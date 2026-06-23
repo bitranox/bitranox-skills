@@ -14,8 +14,24 @@
 # Approach adapted from Anthropic's claude-plugins-official sg-python.sh.
 set -e
 
-# Windows Python defaults to cp1252; force UTF-8 for all IO (PEP 540). No-op elsewhere.
+# This shim is designed for Git Bash (Git for Windows) on Windows, and the native
+# bash on macOS/Linux. WSL bash mounts Windows under /mnt/c and resolves a *Linux*
+# python, and Cygwin uses different path mounts - the native-path/cygpath design
+# below assumes Git Bash. If launched under an unexpected shell, skip loudly to
+# stderr rather than misbehave (still exit 0; a Stop hook must never wedge a turn).
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*|Linux|Darwin) : ;;
+  *) echo "self-improve: unexpected shell '$(uname -s 2>/dev/null)'; gate skipped." >&2; exit 0 ;;
+esac
+
+# Self-document a missing script arg instead of erroring obscurely.
+[ -n "$1" ] && [ -f "$1" ] || { echo "self-improve: gate script not found: ${1:-<none>}" >&2; exit 0; }
+
+# Windows Python defaults to cp1252; force UTF-8 for all IO. PYTHONUTF8 (PEP 540,
+# 3.7+) covers modern interpreters; PYTHONIOENCODING is the classic companion that
+# also fixes older/edge interpreters on a German-locale Windows box. No-op elsewhere.
 export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
 
 # Git Bash passes POSIX paths (/c/Users/...) that a native python.exe misreads as
 # <drive>:\c\Users\... Convert absolute args to native Windows form when cygpath exists

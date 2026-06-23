@@ -23,15 +23,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-# High-precision learning signals (corrections, "remember", admitted miss),
+# High-precision learning signals. Split by role: intent/correction phrasing is
+# only a learning when the USER says it (the assistant routinely writes "remember
+# to...", "note that...", "instead of..." in ordinary answers, which used to fire
+# spurious blocks); self-admitted misses are only meaningful from the ASSISTANT.
 # English and German. Kept deliberately narrow to favour precision over recall.
-_PATTERN = re.compile(
+_USER_PATTERN = re.compile(
     r"no,|nope|that.?s wrong|that is wrong|incorrect|don.?t do|do not do|stop doing"
     r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of"
-    r"|that.?s not right|isn.?t right|you.?re right|you are right|my mistake"
-    r"|i was wrong|apolog|remember|note that|keep in mind|for next time"
-    r"|for the future|from now on|make a (memory|rule|note)"
+    r"|that.?s not right|isn.?t right"
+    r"|remember|note that|keep in mind|for next time|for the future|from now on"
+    r"|make a (memory|rule|note)"
     r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran",
+    re.IGNORECASE,
+)
+_ASST_PATTERN = re.compile(
+    r"you.?re right|you are right|my mistake|i was wrong|apolog",
     re.IGNORECASE,
 )
 
@@ -54,26 +61,38 @@ def _text(content):
     return ""
 
 
-def _last_messages(transcript_path):
+# Read only the JSONL tail: we just need the last user + last assistant line, and
+# transcripts grow to many MB in long sessions. 64 KiB sits comfortably above any
+# normal final turn; bump it if a final turn is ever larger and gets truncated for
+# matching (a truncated tail only costs recall, never a wedged turn).
+_TAIL_BYTES = 65536
+
+
+def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES):
     """Return (last_user_text, last_assistant_text) from the JSONL transcript tail."""
     last_user = last_asst = ""
     try:
-        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                kind = obj.get("type")
-                if kind == "user":
-                    last_user = _text(obj.get("message", {}).get("content"))
-                elif kind == "assistant":
-                    last_asst = _text(obj.get("message", {}).get("content"))
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as fh:
+            if size > tail_bytes:
+                fh.seek(size - tail_bytes)
+                fh.readline()  # drop the partial first line after the seek
+            data = fh.read()
     except OSError:
         return "", ""
+    for raw in data.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        kind = obj.get("type")
+        if kind == "user":
+            last_user = _text(obj.get("message", {}).get("content"))
+        elif kind == "assistant":
+            last_asst = _text(obj.get("message", {}).get("content"))
     return last_user, last_asst
 
 
@@ -94,8 +113,7 @@ def main():
     state = Path(tempfile.gettempdir()) / ("claude-self-improve-%s.state" % proj_key)
 
     last_user, last_asst = _last_messages(transcript)
-    slice_text = last_user + "\n" + last_asst
-    if not slice_text.strip():
+    if not (last_user.strip() or last_asst.strip()):
         return 0
 
     sig = hashlib.sha1(last_user.encode("utf-8", "replace")).hexdigest()
@@ -106,7 +124,7 @@ def main():
     except OSError:
         pass
 
-    if _PATTERN.search(slice_text):
+    if _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst):
         try:
             with open(state, "w", encoding="utf-8") as fh:
                 fh.write(sig)

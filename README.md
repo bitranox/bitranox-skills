@@ -41,6 +41,13 @@ for Windows, Claude Code falls back to PowerShell and the gate is simply skipped
 a turn, but it also will not auto-nudge you to capture learnings. With Git for Windows installed,
 the gate fires normally. You can still run `self-improve` manually at any time.
 
+The gate is designed for **Git Bash** specifically. WSL and Cygwin bash are neither required nor
+supported: they mount Windows drives differently and resolve a Linux `python`, which breaks the
+native-path design. Claude Code invokes its own Git Bash, so this is normally a non-issue; if the
+gate silently does nothing on Windows, check that `uname -s` under the hook shell reports
+`MINGW`/`MSYS` (Git Bash) and not `*Microsoft*` (WSL), and that `CLAUDE_CODE_GIT_BASH_PATH` (if
+set) points at Git Bash. The shim refuses to run under an unexpected shell rather than misbehave.
+
 ## What you get
 
 - **25 skills** under the `bitranox` namespace (`/bitranox:brainstorming`,
