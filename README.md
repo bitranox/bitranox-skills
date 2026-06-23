@@ -36,11 +36,12 @@ the `version` field to track every commit SHA).
 - **25 skills** under the `bitranox` namespace (`/bitranox:brainstorming`,
   `/bitranox:systematic-debugging`, ...). Claude can also invoke them automatically when
   a task matches a skill's description.
-- **A `Stop` hook** (`hooks/self-improve-gate.sh`, wired in `hooks/hooks.json`) that, at
-  the end of a turn, runs a cheap check for a learning signal (a correction, an explicit
-  "remember", a self-admitted miss) and nudges Claude to run the `self-improve` skill.
-  Installing the plugin registers this hook automatically, so you no longer need a manual
-  entry in `~/.claude/settings.json` for it.
+- **A `Stop` hook** (`hooks/self-improve-gate.py`, launched cross-platform via
+  `hooks/run-python.sh` and wired in `hooks/hooks.json`) that, at the end of a turn, runs a
+  cheap check for a learning signal (a correction, an explicit "remember", a self-admitted
+  miss) and nudges Claude to run the `self-improve` skill. It is pure Python (no `jq`/bash
+  logic), so it runs on Windows, macOS, and Linux. Installing the plugin registers this hook
+  automatically, so you no longer need a manual entry in `~/.claude/settings.json` for it.
 
 ## Skills
 
@@ -86,7 +87,8 @@ bitranox-skills/
         <skill>/SKILL.md        # one directory per skill (plus any supporting files)
       hooks/
         hooks.json              # registers the Stop hook
-        self-improve-gate.sh    # the self-improve learning-signal gate
+        self-improve-gate.py    # the self-improve learning-signal gate (cross-platform)
+        run-python.sh           # interpreter-resolver launcher for the gate
   README.md
   CONTRIBUTING.md
 ```
