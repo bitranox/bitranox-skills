@@ -51,3 +51,23 @@ focused on one skill.
     your own setup.
   - **Safety** - confirm the diff was scanned and contains no secrets, personal data, or
     infrastructure references.
+
+## Authoring hooks and scripts (cross-platform)
+
+Hooks and helper scripts must run on Windows, macOS, and Linux.
+
+- **Write hook logic in Python, not bash.** Bash tools (`jq`, `cksum`) are not portable. The
+  self-improve gate is `hooks/self-improve-gate.py`, pure standard library.
+- **Invoke through the launcher.** Claude Code runs hook commands through bash on every desktop
+  platform (Git Bash on Windows), so bash itself is safe; the hard part is finding Python (the
+  Windows Microsoft Store `python3` stub, the `py -3` launcher, UTF-8, Git Bash `/c/...` paths).
+  So `hooks.json` calls `bash run-python.sh <script>.py`, and `run-python.sh` resolves a working
+  Python 3 and execs it.
+- **Mark directly-invoked scripts executable in git.** This repo has `core.fileMode = false`, so
+  a working-tree `chmod +x` is NOT recorded and the installed plugin copy ends up non-executable.
+  Use `git update-index --chmod=+x <file>`. A script run through an interpreter (`python3 x.py`)
+  does not need the bit.
+- **Where the Stop hook fires:** the Claude Code CLI on all OSes, and the Claude Desktop app's
+  Code tab (same engine, shared config). It does NOT run in the consumer Claude Desktop Chat or
+  Cowork tabs; on the web app it runs in Anthropic's cloud sandbox. Every failure path in the gate
+  exits 0, so a missing interpreter or unsupported surface never wedges a turn.
