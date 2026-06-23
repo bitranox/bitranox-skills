@@ -36,12 +36,15 @@ the `version` field to track every commit SHA).
 - **25 skills** under the `bitranox` namespace (`/bitranox:brainstorming`,
   `/bitranox:systematic-debugging`, ...). Claude can also invoke them automatically when
   a task matches a skill's description.
-- **A `Stop` hook** (`hooks/self-improve-gate.py`, launched cross-platform via
-  `hooks/run-python.sh` and wired in `hooks/hooks.json`) that, at the end of a turn, runs a
-  cheap check for a learning signal (a correction, an explicit "remember", a self-admitted
-  miss) and nudges Claude to run the `self-improve` skill. It is pure Python (no `jq`/bash
-  logic), so it runs on Windows, macOS, and Linux. Installing the plugin registers this hook
-  automatically, so you no longer need a manual entry in `~/.claude/settings.json` for it.
+- **A `Stop` hook** (`hooks/self-improve-gate.py`, launched via `hooks/run-python.sh` and wired
+  in `hooks/hooks.json`) that, at the end of a turn, runs a cheap check for a learning signal (a
+  correction, an explicit "remember", a self-admitted miss) and nudges Claude to run the
+  `self-improve` skill. The gate logic is pure Python, but `hooks.json` launches it through a
+  small bash shim, like Claude Code's own official plugin hooks. So it fires on macOS and Linux,
+  and on Windows when **Git for Windows** (Git Bash) is installed; without it Claude Code runs
+  hooks under PowerShell and the gate is simply skipped (it never errors a turn). Installing the
+  plugin registers this hook automatically, so you no longer need a manual entry in
+  `~/.claude/settings.json` for it.
 
 ## Skills
 

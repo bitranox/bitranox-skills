@@ -43,7 +43,7 @@ Use the Read tool to load referenced files for full details.
 |----------------------------|-------------------------|--------------------------------------------------------------|
 | Profile analyzer           | analyze_profile.py      | Analyze cProfile data: top functions, call counts, hot spots |
 | Performance claims checker | validate_perf_claims.py | Extract and validate performance claims from diffs           |
-| Before/after comparator    | compare_performance.sh  | Git-based before/after test suite timing comparison          |
+| Before/after comparator    | compare_performance.py  | Git-based before/after test suite timing comparison          |
 
 ## Execution Steps
 
@@ -188,14 +188,13 @@ $PYTHON_CMD LLM-CONTEXT/review-anal/perf/validate_perf_claims.py > LLM-CONTEXT/r
 
 ### Step 4: Compare Before/After Performance
 
-Deploy `compare_performance.sh`:
+Deploy `compare_performance.py` (Python, so it runs without bash on any OS):
 
 ```bash
 if git rev-parse --is-inside-work-tree 2>/dev/null && [ -f "LLM-CONTEXT/review-anal/scope/changes.diff" ]; then
     echo "Comparing performance before and after changes..."
-    cp "$SKILL_DIR/compare_performance.sh" LLM-CONTEXT/review-anal/perf/
-    chmod +x LLM-CONTEXT/review-anal/perf/compare_performance.sh
-    ./LLM-CONTEXT/review-anal/perf/compare_performance.sh > LLM-CONTEXT/review-anal/perf/performance_comparison.txt 2>&1 || true
+    cp "$SKILL_DIR/compare_performance.py" LLM-CONTEXT/review-anal/perf/
+    python LLM-CONTEXT/review-anal/perf/compare_performance.py > LLM-CONTEXT/review-anal/perf/performance_comparison.txt 2>&1 || true
 fi
 ```
 

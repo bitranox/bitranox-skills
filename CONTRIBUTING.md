@@ -58,11 +58,17 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
 
 - **Write hook logic in Python, not bash.** Bash tools (`jq`, `cksum`) are not portable. The
   self-improve gate is `hooks/self-improve-gate.py`, pure standard library.
-- **Invoke through the launcher.** Claude Code runs hook commands through bash on every desktop
-  platform (Git Bash on Windows), so bash itself is safe; the hard part is finding Python (the
-  Windows Microsoft Store `python3` stub, the `py -3` launcher, UTF-8, Git Bash `/c/...` paths).
-  So `hooks.json` calls `bash run-python.sh <script>.py`, and `run-python.sh` resolves a working
-  Python 3 and execs it.
+- **Bash is NOT guaranteed on Windows.** Claude Code uses Git Bash only when Git for Windows is
+  installed, and falls back to PowerShell otherwise ([setup.md](https://code.claude.com/docs/en/setup.md)).
+  An auto-fired hook still needs a shell command in `hooks.json`; we launch the Python gate with
+  `bash run-python.sh <gate>.py` (matching Claude Code's own official plugin hooks), where
+  `run-python.sh` resolves a working Python 3 (the Windows Store `python3` stub, `py -3`, UTF-8,
+  Git Bash `/c/...` paths). That hook fires on macOS/Linux and on Windows-with-Git-Bash; without
+  bash it is simply skipped (the gate fail-opens and never errors a turn).
+- **Agent-run helpers must be pure Python, never `.sh`.** A script the agent invokes itself (not an
+  auto-hook) must be Python, called as `python script.py`, so it runs under PowerShell on Windows
+  too. Do not ship `.sh` helpers for cross-platform skills - on native Windows without Git Bash
+  they cannot run at all.
 - **Mark directly-invoked scripts executable in git.** This repo has `core.fileMode = false`, so
   a working-tree `chmod +x` is NOT recorded and the installed plugin copy ends up non-executable.
   Use `git update-index --chmod=+x <file>`. A script run through an interpreter (`python3 x.py`)
@@ -70,7 +76,8 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
 - **Build paths with `pathlib`, never backslashes.** In cross-platform Python, construct paths with
   `pathlib.Path` (or forward slashes) - e.g. `Path(tempfile.gettempdir()) / name` - not a `\` literal.
   pathlib renders the correct separator per OS, and Python reads `/` on every OS including Windows.
-- **Where the Stop hook fires:** the Claude Code CLI on all OSes, and the Claude Desktop app's
-  Code tab (same engine, shared config). It does NOT run in the consumer Claude Desktop Chat or
-  Cowork tabs; on the web app it runs in Anthropic's cloud sandbox. Every failure path in the gate
-  exits 0, so a missing interpreter or unsupported surface never wedges a turn.
+- **Where the Stop hook fires:** the Claude Code CLI and the Claude Desktop app's Code tab (same
+  engine) - on macOS/Linux always, on Windows only when Git for Windows provides bash. It does NOT
+  run in the consumer Claude Desktop Chat or Cowork tabs (no plugins there); on the web app it runs
+  in Anthropic's cloud sandbox. Every failure path in the gate exits 0, so a missing shell,
+  interpreter, or unsupported surface never wedges a turn.
