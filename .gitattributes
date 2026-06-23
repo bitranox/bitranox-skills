@@ -1,0 +1,10 @@
+# Shell scripts MUST stay LF or Git Bash on Windows cannot execute them
+# (a CRLF run-python.sh fails with "cannot execute: required file not found"
+# or "$'\r': command not found", silently disabling the self-improve gate).
+*.sh text eol=lf
+# Python hook/skill scripts: normalize to LF for consistent hashing & execution.
+*.py text eol=lf
+# Keep hook/plugin config LF too.
+*.json text eol=lf
+# Let git decide for everything else.
+* text=auto
