@@ -67,6 +67,9 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
   a working-tree `chmod +x` is NOT recorded and the installed plugin copy ends up non-executable.
   Use `git update-index --chmod=+x <file>`. A script run through an interpreter (`python3 x.py`)
   does not need the bit.
+- **Build paths with `pathlib`, never backslashes.** In cross-platform Python, construct paths with
+  `pathlib.Path` (or forward slashes) - e.g. `Path(tempfile.gettempdir()) / name` - not a `\` literal.
+  pathlib renders the correct separator per OS, and Python reads `/` on every OS including Windows.
 - **Where the Stop hook fires:** the Claude Code CLI on all OSes, and the Claude Desktop app's
   Code tab (same engine, shared config). It does NOT run in the consumer Claude Desktop Chat or
   Cowork tabs; on the web app it runs in Anthropic's cloud sandbox. Every failure path in the gate

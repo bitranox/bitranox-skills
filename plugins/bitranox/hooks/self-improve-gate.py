@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import tempfile
+from pathlib import Path
 
 # High-precision learning signals (corrections, "remember", admitted miss),
 # English and German. Kept deliberately narrow to favour precision over recall.
@@ -85,12 +86,12 @@ def main():
         return 0
 
     transcript = event.get("transcript_path") or ""
-    if not transcript or not os.path.isfile(transcript):
+    if not transcript or not Path(transcript).is_file():
         return 0
 
     proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     proj_key = hashlib.sha1(proj.encode("utf-8", "replace")).hexdigest()[:16]
-    state = os.path.join(tempfile.gettempdir(), "claude-self-improve-%s.state" % proj_key)
+    state = Path(tempfile.gettempdir()) / ("claude-self-improve-%s.state" % proj_key)
 
     last_user, last_asst = _last_messages(transcript)
     slice_text = last_user + "\n" + last_asst
