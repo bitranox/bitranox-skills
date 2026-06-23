@@ -27,3 +27,27 @@ If a clone ever diverges (e.g. after an old force-push), recover by re-cloning, 
 `git reset --hard origin/master` in the marketplace clone then re-extract the version dir, or have
 the user run `/plugin marketplace remove bitranox-skills` then
 `/plugin marketplace add bitranox/bitranox-skills`.
+
+## Authoring hooks and bundled scripts: keep them cross-platform
+
+Any script this plugin ships (a hook command, `run-python.sh`, a skill's `scripts/`, a `.py`/`.js`
+helper) runs on user machines that may be Windows. Author every such script so a Windows install
+does not silently break it. These rules are enforced/encoded by `.gitattributes` and
+`hooks/run-python.sh`; keep them intact and apply the same pattern to any new script.
+
+- **LF line endings, always.** `.gitattributes` pins `*.sh`/`*.py`/`*.json` to `eol=lf`. A CRLF
+  `.sh` makes Git Bash on Windows fail (`cannot execute: required file not found` / `$'\r':
+  command not found`), which silently disables a hook. Never remove those `.gitattributes` rules;
+  `git add --renormalize .` after touching them.
+- **Force UTF-8 in launched interpreters.** A non-UTF-8 Windows locale (e.g. German cp1252)
+  corrupts IO. The shim exports `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`; Python code opens
+  files with explicit `encoding="utf-8"`.
+- **No portable interpreter name.** On Windows `python3` is usually the Microsoft Store stub
+  (exits non-zero), `python` may be Python 2, `py -3` is Windows-only. Launch Python through
+  `run-python.sh`, which probes `python3 -> python -> py -3` and `cygpath`-converts POSIX paths.
+  Do not change that probe order or the path conversion.
+- **Git Bash only on Windows; never WSL/Cygwin.** The shim guards `uname -s` and skips loudly to
+  stderr under an unexpected shell. A hook must never wedge a turn: every failure path exits 0.
+
+When a learning here applies beyond this repo (it usually does), it also belongs in the shared
+`skill-writer` skill's "Bundled scripts and hooks: keep them cross-platform" section.

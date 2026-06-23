@@ -481,6 +481,34 @@ pptx/
 ```
 When: Reference material too large for inline
 
+### Bundled scripts and hooks: keep them cross-platform
+
+Any script you ship inside a skill or as a hook (a `.sh`, `.py`, `.js`, scripts in
+`scripts/`, or a hook command) runs on a user's machine that may be Windows. Author it
+so Windows does not silently break it:
+
+- **Line endings: LF only.** Commit a `.gitattributes` that pins `*.sh text eol=lf`
+  (and `*.py`/`*.json` for stable hashing). A CRLF `.sh` makes Git Bash on Windows fail
+  with "cannot execute: required file not found" or `$'\r': command not found`, and a
+  Stop/PreToolUse hook that exits cleanly on failure then disappears with no error.
+- **Force UTF-8 in launched interpreters.** A non-UTF-8 Windows locale (e.g. German
+  cp1252) corrupts IO. For Python set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`
+  before exec; read/write files with explicit `encoding="utf-8"`.
+- **Do not assume an interpreter name resolves.** On Windows `python3` is usually the
+  Microsoft Store stub (exits non-zero in a subprocess), `python` may be Python 2, and
+  `py -3` is Windows-only. Launch Python through a small bash shim that probes
+  `python3 -> python -> py -3` and converts POSIX paths with `cygpath` when present.
+  The plugin's `hooks/run-python.sh` is the working reference; reuse it.
+- **Git Bash only on Windows.** Hooks run through Git Bash (Git for Windows), not WSL or
+  Cygwin (those mount drives differently and resolve a Linux interpreter). Guard
+  `uname -s` and skip loudly to stderr under an unexpected shell.
+- **A hook must never wedge a turn.** Every failure path exits 0; degrade silently
+  (with a one-line stderr note) rather than erroring.
+- **Match signals to their source.** A gate that scans transcript text for a trigger
+  must run intent/correction patterns against the *user* role and self-admission
+  patterns against the *assistant* role; matching both over concatenated text fires on
+  ordinary assistant phrasing.
+
 ## The Iron Law (Same as TDD)
 
 ```
