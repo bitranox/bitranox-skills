@@ -129,8 +129,13 @@ write the note louder.
   help. Escalate to a **deterministic guard** that blocks the bad action regardless of the model's
   attention - the way the tell-sweep hook blocks em dashes on every write. Propose one of: a hook
   (via the `update-config` skill), a script or CI check, or a real code/tooling fix. Put the decision
-  to the user; never auto-create hooks. Note in the rule that it has graduated to a guard so it is
-  not re-littered with notes.
+  to the user; never auto-create hooks. When the guard is a hook or script, make it portable: write
+  the logic in Python (not bash or `jq`), invoke it through an interpreter-resolving launcher, mark
+  it executable in git with `git update-index --chmod=+x` (a working-tree `chmod` does not persist
+  when `core.fileMode` is false, so the installed copy ends up non-executable), and exit 0 on every
+  failure path so a broken guard never wedges a turn. Hooks run only on local Claude Code surfaces
+  (the CLI and the Desktop Code tab), not the cloud or consumer-chat surfaces. Note in the rule that
+  it has graduated to a guard so it is not re-littered with notes.
 
 The point: memory and CLAUDE.md change what the model is *told*; a guard changes what the model can
 *do*. A rule that must always hold belongs in a guard, not only in prose.
