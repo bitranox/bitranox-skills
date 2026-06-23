@@ -25,12 +25,12 @@ You write test cases (pressure scenarios with subagents), watch them fail (basel
 
 | Topic                                                                      | File                             |
 |----------------------------------------------------------------------------|----------------------------------|
-| Testing methodology — pressure scenarios, RED/GREEN/REFACTOR, meta-testing | testing-skills-with-subagents.md |
-| Persuasion principles — authority, commitment, scarcity, social proof      | persuasion-principles.md         |
-| Anthropic official best practices — conciseness, freedom, structure        | anthropic-best-practices.md      |
-| Graphviz conventions — node shapes, edge labels, naming patterns           | graphviz-conventions.dot         |
-| Flowchart rendering — SVG output from dot diagrams                         | render-graphs.js                 |
-| Worked example — full test campaign testing CLAUDE.md variants             | examples/CLAUDE_MD_TESTING.md    |
+| Testing methodology - pressure scenarios, RED/GREEN/REFACTOR, meta-testing | testing-skills-with-subagents.md |
+| Persuasion principles - authority, commitment, scarcity, social proof      | persuasion-principles.md         |
+| Anthropic official best practices - conciseness, freedom, structure        | anthropic-best-practices.md      |
+| Graphviz conventions - node shapes, edge labels, naming patterns           | graphviz-conventions.dot         |
+| Flowchart rendering - SVG output from dot diagrams                         | render-graphs.js                 |
+| Worked example - full test campaign testing CLAUDE.md variants             | examples/CLAUDE_MD_TESTING.md    |
 
 Use the Read tool to load referenced files identified as relevant for full details.
 
@@ -71,7 +71,7 @@ The entire skill creation process follows RED-GREEN-REFACTOR.
 - One-off solutions
 - Standard practices well-documented elsewhere
 - Project-specific conventions (put in project instructions file: CLAUDE.md / AGENTS.md)
-- Mechanical constraints (if it's enforceable with regex/validation, automate it—save documentation for judgment calls)
+- Mechanical constraints (if it's enforceable with regex/validation, automate it - save documentation for judgment calls)
 
 ## Skill Types
 
@@ -111,22 +111,22 @@ skills/
 Use the Read tool to load referenced files identified as relevant for full details.
 ```
 
-Only add this for hub/reference skills with supporting files. Self-contained skills (where everything is in SKILL.md) don't need it — the full body is already loaded when invoked.
+Only add this for hub/reference skills with supporting files. Self-contained skills (where everything is in SKILL.md) don't need it - the full body is already loaded when invoked.
 
 **Upstream doc linking:** When hub skills consolidate content from original source documents in subdirectories (e.g., `docs/`, `tutorial/`, `api/`), include a two-tier routing table in SKILL.md:
-1. **Tier 1** — distilled reference files (same directory as SKILL.md)
-2. **Tier 2** — original upstream docs (subdirectory paths for deeper detail)
+1. **Tier 1** - distilled reference files (same directory as SKILL.md)
+2. **Tier 2** - original upstream docs (subdirectory paths for deeper detail)
 
-Don't rely on passive `> Source:` annotations in supporting files — agents treat these as attribution, not as actionable links. The hub must provide an explicit routing table for upstream docs.
+Don't rely on passive `> Source:` annotations in supporting files - agents treat these as attribution, not as actionable links. The hub must provide an explicit routing table for upstream docs.
 
 ```markdown
 ## Reference Files
 
 | Topic                                           | Distilled reference | Upstream source (full detail)      |
 |-------------------------------------------------|---------------------|------------------------------------|
-| Core API — Client, Session, request(), stream() | api-reference.md    | docs/api/full-reference.md         |
-| Config — Settings, env vars, pyproject section  | configuration.md    | docs/guides/configuration.md       |
-| Tutorials — quickstart, first app, deployment   | quick-start.md      | tutorial/getting-started/README.md |
+| Core API - Client, Session, request(), stream() | api-reference.md    | docs/api/full-reference.md         |
+| Config - Settings, env vars, pyproject section  | configuration.md    | docs/guides/configuration.md       |
+| Tutorials - quickstart, first app, deployment   | quick-start.md      | tutorial/getting-started/README.md |
 
 Use the Read tool to load a distilled reference first.
 If it lacks the detail you need, load the upstream source.
@@ -138,17 +138,17 @@ The upstream table should work as a comprehensive index so an agent can jump str
 | Topic                                                  | Upstream source |
 |--------------------------------------------------------|-----------------|
 | ❌ Widgets                                              | docs/widgets.md |
-| ✅ Widgets — DataTable, Tree, OptionList, Select, Input | docs/widgets.md |
+| ✅ Widgets - DataTable, Tree, OptionList, Select, Input | docs/widgets.md |
 ```
 
-**Building routing tables:** For each supporting file, use `grep -E '^#{2,3} ' filename.md` to extract H2/H3 headings. For tier 1 (distilled reference) rows, list the 3-5 most important headings, class names, or function names as the topic description. If a file covers more than 5 key terms, pick the ones an agent is most likely to search for and add an "etc." or "and more" suffix. For tier 2 (upstream source) rows, list all classes, functions, API endpoints, and key concepts — the upstream column serves as a comprehensive index, so every symbol must be findable through the topic description.
+**Building routing tables:** For each supporting file, use `grep -E '^#{2,3} ' filename.md` to extract H2/H3 headings. For tier 1 (distilled reference) rows, list the 3-5 most important headings, class names, or function names as the topic description. If a file covers more than 5 key terms, pick the ones an agent is most likely to search for and add an "etc." or "and more" suffix. For tier 2 (upstream source) rows, list all classes, functions, API endpoints, and key concepts - the upstream column serves as a comprehensive index, so every symbol must be findable through the topic description.
 
 **Evaluating routing descriptions:** For each row in a routing table, ask: given a realistic user query, could Claude pick the right file from the topic description alone? If two rows sound equally plausible for the same query, the descriptions need more differentiation.
 
 Common failures:
-- Topic names too generic ("API", "Config") — Claude can't distinguish files
-- Overlapping scope — two files both sound relevant for the same query
-- Missing subtopics — key content buried inside a file isn't mentioned in the description
+- Topic names too generic ("API", "Config") - Claude can't distinguish files
+- Overlapping scope - two files both sound relevant for the same query
+- Missing subtopics - key content buried inside a file isn't mentioned in the description
 
 Fix: expand topic descriptions to include 2-3 disambiguating subtopics or keywords.
 
@@ -157,8 +157,8 @@ Fix: expand topic descriptions to include 2-3 disambiguating subtopics or keywor
 |----------------------------------------------|---------------------|
 | ❌ API                                        | api-reference.md    |
 | ❌ Config                                     | configuration.md    |
-| ✅ Core API — endpoints, auth, rate limits    | api-reference.md    |
-| ✅ Config — env vars, CLI flags, config files | configuration.md    |
+| ✅ Core API - endpoints, auth, rate limits    | api-reference.md    |
+| ✅ Config - env vars, CLI flags, config files | configuration.md    |
 ```
 
 **Verifying routing tables:** After writing a routing table, run two checks to confirm it is both complete and accurate. For two-tier tables, run both checks independently for the distilled reference column and the upstream source column:
@@ -166,39 +166,39 @@ Fix: expand topic descriptions to include 2-3 disambiguating subtopics or keywor
 1. **Coverage check (file → table):** For each referenced file, run `grep -E '^#{2,3} ' filename.md` to extract its headings. For each heading or key term, confirm it appears in the routing table's topic description for that file. Missing terms = content agents can't find through the table.
 2. **Accuracy check (table → file):** For each search term listed in the routing table, run `grep -i "term" filename.md` to confirm the file actually contains it. Mismatches = stale entries that route agents to the wrong file.
 
-A routing table passes when every key term in the file appears in the table (coverage) and every term in the table appears in the file (accuracy). For tier 1 rows with 10+ headings, coverage is sufficient if the top 5 most-queried terms are represented. For tier 2 rows, coverage requires all classes, functions, and API endpoints — no "top 5" shortcut. Both columns must pass independently.
+A routing table passes when every key term in the file appears in the table (coverage) and every term in the table appears in the file (accuracy). For tier 1 rows with 10+ headings, coverage is sufficient if the top 5 most-queried terms are represented. For tier 2 rows, coverage requires all classes, functions, and API endpoints - no "top 5" shortcut. Both columns must pass independently.
 
 Example:
 
 ```markdown
 Referenced file `widgets.md` contains headings: DataTable, Tree, Select, Input, OptionList
 
-✅ Coverage check passes — routing table says:
-| Widgets — DataTable, Tree, OptionList, Select, Input | widgets.md |
+✅ Coverage check passes - routing table says:
+| Widgets - DataTable, Tree, OptionList, Select, Input | widgets.md |
 
-❌ Coverage check fails — routing table says:
+❌ Coverage check fails - routing table says:
 | Widgets                                              | widgets.md |
 (agent searching for "DataTable" won't find the right file)
 
-✅ Accuracy check passes — grep widgets.md for "DataTable" → found
-❌ Accuracy check fails — routing table lists "TreeView" but file only contains "Tree"
+✅ Accuracy check passes - grep widgets.md for "DataTable" → found
+❌ Accuracy check fails - routing table lists "TreeView" but file only contains "Tree"
 ```
 
 Tier 2 example (upstream source column):
 
 ```markdown
 Routing table row:
-| Core API — Client, Session, request(), stream() | api-reference.md | docs/api/full-reference.md  |
+| Core API - Client, Session, request(), stream() | api-reference.md | docs/api/full-reference.md  |
 
 Upstream file `docs/api/full-reference.md` contains headings: Client, Session, request, stream, Connection, Retry
 
-❌ Tier 2 coverage check fails — topic lists 4 of 6 symbols; missing Connection and Retry → add them to topic description
-❌ Tier 2 accuracy check fails — topic lists "stream()" but upstream file heading is "Streaming" → fix topic or confirm alias
+❌ Tier 2 coverage check fails - topic lists 4 of 6 symbols; missing Connection and Retry → add them to topic description
+❌ Tier 2 accuracy check fails - topic lists "stream()" but upstream file heading is "Streaming" → fix topic or confirm alias
 
-Fixed topic: Core API — Client, Session, request(), Streaming, Connection, Retry
+Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 ```
 
-**Presence gate:** Before checking coverage and accuracy, first confirm a tier 2 table exists at all. Run `find <upstream-dirs> -name '*.md'` to list all upstream files. If any exist but the routing table has no tier 2 (upstream source) column, the skill is incomplete — add the column and populate it before proceeding with coverage/accuracy checks.
+**Presence gate:** Before checking coverage and accuracy, first confirm a tier 2 table exists at all. Run `find <upstream-dirs> -name '*.md'` to list all upstream files. If any exist but the routing table has no tier 2 (upstream source) column, the skill is incomplete - add the column and populate it before proceeding with coverage/accuracy checks.
 
 ## SKILL.md Structure
 
@@ -674,17 +674,17 @@ description: use when implementing any feature or bugfix, before writing impleme
 
 ### Step 0: Create a Plan
 
-1. **Identify skill type** — Is this a discipline skill, technique, pattern, or reference? (See "Skill Types" above.) This determines the test approach.
-2. **Choose test approach** — Discipline skills need pressure scenarios with 3+ combined pressures. Technique skills need application scenarios. Reference skills need retrieval scenarios. (See "Testing All Skill Types" below.)
-3. **List pressure scenarios** — Draft 2-3 scenario descriptions before writing anything.
-4. **Estimate scope** — Self-contained SKILL.md or hub with supporting files?
-5. **Create task list** — Use TaskCreate with one task per phase:
+1. **Identify skill type** - Is this a discipline skill, technique, pattern, or reference? (See "Skill Types" above.) This determines the test approach.
+2. **Choose test approach** - Discipline skills need pressure scenarios with 3+ combined pressures. Technique skills need application scenarios. Reference skills need retrieval scenarios. (See "Testing All Skill Types" below.)
+3. **List pressure scenarios** - Draft 2-3 scenario descriptions before writing anything.
+4. **Estimate scope** - Self-contained SKILL.md or hub with supporting files?
+5. **Create task list** - Use TaskCreate with one task per phase:
 
 ```
-TaskCreate: "RED — Write and run baseline pressure scenarios"
-TaskCreate: "GREEN — Write minimal SKILL.md addressing baseline failures"
-TaskCreate: "REFACTOR — Close loopholes from GREEN testing"
-TaskCreate: "Deploy — Commit, push, verify discoverability"
+TaskCreate: "RED - Write and run baseline pressure scenarios"
+TaskCreate: "GREEN - Write minimal SKILL.md addressing baseline failures"
+TaskCreate: "REFACTOR - Close loopholes from GREEN testing"
+TaskCreate: "Deploy - Commit, push, verify discoverability"
 ```
 
 ### Using Agent Teams for Skill Creation
@@ -733,11 +733,11 @@ Task tool call:
 
     Choose A, B, or C. Be honest.
 
-  # Do NOT include the skill in the prompt — this is the baseline test.
+  # Do NOT include the skill in the prompt - this is the baseline test.
   # The subagent must work without skill guidance to reveal natural behavior.
 ```
 
-This is "watch the test fail" — you must see what agents naturally do before writing the skill.
+This is "watch the test fail" - you must see what agents naturally do before writing the skill.
 
 ### GREEN: Write Minimal Skill
 
@@ -745,9 +745,9 @@ Write skill that addresses those specific rationalizations. Don't add extra cont
 
 > **CRITICAL: Test the version you are editing, not a stale installed copy.**
 >
-> When developing a skill in the current directory (e.g., `./my-skill/SKILL.md`), GREEN and REFACTOR tests MUST use that file — not whatever may be installed at `~/.claude/skills/`. Two approaches:
+> When developing a skill in the current directory (e.g., `./my-skill/SKILL.md`), GREEN and REFACTOR tests MUST use that file - not whatever may be installed at `~/.claude/skills/`. Two approaches:
 > 1. **Paste content into prompt** (subagent testing): Read the current `./SKILL.md` and paste its full content into the subagent prompt.
-> 2. **Copy to project skills dir** (live-agent testing): `cp -r ./my-skill/ .claude/skills/my-skill/` — project-level skills take priority over user-space.
+> 2. **Copy to project skills dir** (live-agent testing): `cp -r ./my-skill/ .claude/skills/my-skill/` - project-level skills take priority over user-space.
 
 **How to dispatch a verification test:**
 
@@ -766,7 +766,7 @@ Task tool call:
   # Include the full skill content in the prompt so the subagent can follow it.
 ```
 
-Agent should now comply. If agent still fails: skill is unclear or incomplete — revise and re-test.
+Agent should now comply. If agent still fails: skill is unclear or incomplete - revise and re-test.
 
 ### REFACTOR: Close Loopholes
 
@@ -834,7 +834,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Name uses only letters, numbers, hyphens (no parentheses/special chars)
 - [ ] YAML frontmatter with only name and description (max 1024 chars)
 - [ ] Description starts with "Use when..." and includes specific triggers/symptoms
-- [ ] Description does NOT summarize workflow (triggers only — see CSO section)
+- [ ] Description does NOT summarize workflow (triggers only - see CSO section)
 - [ ] Description written in third person
 - [ ] Keywords throughout for search (errors, symptoms, tools)
 - [ ] Clear overview with core principle
@@ -861,15 +861,15 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Hub skills: routing table with topic descriptions for each supporting file
 - [ ] Hub skills: "Use the Read tool..." instruction in body
 - [ ] Hub skills: routing table passes coverage check (file → table) and accuracy check (table → file) for all columns (both distilled reference and upstream source if tier 2 exists)
-- [ ] Hub skills: if upstream reference documents exist in subdirectories (e.g., `docs/`, `tutorial/`, `api/`), tier 2 table is present and lists every upstream file with concrete API symbols — run `find docs/ tutorial/ api/ -name '*.md'` (adjust paths) and confirm each result has a row in the tier 2 column
+- [ ] Hub skills: if upstream reference documents exist in subdirectories (e.g., `docs/`, `tutorial/`, `api/`), tier 2 table is present and lists every upstream file with concrete API symbols - run `find docs/ tutorial/ api/ -name '*.md'` (adjust paths) and confirm each result has a row in the tier 2 column
 - [ ] Token budget: `wc -w SKILL.md` under 500 words (body only)
 
 **Deployment:**
 - [ ] Place skill in the correct directory:
   - **Project skills** (shared with team): `<project-root>/.claude/skills/skill-name/SKILL.md`
   - **Personal skills** (your own): `~/.claude/skills/skill-name/SKILL.md`
-- [ ] Verify frontmatter parses: `head -5 SKILL.md` — confirm `---` delimiters and valid YAML
-- [ ] Check token budget: `wc -w SKILL.md` — target under 500 words for SKILL.md body
+- [ ] Verify frontmatter parses: `head -5 SKILL.md` - confirm `---` delimiters and valid YAML
+- [ ] Check token budget: `wc -w SKILL.md` - target under 500 words for SKILL.md body
 - [ ] Commit skill to git: `git add skills/skill-name/ && git commit -m "Add skill-name skill"`
 - [ ] Push to remote (if configured): `git push`
 - [ ] **Verify discoverability:** Start a fresh Claude session, describe a problem the skill should match, and confirm Claude selects and loads the skill
