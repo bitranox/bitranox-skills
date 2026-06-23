@@ -130,9 +130,13 @@ write the note louder.
   attention - the way the tell-sweep hook blocks em dashes on every write. Propose one of: a hook
   (via the `update-config` skill), a script or CI check, or a real code/tooling fix. Put the decision
   to the user; never auto-create hooks. When the guard is a hook or script, make it portable: write
-  the logic in Python (not bash or `jq`), invoke it through an interpreter-resolving launcher, mark
-  it executable in git with `git update-index --chmod=+x` (a working-tree `chmod` does not persist
-  when `core.fileMode` is false, so the installed copy ends up non-executable), and exit 0 on every
+  the logic in Python (not bash or `jq`), invoke it through an interpreter-resolving launcher, pin
+  the launcher and scripts to LF in `.gitattributes` (`*.sh text eol=lf`, and `*.py`/`*.json`) so a
+  Windows clone with `core.autocrlf=true` cannot CRLF-break the shell shim (a committed
+  `.gitattributes` overrides each clone's `core.autocrlf`, so this needs no per-clone git config),
+  mark it executable in git with `git update-index --chmod=+x` (this writes the mode straight into
+  the tree, so it is correct regardless of `core.fileMode`; a working-tree `chmod` does not persist
+  when `core.fileMode` is false, leaving the installed copy non-executable), and exit 0 on every
   failure path so a broken guard never wedges a turn. Hooks run only on local Claude Code surfaces
   (the CLI and the Desktop Code tab), not the cloud or consumer-chat surfaces. Note in the rule that
   it has graduated to a guard so it is not re-littered with notes.
