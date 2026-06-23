@@ -1,0 +1,935 @@
+# pveum - User Manager
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--disable` <boolean>
+Flag to disable/deactivate the entry.
+
+- `--rate` <number> (1 - N)
+Rate limit in mbps (megabytes per second) as floating point number.
+
+- `--remove_job` <full | local>
+Mark the replication job for removal. The job will remove all local replication snapshots. When set
+to full, it also tries to remove replicated volumes on the target. The job then removes itself from the
+configuration file.
+
+- `--schedule` <string> (default = */15)
+Storage replication schedule. The format is a subset of systemd calendar events.
+
+- `--source` <string>
+For internal use, to detect if the guest was stolen.
+
+A.15
+
+
+```
+pveum - Proxmox VE User Manager
+```
+
+
+```
+pveum <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pveum acl delete <path> --roles <string> [OPTIONS]
+```
+
+Update Access Control List (add or remove permissions).
+
+<path>: <string>
+Access control path
+
+- `--groups` <string>
+List of groups.
+
+- `--propagate` <boolean> (default = 1)
+Allow to propagate (inherit) permissions.
+
+- `--roles` <string>
+List of roles.
+
+- `--tokens` <string>
+List of API tokens.
+
+- `--users` <string>
+List of users.
+
+
+```
+pveum acl list [FORMAT_OPTIONS]
+```
+
+Get Access Control List (ACLs).
+
+```
+pveum acl modify <path> --roles <string> [OPTIONS]
+```
+
+Update Access Control List (add or remove permissions).
+
+<path>: <string>
+Access control path
+
+- `--groups` <string>
+List of groups.
+
+- `--propagate` <boolean> (default = 1)
+Allow to propagate (inherit) permissions.
+
+- `--roles` <string>
+List of roles.
+
+- `--tokens` <string>
+List of API tokens.
+
+- `--users` <string>
+List of users.
+
+```
+pveum acldel
+```
+
+An alias for pveum acl delete.
+
+```
+pveum aclmod
+```
+
+An alias for pveum acl modify.
+
+```
+pveum group add <groupid> [OPTIONS]
+```
+
+Create new group.
+
+<groupid>: <string>
+no description available
+
+- `--comment` <string>
+no description available
+
+```
+pveum group delete <groupid>
+```
+
+Delete group.
+
+<groupid>: <string>
+no description available
+
+
+```
+pveum group list [FORMAT_OPTIONS]
+```
+
+Group index.
+
+```
+pveum group modify <groupid> [OPTIONS]
+```
+
+Update group data.
+
+<groupid>: <string>
+no description available
+
+- `--comment` <string>
+no description available
+
+```
+pveum groupadd
+```
+
+An alias for pveum group add.
+
+```
+pveum groupdel
+```
+
+An alias for pveum group delete.
+
+```
+pveum groupmod
+```
+
+An alias for pveum group modify.
+
+```
+pveum help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pveum passwd <userid> [OPTIONS]
+```
+
+Change user password.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+- `--confirmation-password` <string>
+The current password of the user performing the change.
+
+```
+pveum pool add <poolid> [OPTIONS]
+```
+
+Create new pool.
+
+<poolid>: <string>
+no description available
+
+
+- `--comment` <string>
+no description available
+
+```
+pveum pool delete <poolid>
+```
+
+Delete pool.
+
+<poolid>: <string>
+no description available
+
+```
+pveum pool list [OPTIONS] [FORMAT_OPTIONS]
+```
+
+List pools or get pool configuration.
+
+- `--poolid` <string>
+no description available
+
+- `--type` <lxc | qemu | storage>
+no description available
+
+> **Note:**
+> Requires option(s): poolid
+
+
+```
+pveum pool modify <poolid> [OPTIONS]
+```
+
+Update pool.
+
+<poolid>: <string>
+no description available
+
+- `--allow-move` <boolean> (default = 0)
+Allow adding a guest even if already in another pool. The guest will be removed from its current pool
+and added to this one.
+
+- `--comment` <string>
+no description available
+
+- `--delete` <boolean> (default = 0)
+Remove the passed VMIDs and/or storage IDs instead of adding them.
+
+- `--storage` <string>
+List of storage IDs to add or remove from this pool.
+
+- `--vms` <string>
+List of guest VMIDs to add or remove from this pool.
+
+
+```
+pveum realm add <realm> --type <string> [OPTIONS]
+```
+
+Add an authentication server.
+
+<realm>: <string>
+Authentication domain ID
+
+- `--acr-values` ˆ[ˆ\x00-\x1F\x7F <>#"]*$
+Specifies the Authentication Context Class Reference values that theAuthorization Server is being
+requested to use for the Auth Request.
+
+- `--autocreate` <boolean> (default = 0)
+Automatically create users if they do not exist.
+
+- `--base_dn` <string>
+LDAP base domain name
+
+- `--bind_dn` <string>
+LDAP bind domain name
+
+- `--capath` <string> (default = /etc/ssl/certs)
+Path to the CA certificate store
+
+- `--case-sensitive` <boolean> (default = 1)
+username is case-sensitive
+
+- `--cert` <string>
+Path to the client certificate
+
+- `--certkey` <string>
+Path to the client certificate key
+
+- `--check-connection` <boolean> (default = 0)
+Check bind connection to the server.
+
+- `--client-id` <string>
+OpenID Client ID
+
+- `--client-key` <string>
+OpenID Client Key
+
+- `--comment` <string>
+Description.
+
+- `--default` <boolean>
+Use this as default realm
+
+
+- `--domain` \S+
+AD domain name
+
+- `--filter` <string>
+LDAP filter for user sync.
+
+- `--group_classes` <string> (default = groupOfNames, group,
+univentionGroup, ipausergroup)
+The objectclasses for groups.
+
+- `--group_dn` <string>
+LDAP base domain name for group sync. If not set, the base_dn will be used.
+
+- `--group_filter` <string>
+LDAP filter for group sync.
+
+- `--group_name_attr` <string>
+LDAP attribute representing a groups name. If not set or found, the first value of the DN will be used
+as name.
+
+- `--groups-autocreate` <boolean> (default = 0)
+Automatically create groups if they do not exist.
+
+- `--groups-claim` (?ˆ:[A-Za-z0-9\.\-_]+)
+OpenID claim used to retrieve groups with.
+
+- `--groups-overwrite` <boolean> (default = 0)
+All groups will be overwritten for the user on login.
+
+- `--issuer-url` <string>
+OpenID Issuer Url
+
+- `--mode` <ldap | ldap+starttls | ldaps> (default = ldap)
+LDAP protocol mode.
+
+- `--password` <string>
+LDAP bind password. Will be stored in /etc/pve/priv/realm/<REALM>.pw.
+
+- `--port` <integer> (1 - 65535)
+Server port.
+
+- `--prompt` (?:none|login|consent|select_account|\S+)
+Specifies whether the Authorization Server prompts the End-User for reauthentication and consent.
+
+- `--query-userinfo` <boolean> (default = 1)
+Enables querying the userinfo endpoint for claims values.
+
+
+- `--scopes` <string> (default = email profile)
+Specifies the scopes (user details) that should be authorized and returned, for example email or profile.
+
+- `--secure` <boolean>
+Use secure LDAPS protocol. DEPRECATED: use mode instead.
+
+- `--server1` <string>
+Server IP address (or DNS name)
+
+- `--server2` <string>
+Fallback Server IP address (or DNS name)
+
+- `--sslversion` <tlsv1 | tlsv1_1 | tlsv1_2 | tlsv1_3>
+LDAPS TLS/SSL version. It’s not recommended to use version older than 1.2!
+
+- `--sync-defaults-options` [enable-new=<1|0>] [,full=<1|0>]
+[,purge=<1|0>] [,remove-vanished=([acl];[properties];[entry])|none]
+[,scope=<users|groups|both>]
+The default options for behavior of synchronizations.
+
+- `--sync_attributes` \w+=[ˆ,]+(,\s*\w+=[ˆ,]+)*
+Comma separated list of key=value pairs for specifying which LDAP attributes map to which PVE user
+field. For example, to map the LDAP attribute mail to PVEs email, write email=mail. By default, each
+PVE user field is represented by an LDAP attribute of the same name.
+
+- `--tfa` type=<TFATYPE> [,digits=<COUNT>] [,id=<ID>] [,key=<KEY>]
+[,step=<SECONDS>] [,url=<URL>]
+Use Two-factor authentication.
+
+- `--type` <ad | ldap | openid | pam | pve>
+Realm type.
+
+- `--user_attr` \S{2,}
+LDAP user attribute name
+
+- `--user_classes` <string> (default = inetorgperson, posixaccount, person,
+user)
+The objectclasses for users.
+
+- `--username-claim` <string>
+OpenID claim used to generate the unique username.
+
+- `--verify` <boolean> (default = 0)
+Verify the server’s SSL certificate
+
+```
+pveum realm delete <realm>
+```
+
+Delete an authentication server.
+
+
+<realm>: <string>
+Authentication domain ID
+
+```
+pveum realm list [FORMAT_OPTIONS]
+```
+
+Authentication domain index.
+
+```
+pveum realm modify <realm> [OPTIONS]
+```
+
+Update authentication server settings.
+
+<realm>: <string>
+Authentication domain ID
+
+- `--acr-values` ˆ[ˆ\x00-\x1F\x7F <>#"]*$
+Specifies the Authentication Context Class Reference values that theAuthorization Server is being
+requested to use for the Auth Request.
+
+- `--autocreate` <boolean> (default = 0)
+Automatically create users if they do not exist.
+
+- `--base_dn` <string>
+LDAP base domain name
+
+- `--bind_dn` <string>
+LDAP bind domain name
+
+- `--capath` <string> (default = /etc/ssl/certs)
+Path to the CA certificate store
+
+- `--case-sensitive` <boolean> (default = 1)
+username is case-sensitive
+
+- `--cert` <string>
+Path to the client certificate
+
+- `--certkey` <string>
+Path to the client certificate key
+
+- `--check-connection` <boolean> (default = 0)
+Check bind connection to the server.
+
+- `--client-id` <string>
+OpenID Client ID
+
+- `--client-key` <string>
+OpenID Client Key
+
+
+- `--comment` <string>
+Description.
+
+- `--default` <boolean>
+Use this as default realm
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--domain` \S+
+AD domain name
+
+- `--filter` <string>
+LDAP filter for user sync.
+
+- `--group_classes` <string> (default = groupOfNames, group,
+univentionGroup, ipausergroup)
+The objectclasses for groups.
+
+- `--group_dn` <string>
+LDAP base domain name for group sync. If not set, the base_dn will be used.
+
+- `--group_filter` <string>
+LDAP filter for group sync.
+
+- `--group_name_attr` <string>
+LDAP attribute representing a groups name. If not set or found, the first value of the DN will be used
+as name.
+
+- `--groups-autocreate` <boolean> (default = 0)
+Automatically create groups if they do not exist.
+
+- `--groups-claim` (?ˆ:[A-Za-z0-9\.\-_]+)
+OpenID claim used to retrieve groups with.
+
+- `--groups-overwrite` <boolean> (default = 0)
+All groups will be overwritten for the user on login.
+
+- `--issuer-url` <string>
+OpenID Issuer Url
+
+- `--mode` <ldap | ldap+starttls | ldaps> (default = ldap)
+LDAP protocol mode.
+
+
+- `--password` <string>
+LDAP bind password. Will be stored in /etc/pve/priv/realm/<REALM>.pw.
+
+- `--port` <integer> (1 - 65535)
+Server port.
+
+- `--prompt` (?:none|login|consent|select_account|\S+)
+Specifies whether the Authorization Server prompts the End-User for reauthentication and consent.
+
+- `--query-userinfo` <boolean> (default = 1)
+Enables querying the userinfo endpoint for claims values.
+
+- `--scopes` <string> (default = email profile)
+Specifies the scopes (user details) that should be authorized and returned, for example email or profile.
+
+- `--secure` <boolean>
+Use secure LDAPS protocol. DEPRECATED: use mode instead.
+
+- `--server1` <string>
+Server IP address (or DNS name)
+
+- `--server2` <string>
+Fallback Server IP address (or DNS name)
+
+- `--sslversion` <tlsv1 | tlsv1_1 | tlsv1_2 | tlsv1_3>
+LDAPS TLS/SSL version. It’s not recommended to use version older than 1.2!
+
+- `--sync-defaults-options` [enable-new=<1|0>] [,full=<1|0>]
+[,purge=<1|0>] [,remove-vanished=([acl];[properties];[entry])|none]
+[,scope=<users|groups|both>]
+The default options for behavior of synchronizations.
+
+- `--sync_attributes` \w+=[ˆ,]+(,\s*\w+=[ˆ,]+)*
+Comma separated list of key=value pairs for specifying which LDAP attributes map to which PVE user
+field. For example, to map the LDAP attribute mail to PVEs email, write email=mail. By default, each
+PVE user field is represented by an LDAP attribute of the same name.
+
+- `--tfa` type=<TFATYPE> [,digits=<COUNT>] [,id=<ID>] [,key=<KEY>]
+[,step=<SECONDS>] [,url=<URL>]
+Use Two-factor authentication.
+
+- `--user_attr` \S{2,}
+LDAP user attribute name
+
+- `--user_classes` <string> (default = inetorgperson, posixaccount, person,
+user)
+The objectclasses for users.
+
+
+- `--verify` <boolean> (default = 0)
+Verify the server’s SSL certificate
+
+```
+pveum realm sync <realm> [OPTIONS]
+```
+
+Syncs users and/or groups from the configured LDAP to user.cfg. NOTE: Synced groups will have the name
+name-$realm, so make sure those groups do not exist to prevent overwriting.
+
+<realm>: <string>
+Authentication domain ID
+
+- `--dry-run` <boolean> (default = 0)
+If set, does not write anything.
+
+- `--enable-new` <boolean> (default = 1)
+Enable newly synced users immediately.
+
+- `--full` <boolean>
+DEPRECATED: use remove-vanished instead. If set, uses the LDAP Directory as source of truth,
+deleting users or groups not returned from the sync and removing all locally modified properties of
+synced users. If not set, only syncs information which is present in the synced data, and does not
+delete or modify anything else.
+
+- `--purge` <boolean>
+DEPRECATED: use remove-vanished instead. Remove ACLs for users or groups which were removed
+from the config during a sync.
+
+- `--remove-vanished` ([acl];[properties];[entry])|none (default = none)
+A semicolon-separated list of things to remove when they or the user vanishes during a sync. The
+following values are possible: entry removes the user/group when not returned from the sync. properties removes the set properties on existing user/group that do not appear in the source (even custom
+ones). acl removes acls when the user/group is not returned from the sync. Instead of a list it also can
+be none (the default).
+
+- `--scope` <both | groups | users>
+Select what to sync.
+
+```
+pveum role add <roleid> [OPTIONS]
+```
+
+Create new role.
+
+<roleid>: <string>
+no description available
+
+- `--privs` <string>
+no description available
+
+
+```
+pveum role delete <roleid>
+```
+
+Delete role.
+
+<roleid>: <string>
+no description available
+
+```
+pveum role list [FORMAT_OPTIONS]
+```
+
+Role index.
+
+```
+pveum role modify <roleid> [OPTIONS]
+```
+
+Update an existing role.
+
+<roleid>: <string>
+no description available
+
+- `--append` <boolean>
+no description available
+
+> **Note:**
+> Requires option(s): privs
+
+
+- `--privs` <string>
+no description available
+
+```
+pveum roleadd
+```
+
+An alias for pveum role add.
+
+```
+pveum roledel
+```
+
+An alias for pveum role delete.
+
+```
+pveum rolemod
+```
+
+An alias for pveum role modify.
+
+```
+pveum ticket <username> [OPTIONS]
+```
+
+Create or verify authentication ticket.
+
+<username>: <string>
+User name
+
+- `--new-format` <boolean> (default = 1)
+This parameter is now ignored and assumed to be 1.
+
+- `--otp` <string>
+One-time password for Two-factor authentication.
+
+
+- `--path` <string>
+Verify ticket, and check if user have access privs on path
+
+> **Note:**
+> Requires option(s): privs
+
+
+- `--privs` <string>
+Verify ticket, and check if user have access privs on path
+
+> **Note:**
+> Requires option(s): path
+
+
+- `--realm` <string>
+You can optionally pass the realm using this parameter. Normally the realm is simply added to the
+username <username>@<realm>.
+
+- `--tfa-challenge` <string>
+The signed TFA challenge string the user wants to respond to.
+
+```
+pveum user add <userid> [OPTIONS]
+```
+
+Create new user.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+- `--comment` <string>
+no description available
+
+- `--email` <string>
+no description available
+
+- `--enable` <boolean> (default = 1)
+Enable the account (default). You can set this to 0 to disable the account
+
+- `--expire` <integer> (0 - N)
+Account expiration date (seconds since epoch). 0 means no expiration date.
+
+- `--firstname` <string>
+no description available
+
+- `--groups` <string>
+no description available
+
+
+- `--keys` [0-9a-zA-Z!=]{0,4096}
+Keys for two factor auth (yubico).
+
+- `--lastname` <string>
+no description available
+
+- `--password` <string>
+Initial password.
+
+```
+pveum user delete <userid>
+```
+
+Delete user.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+
+```
+pveum user list [OPTIONS] [FORMAT_OPTIONS]
+```
+
+User index.
+
+- `--enabled` <boolean>
+Optional filter for enable property.
+
+- `--full` <boolean> (default = 0)
+Include group and token information.
+
+```
+pveum user modify <userid> [OPTIONS]
+```
+
+Update user configuration.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+- `--append` <boolean>
+no description available
+
+> **Note:**
+> Requires option(s): groups
+
+
+- `--comment` <string>
+no description available
+
+- `--email` <string>
+no description available
+
+
+- `--enable` <boolean> (default = 1)
+Enable the account (default). You can set this to 0 to disable the account
+
+- `--expire` <integer> (0 - N)
+Account expiration date (seconds since epoch). 0 means no expiration date.
+
+- `--firstname` <string>
+no description available
+
+- `--groups` <string>
+no description available
+
+- `--keys` [0-9a-zA-Z!=]{0,4096}
+Keys for two factor auth (yubico).
+
+- `--lastname` <string>
+no description available
+
+```
+pveum user permissions [<userid>] [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Retrieve effective permissions of given user/token.
+
+<userid>:
+(?ˆ:ˆ(?ˆ:[ˆ\s:/]+)\@(?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)(?:!(?ˆ:[A-Za-z][A-Za-z0User ID or full API token ID
+
+- `--path` <string>
+Only dump this specific path, not the whole tree.
+
+```
+pveum user tfa delete <userid> [OPTIONS]
+```
+
+Delete TFA entries from a user.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+- `--id` <string>
+The TFA ID, if none provided, all TFA entries will be deleted.
+
+```
+pveum user tfa list [<userid>]
+```
+
+List TFA entries.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+
+
+```
+pveum user tfa unlock <userid>
+```
+
+Unlock a user’s TFA authentication.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+
+```
+pveum user token add <userid> <tokenid> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Generate a new API token for a specific user. NOTE: returns API token value, which needs to be stored as
+it cannot be retrieved afterwards!
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+User-specific token identifier.
+
+- `--comment` <string>
+no description available
+
+- `--expire` <integer> (0 - N) (default = same as user)
+API token expiration date (seconds since epoch). 0 means no expiration date.
+
+- `--privsep` <boolean> (default = 1)
+Restrict API token privileges with separate ACLs (default), or give full privileges of corresponding user.
+
+```
+pveum user token delete <userid> <tokenid> [FORMAT_OPTIONS]
+```
+
+Remove API token for a specific user.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+User-specific token identifier.
+
+```
+pveum user token list <userid> [FORMAT_OPTIONS]
+```
+
+Get user API tokens.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+
+```
+pveum user token modify <userid> <tokenid> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Update API token for a specific user.
+
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+User-specific token identifier.
+
+- `--comment` <string>
+no description available
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--expire` <integer> (0 - N) (default = same as user)
+API token expiration date (seconds since epoch). 0 means no expiration date.
+
+- `--privsep` <boolean> (default = 1)
+Restrict API token privileges with separate ACLs (default), or give full privileges of corresponding user.
+
+```
+pveum user token permissions <userid> <tokenid> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Retrieve effective permissions of given token.
+
+<userid>: <string>
+Full User ID, in the name@realm format.
+<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+User-specific token identifier.
+
+- `--path` <string>
+Only dump this specific path, not the whole tree.
+
+```
+pveum user token remove
+```
+
+An alias for pveum user token delete.
+
+```
+pveum useradd
+```
+
+An alias for pveum user add.
+
+```
+pveum userdel
+```
+
+An alias for pveum user delete.
+
+```
+pveum usermod
+```
+
+An alias for pveum user modify.
+
+## See also
+
+- [User Management](../ch14-user-management/_index.md)
+

@@ -1,0 +1,16 @@
+{
+  "name": "bitranox-skills",
+  "owner": {
+    "name": "bitranox"
+  },
+  "metadata": {
+    "description": "Bitranox Claude Code skill collection, distributed as a single plugin."
+  },
+  "plugins": [
+    {
+      "name": "bitranox",
+      "source": "./plugins/bitranox",
+      "description": "Software-engineering workflow skills (planning, debugging, review, architecture, language and tool references) plus a self-improvement loop. Skills invoke as /bitranox:<skill>."
+    }
+  ]
+}

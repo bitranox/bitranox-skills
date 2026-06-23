@@ -1,0 +1,834 @@
+# pvesm - Proxmox VE Storage Manager
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+A.3
+
+
+```
+pvesm - Proxmox VE Storage Manager
+```
+
+
+```
+pvesm <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pvesm add <type> <storage> [OPTIONS]
+```
+
+Create a new storage.
+
+<type>: <btrfs | cephfs | cifs | dir | esxi | iscsi | iscsidirect |
+lvm | lvmthin | nfs | pbs | rbd | zfs | zfspool>
+Storage type.
+
+<storage>: <storage ID>
+The storage identifier.
+
+- `--authsupported` <string>
+Authsupported.
+
+- `--base` <string>
+Base volume. This volume is automatically activated.
+
+- `--blocksize` <string>
+block size
+
+- `--bwlimit` [clone=<LIMIT>] [,default=<LIMIT>] [,migration=<LIMIT>]
+[,move=<LIMIT>] [,restore=<LIMIT>]
+Set I/O bandwidth limit for various operations (in KiB/s).
+
+- `--comstar_hg` <string>
+host group for comstar views
+
+- `--comstar_tg` <string>
+target group for comstar views
+
+- `--content` <string>
+Allowed content types.
+
+> **Note:**
+> the value rootdir is used for Containers, and value images for VMs.
+
+
+- `--content-dirs` <string>
+Overrides for default content type directories.
+
+- `--create-base-path` <boolean> (default = yes)
+Create the base directory if it doesn’t exist.
+
+
+- `--create-subdirs` <boolean> (default = yes)
+Populate the directory with the default structure.
+
+- `--data-pool` <string>
+Data Pool (for erasure coding only)
+
+- `--datastore` <string>
+Proxmox Backup Server datastore name.
+
+- `--disable` <boolean>
+Flag to disable the storage.
+
+- `--domain` <string>
+CIFS domain.
+
+- `--encryption-key` a file containing an encryption key, or the
+special value "autogen"
+Encryption key. Use autogen to generate one automatically without passphrase.
+
+- `--export` <string>
+NFS export path.
+
+- `--fingerprint` ([A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2}
+Certificate SHA 256 fingerprint.
+
+- `--format` <qcow2 | raw | subvol | vmdk>
+Default image format.
+
+- `--fs-name` <string>
+The Ceph filesystem name.
+
+- `--fuse` <boolean>
+Mount CephFS through FUSE.
+
+- `--is_mountpoint` <string> (default = no)
+Assume the given path is an externally managed mountpoint and consider the storage offline if it is
+not mounted. Using a boolean (yes/no) value serves as a shortcut to using the target path in this field.
+
+- `--iscsiprovider` <string>
+iscsi provider
+
+- `--keyring` file containing the keyring to authenticate in the Ceph
+cluster
+Client keyring contents (for external clusters).
+
+- `--krbd` <boolean> (default = 0)
+Always access rbd through krbd kernel module.
+
+
+- `--lio_tpg` <string>
+target portal group for Linux LIO targets
+
+- `--master-pubkey` a file containing a PEM-formatted master public key
+Base64-encoded, PEM-formatted public RSA key. Used to encrypt a copy of the encryption-key which
+will be added to each encrypted backup.
+
+- `--max-protected-backups` <integer> (-1 - N) (default = Unlimited for
+users with Datastore.Allocate privilege, 5 for other users)
+Maximal number of protected backups per guest. Use -1 for unlimited.
+
+- `--mkdir` <boolean> (default = yes)
+Create the directory if it doesn’t exist and populate it with default sub-dirs. NOTE: Deprecated, use the
+create-base-path and create-subdirs options instead.
+
+- `--monhost` <string>
+IP addresses of monitors (for external clusters).
+
+- `--mountpoint` <string>
+mount point
+
+- `--namespace` <string>
+Namespace.
+
+- `--nocow` <boolean> (default = 0)
+Set the NOCOW flag on files. Disables data checksumming and causes data errors to be unrecoverable from while allowing direct I/O. Only use this if data does not need to be any more safe than on a
+single ext4 formatted disk with no underlying raid system.
+
+- `--nodes` <string>
+List of nodes for which the storage configuration applies.
+
+- `--nowritecache` <boolean>
+disable write caching on the target
+
+- `--options` <string>
+NFS/CIFS mount options (see man nfs or man mount.cifs)
+
+- `--password` <password>
+Password for accessing the share/datastore.
+
+- `--path` <string>
+File system path.
+
+- `--pool` <string>
+Pool.
+
+
+- `--port` <integer> (1 - 65535)
+Use this port to connect to the storage instead of the default one (for example, with PBS or ESXi). For
+NFS and CIFS, use the options option to configure the port via the mount options.
+
+- `--portal` <string>
+iSCSI portal (IP or DNS name with optional port).
+
+- `--preallocation` <falloc | full | metadata | off> (default = metadata)
+Preallocation mode for raw and qcow2 images. Using metadata on raw images results in preallocation=off.
+
+- `--prune-backups` [keep-all=<1|0>] [,keep-daily=<N>]
+[,keep-hourly=<N>] [,keep-last=<N>] [,keep-monthly=<N>]
+[,keep-weekly=<N>] [,keep-yearly=<N>]
+The retention options with shorter intervals are processed first with --keep-last being the very first one.
+Each option covers a specific period of time. We say that backups within this period are covered by
+this option. The next option does not take care of already covered backups and only considers older
+backups.
+
+- `--saferemove` <boolean>
+Zero-out data when removing LVs.
+
+- `--saferemove-stepsize` <1 | 16 | 2 | 32 | 4 | 8> (default = 32)
+Wipe step size in MiB. It will be capped to the maximum supported by the storage.
+
+- `--saferemove_throughput` <string>
+Wipe throughput (cstream -t parameter value).
+
+- `--server` <string>
+Server IP or DNS name.
+
+- `--share` <string>
+CIFS share.
+
+- `--shared` <boolean>
+Indicate that this is a single storage with the same contents on all nodes (or all listed in the nodes
+option). It will not make the contents of a local storage automatically accessible to other nodes, it just
+marks an already shared storage as such!
+
+- `--skip-cert-verification` <boolean> (default = false)
+Disable TLS certificate verification, only enable on fully trusted networks!
+
+- `--smbversion` <2.0 | 2.1 | 3 | 3.0 | 3.11 | default> (default = default)
+SMB protocol version. default if not set, negotiates the highest SMB2+ version supported by both the
+client and server.
+
+
+- `--snapshot-as-volume-chain` <boolean> (default = 0)
+Enable support for creating storage-vendor agnostic snapshot through volume backing-chains.
+
+- `--sparse` <boolean>
+use sparse volumes
+
+- `--subdir` <string>
+Subdir to mount.
+
+- `--tagged_only` <boolean>
+Only use logical volumes tagged with pve-vm-ID.
+
+- `--target` <string>
+iSCSI target.
+
+- `--thinpool` <string>
+LVM thin pool LV name.
+
+- `--username` <string>
+RBD Id.
+
+- `--vgname` <string>
+Volume group name.
+
+- `--zfs-base-path` <string>
+Base path where to look for the created ZFS block devices. Set automatically during creation if not
+specified. Usually /dev/zvol.
+
+```
+pvesm alloc <storage> <vmid> <filename> <size> [OPTIONS]
+```
+
+Allocate disk images.
+
+<storage>: <storage ID>
+The storage identifier.
+
+<vmid>: <integer> (100 - 999999999)
+Specify owner VM
+
+<filename>: <string>
+The name of the file to create.
+
+<size>: \d+[MG]?
+Size in kilobyte (1024 bytes). Optional suffixes M (megabyte, 1024K) and G (gigabyte, 1024M)
+
+- `--format` <qcow2 | raw | subvol | vmdk>
+Format of the image.
+
+
+> **Note:**
+> Requires option(s): size
+
+
+```
+pvesm apiinfo
+```
+
+Returns APIVER and APIAGE.
+
+```
+pvesm cifsscan
+```
+
+An alias for pvesm scan cifs.
+
+```
+pvesm export <volume> <format> <filename> [OPTIONS]
+```
+
+Used internally to export a volume.
+
+<volume>: <string>
+Volume identifier
+
+<format>: <btrfs | qcow2+size | raw+size | tar+size | vmdk+size |
+zfs>
+Export stream format
+
+<filename>: <string>
+Destination file name
+
+- `--base` (?ˆi:[a-z0-9_\-]{1,40})
+Snapshot to start an incremental stream from
+
+- `--snapshot` (?ˆi:[a-z0-9_\-]{1,40})
+Snapshot to export
+
+- `--snapshot-list` <string>
+Ordered list of snapshots to transfer
+
+- `--with-snapshots` <boolean> (default = 0)
+Whether to include intermediate snapshots in the stream
+
+```
+pvesm extractconfig <volume>
+```
+
+Extract configuration from vzdump backup archive.
+
+<volume>: <string>
+Volume identifier
+
+```
+pvesm free <volume> [OPTIONS]
+```
+
+Delete volume
+
+<volume>: <string>
+Volume identifier
+
+
+- `--delay` <integer> (1 - 30)
+Time to wait for the task to finish. We return null if the task finish within that time.
+
+- `--storage` <storage ID>
+The storage identifier.
+
+```
+pvesm help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pvesm import <volume> <format> <filename> [OPTIONS]
+```
+
+Used internally to import a volume.
+
+<volume>: <string>
+Volume identifier
+
+<format>: <btrfs | qcow2+size | raw+size | tar+size | vmdk+size |
+zfs>
+Import stream format
+
+<filename>: <string>
+Source file name. For - stdin is used, the tcp://<IP-or-CIDR> format allows to use a TCP connection,
+the unix://PATH-TO-SOCKET format a UNIX socket as input.Else, the file is treated as common file.
+
+- `--allow-rename` <boolean> (default = 0)
+Choose a new volume ID if the requested volume ID already exists, instead of throwing an error.
+
+- `--base` (?ˆi:[a-z0-9_\-]{1,40})
+Base snapshot of an incremental stream
+
+- `--delete-snapshot` (?ˆi:[a-z0-9_\-]{1,80})
+A snapshot to delete on success
+
+- `--snapshot` (?ˆi:[a-z0-9_\-]{1,40})
+The current-state snapshot if the stream contains snapshots
+
+- `--with-snapshots` <boolean> (default = 0)
+Whether the stream includes intermediate snapshots
+
+
+```
+pvesm iscsiscan
+```
+
+An alias for pvesm scan iscsi.
+
+```
+pvesm list <storage> [OPTIONS]
+```
+
+List storage content.
+
+<storage>: <storage ID>
+The storage identifier.
+
+- `--content` <string>
+Only list content of this type.
+
+- `--vmid` <integer> (100 - 999999999)
+Only list images for this VM
+
+```
+pvesm lvmscan
+```
+
+An alias for pvesm scan lvm.
+
+```
+pvesm lvmthinscan
+```
+
+An alias for pvesm scan lvmthin.
+
+```
+pvesm nfsscan
+```
+
+An alias for pvesm scan nfs.
+
+```
+pvesm path <volume>
+```
+
+Get filesystem path for specified volume
+
+<volume>: <string>
+Volume identifier
+
+```
+pvesm prune-backups <storage> [OPTIONS]
+```
+
+Prune backups. Only those using the standard naming scheme are considered. If no keep options are
+specified, those from the storage configuration are used.
+
+<storage>: <storage ID>
+The storage identifier.
+
+- `--dry-run` <boolean>
+Only show what would be pruned, don’t delete anything.
+
+- `--keep-all` <boolean>
+Keep all backups. Conflicts with the other options when true.
+
+- `--keep-daily` <N>
+Keep backups for the last <N> different days. If there is morethan one backup for a single day, only
+the latest one is kept.
+
+
+- `--keep-hourly` <N>
+Keep backups for the last <N> different hours. If there is morethan one backup for a single hour, only
+the latest one is kept.
+
+- `--keep-last` <N>
+Keep the last <N> backups.
+
+- `--keep-monthly` <N>
+Keep backups for the last <N> different months. If there is morethan one backup for a single month,
+only the latest one is kept.
+
+- `--keep-weekly` <N>
+Keep backups for the last <N> different weeks. If there is morethan one backup for a single week, only
+the latest one is kept.
+
+- `--keep-yearly` <N>
+Keep backups for the last <N> different years. If there is morethan one backup for a single year, only
+the latest one is kept.
+
+- `--type` <lxc | qemu>
+Either qemu or lxc. Only consider backups for guests of this type.
+
+- `--vmid` <integer> (100 - 999999999)
+Only consider backups for this guest.
+
+```
+pvesm remove <storage>
+```
+
+Delete storage configuration.
+
+<storage>: <storage ID>
+The storage identifier.
+
+```
+pvesm scan cifs <server> [OPTIONS]
+```
+
+Scan remote CIFS server.
+
+<server>: <string>
+The server address (name or IP).
+
+- `--domain` <string>
+SMB domain (Workgroup).
+
+- `--password` <password>
+User password.
+
+- `--username` <string>
+User name.
+
+
+```
+pvesm scan iscsi <portal>
+```
+
+Scan remote iSCSI server.
+
+<portal>: <string>
+The iSCSI portal (IP or DNS name with optional port).
+
+```
+pvesm scan lvm
+```
+
+List local LVM volume groups.
+
+```
+pvesm scan lvmthin <vg>
+```
+
+List local LVM Thin Pools.
+
+<vg>: [a-zA-Z0-9\.\+\_][a-zA-Z0-9\.\+\_\-]+
+no description available
+
+```
+pvesm scan nfs <server>
+```
+
+Scan remote NFS server.
+
+<server>: <string>
+The server address (name or IP).
+
+
+```
+pvesm scan pbs <server> <username> --password <string> [OPTIONS] [FORMAT_OPTIONS
+```
+
+Scan remote Proxmox Backup Server.
+
+<server>: <string>
+The server address (name or IP).
+
+<username>: <string>
+User-name or API token-ID.
+
+- `--fingerprint` ([A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2}
+Certificate SHA 256 fingerprint.
+
+- `--password` <string>
+User password or API token secret.
+
+- `--port` <integer> (1 - 65535) (default = 8007)
+Optional port.
+
+```
+pvesm scan zfs
+```
+
+Scan zfs pool list on local node.
+
+```
+pvesm set <storage> [OPTIONS]
+```
+
+Update storage configuration.
+
+
+<storage>: <storage ID>
+The storage identifier.
+
+- `--blocksize` <string>
+block size
+
+- `--bwlimit` [clone=<LIMIT>] [,default=<LIMIT>] [,migration=<LIMIT>]
+[,move=<LIMIT>] [,restore=<LIMIT>]
+Set I/O bandwidth limit for various operations (in KiB/s).
+
+- `--comstar_hg` <string>
+host group for comstar views
+
+- `--comstar_tg` <string>
+target group for comstar views
+
+- `--content` <string>
+Allowed content types.
+
+> **Note:**
+> the value rootdir is used for Containers, and value images for VMs.
+
+
+- `--content-dirs` <string>
+Overrides for default content type directories.
+
+- `--create-base-path` <boolean> (default = yes)
+Create the base directory if it doesn’t exist.
+
+- `--create-subdirs` <boolean> (default = yes)
+Populate the directory with the default structure.
+
+- `--data-pool` <string>
+Data Pool (for erasure coding only)
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--disable` <boolean>
+Flag to disable the storage.
+
+- `--domain` <string>
+CIFS domain.
+
+
+- `--encryption-key` a file containing an encryption key, or the
+special value "autogen"
+Encryption key. Use autogen to generate one automatically without passphrase.
+
+- `--fingerprint` ([A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2}
+Certificate SHA 256 fingerprint.
+
+- `--format` <qcow2 | raw | subvol | vmdk>
+Default image format.
+
+- `--fs-name` <string>
+The Ceph filesystem name.
+
+- `--fuse` <boolean>
+Mount CephFS through FUSE.
+
+- `--is_mountpoint` <string> (default = no)
+Assume the given path is an externally managed mountpoint and consider the storage offline if it is
+not mounted. Using a boolean (yes/no) value serves as a shortcut to using the target path in this field.
+
+- `--keyring` file containing the keyring to authenticate in the Ceph
+cluster
+Client keyring contents (for external clusters).
+
+- `--krbd` <boolean> (default = 0)
+Always access rbd through krbd kernel module.
+
+- `--lio_tpg` <string>
+target portal group for Linux LIO targets
+
+- `--master-pubkey` a file containing a PEM-formatted master public key
+Base64-encoded, PEM-formatted public RSA key. Used to encrypt a copy of the encryption-key which
+will be added to each encrypted backup.
+
+- `--max-protected-backups` <integer> (-1 - N) (default = Unlimited for
+users with Datastore.Allocate privilege, 5 for other users)
+Maximal number of protected backups per guest. Use -1 for unlimited.
+
+- `--mkdir` <boolean> (default = yes)
+Create the directory if it doesn’t exist and populate it with default sub-dirs. NOTE: Deprecated, use the
+create-base-path and create-subdirs options instead.
+
+- `--monhost` <string>
+IP addresses of monitors (for external clusters).
+
+- `--mountpoint` <string>
+mount point
+
+
+- `--namespace` <string>
+Namespace.
+
+- `--nocow` <boolean> (default = 0)
+Set the NOCOW flag on files. Disables data checksumming and causes data errors to be unrecoverable from while allowing direct I/O. Only use this if data does not need to be any more safe than on a
+single ext4 formatted disk with no underlying raid system.
+
+- `--nodes` <string>
+List of nodes for which the storage configuration applies.
+
+- `--nowritecache` <boolean>
+disable write caching on the target
+
+- `--options` <string>
+NFS/CIFS mount options (see man nfs or man mount.cifs)
+
+- `--password` <password>
+Password for accessing the share/datastore.
+
+- `--pool` <string>
+Pool.
+
+- `--port` <integer> (1 - 65535)
+Use this port to connect to the storage instead of the default one (for example, with PBS or ESXi). For
+NFS and CIFS, use the options option to configure the port via the mount options.
+
+- `--preallocation` <falloc | full | metadata | off> (default = metadata)
+Preallocation mode for raw and qcow2 images. Using metadata on raw images results in preallocation=off.
+
+- `--prune-backups` [keep-all=<1|0>] [,keep-daily=<N>]
+[,keep-hourly=<N>] [,keep-last=<N>] [,keep-monthly=<N>]
+[,keep-weekly=<N>] [,keep-yearly=<N>]
+The retention options with shorter intervals are processed first with --keep-last being the very first one.
+Each option covers a specific period of time. We say that backups within this period are covered by
+this option. The next option does not take care of already covered backups and only considers older
+backups.
+
+- `--saferemove` <boolean>
+Zero-out data when removing LVs.
+
+- `--saferemove-stepsize` <1 | 16 | 2 | 32 | 4 | 8> (default = 32)
+Wipe step size in MiB. It will be capped to the maximum supported by the storage.
+
+- `--saferemove_throughput` <string>
+Wipe throughput (cstream -t parameter value).
+
+
+- `--server` <string>
+Server IP or DNS name.
+
+- `--shared` <boolean>
+Indicate that this is a single storage with the same contents on all nodes (or all listed in the nodes
+option). It will not make the contents of a local storage automatically accessible to other nodes, it just
+marks an already shared storage as such!
+
+- `--skip-cert-verification` <boolean> (default = false)
+Disable TLS certificate verification, only enable on fully trusted networks!
+
+- `--smbversion` <2.0 | 2.1 | 3 | 3.0 | 3.11 | default> (default = default)
+SMB protocol version. default if not set, negotiates the highest SMB2+ version supported by both the
+client and server.
+
+- `--snapshot-as-volume-chain` <boolean> (default = 0)
+Enable support for creating storage-vendor agnostic snapshot through volume backing-chains.
+
+- `--sparse` <boolean>
+use sparse volumes
+
+- `--subdir` <string>
+Subdir to mount.
+
+- `--tagged_only` <boolean>
+Only use logical volumes tagged with pve-vm-ID.
+
+- `--username` <string>
+RBD Id.
+
+- `--zfs-base-path` <string>
+Base path where to look for the created ZFS block devices. Set automatically during creation if not
+specified. Usually /dev/zvol.
+
+```
+pvesm status [OPTIONS]
+```
+
+Get status for all datastores.
+
+- `--content` <string>
+Only list stores which support this content type.
+
+- `--enabled` <boolean> (default = 0)
+Only list stores which are enabled (not disabled in config).
+
+- `--format` <boolean> (default = 0)
+Include information about formats
+
+
+- `--storage` <storage ID>
+Only list status for specified storage
+
+- `--target` <string>
+If target is different to node, we only lists shared storages which content is accessible on this node and
+the specified target node.
+
+```
+pvesm zfsscan
+```
+
+An alias for pvesm scan zfs.
+
+A.4
+
+
+```
+pvesubscription - Proxmox VE Subscription Manager
+```
+
+
+```
+pvesubscription <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pvesubscription delete
+```
+
+Delete subscription key of this node.
+
+```
+pvesubscription get
+```
+
+Read subscription info.
+
+```
+pvesubscription help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pvesubscription set <key>
+```
+
+Set subscription key.
+
+<key>: \s*pve([1248])([cbsp])-[0-9a-f]{10}\s*
+Proxmox VE subscription key
+
+```
+pvesubscription set-offline-key <data>
+```
+
+Internal use only! To set an offline key, use the package proxmox-offline-mirror-helper instead.
+
+<data>: <string>
+A signed subscription info blob
+
+```
+pvesubscription update [OPTIONS]
+```
+
+Update subscription info.
+
+- `--force` <boolean> (default = 0)
+Always connect to server, even if local cache is still valid.
+
+## See also
+
+- [Storage](../ch07-storage/_index.md)
+

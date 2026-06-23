@@ -1,0 +1,112 @@
+# NFS Backend
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+The real file system path is shown with:
+
+
+```
+# pvesm path local:100/vm-100-disk10.raw
+/var/lib/vz/images/100/vm-100-disk10.raw
+And you can remove the image with:
+
+# pvesm free local:100/vm-100-disk10.raw
+```
+
+
+## 7.6 NFS Backend
+
+
+Storage pool type: nfs
+The NFS backend is based on the directory backend, so it shares most properties. The directory layout
+and the file naming conventions are the same. The main advantage is that you can directly configure the
+NFS server properties, so the backend can mount the share automatically. There is no need to modify
+/etc/fstab. The backend can also test if the server is online, and provides a method to query the server
+for exported shares.
+
+
+### 7.6.1 Configuration
+
+
+The backend supports all common storage properties, except the shared flag, which is always set. Additionally, the following properties are used to configure the NFS server:
+
+server
+Server IP or DNS name. To avoid DNS lookup delays, it is usually preferable to use an IP address
+instead of a DNS name - unless you have a very reliable DNS server, or list the server in the local
+/etc/hosts file.
+export
+NFS export path (as listed by pvesm nfsscan).
+You can also set NFS mount options:
+
+path
+The local mount point (defaults to /mnt/pve/<STORAGE_ID>/).
+content-dirs
+Overrides for the default directory layout. Optional.
+options
+NFS mount options (see man nfs).
+
+
+Configuration Example (/etc/pve/storage.cfg)
+
+nfs: iso-templates
+path /mnt/pve/iso-templates
+server 10.0.0.10
+export /space/iso-templates
+options vers=3,soft
+content iso,vztmpl
+
+
+> **Tip:**
+> After an NFS request times out, NFS request are retried indefinitely by default. This can lead to unexpected
+> hangs on the client side. For read-only content, it is worth to consider the NFS soft option, which limits
+> the number of retries to three.
+
+
+### 7.6.2 Storage Features
+
+
+NFS does not support snapshots, but the backend uses qcow2 features to implement snapshots and
+cloning.
+
+Table 7.4: Storage features for backend nfs
+Content types
+
+Image formats
+
+images
+rootdir
+vztmpl iso
+backup
+snippets
+
+raw qcow2
+vmdk
+
+
+### 7.6.3 Shared
+
+yes
+
+Snapshots
+qcow2
+
+Clones
+qcow2
+
+Examples
+
+You can get a list of exported NFS shares with:
+
+
+```
+# pvesm scan nfs <server>
+```
+
+
+## 7.7 CIFS Backend
+
+
+Storage pool type: cifs
+The CIFS backend extends the directory backend, so that no manual setup of a CIFS mount is needed. Such
+a storage can be added directly through the Proxmox VE API or the web UI, with all our backend advantages,
+like server heartbeat check or comfortable selection of exported shares.

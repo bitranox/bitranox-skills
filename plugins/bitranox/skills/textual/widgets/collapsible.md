@@ -1,0 +1,212 @@
+# Collapsible
+
+> **Tip: Added in version 0.37**
+
+
+A container with a title that can be used to show (expand) or hide (collapse) content, either by clicking or focusing and pressing `Enter`.
+
+- [x] Focusable
+- [x] Container
+
+
+## Composing
+
+You can add content to a Collapsible widget either by passing in children to the constructor, or with a context manager (`with` statement).
+
+Here is an example of using the constructor to add content:
+
+```python
+def compose(self) -> ComposeResult:
+    yield Collapsible(Label("Hello, world."))
+```
+
+Here's how the to use it with the context manager:
+
+```python
+def compose(self) -> ComposeResult:
+    with Collapsible():
+        yield Label("Hello, world.")
+```
+
+The second form is generally preferred, but the end result is the same.
+
+## Title
+
+The default title "Toggle" can be customized by setting the `title` parameter of the constructor:
+
+```python
+def compose(self) -> ComposeResult:
+    with Collapsible(title="An interesting story."):
+        yield Label("Interesting but verbose story.")
+```
+
+## Initial State
+
+The initial state of the `Collapsible` widget can be customized via the `collapsed` parameter of the constructor:
+
+```python
+def compose(self) -> ComposeResult:
+    with Collapsible(title="Contents 1", collapsed=False):
+        yield Label("Hello, world.")
+
+    with Collapsible(title="Contents 2", collapsed=True):  # Default.
+        yield Label("Hello, world.")
+```
+
+## Collapse/Expand Symbols
+
+The symbols used to show the collapsed / expanded state can be customized by setting the parameters `collapsed_symbol` and `expanded_symbol`:
+
+```python
+def compose(self) -> ComposeResult:
+    with Collapsible(collapsed_symbol=">>>", expanded_symbol="v"):
+        yield Label("Hello, world.")
+```
+
+## Examples
+
+
+The following example contains three `Collapsible`s in different states.
+
+**collapsible.py**
+
+
+```python
+from textual.app import App, ComposeResult
+from textual.widgets import Collapsible, Footer, Label, Markdown
+
+LETO = """\
+# Duke Leto I Atreides
+
+Head of House Atreides."""
+
+JESSICA = """
+# Lady Jessica
+
+Bene Gesserit and concubine of Leto, and mother of Paul and Alia.
+"""
+
+PAUL = """
+# Paul Atreides
+
+Son of Leto and Jessica.
+"""
+
+
+class CollapsibleApp(App[None]):
+    """An example of collapsible container."""
+
+    BINDINGS = [
+        ("c", "collapse_or_expand(True)", "Collapse All"),
+        ("e", "collapse_or_expand(False)", "Expand All"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        """Compose app with collapsible containers."""
+        yield Footer()
+        with Collapsible(collapsed=False, title="Leto"):
+            yield Label(LETO)
+        yield Collapsible(Markdown(JESSICA), collapsed=False, title="Jessica")
+        with Collapsible(collapsed=True, title="Paul"):
+            yield Markdown(PAUL)
+
+    def action_collapse_or_expand(self, collapse: bool) -> None:
+        for child in self.walk_children(Collapsible):
+            child.collapsed = collapse
+
+
+if __name__ == "__main__":
+    app = CollapsibleApp()
+    app.run()
+```
+### Setting Initial State
+
+The example below shows nested `Collapsible` widgets and how to set their initial state.
+
+
+**collapsible_nested.py**
+
+
+```python
+from textual.app import App, ComposeResult
+from textual.widgets import Collapsible, Label
+
+
+class CollapsibleApp(App[None]):
+    def compose(self) -> ComposeResult:
+        with Collapsible(collapsed=False):
+            with Collapsible():
+                yield Label("Hello, world.")
+
+
+if __name__ == "__main__":
+    app = CollapsibleApp()
+    app.run()
+```
+### Custom Symbols
+
+The following example shows `Collapsible` widgets with custom expand/collapse symbols.
+
+
+**collapsible_custom_symbol.py**
+
+
+```python
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal
+from textual.widgets import Collapsible, Label
+
+
+class CollapsibleApp(App[None]):
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            with Collapsible(
+                collapsed_symbol=">>>",
+                expanded_symbol="v",
+            ):
+                yield Label("Hello, world.")
+
+            with Collapsible(
+                collapsed_symbol=">>>",
+                expanded_symbol="v",
+                collapsed=False,
+            ):
+                yield Label("Hello, world.")
+
+
+if __name__ == "__main__":
+    app = CollapsibleApp()
+    app.run()
+```
+## Reactive Attributes
+
+| Name        | Type   | Default    | Description                                          |
+|-------------|--------|------------|------------------------------------------------------|
+| `collapsed` | `bool` | `True`     | Controls the collapsed/expanded state of the widget. |
+| `title`     | `str`  | `"Toggle"` | Title of the collapsed/expanded contents.            |
+
+## Messages
+
+- `Collapsible.Toggled`
+
+## Bindings
+
+The collapsible widget defines the following binding on its title:
+
+*API reference: `textual.widgets._collapsible.CollapsibleTitle.BINDINGS`*
+
+
+## Component Classes
+
+This widget has no component classes.
+
+
+## See also
+
+- [TabbedContent](./tabbed_content.md) - Another way to show/hide content with tabs
+- [ContentSwitcher](./content_switcher.md) - Switches between mutually exclusive content
+- [Widgets guide](../guide/widgets.md) - How to build and use widgets
+
+---
+
+*API reference: `textual.widgets.Collapsible`*

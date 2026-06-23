@@ -1,0 +1,406 @@
+# pveceph - Manage Ceph Services
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+<name>: <string>
+The ceph filesystem name.
+
+- `--remove-pools` <boolean> (default = 0)
+Remove data and metadata pools configured for this fs.
+
+- `--remove-storages` <boolean> (default = 0)
+Remove all pveceph-managed storages configured for this fs.
+
+```
+pveceph help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pveceph init [OPTIONS]
+```
+
+Create initial ceph default configuration and setup symlinks.
+
+- `--cluster-network` <string>
+Declare a separate cluster network, OSDs will routeheartbeat, object replication and recovery traffic
+over it
+
+> **Note:**
+> Requires option(s): network
+
+
+- `--disable_cephx` <boolean> (default = 0)
+Disable cephx authentication.
+
+
+> **Warning:**
+> cephx is a security feature protecting against man-in-the-middle attacks. Only consider disabling cephx if your network is private!
+
+
+- `--min_size` <integer> (1 - 7) (default = 2)
+Minimum number of available replicas per object to allow I/O
+
+- `--network` <string>
+Use specific network for all ceph related traffic
+
+
+- `--pg_bits` <integer> (6 - 14) (default = 6)
+Placement group bits, used to specify the default number of placement groups.
+Depreacted. This setting was deprecated in recent Ceph versions.
+
+- `--size` <integer> (1 - 7) (default = 3)
+Targeted number of replicas per object
+
+```
+pveceph install [OPTIONS]
+```
+
+Install ceph related packages.
+
+- `--allow-experimental` <boolean> (default = 0)
+Allow experimental versions. Use with care!
+
+- `--repository` <enterprise | manual | no-subscription | test> (default =
+enterprise)
+Ceph repository to use. The manual option will not configure any repositories. Use it if the host cannot
+access the public repositories, for example if Proxmox Offline Mirror is used. A repository that contains
+the Ceph packages for the version needs to be manually configured before starting the installation!
+
+- `--version` <squid> (default = squid)
+Ceph version to install.
+
+```
+pveceph lspools
+```
+
+An alias for pveceph pool ls.
+
+```
+pveceph mds create [OPTIONS]
+```
+
+Create Ceph Metadata Server (MDS)
+
+- `--hotstandby` <boolean> (default = 0)
+Determines whether a ceph-mds daemon should poll and replay the log of an active MDS. Faster
+switch on MDS failure, but needs more idle resources.
+
+- `--name` [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])? (default = nodename)
+The ID for the mds, when omitted the same as the nodename
+
+```
+pveceph mds destroy <name>
+```
+
+Destroy Ceph Metadata Server
+
+<name>: [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?
+The name (ID) of the mds
+
+```
+pveceph mgr create [OPTIONS]
+```
+
+Create Ceph Manager
+
+
+- `--id` [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?
+The ID for the manager, when omitted the same as the nodename
+
+```
+pveceph mgr destroy <id>
+```
+
+Destroy Ceph Manager.
+
+<id>: [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?
+The ID of the manager
+
+```
+pveceph mon create [OPTIONS]
+```
+
+Create Ceph Monitor and Manager
+
+- `--mon-address` <string>
+Overwrites autodetected monitor IP address(es). Must be in the public network(s) of Ceph.
+
+- `--monid` [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?
+The ID for the monitor, when omitted the same as the nodename
+
+```
+pveceph mon destroy <monid>
+```
+
+Destroy Ceph Monitor and Manager.
+
+<monid>: [a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?
+Monitor ID
+
+```
+pveceph osd create <dev> [OPTIONS]
+```
+
+Create OSD
+
+<dev>: <string>
+Block device name.
+
+- `--crush-device-class` <string>
+Set the device class of the OSD in crush.
+
+- `--db_dev` <string>
+Block device name for block.db.
+
+- `--db_dev_size` <number> (1 - N) (default = bluestore_block_db_size or 10%
+of OSD size)
+Size in GiB for block.db.
+
+> **Note:**
+> Requires option(s): db_dev
+
+
+- `--encrypted` <boolean> (default = 0)
+Enables encryption of the OSD.
+
+- `--osds-per-device` <integer> (1 - N)
+OSD services per physical device. Only useful for fast NVMe devices" ." to utilize their performance
+better.
+
+- `--wal_dev` <string>
+Block device name for block.wal.
+
+- `--wal_dev_size` <number> (0.5 - N) (default = bluestore_block_wal_size or
+1% of OSD size)
+Size in GiB for block.wal.
+
+> **Note:**
+> Requires option(s): wal_dev
+
+
+```
+pveceph osd destroy <osdid> [OPTIONS]
+```
+
+Destroy OSD
+
+<osdid>: <integer>
+OSD ID
+
+- `--cleanup` <boolean> (default = 0)
+If set, we remove partition table entries.
+
+```
+pveceph osd details <osdid> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Get OSD details.
+
+<osdid>: <string>
+ID of the OSD
+
+- `--verbose` <boolean> (default = 0)
+Print verbose information, same as json-pretty output format.
+
+```
+pveceph pool create <name> [OPTIONS]
+```
+
+Create Ceph pool
+
+<name>: (?ˆ:ˆ[ˆ:/\s]+$)
+The name of the pool. It must be unique.
+
+- `--add_storages` <boolean> (default = 0; for erasure coded pools:
+Configure VM and CT storage using the new pool.
+
+1)
+
+
+- `--application` <cephfs | rbd | rgw> (default = rbd)
+The application of the pool.
+
+- `--crush_rule` <string>
+The rule to use for mapping object placement in the cluster.
+
+- `--erasure-coding` k=<integer> ,m=<integer> [,device-class=<class>]
+[,failure-domain=<domain>] [,profile=<profile>]
+Create an erasure coded pool for RBD with an accompaning replicated pool for metadata storage.
+With EC, the common ceph options size, min_size and crush_rule parameters will be applied to the
+metadata pool.
+
+- `--min_size` <integer> (1 - 7) (default = 2)
+Minimum number of replicas per object
+
+- `--pg_autoscale_mode` <off | on | warn> (default = warn)
+The automatic PG scaling mode of the pool.
+
+- `--pg_num` <integer> (1 - 32768) (default = 128)
+Number of placement groups.
+
+- `--pg_num_min` <integer> (-N - 32768)
+Minimal number of placement groups.
+
+- `--size` <integer> (1 - 7) (default = 3)
+Number of replicas per object
+
+- `--target_size` ˆ(\d+(\.\d+)?)([KMGT])?$
+The estimated target size of the pool for the PG autoscaler.
+
+- `--target_size_ratio` <number>
+The estimated target ratio of the pool for the PG autoscaler.
+
+```
+pveceph pool destroy <name> [OPTIONS]
+```
+
+Destroy pool
+
+<name>: <string>
+The name of the pool. It must be unique.
+
+- `--force` <boolean> (default = 0)
+If true, destroys pool even if in use
+
+- `--remove_ecprofile` <boolean> (default = 1)
+Remove the erasure code profile. Defaults to true, if applicable.
+
+
+- `--remove_storages` <boolean> (default = 0)
+Remove all pveceph-managed storages configured for this pool
+
+```
+pveceph pool get <name> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Show the current pool status.
+
+<name>: <string>
+The name of the pool. It must be unique.
+
+- `--verbose` <boolean> (default = 0)
+If enabled, will display additional data(eg. statistics).
+
+```
+pveceph pool ls [FORMAT_OPTIONS]
+```
+
+List all pools and their settings (which are settable by the POST/PUT endpoints).
+
+```
+pveceph pool set <name> [OPTIONS]
+```
+
+Change POOL settings
+
+<name>: (?ˆ:ˆ[ˆ:/\s]+$)
+The name of the pool. It must be unique.
+
+- `--application` <cephfs | rbd | rgw>
+The application of the pool.
+
+- `--crush_rule` <string>
+The rule to use for mapping object placement in the cluster.
+
+- `--min_size` <integer> (1 - 7)
+Minimum number of replicas per object
+
+- `--pg_autoscale_mode` <off | on | warn>
+The automatic PG scaling mode of the pool.
+
+- `--pg_num` <integer> (1 - 32768)
+Number of placement groups.
+
+- `--pg_num_min` <integer> (-N - 32768)
+Minimal number of placement groups.
+
+- `--size` <integer> (1 - 7)
+Number of replicas per object
+
+- `--target_size` ˆ(\d+(\.\d+)?)([KMGT])?$
+The estimated target size of the pool for the PG autoscaler.
+
+
+- `--target_size_ratio` <number>
+The estimated target ratio of the pool for the PG autoscaler.
+
+```
+pveceph purge [OPTIONS]
+```
+
+Destroy ceph related data and configuration files.
+
+- `--crash` <boolean>
+Additionally purge Ceph crash logs, /var/lib/ceph/crash.
+
+- `--logs` <boolean>
+Additionally purge Ceph logs, /var/log/ceph.
+
+```
+pveceph start [OPTIONS]
+```
+
+Start ceph services.
+
+--service
+(ceph|mon|mds|osd|mgr)(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)?
+(default = ceph.target)
+Ceph service name.
+
+```
+pveceph status
+```
+
+Get Ceph Status.
+
+```
+pveceph stop [OPTIONS]
+```
+
+Stop ceph services.
+
+--service
+(ceph|mon|mds|osd|mgr)(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)?
+(default = ceph.target)
+Ceph service name.
+
+A.7
+
+
+```
+pvenode - Proxmox VE Node Management
+```
+
+
+```
+pvenode <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pvenode acme account deactivate [<name>]
+```
+
+Deactivate existing ACME account at CA.
+
+<name>: <name> (default = default)
+ACME account config file name.
+
+```
+pvenode acme account info [<name>] [FORMAT_OPTIONS]
+```
+
+Return existing ACME account information.
+
+## See also
+
+- [Ceph Cluster](../ch08-ceph/_index.md)
+

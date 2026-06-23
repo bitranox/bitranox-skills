@@ -1,0 +1,376 @@
+# ha-manager - HA Manager
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+- `--comment` <string>
+Description.
+
+- `--failback` <boolean> (default = 1)
+Automatically migrate HA resource to the node with the highest priority according to their node affinity
+rules, if a node with a higher priority than the current node comes online.
+
+- `--group` <string>
+The HA group identifier.
+
+- `--max_relocate` <integer> (0 - N) (default = 1)
+Maximal number of service relocate tries when a service failes to start.
+
+- `--max_restart` <integer> (0 - N) (default = 1)
+Maximal number of tries to restart the service on a node after its start failed.
+
+- `--state` <disabled | enabled | ignored | started | stopped> (default =
+started)
+Requested resource state.
+
+- `--type` <ct | vm>
+Resource type.
+
+```
+ha-manager config [OPTIONS]
+```
+
+List HA resources.
+
+- `--type` <ct | vm>
+Only list resources of specific type
+
+```
+ha-manager crm-command migrate <sid> <node>
+```
+
+Request resource migration (online) to another node.
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+<node>: <string>
+Target node.
+
+
+```
+ha-manager crm-command node-maintenance disable <node>
+```
+
+Change the node-maintenance request state.
+
+<node>: <string>
+The cluster node name.
+
+```
+ha-manager crm-command node-maintenance enable <node>
+```
+
+Change the node-maintenance request state.
+
+<node>: <string>
+The cluster node name.
+
+```
+ha-manager crm-command relocate <sid> <node>
+```
+
+Request resource relocatzion to another node. This stops the service on the old node, and restarts it on the
+target node.
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+<node>: <string>
+Target node.
+
+```
+ha-manager crm-command stop <sid> <timeout>
+```
+
+Request the service to be stopped.
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+<timeout>: <integer> (0 - N)
+Timeout in seconds. If set to 0 a hard stop will be performed.
+
+```
+ha-manager groupadd <group> --nodes <string> [OPTIONS]
+```
+
+Create a new HA group. (deprecated in favor of HA rules)
+
+<group>: <string>
+The HA group identifier.
+
+- `--comment` <string>
+Description.
+
+
+- `--nodes` <node>[:<pri>]{,<node>[:<pri>]}*
+List of cluster node names with optional priority.
+
+- `--nofailback` <boolean> (default = 0)
+The CRM tries to run services on the node with the highest priority. If a node with higher priority comes
+online, the CRM migrates the service to that node. Enabling nofailback prevents that behavior.
+
+- `--restricted` <boolean> (default = 0)
+Resources bound to restricted groups may only run on nodes defined by the group.
+
+- `--type` <group>
+Group type.
+
+```
+ha-manager groupconfig
+```
+
+Get HA groups. (deprecated in favor of HA rules)
+
+```
+ha-manager groupremove <group>
+```
+
+Delete ha group configuration. (deprecated in favor of HA rules)
+
+<group>: <string>
+The HA group identifier.
+
+```
+ha-manager groupset <group> [OPTIONS]
+```
+
+Update ha group configuration. (deprecated in favor of HA rules)
+
+<group>: <string>
+The HA group identifier.
+
+- `--comment` <string>
+Description.
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--nodes` <node>[:<pri>]{,<node>[:<pri>]}*
+List of cluster node names with optional priority.
+
+- `--nofailback` <boolean> (default = 0)
+The CRM tries to run services on the node with the highest priority. If a node with higher priority comes
+online, the CRM migrates the service to that node. Enabling nofailback prevents that behavior.
+
+
+- `--restricted` <boolean> (default = 0)
+Resources bound to restricted groups may only run on nodes defined by the group.
+
+```
+ha-manager help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+ha-manager migrate
+```
+
+An alias for ha-manager crm-command migrate.
+
+```
+ha-manager relocate
+```
+
+An alias for ha-manager crm-command relocate.
+
+```
+ha-manager remove <sid> [OPTIONS]
+```
+
+Delete resource configuration.
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+- `--purge` <boolean> (default = 1)
+Remove this resource from rules that reference it, deleting the rule if this resource is the only resource
+in the rule
+
+```
+ha-manager rules add <type> <rule> --resources <string> [OPTIONS]
+```
+
+Create HA rule.
+
+<type>: <node-affinity | resource-affinity>
+HA rule type.
+
+<rule>: <string>
+HA rule identifier.
+
+- `--comment` <string>
+HA rule description.
+
+- `--disable` <boolean>
+Whether the HA rule is disabled.
+
+
+- `--resources` <type>:<name>{,<type>:<name>}*
+List of HA resource IDs. This consists of a list of resource types followed by a resource specific name
+separated with a colon (example: vm:100,ct:101).
+
+Conditional options:
+
+[type=node-affinity]
+- `--nodes` <node>[:<pri>]{,<node>[:<pri>]}*
+List of cluster node names with optional priority.
+
+- `--strict` <boolean> (default = 0)
+Describes whether the node affinity rule is strict or non-strict.
+
+[type=resource-affinity]
+- `--affinity` <negative | positive>
+Describes whether the HA resources are supposed to be kept on the same node (positive), or
+are supposed to be kept on separate nodes (negative).
+
+```
+ha-manager rules config [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Get HA rules.
+
+- `--resource` <string>
+Limit the returned list to rules affecting the specified resource.
+
+- `--type` <node-affinity | resource-affinity>
+Limit the returned list to the specified rule type.
+
+```
+ha-manager rules list [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Get HA rules.
+
+- `--resource` <string>
+Limit the returned list to rules affecting the specified resource.
+
+- `--type` <node-affinity | resource-affinity>
+Limit the returned list to the specified rule type.
+
+```
+ha-manager rules remove <rule>
+```
+
+Delete HA rule.
+
+<rule>: <string>
+HA rule identifier.
+
+
+```
+ha-manager rules set <type> <rule> [OPTIONS]
+```
+
+Update HA rule.
+
+<type>: <node-affinity | resource-affinity>
+HA rule type.
+
+<rule>: <string>
+HA rule identifier.
+
+- `--comment` <string>
+HA rule description.
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--disable` <boolean>
+Whether the HA rule is disabled.
+
+- `--resources` <type>:<name>{,<type>:<name>}*
+List of HA resource IDs. This consists of a list of resource types followed by a resource specific name
+separated with a colon (example: vm:100,ct:101).
+
+Conditional options:
+
+[type=node-affinity]
+- `--nodes` <node>[:<pri>]{,<node>[:<pri>]}*
+List of cluster node names with optional priority.
+
+- `--strict` <boolean> (default = 0)
+Describes whether the node affinity rule is strict or non-strict.
+
+[type=resource-affinity]
+- `--affinity` <negative | positive>
+Describes whether the HA resources are supposed to be kept on the same node (positive), or
+are supposed to be kept on separate nodes (negative).
+
+```
+ha-manager set <sid> [OPTIONS]
+```
+
+Update resource configuration.
+
+
+<sid>: <type>:<name>
+HA resource ID. This consists of a resource type followed by a resource specific name, separated with
+colon (example: vm:100 / ct:100). For virtual machines and containers, you can simply use the VM or
+CT id as a shortcut (example: 100).
+
+- `--comment` <string>
+Description.
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--failback` <boolean> (default = 1)
+Automatically migrate HA resource to the node with the highest priority according to their node affinity
+rules, if a node with a higher priority than the current node comes online.
+
+- `--group` <string>
+The HA group identifier.
+
+- `--max_relocate` <integer> (0 - N) (default = 1)
+Maximal number of service relocate tries when a service failes to start.
+
+- `--max_restart` <integer> (0 - N) (default = 1)
+Maximal number of tries to restart the service on a node after its start failed.
+
+- `--state` <disabled | enabled | ignored | started | stopped> (default =
+started)
+Requested resource state.
+
+```
+ha-manager status [OPTIONS]
+```
+
+Display HA manger status.
+
+- `--verbose` <boolean> (default = 0)
+Verbose output. Include complete CRM and LRM status (JSON).
+
+## See also
+
+- [High Availability](../ch15-high-availability/_index.md)
+

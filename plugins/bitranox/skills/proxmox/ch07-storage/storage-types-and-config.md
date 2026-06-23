@@ -1,0 +1,484 @@
+# Storage Types and Configuration
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+The Proxmox VE storage model is very flexible. Virtual machine images can either be stored on one or
+several local storages, or on shared storage like NFS or iSCSI (NAS, SAN). There are no limits, and you
+may configure as many storage pools as you like. You can use all storage technologies available for Debian
+Linux.
+One major benefit of storing VMs on shared storage is the ability to live-migrate running machines without
+any downtime, as all nodes in the cluster have direct access to VM disk images. There is no need to copy
+VM image data, so live migration is very fast in that case.
+The storage library (package libpve-storage-perl) uses a flexible plugin system to provide a common interface to all storage types. This can be easily adopted to include further storage types in the future.
+
+
+## 7.1 Storage Types
+
+
+There are basically two different classes of storage types:
+
+File level storage
+File level based storage technologies allow access to a fully featured (POSIX) file system. They are in
+general more flexible than any Block level storage (see below), and allow you to store content of any
+type. ZFS is probably the most advanced system, and it has full support for snapshots and clones.
+Block level storage
+Allows to store large raw images. It is usually not possible to store other files (ISO, backups, ..) on
+such storage types. Most modern block level storage implementations support snapshots and clones.
+Ceph RADOS is a distributed systems, replicating storage data to different nodes that can be accessed
+as RBD (RADOS Block Device).
+
+Table 7.1: Available storage types
+Description
+ZFS (local)
+Directory
+BTRFS
+
+Plugin type
+
+zfspool
+dir
+btrfs
+
+Level
+both1
+file
+file
+
+Shared
+no
+no
+no
+
+Snapshots
+yes
+yes2
+yes
+
+Stable
+yes
+yes
+TP5
+
+
+Table 7.1: (continued)
+Description
+NFS
+CIFS
+Proxmox Backup
+CephFS
+LVM
+LVM-thin
+iSCSI/kernel
+iSCSI/libiscsi
+Ceph/RBD
+ZFS over iSCSI
+
+1
+
+Plugin type
+
+Level
+
+nfs
+file
+cifs
+file
+pbs
+both
+cephfs
+file
+lvm
+block
+lvmthin
+block
+iscsi
+block
+iscsidirectblock
+rbd
+block
+zfs
+block
+
+Shared
+yes
+yes
+yes
+yes
+no3
+no
+yes
+yes
+yes
+yes
+
+Snapshots
+yes2
+yes2
+n/a
+yes
+yes4
+yes
+no
+no
+yes
+yes
+
+Stable
+yes
+yes
+yes
+yes
+yes
+yes
+yes
+yes
+yes
+yes
+
+: Disk images for VMs are stored in ZFS volume (zvol) datasets, which provide block device functionality.
+
+2
+
+: On file based storages, snapshots are possible with the qcow2 format, either using the internal snapshot
+function, or snapshots as volume chains4 .
+3
+
+: It is possible to use LVM on top of an iSCSI or FC-based storage. That way you get a shared LVM
+storage
+4
+
+: Since Proxmox VE 9, snapshots as a volume chain have been available for VMs. These snapshots
+use separate volumes for the snapshot data and layer them. For more details, see the description for
+snapshot-as-volume-chain in the LVM configuration section.
+5
+
+Technology preview with best-effort support.
+
+
+### 7.1.1 Thin Provisioning
+
+
+A number of storages, and the QEMU image format qcow2, support thin provisioning. With thin provisioning
+activated, only the blocks that the guest system actually use will be written to the storage.
+Say for instance you create a VM with a 32GB hard disk, and after installing the guest system OS, the root
+file system of the VM contains 3 GB of data. In that case only 3GB are written to the storage, even if the
+guest VM sees a 32GB hard drive. In this way thin provisioning allows you to create disk images which are
+larger than the currently available storage blocks. You can create large disk images for your VMs, and when
+the need arises, add more disks to your storage without resizing the VMs’ file systems.
+All storage types which have the “Snapshots” feature also support thin provisioning.
+
+> **Caution:**
+> If a storage runs full, all guests using volumes on that storage receive IO errors. This can cause file
+> system inconsistencies and may corrupt your data. So it is advisable to avoid over-provisioning of
+> your storage resources, or carefully observe free space to avoid such conditions.
+
+
+## 7.2 Storage Configuration
+
+
+All Proxmox VE related storage configuration is stored within a single text file at /etc/pve/storage.cfg.
+As this file is within /etc/pve/, it gets automatically distributed to all cluster nodes. So all nodes share
+the same storage configuration.
+Sharing storage configuration makes perfect sense for shared storage, because the same “shared” storage
+is accessible from all nodes. But it is also useful for local storage types. In this case such local storage is
+available on all nodes, but it is physically different and can have totally different content.
+
+
+### 7.2.1 Storage Pools
+
+
+Each storage pool has a <type>, and is uniquely identified by its <STORAGE_ID>. A pool configuration
+looks like this:
+
+<type>: <STORAGE_ID>
+<property> <value>
+<property> <value>
+<property>
+...
+The <type>: <STORAGE_ID> line starts the pool definition, which is then followed by a list of properties. Most properties require a value. Some have reasonable defaults, in which case you can omit the
+value.
+To be more specific, take a look at the default storage configuration after installation. It contains one special
+local storage pool named local, which refers to the directory /var/lib/vz and is always available. The
+Proxmox VE installer creates additional storage entries depending on the storage type chosen at installation
+time.
+
+Default storage configuration (/etc/pve/storage.cfg)
+
+dir: local
+path /var/lib/vz
+content iso,vztmpl,backup
+# default image store on LVM based installation
+lvmthin: local-lvm
+thinpool data
+vgname pve
+content rootdir,images
+# default image store on ZFS based installation
+zfspool: local-zfs
+pool rpool/data
+sparse
+content images,rootdir
+
+
+> **Caution:**
+> It is problematic to have multiple storage configurations pointing to the exact same underlying storage. Such an aliased storage configuration can lead to two different volume IDs (volid) pointing to
+> the exact same disk image. Proxmox VE expects that the images’ volume IDs point to, are unique.
+> Choosing different content types for aliased storage configurations can be fine, but is not recommended.
+
+
+### 7.2.2 Common Storage Properties
+
+
+A few storage properties are common among different storage types.
+
+nodes
+List of cluster node names where this storage is usable/accessible. One can use this property to
+restrict storage access to a limited set of nodes.
+content
+A storage can support several content types, for example virtual disk images, cdrom iso images,
+container templates or container root directories. Not all storage types support all content types. One
+can set this property to select what this storage is used for.
+images
+QEMU/KVM VM images.
+rootdir
+Allow to store container data.
+vztmpl
+Container templates.
+backup
+Backup files (vzdump).
+iso
+ISO images
+snippets
+Snippet files, for example guest hook scripts
+shared
+Indicate that this is a single storage with the same contents on all nodes (or all listed in the nodes
+option). It will not make the contents of a local storage automatically accessible to other nodes, it just
+marks an already shared storage as such!
+disable
+You can use this flag to disable the storage completely.
+prune-backups
+Retention options for backups. For details, see Backup Retention.
+
+
+format
+Default image format (raw|qcow2|vmdk)
+preallocation
+Preallocation mode (off|metadata|falloc|full) for raw and qcow2 images on file-based
+storages. The default is metadata, which is treated like off for raw images. When using network
+storages in combination with large qcow2 images, using off can help to avoid timeouts.
+
+> **Warning:**
+> It is not advisable to use the same storage pool on different Proxmox VE clusters. Some storage
+> operation need exclusive access to the storage, so proper locking is required. While this is implemented within a cluster, it does not work between different clusters.
+
+
+## 7.3 Volumes
+
+
+We use a special notation to address storage data. When you allocate data from a storage pool, it returns such a volume identifier. A volume is identified by the <STORAGE_ID>, followed by a storage type
+dependent volume name, separated by colon. A valid <VOLUME_ID> looks like:
+
+local:230/example-image.raw
+local:iso/debian-501-amd64-netinst.iso
+local:vztmpl/debian-5.0-joomla_1.5.9-1_i386.tar.gz
+iscsi-storage:0.0.2.scsi-14 ←f504e46494c4500494b5042546d2d646744372d31616d61
+To get the file system path for a <VOLUME_ID> use:
+
+
+```
+pvesm path <VOLUME_ID>
+```
+
+
+### 7.3.1 Volume Ownership
+
+
+There exists an ownership relation for image type volumes. Each such volume is owned by a VM or
+Container. For example volume local:230/example-image.raw is owned by VM 230. Most storage
+backends encodes this ownership information into the volume name.
+When you remove a VM or Container, the system also removes all associated volumes which are owned by
+that VM or Container.
+
+
+## 7.4 Using the Command-line Interface
+
+
+It is recommended to familiarize yourself with the concept behind storage pools and volume identifiers, but in
+real life, you are not forced to do any of those low level operations on the command line. Normally, allocation
+and removal of volumes is done by the VM and Container management tools.
+
+
+Nevertheless, there is a command-line tool called pvesm (“Proxmox VE Storage Manager”), which is able
+to perform common storage management tasks.
+
+
+### 7.4.1 Examples
+
+
+Add storage pools
+
+
+```
+pvesm add <TYPE> <STORAGE_ID> <OPTIONS>
+```
+
+
+```
+pvesm add dir <STORAGE_ID> --path <PATH>
+```
+
+
+```
+pvesm add nfs <STORAGE_ID> --path <PATH> --server <SERVER> --export ←<EXPORT>
+```
+
+
+```
+pvesm add lvm <STORAGE_ID> --vgname <VGNAME>
+```
+
+
+```
+pvesm add iscsi <STORAGE_ID> --portal <HOST[:PORT]> --target <TARGET ←>
+```
+
+Disable storage pools
+
+
+```
+pvesm set <STORAGE_ID> --disable 1
+```
+
+Enable storage pools
+
+
+```
+pvesm set <STORAGE_ID> --disable 0
+```
+
+Change/set storage options
+
+
+```
+pvesm set <STORAGE_ID> <OPTIONS>
+```
+
+
+```
+pvesm set <STORAGE_ID> --shared 1
+```
+
+
+```
+pvesm set local --format qcow2
+```
+
+
+```
+pvesm set <STORAGE_ID> --content iso
+```
+
+Remove storage pools. This does not delete any data, and does not disconnect or unmount anything. It just
+removes the storage configuration.
+
+
+```
+pvesm remove <STORAGE_ID>
+```
+
+Allocate volumes
+
+
+```
+pvesm alloc <STORAGE_ID> <VMID> <name> <size> [--format <raw|qcow2>]
+```
+
+Allocate a 4G volume in local storage. The name is auto-generated if you pass an empty string as <name>
+
+
+```
+pvesm alloc local <VMID> '' 4G
+```
+
+Free volumes
+
+
+```
+pvesm free <VOLUME_ID>
+```
+
+
+> **Warning:**
+> This really destroys all volume data.
+
+
+List storage status
+
+
+```
+pvesm status
+```
+
+List storage contents
+
+
+```
+pvesm list <STORAGE_ID> [--vmid <VMID>]
+```
+
+List volumes allocated by VMID
+
+
+```
+pvesm list <STORAGE_ID> --vmid <VMID>
+```
+
+List iso images
+
+
+```
+pvesm list <STORAGE_ID> --content iso
+```
+
+List container templates
+
+
+```
+pvesm list <STORAGE_ID> --content vztmpl
+```
+
+Show file system path for a volume
+
+
+```
+pvesm path <VOLUME_ID>
+```
+
+Exporting the volume local:103/vm-103-disk-0.qcow2 to the file target. This is mostly used
+internally with pvesm import. The stream format qcow2+size is different to the qcow2 format. Consequently, the exported file cannot simply be attached to a VM. This also holds for the other formats.
+
+
+```
+pvesm export local:103/vm-103-disk-0.qcow2 qcow2+size target --with- ←snapshots 1
+```
+
+
+## 7.5 Directory Backend
+
+
+Storage pool type: dir
+Proxmox VE can use local directories or locally mounted shares for storage. A directory is a file level storage,
+so you can store any content type like virtual disk images, containers, templates, ISO images or backup files.
+
+> **Note:**
+> You can mount additional storages via standard linux /etc/fstab, and then define a directory storage
+> for that mount point. This way you can use any file system supported by Linux.
+
+
+This backend assumes that the underlying directory is POSIX compatible, but nothing else. This implies that
+you cannot create snapshots at the storage level. But there exists a workaround for VM images using the
+qcow2 file format, because that format supports snapshots internally.
+
+> **Tip:**
+> Some storage types do not support O_DIRECT, so you can’t use cache mode none with such storages.
+> Simply use cache mode writeback instead.
+

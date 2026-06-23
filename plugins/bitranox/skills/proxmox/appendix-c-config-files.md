@@ -1,0 +1,279 @@
+# Configuration Files
+
+*[Main Index](SKILL.md)*
+
+
+## C.1 General
+
+
+Most configuration files in Proxmox VE reside on the shared cluster file system mounted at /etc/pve.
+There are exceptions, like the node-specific configuration file for backups in /etc/vzdump.conf.
+Usually, the properties in a configuration file are derived from the JSON Schema that is also used for the
+associated API endpoints.
+
+
+### C.1.1 Casing of Property Names
+
+
+Historically, longer properties (and sub-properties) often used snake_case, or were written as one word.
+This can likely be attributed to the Proxmox VE stack being developed mostly in the programming language
+Perl, where access to properties using kebab-case requires additional quotes, as well as less style enforcement during early development, so different developers used different conventions.
+For new properties, kebab-case is the preferred way and it is planned to introduce aliases for existing
+snake_case properties, and in the long term, switch over to kebab-case for the API, CLI and in-use
+configuration files while maintaining backwards-compatibility when restoring a configuration.
+
+
+## C.2 Datacenter Configuration
+
+
+The file /etc/pve/datacenter.cfg is a configuration file for Proxmox VE. It contains cluster wide
+default values used by all nodes.
+
+
+### C.2.1 File Format
+
+
+The file uses a simple colon separated key/value format. Each line has the following format:
+
+OPTION: value
+Blank lines in the file are ignored, and lines starting with a # character are treated as comments and are also
+ignored.
+
+
+### C.2.2 Options
+
+
+bwlimit: [clone=<LIMIT>] [,default=<LIMIT>] [,migration=<LIMIT>]
+[,move=<LIMIT>] [,restore=<LIMIT>]
+Set I/O bandwidth limit for various operations (in KiB/s).
+
+clone=<LIMIT>
+bandwidth limit in KiB/s for cloning disks
+
+default=<LIMIT>
+default bandwidth limit in KiB/s
+
+migration=<LIMIT>
+bandwidth limit in KiB/s for migrating guests (including moving local disks)
+
+move=<LIMIT>
+bandwidth limit in KiB/s for moving disks
+
+restore=<LIMIT>
+bandwidth limit in KiB/s for restoring guests from backups
+
+consent-text: <string>
+Consent text that is displayed before logging in.
+
+console: <applet | html5 | vv | xtermjs>
+Select the default Console viewer. You can either use the builtin java applet (VNC; deprecated and
+maps to html5), an external virt-viewer comtatible application (SPICE), an HTML5 based vnc viewer
+(noVNC), or an HTML5 based console client (xtermjs). If the selected viewer is not available (e.g.
+SPICE not activated for the VM), the fallback is noVNC.
+
+crs: [ha=<basic|static>] [,ha-rebalance-on-start=<1|0>]
+Cluster resource scheduling settings.
+
+ha=<basic | static> (default = basic)
+Configures how the HA manager should select nodes to start or recover services. With basic,
+only the number of services is used, with static, static CPU and memory configuration of services
+is considered.
+
+ha-rebalance-on-start=<boolean> (default = 0)
+Set to use CRS for selecting a suited node when a HA services request-state changes from stop
+to start.
+
+description: <string>
+Datacenter description. Shown in the web-interface datacenter notes panel. This is saved as comment
+inside the configuration file.
+
+email_from: <string>
+Specify email address to send notification from (default is root@$hostname)
+
+
+fencing: <both | hardware | watchdog> (default = watchdog)
+Set the fencing mode of the HA cluster. Hardware mode needs a valid configuration of fence devices
+in /etc/pve/ha/fence.cfg. With both all two modes are used.
+
+
+> **Warning:**
+> hardware and both are EXPERIMENTAL & WIP
+
+
+ha: shutdown_policy=<enum>
+Cluster wide HA settings.
+
+shutdown_policy=<conditional | failover | freeze | migrate>
+(default = conditional)
+Describes the policy for handling HA services on poweroff or reboot of a node. Freeze will
+always freeze services which are still located on the node on shutdown, those services won’t
+be recovered by the HA manager. Failover will not mark the services as frozen and thus the
+services will get recovered to other nodes, if the shutdown node does not come up again quickly
+(< 1min). conditional chooses automatically depending on the type of shutdown, i.e., on a reboot
+the service will be frozen but on a poweroff the service will stay as is, and thus get recovered
+after about 2 minutes. Migrate will try to move all running services to another node when a reboot
+or shutdown was triggered. The poweroff process will only continue once no running services
+are located on the node anymore. If the node comes up again, the service will be moved back to
+the previously powered-off node, at least if no other migration, reloaction or recovery took place.
+
+http_proxy: http://.*
+Specify external http proxy which is used for downloads (example: http://username:password@host:port/ )
+
+keyboard: <da | de | de-ch | en-gb | en-us | es | fi | fr | fr-be |
+fr-ca | fr-ch | hu | is | it | ja | lt | mk | nl | no | pl | pt |
+pt-br | sl | sv | tr>
+Default keybord layout for vnc server.
+
+language: <ar | ca | da | de | en | es | eu | fa | fr | he | hr | it
+| ja | ka | kr | nb | nl | nn | pl | pt_BR | ru | sl | sv | tr |
+ukr | zh_CN | zh_TW>
+Default GUI language.
+
+mac_prefix: <string> (default = BC:24:11)
+Prefix for the auto-generated MAC addresses of virtual guests. The default BC:24:11 is the Organizationally Unique Identifier (OUI) assigned by the IEEE to Proxmox Server Solutions GmbH for a
+MAC Address Block Large (MA-L). You’re allowed to use this in local networks, i.e., those not directly
+reachable by the public (e.g., in a LAN or NAT/Masquerading).
+Note that when you run multiple cluster that (partially) share the networks of their virtual guests, it’s highly
+recommended that you extend the default MAC prefix, or generate a custom (valid) one, to reduce the chance
+
+
+of MAC collisions. For example, add a separate extra hexadecimal to the Proxmox OUI for each cluster, like
+BC:24:11:0 for the first, BC:24:11:1 for the second, and so on. Alternatively, you can also separate
+the networks of the guests logically, e.g., by using VLANs.
++ For publicly accessible guests it’s recommended that you get your own OUI from the IEEE registered or
+coordinate with your, or your hosting providers, network admins.
+
+max_workers: <integer> (1 - N)
+Defines how many workers (per node) are maximal started on actions like stopall VMs or task from
+the ha-manager.
+
+migration: [type=]<secure|insecure> [,network=<CIDR>]
+For cluster wide migration settings.
+
+network=<CIDR>
+CIDR of the (sub) network that is used for migration. Used as a fallback for replications jobs if
+the replication network setting is not set
+
+type=<insecure | secure> (default = secure)
+Migration traffic is encrypted using an SSH tunnel by default. On secure, completely private
+networks this can be disabled to increase performance.
+
+migration_unsecure: <boolean>
+Migration is secure using SSH tunnel by default. For secure private networks you can disable it to
+speed up migration. Deprecated, use the migration property instead!
+
+next-id: [lower=<integer>] [,upper=<integer>]
+Control the range for the free VMID auto-selection pool.
+
+lower=<integer> (default = 100)
+Lower, inclusive boundary for free next-id API range.
+
+upper=<integer> (default = 1000000)
+Upper, exclusive boundary for free next-id API range.
+
+notify: [fencing=<always|never>]
+[,package-updates=<auto|always|never>]
+[,replication=<always|never>] [,target-fencing=<TARGET>]
+[,target-package-updates=<TARGET>] [,target-replication=<TARGET>]
+Cluster-wide notification settings.
+
+fencing=<always | never>
+UNUSED - Use datacenter notification settings instead.
+
+package-updates=<always | auto | never> (default = auto)
+DEPRECATED: Use datacenter notification settings instead. Control how often the daily update
+job should send out notifications:
+
+
+- auto daily for systems with a valid subscription, as those are assumed to be production-ready
+and thus should know about pending updates.
+
+- always every update, if there are new pending updates.
+- never never send a notification for new pending updates.
+replication=<always | never>
+UNUSED - Use datacenter notification settings instead.
+
+target-fencing=<TARGET>
+UNUSED - Use datacenter notification settings instead.
+
+target-package-updates=<TARGET>
+UNUSED - Use datacenter notification settings instead.
+
+target-replication=<TARGET>
+UNUSED - Use datacenter notification settings instead.
+
+registered-tags: <tag>[;<tag>...]
+A list of tags that require a Sys.Modify on / to set and delete. Tags set here that are also in
+user-tag-access also require Sys.Modify.
+replication: [type=]<secure|insecure> [,network=<CIDR>]
+For cluster wide replication settings.
+
+network=<CIDR>
+CIDR of the (sub) network that is used for replication jobs.
+
+type=<insecure | secure> (default = secure)
+Replication traffic is encrypted using an SSH tunnel by default. On secure, completely private
+networks this can be disabled to increase performance.
+
+tag-style: [case-sensitive=<1|0>]
+[,color-map=<tag>:<hex-color>[:<hex-color-for-text>][;<tag>=...]]
+[,ordering=<config|alphabetical>] [,shape=<enum>]
+Tag style options.
+
+case-sensitive=<boolean> (default = 0)
+Controls if filtering for unique tags on update should check case-sensitive.
+
+color-map=<tag>:<hex-color>[:<hex-color-for-text>][;<tag>=...]
+Manual color mapping for tags (semicolon separated).
+
+ordering=<alphabetical | config> (default = alphabetical)
+Controls the sorting of the tags in the web-interface and the API update.
+
+shape=<circle | dense | full | none> (default = circle)
+Tag shape for the web ui tree. full draws the full tag. circle draws only a circle with the background color. dense only draws a small rectancle (useful when many tags are assigned to each
+guest).none disables showing the tags.
+
+
+u2f: [appid=<APPID>] [,origin=<URL>]
+u2f
+
+appid=<APPID>
+U2F AppId URL override. Defaults to the origin.
+
+origin=<URL>
+U2F Origin override. Mostly useful for single nodes with a single URL.
+
+user-tag-access: [user-allow=<enum>]
+[,user-allow-list=<tag>[;<tag>...]]
+Privilege options for user-settable tags
+
+user-allow=<existing | free | list | none> (default = free)
+Controls which tags can be set or deleted on resources a user controls (such as guests). Users
+with the Sys.Modify privilege on / are alwaysunrestricted.
+
+- none no tags are usable.
+- list tags from user-allow-list are usable.
+- existing like list, but already existing tags of resources are also usable.
+- free no tag restrictions.
+user-allow-list=<tag>[;<tag>...]
+List of tags users are allowed to set and delete (semicolon separated) for user-allow values list
+and existing.
+
+webauthn: [allow-subdomains=<1|0>] [,id=<DOMAINNAME>]
+[,origin=<URL>] [,rp=<RELYING_PARTY>]
+webauthn configuration
+
+allow-subdomains=<boolean> (default = 1)
+Whether to allow the origin to be a subdomain, rather than the exact URL.
+
+id=<DOMAINNAME>
+Relying party ID. Must be the domain name without protocol, port or location. Changing this will
+break existing credentials.
+
+origin=<URL>
+Site origin. Must be a https:// URL (or http://localhost). Should contain the address
+users type in their browsers to access the web interface. Changing this may break existing
+credentials.
+
+rp=<RELYING_PARTY>
+Relying party name. Any text identifier. Changing this may break existing credentials.

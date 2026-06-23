@@ -1,0 +1,242 @@
+# Input
+
+A single-line text input widget.
+
+- [x] Focusable
+- [ ] Container
+
+## Examples
+
+### A Simple Example
+
+The example below shows how you might create a simple form using two `Input` widgets.
+
+**input.py**
+
+
+```python
+from textual.app import App, ComposeResult
+from textual.widgets import Input
+
+
+class InputApp(App):
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="First Name")
+        yield Input(placeholder="Last Name")
+
+
+if __name__ == "__main__":
+    app = InputApp()
+    app.run()
+```
+### Input Types
+
+The `Input` widget supports a `type` parameter which will prevent the user from typing invalid characters.
+You can set `type` to any of the following values:
+
+
+| input.type  | Description                                 |
+|-------------|---------------------------------------------|
+| `"integer"` | Restricts input to integers.                |
+| `"number"`  | Restricts input to a floating point number. |
+| `"text"`    | Allow all text (no restrictions).           |
+
+**input_types.py**
+
+
+```python
+from textual.app import App, ComposeResult
+from textual.widgets import Input
+
+
+class InputApp(App):
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="An integer", type="integer")
+        yield Input(placeholder="A number", type="number")
+
+
+if __name__ == "__main__":
+    app = InputApp()
+    app.run()
+```
+If you set `type` to something other than `"text"`, then the `Input` will apply the appropriate [validator](#validating-input).
+
+### Restricting Input
+
+You can limit input to particular characters by supplying the `restrict` parameter, which should be a regular expression.
+The `Input` widget will prevent the addition of any characters that would cause the regex to no longer match.
+For instance, if you wanted to limit characters to binary you could set `restrict=r"[01]*"`.
+
+> **Note**
+>
+>
+> The `restrict` regular expression is applied to the full value and not just to the new character.
+
+
+### Maximum Length
+
+You can limit the length of the input by setting `max_length` to a value greater than zero.
+This will prevent the user from typing any more characters when the maximum has been reached.
+
+### Validating Input
+
+You can supply one or more *`validators`* to the `Input` widget to validate the value.
+
+All the supplied validators will run when the value changes, the `Input` is submitted, or focus moves _out_ of the `Input`.
+The values `"changed"`, `"submitted"`, and `"blur"`, can be passed as an iterable to the `Input` parameter `validate_on` to request that validation occur only on the respective mesages.
+(See ``InputValidationOn`` and ``Input.validate_on``.)
+For example, the code below creates an `Input` widget that only gets validated when the value is submitted explicitly:
+
+```python
+input = Input(validate_on=["submitted"])
+```
+
+Validation is considered to have failed if *any* of the validators fail.
+
+You can check whether the validation succeeded or failed inside an `Input.Changed`, `Input.Submitted`, or `Input.Blurred` handler by looking at the `validation_result` attribute on these events.
+
+In the example below, we show how to combine multiple validators and update the UI to tell the user
+why validation failed.
+Click the tabs to see the output for validation failures and successes.
+
+**input_validation.py**
+
+
+```python
+from textual import on
+from textual.app import App, ComposeResult
+from textual.validation import Function, Number, ValidationResult, Validator
+from textual.widgets import Input, Label, Pretty
+
+
+class InputApp(App):
+    # (6)!
+    CSS = """
+    Input.-valid {
+        border: tall $success 60%;
+    }
+    Input.-valid:focus {
+        border: tall $success;
+    }
+    Input {
+        margin: 1 1;
+    }
+    Label {
+        margin: 1 2;
+    }
+    Pretty {
+        margin: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label("Enter an even number between 1 and 100 that is also a palindrome.")
+        yield Input(
+            placeholder="Enter a number...",
+            validators=[
+                Number(minimum=1, maximum=100),  # (1)!
+                Function(is_even, "Value is not even."),  # (2)!
+                Palindrome(),  # (3)!
+            ],
+        )
+        yield Pretty([])
+
+    @on(Input.Changed)
+    def show_invalid_reasons(self, event: Input.Changed) -> None:
+        # Updating the UI to show the reasons why validation failed
+        if not event.validation_result.is_valid:  # (4)!
+            self.query_one(Pretty).update(event.validation_result.failure_descriptions)
+        else:
+            self.query_one(Pretty).update([])
+
+
+def is_even(value: str) -> bool:
+    try:
+        return int(value) % 2 == 0
+    except ValueError:
+        return False
+
+
+# A custom validator
+class Palindrome(Validator):  # (5)!
+    def validate(self, value: str) -> ValidationResult:
+        """Check a string is equal to its reverse."""
+        if self.is_palindrome(value):
+            return self.success()
+        else:
+            return self.failure("That's not a palindrome :/")
+
+    @staticmethod
+    def is_palindrome(value: str) -> bool:
+        return value == value[::-1]
+
+
+app = InputApp()
+
+if __name__ == "__main__":
+    app.run()
+```
+
+2. `Function` lets you quickly define custom validation constraints. In this case, we check the value in the `Input` is even.
+3. `Palindrome` is a custom `Validator` defined below.
+4. The `Input.Changed` event has a `validation_result` attribute which contains information about the validation that occurred when the value changed.
+5. Here's how we can implement a custom validator which checks if a string is a palindrome. Note how the description passed into `self.failure` corresponds to the message seen on UI.
+6. Textual offers default styling for the `-invalid` CSS class (a red border), which is automatically applied to `Input` when validation fails. We can also provide custom styling for the `-valid` class, as seen here. In this case, we add a green border around the `Input` to indicate successful validation.
+
+
+Textual offers several `built-in validators` for common requirements,
+but you can easily roll your own by extending `Validator`,
+as seen for `Palindrome` in the example above.
+
+#### Validate Empty
+
+If you set `valid_empty=True` then empty values will bypass any validators, and empty values will be considered valid.
+
+## Reactive Attributes
+
+| Name              | Type   | Default  | Description                                                     |
+|-------------------|--------|----------|-----------------------------------------------------------------|
+| `cursor_blink`    | `bool` | `True`   | True if cursor blinking is enabled.                             |
+| `value`           | `str`  | `""`     | The value currently in the text input.                          |
+| `cursor_position` | `int`  | `0`      | The index of the cursor in the value string.                    |
+| `placeholder`     | `str`  | `""`     | The dimmed placeholder text to display when the input is empty. |
+| `password`        | `bool` | `False`  | True if the input should be masked.                             |
+| `restrict`        | `str`  | `None`   | Optional regular expression to restrict input.                  |
+| `type`            | `str`  | `"text"` | The type of the input.                                          |
+| `max_length`      | `int`  | `None`   | Maximum length of the input value.                              |
+| `valid_empty`     | `bool` | `False`  | Allow empty values to bypass validation.                        |
+
+## Messages
+
+- `Input.Blurred`
+- `Input.Changed`
+- `Input.Submitted`
+
+## Bindings
+
+The input widget defines the following bindings:
+
+*API reference: `textual.widgets.Input.BINDINGS`*
+
+
+## Component Classes
+
+The input widget provides the following component classes:
+
+*API reference: `textual.widgets.Input.COMPONENT_CLASSES`*
+
+
+## Additional Notes
+
+* The spacing around the text content is due to border. To remove it, set `border: none;` in your CSS.
+
+## See also
+
+- [MaskedInput](./masked_input.md) - An input with template-based restrictions
+- [TextArea](./text_area.md) - A multi-line text editing widget
+- [Widgets guide](../guide/widgets.md) - How to build and use widgets
+
+---
+
+
+*API reference: `textual.widgets.Input`*

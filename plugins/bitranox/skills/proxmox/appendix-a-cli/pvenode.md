@@ -1,0 +1,591 @@
+# pvenode - Node Management
+
+*[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
+
+- `--target_size_ratio` <number>
+The estimated target ratio of the pool for the PG autoscaler.
+
+```
+pveceph purge [OPTIONS]
+```
+
+Destroy ceph related data and configuration files.
+
+- `--crash` <boolean>
+Additionally purge Ceph crash logs, /var/lib/ceph/crash.
+
+- `--logs` <boolean>
+Additionally purge Ceph logs, /var/log/ceph.
+
+```
+pveceph start [OPTIONS]
+```
+
+Start ceph services.
+
+--service
+(ceph|mon|mds|osd|mgr)(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)?
+(default = ceph.target)
+Ceph service name.
+
+```
+pveceph status
+```
+
+Get Ceph Status.
+
+```
+pveceph stop [OPTIONS]
+```
+
+Stop ceph services.
+
+--service
+(ceph|mon|mds|osd|mgr)(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)?
+(default = ceph.target)
+Ceph service name.
+
+A.7
+
+
+```
+pvenode - Proxmox VE Node Management
+```
+
+
+```
+pvenode <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pvenode acme account deactivate [<name>]
+```
+
+Deactivate existing ACME account at CA.
+
+<name>: <name> (default = default)
+ACME account config file name.
+
+```
+pvenode acme account info [<name>] [FORMAT_OPTIONS]
+```
+
+Return existing ACME account information.
+
+
+<name>: <name> (default = default)
+ACME account config file name.
+
+```
+pvenode acme account list
+```
+
+ACMEAccount index.
+
+```
+pvenode acme account register [<name>] {<contact>} [OPTIONS]
+```
+
+Register a new ACME account with a compatible CA.
+
+<name>: <name> (default = default)
+ACME account config file name.
+
+<contact>: <string>
+Contact email addresses.
+
+- `--directory` ˆhttps?://.*
+URL of ACME CA directory endpoint.
+
+```
+pvenode acme account update [<name>] [OPTIONS]
+```
+
+Update existing ACME account information with CA. Note: not specifying any new account information
+triggers a refresh.
+
+<name>: <name> (default = default)
+ACME account config file name.
+
+- `--contact` <string>
+Contact email addresses.
+
+```
+pvenode acme cert order [OPTIONS]
+```
+
+Order a new certificate from ACME-compatible CA.
+
+- `--force` <boolean> (default = 0)
+Overwrite existing custom certificate.
+
+```
+pvenode acme cert renew [OPTIONS]
+```
+
+Renew existing certificate from CA.
+
+- `--force` <boolean> (default = 0)
+Force renewal even if expiry is more than 30 days away.
+
+```
+pvenode acme cert revoke
+```
+
+Revoke existing certificate from CA.
+
+```
+pvenode acme plugin add <type> <id> [OPTIONS]
+```
+
+Add ACME plugin configuration.
+
+
+<type>: <dns | standalone>
+ACME challenge type.
+
+<id>: <string>
+ACME Plugin ID name
+
+- `--api` <1984hosting | acmedns | acmeproxy | active24 | ad | ali |
+alviy | anx | artfiles | arvan | aurora | autodns | aws | azion |
+azure | beget | bookmyname | bunny | cf | clouddns | cloudns | cn |
+conoha | constellix | cpanel | curanet | cyon | da | ddnss | desec
+| df | dgon | dnsexit | dnshome | dnsimple | dnsservices | doapi |
+domeneshop | dp | dpi | dreamhost | duckdns | durabledns | dyn |
+dynu | dynv6 | easydns | edgecenter | edgedns | euserv | exoscale |
+fornex | freedns | freemyip | gandi_livedns | gcloud | gcore | gd |
+geoscaling | googledomains | he | he_ddns | hetzner | hexonet |
+hostingde | huaweicloud | infoblox | infomaniak | internetbs | inwx
+| ionos | ionos_cloud | ipv64 | ispconfig | jd | joker | kappernet
+| kas | kinghost | knot | la | leaseweb | lexicon | limacity |
+linode | linode_v4 | loopia | lua | maradns | me | miab | mijnhost
+| misaka | myapi | mydevil | mydnsjp | mythic_beasts | namecheap |
+namecom | namesilo | nanelo | nederhost | neodigit | netcup |
+netlify | nic | njalla | nm | nsd | nsone | nsupdate | nw | oci |
+omglol | one | online | openprovider | openstack | opnsense | ovh |
+pdns | pleskxml | pointhq | porkbun | rackcorp | rackspace | rage4
+| rcode0 | regru | scaleway | schlundtech | selectel | selfhost |
+servercow | simply | technitium | tele3 | tencent | timeweb |
+transip | udr | ultra | unoeuro | variomedia | veesp | vercel |
+vscale | vultr | websupport | west_cn | world4you | yandex360 | yc
+| zilore | zone | zoneedit | zonomi>
+API plugin name
+
+- `--data` File with one key-value pair per line, will be base64url
+encode for storage in plugin config.
+DNS plugin data. (base64 encoded)
+
+- `--disable` <boolean>
+Flag to disable the config.
+
+- `--nodes` <string>
+List of cluster node names.
+
+- `--validation-delay` <integer> (0 - 172800) (default = 30)
+Extra delay in seconds to wait before requesting validation. Allows to cope with a long TTL of DNS
+records.
+
+```
+pvenode acme plugin config <id> [FORMAT_OPTIONS]
+```
+
+Get ACME plugin configuration.
+
+
+<id>: <string>
+Unique identifier for ACME plugin instance.
+
+```
+pvenode acme plugin list [OPTIONS] [FORMAT_OPTIONS]
+```
+
+ACME plugin index.
+
+- `--type` <dns | standalone>
+Only list ACME plugins of a specific type
+
+```
+pvenode acme plugin remove <id>
+```
+
+Delete ACME plugin configuration.
+
+<id>: <string>
+Unique identifier for ACME plugin instance.
+
+```
+pvenode acme plugin set <id> [OPTIONS]
+```
+
+Update ACME plugin configuration.
+
+<id>: <string>
+ACME Plugin ID name
+
+- `--api` <1984hosting | acmedns | acmeproxy | active24 | ad | ali |
+alviy | anx | artfiles | arvan | aurora | autodns | aws | azion |
+azure | beget | bookmyname | bunny | cf | clouddns | cloudns | cn |
+conoha | constellix | cpanel | curanet | cyon | da | ddnss | desec
+| df | dgon | dnsexit | dnshome | dnsimple | dnsservices | doapi |
+domeneshop | dp | dpi | dreamhost | duckdns | durabledns | dyn |
+dynu | dynv6 | easydns | edgecenter | edgedns | euserv | exoscale |
+fornex | freedns | freemyip | gandi_livedns | gcloud | gcore | gd |
+geoscaling | googledomains | he | he_ddns | hetzner | hexonet |
+hostingde | huaweicloud | infoblox | infomaniak | internetbs | inwx
+| ionos | ionos_cloud | ipv64 | ispconfig | jd | joker | kappernet
+| kas | kinghost | knot | la | leaseweb | lexicon | limacity |
+linode | linode_v4 | loopia | lua | maradns | me | miab | mijnhost
+| misaka | myapi | mydevil | mydnsjp | mythic_beasts | namecheap |
+namecom | namesilo | nanelo | nederhost | neodigit | netcup |
+netlify | nic | njalla | nm | nsd | nsone | nsupdate | nw | oci |
+omglol | one | online | openprovider | openstack | opnsense | ovh |
+pdns | pleskxml | pointhq | porkbun | rackcorp | rackspace | rage4
+| rcode0 | regru | scaleway | schlundtech | selectel | selfhost |
+servercow | simply | technitium | tele3 | tencent | timeweb |
+transip | udr | ultra | unoeuro | variomedia | veesp | vercel |
+vscale | vultr | websupport | west_cn | world4you | yandex360 | yc
+| zilore | zone | zoneedit | zonomi>
+API plugin name
+
+
+- `--data` File with one key-value pair per line, will be base64url
+encode for storage in plugin config.
+DNS plugin data. (base64 encoded)
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--digest` <string>
+Prevent changes if current configuration file has a different digest. This can be used to prevent concurrent modifications.
+
+- `--disable` <boolean>
+Flag to disable the config.
+
+- `--nodes` <string>
+List of cluster node names.
+
+- `--validation-delay` <integer> (0 - 172800) (default = 30)
+Extra delay in seconds to wait before requesting validation. Allows to cope with a long TTL of DNS
+records.
+
+```
+pvenode cert delete [<restart>]
+```
+
+DELETE custom certificate chain and key.
+
+<restart>: <boolean> (default = 0)
+Restart pveproxy.
+
+```
+pvenode cert info [FORMAT_OPTIONS]
+```
+
+Get information about node’s certificates.
+
+```
+pvenode cert set <certificates> [<key>] [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Upload or update custom certificate chain and key.
+
+<certificates>: <string>
+PEM encoded certificate (chain).
+
+<key>: <string>
+PEM encoded private key.
+
+- `--force` <boolean> (default = 0)
+Overwrite existing custom or ACME certificate files.
+
+- `--restart` <boolean> (default = 0)
+Restart pveproxy.
+
+
+```
+pvenode config get [OPTIONS]
+```
+
+Get node configuration options.
+
+- `--property` <acme | acmedomain0 | acmedomain1 | acmedomain2 |
+acmedomain3 | acmedomain4 | acmedomain5 | ballooning-target |
+description | startall-onboot-delay | wakeonlan> (default = all)
+Return only a specific property from the node configuration.
+
+```
+pvenode config set [OPTIONS]
+```
+
+Set node configuration options.
+
+- `--acme` [account=<name>] [,domains=<domain[;domain;...]>]
+Node specific ACME settings.
+
+--acmedomain[n] [domain=]<domain> [,alias=<domain>] [,plugin=<name
+of the plugin configuration>]
+ACME domain and validation plugin
+
+- `--ballooning-target` <integer> (0 - 100) (default = 80)
+RAM usage target for ballooning (in percent of total memory)
+
+- `--delete` <string>
+A list of settings you want to delete.
+
+- `--description` <string>
+Description for the Node. Shown in the web-interface node notes panel. This is saved as comment
+inside the configuration file.
+
+- `--digest` <string>
+Prevent changes if current configuration file has different SHA1 digest. This can be used to prevent
+concurrent modifications.
+
+- `--startall-onboot-delay` <integer> (0 - 300) (default = 0)
+Initial delay in seconds, before starting all the Virtual Guests with on-boot enabled.
+
+- `--wakeonlan` [mac=]<MAC address> [,bind-interface=<bind interface>]
+[,broadcast-address=<IPv4 broadcast address>]
+Node specific wake on LAN settings.
+
+```
+pvenode help [OPTIONS]
+```
+
+Get help about specified command.
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pvenode migrateall <target> [OPTIONS]
+```
+
+Migrate all VMs and Containers.
+
+<target>: <string>
+Target node.
+
+- `--maxworkers` <integer> (1 - N)
+Maximal number of parallel migration job. If not set, uses’max_workers’ from datacenter.cfg. One of
+both must be set!
+
+- `--vms` <string>
+Only consider Guests with these IDs.
+
+- `--with-local-disks` <boolean>
+Enable live storage migration for local disk
+
+```
+pvenode startall [OPTIONS]
+```
+
+Start all VMs and containers located on this node (by default only those with onboot=1).
+
+- `--force` <boolean> (default = off)
+Issue start command even if virtual guest have onboot not set or set to off.
+
+- `--vms` <string>
+Only consider guests from this comma separated list of VMIDs.
+
+```
+pvenode stopall [OPTIONS]
+```
+
+Stop all VMs and Containers.
+
+- `--force-stop` <boolean> (default = 1)
+Force a hard-stop after the timeout.
+
+- `--timeout` <integer> (0 - 7200) (default = 180)
+Timeout for each guest shutdown task. Depending on force-stop, the shutdown gets then simply
+aborted or a hard-stop is forced.
+
+- `--vms` <string>
+Only consider Guests with these IDs.
+
+```
+pvenode task list [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Read task list for one node (finished tasks).
+
+
+- `--errors` <boolean> (default = 0)
+Only list tasks with a status of ERROR.
+
+- `--limit` <integer> (0 - N) (default = 50)
+Only list this number of tasks.
+
+- `--since` <integer>
+Only list tasks since this UNIX epoch.
+
+- `--source` <active | all | archive> (default = archive)
+List archived, active or all tasks.
+
+- `--start` <integer> (0 - N) (default = 0)
+List tasks beginning from this offset.
+
+- `--statusfilter` <string>
+List of Task States that should be returned.
+
+- `--typefilter` <string>
+Only list tasks of this type (e.g., vzstart, vzdump).
+
+- `--until` <integer>
+Only list tasks until this UNIX epoch.
+
+- `--userfilter` <string>
+Only list tasks from this user.
+
+- `--vmid` <integer> (100 - 999999999)
+Only list tasks for this VM.
+
+```
+pvenode task log <upid> [OPTIONS]
+```
+
+Read task log.
+
+<upid>: <string>
+The task’s unique ID.
+
+- `--download` <boolean>
+Whether the tasklog file should be downloaded. This parameter can’t be used in conjunction with other
+parameters
+
+- `--start` <integer> (0 - N) (default = 0)
+Start at this line when reading the tasklog
+
+```
+pvenode task status <upid> [FORMAT_OPTIONS]
+```
+
+Read task status.
+
+
+<upid>: <string>
+The task’s unique ID.
+
+```
+pvenode wakeonlan <node>
+```
+
+Try to wake a node via wake on LAN network packet.
+
+<node>: <string>
+target node for wake on LAN packet
+
+A.8
+
+
+```
+pvesh - Shell interface for the Proxmox VE API
+```
+
+
+```
+pvesh <COMMAND> [ARGS] [OPTIONS]
+```
+
+
+```
+pvesh create <api_path> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Call API POST on <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--noproxy` <boolean>
+Disable automatic proxying.
+
+```
+pvesh delete <api_path> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Call API DELETE on <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--noproxy` <boolean>
+Disable automatic proxying.
+
+```
+pvesh get <api_path> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Call API GET on <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--noproxy` <boolean>
+Disable automatic proxying.
+
+```
+pvesh help [OPTIONS]
+```
+
+Get help about specified command.
+
+
+- `--extra-args` <array>
+Shows help for a specific command
+
+- `--verbose` <boolean>
+Verbose output format.
+
+```
+pvesh ls <api_path> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+List child objects on <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--noproxy` <boolean>
+Disable automatic proxying.
+
+```
+pvesh set <api_path> [OPTIONS] [FORMAT_OPTIONS]
+```
+
+Call API PUT on <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--noproxy` <boolean>
+Disable automatic proxying.
+
+```
+pvesh usage <api_path> [OPTIONS]
+```
+
+print API usage information for <api_path>.
+
+<api_path>: <string>
+API path.
+
+- `--command` <create | delete | get | set>
+API command.
+
+- `--returns` <boolean>
+Including schema for returned data.
+
+- `--verbose` <boolean>
+Verbose output format.
+
+## See also
+
+- [Node Management](../ch03-host-admin/node-management.md)
+

@@ -1,0 +1,336 @@
+# Graphical User Interface
+
+*[Main Index](SKILL.md)*
+
+Proxmox VE is simple. There is no need to install a separate management tool, and everything can be done
+through your web browser (Latest Firefox or Google Chrome is preferred). A built-in HTML5 console is used
+to access the guest console. As an alternative, SPICE can be used.
+Because we use the Proxmox cluster file system (pmxcfs), you can connect to any node to manage the
+entire cluster. Each node can manage the entire cluster. There is no need for a dedicated manager node.
+You can use the web-based administration interface with any modern browser. When Proxmox VE detects
+that you are connecting from a mobile device, you are redirected to a simpler, touch-based user interface.
+The web interface can be reached via https://youripaddress:8006 (default login is: root, and the password is
+specified during the installation process).
+
+
+## 4.1 Features
+
+
+- Seamless integration and management of Proxmox VE clusters
+- AJAX technologies for dynamic updates of resources
+- Secure access to all Virtual Machines and Containers via SSL encryption (https)
+- Fast search-driven interface, capable of handling hundreds and probably thousands of VMs
+- Secure HTML5 console or SPICE
+- Role based permission management for all objects (VMs, storages, nodes, etc.)
+- Support for multiple authentication sources (e.g. local, MS ADS, LDAP, . . . )
+- Two-Factor Authentication (OATH, Yubikey)
+- Based on ExtJS 7.x JavaScript framework
+
+
+## 4.2 Login
+
+
+When you connect to the server, you will first see the login window. Proxmox VE supports various authentication backends (Realm), and you can select the language here. The GUI is translated to more than 20
+languages.
+
+> **Note:**
+> You can save the user name on the client side by selecting the checkbox at the bottom. This saves some
+> typing when you login next time.
+
+
+## 4.3 GUI Overview
+
+
+The Proxmox VE user interface consists of four regions.
+
+Header
+Resource Tree
+Content Panel
+Log Panel
+
+
+On top. Shows status information and contains buttons for most important actions.
+At the left side. A navigation tree where you can select specific objects.
+Center region. Selected objects display configuration options and status here.
+At the bottom. Displays log entries for recent tasks. You can double-click on those
+log entries to get more details, or to abort a running task.
+
+
+> **Note:**
+> You can shrink and expand the size of the resource tree and log panel, or completely hide the log panel.
+> This can be helpful when you work on small displays and want more space to view other content.
+
+
+### 4.3.1 Header
+
+
+On the top left side, the first thing you see is the Proxmox logo. Next to it is the current running version of
+Proxmox VE. In the search bar nearside you can search for specific objects (VMs, containers, nodes, . . . ).
+This is sometimes faster than selecting an object in the resource tree.
+The right part of the header contains four buttons:
+Documentation
+Create VM
+Create CT
+User Menu
+
+
+### 4.3.2 Opens a new browser window showing the reference documentation.
+
+Opens the virtual machine creation wizard.
+Open the container creation wizard.
+Displays the identity of the user you’re currently logged in with, and clicking it opens
+a menu with user-specific options.
+In the user menu, you’ll find the My Settings dialog, which provides local UI settings.
+Below that, there are shortcuts for TFA (Two-Factor Authentication) and Password
+self-service. You’ll also find options to change the Language and the Color Theme.
+Finally, at the bottom of the menu is the Logout option.
+
+My Settings
+
+
+The My Settings window allows you to set locally stored settings. These include the Dashboard Storages
+which allow you to enable or disable specific storages to be counted towards the total amount visible in the
+datacenter summary. If no storage is checked the total is the sum of all storages, same as enabling every
+single one.
+Below the dashboard settings you find the stored user name and a button to clear it as well as a button to
+reset every layout in the GUI to its default.
+On the right side there are xterm.js Settings. These contain the following options:
+Font-Family
+Font-Size
+Letter Spacing
+Line Height
+
+
+### 4.3.3 The font to be used in xterm.js (e.g. Arial).
+
+The preferred font size to be used.
+Increases or decreases spacing between letters in text.
+Specify the absolute height of a line.
+
+Resource Tree
+
+This is the main navigation tree. On top of the tree you can select some predefined views, which change the
+structure of the tree below. The default view is the Server View, and it shows the following object types:
+Datacenter
+Node
+Guest
+Storage
+Pool
+
+Contains cluster-wide settings (relevant for all nodes).
+Represents the hosts inside a cluster, where the guests run.
+VMs, containers and templates.
+Data Storage.
+It is possible to group guests using a pool to simplify management.
+
+The following view types are available:
+Server View
+Folder View
+Pool View
+Tag View
+
+
+### 4.3.4 Shows all kinds of objects, grouped by nodes.
+
+Shows all kinds of objects, grouped by object type.
+Show VMs and containers, grouped by pool.
+Show VMs and containers, grouped by tags.
+
+Log Panel
+
+The main purpose of the log panel is to show you what is currently going on in your cluster. Actions like
+creating an new VM are executed in the background, and we call such a background job a task.
+Any output from such a task is saved into a separate log file. You can view that log by simply double-click a
+task log entry. It is also possible to abort a running task there.
+Please note that we display the most recent tasks from all cluster nodes here. So you can see when
+somebody else is working on another cluster node in real-time.
+
+> **Note:**
+> We remove older and finished task from the log panel to keep that list short. But you can still find those
+> tasks within the node panel in the Task History.
+
+
+Some short-running actions simply send logs to all cluster members. You can see those messages in the
+Cluster log panel.
+
+
+## 4.4 Content Panels
+
+
+When you select an item from the resource tree, the corresponding object displays configuration and status
+information in the content panel. The following sections provide a brief overview of this functionality. Please
+refer to the corresponding chapters in the reference documentation to get more detailed information.
+
+
+### 4.4.1 Datacenter
+
+
+On the datacenter level, you can access cluster-wide settings and information.
+
+- Search: perform a cluster-wide search for nodes, VMs, containers, storage devices, and pools.
+- Summary: gives a brief overview of the cluster’s health and resource usage.
+- Cluster: provides the functionality and information necessary to create or join a cluster.
+- Options: view and manage cluster-wide default settings.
+- Storage: provides an interface for managing cluster storage.
+- Backup: schedule backup jobs. This operates cluster wide, so it doesn’t matter where the VMs/containers
+are on your cluster when scheduling.
+
+
+- Replication: view and manage replication jobs.
+- Permissions: manage user, group, and API token permissions, and LDAP, MS-AD and Two-Factor authentication.
+
+- HA: manage Proxmox VE High Availability.
+- ACME: set up ACME (Let’s Encrypt) certificates for server nodes.
+- Firewall: configure and make templates for the Proxmox Firewall cluster wide.
+- Metric Server: define external metric servers for Proxmox VE.
+- Notifications: configurate notification behavior and targets for Proxmox VE.
+- Support: display information about your support subscription.
+
+
+### 4.4.2 Nodes
+
+
+Nodes in your cluster can be managed individually at this level.
+The top header has useful buttons such as Reboot, Shutdown, Shell, Bulk Actions and Help. Shell has
+the options noVNC, SPICE and xterm.js. Bulk Actions has the options Bulk Start, Bulk Shutdown and Bulk
+Migrate.
+
+
+- Search: search a node for VMs, containers, storage devices, and pools.
+- Summary: display a brief overview of the node’s resource usage.
+- Notes: write custom comments in Markdown syntax.
+- Shell: access to a shell interface for the node.
+- System: configure network, DNS and time settings, and access the syslog.
+- Updates: upgrade the system and see the available new packages.
+- Firewall: manage the Proxmox Firewall for a specific node.
+- Disks: get an overview of the attached disks, and manage how they are used.
+- Ceph: is only used if you have installed a Ceph server on your host. In this case, you can manage your
+Ceph cluster and see the status of it here.
+
+- Replication: view and manage replication jobs.
+- Task History: see a list of past tasks.
+- Subscription: upload a subscription key, and generate a system report for use in support cases.
+
+
+### 4.4.3 Guests
+
+
+There are two different kinds of guests and both can be converted to a template. One of them is a Kernelbased Virtual Machine (KVM) and the other is a Linux Container (LXC). Navigation for these are mostly the
+same; only some options are different.
+
+
+To access the various guest management interfaces, select a VM or container from the menu on the left.
+The header contains commands for items such as power management, migration, console access and type,
+cloning, HA, and help. Some of these buttons contain drop-down menus, for example, Shutdown also contains other power options, and Console contains the different console types: SPICE, noVNC and xterm.js.
+The panel on the right contains an interface for whatever item is selected from the menu on the left.
+The available interfaces are as follows.
+
+- Summary: provides a brief overview of the VM’s activity and a Notes field for Markdown syntax comments.
+
+- Console: access to an interactive console for the VM/container.
+- (KVM)Hardware: define the hardware available to the KVM VM.
+- (LXC)Resources: define the system resources available to the LXC.
+- (LXC)Network: configure a container’s network settings.
+- (LXC)DNS: configure a container’s DNS settings.
+- Options: manage guest options.
+- Task History: view all previous tasks related to the selected guest.
+- (KVM) Monitor: an interactive communication interface to the KVM process.
+- Backup: create and restore system backups.
+- Replication: view and manage the replication jobs for the selected guest.
+- Snapshots: create and restore VM snapshots.
+- Firewall: configure the firewall on the VM level.
+- Permissions: manage permissions for the selected guest.
+
+
+### 4.4.4 Storage
+
+
+As with the guest interface, the interface for storage consists of a menu on the left for certain storage elements and an interface on the right to manage these elements.
+In this view we have a two partition split-view. On the left side we have the storage options and on the right
+side the content of the selected option will be shown.
+
+- Summary: shows important information about the storage, such as the type, usage, and content which it
+stores.
+
+- Content: a menu item for each content type which the storage stores, for example, Backups, ISO Images,
+CT Templates.
+
+- Permissions: manage permissions for the storage.
+
+
+### 4.4.5 Pools
+
+
+Again, the pools view comprises two partitions: a menu on the left, and the corresponding interfaces for each
+menu item on the right.
+
+- Summary: shows a description of the pool.
+- Members: display and manage pool members (guests and storage).
+- Permissions: manage the permissions for the pool.
+
+
+## 4.5 Tags
+
+
+For organizational purposes, it is possible to set tags for guests. Currently, these only provide informational
+value to users. Tags are displayed in two places in the web interface: in the Resource Tree and in the
+status line when a guest is selected.
+Tags can be added, edited, and removed in the status line of the guest by clicking on the pencil icon. You
+can add multiple tags by pressing the + button and remove them by pressing the - button. To save or cancel
+the changes, you can use the ✓ and x button respectively.
+Tags can also be set via the CLI, where multiple tags are separated by semicolons. For example:
+
+
+```
+# qm set ID --tags 'myfirsttag;mysecondtag'
+```
+
+
+### 4.5.1 Style Configuration
+
+
+By default, the tag colors are derived from their text in a deterministic way. The color, shape in the resource
+tree, and case-sensitivity, as well as how tags are sorted, can be customized. This can be done via the web
+interface under Datacenter → Options → Tag Style Override. Alternatively, this can be done via the CLI. For
+example:
+
+
+```
+# pvesh set /cluster/options --tag-style color-map=example:000000:FFFFFF
+sets the background color of the tag example to black (#000000) and the text color to white (#FFFFFF).
+```
+
+
+### 4.5.2 Permissions
+
+
+By default, users with the privilege VM.Config.Options on a guest (/vms/ID) can set any tags they
+
+
+want (see Permission Management). If you want to restrict this behavior, appropriate permissions can be set
+under Datacenter → Options → User Tag Access:
+
+- free: users are not restricted in setting tags (Default)
+- list: users can set tags based on a predefined list of tags
+- existing: like list but users can also use already existing tags
+- none: users are restricted from using tags
+The same can also be done via the CLI.
+Note that a user with the Sys.Modify privileges on / is always able to set or delete any tags, regardless of
+the settings here. Additionally, there is a configurable list of registered tags which can only be added
+and removed by users with the privilege Sys.Modify on /. The list of registered tags can be edited under
+Datacenter → Options → Registered Tags or via the CLI.
+For more details on the exact options and how to invoke them in the CLI, see Datacenter Configuration.
+
+
+## 4.6 Consent Banner
+
+
+A custom consent banner that has to be accepted before login can be configured in Datacenter → Options
+→ Consent Text. If there is no content, the consent banner will not be displayed. The text will be stored as
+a base64 string in the /etc/pve/datacenter.cfg config file.
+
+## See also
+
+- [User Management](ch14-user-management/_index.md)
+- [Introduction](ch01-introduction.md)
+

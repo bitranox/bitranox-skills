@@ -1,0 +1,458 @@
+# Notifications
+
+*[Main Index](SKILL.md)*
+
+
+## 17.1 Overview
+
+
+- Proxmox VE emits Notification Events in case of storage replication failures, node fencing, finished/failed
+backups and other events. These events are processed based on the global notification settings. Each notification event includes metadata, such as a timestamp, severity level, type, and additional event-specific
+fields.
+
+- Notification Matchers route a notification event to one or more notification targets. A matcher can have
+match rules to selectively route based on the metadata of a notification event.
+
+- Notification Targets are a destination to which a notification event is routed to by a matcher. There are
+multiple types of target, mail-based (Sendmail and SMTP) and Gotify.
+The global notification settings can be configured in the GUI under Datacenter → Notifications. The configuration is stored in /etc/pve/notifications.cfg and /etc/pve/priv/notifications.cfg
+- the latter contains sensitive configuration options such as passwords or authentication tokens for notification
+targets and can only be read by root.
+
+
+## 17.2 Notification Targets
+
+
+Proxmox VE offers multiple types of notification targets.
+
+
+### 17.2.1 Sendmail
+
+
+The sendmail binary is a program commonly found on Unix-like operating systems that handles the sending
+of email messages. It is a command-line utility that allows users and applications to send emails directly
+from the command line or from within scripts.
+The sendmail notification target uses the sendmail binary to send emails to a list of configured users or
+email addresses. If a user is selected as a recipient, the email address configured in user’s settings will be
+used. For the root@pam user, this is the email address entered during installation. A user’s email address
+can be configured in Datacenter → Permissions → Users. If a user has no associated email
+address, no email will be sent.
+
+> **Note:**
+> In standard Proxmox VE installations, the sendmail binary is provided by Postfix. It may be necessary
+> to configure Postfix so that it can deliver mails correctly - for example by setting an external mail relay
+> (smart host). In case of failed delivery, check the system logs for messages logged by the Postfix daemon.
+
+
+The configuration for Sendmail target plugins has the following options:
+
+- mailto: E-Mail address to which the notification shall be sent to. Can be set multiple times to accommodate multiple recipients.
+
+- mailto-user: Users to which emails shall be sent to. The user’s email address will be looked up in
+users.cfg. Can be set multiple times to accommodate multiple recipients.
+- author: Sets the author of the E-Mail. Defaults to Proxmox VE.
+- from-address: Sets the from address of the E-Mail. If the parameter is not set, the plugin will fall back
+to the email_from setting from datacenter.cfg. If that is also not set, the plugin will default to
+root@$hostname, where $hostname is the hostname of the node. The From header in the email
+will be set to $author <$from-address>.
+- comment: Comment for this target
+Example configuration (/etc/pve/notifications.cfg):
+
+sendmail: example
+mailto-user root@pam
+mailto-user admin@pve
+mailto max@example.com
+from-address pve1@example.com
+comment Send to multiple users/addresses
+
+
+### 17.2.2 SMTP
+
+
+SMTP notification targets can send emails directly to an SMTP mail relay. This target does not use the
+system’s MTA to deliver emails. Similar to sendmail targets, if a user is selected as a recipient, the user’s
+configured email address will be used.
+
+> **Note:**
+> Unlike sendmail targets, SMTP targets do not have any queuing/retry mechanism in case of a failed mail
+> delivery.
+
+
+The configuration for SMTP target plugins has the following options:
+
+- mailto: E-Mail address to which the notification shall be sent to. Can be set multiple times to accommodate multiple recipients.
+
+- mailto-user: Users to which emails shall be sent to. The user’s email address will be looked up in
+users.cfg. Can be set multiple times to accommodate multiple recipients.
+- author: Sets the author of the E-Mail. Defaults to Proxmox VE.
+- from-address: Sets the From-address of the email. SMTP relays might require that this address is
+owned by the user in order to avoid spoofing. The From header in the email will be set to $author
+<$from-address>.
+- username: Username to use during authentication. If no username is set, no authentication will be
+performed. The PLAIN and LOGIN authentication methods are supported.
+
+- password: Password to use when authenticating.
+- mode: Sets the encryption mode (insecure, starttls or tls). Defaults to tls.
+- server: Address/IP of the SMTP relay.
+- port: The port to connect to. If not set, the used port . Defaults to 25 (insecure), 465 (tls) or 587
+(starttls), depending on the value of mode.
+- comment: Comment for this target
+
+
+Example configuration (/etc/pve/notifications.cfg):
+
+smtp: example
+mailto-user root@pam
+mailto-user admin@pve
+mailto max@example.com
+from-address pve1@example.com
+username pve1
+server mail.example.com
+mode starttls
+The matching entry in /etc/pve/priv/notifications.cfg, containing the secret token:
+
+smtp: example
+password somepassword
+
+
+### 17.2.3 Gotify
+
+
+Gotify is an open-source self-hosted notification server that allows you to send and receive push notifications
+to various devices and applications. It provides a simple API and web interface, making it easy to integrate
+with different platforms and services.
+The configuration for Gotify target plugins has the following options:
+
+- server: The base URL of the Gotify server, e.g. http://<ip>:8888
+- token: The authentication token. Tokens can be generated within the Gotify web interface.
+- comment: Comment for this target
+
+> **Note:**
+> The Gotify target plugin will respect the HTTP proxy settings from the datacenter configuration
+
+
+Example configuration (/etc/pve/notifications.cfg):
+
+gotify: example
+server http://gotify.example.com:8888
+comment Send to multiple users/addresses
+The matching entry in /etc/pve/priv/notifications.cfg, containing the secret token:
+
+gotify: example
+token somesecrettoken
+
+
+### 17.2.4 Webhook
+
+
+Webhook notification targets perform HTTP requests to a configurable URL.
+The following configuration options are available:
+
+- url: The URL to which to perform the HTTP requests. Supports templating to inject message contents,
+metadata and secrets.
+
+- method: HTTP Method to use (POST/PUT/GET)
+- header: Array of HTTP headers that should be set for the request. Supports templating to inject message
+contents, metadata and secrets.
+
+- body: HTTP body that should be sent. Supports templating to inject message contents, metadata and
+secrets.
+
+- secret: Array of secret key-value pairs. These will be stored in a protected configuration file only
+readable by root. Secrets can be accessed in body/header/URL templates via the secrets namespace.
+- comment: Comment for this target.
+For configuration options that support templating, the Handlebars syntax can be used to access the following
+properties:
+
+- {{ title }}: The rendered notification title
+- {{ message }}: The rendered notification body
+- {{ severity }}: The severity of the notification (info, notice, warning, error, unknown)
+- {{ timestamp }}: The notification’s timestamp as a UNIX epoch (in seconds).
+- {{ fields.<name> }}: Sub-namespace for any metadata fields of the notification. For instance,
+fields.type contains the notification type - for all available fields refer to Notification Events.
+- {{ secrets.<name> }}: Sub-namespace for secrets. For instance, a secret named token is accessible via secrets.token.
+For convenience, the following helpers are available:
+
+- {{ url-encode <value/property> }}: URL-encode a property/literal.
+- {{ escape <value/property> }}: Escape any control characters that cannot be safely represented as a JSON string.
+
+- {{ json <value/property> }}: Render a value as JSON. This can be useful to pass a whole
+sub-namespace (e.g. fields) as a part of a JSON payload (e.g. {{ json fields }}).
+
+Examples
+
+ntfy.sh
+- Method: POST
+- URL: https://ntfy.sh/{{ secrets.channel }}
+- Headers:
+– Markdown: Yes
+- Body:
+```
+{{ message }}
+```
+
+- Secrets:
+– channel: <your ntfy.sh channel>
+Discord
+
+- Method: POST
+- URL: https://discord.com/api/webhooks/{{ secrets.token }}
+- Headers:
+– Content-Type: application/json
+- Body:
+{
+"content": " ``` {{ escape message }} ```"
+}
+
+- Secrets:
+– token: <token>
+
+
+Slack
+
+- Method: POST
+- URL: https://hooks.slack.com/services/{{ secrets.token }}
+- Headers:
+– Content-Type: application/json
+- Body:
+{
+"text": " ``` {{escape message}} ```",
+"type": "mrkdwn"
+}
+
+- Secrets:
+– token: <token>
+
+
+## 17.3 Notification Matchers
+
+
+Notification matchers route notifications to notification targets based on their matching rules. These rules
+can match certain properties of a notification, such as the timestamp (match-calendar), the severity of
+the notification (match-severity) or metadata fields (match-field). If a notification is matched by a
+matcher, all targets configured for the matcher will receive the notification.
+An arbitrary number of matchers can be created, each with with their own matching rules and targets to notify.
+Every target is notified at most once for every notification, even if the target is used in multiple matchers.
+A matcher without any matching rules is always true; the configured targets will always be notified.
+
+matcher: always-matches
+target admin
+comment This matcher always matches
+
+
+### 17.3.1 Matcher Options
+
+
+- target: Determine which target should be notified if the matcher matches. can be used multiple times
+to notify multiple targets.
+
+- invert-match: Inverts the result of the whole matcher
+- mode: Determines how the individual match rules are evaluated to compute the result for the whole
+matcher. If set to all, all matching rules must match. If set to any, at least one rule must match.
+Defaults to all.
+- match-calendar: Match the notification’s timestamp against a schedule.
+- match-field: Match the notification’s metadata fields.
+- match-severity: Match the notification’s severity.
+- comment: Comment for this matcher.
+
+
+### 17.3.2 Calendar Matching Rules
+
+
+A calendar matcher matches the time when a notification is sent against a configurable schedule.
+
+- match-calendar 8-12
+- match-calendar 8:00-15:30
+- match-calendar mon-fri 9:00-17:00
+- match-calendar sun,tue-wed,fri 9-17
+
+
+### 17.3.3 Field Matching Rules
+
+
+Notifications have a selection of metadata fields that can be matched. When using exact as a matching
+mode, a , can be used as a separator. The matching rule then matches if the metadata field has any of the
+specified values.
+
+- match-field exact:type=vzdump Only match notifications about backups.
+- match-field exact:type=replication,fencing Match replication and fencing notifications.
+
+- match-field regex:hostname=ˆ.+\.example\.com$ Match the hostname of the node.
+If a matched metadata field does not exist, the notification will not be matched. For instance, a match-field
+regex:hostname=.* directive will only match notifications that have an arbitrary hostname metadata
+field, but will not match if the field does not exist.
+
+
+### 17.3.4 Severity Matching Rules
+
+
+A notification has a associated severity that can be matched.
+
+- match-severity error: Only match errors
+- match-severity warning,error: Match warnings and error
+The following severities are in use: info, notice, warning, error, unknown.
+
+
+### 17.3.5 Examples
+
+
+matcher: workday
+match-calendar mon-fri 9-17
+target admin
+comment Notify admins during working hours
+matcher: night-and-weekend
+match-calendar mon-fri 9-17
+invert-match true
+target on-call-admins
+comment Separate target for non-working hours
+matcher: backup-failures
+match-field exact:type=vzdump
+match-severity error
+target backup-admins
+comment Send notifications about backup failures to one group of
+admins
+
+←-
+
+matcher: cluster-failures
+match-field exact:type=replication,fencing
+target cluster-admins
+comment Send cluster-related notifications to other group of admins
+
+
+## 17.4 Notification Events
+
+
+Event
+
+type
+
+Severity
+
+Metadata fields (in
+addition to type)
+
+System updates
+available
+Cluster node fenced
+Storage replication job
+failed
+Backup succeeded
+
+package-updates
+
+info
+
+hostname
+
+fencing
+replication
+
+error
+error
+
+hostname
+hostname, job-id
+
+vzdump
+
+info
+
+hostname, job-id
+(only for backup jobs)
+
+
+Event
+
+type
+
+Severity
+
+Backup failed
+
+vzdump
+
+error
+
+Mail for root
+
+system-mail
+
+unknown
+
+Field name
+
+type
+hostname
+job-id
+
+Metadata fields (in
+addition to type)
+hostname, job-id
+(only for backup jobs)
+
+hostname
+
+Description
+Type of the notification
+Hostname, without domain (e.g. pve1)
+Job ID
+
+
+> **Note:**
+> Backup job notifications only have job-id set if the backup job was executed automatically based on its
+> schedule, but not if it was triggered manually by the Run now button in the UI.
+
+
+## 17.5 System Mail Forwarding
+
+
+Certain local system daemons, such as smartd, generate notification emails that are initially directed to
+the local root user. These mails are converted into notification events with the type system-mail and a
+severity of unknown and are processed based on the global notification settings.
+When the email is forwarded to a sendmail target, the mail’s content and headers are forwarded as-is. For all
+other targets, the system tries to extract both a subject line and the main text body from the email content. In
+instances where emails solely consist of HTML content, they will be transformed into plain text format during
+this process.
+
+
+## 17.6 Permissions
+
+
+To modify/view the configuration for notification targets, the Mapping.Modify/Mapping.Audit permissions are required for the /mapping/notifications ACL node.
+
+Testing a target requires Mapping.Use, Mapping.Audit or Mapping.Modify permissions on /mapping
+
+
+## 17.7 Notification Mode
+
+
+Backup jobs allow to choose between two modes for sending backup related notifications. This is controlled
+by the notification-mode option in the backup job configuration.
+
+- Send notifications based on the global notification settings (notification-system).
+- Send notification emails via the system’s sendmail command to the email address configured in the
+backup job (legacy-sendmail). This mode also allows to select whether the email should be sent
+always or only on failure of the backup. Any targets or matchers from the global notification settings are
+ignored. This mode is equivalent to the notification behavior for Proxmox VE versions before 8.1. This
+mode might be removed in a later release of Proxmox VE.
+
+
+## 17.8 Overriding Notification Templates
+
+
+Proxmox VE uses Handlebars templates to render notifications. The original templates provided by Proxmox
+VE are stored in /usr/share/pve-manager/templates/default/.
+Notification templates can be overridden by providing a custom template file in the override directory at
+/etc/pve/notification-templates/default/. When rendering a notification of a given type,
+Proxmox VE will first attempt to load a template from the override directory. If this one does not exist or fails
+to render, the original template will be used.
+The template files follow the naming convention of <type>-<body|subject>.<html|txt>.hbs.
+For instance, the file vzdump-body.html.hbs contains the template for rendering the HTML version for
+backup notifications, while package-updates-subject.txt.hbs is used to render the subject line
+of notifications for available package updates.
+
+Email-based notification targets, such as sendmail and smtp, always send multi-part messages with an
+HTML and a plain text part. As a result, both the <type>-body.html.hbs as well as the <type>-body.txt
+template will be used when rendering the email message. All other notification target types only use the
+<type>-body.txt.hbs template.
