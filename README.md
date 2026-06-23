@@ -31,6 +31,16 @@ Update later with `/plugin marketplace update bitranox-skills`. Because `plugin.
 sets a `version`, bump it when you want installed copies to pick up changes (or remove
 the `version` field to track every commit SHA).
 
+### Windows: install Git for Windows
+
+On macOS and Linux everything works out of the box. On **Windows**, install
+[Git for Windows](https://gitforwindows.org/) so Claude Code has **Git Bash**. The skills and
+their Python helpers run fine either way, but the `self-improve` **Stop-hook gate** is launched
+through a small bash shim (the same pattern Claude Code's own official plugins use). Without Git
+for Windows, Claude Code falls back to PowerShell and the gate is simply skipped - it never errors
+a turn, but it also will not auto-nudge you to capture learnings. With Git for Windows installed,
+the gate fires normally. You can still run `self-improve` manually at any time.
+
 ## What you get
 
 - **25 skills** under the `bitranox` namespace (`/bitranox:brainstorming`,
