@@ -216,11 +216,21 @@ When you add or change a shared skill or hook, run this loop:
      live):** do NOT commit straight to the default branch. Open a structured self-PR so an
      auto-review agent (or the maintainer later) merges or rejects it.
    - **Outside contributor (no write access):** fork, then open a structured PR.
-4. **Confirm, then apply.** Ask one short permission prompt, then carry out the routed path:
-   - **Direct commit:** edit in the repo clone, commit, push to the default branch.
+4. **Bump the distributed version (REQUIRED for version-gated installs).** Before committing, read
+   the repo's `CONTRIBUTING`/release docs so you follow its rule rather than guess. If the artifact
+   is distributed by version - a plugin or package whose installed copies only re-fetch when the
+   version changes (a Claude Code plugin's `plugin.json`, an npm/PyPI package, ...) - bump that
+   version per the repo's semver convention IN THE SAME COMMIT and note the bump in the subject.
+   Propagation is NOT done until the version is bumped: without it every install stays on the old
+   copy and the change ships to nobody. A docs-only change that does not touch the distributed
+   artifact may be exempt (check the repo's rule).
+5. **Confirm, then apply.** Ask one short permission prompt, then carry out the routed path:
+   - **Direct commit:** edit in the repo clone, commit (with the version bump from step 4), push to
+     the default branch.
    - **PR (self-PR or fork):** edit on a new branch, push, `gh pr create` with a structured title and
      body so a downstream agent can auto-merge or auto-reject without guessing:
-     - **Title:** `skill(<name>): <one-line change>` (or `hook(<name>):` / `gate:` / `docs:`).
+     - **Title:** `skill(<name>): <one-line change>` (or `hook(<name>):` / `gate:` / `docs:`); append
+       `; bump to X.Y.Z` if the repo's history does.
      - **Body:** **Motivation** (the learning or failure that prompted it), **What changed** (file by
        file), **Scope** (shared, not project-specific; applies beyond this one setup), **Safety**
        (diff scanned, no secrets, PII, or infrastructure references).
