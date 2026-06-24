@@ -1,6 +1,6 @@
 ---
 name: python-use-modern-libraries
-description: Use when choosing a Python library for a task, writing new Python code that needs a dependency, or reviewing imports for dated defaults. Gives modern, well-maintained third-party picks (HTTP, JSON, TOML, YAML, data models, enums, dates, compression, database, testing, type-checking) and what to avoid. Public, mainstream defaults; adjust per project.
+description: Use when choosing a Python library for a task, writing new Python code that needs a dependency, or reviewing imports for dated defaults. Gives modern, well-maintained third-party picks (HTTP, JSON, XML, TOML, YAML, data models, enums, dates, compression, database, testing, type-checking) and what to avoid. For building/editing JSON/XML/YAML files specifically, see bitranox:edit-json, bitranox:edit-xml, bitranox:edit-yml. Public, mainstream defaults; adjust per project.
 ---
 
 # Modern Python library choices
@@ -38,6 +38,7 @@ rows silently competing for the same job:
 | JSON                                  | `orjson` (fast, correct, bytes)                                      | `json` stdlib for hot paths                    |
 | TOML                                  | `rtoml`                                                              | `tomllib`, `tomli`                             |
 | YAML                                  | `ruamel.yaml` (round-trips comments)                                 | `PyYAML`                                       |
+| XML                                   | `lxml` (XPath, schema validation, fast C parser)                    | `xml.etree`, `minidom`, `xmltodict`            |
 | Domain models                         | `dataclasses`                                                        | bare `dict`                                    |
 | Boundary validation (untrusted input) | `pydantic`                                                           | hand-rolled parsing                            |
 | Enums                                 | `IntEnum` / `StrEnum`                                                | plain `Enum`, magic strings                    |
