@@ -51,3 +51,11 @@ does not silently break it. These rules are enforced/encoded by `.gitattributes`
 
 When a learning here applies beyond this repo (it usually does), it also belongs in the shared
 `skill-writer` skill's "Bundled scripts and hooks: keep them cross-platform" section.
+
+## Every shipped Python script needs sibling tests
+
+Any `.py` this plugin ships - a `skills/<skill>/` script OR a `hooks/` script - must have tests in a
+sibling `tests/` dir: a `conftest.py` that puts the script dir on `sys.path`, and a `test_<script>.py`
+run with `python3 -m pytest -q`. Write/extend them in the same change that adds or edits the script;
+a script with no test is incomplete. For a hyphenated (non-importable) hook module, load it in
+`conftest.py` via `importlib.util.spec_from_file_location` and alias it in `sys.modules`.

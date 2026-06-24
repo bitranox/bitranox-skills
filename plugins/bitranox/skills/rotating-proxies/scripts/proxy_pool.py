@@ -42,7 +42,7 @@ The --cmd template may contain {proxy} (host:port) and {item}. Example:
             https://www.youtube.com/watch?v={item}'
 """
 import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, threading, time
-import httpx2 as httpx
+import httpx2
 
 DEAD_DEFAULT = r"connection refused|connection reset|timed out|cannot connect|unreachable|EOF occurred|proxy|tunnel|ProxyError"
 
@@ -90,7 +90,7 @@ def discover(store, sources):
     found = set()
     for url in sources:
         try:
-            r = httpx.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+            r = httpx2.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
             hits = set(IPPORT.findall(r.text))
             found |= hits
             print(f"  {len(hits):5d} from {url[:60]}")
@@ -142,7 +142,7 @@ def _reachable(proxy, test_url, timeout):
     """Return (ok, latency_seconds). latency is None on failure."""
     t0 = time.perf_counter()
     try:
-        with httpx.Client(proxy=f"http://{proxy}", timeout=timeout, follow_redirects=True) as c:
+        with httpx2.Client(proxy=f"http://{proxy}", timeout=timeout, follow_redirects=True) as c:
             ok = c.get(test_url).status_code in (200, 204)
     except Exception:
         return (False, None)
