@@ -17,6 +17,7 @@ _HOOK_MODULES = {
     "block-pgrep-self-match": "block_pgrep_self_match",
     "self-improve-gate": "self_improve_gate",
     "repo-gate": "repo_gate",
+    "tell-sweep": "tell_sweep",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

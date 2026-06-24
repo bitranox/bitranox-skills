@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [1.7.0] - 2026-06-24
+
+### Added
+- `tell-sweep` hook: a `PostToolUse(Write|Edit|MultiEdit)` guard that flags AI-writing
+  typographic and invisible tells (em/en-dashes, curly quotes, ellipsis, guillemets, NBSP,
+  ZWSP, BOM, bidi controls) just written to a prose file (`*.md`, `*.markdown`, `*.txt`,
+  `CLAUDE.md`). Tells inside inline-code spans and fenced code blocks are ignored, so a file
+  that documents the tells does not false-positive on its own examples. Code files are
+  skipped; allowed symbols (arrow, multiplication, comparison, check, bullet) never trip it.
+
 ## [1.6.0] - 2026-06-24
 
 ### Added
