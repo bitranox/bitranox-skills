@@ -33,12 +33,12 @@ from pathlib import Path
 path = Path("plugins/bitranox/.claude-plugin/plugin.json")
 data = json.loads(path.read_text(encoding="utf-8"))   # parse into Python objects
 
-data["version"] = "1.5.0"                              # edit the structure
+data["version"] = "1.6.0"                              # edit the structure
 
 path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")  # serialize back
 
 # validate: re-load and assert (raises JSONDecodeError if malformed)
-assert json.loads(path.read_text(encoding="utf-8"))["version"] == "1.5.0"
+assert json.loads(path.read_text(encoding="utf-8"))["version"] == "1.6.0"
 ```
 
 For a quick syntax check of any JSON file without editing:
