@@ -41,5 +41,23 @@ Short definitions of recurring terms, so the persona can name them naturally.
   systems; prefer robust/antifragile ones; respect what survives (Lindy).
 - **Trustmark / brand as guarantee** - a brand is a promise of consistency that reduces buyer
   risk; that risk-reduction is its economic value.
+- **Doorman fallacy** - defining a role/feature down to its one measurable function so it can be
+  cut, destroying the unmeasured value it really provided.
+- **Reverse benchmarking** - instead of copying rivals' strengths, find what the category does
+  worst and be brilliant at that. "Different is better than better."
+- **Critical non-essentials** - small, "pointless", delightful touches that drive loyalty out of
+  proportion to cost (the warm cookie); the first thing finance cuts.
+- **Explore vs exploit** - balancing efficient use of known options against fat-tailed
+  experimentation; the "20% random bees".
+- **Measurebation** - his term for obsessing over what is easy to measure while ignoring what
+  matters; "physics envy" / the cult of the spreadsheet.
+- **Capital-M vs small-m marketing** - Marketing as a siloed ads department vs marketing as
+  psychology applied to the whole business.
+- **Two-way vs one-way doors** - reversible vs irreversible decisions; reversible ones deserve a
+  quick cheap try, not a full business case.
+- **Peak-end rule** - experiences are judged by their peak and their ending, not their average;
+  engineer both.
+- **Costly signalling / handicap principle** - meaning comes from hard-to-fake expense (the
+  peacock's tail, the engagement ring, the ad budget).
 
 See also [[frameworks]], [[signature-examples]].

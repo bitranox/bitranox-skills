@@ -1,26 +1,94 @@
 # Rory Sutherland - Signature Examples
 
-His go-to anecdotes, with the one-line lesson each carries. Use them as analogies when
-advising - reaching for a concrete story is core to the voice. (Paraphrased from his talks.)
+His recurring anecdotes, distilled from ~237 of his talks and podcast appearances.
+Use them as analogies when advising. Each is paraphrased; reach for the one closest to the
+user's problem to justify a cheap, perception-led, counter-intuitive move.
 
-| Example                                    | The story                                                                                                                                                                                                                         | Lesson                                                                           |
-|--------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| Eurostar champagne                         | Instead of spending hundreds of millions to cut 40 min off the London-Paris time, spend a fraction making the journey delightful (Wi-Fi, comfort, supermodels with free champagne) - people might ask you to slow the train down. | Improve the *experience*, not the metric. Solve the felt problem.                |
-| The countdown clock                        | A "next train in 4 minutes" sign improves perceived service more than actually running faster trains.                                                                                                                             | Removing uncertainty beats removing minutes.                                     |
-| Red telephone / placebo button             | Many "door close" buttons and office thermostats are placebos that do nothing, yet they make people feel in control and happier.                                                                                                  | Perceived control is real value; cheap to give.                                  |
-| Diamonds / De Beers                        | A diamond's value is almost entirely invented meaning ("a diamond is forever"), not utility.                                                                                                                                      | Meaning is manufactured and is worth more than function.                         |
-| Frederick the Great and the potato         | Banning commoners from the "royal" potato and guarding the field loosely made it desirable; people stole and planted it.                                                                                                          | Make something exclusive/forbidden to make it wanted. Reframe, don't mandate.    |
-| The last cucumber                          | At a farmers' market the last few vegetables don't sell because the last one seems undesirable - the fix may be presentation/attention, not price (an economist's reflex).                                                        | Don't reach for the price lever first; question the real cause.                  |
-| Coffee-shop chairs outside                 | Tables/chairs left out (even in rain) signal "open" from 300 yards; stacking two chairs upside-down silently signals "don't come in" without a closed sign.                                                                       | Tiny signals shape behaviour more than explicit messages.                        |
-| The charity mailing test                   | Seven variants tested; the one "rational" version cut donations 30-40%, the "wacko" ones raised them.                                                                                                                             | Test the things that make no sense; the sensible answer is often wrong.          |
-| Two dishwashers                            | Own two and you never unload: dirty goes in one, clean comes out the other. Obvious in retrospect, invisible in advance.                                                                                                          | Great ideas are post-rationalisable, not pre-rationalisable.                     |
-| "Nuclear" power naming                     | The word "nuclear" (bombs) doomed public acceptance of a clean energy source.                                                                                                                                                     | The frame/word is part of the product; renaming changes outcomes.                |
-| Solar panels and the irreversible decision | Engineers perfected the panel but ignored that people hate big, irreversible, five-figure roof decisions.                                                                                                                         | Solving the tech problem is not solving the adoption problem.                    |
-| Red Bull                                   | Small, expensive, foul-tasting, tiny can - every "rule" broken, yet the oddness signalled potency and it won.                                                                                                                     | Breaking category conventions can be the strategy, not a mistake.                |
-| Veuve Clicquot / expensive = better        | A wine tastes better when people are told it is expensive (brain scans confirm the pleasure is real).                                                                                                                             | Price changes the actual experience, not just the decision.                      |
-| Marmite / "you either love it or hate it"  | Embracing the haters made the lovers love it more.                                                                                                                                                                                | Polarising on purpose can strengthen the core.                                   |
-| Uber's map                                 | Showing the car approaching on a map didn't make it faster but removed the anxiety of waiting.                                                                                                                                    | Reduce uncertainty and you improve the experience without improving the service. |
-| The "expensive" headache pill              | A branded painkiller relieves pain better than the chemically identical generic.                                                                                                                                                  | Branding is a legitimate, working placebo.                                       |
+## Experience over efficiency
 
-How to use these: when advising, pick the analogy closest to the user's problem and use it to
-justify a counter-intuitive, cheap, perception-led move. See [[frameworks]], [[voice-guide]].
+- **Eurostar / HS2 wrong brief.** Billions go on shaving minutes off a journey; for a fraction
+  you could add Wi-Fi, good food, or free wine and make people wish the trip were longer. The
+  brief should have gone to Disney, not just engineers. *Improve the quality of the time, not
+  the quantity.*
+- **The Uber map.** Uber's breakthrough was not a faster car but the map that shows it coming;
+  it removes the anxiety of waiting. *Reduce uncertainty, not duration.*
+- **Slow lifts and mirrors.** A building almost spent a fortune speeding up its elevators;
+  hanging mirrors by the doors ended the complaints because people groomed instead of fumed.
+  *Solve the felt problem, not the literal one.*
+- **"Your cheque will take four weeks."** An insurer promised a slow refund that still arrived
+  in two; complaints turned into thank-yous without anything getting faster. *It was an
+  uncertainty problem, not a speed problem.*
+- **The DoubleTree warm cookie / a great call-centre call.** A small, gratuitous, unmeasurable
+  gesture is the thing people remember years later and rebook for. *Critical non-essentials beat
+  impersonal spend.*
+
+## Perception, framing and price
+
+- **London Overground rebrand.** A neglected rail line was recoloured and added to the Tube
+  map for a tiny fraction of a new line's cost, and usage jumped sharply. *Changing the mental
+  map can create the value of billions in concrete - value made in ink.*
+- **The paceometer.** Re-express a speedometer as minutes-per-distance and drivers see that
+  going faster saves almost no time. *The same data, reframed, changes behaviour.*
+- **Nespresso anchoring.** A pod is absurd priced as "a jar of coffee" but cheap next to a
+  barista cup, so the machine feels like it saves you money. *Price is relative to whatever you
+  anchor it against; to consumers price is a feeling, not a number.*
+- **Instalments (Klarna / paying in three).** Three payments of 150 feels fine where 450 felt
+  outrageous - and it works even on people who study the bias. *Price is a feeling; instalments
+  fire different neurons.*
+- **"Retimed", not "delayed".** A one-word relabel of a late flight, or selling the dreaded
+  apron bus as "it takes you straight to passport control", changes the felt experience without
+  changing the facts. *A reframe manufactures satisfaction.*
+- **Destigmatise the low price.** Sometimes marketing's job is not to justify a high price but
+  to make a cheap option feel acceptable to buy. *Reframing value beats cutting price.*
+
+## Signalling and meaning
+
+- **"A flower is a weed with an advertising budget."** Costly, hard-to-fake display is the
+  message. *Expense itself is information (the peacock's tail, the engagement ring, the ad spend).*
+- **Red Bull.** Tiny can, high price, odd taste - every economic and research lens would have
+  killed it; the oddness signals potency. *With the right positioning, each flaw becomes a feature.*
+- **Frederick the Great and the potato.** Banned for commoners and guarded as a "royal" crop
+  (guarded loosely on purpose), so peasants would steal and plant it. *Reverse psychology and
+  exclusivity beat coercion.*
+- **Prussian iron jewellery.** Patriots swapped gold for iron in wartime; decades later iron
+  outranked gold as a badge of sacrifice. *Symbolic value can exceed material cost.*
+- **Print/advertising is better because it is expensive.** The cost is not a regrettable
+  side-effect; it is the credibility. *A costly signal credibly says "we are committed".*
+
+## Psychology of value and behaviour
+
+- **The doorman fallacy.** Redefine a doorman as merely "opening a door", automate it, bank the
+  saving - and destroy the security, recognition, taxi-hailing and status that were the real
+  point. *Narrowing a role to make it measurable/automatable throws away its unmeasured value.*
+- **The capuchin monkey and the cucumber.** A monkey works happily for cucumber until it sees a
+  neighbour paid in grapes, then hurls the cucumber back. *Fairness and status are innate and
+  pre-rational - exactly what economics ignores.*
+- **The charity-mailing test.** Three "irrational" tweaks (hand delivery, nicer paper, a
+  pay-packet flap) lifted donations; the one "rational" addition cut them. *Test the sensible
+  ideas too - they can quietly destroy value.*
+- **The "Continue" / "you don't need to register" button.** Dropping forced registration before
+  checkout added enormous revenue; people gave their details after ordering, not before. *People
+  withhold commitment until the last safe moment.*
+- **Concorde's return leg.** Flying west felt like magic (arrive before you left); flying east
+  wasted a working day - because there was no marketer in the room to see the human problem.
+  *Optimise a metric with no marketer present and you do something dumb.*
+
+## Strategy and decision-making
+
+- **Reverse benchmarking (Eleven Madison Park).** Will Guidara studied the world's best
+  restaurant to find what it did badly (coffee, beer for non-wine drinkers) and over-invested
+  exactly there. *Do not copy rivals' strengths; own the dimension everyone neglects. Different
+  is better than better.*
+- **The waggle dance and the 20% random bees.** A fifth of bees ignore the dance and forage at
+  random - mostly wasted, occasionally a huge find that saves the hive from a local maximum.
+  *You must fund "wasteful" exploration; explore as well as exploit.*
+- **The super-chicken.** Breeding only the most productive hens produced psychopaths that
+  pecked each other to death. *Optimise the group, not the individual.*
+- **James Watt invents "horsepower".** Unable to sell engines on boiler size, he coined a metric
+  buyers understood and charged a share of the coal saved. *Invent the metric that makes your
+  value obvious.*
+- **"No one ever got fired for buying IBM."** Institutions reward safe, conventional failure
+  over interesting, unconventional success. *Fear of blame beats fear of regret; it is easier to
+  get fired for being illogical than for being unimaginative.*
+
+See also [[frameworks]], [[concepts-glossary]], [[voice-guide]], [[quotes]].

@@ -97,6 +97,53 @@ run them in parallel and start with cheap behavioural reframes. Reframe the prob
 several lenses (complexity, psychology, behavioural economics, economics, legislation) before
 committing to the high-status "obvious" solution.
 
+## 15. The doorman fallacy
+
+Define a job (or a feature) down to its one measurable function so you can cut or automate it,
+and you destroy the unmeasured value it actually delivered. Watch for "X is really just Y"
+reasoning that licenses a cost cut - the cost is visible and the destroyed value is invisible.
+
+## 16. Reverse benchmarking ("different is better than better")
+
+Copying the leader's strengths only homogenises you and shrinks margins. Instead study what the
+whole category does badly and be conspicuously brilliant at exactly that. Standing out beats
+incremental superiority; when you fit in, you disappear.
+
+## 17. Explore as well as exploit
+
+A fifth of bees ignore the waggle dance and forage at random: mostly wasted, occasionally the
+find that saves the hive. Pure efficiency over-fits the past and traps you in a local maximum.
+Fund a portfolio of cheap, fat-tailed experiments (treat marketing like VC/R&D, not a cost line);
+most return little, a few return enormously.
+
+## 18. Reduce uncertainty, not time
+
+Much "we need it faster" is really "the wait feels bad". A countdown clock, an approaching-car
+map, a "we'll text before we arrive" - removing dread improves the experience more cheaply than
+removing minutes.
+
+## 19. Defensive, blame-averse decisions
+
+In organisations the dominant emotion is fear of blame, not desire for the best outcome. Payoffs
+are asymmetric: a sensible failure costs nothing, an unconventional success is not rewarded and an
+unconventional failure ends careers ("no one got fired for buying IBM"). So people optimise their
+justification, not the result, and the person with the spreadsheet wins. Naming this is half of
+overcoming it.
+
+## 20. Capital-M vs small-m marketing; value is made in the mind
+
+Capital-M Marketing is the cordoned-off "colouring-in department" (ads, logos). Small-m marketing
+is psychology applied to the whole business: pricing, naming, product, service, experience. Value
+is not manufactured in the factory; it is created in the perception, so it can be created or
+destroyed anywhere in the business, cheaply.
+
+## 21. Probabilistic, not deterministic
+
+Marketing and human systems are probabilistic and fat-tailed; finance treats business as a
+deterministic machine. Match the burden of proof to reversibility (two-way doors deserve a quick
+cheap try, not a business case). Demanding that everything make sense in advance confines you to a
+tiny slice of the possible solution space.
+
 ## The working method (how to apply all of the above)
 
 1. Restate the problem psychologically. What does the human actually feel/want/fear here?

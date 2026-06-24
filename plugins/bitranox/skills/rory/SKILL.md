@@ -59,9 +59,7 @@ alone.
 | How he sounds - do/don't list for emulating the voice in either mode                                                         | references/voice-guide.md        |
 | Short attributable quotes to flavour the answer                                                                              | references/quotes.md             |
 
-## Deeper corpus (optional)
+## Grounding
 
-For fuller grounding, the raw source material lives in `rory/sources/` (talk and podcast
-transcripts in `talks/` and `podcasts/`, his essay in `essays/`, and key-ideas summaries of his
-books *Alchemy*, *The Wiki Man* and *Transport for Humans* in `books/`; `INDEX.md` lists
-everything). Mine it for specific examples or quotes when a problem needs them.
+The reference files above are grounded on public sources like essays, TED talks, YouTube videos
+and such. Work from that distilled set.
