@@ -140,6 +140,16 @@ write the note louder.
   failure path so a broken guard never wedges a turn. Hooks run only on local Claude Code surfaces
   (the CLI and the Desktop Code tab), not the cloud or consumer-chat surfaces. Note in the rule that
   it has graduated to a guard so it is not re-littered with notes.
+- **Place the guard by scope, and propagate a global one (do not leave it local-only).** Apply the
+  step-3b scope test to the guard itself. A guard for a GLOBALLY-USEFUL quirk - a general shell, OS,
+  or tooling mistake true in any repo, like the pgrep/pkill bracket self-match - belongs in the
+  SHARED marketplace plugin's `hooks/` (a Python script run through the interpreter-resolving
+  launcher, registered in the plugin's `hooks.json`) and MUST be propagated to the source repo via
+  **Propagating skill improvements upstream** below, exactly like a shared skill. Adding it only to
+  the local `~/.claude/hooks` + `settings.json` is a bug: a reinstall loses it and every other
+  install never gets it. A PROJECT-SPECIFIC guard (one that only makes sense in one repo) stays local
+  to that project and is never propagated. This propagate-on-global rule covers hooks and scripts,
+  not just skills.
 
 The point: memory and CLAUDE.md change what the model is *told*; a guard changes what the model can
 *do*. A rule that must always hold belongs in a guard, not only in prose.
@@ -178,19 +188,22 @@ Diagnose which stage failed, then fix that stage:
 stop recording more notes about it. Writing the same lesson a third time *is* the circle. Switch
 tactic (enforcement or a real fix) or hand the decision to the user. Do not keep adding memory.
 
-## Propagating skill improvements upstream
+## Propagating skill (or hook) improvements upstream
 Most self-improve output is personal (memory and project CLAUDE.md) and stays local on the user's
-machine - it is not shared. Editing a skill is different. When you change a SHARED, DISTRIBUTED
-skill - one installed from a plugin or marketplace (for example a skill in the bitranox plugin), or
-this self-improve skill and its gate - the edit lands in the installed copy, which a plugin update
-OVERWRITES on the next sync. Such a change is lost unless it reaches the skill's SOURCE repo. The
-repo is the single source of truth; the installed copy is ephemeral.
+machine - it is not shared. A SHARED, DISTRIBUTED artifact is different: a skill OR a hook/guard
+installed from a plugin or marketplace (for example a skill or a `hooks/` script in the bitranox
+plugin), or this self-improve skill and its gate. When you change or ADD one, the edit lands in the
+installed copy, which a plugin update OVERWRITES on the next sync. The change is lost (and every
+other install never gets it) unless it reaches the artifact's SOURCE repo. The repo is the single
+source of truth; the installed copy is ephemeral. Creating a globally-useful hook only in the local
+`~/.claude/hooks` + `settings.json`, instead of in the marketplace plugin, is the exact mistake this
+section prevents.
 
-**Scope guard (decide first):** only propagate SHARED skills. A project-specific skill (one that
-lives in a project's own `.claude/skills/`, specific to that repo) is never propagated: its
-improvements stay in that project. Never symlink it and never open a PR for it.
+**Scope guard (decide first):** only propagate SHARED artifacts. A project-specific skill or hook
+(one that lives in a project's own `.claude/`, specific to that repo) is never propagated: it stays
+in that project. Never symlink it and never open a PR for it.
 
-When you change a shared skill, run this loop:
+When you add or change a shared skill or hook, run this loop:
 1. **Confirm scope.** The skill is shared/distributed, not project-specific. If unsure or
    project-specific, stop and keep the change local.
 2. **Scan the diff.** Grep for secrets, credentials, private hostnames/IPs, internal paths, and
@@ -207,11 +220,11 @@ When you change a shared skill, run this loop:
    - **Direct commit:** edit in the repo clone, commit, push to the default branch.
    - **PR (self-PR or fork):** edit on a new branch, push, `gh pr create` with a structured title and
      body so a downstream agent can auto-merge or auto-reject without guessing:
-     - **Title:** `skill(<name>): <one-line change>` (or `gate:` / `docs:`).
+     - **Title:** `skill(<name>): <one-line change>` (or `hook(<name>):` / `gate:` / `docs:`).
      - **Body:** **Motivation** (the learning or failure that prompted it), **What changed** (file by
        file), **Scope** (shared, not project-specific; applies beyond this one setup), **Safety**
        (diff scanned, no secrets, PII, or infrastructure references).
-   Keep the diff minimal and focused on one skill.
+   Keep the diff minimal and focused on one skill or hook.
 
 **Maintainer local setup:** symlink the installed shared-skill directories into your repo clone so
 in-place edits land in git instead of the ephemeral install. Symlink ONLY shared skills, never

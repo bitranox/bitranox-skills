@@ -62,6 +62,12 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
   hooks under PowerShell and the gate is simply skipped (it never errors a turn). Installing the
   plugin registers this hook automatically, so you no longer need a manual entry in
   `~/.claude/settings.json` for it.
+- **A `PreToolUse` Bash guard** (`hooks/block-pgrep-self-match.py`, launched the same way) that
+  blocks the `pgrep`/`pkill` bracket-trick self-match: a command like
+  `pgrep -f "[n]ginx"; echo "nginx up?"` where the bracketed pattern's literal (`nginx`) also
+  appears verbatim in an echo/label, which re-introduces it into the shell's own argv and makes
+  the check self-match (a false positive, or `pkill` killing its own shell). It blocks only that
+  precise case, so it almost never false-fires, and fail-opens like the gate.
 
 ## Skills
 
@@ -106,9 +112,10 @@ bitranox-skills/
       skills/
         <skill>/SKILL.md        # one directory per skill (plus any supporting files)
       hooks/
-        hooks.json              # registers the Stop hook
+        hooks.json              # registers the Stop gate and the PreToolUse Bash guard
         self-improve-gate.py    # the self-improve learning-signal gate (cross-platform)
-        run-python.sh           # interpreter-resolver launcher for the gate
+        block-pgrep-self-match.py  # PreToolUse guard against the pgrep/pkill self-match
+        run-python.sh           # interpreter-resolver launcher for both
   README.md
   CONTRIBUTING.md
 ```
