@@ -20,7 +20,8 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 3.13+ required: python-performance-reviewer/setup_env.py (and its tests) gate on it.
+          python-version: "3.13"
 
       - name: Install test dependencies
         # The convention test suite (examples/ and demos/ are excluded by the gate) needs
