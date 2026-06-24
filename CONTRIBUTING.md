@@ -20,6 +20,21 @@ Once installed, the plugin is a managed git clone. `/plugin marketplace update` 
 this repo and **overwrites** the installed files. Any edit to the installed copy is lost on the
 next update. This repo is the single source of truth.
 
+## Versioning (always bump, per semver)
+
+Installed copies only re-fetch when the version changes, so **every change that affects the
+distributed plugin (anything under `plugins/bitranox/`) MUST bump
+`plugins/bitranox/.claude-plugin/plugin.json`** following semver:
+
+- **MAJOR** - a breaking change to the published surface: removing or renaming a skill, or
+  changing a skill's invocation or behaviour in an incompatible way.
+- **MINOR** - backward-compatible additions: a new skill, or a new capability in an existing one.
+- **PATCH** - backward-compatible fixes: bug fixes, wording/doc fixes inside a skill, test additions.
+
+Note the bump in the commit subject (`...; bump to X.Y.Z`), matching the existing history.
+Repo-meta changes outside the plugin tree (this file, the root `README`, CI) do not ship to
+installed copies and do not need a plugin bump.
+
 ## Contributor workflow (PR)
 
 If your `self-improve` improved a shared skill and you want to share it:
