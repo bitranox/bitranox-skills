@@ -17,7 +17,7 @@ You write test cases (pressure scenarios with subagents), watch them fail (basel
 
 **Core principle:** If you didn't watch an agent fail without the skill, you don't know if the skill teaches the right thing.
 
-**REQUIRED BACKGROUND:** You MUST understand superpowers:test-driven-development before using this skill. That skill defines the fundamental RED-GREEN-REFACTOR cycle. This skill adapts TDD to documentation.
+**REQUIRED BACKGROUND:** You MUST understand bitranox:test-driven-development before using this skill. That skill defines the fundamental RED-GREEN-REFACTOR cycle. This skill adapts TDD to documentation.
 
 **Official guidance:** For Anthropic's official skill authoring best practices, see anthropic-best-practices.md. This document provides additional patterns and guidelines that complement the TDD-focused approach in this skill.
 
@@ -55,7 +55,7 @@ A **skill** is a reference guide for proven techniques, patterns, or tools. Skil
 | **Watch it fail**       | Document exact rationalizations agent uses       |
 | **Minimal code**        | Write skill addressing those specific violations |
 | **Watch it pass**       | Verify agent now complies                        |
-| **Refactor cycle**      | Find new rationalizations → plug → re-verify     |
+| **Refactor cycle**      | Find new rationalizations -> plug -> re-verify   |
 
 The entire skill creation process follows RED-GREEN-REFACTOR.
 
@@ -135,10 +135,10 @@ If it lacks the detail you need, load the upstream source.
 The upstream table should work as a comprehensive index so an agent can jump straight to the right file for any specific class, function, or method. Each row needs to list the concrete API symbols the file covers, not just a prose summary.
 
 ```markdown
-| Topic                                                  | Upstream source |
-|--------------------------------------------------------|-----------------|
-| ❌ Widgets                                              | docs/widgets.md |
-| ✅ Widgets - DataTable, Tree, OptionList, Select, Input | docs/widgets.md |
+| Topic                                                   | Upstream source |
+|---------------------------------------------------------|-----------------|
+| NO Widgets                                              | docs/widgets.md |
+| OK Widgets - DataTable, Tree, OptionList, Select, Input | docs/widgets.md |
 ```
 
 **Building routing tables:** For each supporting file, use `grep -E '^#{2,3} ' filename.md` to extract H2/H3 headings. For tier 1 (distilled reference) rows, list the 3-5 most important headings, class names, or function names as the topic description. If a file covers more than 5 key terms, pick the ones an agent is most likely to search for and add an "etc." or "and more" suffix. For tier 2 (upstream source) rows, list all classes, functions, API endpoints, and key concepts - the upstream column serves as a comprehensive index, so every symbol must be findable through the topic description.
@@ -153,18 +153,18 @@ Common failures:
 Fix: expand topic descriptions to include 2-3 disambiguating subtopics or keywords.
 
 ```markdown
-| Topic                                        | Distilled reference |
-|----------------------------------------------|---------------------|
-| ❌ API                                        | api-reference.md    |
-| ❌ Config                                     | configuration.md    |
-| ✅ Core API - endpoints, auth, rate limits    | api-reference.md    |
-| ✅ Config - env vars, CLI flags, config files | configuration.md    |
+| Topic                                         | Distilled reference |
+|-----------------------------------------------|---------------------|
+| NO API                                        | api-reference.md    |
+| NO Config                                     | configuration.md    |
+| OK Core API - endpoints, auth, rate limits    | api-reference.md    |
+| OK Config - env vars, CLI flags, config files | configuration.md    |
 ```
 
 **Verifying routing tables:** After writing a routing table, run two checks to confirm it is both complete and accurate. For two-tier tables, run both checks independently for the distilled reference column and the upstream source column:
 
-1. **Coverage check (file → table):** For each referenced file, run `grep -E '^#{2,3} ' filename.md` to extract its headings. For each heading or key term, confirm it appears in the routing table's topic description for that file. Missing terms = content agents can't find through the table.
-2. **Accuracy check (table → file):** For each search term listed in the routing table, run `grep -i "term" filename.md` to confirm the file actually contains it. Mismatches = stale entries that route agents to the wrong file.
+1. **Coverage check (file -> table):** For each referenced file, run `grep -E '^#{2,3} ' filename.md` to extract its headings. For each heading or key term, confirm it appears in the routing table's topic description for that file. Missing terms = content agents can't find through the table.
+2. **Accuracy check (table -> file):** For each search term listed in the routing table, run `grep -i "term" filename.md` to confirm the file actually contains it. Mismatches = stale entries that route agents to the wrong file.
 
 A routing table passes when every key term in the file appears in the table (coverage) and every term in the table appears in the file (accuracy). For tier 1 rows with 10+ headings, coverage is sufficient if the top 5 most-queried terms are represented. For tier 2 rows, coverage requires all classes, functions, and API endpoints - no "top 5" shortcut. Both columns must pass independently.
 
@@ -173,15 +173,15 @@ Example:
 ```markdown
 Referenced file `widgets.md` contains headings: DataTable, Tree, Select, Input, OptionList
 
-✅ Coverage check passes - routing table says:
+OK Coverage check passes - routing table says:
 | Widgets - DataTable, Tree, OptionList, Select, Input | widgets.md |
 
-❌ Coverage check fails - routing table says:
+NO Coverage check fails - routing table says:
 | Widgets                                              | widgets.md |
 (agent searching for "DataTable" won't find the right file)
 
-✅ Accuracy check passes - grep widgets.md for "DataTable" → found
-❌ Accuracy check fails - routing table lists "TreeView" but file only contains "Tree"
+OK Accuracy check passes - grep widgets.md for "DataTable" -> found
+NO Accuracy check fails - routing table lists "TreeView" but file only contains "Tree"
 ```
 
 Tier 2 example (upstream source column):
@@ -192,8 +192,8 @@ Routing table row:
 
 Upstream file `docs/api/full-reference.md` contains headings: Client, Session, request, stream, Connection, Retry
 
-❌ Tier 2 coverage check fails - topic lists 4 of 6 symbols; missing Connection and Retry → add them to topic description
-❌ Tier 2 accuracy check fails - topic lists "stream()" but upstream file heading is "Streaming" → fix topic or confirm alias
+NO Tier 2 coverage check fails - topic lists 4 of 6 symbols; missing Connection and Retry -> add them to topic description
+NO Tier 2 accuracy check fails - topic lists "stream()" but upstream file heading is "Streaming" -> fix topic or confirm alias
 
 Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 ```
@@ -214,7 +214,7 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 
 ```markdown
 ---
-name: Skill-Name-With-Hyphens
+name: skill-name-with-hyphens
 description: Use when [specific triggering conditions and symptoms]
 ---
 
@@ -268,16 +268,16 @@ When the description was changed to just "Use when executing implementation plan
 **The trap:** Descriptions that summarize workflow create a shortcut Claude will take. The skill body becomes documentation Claude skips.
 
 ```yaml
-# ❌ BAD: Summarizes workflow - Claude may follow this instead of reading skill
+# NO BAD: Summarizes workflow - Claude may follow this instead of reading skill
 description: Use when executing plans - dispatches subagent per task with code review between tasks
 
-# ❌ BAD: Too much process detail
+# NO BAD: Too much process detail
 description: Use for TDD - write test first, watch it fail, write minimal code, refactor
 
-# ✅ GOOD: Just triggering conditions, no workflow summary
+# OK GOOD: Just triggering conditions, no workflow summary
 description: Use when executing implementation plans with independent tasks in the current session
 
-# ✅ GOOD: Triggering conditions only
+# OK GOOD: Triggering conditions only
 description: Use when implementing any feature or bugfix, before writing implementation code
 ```
 
@@ -290,19 +290,19 @@ description: Use when implementing any feature or bugfix, before writing impleme
 - **NEVER summarize the skill's process or workflow**
 
 ```yaml
-# ❌ BAD: Too abstract, vague, doesn't include when to use
+# NO BAD: Too abstract, vague, doesn't include when to use
 description: For async testing
 
-# ❌ BAD: First person
+# NO BAD: First person
 description: I can help you with async tests when they're flaky
 
-# ❌ BAD: Mentions technology but skill isn't specific to it
+# NO BAD: Mentions technology but skill isn't specific to it
 description: Use when tests use setTimeout/sleep and are flaky
 
-# ✅ GOOD: Starts with "Use when", describes problem, no workflow
+# OK GOOD: Starts with "Use when", describes problem, no workflow
 description: Use when tests have race conditions, timing dependencies, or pass/fail inconsistently
 
-# ✅ GOOD: Technology-specific skill with explicit trigger
+# OK GOOD: Technology-specific skill with explicit trigger
 description: Use when using React Router and handling authentication redirects
 ```
 
@@ -317,50 +317,51 @@ Use words Claude would search for:
 ### 3. Descriptive Naming
 
 **Use active voice, verb-first:**
-- ✅ `creating-skills` not `skill-creation`
-- ✅ `condition-based-waiting` not `async-test-helpers`
+- OK `creating-skills` not `skill-creation`
+- OK `condition-based-waiting` not `async-test-helpers`
 
 ### 4. Token Efficiency (Critical)
 
 **Problem:** getting-started and frequently-referenced skills load into EVERY conversation. Every token counts.
 
-**Target word counts:**
+**Target word counts (tiered by skill type):**
 - getting-started workflows: <150 words each
-- Frequently-loaded skills: <200 words total
-- Other skills: <500 words (still be concise)
+- Frequently-loaded / process skills: <200 words total
+- Other process/technique skills: <500 words (still be concise)
+- Reference/hub skills (routing tables + supporting files): MAY exceed 500 words, but keep the SKILL.md lean - push detail into reference files and let the body stay an index. This skill-writer is itself a hub skill and legitimately runs long.
 
 **Techniques:**
 
 **Move details to tool help:**
 ```bash
-# ❌ BAD: Document all flags in SKILL.md
+# NO BAD: Document all flags in SKILL.md
 search-conversations supports --text, --both, --after DATE, --before DATE, --limit N
 
-# ✅ GOOD: Reference --help
+# OK GOOD: Reference --help
 search-conversations supports multiple modes and filters. Run --help for details.
 ```
 
 **Use cross-references:**
 ```markdown
-# ❌ BAD: Repeat workflow details
+# NO BAD: Repeat workflow details
 When searching, dispatch subagent with template...
 [20 lines of repeated instructions]
 
-# ✅ GOOD: Reference other skill
+# OK GOOD: Reference other skill
 Always use subagents (50-100x context savings). REQUIRED: Use [other-skill-name] for workflow.
 ```
 
 **Compress examples:**
 ```markdown
-# ❌ BAD: Verbose example (42 words)
+# NO BAD: Verbose example (42 words)
 your human partner: "How did we handle authentication errors in React Router before?"
 You: I'll search past conversations for React Router authentication patterns.
 [Dispatch subagent with search query: "React Router authentication error handling 401"]
 
-# ✅ GOOD: Minimal example (20 words)
+# OK GOOD: Minimal example (20 words)
 Partner: "How did we handle auth errors in React Router?"
 You: Searching...
-[Dispatch subagent → synthesis]
+[Dispatch subagent -> synthesis]
 ```
 
 **Eliminate redundancy:**
@@ -376,10 +377,10 @@ wc -w skills/path/SKILL.md
 ```
 
 **Name by what you DO or core insight:**
-- ✅ `condition-based-waiting` > `async-test-helpers`
-- ✅ `using-skills` not `skill-usage`
-- ✅ `flatten-with-flags` > `data-structure-refactoring`
-- ✅ `root-cause-tracing` > `debugging-techniques`
+- OK `condition-based-waiting` > `async-test-helpers`
+- OK `using-skills` not `skill-usage`
+- OK `flatten-with-flags` > `data-structure-refactoring`
+- OK `root-cause-tracing` > `debugging-techniques`
 
 **Gerunds (-ing) work well for processes:**
 - `creating-skills`, `testing-skills`, `debugging-with-logs`
@@ -390,10 +391,10 @@ wc -w skills/path/SKILL.md
 **When writing documentation that references other skills:**
 
 Use skill name only, with explicit requirement markers:
-- ✅ Good: `**REQUIRED SUB-SKILL:** Use superpowers:test-driven-development`
-- ✅ Good: `**REQUIRED BACKGROUND:** You MUST understand superpowers:systematic-debugging`
-- ❌ Bad: `See skills/testing/test-driven-development` (unclear if required)
-- ❌ Bad: `@skills/testing/test-driven-development/SKILL.md` (force-loads, burns context)
+- OK Good: `**REQUIRED SUB-SKILL:** Use bitranox:test-driven-development`
+- OK Good: `**REQUIRED BACKGROUND:** You MUST understand bitranox:systematic-debugging`
+- NO Bad: `See skills/testing/test-driven-development` (unclear if required)
+- NO Bad: `@skills/testing/test-driven-development/SKILL.md` (force-loads, burns context)
 
 **Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
 
@@ -418,9 +419,9 @@ digraph when_flowchart {
 - "When to use A vs B" decisions
 
 **Never use flowcharts for:**
-- Reference material → Tables, lists
-- Code examples → Markdown blocks
-- Linear instructions → Numbered lists
+- Reference material -> Tables, lists
+- Code examples -> Markdown blocks
+- Linear instructions -> Numbered lists
 - Labels without semantic meaning (step1, helper2)
 
 **REFERENCE:** See graphviz-conventions.dot for graphviz style rules.
@@ -436,9 +437,9 @@ digraph when_flowchart {
 **One excellent example beats many mediocre ones**
 
 Choose most relevant language:
-- Testing techniques → TypeScript/JavaScript
-- System debugging → Shell/Python
-- Data processing → Python
+- Testing techniques -> TypeScript/JavaScript
+- System debugging -> Shell/Python
+- Data processing -> Python
 
 **Good example:**
 - Complete and runnable
@@ -508,6 +509,62 @@ so Windows does not silently break it:
   must run intent/correction patterns against the *user* role and self-admission
   patterns against the *assistant* role; matching both over concatenated text fires on
   ordinary assistant phrasing.
+- **Do real work in this preference order; drop a level only when the one above cannot do it:**
+  1. **A modern, well-maintained library for the job.** Consult the
+     **`python-use-modern-libraries`** skill and use its pick (httpx2 for HTTP, orjson for
+     JSON, rtoml for TOML, ruamel.yaml for YAML, and so on). Do not fall back to dated
+     defaults (`urllib`/`requests`, stdlib `json`) when a clearly better library exists.
+     Declare deps via `uv` so they land in an isolated, reproducible environment, never the
+     user's system Python: a CLI tool via `uvx <tool>`, or a script with PEP-723 inline
+     metadata run by `uv run script.py` (uv fetches the deps on run, no prompt).
+     - **Libraries on the `python-use-modern-libraries` list are pre-approved** - use them and
+       let `uv` fetch them; do NOT ask first.
+     - For a library NOT on that list, first vet it: trustworthy (reputable maintainer or
+       community, not a typo-squat), common (widely adopted), and modern (actively maintained,
+       current releases). If it passes, propose adding it to the `python-use-modern-libraries`
+       list so the curated set grows. Each new entry needs: a proper one-line description of
+       what it is for, the older library/libraries it replaces, and why it is better. Then use
+       it. If it fails vetting, prefer a curated alternative or stdlib. Either way surface the
+       choice to the user (name it, say why, note it is new to the list).
+     - `uv` itself is the one prerequisite: if it is not installed, STOP and ask permission to
+       install it (explaining what for) rather than installing it silently.
+  2. **Standard library when no third-party library is warranted** (small glue, no hot path,
+     or the stdlib module is genuinely the best tool: `pathlib`, `dataclasses`, `zoneinfo`,
+     `re`, `subprocess`). The goal is the best tool, not the most dependencies.
+  3. **An external command (last resort).** Only when neither of the above fits. Shelling out
+     is the least portable choice because the program and its flags differ per OS:
+     - **It must EXIST on every target OS.** Windows usually has no `grep`, `sed`, `awk`,
+       `curl`, `jq`, `timeout`, or `make`. Probe with `shutil.which(prog)` and fail with a
+       clear message (or fall back to stdlib) instead of crashing with "file not found".
+     - **Its flags must be valid for THAT OS's build.** The same tool name is often a
+       different program with different options (GNU vs BSD/macOS `sed`/`date`/`stat`; the
+       Windows port of a tool; PowerShell vs `cmd.exe` builtins). Do not assume a Linux flag
+       works elsewhere; stick to the common documented subset or branch per platform.
+     - **Pass an argv list, never a shell string.** Use `subprocess.run([...])`, not
+       `shell=True`. A shell string (pipes, `||`, `$?`, redirects, `case`) is POSIX-only,
+       breaks under Windows `cmd.exe`, and is a command-injection risk. Decide success from
+       the return code plus an output-file or output-text check in your own code, not shell
+       glue. If you must accept a user-supplied command template, parse it once with
+       `shlex.split` and substitute placeholders into the list elements (no shell).
+
+### Ship tests for every script (and they MUST pass)
+
+A skill that bundles Python scripts MUST also ship a `tests/` directory with pytest tests, and
+those tests MUST pass before the skill is considered done. This is not optional.
+
+- **Cover every important/main function** - each script's public/main functions need a test
+  with decent coverage (happy path plus the key edge cases), not just an import smoke test.
+- **Tests must pass.** Run them (`uv run --with pytest pytest tests/` or the project's runner)
+  and confirm green. A skill with failing or missing tests does not ship.
+- **Test by behaviour with real inputs:** build a tiny fixture project/data, run the function,
+  assert on the actual output (e.g. the analyzer flags the planted case and skips the
+  decorated/compiled one). Writing the tests routinely surfaces real bugs (argv ignored,
+  order-sensitive regex, wrong thresholds) - fix the script, do not weaken the test.
+- **Keep scripts import-safe** so they can be tested: all run-time work behind
+  `if __name__ == "__main__":`, never at module top level (a script that executes on import
+  cannot be unit-tested and will run side effects when imported).
+- A `tests/conftest.py` that puts the skill dir on `sys.path` lets tests `import <script>` by
+  module name.
 
 ## The Iron Law (Same as TDD)
 
@@ -528,7 +585,7 @@ Edit skill without testing? Same violation.
 - Don't "adapt" while running tests
 - Delete means delete
 
-**REQUIRED BACKGROUND:** The superpowers:test-driven-development skill explains why this matters. Same principles apply to documentation.
+**REQUIRED BACKGROUND:** The bitranox:test-driven-development skill explains why this matters. Same principles apply to documentation.
 
 ## Testing All Skill Types
 
@@ -583,13 +640,13 @@ Different skill types need different test approaches:
 
 | Excuse                         | Reality                                                          |
 |--------------------------------|------------------------------------------------------------------|
-| "Skill is obviously clear"     | Clear to you ≠ clear to other agents. Test it.                   |
+| "Skill is obviously clear"     | Clear to you  is not  clear to other agents. Test it.            |
 | "It's just a reference"        | References can have gaps, unclear sections. Test retrieval.      |
 | "Testing is overkill"          | Untested skills have issues. Always. 15 min testing saves hours. |
 | "I'll test if problems emerge" | Problems = agents can't use skill. Test BEFORE deploying.        |
 | "Too tedious to test"          | Testing is less tedious than debugging bad skill in production.  |
 | "I'm confident it's good"      | Overconfidence guarantees issues. Test anyway.                   |
-| "Academic review is enough"    | Reading ≠ using. Test application scenarios.                     |
+| "Academic review is enough"    | Reading  is not  using. Test application scenarios.              |
 | "No time to test"              | Deploying untested skill wastes more time fixing it later.       |
 
 **All of these mean: Test before deploying. No exceptions.**
@@ -670,7 +727,7 @@ description: use when implementing any feature or bugfix, before writing impleme
 
 ## Planning Before You Start
 
-**Before writing any skill, plan the work.** Use TaskCreate to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.
+**Before writing any skill, plan the work.** Use your task/todo tooling (e.g. TodoWrite) to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.
 
 ### Step 0: Create a Plan
 
@@ -678,7 +735,7 @@ description: use when implementing any feature or bugfix, before writing impleme
 2. **Choose test approach** - Discipline skills need pressure scenarios with 3+ combined pressures. Technique skills need application scenarios. Reference skills need retrieval scenarios. (See "Testing All Skill Types" below.)
 3. **List pressure scenarios** - Draft 2-3 scenario descriptions before writing anything.
 4. **Estimate scope** - Self-contained SKILL.md or hub with supporting files?
-5. **Create task list** - Use TaskCreate with one task per phase:
+5. **Create task list** - Use your task/todo tooling (e.g. TodoWrite) with one task per phase:
 
 ```
 TaskCreate: "RED - Write and run baseline pressure scenarios"
@@ -689,7 +746,7 @@ TaskCreate: "Deploy - Commit, push, verify discoverability"
 
 ### Using Agent Teams for Skill Creation
 
-For complex skills, use TeamCreate to parallelize work:
+For complex skills, if you have agent-team tooling available, you can parallelize work:
 
 ```
 TeamCreate: team_name="skill-creation"
@@ -780,22 +837,22 @@ Agent found new rationalization? Add explicit counter. Re-test until bulletproof
 
 ## Anti-Patterns
 
-### ❌ Narrative Example
+### NO Narrative Example
 "In session 2025-10-03, we found empty projectDir caused..."
 **Why bad:** Too specific, not reusable
 
-### ❌ Multi-Language Dilution
+### NO Multi-Language Dilution
 example-js.js, example-py.py, example-go.go
 **Why bad:** Mediocre quality, maintenance burden
 
-### ❌ Code in Flowcharts
+### NO Code in Flowcharts
 ```dot
 step1 [label="import fs"];
 step2 [label="read file"];
 ```
 **Why bad:** Can't copy-paste, hard to read
 
-### ❌ Generic Labels
+### NO Generic Labels
 helper1, helper2, step3, pattern4
 **Why bad:** Labels should have semantic meaning
 
@@ -810,20 +867,20 @@ helper1, helper2, step3, pattern4
 
 **The deployment checklist below is MANDATORY for EACH skill.**
 
-**Gate enforcement:** Use TaskCreate to track the deployment checklist. Do NOT mark the final deployment task as completed until you have verified the skill is discoverable in a fresh session. Only after the deployment task is completed may you begin the next skill.
+**Gate enforcement:** Use your task/todo tooling (e.g. TodoWrite) to track the deployment checklist. Do NOT mark the final deployment task as completed until you have verified the skill is discoverable in a fresh session. Only after the deployment task is completed may you begin the next skill.
 
 Deploying untested skills = deploying untested code. It's a violation of quality standards.
 
 ## Skill Creation Checklist (TDD Adapted)
 
-**IMPORTANT: Use TaskCreate to create tasks for EACH checklist item below.** For complex skills, use TeamCreate to parallelize testing work across subagents.
+**IMPORTANT: Use your task/todo tooling (e.g. TodoWrite) to create tasks for EACH checklist item below.** For complex skills, if agent-team tooling is available, parallelize testing work across subagents.
 
 **PLAN Phase - Before Writing Anything:**
 - [ ] Identify skill type (discipline, technique, pattern, or reference)
 - [ ] Choose test approach based on skill type (see "Testing All Skill Types")
 - [ ] Draft 2-3 pressure/application/retrieval scenarios
 - [ ] Decide scope: self-contained SKILL.md or hub with supporting files
-- [ ] Create task list with TaskCreate (one task per phase)
+- [ ] Create task list with your task/todo tooling, e.g. TodoWrite (one task per phase)
 
 **RED Phase - Write Failing Test:**
 - [ ] Create pressure scenarios (3+ combined pressures for discipline skills)
@@ -860,16 +917,18 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Supporting files only for tools or heavy reference
 - [ ] Hub skills: routing table with topic descriptions for each supporting file
 - [ ] Hub skills: "Use the Read tool..." instruction in body
-- [ ] Hub skills: routing table passes coverage check (file → table) and accuracy check (table → file) for all columns (both distilled reference and upstream source if tier 2 exists)
+- [ ] Hub skills: routing table passes coverage check (file -> table) and accuracy check (table -> file) for all columns (both distilled reference and upstream source if tier 2 exists)
 - [ ] Hub skills: if upstream reference documents exist in subdirectories (e.g., `docs/`, `tutorial/`, `api/`), tier 2 table is present and lists every upstream file with concrete API symbols - run `find docs/ tutorial/ api/ -name '*.md'` (adjust paths) and confirm each result has a row in the tier 2 column
-- [ ] Token budget: `wc -w SKILL.md` under 500 words (body only)
+- [ ] Token budget (tiered): `wc -w SKILL.md` body under 500 words for process/technique skills; reference/hub skills may exceed but keep the body a lean index and push detail to reference files
 
 **Deployment:**
 - [ ] Place skill in the correct directory:
   - **Project skills** (shared with team): `<project-root>/.claude/skills/skill-name/SKILL.md`
   - **Personal skills** (your own): `~/.claude/skills/skill-name/SKILL.md`
 - [ ] Verify frontmatter parses: `head -5 SKILL.md` - confirm `---` delimiters and valid YAML
-- [ ] Check token budget: `wc -w SKILL.md` - target under 500 words for SKILL.md body
+- [ ] Check token budget: `wc -w SKILL.md` - target under 500 words for process/technique SKILL.md bodies; reference/hub skills may exceed but should keep the body lean and push detail to reference files
+- [ ] **If the skill ships Python scripts: `tests/` exists, covers every main function, and PASSES** (`uv run --with pytest pytest tests/`). Do not ship with missing or failing tests.
+- [ ] **Security review before any PR/push:** review the full diff for secrets, credentials, private hostnames/IPs, internal paths, PII, and unsafe code (`shell=True` on untrusted input, `eval`/`exec`, command injection, path traversal, unpinned `curl | sh`). Run the `security-review` skill/command on the change. Fix findings before opening the PR.
 - [ ] Commit skill to git: `git add skills/skill-name/ && git commit -m "Add skill-name skill"`
 - [ ] Push to remote (if configured): `git push`
 - [ ] **Verify discoverability:** Start a fresh Claude session, describe a problem the skill should match, and confirm Claude selects and loads the skill
@@ -893,7 +952,7 @@ How future Claude finds your skill:
 **Creating skills IS TDD for process documentation.**
 
 Same Iron Law: No skill without failing test first.
-Same cycle: RED (baseline) → GREEN (write skill) → REFACTOR (close loopholes).
+Same cycle: RED (baseline) -> GREEN (write skill) -> REFACTOR (close loopholes).
 Same benefits: Better quality, fewer surprises, bulletproof results.
 
 If you follow TDD for code, follow it for skills. It's the same discipline applied to documentation.

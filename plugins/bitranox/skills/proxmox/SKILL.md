@@ -56,11 +56,9 @@ description: >-
 pvecm create CLUSTERNAME
 pvecm create CLUSTERNAME --link0 10.10.10.1
 
-# Get join information (run on existing node)
-pvecm join-info
-
-# Join cluster (run on joining node)
-pvecm add IP-ADDRESS-CLUSTER
+# Join cluster (run on joining node, using an existing member's IP)
+pvecm add IP-ADDRESS-CLUSTER                         # join via API (or GUI: Datacenter > Cluster > Join Information)
+pvecm add IP-ADDRESS-CLUSTER --use_ssh               # force SSH join instead of API
 pvecm add IP-ADDRESS-CLUSTER --link0 LOCAL-IP        # separated cluster network
 
 # Remove node (migrate all VMs/CTs first!)
@@ -141,7 +139,7 @@ systemctl status corosync                                  # 4. verify
 
 > **Mandatory.** Perform this review before every action executed directly on a Proxmox node, VM, or container (commands, config changes, service operations).
 
-> **Exception:** Read-only operations — reading logs, querying status, gathering information without changing anything — are considered safe and can be performed immediately without this review.
+> **Exception:** Read-only operations - reading logs, querying status, gathering information without changing anything - are considered safe and can be performed immediately without this review.
 
 ### 6.1 Steelman Prompt
 
@@ -263,7 +261,7 @@ qm agent {vmid} fsfreeze-freeze                            # freeze filesystems
 qm agent {vmid} fsfreeze-thaw                              # thaw filesystems
 qm monitor {vmid}                                          # QEMU monitor
 
-qm set {vmid} --boot order=scsi0;ide2;net0                 # boot order
+qm set {vmid} --boot 'order=scsi0;ide2;net0'               # boot order
 qm set {vmid} --startup order=10,up=30,down=60             # startup order
 qm set {vmid} --onboot 1                                   # autostart
 qm set {vmid} --tags "production;web"                      # tags
@@ -1172,7 +1170,7 @@ pvesh usage /nodes/{node}/qemu/{vmid} \
 
 ---
 
-## Deep Reference — Chapter Documentation
+## Deep Reference - Chapter Documentation
 
 For detailed documentation beyond this quick reference, read the
 relevant chapter file from the skill directory.
@@ -1226,19 +1224,19 @@ relevant chapter file from the skill directory.
 For topics not in the quick-lookup table, find the right chapter here,
 then read its `_index.md` for sub-topic routing to individual files.
 
-| Topic — key terms                                                                                                                                                                                     | Chapter index                      |
+| Topic - key terms                                                                                                                                                                                     | Chapter index                      |
 |-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
-| Host Admin — repos, updates, firmware, networking, bonding, VLANs, NTP, metrics, disk health, LVM, ZFS, ZFS encryption, BTRFS, node management, certs, ACME, bootloader, GRUB, Secure Boot, KSM       | `ch03-host-admin/_index.md`        |
-| Cluster — create, join, quorum, corosync, QDevice, cluster network, remove node, rejoin                                                                                                               | `ch05-cluster-manager/_index.md`   |
-| Storage backends — Dir, NFS, CIFS, PBS, ZFS pool, LVM, LVM-thin, iSCSI, Ceph RBD, CephFS, BTRFS, ZFS-over-iSCSI                                                                                       | `ch07-storage/_index.md`           |
-| Ceph — install, config, monitors, managers, OSDs, pools, CRUSH, CephFS, client, maintenance                                                                                                           | `ch08-ceph/_index.md`              |
-| QEMU/KVM — settings, hardware, CPU, memory, encryption, display, USB, PCI, boot, migration, clones, templates, import, cloud-init, passthrough, hookscripts, hibernation, resource mapping, qm, locks | `ch10-qemu/_index.md`              |
-| Containers — LXC, distributions, images, settings, security, apparmor, storage, backup, migration, pct config, locks                                                                                  | `ch11-containers/_index.md`        |
-| SDN — zones, VNets, subnets, controllers, fabrics, IPAM, DNS, DHCP, firewall integration                                                                                                              | `ch12-sdn/_index.md`               |
-| Firewall — directions, zones, cluster.fw, host rules, VM/CT rules, security groups, IP sets, nftables                                                                                                 | `ch13-firewall/_index.md`          |
-| Users — users, groups, tokens, pools, auth realms, LDAP, AD, OpenID, 2FA, TOTP, WebAuthn, permissions, ACLs, roles                                                                                    | `ch14-user-management/_index.md`   |
-| HA — resources, groups, fencing, watchdog, error recovery, maintenance, scheduling                                                                                                                    | `ch15-high-availability/_index.md` |
-| Backup — modes (snapshot/suspend/stop), fleecing, compression, encryption, jobs, retention, restore                                                                                                   | `ch16-backup-restore/_index.md`    |
+| Host Admin - repos, updates, firmware, networking, bonding, VLANs, NTP, metrics, disk health, LVM, ZFS, ZFS encryption, BTRFS, node management, certs, ACME, bootloader, GRUB, Secure Boot, KSM       | `ch03-host-admin/_index.md`        |
+| Cluster - create, join, quorum, corosync, QDevice, cluster network, remove node, rejoin                                                                                                               | `ch05-cluster-manager/_index.md`   |
+| Storage backends - Dir, NFS, CIFS, PBS, ZFS pool, LVM, LVM-thin, iSCSI, Ceph RBD, CephFS, BTRFS, ZFS-over-iSCSI                                                                                       | `ch07-storage/_index.md`           |
+| Ceph - install, config, monitors, managers, OSDs, pools, CRUSH, CephFS, client, maintenance                                                                                                           | `ch08-ceph/_index.md`              |
+| QEMU/KVM - settings, hardware, CPU, memory, encryption, display, USB, PCI, boot, migration, clones, templates, import, cloud-init, passthrough, hookscripts, hibernation, resource mapping, qm, locks | `ch10-qemu/_index.md`              |
+| Containers - LXC, distributions, images, settings, security, apparmor, storage, backup, migration, pct config, locks                                                                                  | `ch11-containers/_index.md`        |
+| SDN - zones, VNets, subnets, controllers, fabrics, IPAM, DNS, DHCP, firewall integration                                                                                                              | `ch12-sdn/_index.md`               |
+| Firewall - directions, zones, cluster.fw, host rules, VM/CT rules, security groups, IP sets, nftables                                                                                                 | `ch13-firewall/_index.md`          |
+| Users - users, groups, tokens, pools, auth realms, LDAP, AD, OpenID, 2FA, TOTP, WebAuthn, permissions, ACLs, roles                                                                                    | `ch14-user-management/_index.md`   |
+| HA - resources, groups, fencing, watchdog, error recovery, maintenance, scheduling                                                                                                                    | `ch15-high-availability/_index.md` |
+| Backup - modes (snapshot/suspend/stop), fleecing, compression, encryption, jobs, retention, restore                                                                                                   | `ch16-backup-restore/_index.md`    |
 
 ---
 

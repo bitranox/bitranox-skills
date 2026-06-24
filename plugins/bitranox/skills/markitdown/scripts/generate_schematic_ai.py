@@ -10,7 +10,7 @@ This script uses a smart iterative refinement approach:
 
 Requirements:
     - OPENROUTER_API_KEY environment variable
-    - requests library
+    - httpx2 library
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 try:
-    import requests
+    import httpx2 as httpx
 except ImportError:
-    print("Error: requests library not found. Install with: pip install requests")
+    print("Error: httpx2 library not found. Run via: uv run --with httpx2 generate_schematic_ai.py")
     sys.exit(1)
 
 # Try to load .env file from multiple potential locations
@@ -186,7 +186,7 @@ IMPORTANT - NO FIGURE NUMBERS:
         self._log(f"Making request to {model}...")
         
         try:
-            response = requests.post(
+            response = httpx.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
@@ -206,9 +206,9 @@ IMPORTANT - NO FIGURE NUMBERS:
                 raise RuntimeError(f"API request failed (HTTP {response.status_code}): {error_detail}")
             
             return response_json
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             raise RuntimeError("API request timed out after 120 seconds")
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             raise RuntimeError(f"API request failed: {str(e)}")
     
     def _extract_image_from_response(self, response: Dict[str, Any]) -> Optional[bytes]:
@@ -709,7 +709,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
         
         # Save review log
         log_path = output_dir / f"{base_name}_review_log.json"
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"✓ Review log: {log_path}")
         

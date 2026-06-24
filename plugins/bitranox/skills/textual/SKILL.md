@@ -1,6 +1,6 @@
 ---
 name: textual
-description: Textual TUI framework documentation reference
+description: Use when building terminal or web UIs in Python with Textual - App, compose(), widgets (DataTable, Button, Input, Tree), reactive attributes, Textual CSS (TCSS) styling, screens, workers, events, or testing with Pilot.
 ---
 
 # Textual Framework Documentation
@@ -244,24 +244,24 @@ Reference for all built-in events. Each event page links to complementary events
 
 CSS types define the values that Textual CSS styles accept. Each type page includes a "Used by" section listing all style properties that accept it. See [css_types/index.md](css_types/index.md).
 
-| Page                                    | Description                                                                                                                       |
-|-----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| [<border>](css_types/border.md)         | Border style type — used by border, outline                                                                                       |
-| [<color>](css_types/color.md)           | Color type — used by 23 style properties (background, color, tint, border colors, link colors, scrollbar colors)                  |
-| [<hatch>](css_types/hatch.md)           | Hatch character type — used by hatch                                                                                              |
-| [<horizontal>](css_types/horizontal.md) | Horizontal position — used by align, content-align, border-title-align, border-subtitle-align                                     |
-| [<integer>](css_types/integer.md)       | Integer type — used by column-span, row-span, grid-size, grid-gutter, margin, padding, scrollbar-size                             |
-| [<keyline>](css_types/keyline.md)       | Keyline style type — used by keyline                                                                                              |
-| [<name>](css_types/name.md)             | Name identifier type — used by layer, layers                                                                                      |
-| [<number>](css_types/number.md)         | Number type (int or decimal) — used by opacity, text-opacity                                                                      |
-| [<overflow>](css_types/overflow.md)     | Overflow mode type — used by overflow                                                                                             |
-| [<percentage>](css_types/percentage.md) | Percentage type — used by 22 style properties (color alphas, opacity, background, tint)                                           |
-| [<pointer>](css_types/pointer.md)       | Mouse cursor shape type — used by pointer                                                                                         |
-| [<position>](css_types/position.md)     | Offset application mode — used by position                                                                                        |
-| [<scalar>](css_types/scalar.md)         | Length type (number + unit or auto) — used by width, height, min/max dimensions, margin, padding, offset, grid-columns, grid-rows |
-| [<text-align>](css_types/text_align.md) | Text alignment type — used by text-align                                                                                          |
-| [<text-style>](css_types/text_style.md) | Text style type — used by text-style, border-title-style, border-subtitle-style, link-style, link-style-hover                     |
-| [<vertical>](css_types/vertical.md)     | Vertical position — used by align, content-align                                                                                  |
+| Page                                    | Description                                                                                                                         |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| [<border>](css_types/border.md)         | Border style type  -  used by border, outline                                                                                       |
+| [<color>](css_types/color.md)           | Color type  -  used by 23 style properties (background, color, tint, border colors, link colors, scrollbar colors)                  |
+| [<hatch>](css_types/hatch.md)           | Hatch character type  -  used by hatch                                                                                              |
+| [<horizontal>](css_types/horizontal.md) | Horizontal position  -  used by align, content-align, border-title-align, border-subtitle-align                                     |
+| [<integer>](css_types/integer.md)       | Integer type  -  used by column-span, row-span, grid-size, grid-gutter, margin, padding, scrollbar-size                             |
+| [<keyline>](css_types/keyline.md)       | Keyline style type  -  used by keyline                                                                                              |
+| [<name>](css_types/name.md)             | Name identifier type  -  used by layer, layers                                                                                      |
+| [<number>](css_types/number.md)         | Number type (int or decimal)  -  used by opacity, text-opacity                                                                      |
+| [<overflow>](css_types/overflow.md)     | Overflow mode type  -  used by overflow                                                                                             |
+| [<percentage>](css_types/percentage.md) | Percentage type  -  used by 22 style properties (color alphas, opacity, background, tint)                                           |
+| [<pointer>](css_types/pointer.md)       | Mouse cursor shape type  -  used by pointer                                                                                         |
+| [<position>](css_types/position.md)     | Offset application mode  -  used by position                                                                                        |
+| [<scalar>](css_types/scalar.md)         | Length type (number + unit or auto)  -  used by width, height, min/max dimensions, margin, padding, offset, grid-columns, grid-rows |
+| [<text-align>](css_types/text_align.md) | Text alignment type  -  used by text-align                                                                                          |
+| [<text-style>](css_types/text_style.md) | Text style type  -  used by text-style, border-title-style, border-subtitle-style, link-style, link-style-hover                     |
+| [<vertical>](css_types/vertical.md)     | Vertical position  -  used by align, content-align                                                                                  |
 
 ---
 
@@ -340,7 +340,7 @@ Practical articles covering various Textual topics. Each guide links to relevant
 
 ## Examples
 
-Example source code referenced throughout these docs (317 entries). Files marked *(+tcss)* have a companion `.tcss` stylesheet with the same base name.
+310 example programs (companion `.tcss` stylesheets folded in via the *(+tcss)* marker). Files marked *(+tcss)* have a companion `.tcss` stylesheet with the same base name.
 
 ### App
 

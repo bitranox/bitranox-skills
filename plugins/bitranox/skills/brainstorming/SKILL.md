@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+description: "Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled. Not for trivial, mechanical, or fully-specified changes."
 ---
 
 # Brainstorming Ideas Into Designs
@@ -8,6 +8,8 @@ description: "You MUST use this before any creative work - creating features, bu
 ## Overview
 
 Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+
+**When NOT to use:** trivial, mechanical, or fully-specified tasks where design and requirements are already settled.
 
 Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
 
@@ -41,8 +43,8 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Implementation (if continuing):**
 - Ask: "Ready to set up for implementation?"
-- Use superpowers:using-git-worktrees to create isolated workspace
-- Use superpowers:writing-plans to create detailed implementation plan
+- Use bitranox:git-worktrees to create isolated workspace
+- Use bitranox:plan-writer to create detailed implementation plan
 
 ## Key Principles
 

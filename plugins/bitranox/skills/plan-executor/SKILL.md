@@ -11,7 +11,7 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 
 **Core principle:** Batch execution with checkpoints for architect review.
 
-**Announce at start:** "I'm using the executing-plans skill to implement this plan."
+**Announce at start:** "I'm using the plan-executor skill to implement this plan."
 
 ## The Process
 
@@ -43,6 +43,12 @@ Based on feedback:
 - Repeat until complete
 
 ### Step 5: Complete Development
+
+When all batches are done:
+- Confirm every task in the plan is completed (check the TodoWrite list).
+- Run the full test suite and confirm it is green; output pristine (no errors or warnings).
+- Summarize what changed across the batches for the architect.
+- Per the user's wish, hand off to bitranox:finishing-development-branch or open a PR.
 
 ## When to Stop and Ask for Help
 

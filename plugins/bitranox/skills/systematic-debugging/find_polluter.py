@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bisection helper to find which test creates an unwanted file or directory.
+"""Find which test creates an unwanted file or directory (linear scan).
 
 Usage:   python find_polluter.py <path_to_check> <test_glob>
 Example: python find_polluter.py .git "src/**/*.test.ts"

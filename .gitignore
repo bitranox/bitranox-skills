@@ -7,3 +7,8 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Private skill: stays local, not published to the marketplace
+plugins/bitranox/skills/python-libraries-to-use/
+.pytest_cache/
+.coverage

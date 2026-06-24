@@ -11,6 +11,7 @@ as `python compare_performance.py`, so it does not depend on bash (Claude Code
 falls back to PowerShell on Windows when Git Bash is absent). Timing uses a
 monotonic clock; tests run via `python -m pytest`.
 """
+import os
 import subprocess
 import sys
 import time
@@ -20,9 +21,22 @@ def _git(*args):
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
+def _pytest_argv():
+    """Build the pytest argv, only naming a test dir when one exists.
+
+    If neither ``tests/`` nor ``test/`` is present, omit the path so pytest
+    discovers tests itself (honouring any pyproject testpaths)."""
+    argv = [sys.executable, "-m", "pytest"]
+    testdir = next((d for d in ("tests", "test") if os.path.isdir(d)), None)
+    if testdir:
+        argv.append(testdir)
+    argv.append("-v")
+    return argv
+
+
 def _time_pytest_ms():
     start = time.perf_counter()
-    subprocess.run([sys.executable, "-m", "pytest", "tests/", "-v"],
+    subprocess.run(_pytest_argv(),
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     return int((time.perf_counter() - start) * 1000)
 
