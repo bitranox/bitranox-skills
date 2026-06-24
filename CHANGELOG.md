@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [1.8.0] - 2026-06-25
+
+### Added
+- `computer-use-bash`, `computer-use-git`, `computer-use-ssh` skills: consolidate the global
+  shell/git/ssh mechanics that were scattered across project notes. Bash: never dismiss a
+  non-zero exit as a quirk, isolate a mutation from a trailing check (exit-code masking),
+  pipeline `PIPESTATUS`, pgrep/pkill self-match, don't over-wait. Git: `rev-parse --short`
+  takes one rev, the `core.fileMode=false` exec-bit trap (`git update-index --chmod=+x`),
+  CRLF/LF, no interactive flags. SSH: remote pgrep/pkill self-match, inline-quoting layers,
+  backgrounding drops the session, remote PowerShell needs `-File` not inline.
+- `git-footgun-guard` hook: a `PreToolUse(Bash)` guard that blocks the always-broken
+  `git rev-parse --short <2+ revs>` (it fails `fatal: needed a single commit`) before it
+  produces the confusing error, naming the fix.
+
 ## [1.7.0] - 2026-06-24
 
 ### Added

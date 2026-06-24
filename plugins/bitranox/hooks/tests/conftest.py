@@ -18,6 +18,7 @@ _HOOK_MODULES = {
     "self-improve-gate": "self_improve_gate",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
+    "git-footgun-guard": "git_footgun_guard",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():
