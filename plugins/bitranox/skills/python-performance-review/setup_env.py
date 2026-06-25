@@ -1,4 +1,4 @@
-"""Portable, stdlib-only bootstrap for the python-performance-reviewer skill.
+"""Portable, stdlib-only bootstrap for the python-performance-review skill.
 
 Replaces the old POSIX-only bash "Setup" step. Cross-platform (works on
 Windows, macOS, Linux): no hardcoded /tmp, no mktemp, no `command -v`, no

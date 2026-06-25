@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.0.0] - 2026-06-25
+
+### Changed (BREAKING)
+- Renamed skill `python-performance-reviewer` -> `python-performance-review` (the invocation name
+  changes; update any references).
+
+### Added
+- `python-enforce-data-architecture-strict` skill: an iterative, subagent-driven workflow that
+  refactors Python to a strict data architecture - Pydantic models at every external boundary,
+  typed models (never raw dicts) internally, Enums/IntEnum for fixed string values, compatibility
+  shims removed, and conversions minimized to one parse in / one dump out.
+
 ## [2.0.0] - 2026-06-25
 
 ### Changed (BREAKING)

@@ -1,5 +1,5 @@
 ---
-name: python-performance-reviewer
+name: python-performance-review
 description: "Use when reviewing Python code for performance: identifying caching opportunities in pure functions, finding uncompiled regex patterns, profiling hot spots with real test suites, validating optimization claims from a diff, or comparing before/after timing across git history. Runs standalone or as a performance sub-agent inside a larger code-review workflow."
 ---
 

@@ -77,6 +77,19 @@ Catch it BEFORE you push: history here is append-only, so a value that is pushed
 history even after you remove it from the current files (scrubbing needs a force-push, which
 breaks every existing install).
 
+## Docs describe the current state only (no legacy noise)
+
+Everything shipped (CHANGELOG, `SKILL.md`, README) is public and read by people who do not know this
+repo's internals. Document what a skill does and when to use it, never its provenance or history:
+
+- No "integrated from `<X>` command", no "ported/migrated from `<old>`", no references to private
+  commands, files, or internal sources.
+- No back-compat or legacy framing for the marketplace itself ("formerly", "old name was", "kept for
+  compatibility"). A breaking-rename CHANGELOG note that tells users the NEW invocation name is fine
+  (current-state info users need); internal provenance is not.
+
+When you port or integrate a skill, describe the skill, not where it came from.
+
 ## Contributor workflow (PR)
 
 If your `self-improve` improved a shared skill and you want to share it:

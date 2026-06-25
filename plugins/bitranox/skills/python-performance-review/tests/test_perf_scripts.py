@@ -1,4 +1,4 @@
-"""Behavioural tests for the python-performance-reviewer scripts.
+"""Behavioural tests for the python-performance-review scripts.
 
 Each main/public function is exercised with real inputs and asserted on actual output.
 """
