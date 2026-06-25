@@ -32,4 +32,4 @@ A git command that "fails confusingly" has a knowable cause; reproduce the minim
 
 ## Hooks
 
-`repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error.
+`repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error.

@@ -17,6 +17,12 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.2.1] - 2026-06-25
+
+### Fixed
+- `computer-use-git`: the `repo-gate` hook description now lists all of its checks - the
+  using-bitranox-skills index sync and the secrets/private-data scan, alongside tests/pytest/JSON/LF.
+
 ## [3.2.0] - 2026-06-25
 
 ### Added
