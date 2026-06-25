@@ -19,6 +19,7 @@ _HOOK_MODULES = {
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
+    "session-start": "session_start",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

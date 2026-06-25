@@ -35,6 +35,48 @@ Note the bump in the commit subject (`...; bump to X.Y.Z`), matching the existin
 Repo-meta changes outside the plugin tree (this file, the root `README`, CI) do not ship to
 installed copies and do not need a plugin bump.
 
+## When you add, rename, or remove a skill
+
+Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate.py`) will block you:
+
+- **Update `using-bitranox-skills`.** Add the skill to the domains list in
+  `plugins/bitranox/skills/using-bitranox-skills/SKILL.md` (and drop or rename stale entries). The
+  gate checks both directions: every shipped skill must be listed, and every name listed must exist.
+- **Update cross-links.** A rename changes the invocation name (`bitranox:<name>`); fix every
+  reference in other skills, hooks, and the README (`grep -rn '<old-name>'`).
+- **Bump the version** per semver above (a rename is MAJOR; a new skill is MINOR).
+- **Ship tests** for any script the skill bundles (a `tests/` dir with passing pytest) - also gated.
+
+## Authoring craft lives in the `skill-writer` skill
+
+The general craft of writing a skill - description/CSO, structure, flowcharts, token efficiency,
+cross-platform scripts, and testing - lives in the shipped `skill-writer` skill. Follow it for any
+skill, here or independent. This file is only the **extra** rules specific to contributing to this
+marketplace repo (versioning, the registry sync above, the contribution gate, history policy). When
+you learn a new authoring rule, put general ones in `skill-writer` and repo-only ones here.
+
+## Security review (required, every commit and PR)
+
+This repo is a PUBLIC marketplace, so anything committed is published. A security scan is part
+of the gate (`hooks/repo-gate.py`) and runs on every commit and in CI:
+
+- **Auto-enforced (the gate blocks the commit/PR):** credential formats (GitHub / AWS / Google /
+  Slack / GitLab tokens, OpenAI / Anthropic keys), embedded private keys, and sensitive filenames
+  (`.env`, `id_rsa`, `*.pem`, `credentials.*`). These never belong in a shipped skill.
+- **Maintainer infra denylist (local, optional):** put your own private hostnames, domains, and
+  IPs (one per line) in a gitignored `.security-denylist.local` at the repo root (or
+  `~/.config/bitranox/security-denylist.txt`). The gate then blocks any commit that reintroduces
+  them. The file is gitignored, so the terms are never published.
+- **Judgment review (you or an agent, before pushing):** the gate cannot tell a generic example
+  IP/domain from a real one. Review the diff for leaked infrastructure, internal IPs/hostnames,
+  and personal data. Use documentation-safe placeholders in examples: `example.com` /
+  `example.test` for domains and the RFC5737 ranges (`192.0.2.0/24`, `198.51.100.0/24`,
+  `203.0.113.0/24`) for IPs.
+
+Catch it BEFORE you push: history here is append-only, so a value that is pushed stays in public
+history even after you remove it from the current files (scrubbing needs a force-push, which
+breaks every existing install).
+
 ## Contributor workflow (PR)
 
 If your `self-improve` improved a shared skill and you want to share it:

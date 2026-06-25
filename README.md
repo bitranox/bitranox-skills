@@ -77,14 +77,12 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
 | bash-reference                 | Exact GNU Bash 5.3 reference: builtins, expansions, redirections, tests, arrays, traps.               |
 | brainstorming                  | Collaborative design exploration before any creative work; surfaces intent and requirements.          |
 | enhance-code-quality           | Rate, audit, and improve a project's code quality with a 0-10 assessment and concrete fixes.          |
-| force-using-skills             | Establishes that applicable skills must be invoked before any response.                               |
 | humanize-de                    | Remove signs of AI-generated writing from German text.                                                |
 | humanize-en                    | Remove signs of AI-generated writing from English text.                                               |
 | markitdown                     | Convert files and office docs (PDF, DOCX, PPTX, XLSX, images, audio, HTML, ...) to Markdown.          |
 | md-table-formatting            | Create, edit, and realign Markdown tables with proper column alignment.                               |
 | performance                    | Review Python for performance issues: caching, uncompiled regex, hot-spot profiling.                  |
 | plan-executor                  | Execute a written implementation plan in a separate session with review checkpoints.                  |
-| plan-writer                    | Turn a spec or requirements into a step-by-step implementation plan before coding.                    |
 | proxmox                        | Proxmox VE 9.1.2 reference: clusters, VMs, containers, storage, Ceph, SDN, firewall, HA, backups.     |
 | python-clean-architecture      | Layered ports-and-adapters architecture for Python 3.10+ (domain, UoW, outbox, idempotency).          |
 | python-libraries-to-use        | Standardized library choices for Python projects; enforces preferred tools.                           |
@@ -96,8 +94,10 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
 | systematic-debugging           | Root-cause-first debugging: find the cause before proposing fixes.                                    |
 | test-driven-development        | Write tests first, watch them fail, then write minimal code to pass.                                  |
 | textual                        | Textual TUI framework documentation reference (API, guides, CSS, widgets).                            |
+| using-bitranox-skills          | Establishes that applicable skills must be invoked before any response.                               |
 | uv                             | Reference for the uv package manager (v0.10.2): projects, lockfiles, tools, Docker, CI/CD, migration. |
 | verification-before-completion | Require running verification commands and confirming output before claiming success.                  |
+| writing-plans                  | Turn a spec or requirements into a step-by-step implementation plan before coding.                    |
 
 ## Layout
 

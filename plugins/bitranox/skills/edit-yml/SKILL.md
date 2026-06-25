@@ -39,7 +39,7 @@ path = Path("traefik/dynamic/services.yml")
 
 data = yaml.load(path)             # parse existing file into Python objects
 data["http"]["routers"]["media"] = {
-    "rule": "Host(`media.rotek.at`)",
+    "rule": "Host(`media.example.com`)",
     "entrypoints": ["websecure"],
     "service": "media",
     "tls": True,

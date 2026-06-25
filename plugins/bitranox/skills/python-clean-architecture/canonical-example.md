@@ -243,14 +243,15 @@ def make_memory_outbox(storage: list[DomainEvent] | None = None):
 ```python
 # src/<pkg>/accounts/adapters/memory/idempotency.py
 def make_memory_idempotency():
-    seen: set[str] = set()
+    results: dict[str, Any] = {}
 
     class _Idem:
         async def run_once(self, key: str, fn, *, ttl_seconds: int | None = None):
-            if key in seen:
-                return {"ok": True}
-            seen.add(key)
-            return await fn()
+            if key in results:
+                return results[key]          # duplicate: return the ORIGINAL result
+            result = await fn()              # run first; if it raises, nothing is recorded -> retry is safe
+            results[key] = result            # record only after success (exactly-once)
+            return result
 
     return _Idem()
 ```

@@ -488,6 +488,10 @@ Any script you ship inside a skill or as a hook (a `.sh`, `.py`, `.js`, scripts 
 `scripts/`, or a hook command) runs on a user's machine that may be Windows. Author it
 so Windows does not silently break it:
 
+- **Write the logic in Python, not bash or `jq`.** A script's or hook's real work belongs in a
+  typed, testable language (Python with the standard library is the default); use bash only as a
+  thin launcher shim. Bash/`jq` pipelines are hard to unit-test, behave differently across OSes,
+  and are the usual source of silent Windows breakage.
 - **Line endings: LF only.** Commit a `.gitattributes` that pins `*.sh text eol=lf`
   (and `*.py`/`*.json` for stable hashing). A CRLF `.sh` makes Git Bash on Windows fail
   with "cannot execute: required file not found" or `$'\r': command not found`, and a
@@ -505,6 +509,12 @@ so Windows does not silently break it:
   `uname -s` and skip loudly to stderr under an unexpected shell.
 - **A hook must never wedge a turn.** Every failure path exits 0; degrade silently
   (with a one-line stderr note) rather than erroring.
+- **Set the executable bit in git, not the working tree.** A file run directly (`./script`, or a
+  hook invoked by path with a `#!` shebang) needs its exec bit recorded in git. A working-tree
+  `chmod +x` does NOT persist when `core.fileMode = false`; set it in the index with
+  `git update-index --chmod=+x <file>` and verify with `git ls-files -s` (mode `100755`).
+  Interpreter-run files with no shebang (a `.py`/`.js` run as `python x.py`) are never `./`-run,
+  so they stay `100644`.
 - **Match signals to their source.** A gate that scans transcript text for a trigger
   must run intent/correction patterns against the *user* role and self-admission
   patterns against the *assistant* role; matching both over concatenated text fires on
@@ -565,6 +575,22 @@ those tests MUST pass before the skill is considered done. This is not optional.
   cannot be unit-tested and will run side effects when imported).
 - A `tests/conftest.py` that puts the skill dir on `sys.path` lets tests `import <script>` by
   module name.
+
+### Universal rules vs. marketplace plumbing
+
+Everything in this skill (CSO/description craft, structure, flowcharts, cross-platform scripts,
+tests, library choices) applies to **any** skill you author - a standalone skill for your own
+machine just as much as one you contribute to a marketplace. Follow it either way.
+
+A skill you contribute to a **specific plugin marketplace** has EXTRA rules layered on top, and
+those are repo-specific, so they live in that repo's `CONTRIBUTING.md` (and `CLAUDE.md`), not
+here. Typically: a release/versioning policy, a contribution gate (pre-commit/CI check), an
+index or registry to update when you add a skill, and a git-history policy. Read that repo's
+`CONTRIBUTING.md` before contributing.
+
+When you discover a NEW authoring rule: if it helps any skill author (a portability gotcha, a
+testing habit, a structural pattern), it belongs **here** in `skill-writer`; if it only matters
+for one repo's release machinery, it belongs in **that repo's** `CONTRIBUTING.md`.
 
 ## The Iron Law (Same as TDD)
 

@@ -160,7 +160,7 @@ awaiting your go. No filler.
 
 ## Improving this skill (meta-loop)
 The one exception to "suggest, do not author" (step 5) is **this skill and its gate**
-(`self-improve-gate.sh`): keeping the improver itself effective is the whole point, so you may edit
+(`self-improve-gate.py`): keeping the improver itself effective is the whole point, so you may edit
 them. Treat it as the highest-risk change: **propose-first always**, and after a substantive change to
 the procedure or the gate, re-verify with a baseline subagent test before relying on it. A change to
 this skill or any shared skill must reach the source repo, not just the installed copy a plugin update

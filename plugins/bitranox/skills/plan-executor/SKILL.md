@@ -80,4 +80,6 @@ When all batches are done:
 ## Integration
 
 **Required workflow skills:**
-- **plan-writer** - Creates the plan this skill executes
+- **bitranox:writing-plans** - Creates the plan this skill executes
+- **bitranox:subagent-driven-development** - the in-session alternative: drive the same plan through
+  implementer and reviewer subagents in this session, instead of executing it yourself in a separate one

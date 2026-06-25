@@ -17,6 +17,41 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [2.0.0] - 2026-06-25
+
+### Changed (BREAKING)
+- Renamed two skills (the invocation names change, so any references must update):
+  `force-using-skills` -> `using-bitranox-skills`, and `plan-writer` -> `writing-plans`
+  (matching the upstream superpowers name). All in-repo cross-links, the SessionStart hook,
+  and the README were updated.
+
+### Added
+- Adopted the remaining four superpowers skills so bitranox fully covers them and the
+  superpowers marketplace can be dropped: `dispatching-parallel-agents` (fan out 2+ independent
+  tasks), `requesting-code-review` and `receiving-code-review` (the two halves of a review
+  cycle, with a `code-reviewer.md` subagent template), and `subagent-driven-development`
+  (drive a plan through implementer/reviewer subagents in one session, with `task-brief` /
+  `review-package` / `sdd-workspace` helper scripts).
+- `session-start.py` hook (SessionStart, matcher `startup|clear|compact`): injects the
+  `using-bitranox-skills` skill as session context on startup, `/clear`, and after compaction -
+  bitranox's replacement for the superpowers SessionStart bootstrap, so the skills-first
+  discipline is active from the first turn without dropping when superpowers is removed.
+
+### Changed
+- `using-bitranox-skills` (renamed from `force-using-skills`) enhanced with concepts carried over
+  from superpowers `using-superpowers`: a SUBAGENT-STOP guard, an Instruction Priority section
+  (user instructions / CLAUDE.md outrank skills outrank the default prompt), a "never read a
+  skill's SKILL.md by hand - invoke it" rule, and a brainstorm-before-plan-mode branch.
+- `writing-plans` (renamed from `plan-writer`) reconciled with superpowers `writing-plans`, adding
+  the Scope Check, File Structure, Task Right-Sizing, Global Constraints, Interfaces block,
+  checkbox steps, No Placeholders, and Self-Review sections it was missing.
+- Cross-links in the adopted skills now point at their bitranox equivalents
+  (superpowers `writing-plans` -> `bitranox:writing-plans`, `executing-plans` -> `plan-executor`,
+  `using-git-worktrees` -> `git-worktrees`,
+  `finishing-a-development-branch` -> `finishing-development-branch`). The SDD workspace dir
+  moved from `.superpowers/sdd` to `.bitranox/sdd`. `plan-executor` gained a reciprocal link to
+  `subagent-driven-development` as the in-session execution alternative.
+
 ## [1.8.0] - 2026-06-25
 
 ### Added

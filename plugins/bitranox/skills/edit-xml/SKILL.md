@@ -36,7 +36,7 @@ root = tree.getroot()
 # edit via XPath: append a host override under <unbound>
 unbound = root.find("unbound")
 host = etree.SubElement(unbound, "hosts")
-for tag, text in (("host", "media"), ("domain", "rotek.at"), ("ip", "192.168.168.62")):
+for tag, text in (("host", "media"), ("domain", "example.com"), ("ip", "192.0.2.10")):
     etree.SubElement(host, tag).text = text
 
 xml_bytes = etree.tostring(tree, pretty_print=True, xml_declaration=True, encoding="UTF-8")
@@ -48,7 +48,7 @@ etree.fromstring(xml_bytes)
 ```
 
 For a quick well-formedness check without editing:
-`python3 -c "from lxml import etree,sys; etree.parse(sys.argv[1]); print('ok')" config.xml`
+`python3 -c "import sys; from lxml import etree; etree.parse(sys.argv[1]); print('ok')" config.xml`
 For schema validation: `etree.XMLSchema(etree.parse('schema.xsd')).assertValid(tree)`.
 
 ## Common mistakes

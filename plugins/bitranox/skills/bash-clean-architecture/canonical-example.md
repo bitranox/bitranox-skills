@@ -57,11 +57,11 @@ domain__build_summary() {
     local total=0 healthy=0 degraded=0 down=0
 
     while IFS=' ' read -r _name status _time; do
-        (( total++ ))
+        (( ++total ))
         case "$status" in
-            healthy)  (( healthy++ )) ;;
-            degraded) (( degraded++ )) ;;
-            down)     (( down++ )) ;;
+            healthy)  (( ++healthy )) ;;
+            degraded) (( ++degraded )) ;;
+            down)     (( ++down )) ;;
         esac
     done <<< "$results"
 
@@ -372,10 +372,10 @@ assert_eq() {
     local desc="$1" expected="$2" actual="$3"
     if [[ "$expected" == "$actual" ]]; then
         echo "PASS: $desc"
-        (( PASS++ ))
+        (( ++PASS ))
     else
         echo "FAIL: $desc (expected='$expected', actual='$actual')"
-        (( FAIL++ ))
+        (( ++FAIL ))
     fi
 }
 
@@ -389,9 +389,9 @@ test_validate_service_def__valid() {
 
 test_validate_service_def__invalid_port() {
     domain__validate_service_def "web:example.com:abc" 2>/dev/null && {
-        echo "FAIL: should reject non-numeric port"; (( FAIL++ ))
+        echo "FAIL: should reject non-numeric port"; (( ++FAIL ))
     } || {
-        echo "PASS: rejects non-numeric port"; (( PASS++ ))
+        echo "PASS: rejects non-numeric port"; (( ++PASS ))
     }
 }
 

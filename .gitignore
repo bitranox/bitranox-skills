@@ -8,6 +8,11 @@ __pycache__/
 # OS
 .DS_Store
 
+# Local-only security denylist: the maintainer's private infra terms (host names, domains,
+# IPs, etc.) that the repo-gate scans for. Kept out of the repo so the terms themselves are
+# never published; never commit this file.
+.security-denylist.local
+
 # Private skill: stays local, not published to the marketplace
 plugins/bitranox/skills/python-libraries-to-use/
 .pytest_cache/

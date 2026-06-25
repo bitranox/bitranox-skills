@@ -167,6 +167,123 @@ def check_version_bumped(root):
     return []
 
 
+def check_skills_index(root):
+    """Keep the using-bitranox-skills domains list in sync with the skill dirs.
+
+    Every shipped skill must be listed there (so the orientation list stays complete),
+    and every name listed must be a real skill dir (so a rename/removal cannot leave a
+    dangling entry). This is the deterministic guard for "update the index when you add
+    or rename a skill" - the rule prose alone kept silently breaking.
+    """
+    skills_dir = root / "plugins" / "bitranox" / "skills"
+    index = skills_dir / "using-bitranox-skills" / "SKILL.md"
+    if not skills_dir.is_dir() or not index.is_file():
+        return []
+    try:
+        text = index.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    # Collect backtick-quoted skill names from the bullet lines of the domains section.
+    listed = set()
+    in_section = False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_section = line.startswith("## Skills Span Every Domain")
+            continue
+        if in_section and line.lstrip().startswith("- "):
+            listed.update(re.findall(r"`([a-z][a-z0-9-]+)`", line))
+    dirs = {d.name for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
+    dirs.discard("using-bitranox-skills")
+    missing = sorted(dirs - listed)
+    stale = sorted(listed - dirs)
+    msgs = []
+    if missing:
+        msgs.append("using-bitranox-skills omits these skills (add to its domains list): " + ", ".join(missing))
+    if stale:
+        msgs.append("using-bitranox-skills lists non-existent skills (renamed/removed?): " + ", ".join(stale))
+    return msgs
+
+
+# High-signal credential formats that are never legitimate in a shipped skill. Standard
+# secret-scanner patterns (gitleaks/trufflehog family); low false-positive by construction.
+_SECRET_RX = [
+    (re.compile(r"ghp_[A-Za-z0-9]{36}"), "GitHub token"),
+    (re.compile(r"github_pat_[A-Za-z0-9_]{60,}"), "GitHub fine-grained PAT"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}"), "Anthropic API key"),
+    (re.compile(r"\bsk-[A-Za-z0-9]{40,}\b"), "OpenAI-style key"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "Google API key"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "Slack token"),
+    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b"), "GitLab token"),
+]
+# A complete private key block. The body must lack a "..." truncation marker and carry real
+# base64, so an illustrative/elided example (e.g. the rpyc tutorial's key) does not trip it.
+_PRIVKEY_RX = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----([\s\S]{20,8000}?)-----END [A-Z0-9 ]*PRIVATE KEY-----"
+)
+_SENSITIVE_NAME_RX = re.compile(
+    r"(^|/)(\.env(\.[^/]*)?|id_rsa|id_dsa|id_ecdsa|id_ed25519|.*\.pem|.*\.p12|.*\.pfx|"
+    r"\.netrc|\.htpasswd|.*\.kdbx)$|credentials?\.(json|ya?ml|toml|txt)$",
+    re.IGNORECASE,
+)
+
+
+def _denylist_terms(root):
+    """Maintainer's private-infra terms, loaded from a LOCAL (gitignored / out-of-repo) file so
+    the terms themselves are never published in this shipped hook. Absent on contributor/CI
+    machines -> that part of the scan is simply skipped (the maintainer's pre-commit catches it)."""
+    candidates = [root / ".security-denylist.local",
+                  Path.home() / ".config" / "bitranox" / "security-denylist.txt"]
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return [ln.strip() for ln in cand.read_text(encoding="utf-8").splitlines()
+                        if ln.strip() and not ln.lstrip().startswith("#")]
+        except OSError:
+            pass
+    return []
+
+
+def check_secrets(root):
+    """Block credentials, private keys, sensitive files, and (locally) denylisted infra terms.
+    Runs on every commit and PR, so the credential class of leak can never land. The judgment
+    class (generic vs real IPs/domains) is left to the documented human/agent security review."""
+    rc, listing, _ = _git(root, "ls-files")
+    if rc != 0:
+        return []
+    deny = [(t, t.lower()) for t in _denylist_terms(root)]
+    findings = []
+    for rel in listing.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        if _SENSITIVE_NAME_RX.search(rel):
+            findings.append(f"  {rel}: sensitive filename")
+        fp = root / rel
+        try:
+            raw = fp.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw[:4096] or len(raw) > 2_000_000:
+            continue  # binary or oversized
+        text = raw.decode("utf-8", "replace")
+        for rx, label in _SECRET_RX:
+            if rx.search(text):
+                findings.append(f"  {rel}: possible {label}")
+        for m in _PRIVKEY_RX.finditer(text):
+            body = m.group(1)
+            if "..." not in body and len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) > 64:
+                findings.append(f"  {rel}: embedded private key")
+                break
+        low = text.lower()
+        for orig, term in deny:
+            if term in low:
+                findings.append(f"  {rel}: denylisted infra term '{orig}'")
+    if findings:
+        return ["Potential secrets / private data (security gate) - remove or genericize:"] + sorted(set(findings))
+    return []
+
+
 def check_pytest(root, paths):
     target = [str(p) for p in paths if p.exists()]
     if not target:
@@ -198,6 +315,8 @@ def run_checks(root, ci):
     failures += check_tests_exist(root)
     failures += check_json_valid(root)
     failures += check_lf_endings(root)
+    failures += check_skills_index(root)
+    failures += check_secrets(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
     # version decision away from the merge. So enforce it ONLY in the local pre-commit

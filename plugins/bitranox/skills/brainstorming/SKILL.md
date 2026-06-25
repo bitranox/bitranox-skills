@@ -44,7 +44,7 @@ Start by understanding the current project context, then ask questions one at a 
 **Implementation (if continuing):**
 - Ask: "Ready to set up for implementation?"
 - Use bitranox:git-worktrees to create isolated workspace
-- Use bitranox:plan-writer to create detailed implementation plan
+- Use bitranox:writing-plans to create detailed implementation plan
 
 ## Key Principles
 
