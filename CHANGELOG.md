@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.2.0] - 2026-06-25
+
+### Added
+- `python-performance-review`, `python-clean-architecture`, `enhance-code-quality`: a third
+  robustness rule - never trust structured input. Structured data passed in (dict, JSON, API/IPC
+  payload, deserialized object) must have its structure parsed/validated into a typed model before
+  use, never assumed correct - unless the user deliberately opts out of the check.
+
 ## [3.1.0] - 2026-06-25
 
 ### Added

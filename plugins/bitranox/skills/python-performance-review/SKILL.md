@@ -39,6 +39,10 @@ Independent of the cache/regex pipeline, these are first-class findings (usually
   unvalidated types, and unhandled encoding or arbitrary characters (non-ASCII, emoji, CJK,
   control characters, binary data). Adversarial input must not blow up time or memory (ReDoS,
   quadratic blow-ups, OOM). Inputs must be bounded, validated, and the handling tested.
+- **Untrusted structured input.** Structured data (a dict, JSON, a deserialized payload) used
+  without parsing or validating its structure - assuming keys, types, or shape that may be
+  missing or wrong. Require a parse/validation step at the boundary, unless the project has
+  deliberately accepted skipping it.
 
 ## Purpose
 

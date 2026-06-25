@@ -95,7 +95,7 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 
 Present the scorecard as a table with per-dimension scores and the weighted total.
 
-**Two always-on robustness checks** (score under Resource Safety and Security):
+**Three always-on robustness checks** (score under Resource Safety and Security):
 - **Bounded memory on large/unbounded data.** Reading big files, huge database result sets, or
   huge log files must stream/iterate/chunk/paginate - never load the whole thing into memory or
   accumulate unbounded. Materialize only when the dataset is provably and safely bounded.
@@ -103,6 +103,9 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
   type-validated, and encoding-safe - non-ASCII, emoji, CJK, control characters, and binary data
   are rejected/normalized/escaped, never trusted raw - and the handling is tested with adversarial
   and edge inputs.
+- **Validated structured input.** Structured data passed in (a dict, JSON, an API/IPC payload, a
+  deserialized object) is parsed into a typed model before use - never trusted to have the right
+  keys, types, or shape. Exception: items the project instructions deliberately accept.
 
 ## Step 4: Filter Deliberately Accepted Items
 
