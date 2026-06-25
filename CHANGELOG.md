@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.1.0] - 2026-06-25
+
+### Added
+- `python-performance-review`, `python-clean-architecture`, `enhance-code-quality`: two robustness
+  rules - (1) keep memory bounded on large/unbounded data (big files, huge DB result sets, huge log
+  files must stream/chunk/paginate, not load whole, unless provably bounded), and (2) sanitize and
+  bound all external input (lengths/overflow, types, encoding; non-ASCII/emoji/CJK/binary handled
+  safely and tested). `enhance-code-quality` gains a Resource Safety rubric dimension.
+- `python-performance-review`: `find_unbounded_memory.py` AST detector (with tests) that flags
+  whole-file/DB/log reads (`read()`/`readlines()`/`read_text()`, `fetchall()`, un-chunked pandas
+  readers), wired into the analysis pipeline as Step 4f.
+
 ## [3.0.0] - 2026-06-25
 
 ### Changed (BREAKING)

@@ -69,6 +69,20 @@ You may need more or fewer layers depending on complexity. The dependency rule a
 
 Data passed across a boundary must always be in the form most convenient for the **inner** layer. Never pass ORM row structures or Pydantic request models inward -- adapters convert to domain types at the boundary.
 
+### Bounded and Sanitized Inputs at the Boundary
+
+Adapters/edges are the only place external data enters, so two rules are enforced there:
+
+- **Sanitize and bound every external input.** Validate type and shape, enforce length limits
+  (guard overflow/underflow), and handle arbitrary bytes/characters safely - non-ASCII, emoji,
+  CJK, control characters, and binary data are rejected, normalized, or escaped, never trusted
+  raw. The boundary parser (Pydantic at the edge) owns this, and it is covered by tests with
+  adversarial and edge inputs.
+- **Keep memory bounded on large or unbounded data.** When an adapter reads big files, huge
+  database result sets, or huge log files, stream/iterate/chunk/paginate - never load the whole
+  thing into memory or accumulate an unbounded collection. Ports expose iterators/pagination, not
+  fully-materialized lists. Materialize only when the dataset is provably and safely bounded.
+
 ### Domain vs Use Cases
 
 |                  | Domain                                                      | Use Cases                                                          |
@@ -537,6 +551,8 @@ Architecture is defined by boundaries and dependencies, not by process boundarie
 - [ ] Deterministic lock ordering for multi-aggregate ops
 - [ ] Outbox + Idempotency implemented
 - [ ] Boundary validation (Pydantic at edges)
+- [ ] Boundary input sanitized and length-bounded (types, encoding; non-ASCII/emoji/CJK/binary handled safely) and tested
+- [ ] Large/unbounded reads (big files, huge DB results, huge logs) stream/paginate; no full materialization unless provably bounded
 - [ ] Money as integer minor units (cents)
 - [ ] Observability hooks at boundaries (`trace_id` via contextvars)
 - [ ] UoW generic over typed deps (`UnitOfWork[D]`); no `Mapping[str, Any]` for deps

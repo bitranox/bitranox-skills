@@ -63,15 +63,16 @@ Record tool output (pass/fail, coverage %, lint warnings). Use this objective da
 
 Use this rubric to score the project. Each dimension is 0-10, final score is the weighted average.
 
-| Dimension       | Weight | What to Check                                            |
-|-----------------|--------|----------------------------------------------------------|
-| Architecture    | 20%    | Layer separation, dependency direction, SOLID principles |
-| Type Safety     | 15%    | See language-specific criteria below                     |
-| Testing         | 20%    | Coverage %, test quality, edge cases, isolation          |
-| Error Handling  | 10%    | Consistency, domain exceptions, exit codes               |
-| Security        | 15%    | Input validation, secrets handling, dependency audit     |
-| Documentation   | 10%    | Docstrings/comments, README, inline docs where needed    |
-| Maintainability | 10%    | DRY, naming, complexity, readability                     |
+| Dimension       | Weight | What to Check                                                  |
+|-----------------|--------|----------------------------------------------------------------|
+| Architecture    | 16%    | Layer separation, dependency direction, SOLID principles       |
+| Type Safety     | 15%    | See language-specific criteria below                           |
+| Testing         | 20%    | Coverage %, test quality, edge cases, isolation                |
+| Error Handling  | 8%     | Consistency, domain exceptions, exit codes                     |
+| Security        | 15%    | Input validation/sanitization, secrets handling, dep audit     |
+| Resource Safety | 10%    | Bounded memory on large data (stream/chunk, no unbounded load) |
+| Documentation   | 8%     | Docstrings/comments, README, inline docs where needed          |
+| Maintainability | 8%     | DRY, naming, complexity, readability                           |
 
 **Type Safety by language:**
 
@@ -93,6 +94,15 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 | 9-10  | Excellent, best practices throughout, no meaningful gaps |
 
 Present the scorecard as a table with per-dimension scores and the weighted total.
+
+**Two always-on robustness checks** (score under Resource Safety and Security):
+- **Bounded memory on large/unbounded data.** Reading big files, huge database result sets, or
+  huge log files must stream/iterate/chunk/paginate - never load the whole thing into memory or
+  accumulate unbounded. Materialize only when the dataset is provably and safely bounded.
+- **Sanitized, bounded input.** External input is length-bounded (guard overflow/underflow),
+  type-validated, and encoding-safe - non-ASCII, emoji, CJK, control characters, and binary data
+  are rejected/normalized/escaped, never trusted raw - and the handling is tested with adversarial
+  and edge inputs.
 
 ## Step 4: Filter Deliberately Accepted Items
 

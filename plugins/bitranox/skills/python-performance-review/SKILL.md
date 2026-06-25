@@ -23,6 +23,22 @@ Your approach:
 - "Are regex patterns compiled at module level? Let me scan the AST."
 - "What's the cache hit rate with REAL test data? Let me measure."
 - "Does caching improve performance >5%? Let me benchmark with real tests."
+- "Does this read a big file / huge DB result / huge logfile fully into memory? Could it stream?"
+- "Is external input length-bounded and sanitized, or can adversarial input blow up time/memory?"
+
+## Always Flag: Unbounded Memory and Unsafe Input
+
+Independent of the cache/regex pipeline, these are first-class findings (usually SEVERE):
+
+- **Unbounded memory growth.** Code that reads big files, huge database result sets, or huge
+  log files fully into memory - or accumulates an unbounded list/dict/string - instead of
+  streaming, iterating, chunking, or paginating. Require bounded memory (generators, `iter`
+  chunks, server-side cursors, line-by-line/`io` streaming, pagination). Only neglect this when
+  the dataset is provably and safely bounded (small, fixed size); then materializing is fine.
+- **Unsafe / unbounded input.** Input that is not size-bounded or sanitized: unbounded length,
+  unvalidated types, and unhandled encoding or arbitrary characters (non-ASCII, emoji, CJK,
+  control characters, binary data). Adversarial input must not blow up time or memory (ReDoS,
+  quadratic blow-ups, OOM). Inputs must be bounded, validated, and the handling tested.
 
 ## Purpose
 
@@ -39,6 +55,7 @@ Use the Read tool to load referenced files for full details.
 | Candidate prioritizer         | prioritize_cache_candidates.py | Cross-reference pure functions with hotspots              |
 | Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch        |
 | Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns |
+| Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data  |
 | Performance claims checker    | validate_perf_claims.py        | Extract and validate performance claims from a diff       |
 | Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison       |
 
@@ -293,6 +310,30 @@ Verdicts:
 - **INEFFECTIVE**: Low call count (<100), negligible cumtime, or cache hit rate <20%  -  propose removal
 - **HARMFUL**: Caches impure function, mutable args without conversion, or masks a bug  -  propose removal with explanation
 
+#### 4f: Detect Unbounded Memory Patterns
+
+Run `find_unbounded_memory.py` to flag code that reads big files, huge database result sets, or huge log files fully into memory (whole-file `read()`/`readlines()`/`read_text()`, `fetchall()`, pandas readers without `chunksize=`) instead of streaming. Each hit is a CANDIDATE - confirm the source can actually grow unbounded before flagging it (a provably small, fixed dataset is fine), then classify it SEVERE.
+
+```bash
+# Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
+read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+
+# Discover Python files
+if [ -n "${BX_PERF_FILES:-}" ]; then
+    python_files="$BX_PERF_FILES"
+elif [ -d "src" ]; then
+    python_files=$(find src/ -name '*.py' | tr '\n' ' ')
+else
+    python_files=$(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' | tr '\n' ' ')
+fi
+
+if [ -n "$python_files" ]; then
+    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" $python_files > "$BX_PERF_TMPDIR/memory_candidates.txt" 2>&1 || true
+    echo "Unbounded-memory candidates identified"
+fi
+```
+
 ### Step 5: Merge, Classify, and Sort Findings
 
 Parse the five output files from Step 4. Output format reference:
@@ -439,3 +480,5 @@ After running the test suite, report:
 - **ONE issue at a time**  -  never batch-present
 - **ALWAYS audit existing caches**  -  verify they're still effective, propose removal if not
 - **RESPECT prior decisions**  -  check project instructions before suggesting
+- **ALWAYS flag unbounded memory**  -  big files / huge DB results / huge logfiles must stream, not load whole
+- **ALWAYS flag unsafe input**  -  bound length, sanitize types/encoding (non-ASCII/emoji/CJK/binary), test it
