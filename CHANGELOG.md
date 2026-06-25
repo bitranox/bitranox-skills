@@ -17,6 +17,35 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.5.0] - 2026-06-25
+
+### Added
+- `reformat-md-tables` hook (`PostToolUse(Write|Edit|MultiEdit)`): after a markdown file is written
+  or edited, it auto-realigns the file's tables in place (reusing the md-table-formatting skill's
+  `reformat_file`), so a table can never ship misaligned. Silent, safe-by-design (bails on malformed
+  tables), exits 0 on every failure path.
+
+## [3.4.0] - 2026-06-25
+
+### Added
+- `computer-use-vnc` skill: drive a target's screen over plain VNC/RFB with the `vnc-remote-control`
+  CLI (type, key, click, screenshot, OCR, click-text) when the target has no network/SSH/agent/API -
+  Proxmox/hypervisor VM consoles (incl. first boot before networking), legacy GUI software, and old
+  TUI apps. Pure client: nothing on the target except its VNC server (Proxmox ships noVNC). The skill
+  installs the tool via uv and drives it; click coordinates are absolute native pixels (no scaling).
+
+## [3.3.0] - 2026-06-25
+
+### Added
+- `computer-use-ssh`: an Authentication and host keys section - never ask for / type / accept an SSH
+  password (it leaks into transcript, history, logs); log in with a key by PATH (`ssh -i <keypath>`,
+  never reading the key or a passphrase), proposing the user set up passwordless key auth if a host
+  still wants a password; on the user's OWN/trusted subnet accept new AND changed
+  host keys (reimaged hosts), scoped via `~/.ssh/config` to the subnet ranges (`StrictHostKeyChecking=no`
+  + `UserKnownHostsFile=/dev/null`), while untrusted hosts use `accept-new`. Includes per-OS walkthroughs
+  for setting up key auth (client, incl. Windows OpenSSH via winget/Add-WindowsCapability) and an SSH
+  server (Linux/macOS/Windows).
+
 ## [3.2.1] - 2026-06-25
 
 ### Fixed

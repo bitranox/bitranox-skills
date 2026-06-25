@@ -53,11 +53,11 @@ For schema validation: `etree.XMLSchema(etree.parse('schema.xsd')).assertValid(t
 
 ## Common mistakes
 
-| Mistake                                            | Do instead                                            |
-|----------------------------------------------------|-------------------------------------------------------|
-| `sed`/regex/f-strings to change a value or add a tag | `parse` -> edit the tree -> `tostring`              |
-| Building XML by string concatenation               | `etree.SubElement` / set `.text`, `.attrib`           |
-| Ignoring namespaces (find fails silently)          | Use the namespace map: `root.find("ns:tag", nsmap)`   |
-| Manually escaping `&`, `<`, quotes                 | The serializer escapes correctly; never do it by hand |
-| Parsing untrusted XML with defaults                | Disable entities: `resolve_entities=False, no_network=True` |
-| Committing/deploying without re-parsing            | Re-parse the serialized bytes before you ship it      |
+| Mistake                                              | Do instead                                                  |
+|------------------------------------------------------|-------------------------------------------------------------|
+| `sed`/regex/f-strings to change a value or add a tag | `parse` -> edit the tree -> `tostring`                      |
+| Building XML by string concatenation                 | `etree.SubElement` / set `.text`, `.attrib`                 |
+| Ignoring namespaces (find fails silently)            | Use the namespace map: `root.find("ns:tag", nsmap)`         |
+| Manually escaping `&`, `<`, quotes                   | The serializer escapes correctly; never do it by hand       |
+| Parsing untrusted XML with defaults                  | Disable entities: `resolve_entities=False, no_network=True` |
+| Committing/deploying without re-parsing              | Re-parse the serialized bytes before you ship it            |

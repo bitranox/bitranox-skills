@@ -23,13 +23,13 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 
 ### What to Use When
 
-| Scenario | Use |
-|----------|-----|
-| External input/output | Pydantic `BaseModel` |
-| Internal business logic (no serialization) | `@dataclass` or Pydantic |
-| Need validation | Pydantic `BaseModel` |
-| Fixed string values | `IntEnum` (preferred) or `Enum` |
-| Simple value objects | `NamedTuple` or `@dataclass` |
+| Scenario                                   | Use                             |
+|--------------------------------------------|---------------------------------|
+| External input/output                      | Pydantic `BaseModel`            |
+| Internal business logic (no serialization) | `@dataclass` or Pydantic        |
+| Need validation                            | Pydantic `BaseModel`            |
+| Fixed string values                        | `IntEnum` (preferred) or `Enum` |
+| Simple value objects                       | `NamedTuple` or `@dataclass`    |
 
 ### Anti-Patterns to Eliminate
 

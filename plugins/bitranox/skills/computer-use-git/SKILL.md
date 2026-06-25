@@ -7,15 +7,15 @@ description: Use when running git - commit, push, tag, rev-parse, marking a hook
 
 ## Quick reference
 
-| Situation | Rule |
-|-----------|------|
-| `git rev-parse --short` with 2+ revs | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev. |
-| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk. |
-| Make a hook/script executable | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`. |
-| Did a mode change "take"? | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`. |
-| A module run via an interpreter/launcher | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`. |
-| Line endings | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF. |
-| Interactive flags | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits). |
+| Situation                                    | Rule                                                                                                                                                                                                                                                                               |
+|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `git rev-parse --short` with 2+ revs         | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev.                                                                                                                  |
+| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk.                                                                                                                                                |
+| Make a hook/script executable                | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`.                                                                      |
+| Did a mode change "take"?                    | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`.                                                                                                                                                                  |
+| A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                |
+| Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF. |
+| Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                               |
 
 ## Exec bit + fileMode (the silent hook failure)
 

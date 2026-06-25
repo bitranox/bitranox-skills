@@ -9,14 +9,14 @@ Run shell commands so the result is unambiguous, and read that result truthfully
 
 ## Quick reference
 
-| Situation | Rule |
-|-----------|------|
-| A command exits non-zero | NEVER dismiss it as "a quirk". Reproduce the smallest failing form to find the deterministic cause, or fix the command. |
-| Critical command + a check in one call | Run the mutation in its OWN call (or join with `&&`). A trailing command's exit masks or misattributes the real one. |
-| `cmd \| tail`/`head`/`grep` | The pipeline's exit is the LAST stage's, not `cmd`'s. Use `set -o pipefail` or check `${PIPESTATUS[0]}`. |
-| Check/kill a process by name | `pgrep`/`pkill -f PATTERN` matches your OWN shell. Prefer a pidfile + `kill -0`, a port/unit/cgroup signal, or bracket the first char (`[p]attern`) AND keep the keyword out of `echo` labels in the same command. |
-| Waiting for an event | Match the wait to the measured timing plus a small margin; prefer a concrete completion signal over a fixed long sleep. |
-| Judging current state from output/logs | Read the freshest lines and check their timestamps; never conclude from a stale capture. |
+| Situation                              | Rule                                                                                                                                                                                                               |
+|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A command exits non-zero               | NEVER dismiss it as "a quirk". Reproduce the smallest failing form to find the deterministic cause, or fix the command.                                                                                            |
+| Critical command + a check in one call | Run the mutation in its OWN call (or join with `&&`). A trailing command's exit masks or misattributes the real one.                                                                                               |
+| `cmd \| tail`/`head`/`grep`            | The pipeline's exit is the LAST stage's, not `cmd`'s. Use `set -o pipefail` or check `${PIPESTATUS[0]}`.                                                                                                           |
+| Check/kill a process by name           | `pgrep`/`pkill -f PATTERN` matches your OWN shell. Prefer a pidfile + `kill -0`, a port/unit/cgroup signal, or bracket the first char (`[p]attern`) AND keep the keyword out of `echo` labels in the same command. |
+| Waiting for an event                   | Match the wait to the measured timing plus a small margin; prefer a concrete completion signal over a fixed long sleep.                                                                                            |
+| Judging current state from output/logs | Read the freshest lines and check their timestamps; never conclude from a stale capture.                                                                                                                           |
 
 ## Why exit codes get misread
 

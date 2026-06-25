@@ -20,6 +20,7 @@ _HOOK_MODULES = {
     "tell-sweep": "tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
     "session-start": "session_start",
+    "reformat-md-tables": "reformat_md_tables",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

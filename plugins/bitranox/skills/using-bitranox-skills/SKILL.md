@@ -110,7 +110,7 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 - **Architecture:** `python-clean-architecture`, `bash-clean-architecture`, `python-enforce-data-architecture-strict`
 - **Language and tooling references:** `bash-reference`, `uv`, `rpyc`, `textual`, `python-performance-review`, `python-use-modern-libraries`
 - **Editing structured files and docs:** `edit-json`, `edit-xml`, `edit-yml`, `md-table-formatting`, `markitdown`
-- **Shell / git / ssh mechanics:** `computer-use-bash`, `computer-use-git`, `computer-use-ssh`
+- **Shell / git / ssh / remote-control mechanics:** `computer-use-bash`, `computer-use-git`, `computer-use-ssh`, `computer-use-vnc`
 - **Writing:** `humanize-de`, `humanize-en`
 - **Infrastructure and ops:** `proxmox`, `rotating-proxies`
 - **Persuasion and business:** `rory`

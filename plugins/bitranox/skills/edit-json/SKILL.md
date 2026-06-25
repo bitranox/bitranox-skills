@@ -46,11 +46,11 @@ For a quick syntax check of any JSON file without editing:
 
 ## Common mistakes
 
-| Mistake                                          | Do instead                                          |
-|--------------------------------------------------|-----------------------------------------------------|
-| Hand-editing and leaving a trailing comma        | `load` -> edit the object -> `dump` (no trailing commas) |
-| `sed`/regex to bump a value or add a key         | `load` -> edit -> `dump`                            |
-| Single quotes or unquoted keys                   | The serializer emits correct double-quoted JSON     |
-| Running `json.load` on a JSONC/tsconfig file     | Load with `pyjson5`; write back strict JSON         |
-| Losing key order / churning diffs                | Python dicts keep insertion order; `sort_keys` for stable diffs |
-| Committing without re-loading                    | Re-`load` after dump and assert the expected value  |
+| Mistake                                      | Do instead                                                      |
+|----------------------------------------------|-----------------------------------------------------------------|
+| Hand-editing and leaving a trailing comma    | `load` -> edit the object -> `dump` (no trailing commas)        |
+| `sed`/regex to bump a value or add a key     | `load` -> edit -> `dump`                                        |
+| Single quotes or unquoted keys               | The serializer emits correct double-quoted JSON                 |
+| Running `json.load` on a JSONC/tsconfig file | Load with `pyjson5`; write back strict JSON                     |
+| Losing key order / churning diffs            | Python dicts keep insertion order; `sort_keys` for stable diffs |
+| Committing without re-loading                | Re-`load` after dump and assert the expected value              |
