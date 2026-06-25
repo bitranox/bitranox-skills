@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.6.0] - 2026-06-25
+
+### Added
+- `computer-use-git`: a "review for leaked data before push / PR / publish" section - scan the WHOLE
+  push range (every unpushed commit, plus `--all`/`--tags`/side branches), not just the last diff, for
+  secrets, private infrastructure, and personal data; use documentation-safe placeholders; history is
+  hard to scrub once pushed. Brief cross-referencing gates added to `finishing-development-branch`
+  (before a push/PR option) and `requesting-code-review` (before merging).
+
 ## [3.5.0] - 2026-06-25
 
 ### Added

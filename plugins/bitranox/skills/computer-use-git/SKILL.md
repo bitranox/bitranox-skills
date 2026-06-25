@@ -30,6 +30,25 @@ git ls-files -s path/to/hook.sh   # 100755 = executable in git
 
 A git command that "fails confusingly" has a knowable cause; reproduce the minimal form rather than waving it off. `git rev-parse --short A B` is the canonical example: it always fails because `--short` takes a single revision.
 
+## Before you push / PR / publish: review for leaked data
+
+A push, PR, or publish is irreversible exposure on a shared or public remote - and even after you
+delete a value it stays in history (removing it needs a force-push, which breaks existing clones).
+So before `git push` / `gh pr create` / a release, review what will ACTUALLY leave the machine.
+
+- **Review the whole push range, not just the last diff.** `git push` sends EVERY unpushed commit on
+  the branch (and `--all`/`--tags`/`--mirror`, or pushing a side branch, sends even more), so a
+  secret committed three commits ago still goes out. Scan the range, not `git diff --cached`:
+  `git diff @{push}..HEAD` (or `git diff <base>...HEAD` for a PR), plus `git log --stat <range>`.
+- **What to look for:** secrets/credentials (API keys, tokens, passwords, private keys,
+  `.env`/`id_rsa`/`*.pem`), private infrastructure (internal hostnames, private IPs, internal
+  URLs/paths, host/cluster names), and personal data (emails, names). Quick grep:
+  `git diff @{push}..HEAD | grep -inE 'api[_-]?key|secret|token|password|BEGIN .*PRIVATE KEY'`.
+- **Use documentation-safe placeholders** in examples: `example.com`/`example.test` for domains and
+  the RFC5737 ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for IPs.
+- A deterministic secret/denylist gate (pre-commit / CI) catches the unambiguous cases, but the
+  judgement call - a real internal IP vs a generic example - is yours. Do it BEFORE the push.
+
 ## Hooks
 
 `repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error.

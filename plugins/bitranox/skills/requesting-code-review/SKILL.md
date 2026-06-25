@@ -45,6 +45,8 @@ Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md
 - Note Minor issues for later
 - Push back if reviewer is wrong (with reasoning)
 
+**Before merging:** scan the push range for leaked secrets, private infrastructure, or personal data (see `bitranox:computer-use-git`) - a reviewer should flag these too.
+
 ## Example
 
 ```

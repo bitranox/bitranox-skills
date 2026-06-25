@@ -94,6 +94,8 @@ Which option?
 
 **Don't add explanation** - keep options concise.
 
+**Before any option that pushes (option 2, or detached-HEAD option 1): review the push range for leaked secrets, private infrastructure, and personal data** (see `bitranox:computer-use-git`) - `git push` sends every unpushed commit on the branch, not just the merge.
+
 ### Step 5: Execute Choice
 
 #### Option 1: Merge Locally
