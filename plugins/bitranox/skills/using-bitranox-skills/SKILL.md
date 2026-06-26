@@ -112,7 +112,7 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 - **Editing structured files and docs:** `edit-json`, `edit-xml`, `edit-yml`, `md-table-formatting`, `markitdown`
 - **Shell / git / ssh / remote-control mechanics:** `computer-use-bash`, `computer-use-git`, `computer-use-ssh`, `computer-use-vnc`
 - **Writing:** `humanize-de`, `humanize-en`
-- **Infrastructure and ops:** `proxmox`, `rotating-proxies`
+- **Infrastructure and ops:** `proxmox`, `proxmox-bindsnap`, `rotating-proxies`
 - **Persuasion and business:** `rory`
 
 This grouping is orientation, not the source of truth: skills get added and renamed. Trust the available-skills list for what currently exists, and never skip a domain skill just because the task looked like "only" a coding task (e.g. editing a YAML file -> `edit-yml`; writing a user-facing message -> `humanize-en`/`humanize-de`; touching a Proxmox host -> `proxmox`).

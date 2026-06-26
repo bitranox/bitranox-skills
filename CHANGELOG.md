@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.8.0] - 2026-06-26
+
+### Added
+- `proxmox-bindsnap`: install, verify, configure and operate pve-bindsnap on a Proxmox VE node -
+  snapshot and clone LXC containers that have bind/device mounts (the `BINDSNAP-FORCE-RUNNING`,
+  `BINDSNAP-UNSUPPORTED`, `BINDSNAP-EXCLUDE` markers, the checksum guard / untested-build workflow,
+  cloning, and uninstall).
+
 ## [3.7.0] - 2026-06-26
 
 ### Changed
