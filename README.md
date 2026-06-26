@@ -87,6 +87,7 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
 | proxmox                                 | Proxmox VE 9.1.2 reference: clusters, VMs, containers, storage, Ceph, SDN, firewall, HA, backups.                               |
 | python-clean-architecture               | Layered ports-and-adapters architecture for Python 3.10+ (domain, UoW, outbox, idempotency).                                    |
 | python-enforce-data-architecture-strict | Refactor Python to a strict data architecture: Pydantic at boundaries, typed models, Enums, minimal conversions.                |
+| python-gitignore                        | Git-exact .gitignore parsing / path filtering (incl. whitelist mode) via the igittigitt library/CLI.                            |
 | python-libraries-to-use                 | Standardized library choices for Python projects; enforces preferred tools.                                                     |
 | python-performance-review               | Performance-analysis sub-agent: profile with real test suites, validate claims with benchmarks.                                 |
 | rory                                    | Marketing, branding, pricing, and behavioural-science angle (what would Rory Sutherland do).                                    |

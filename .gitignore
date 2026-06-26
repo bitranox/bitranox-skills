@@ -17,3 +17,6 @@ __pycache__/
 plugins/bitranox/skills/python-libraries-to-use/
 .pytest_cache/
 .coverage
+
+# Local, per-developer settings (Claude Code etc.) - never commit
+*.local.json

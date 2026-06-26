@@ -108,7 +108,7 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 
 - **Process and quality:** `brainstorming`, `writing-plans`, `plan-executor`, `subagent-driven-development`, `dispatching-parallel-agents`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `finishing-development-branch`, `git-worktrees`, `enhance-code-quality`, `self-improve`, `skill-writer`
 - **Architecture:** `python-clean-architecture`, `bash-clean-architecture`, `python-enforce-data-architecture-strict`
-- **Language and tooling references:** `bash-reference`, `uv`, `rpyc`, `textual`, `python-performance-review`, `python-use-modern-libraries`
+- **Language and tooling references:** `bash-reference`, `uv`, `rpyc`, `textual`, `python-performance-review`, `python-use-modern-libraries`, `python-gitignore`
 - **Editing structured files and docs:** `edit-json`, `edit-xml`, `edit-yml`, `md-table-formatting`, `markitdown`
 - **Shell / git / ssh / remote-control mechanics:** `computer-use-bash`, `computer-use-git`, `computer-use-ssh`, `computer-use-vnc`
 - **Writing:** `humanize-de`, `humanize-en`

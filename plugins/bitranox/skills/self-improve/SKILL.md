@@ -35,6 +35,40 @@ Keep the two memory systems in their lanes, and do not duplicate across them:
   journal: `now.md` -> `today-*.md` -> `recent.md` -> `archive.md`). Never put durable learnings there,
   and never copy handoff/task state into Auto memory.
 
+### Scaling memory as it grows
+
+Self-improve adds entries over time, so the store grows. Manage the growth by escalation; do not let
+it bloat:
+
+1. **Keep it lean (default, holds for a long time).** One fact per topic file, a one-line `MEMORY.md`
+   index entry (under ~200 chars), and EDIT an existing entry rather than appending a new one (the
+   core anti-bloat rule). The index lines are what keep the loaded-every-session cost small.
+2. **When the `MEMORY.md` index itself gets too big to scan**, add semantic search over the topic
+   files with the `basic-memory` MCP (markdown-file-backed, local `fastembed` embeddings - no cloud). It
+   keeps its own DB/config in `~/.basic-memory` (it does not litter the memory dir) and can point
+   straight at the existing `~/.claude/projects/<project>/memory/` directory, so it augments the
+   native store with search without replacing it and without a migration. Best fit.
+   - **Before pointing it at the files, stop it from rewriting them.** basic-memory's sync can write
+     its OWN frontmatter (permalink, etc.) into the source markdown, which clashes with the
+     self-improve schema (`name`/`description`/`metadata`). In `~/.basic-memory/config.json` set
+     `ensure_frontmatter_on_sync: false`, `disable_permalinks: true`, `format_on_save: false` (edit it
+     with the `edit-json` skill), then back up the memory dir and diff after its first index run to confirm
+     nothing was modified.
+   - Alternative: `@modelcontextprotocol/server-memory` is a knowledge-graph store
+     (entities/relations) - a different model and a separate parallel store, not a search layer over
+     the existing files. Use it only if you actually want the graph model.
+
+Add an MCP server through the `update-config` skill (it edits the MCP/settings config); never wire one
+in silently.
+
+**Push vs pull - keep both in their lanes.** `MEMORY.md` is PUSH: loaded into context every session,
+always present, zero query - the reliable home for critical, always-apply rules. `basic-memory` is
+PULL: semantic search on demand (a tool call), so a memory only surfaces if you actually search for
+it. Keep must-hold rules as short `MEMORY.md` index lines or CLAUDE.md guardrails (push, reliable),
+and use `basic-memory` for the large tail of episodic/topic memories (pull, scalable). Never move a
+must-hold rule into the search-only store: a critical rule has to be in context every time, not only
+when queried.
+
 ## When to run
 
 Any turn that contains a learning signal. The gated Stop hook fires this for you when it sees a

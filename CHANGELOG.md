@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.9.0] - 2026-06-26
+
+### Added
+- `python-gitignore` skill: git-exact `.gitignore` parsing and path filtering (include/whitelist mode,
+  memory-bounded for millions of paths) via the `igittigitt` library/CLI - install, config, library
+  API, CLI, and bash piping. Added the matching row to `python-use-modern-libraries` (prefer
+  `igittigitt` over hand-rolled fnmatch/glob/re, `gitignore_parser`, or `pathspec`).
+- `self-improve`: a "Scaling memory as it grows" section - keep entries lean (one-line index, edit over
+  append); when the index gets too big, add the `basic-memory` MCP for semantic search over the existing
+  markdown memory files (with the caveat to disable its frontmatter-rewriting flags first and back up +
+  diff). Keeps must-hold rules in MEMORY.md/CLAUDE.md (push, always loaded) and uses basic-memory for the episodic tail (pull, on-demand search); `@modelcontextprotocol/server-memory` noted as a knowledge-graph alternative.
+
 ## [3.8.0] - 2026-06-26
 
 ### Added
