@@ -204,10 +204,59 @@ def check_skills_index(root):
     return msgs
 
 
+_CREDIT_RX = re.compile(r"(?m)^>\s*Adapted from .+\(.+\)\.")
+_NOTICE_HEADING_RX = re.compile(r"(?m)^###\s+([a-z][a-z0-9-]+)\s*$")
+
+
+def check_attribution(root):
+    """Keep license-attribution credit lines and THIRD_PARTY_NOTICES.md entries in sync.
+
+    A skill adapted from a third-party source carries a `> Adapted from <src> (<LICENSE>).`
+    credit line at the top of its SKILL.md; the permissive licenses we accept require the
+    notice to ship, so each such skill must also have a `### <name>` entry in
+    plugins/bitranox/THIRD_PARTY_NOTICES.md - and no notice may dangle without a credit line.
+    Deterministic guard for the attribution rule (CONTRIBUTING.md), so it cannot silently rot.
+    """
+    skills_dir = root / "plugins" / "bitranox" / "skills"
+    notices = root / "plugins" / "bitranox" / "THIRD_PARTY_NOTICES.md"
+    if not skills_dir.is_dir():
+        return []
+    credited = set()
+    for sk in sorted(skills_dir.iterdir()):
+        md = sk / "SKILL.md"
+        if sk.is_dir() and md.is_file():
+            try:
+                if _CREDIT_RX.search(md.read_text(encoding="utf-8")):
+                    credited.add(sk.name)
+            except OSError:
+                continue
+    noticed = set()
+    if notices.is_file():
+        try:
+            noticed = set(_NOTICE_HEADING_RX.findall(notices.read_text(encoding="utf-8")))
+        except OSError:
+            noticed = set()
+    if not credited and not noticed:
+        return []
+    msgs = []
+    missing = sorted(credited - noticed)
+    orphan = sorted(noticed - credited)
+    if missing:
+        msgs.append("Skills credit an upstream but have no THIRD_PARTY_NOTICES.md entry: "
+                    + ", ".join(missing))
+    if orphan:
+        msgs.append("THIRD_PARTY_NOTICES.md entries with no matching '> Adapted from' credit line: "
+                    + ", ".join(orphan))
+    return msgs
+
+
 # High-signal credential formats that are never legitimate in a shipped skill. Standard
 # secret-scanner patterns (gitleaks/trufflehog family); low false-positive by construction.
 _SECRET_RX = [
-    (re.compile(r"ghp_[A-Za-z0-9]{36}"), "GitHub token"),
+    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "GitHub token"),
+    # Installation tokens (ghs_) are now long JWT-format strings (~520 chars) carrying
+    # dots/dashes/underscores, so the body allows ".-_" and is open-ended on length.
+    (re.compile(r"ghs_[A-Za-z0-9._-]{36,}"), "GitHub App installation token"),
     (re.compile(r"github_pat_[A-Za-z0-9_]{60,}"), "GitHub fine-grained PAT"),
     (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}"), "Anthropic API key"),
     (re.compile(r"\bsk-[A-Za-z0-9]{40,}\b"), "OpenAI-style key"),
@@ -316,6 +365,7 @@ def run_checks(root, ci):
     failures += check_json_valid(root)
     failures += check_lf_endings(root)
     failures += check_skills_index(root)
+    failures += check_attribution(root)
     failures += check_secrets(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the

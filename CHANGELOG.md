@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.10.0] - 2026-06-27
+
+### Added
+- `adopting-external-skills` skill: a playbook plus a `adopt_skill.py` helper for bringing a useful
+  third-party Claude Code skill (a repo URL, an installed plugin path, or a pasted `SKILL.md`) up to
+  bitranox standards and into this marketplace. It runs a blocking license gate (accept the permissive
+  family MIT/BSD/ISC/Apache-2.0, reject copyleft, never assume MIT when a license is absent), normalizes
+  naming and cross-references, scaffolds tests, and records attribution. It is upstream-first - push the
+  improvement to the original author first - and never removes or disables the user's other plugins.
+- `plugins/bitranox/THIRD_PARTY_NOTICES.md`: per-skill attribution and license texts for adapted skills,
+  shipped with the plugin so the notice travels with every install. Seeded with the existing adaptations.
+- `repo-gate.py` `check_attribution`: keeps every `> Adapted from ...` credit line in sync with a
+  `THIRD_PARTY_NOTICES.md` entry (no orphan credit lines or notices).
+
+### Changed
+- `self-improve`: realizations now count as a learning signal. The gated Stop hook fires on
+  discovery phrasings ("now I understand the real ...", "I figured out ...", "it turns out ..."),
+  and the skill routes a discovered infrastructure/architecture/topology/data-flow fact at the
+  right altitude (own infra spanning projects -> top-level CLAUDE.md; one project -> its
+  CLAUDE.md/memory; unsure -> ask). The memory backend is framed as a push/pull choice: must-hold
+  standing rules stay in `MEMORY.md`/CLAUDE.md, the episodic tail can live in an installed memory
+  MCP server (`basic-memory` or `server-memory`).
+- `skill-writer`: new rule "Persisting durable state: choose a memory backend" - a skill that stores
+  durable facts must treat the backend as a push/pull choice (standing rules in `MEMORY.md`/CLAUDE.md,
+  episodic tail in a memory MCP server) rather than hard-coding `MEMORY.md`.
+
 ## [3.9.0] - 2026-06-26
 
 ### Added

@@ -106,7 +106,7 @@ When multiple skills could apply, use this order:
 
 bitranox ships far more than the workflow/process skills. Before concluding "no skill applies," scan these domains: there is very likely a relevant one. The authoritative, current list is your injected available-skills - invoke any by name with the Skill tool.
 
-- **Process and quality:** `brainstorming`, `writing-plans`, `plan-executor`, `subagent-driven-development`, `dispatching-parallel-agents`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `finishing-development-branch`, `git-worktrees`, `enhance-code-quality`, `self-improve`, `skill-writer`
+- **Process and quality:** `brainstorming`, `writing-plans`, `plan-executor`, `subagent-driven-development`, `dispatching-parallel-agents`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `finishing-development-branch`, `git-worktrees`, `enhance-code-quality`, `self-improve`, `skill-writer`, `adopting-external-skills`
 - **Architecture:** `python-clean-architecture`, `bash-clean-architecture`, `python-enforce-data-architecture-strict`
 - **Language and tooling references:** `bash-reference`, `uv`, `rpyc`, `textual`, `python-performance-review`, `python-use-modern-libraries`, `python-gitignore`
 - **Editing structured files and docs:** `edit-json`, `edit-xml`, `edit-yml`, `md-table-formatting`, `markitdown`

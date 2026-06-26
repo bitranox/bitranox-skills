@@ -72,6 +72,66 @@ def test_assistant_self_admitted_miss_blocks(tmp_path, monkeypatch, capsys):
     assert decision_of(capsys) == "block"
 
 
+def test_assistant_hook_block_self_admission_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(
+        tmp_path, user="check the processes", asst="The hook caught my self-matching echo labels. Let me redo it."
+    )
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_blocked_by_guard_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="ok", asst="My command was blocked by the guard, so I will use ps instead.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_explaining_a_hook_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(
+        tmp_path, user="how does it work", asst="The tell-sweep hook blocks em dashes on every write to keep prose clean."
+    )
+    rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert rc == 0
+    assert decision_of(capsys) is None
+
+
+def test_assistant_generic_redo_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="run it again", asst="Let me redo the query without the join and rerun it.")
+    rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert rc == 0
+    assert decision_of(capsys) is None
+
+
+def test_assistant_realization_topology_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(
+        tmp_path, user="where does the generator run",
+        asst="Now I understand the real topology: the generator runs on the internal host.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_figured_out_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="why is it slow",
+                         asst="I figured out that the worker actually runs on the media host.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_turns_out_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="trace it",
+                         asst="It turns out the data flows through the cache first.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_plain_acknowledgement_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="please adjust the layout",
+                         asst="I understand the requirement and will adjust the layout now.")
+    rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert rc == 0
+    assert decision_of(capsys) is None
+
+
 def test_normal_turn_does_not_block(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="add a function to sum a list", asst="Done, added sum_list().")
     rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})

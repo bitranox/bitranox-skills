@@ -28,7 +28,14 @@ confirm it is actually active; otherwise learnings get written but never loaded.
   Claude Code v2.1.59+ if older. Until it is on, fall back to recording durable rules as a CLAUDE.md
   guardrail so nothing is lost. (See https://code.claude.com/docs/en/memory.)
 
-Keep the two memory systems in their lanes, and do not duplicate across them:
+The store's **backend is a choice, not fixed to flat files.** By default it is Auto memory's
+`MEMORY.md` + topic files (the push tier, loaded every session). Where a memory MCP server is
+installed - `basic-memory` over those same files, or `server-memory` (see "Scaling memory as it
+grows") - it is the pull-tier backend for the large episodic tail. The split is the rule: the **most
+important standing rules** stay in `MEMORY.md` / CLAUDE.md (push, always in context) and never only
+in a search-only MCP store, while the episodic tail can live in the MCP store.
+
+Keep the memory systems in their lanes, and do not duplicate across them:
 - **Auto memory / `MEMORY.md` (this skill):** durable, curated, deduplicated rules and facts, loaded
   every session. This is where learnings go.
 - **The `remember` plugin / `.remember/`:** session task-continuity only (a time-decaying handoff
@@ -72,8 +79,13 @@ when queried.
 ## When to run
 
 Any turn that contains a learning signal. The gated Stop hook fires this for you when it sees a
-correction, an explicit "remember", or a self-admitted miss; you can also invoke it manually. If you
-reflect and find nothing durable, say so in one line and stop. Do not manufacture a "learning".
+correction, an explicit "remember", a self-admitted miss, or a **realization** - a turn where you
+finally work out how something really fits together ("now I understand the real topology...", "I
+figured out that X actually runs on Y", "it turns out the data flows through Z first"). A
+realization about your own infrastructure or a project's architecture, topology, or data-flow is a
+durable discovery: capture the fact, do not let it evaporate when the turn ends. You can also invoke
+this skill manually. If you reflect and find nothing durable, say so in one line and stop. Do not
+manufacture a "learning".
 
 ## Procedure
 
@@ -85,13 +97,14 @@ List the concrete, reusable things this session surfaced, one plain sentence eac
 that is task state, already recorded in the repo or git history, or only mattered to this conversation.
 
 ### 2. Classify each candidate
-| Kind                                                                                                                                                          | Home                                                                                                                                                                                  |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                    |
-| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                        |
-| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                 |
-| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop) |
-| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                               |
+| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                     |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                       |
+| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                           |
+| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                    |
+| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): own infra spanning projects -> the top-level/parent CLAUDE.md; one project's scope -> that project's CLAUDE.md or its memory; **unsure which -> ask the user where it belongs**. See the memory-vs-CLAUDE.md note below |
+| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                    |
+| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                  |
 
 ### 3. Dedup BEFORE writing (mandatory)
 For each surviving candidate, search first (`grep -ril "<keyword>"` over the memory dir and the
@@ -116,6 +129,18 @@ this project (the core anti-bloat constraint still applies).
 
 A CLAUDE.md under version control is a shared artifact: **propose** the edit with a diff rather
 than auto-committing (see step 4). Private MEMORY.md entries stay auto-apply.
+
+**Memory vs CLAUDE.md (and when both).** A must-hold structural fact - your own infrastructure
+topology, a project's architecture or data-flow that has to be in context every time - goes in the
+right-altitude **CLAUDE.md** (own infra spanning projects -> the top-level/parent CLAUDE.md; one
+project -> that project's CLAUDE.md), matching where infra already lives. A smaller episodic or
+looked-up detail goes in the **memory** store: a `MEMORY.md` topic file (with its one-line index
+entry), or - where a memory MCP server is installed (`basic-memory`, or `server-memory`; see
+"Scaling memory as it grows") - that MCP store, which is the pull-tier home for the episodic tail.
+Keep must-hold facts in the push tier (CLAUDE.md / `MEMORY.md` index), never move them into a
+search-only MCP store. Use **both** push and a topic entry only as the general-principle (CLAUDE.md)
+plus concrete-instance (memory) split above - cross-linked, never duplicated. When the altitude is
+genuinely unclear, **ask the user where it belongs** rather than guessing.
 
 ### 4. Risk-classify and apply
 - **Auto-apply (low risk, additive):** a new memory topic file plus one short index line; appending a

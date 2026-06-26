@@ -38,17 +38,45 @@ _USER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ASST_PATTERN = re.compile(
-    r"you.?re right|you are right|my mistake|i was wrong|apolog",
+    r"you.?re right|you are right|my mistake|i was wrong|apolog"
+    # A deterministic guard/hook blocked the assistant's OWN action -> high-signal
+    # process miss. Require a first-person object (me/my), or the passive "blocked by
+    # ... hook", so merely explaining a hook to the user does not fire. "let me
+    # redo/fix" alone deliberately does NOT match (too noisy, used to spurious-block).
+    r"|(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,10}\b(me|my)\b"
+    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby (a |the )?(hook|guard|gate)"
+    r"|self.?match(ed|ing|es)?",
+    re.IGNORECASE,
+)
+# A realization the assistant reaches AFTER probing - "now I understand the real
+# topology...", "I now realize the data flows through X" - is a durable discovery about
+# infrastructure/architecture/data-flow that should be captured at the right altitude
+# (own infra -> top-level CLAUDE.md; one project -> its CLAUDE.md/memory; unsure -> ask).
+# Anchored on the now/finally realization opener (so a bare "I understand your point"
+# acknowledgement does NOT fire) plus the strong "the real <structure>" / "turns out" forms.
+_REALIZATION_PATTERN = re.compile(
+    r"now i (understand|see|realize|get it)\b"
+    r"|i (now|finally) (understand|see|realize)\b"
+    r"|i(.?ve| have)? figured (it |this )?out|i figured out\b"
+    r"|the (real|actual) (topolog|architect|structure|setup|layout|wiring|flow|picture|story|design)"
+    r"|it turns out\b|turns out (that|the)\b"
+    r"|(that|this) explains (the|why|how|what)\b"
+    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b|root cause is\b"
+    r"|(actually|really) (runs|lives|sits|resides|is hosted|happens|is served) on\b"
+    r"|jetzt (verstehe ich|wird klar|ergibt)|stellt sich heraus|herausgefunden",
     re.IGNORECASE,
 )
 
 _REASON = (
-    'A learning signal was detected this turn (a correction, an explicit "remember", or a '
-    "self-admitted miss). Before you stop: invoke the self-improve skill (Skill tool, name "
-    '"self-improve") to capture this session\'s learnings into memory/CLAUDE.md per its '
-    "procedure. If a project-specific extension skill exists (a repo-local *-self-improve), "
-    "follow its bindings too. If on reflection there is genuinely nothing worth recording, say "
-    "so in one line and then stop."
+    'A learning signal was detected this turn (a correction, an explicit "remember", a '
+    'self-admitted miss, or a realization such as "now I understand the real ..."). Before you '
+    'stop: invoke the self-improve skill (Skill tool, name "self-improve") to capture this '
+    "session's learnings into memory/CLAUDE.md per its procedure. A discovered fact about your "
+    "own infrastructure or a project's architecture/topology/data-flow goes at the right "
+    "altitude (own infra spanning projects -> the top-level CLAUDE.md; one project -> its "
+    "CLAUDE.md/memory; unsure -> ask the user where it belongs). If a project-specific "
+    "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "
+    "reflection there is genuinely nothing worth recording, say so in one line and then stop."
 )
 
 
@@ -124,7 +152,8 @@ def main():
     except OSError:
         pass
 
-    if _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst):
+    if (_USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
+            or _REALIZATION_PATTERN.search(last_asst)):
         try:
             with open(state, "w", encoding="utf-8") as fh:
                 fh.write(sig)

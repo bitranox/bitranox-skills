@@ -132,6 +132,10 @@ Skills Directory) and have been adapted here. `markitdown` and `rory` build on u
 sources (the MarkItDown document converter and Rory Sutherland's public talks and
 writing, respectively).
 
+Skills adapted from a third-party source under a permissive license carry their original
+copyright and license text in [`plugins/bitranox/THIRD_PARTY_NOTICES.md`](plugins/bitranox/THIRD_PARTY_NOTICES.md).
+
 ## License
 
-MIT
+MIT - see [`LICENSE`](LICENSE). Adapted third-party skills retain their own permissive licenses;
+see [`plugins/bitranox/THIRD_PARTY_NOTICES.md`](plugins/bitranox/THIRD_PARTY_NOTICES.md).

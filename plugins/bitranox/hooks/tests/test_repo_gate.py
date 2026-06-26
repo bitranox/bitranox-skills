@@ -261,12 +261,60 @@ def test_skills_index_ignores_itself_and_non_bullet_names(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# check_attribution (credit line <-> THIRD_PARTY_NOTICES.md sync)
+# --------------------------------------------------------------------------
+
+
+def credited_skill(root, name):
+    write(root / f"plugins/bitranox/skills/{name}/SKILL.md",
+          f"---\nname: {name}\n---\n\n# {name}\n\n> Adapted from upstream x (MIT).\n")
+
+
+def notices(root, names):
+    body = "# Third-Party Notices\n" + "".join(f"\n---\n\n### {n}\n\n- License: MIT\n" for n in names)
+    write(root / "plugins/bitranox/THIRD_PARTY_NOTICES.md", body)
+
+
+def test_attribution_in_sync(tmp_path):
+    credited_skill(tmp_path, "alpha")
+    notices(tmp_path, ["alpha"])
+    assert RG.check_attribution(tmp_path) == []
+
+
+def test_attribution_credit_without_notice_blocks(tmp_path):
+    credited_skill(tmp_path, "alpha")
+    notices(tmp_path, [])  # notices file exists but has no entry
+    fails = RG.check_attribution(tmp_path)
+    assert any("alpha" in f and "no THIRD_PARTY_NOTICES" in f for f in fails)
+
+
+def test_attribution_credit_with_no_notices_file_blocks(tmp_path):
+    credited_skill(tmp_path, "alpha")  # no notices file at all
+    fails = RG.check_attribution(tmp_path)
+    assert any("alpha" in f for f in fails)
+
+
+def test_attribution_orphan_notice_blocks(tmp_path):
+    make_skills(tmp_path, ["alpha"])  # plain skill, no credit line
+    notices(tmp_path, ["alpha"])
+    fails = RG.check_attribution(tmp_path)
+    assert any("alpha" in f and "no matching" in f for f in fails)
+
+
+def test_attribution_no_credits_no_notices_passes(tmp_path):
+    make_skills(tmp_path, ["alpha", "beta"])
+    assert RG.check_attribution(tmp_path) == []
+
+
+# --------------------------------------------------------------------------
 # check_secrets (credentials / private keys / sensitive files / infra denylist)
 # Tokens are built via concatenation so the literal patterns are NOT present in this
 # test file (else the gate would flag this file when scanning the real repo).
 # --------------------------------------------------------------------------
 
 GH_TOKEN = "ghp_" + "A" * 36
+# Long JWT-format installation token: ghs_ + three dot-separated base64url segments.
+GHS_TOKEN = "ghs_" + ".".join(["A" * 40, "B" * 40, "C" * 40])
 AWS_KEY = "AKIA" + "ABCDEFGHIJ123456"
 
 
@@ -288,6 +336,11 @@ def test_secrets_clean_repo(tmp_path):
 def test_secrets_detects_github_token(tmp_path):
     git_repo(tmp_path, {"a.md": f"token = {GH_TOKEN}\n"})
     assert any("GitHub token" in f for f in RG.check_secrets(tmp_path))
+
+
+def test_secrets_detects_github_app_installation_token(tmp_path):
+    git_repo(tmp_path, {"a.md": f"token = {GHS_TOKEN}\n"})
+    assert any("GitHub App installation token" in f for f in RG.check_secrets(tmp_path))
 
 
 def test_secrets_detects_aws_key(tmp_path):

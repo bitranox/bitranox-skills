@@ -592,6 +592,23 @@ When you discover a NEW authoring rule: if it helps any skill author (a portabil
 testing habit, a structural pattern), it belongs **here** in `skill-writer`; if it only matters
 for one repo's release machinery, it belongs in **that repo's** `CONTRIBUTING.md`.
 
+### Persisting durable state: choose a memory backend (do not hard-code MEMORY.md)
+
+If the skill you author persists durable facts, learnings, preferences, or state across sessions,
+treat the **store backend as a choice**, not "write it to `MEMORY.md`". Route by the push/pull split:
+
+- **Push tier - the most important standing rules** that must be in context every session: the
+  `MEMORY.md` index and CLAUDE.md guardrails (always loaded, zero query). Keep must-hold rules here,
+  never only in a search-only store.
+- **Pull tier - the larger episodic/searchable tail:** where a **memory MCP server** is installed
+  (`basic-memory` over the memory files, or `@modelcontextprotocol/server-memory`), route the tail
+  there so the always-loaded context stays small.
+
+So consider whether a memory MCP server is (or should be) installed and send the episodic tail to
+it, reserving `MEMORY.md`/CLAUDE.md for the standing rules. Wire any MCP server through the
+`update-config` skill, never silently. The full memory-lane model, detection, and the basic-memory
+setup caveats live in `bitranox:self-improve` - cross-reference it rather than restating it.
+
 ## The Iron Law (Same as TDD)
 
 ```

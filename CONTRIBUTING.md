@@ -90,6 +90,18 @@ repo's internals. Document what a skill does and when to use it, never its prove
 
 When you port or integrate a skill, describe the skill, not where it came from.
 
+**Exception: license attribution is required, and is not legacy noise.** When a skill adapts a
+third-party skill under a permissive license, copyright law requires crediting the source - that
+credit is current-state legal metadata, not provenance narrative. Record it in exactly two places:
+(1) a single structured credit line at the top of the skill body, `> Adapted from <source>
+(<LICENSE>).`, naming only the source and its license; and (2) a full entry in
+`plugins/bitranox/THIRD_PARTY_NOTICES.md` (the upstream copyright line verbatim, the license text,
+and - for Apache-2.0 - its `NOTICE` and a "modified" note). Everything else in this section still
+holds: no "ported/migrated from", no internal command or file names, no "formerly known as". The
+distinction is mechanical - a credit line that names source + license is allowed; prose that
+narrates the porting history is not. The `bitranox:adopting-external-skills` skill walks the whole
+adoption flow, and `repo-gate.py` keeps the credit lines and notices in sync.
+
 ## Contributor workflow (PR)
 
 If your `self-improve` improved a shared skill and you want to share it:
