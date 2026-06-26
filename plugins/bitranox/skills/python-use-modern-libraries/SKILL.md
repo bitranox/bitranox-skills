@@ -32,30 +32,38 @@ rows silently competing for the same job:
 
 `Use` names the pick with a brief why; `Avoid` names what it replaces.
 
-| Task                                       | Use                                                                                | Avoid                                          |
-|--------------------------------------------|------------------------------------------------------------------------------------|------------------------------------------------|
-| HTTP / REST                                | `httpx2` (HTTP/2; the new Pydantic-org successor to httpx) or httpx                | `requests`                                     |
-| JSON                                       | `orjson` (fast, correct, bytes)                                                    | `json` stdlib for hot paths                    |
-| TOML                                       | `rtoml`                                                                            | `tomllib`, `tomli`                             |
-| YAML                                       | `ruamel.yaml` (round-trips comments)                                               | `PyYAML`                                       |
-| XML                                        | `lxml` (XPath, schema validation, fast C parser)                                   | `xml.etree`, `minidom`, `xmltodict`            |
-| Domain models                              | `dataclasses`                                                                      | bare `dict`                                    |
-| Boundary validation (untrusted input)      | `pydantic`                                                                         | hand-rolled parsing                            |
-| Enums                                      | `IntEnum` / `StrEnum`                                                              | plain `Enum`, magic strings                    |
-| Terminal output                            | `rich`                                                                             | `colorama` (fallback only)                     |
-| TUI                                        | `textual`                                                                          | `curses`                                       |
-| Paths                                      | `pathlib.Path`                                                                     | `os.path`                                      |
-| Date / time                                | stdlib `datetime` + `zoneinfo` (tz-aware)                                          | `pytz`, naive datetimes                        |
-| Compression (streaming / web / high speed) | `isal` (igzip) - speed tuned, bigger files                                         | `gzip` stdlib for throughput                   |
-| Compression (archival, high ratio)         | `deflate` (libdeflate bindings, high ratio, smaller files, C-extension dependency) | `gzip` stdlib                                  |
-| .env files                                 | `python-dotenv`                                                                    | manual parsing                                 |
-| Database (ODBC)                            | `pyodbc`                                                                           | raw ODBC bindings                              |
-| Database (MySQL)                           | `mysql-connector-python` or `SQLAlchemy`                                           | `PyMySQL`, `mysqlclient`                       |
-| ORM / complex queries                      | `SQLAlchemy`                                                                       | custom ORM, raw SQL for complex apps           |
-| Testing                                    | `pytest`                                                                           | `unittest`                                     |
-| Type checking                              | `mypy`                                                                             | none                                           |
-| CLI args / parsing                         | `rich-click` (Click-based, rich-formatted --help; drop-in for click)               | `argparse`, `optparse`, `getopt`, bare `click` |
-| Subprocess                                 | `subprocess.run([...])` (argv list)                                                | `os.system`, `shell=True`                      |
+| Task                                        | Use                                                                                | Avoid                                          |
+|---------------------------------------------|------------------------------------------------------------------------------------|------------------------------------------------|
+| HTTP / REST                                 | `httpx2` (HTTP/2; the new Pydantic-org successor to httpx) or httpx                | `requests`                                     |
+| JSON                                        | `orjson` (fast, correct, bytes)                                                    | `json` stdlib for hot paths                    |
+| TOML                                        | `rtoml`                                                                            | `tomllib`, `tomli`                             |
+| YAML                                        | `ruamel.yaml` (round-trips comments)                                               | `PyYAML`                                       |
+| XML                                         | `lxml` (XPath, schema validation, fast C parser)                                   | `xml.etree`, `minidom`, `xmltodict`            |
+| Structured data (pure / internal layers)    | `dataclasses` (stdlib, lightweight; trusted internal data)                         | bare `dict`, `attrs`, hand-rolled classes      |
+| Structured data at boundaries (parse input) | `pydantic` (validates + parses untrusted input at the edge)                        | bare `dict`, `attrs`, hand-rolled parsing      |
+| Enums                                       | `IntEnum` / `StrEnum`                                                              | plain `Enum`, magic strings                    |
+| Terminal output                             | `rich`                                                                             | `colorama` (fallback only)                     |
+| TUI                                         | `textual`                                                                          | `curses`                                       |
+| Paths                                       | `pathlib.Path`                                                                     | `os.path`                                      |
+| Date / time                                 | stdlib `datetime` + `zoneinfo` (tz-aware)                                          | `pytz`, naive datetimes                        |
+| Compression (streaming / web / high speed)  | `isal` (igzip) - speed tuned, bigger files                                         | `gzip` stdlib for throughput                   |
+| Compression (archival, high ratio)          | `deflate` (libdeflate bindings, high ratio, smaller files, C-extension dependency) | `gzip` stdlib                                  |
+| .env files                                  | `python-dotenv`                                                                    | manual parsing                                 |
+| Database (ODBC)                             | `pyodbc`                                                                           | raw ODBC bindings                              |
+| Database (MySQL)                            | `mysql-connector-python` or `SQLAlchemy`                                           | `PyMySQL`, `mysqlclient`                       |
+| ORM / complex queries                       | `SQLAlchemy`                                                                       | custom ORM, raw SQL for complex apps           |
+| Testing                                     | `pytest`                                                                           | `unittest`                                     |
+| Type checking                               | `mypy`                                                                             | none                                           |
+| CLI args / parsing                          | `rich-click` (Click-based, rich-formatted --help; drop-in for click)               | `argparse`, `optparse`, `getopt`, bare `click` |
+| Subprocess                                  | `subprocess.run([...])` (argv list)                                                | `os.system`, `shell=True`                      |
+
+## Structured data: pydantic at the edges, dataclasses inside
+
+For any structured data in a Python app, parse untrusted/external input into `pydantic` models at
+every boundary, and use `dataclasses` for pure internal layers. Do NOT use `attrs`, hand-woven
+classes, or raw `dict`s for structured data. For the full end-to-end discipline (parse once at the
+boundary, typed models throughout, Enums for fixed values, minimal conversions), use the
+`bitranox:python-enforce-data-architecture-strict` skill.
 
 ## HTTP example (httpx2)
 

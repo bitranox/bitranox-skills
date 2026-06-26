@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.7.0] - 2026-06-26
+
+### Changed
+- `python-use-modern-libraries`: sharpened the structured-data guidance - `pydantic` to parse
+  untrusted input at every boundary, `dataclasses` for pure internal layers, and `attrs` /
+  hand-woven classes / raw `dict`s added to what to avoid. Cross-links the
+  `python-enforce-data-architecture-strict` skill for the full end-to-end discipline.
+
 ## [3.6.0] - 2026-06-25
 
 ### Added
