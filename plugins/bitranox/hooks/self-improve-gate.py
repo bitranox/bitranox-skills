@@ -63,7 +63,12 @@ _REALIZATION_PATTERN = re.compile(
     r"|(that|this) explains (the|why|how|what)\b"
     r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b|root cause is\b"
     r"|(actually|really) (runs|lives|sits|resides|is hosted|happens|is served) on\b"
-    r"|jetzt (verstehe ich|wird klar|ergibt)|stellt sich heraus|herausgefunden",
+    # "the picture is clear now", "I have a clearer picture", "now it's clear", "makes sense now"
+    r"|clear(er)? picture|the (full|whole|complete|bigger) picture"
+    r"|\b(now|it all|everything|it)('?s| is| are)? (clear|much clearer)\b"
+    r"|\bmakes sense now\b|\bnow [^.\n]{0,20}makes sense\b"
+    r"|jetzt (verstehe ich|wird klar|ergibt)|jetzt ist (alles |es )?klar|klares bild"
+    r"|stellt sich heraus|herausgefunden",
     re.IGNORECASE,
 )
 

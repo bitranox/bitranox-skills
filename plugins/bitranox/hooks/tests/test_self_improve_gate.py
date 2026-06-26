@@ -124,6 +124,28 @@ def test_assistant_turns_out_blocks(tmp_path, monkeypatch, capsys):
     assert decision_of(capsys) == "block"
 
 
+def test_assistant_clear_now_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="trace the path",
+                         asst="Now it's clear: the cache sits in front of the database.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_assistant_clearer_picture_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="how do the pieces connect",
+                         asst="I have a clearer picture now of how the services connect.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_question_is_that_clear_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="ok",
+                         asst="The requirements are clear and well scoped. Is that clear enough?")
+    rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert rc == 0
+    assert decision_of(capsys) is None
+
+
 def test_assistant_plain_acknowledgement_does_not_block(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="please adjust the layout",
                          asst="I understand the requirement and will adjust the layout now.")

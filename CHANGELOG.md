@@ -17,6 +17,13 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.10.1] - 2026-06-27
+
+### Changed
+- `self-improve` gate: broadened the realization signal to the "clear" family - "now it's clear",
+  "I have a clearer picture", "the full picture", "makes sense now" - while still not firing on a
+  plain "the requirements are clear" / "is that clear?".
+
 ## [3.10.0] - 2026-06-27
 
 ### Added
