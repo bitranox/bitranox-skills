@@ -89,8 +89,8 @@ prevent fencing.
 
 
 When creating a cluster without any parameters, the corosync cluster network is generally shared with the
-web interface and the VMs’ network. Depending on your setup, even storage traffic may get sent over the
-same network. It’s recommended to change that, as corosync is a time-critical, real-time application.
+web interface and the VMs' network. Depending on your setup, even storage traffic may get sent over the
+same network. It's recommended to change that, as corosync is a time-critical, real-time application.
 Setting Up a New Network
 First, you have to set up a new network interface. It should be on a physically separate network. Ensure that
 your network fulfills the cluster network requirements.
@@ -170,7 +170,7 @@ In this example, we want to switch cluster communication to the 10.10.10.0/25 ne
 ring0_addr of each node respectively.
 
 > **Note:**
-> The exact same procedure can be used to change other ringX_addr values as well. However, we recommend only changing one link address at a time, so that it’s easier to recover if something goes wrong.
+> The exact same procedure can be used to change other ringX_addr values as well. However, we recommend only changing one link address at a time, so that it's easier to recover if something goes wrong.
 
 
 After we increase the config_version property, the new configuration file should look like:
@@ -383,8 +383,8 @@ order to exchange migration information and transfer memory and disk contents.
 
 On Proxmox VE systems, the following changes are made to the SSH configuration/setup:
 
-- the root user’s SSH client config gets setup to prefer AES over ChaCha20
-- the root user’s authorized_keys file gets linked to /etc/pve/priv/authorized_keys,
+- the root user's SSH client config gets setup to prefer AES over ChaCha20
+- the root user's authorized_keys file gets linked to /etc/pve/priv/authorized_keys,
 merging all authorized keys within a cluster
 
 - sshd is configured to allow logging in as root with a password
@@ -403,7 +403,7 @@ In case you have a custom .bashrc, or similar files that get executed on login b
 ssh will automatically run it once the session is established successfully. This can cause some unexpected
 behavior, as those commands may be executed with root permissions on any of the operations described
 above. This can cause possible problematic side-effects!
-In order to avoid such complications, it’s recommended to add a check in /root/.bashrc to make sure
+In order to avoid such complications, it's recommended to add a check in /root/.bashrc to make sure
 the session is interactive, and only then run .bashrc commands.
 You can add this snippet at the beginning of your .bashrc file:
 

@@ -122,7 +122,7 @@ For example, to format an empty partition /dev/sda2 as ESP, run the following:
 
 ```
 # proxmox-boot-tool format /dev/sda2
-To setup an existing, unmounted ESP located on /dev/sda2 for inclusion in Proxmox VE’s kernel update
+To setup an existing, unmounted ESP located on /dev/sda2 for inclusion in Proxmox VE's kernel update
 synchronization mechanism, use the following:
 
 # proxmox-boot-tool init /dev/sda2
@@ -189,7 +189,7 @@ kernels, for example:
 
 
 > **Note:**
-> It’s required to run proxmox-boot-tool refresh to update all EFI System Partitions (ESPs) after
+> It's required to run proxmox-boot-tool refresh to update all EFI System Partitions (ESPs) after
 > a manual kernel addition or removal from above.
 
 

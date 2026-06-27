@@ -204,7 +204,7 @@ type (ostype. We use the nocloud format for Linux, and configdrive2 for windows.
 cloud-init: do an automatic package upgrade after the first boot.
 
 - `--ciuser` <string>
-cloud-init: User name to change ssh keys and password for instead of the image’s configured default
+cloud-init: User name to change ssh keys and password for instead of the image's configured default
 user.
 
 - `--cores` <integer> (1 - N) (default = 1)
@@ -229,7 +229,7 @@ v2: 100)
 CPU weight for a VM, will be clamped to [1, 10000] in cgroup v2.
 
 - `--description` <string>
-Description for the VM. Shown in the web-interface VM’s summary. This is saved as comment inside
+Description for the VM. Shown in the web-interface VM's summary. This is saved as comment inside
 the configuration file.
 
 - `--efidisk0` [file=]<volume> [,efitype=<2m|4m>] [,format=<enum>]
@@ -479,7 +479,7 @@ cloud-init: Setup public SSH keys (one key per line, OpenSSH format).
 Start VM after it was created successfully.
 
 - `--startdate` (now | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS) (default = now)
-Set the initial date of the real time clock. Valid format for date are:’now’ or 2006-06-17T16:01:21 or
+Set the initial date of the real time clock. Valid format for date are:'now' or 2006-06-17T16:01:21 or
 2006-06-17.
 
 - `--startup` `[[order=]\d+] [,up=\d+] [,down=\d+] `

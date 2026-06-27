@@ -60,14 +60,14 @@ You can directly choose the size of those with the -db_size and -wal_size parame
 are not given, the following values (in order) will be used:
 
 - bluestore_block_{db,wal}_size from Ceph configuration. . .
-– . . . database, section osd
-– . . . database, section global
-– . . . file, section osd
-– . . . file, section global
+- . . . database, section osd
+- . . . database, section global
+- . . . file, section osd
+- . . . file, section global
 - 10% (DB)/1% (WAL) of OSD size
 
 > **Note:**
-> The DB stores BlueStore’s internal metadata, and the WAL is BlueStore’s internal journal or write-ahead
+> The DB stores BlueStore's internal metadata, and the WAL is BlueStore's internal journal or write-ahead
 > log. It is recommended to use a fast SSD or NVRAM for better performance.
 
 

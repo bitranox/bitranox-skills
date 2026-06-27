@@ -1,4 +1,4 @@
-# Review Checklists — REVIEW Mode Output
+# Review Checklists  -  REVIEW Mode Output
 
 Use these checklists when auditing code against layered ports-and-adapters architecture. Report violations with severity, location, and concrete fix.
 
@@ -17,7 +17,7 @@ For each violation found:
 
 Example:
 
-> **[HIGH] `src/app/orders/use_cases/place_order.py:12`** — Imports `sqlalchemy.orm.Session` (framework type in application layer). **Fix:** Define `UnitOfWork` port in `application/ports/`; inject via composition root.
+> **[HIGH] `src/app/orders/use_cases/place_order.py:12`**  -  Imports `sqlalchemy.orm.Session` (framework type in application layer). **Fix:** Define `UnitOfWork` port in `application/ports/`; inject via composition root.
 
 ---
 

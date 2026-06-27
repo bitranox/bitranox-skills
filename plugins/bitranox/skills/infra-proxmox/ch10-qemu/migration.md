@@ -13,7 +13,7 @@ target. If the guest memory on the source changes, those sections are marked dir
 made to send the guest memory data. This loop is repeated until the data difference between running source
 VM and incoming target VM is small enough to be sent in a few milliseconds, because then the source VM
 can be paused completely, without a user or program noticing the pause, so that the remaining data can be
-sent to the target, and then unpause the targets VM’s CPU to make it the new running VM in well under a
+sent to the target, and then unpause the targets VM's CPU to make it the new running VM in well under a
 second.
 
 Requirements
@@ -117,7 +117,7 @@ Proxmox VE supports Virtual Machine Generation ID (vmgenid) 13 for virtual machi
 by the guest operating system to detect any event resulting in a time shift event, for example, restoring a
 backup or a snapshot rollback.
 When creating new VMs, a vmgenid will be automatically generated and saved in its configuration file.
-To create and add a vmgenid to an already existing VM one can pass the special value ‘1’ to let Proxmox VE
+To create and add a vmgenid to an already existing VM one can pass the special value '1' to let Proxmox VE
 autogenerate one or manually set the UUID 14 by using it as value, for example:
 
 
@@ -132,7 +132,7 @@ autogenerate one or manually set the UUID 14 by using it as value, for example:
 > snapshot rollback, backup restore, etc., has as the VM can interpret this as generation change.
 
 
-In the rare case the vmgenid mechanism is not wanted one can pass ‘0’ for its value on VM creation, or
+In the rare case the vmgenid mechanism is not wanted one can pass '0' for its value on VM creation, or
 retroactively delete the property in the configuration with:
 13 Official vmgenid Specification https://docs.microsoft.com/en-us/windows/desktop/hyperv_v2/virtual-machine-generation-
 
@@ -161,6 +161,6 @@ storage.
 migrating from another Proxmox VE instance.
 
 - using the OVF-specific import command of the qm command-line tool.
-If you import VMs to Proxmox VE from other hypervisors, it’s recommended to familiarize yourself with the
+If you import VMs to Proxmox VE from other hypervisors, it's recommended to familiarize yourself with the
 concepts of Proxmox VE.
 15 https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/get-started/virtual-dc/virtualized-domain-controllerarchitecture

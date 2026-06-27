@@ -91,13 +91,13 @@ actions (for example, shutdown or snapshots) more intelligently.
 Proxmox VE allows to boot VMs with different firmware and machine types, namely SeaBIOS and OVMF. In
 most cases you want to switch from the default SeaBIOS to OVMF only if you plan to use PCIe passthrough.
 Machine Type
-A VM’s Machine Type defines the hardware layout of the VM’s virtual motherboard. You can choose between
+A VM's Machine Type defines the hardware layout of the VM's virtual motherboard. You can choose between
 the default Intel 440FX or the Q35 chipset, which also provides a virtual PCIe bus, and thus may be desired
 if you want to pass through PCIe hardware. Additionally, you can select a vIOMMU implementation.
 Machine Version
 Each machine type is versioned in QEMU and a given QEMU binary supports many machine versions.
 New versions might bring support for new features, fixes or general improvements. However, they also
-change properties of the virtual hardware. To avoid sudden changes from the guest’s perspective and ensure
+change properties of the virtual hardware. To avoid sudden changes from the guest's perspective and ensure
 compatibility of the VM state, live-migration and snapshots with RAM will keep using the same machine
 version in the new QEMU instance.
 For Windows guests, the machine version is pinned during creation, because Windows is sensitive to
@@ -136,7 +136,7 @@ If you see a deprecation warning, you should change the machine version to a new
 a working backup first and be prepared for changes to how the guest sees hardware. In some scenarios,
 re-installing certain drivers might be required. You should also check for snapshots with RAM that were taken
 with these machine versions (i.e. the runningmachine configuration entry). Unfortunately, there is no
-way to change the machine version of a snapshot, so you’d need to load the snapshot to salvage any data
+way to change the machine version of a snapshot, so you'd need to load the snapshot to salvage any data
 from it.
 
 

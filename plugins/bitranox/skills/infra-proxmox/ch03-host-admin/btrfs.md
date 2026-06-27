@@ -58,10 +58,10 @@ RAID0
 RAID1
 RAID10
 
-Also called “striping”. The capacity of such volume is the sum of the capacities of all
+Also called "striping". The capacity of such volume is the sum of the capacities of all
 disks. But RAID0 does not add any redundancy, so the failure of a single drive
 makes the volume unusable.
-Also called “mirroring”. Data is written identically to all disks. This mode requires at
+Also called "mirroring". Data is written identically to all disks. This mode requires at
 least 2 disks with the same size. The resulting capacity is that of a single disk.
 A combination of RAID0 and RAID1. Requires at least 4 disks.
 
@@ -115,7 +115,7 @@ The new file-system can then be mounted either manually, for example:
 # mkdir /my-storage
 # mount /dev/sdb /my-storage
 A BTRFS can also be added to /etc/fstab like any other mount point, automatically mounting it on boot.
-It’s recommended to avoid using block-device paths but use the UUID value the mkfs.btrfs command
+It's recommended to avoid using block-device paths but use the UUID value the mkfs.btrfs command
 printed, especially there is more than one disk in a BTRFS setup.
 For example:
 File /etc/fstab
@@ -197,8 +197,8 @@ btrfs filesystem usage /PATH command, for example:
 
 
 The Proxmox VE node management tool (pvenode) allows you to control node specific settings and resources.
-Currently pvenode allows you to set a node’s description, run various bulk operations on the node’s guests,
-view the node’s task history, and manage the node’s SSL certificates, which are used for the API and the
+Currently pvenode allows you to set a node's description, run various bulk operations on the node's guests,
+view the node's task history, and manage the node's SSL certificates, which are used for the API and the
 web GUI through pveproxy.
 
 
@@ -206,9 +206,9 @@ web GUI through pveproxy.
 
 
 Wake-on-LAN (WoL) allows you to switch on a sleeping computer in the network, by sending a magic packet.
-At least one NIC must support this feature, and the respective option needs to be enabled in the computer’s
+At least one NIC must support this feature, and the respective option needs to be enabled in the computer's
 firmware (BIOS/UEFI) configuration. The option name can vary from Enable Wake-on-Lan to Power On By
-PCIE Device; check your motherboard’s vendor manual, if you’re unsure. ethtool can be used to check
+PCIE Device; check your motherboard's vendor manual, if you're unsure. ethtool can be used to check
 the WoL configuration of <interface> by running:
 
 ## See also

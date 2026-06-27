@@ -65,7 +65,7 @@ pvenode config set --ballooning-target 90
 
 Each Proxmox VE cluster creates by default its own (self-signed) Certificate Authority (CA) and generates
 a certificate for each node which gets signed by the aforementioned CA. These certificates are used for
-encrypted communication with the cluster’s pveproxy service and the Shell/Console feature if SPICE is
+encrypted communication with the cluster's pveproxy service and the Shell/Console feature if SPICE is
 used.
 The CA certificate and key are stored in the Proxmox Cluster File System (pmxcfs).
 
@@ -79,7 +79,7 @@ You have the following options for the certificate used by pveproxy:
 This certificate is signed by the cluster CA and therefore not automatically trusted by browsers and
 operating systems.
 2. use an externally provided certificate (e.g. signed by a commercial CA).
-3. use ACME (Let’s Encrypt) to get a trusted certificate with automatic renewal, this is also integrated in
+3. use ACME (Let's Encrypt) to get a trusted certificate with automatic renewal, this is also integrated in
 the Proxmox VE API and web interface.
 
 For options 2 and 3 the file /etc/pve/local/pveproxy-ssl.pem (and /etc/pve/local/pveproxywhich needs to be without password) is used.
@@ -102,14 +102,14 @@ Certificates are managed with the Proxmox VE Node management command (see the pv
 If you already have a certificate which you want to use for a Proxmox VE node you can upload that certificate
 simply over the web interface.
 
-Note that the certificates key file, if provided, mustn’t be password protected.
+Note that the certificates key file, if provided, mustn't be password protected.
 
 
-### 3.12.4 Trusted certificates via Let’s Encrypt (ACME)
+### 3.12.4 Trusted certificates via Let's Encrypt (ACME)
 
 
-Proxmox VE includes an implementation of the Automatic Certificate Management Environment ACME protocol, allowing Proxmox VE admins to use an ACME provider like Let’s Encrypt for easy setup of TLS certificates which are accepted and trusted on modern operating systems and web browsers out of the box.
-Currently, the two ACME endpoints implemented are the Let’s Encrypt (LE) production and its staging environment. Our ACME client supports validation of http-01 challenges using a built-in web server and
+Proxmox VE includes an implementation of the Automatic Certificate Management Environment ACME protocol, allowing Proxmox VE admins to use an ACME provider like Let's Encrypt for easy setup of TLS certificates which are accepted and trusted on modern operating systems and web browsers out of the box.
+Currently, the two ACME endpoints implemented are the Let's Encrypt (LE) production and its staging environment. Our ACME client supports validation of http-01 challenges using a built-in web server and
 validation of dns-01 challenges using a DNS plugin supporting all the DNS API endpoints acme.sh does.
 
 ACME Account
@@ -134,10 +134,10 @@ The ACME plugins task is to provide automatic verification that you, and thus th
 your operation, are the real owner of a domain. This is the basis building block for automatic certificate
 management.
 The ACME protocol specifies different types of challenges, for example the http-01 where a web server
-provides a file with a certain content to prove that it controls a domain. Sometimes this isn’t possible, either
+provides a file with a certain content to prove that it controls a domain. Sometimes this isn't possible, either
 because of technical limitations or if the address of a record to is not reachable from the public internet. The
 dns-01 challenge can be used in these cases. This challenge is fulfilled by creating a certain DNS record
-in the domain’s zone.
+in the domain's zone.
 
 
 Proxmox VE supports both of those challenge types out of the box, you can configure plugins either over the
@@ -163,13 +163,13 @@ built-in webserver spawned on port 80.
 
 
 > **Note:**
-> The name standalone means that it can provide the validation on it’s own, without any third party
+> The name standalone means that it can provide the validation on it's own, without any third party
 > service. So, this plugin works also for cluster nodes.
 
 
-There are a few prerequisites to use it for certificate management with Let’s Encrypts ACME.
+There are a few prerequisites to use it for certificate management with Let's Encrypts ACME.
 
-- You have to accept the ToS of Let’s Encrypt to register an account.
+- You have to accept the ToS of Let's Encrypt to register an account.
 - Port 80 of the node needs to be reachable from the internet.
 - There must be no other listener on port 80.
 - The requested (sub)domain needs to resolve to a public IP of the Node.
@@ -234,7 +234,7 @@ renewal will be attempted if the certificate has expired already, or will expire
 ### 3.12.8 ACME Examples with pvenode
 
 
-Example: Sample pvenode invocation for using Let’s Encrypt certificates
+Example: Sample pvenode invocation for using Let's Encrypt certificates
 
 root@proxmox:~# pvenode acme account register default mail@example.invalid
 Directory endpoints:

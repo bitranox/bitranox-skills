@@ -7,7 +7,7 @@
 
 
 Some zones implement a separated control and data plane that require an external controller to manage the
-VNet’s control plane.
+VNet's control plane.
 Currently, only the EVPN zone requires an external controller.
 
 
@@ -20,8 +20,8 @@ To enable the EVPN controller, you need to enable FRR on every node, see install
 EVPN controller configuration options:
 
 ASN #
-A unique BGP ASN number. It’s highly recommended to use a private ASN number (64512 – 65534,
-4200000000 – 4294967294), as otherwise you could end up breaking global routing by mistake.
+A unique BGP ASN number. It's highly recommended to use a private ASN number (64512 - 65534,
+4200000000 - 4294967294), as otherwise you could end up breaking global routing by mistake.
 SDN Fabric
 A Fabric that contains all the nodes part of the EVPN zone. Will be used as the underlay network.
 Peers
@@ -37,7 +37,7 @@ For BGP-EVPN, it can be used to define a different ASN by node, so doing EBGP. I
 export EVPN routes to an external BGP peer.
 
 > **Note:**
-> By default, for a simple full mesh EVPN, you don’t need to define a BGP controller.
+> By default, for a simple full mesh EVPN, you don't need to define a BGP controller.
 
 
 BGP controller configuration options:
@@ -45,14 +45,14 @@ BGP controller configuration options:
 Node
 The node of this BGP controller
 ASN #
-A unique BGP ASN number. It’s highly recommended to use a private ASN number in the range (64512
+A unique BGP ASN number. It's highly recommended to use a private ASN number in the range (64512
 - 65534) or (4200000000 - 4294967294), as otherwise you could break global routing by mistake.
 Peer
 A list of peer IP addresses you want to communicate with using the underlying BGP network.
 
 
 EBGP
-If your peer’s remote-AS is different, this enables EBGP.
+If your peer's remote-AS is different, this enables EBGP.
 Loopback Interface
 Use a loopback or dummy interface as the source of the EVPN network (for multipath).
 ebgp-mutltihop
@@ -109,7 +109,7 @@ or modify a fabric configuration, users need SDN.Allocate permissions. To view t
 
 
 users need the Sys.Audit or Sys.Modify permissions. When adding or updating nodes within a fabric, additional Sys.Modify permission for the specific node is required, since this operation involves writing to the
-node’s /etc/network/interfaces file.
+node's /etc/network/interfaces file.
 
 
 ### 12.10.3 Configuration
@@ -125,19 +125,19 @@ consistency in your addressing scheme and helps prevent addressing conflicts or 
 
 Router-ID Selection
 Each node in a fabric needs a unique router-ID, which is an IPv4 address in dotted decimal notation (e.g.,
-192.0.2.1). In OpenFabric this can also be an IPv6 address in the typical hexadecimal representation separated by colons (e.g., 2001:db8::1428:57ab). A dummy interface with the router-ID as address will automatically be created and will act as a loopback interface for the fabric (it’s also passive by default).
+192.0.2.1). In OpenFabric this can also be an IPv6 address in the typical hexadecimal representation separated by colons (e.g., 2001:db8::1428:57ab). A dummy interface with the router-ID as address will automatically be created and will act as a loopback interface for the fabric (it's also passive by default).
 
 RouteMaps
 For every fabric, an access-list and a route-map are automatically created. These configure the router to
 rewrite the source address of outgoing packets. When you communicate with another node (for example,
-by pinging it), this ensures that traffic originates from the local dummy interface’s IP address rather than
+by pinging it), this ensures that traffic originates from the local dummy interface's IP address rather than
 from the physical interface. This provides consistent routing behavior and proper source address selection
 throughout the fabric.
 
 Notes on IPv6
 IPv6 is currently only usable on OpenFabric fabrics. These IPv6 Fabrics need global IPv6 forwarding enabled
-on all nodes contained in the fabric. Without IPv6 forwarding, non-full-mesh fabrics won’t work because
-the transit nodes don’t forward packets to the outer nodes. Currently there isn’t an easy way to enable
+on all nodes contained in the fabric. Without IPv6 forwarding, non-full-mesh fabrics won't work because
+the transit nodes don't forward packets to the outer nodes. Currently there isn't an easy way to enable
 IPv6 forwarding per-interface like with IPv4, so it has to be enabled globally. This can be accomplished by
 appending this line:
 
@@ -151,7 +151,7 @@ https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt under net.ipv6
 ### 12.10.4 OpenFabric
 
 
-OpenFabric is a routing protocol specifically designed for data center fabrics. It’s based on IS-IS and optimized for the spine-leaf topology common in data centers.
+OpenFabric is a routing protocol specifically designed for data center fabrics. It's based on IS-IS and optimized for the spine-leaf topology common in data centers.
 
 Configuration options:
 

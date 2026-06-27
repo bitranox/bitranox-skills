@@ -154,7 +154,7 @@ pct set 100 -mp0 /mnt/bindmounts/shared,mp=/shared
 to achieve the same result.
 Device Mount Points
 Device mount points allow to mount block devices of the host directly into the container. Similar to bind
-mounts, device mounts are not managed by Proxmox VE’s storage subsystem, but the quota and acl
+mounts, device mounts are not managed by Proxmox VE's storage subsystem, but the quota and acl
 options will be honored.
 
 > **Note:**
@@ -182,7 +182,7 @@ bridge=<bridge>
 Bridge to attach the network device to.
 
 firewall=<boolean>
-Controls whether this interface’s firewall rules should be used.
+Controls whether this interface's firewall rules should be used.
 
 gw=<GatewayIPv4>
 Default gateway for IPv4 traffic.
@@ -191,7 +191,7 @@ gw6=<GatewayIPv6>
 Default gateway for IPv6 traffic.
 
 host-managed=<boolean>
-Whether this interface’s IP configuration should be managed by the host.
+Whether this interface's IP configuration should be managed by the host.
 
 hwaddr=<XX:XX:XX:XX:XX:XX>
 A common MAC address with the I/G (Individual/Group) bit not set.
@@ -319,7 +319,7 @@ with cgroupv2 memory and swap are now controlled independently. The memory and s
 containers can map directly to these values, whereas previously only the memory limit and the limit of the
 sum of memory and swap could be limited.
 Another important difference is that the devices controller is configured in a completely different way. Because of this, file system quotas are currently not supported in a pure cgroupv2 environment.
-cgroupv2 support by the container’s OS is needed to run in a pure cgroupv2 environment. Containers
+cgroupv2 support by the container's OS is needed to run in a pure cgroupv2 environment. Containers
 running systemd version 231 or newer support cgroupv2 1 , as do containers not using systemd as init
 system 2 .
 
@@ -337,7 +337,7 @@ the future.
 an easy and quick stop-gap measurement.
 
 - Move the container, or its services, to a Virtual Machine. Virtual Machines have a much less interaction
-with the host, that’s why one can install decades old OS versions just fine there.
+with the host, that's why one can install decades old OS versions just fine there.
 
 1 this includes all newest major versions of container templates shipped by Proxmox VE
 2 for example Alpine Linux

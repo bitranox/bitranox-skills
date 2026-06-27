@@ -102,7 +102,7 @@ def split_table_row(line):
                     current.append(stripped[i])
                     i += 1
         elif ch == "\\" and i + 1 < len(stripped) and stripped[i + 1] == "|":
-            # Escaped pipe — not a separator
+            # Escaped pipe  -  not a separator
             current.append("\\|")
             i += 2
         elif ch == "|":
@@ -130,7 +130,7 @@ def reformat_table(lines):
 
     num_cols = len(rows[0])
 
-    # All rows must have the same column count — bail if not
+    # All rows must have the same column count  -  bail if not
     for row in rows:
         if len(row) != num_cols:
             return lines

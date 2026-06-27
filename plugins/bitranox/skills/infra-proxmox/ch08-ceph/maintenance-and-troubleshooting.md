@@ -16,7 +16,7 @@ ceph crash archive-all
 
 
 It is good practice to run fstrim (discard) regularly on VMs and containers. This releases data blocks that the
-filesystem isn’t using anymore. It reduces data usage and resource load. Most modern operating systems
+filesystem isn't using anymore. It reduces data usage and resource load. Most modern operating systems
 issue such discard commands to their disks regularly. You only need to ensure that the Virtual Machines
 enable the disk discard option.
 
@@ -106,9 +106,9 @@ whether all Proxmox VE nodes are reliably reachable on the corosync cluster netw
 public and cluster network.
 
 - Disk or connection parts which are:
-– defective
-– not firmly mounted
-– lacking I/O performance under higher load (e.g. when using HDDs, consumer hardware or inadvisable
+- defective
+- not firmly mounted
+- lacking I/O performance under higher load (e.g. when using HDDs, consumer hardware or inadvisable
 RAID controllers)
 
 - Not fulfilling the recommendations for a healthy Ceph cluster.

@@ -27,7 +27,7 @@ and use the Proxmox VE web interface to add a TOTP factor.
 
 For WebAuthn to work, you need to have two things:
 
-- A trusted HTTPS certificate (for example, by using Let’s Encrypt). While it probably works with an untrusted
+- A trusted HTTPS certificate (for example, by using Let's Encrypt). While it probably works with an untrusted
 certificate, some browsers may warn or refuse WebAuthn operations if it is not trusted.
 
 - Setup the WebAuthn configuration (see Datacenter → Options → WebAuthn Settings in the Proxmox
@@ -101,9 +101,9 @@ this.
 ### 14.6.10 Activating U2F as a User
 
 
-To enable U2F authentication, open the TFA window’s U2F tab, type in the current password (unless logged
+To enable U2F authentication, open the TFA window's U2F tab, type in the current password (unless logged
 in as root), and press the Register button. If the server is set up correctly and the browser accepts the
-server’s provided AppId, a message will appear prompting the user to press the button on the U2F device (if
+server's provided AppId, a message will appear prompting the user to press the button on the U2F device (if
 it is a YubiKey, the button light should be toggling on and off steadily, roughly twice per second).
 Firefox users may need to enable security.webauth.u2f via about:config before they can use a U2F token.
 
@@ -111,7 +111,7 @@ Firefox users may need to enable security.webauth.u2f via about:config before th
 ## 14.7 Permission Management
 
 
-In order for a user to perform an action (such as listing, modifying or deleting parts of a VM’s configuration),
+In order for a user to perform an action (such as listing, modifying or deleting parts of a VM's configuration),
 the user needs to have the appropriate permissions.
 Proxmox VE uses a role and path based permission management system. An entry in the permissions table
 allows a user, group or token to take on a specific role when accessing an object or path. This means that
@@ -251,9 +251,9 @@ file system like paths to address these objects. These paths form a natural tree
 levels (shorter paths) can optionally be propagated down within this hierarchy.
 Paths can be templated. When an API call requires permissions on a templated path, the path may contain
 references to parameters of the API call. These references are specified in curly braces. Some parameters
-are implicitly taken from the API call’s URI. For instance, the permission path /nodes/{node} when
+are implicitly taken from the API call's URI. For instance, the permission path /nodes/{node} when
 calling /nodes/mynode/status requires permissions on /nodes/mynode, while the path {path} in a
-PUT request to /access/acl refers to the method’s path parameter.
+PUT request to /access/acl refers to the method's path parameter.
 Some examples are:
 
 - /nodes/{node}: Access to Proxmox VE server machines

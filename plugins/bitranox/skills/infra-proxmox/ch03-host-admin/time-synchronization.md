@@ -9,7 +9,7 @@
 By default, MAC learning is enabled on a bridge to ensure a smooth experience with virtual guests and their
 networks.
 But in some environments this can be undesired. Since Proxmox VE 7.3 you can disable MAC learning on the
-bridge by setting the ‘bridge-disable-mac-learning 1` configuration on a bridge in `/etc/network/interfaces’,
+bridge by setting the 'bridge-disable-mac-learning 1` configuration on a bridge in `/etc/network/interfaces',
 for example:
 
 # ...
@@ -30,9 +30,9 @@ their actual MAC address.
 
 
 The Proxmox VE cluster stack itself relies heavily on the fact that all the nodes have precisely synchronized
-time. Some other components, like Ceph, also won’t work properly if the local time on all nodes is not in
+time. Some other components, like Ceph, also won't work properly if the local time on all nodes is not in
 sync.
-Time synchronization between nodes can be achieved using the “Network Time Protocol” (NTP). As of Proxmox VE 7, chrony is used as the default NTP daemon, while Proxmox VE 6 uses systemd-timesyncd.
+Time synchronization between nodes can be achieved using the "Network Time Protocol" (NTP). As of Proxmox VE 7, chrony is used as the default NTP daemon, while Proxmox VE 6 uses systemd-timesyncd.
 Both come preconfigured to use a set of public servers.
 
 

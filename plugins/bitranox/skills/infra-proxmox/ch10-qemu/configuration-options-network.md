@@ -265,7 +265,7 @@ Every period milliseconds the entropy-injection quota is reset, allowing the gue
 
 source=</dev/hwrng | /dev/random | /dev/urandom>
 The file on the host to gather entropy from. Using urandom does not decrease security in any
-meaningful way, as it’s still seeded from real entropy, and the bytes provided will most likely be
+meaningful way, as it's still seeded from real entropy, and the bytes provided will most likely be
 mixed with real entropy on the guest as well. /dev/hwrng can be used to pass through a hardware
 RNG from the host.
 
@@ -312,7 +312,7 @@ bps_wr_max_length=<seconds>
 Maximum length of write I/O bursts in seconds.
 
 cache=<directsync | none | unsafe | writeback | writethrough>
-The drive’s cache mode
+The drive's cache mode
 
 detect_zeroes=<boolean>
 Controls whether to detect and try to optimize writes of zeroes.
@@ -322,10 +322,10 @@ Controls whether to pass discard/trim requests to the underlying storage.
 
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<cloop | qcow | qcow2 | qed | raw | vmdk>
-The drive’s backing file’s data format.
+The drive's backing file's data format.
 
 iops=<iops>
 Maximum r/w I/O in operations per second.
@@ -373,7 +373,7 @@ mbps_wr_max=<mbps>
 Maximum unthrottled write pool in megabytes per second.
 
 media=<cdrom | disk> (default = disk)
-The drive’s media type.
+The drive's media type.
 
 
 replicate=<boolean> (default = 1)
@@ -383,7 +383,7 @@ rerror=<ignore | report | stop>
 Read error action.
 
 serial=<serial>
-The drive’s reported serial number, url-encoded, up to 20 bytes long.
+The drive's reported serial number, url-encoded, up to 20 bytes long.
 
 shared=<boolean> (default = 0)
 Mark this locally-managed volume as available on all nodes.
@@ -397,7 +397,7 @@ size=<DiskSize>
 Disk size. This is purely informational and has no effect.
 
 snapshot=<boolean>
-Controls qemu’s snapshot mode feature. If activated, changes made to the disk are temporary
+Controls qemu's snapshot mode feature. If activated, changes made to the disk are temporary
 and will be discarded when the VM is shutdown.
 
 ssd=<boolean>
@@ -407,7 +407,7 @@ werror=<enospc | ignore | report | stop>
 Write error action.
 
 wwn=<wwn>
-The drive’s worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
+The drive's worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
 
 
 ## See also

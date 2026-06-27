@@ -28,7 +28,7 @@ not be possible if too many nodes are powered off at a time, but you still want 
 recovered and started again as soon as possible.
 
 Freeze
-This mode ensures that all services get stopped and frozen, so that they won’t get recovered until the current
+This mode ensures that all services get stopped and frozen, so that they won't get recovered until the current
 node is online again.
 
 Conditional
@@ -47,7 +47,7 @@ all managed services in this case. This means that other nodes will take over th
 
 Reboot
 Node reboots are initiated with the reboot command. This is usually done after installing a new kernel.
-Please note that this is different from “shutdown”, because the node immediately starts again.
+Please note that this is different from "shutdown", because the node immediately starts again.
 The LRM tells the CRM that it wants to restart, and waits until the CRM puts all resources into the freeze
 state (same mechanism is used for Package Updates). This prevents those resources from being moved to
 other nodes. Instead, the CRM starts the resources after the reboot on the same node.
@@ -97,14 +97,14 @@ Static usage information from HA services on each node is used to choose a recov
 non-HA-managed services is currently not considered.
 For this selection, each node in turn is considered as if the service was already running on it, using CPU
 and memory usage from the associated guest configuration. Then for each such alternative, CPU and
-memory usage of all nodes are considered, with memory being weighted much more, because it’s a truly
+memory usage of all nodes are considered, with memory being weighted much more, because it's a truly
 limited resource. For both, CPU and memory, highest usage among nodes (weighted more, as ideally no
 node should be overcommitted) and average usage of all nodes (to still be able to distinguish in case there
 already is a more highly committed node) are considered.
 
 
 > **Important:**
-> The more services the more possible combinations there are, so it’s currently not recommended to
+> The more services the more possible combinations there are, so it's currently not recommended to
 > use it if you have thousands of HA managed services.
 
 
@@ -113,7 +113,7 @@ already is a more highly committed node) are considered.
 
 The CRS algorithm is not applied for every service in every round, since this would mean a large number
 of constant migrations. Depending on the workload, this could put more strain on the cluster than could be
-avoided by constant balancing. That’s why the Proxmox VE HA manager favors keeping services on their
+avoided by constant balancing. That's why the Proxmox VE HA manager favors keeping services on their
 current node.
 The CRS is currently used at the following scheduling points:
 
@@ -130,15 +130,15 @@ HA stack will use the CRS algorithm to find a new target node for the HA resourc
 depending on the type of the new rules:
 
 
-– Node affinity rules: If a node affinity rule is created or HA resources/nodes are added to an existing node
+- Node affinity rules: If a node affinity rule is created or HA resources/nodes are added to an existing node
 affinity rule, the HA stack will use the CRS algorithm to ensure that these HA resources are assigned
 according to their node and priority constraints.
 
-– Positive resource affinity rules: If a positive resource affinity rule is created or HA resources are added
+- Positive resource affinity rules: If a positive resource affinity rule is created or HA resources are added
 to an existing positive resource affinity rule, the HA stack will use the CRS algorithm to ensure that these
 HA resources are moved to a common node.
 
-– Negative resource affinity rules: If a negative resource affinity rule is created or HA resources are
+- Negative resource affinity rules: If a negative resource affinity rule is created or HA resources are
 added to an existing negative resource affinity rule, the HA stack will use the CRS algorithm to ensure
 that these HA resources are moved to separate nodes.
 

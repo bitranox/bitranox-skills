@@ -6,7 +6,7 @@
 ### 3.4.7 Linux Bond
 
 
-Bonding (also called NIC teaming or Link Aggregation) is a technique for binding multiple NIC’s to a single
+Bonding (also called NIC teaming or Link Aggregation) is a technique for binding multiple NIC's to a single
 network device. It is possible to achieve different goals, like make the network fault-tolerant, increase the
 performance or both together.
 High-speed hardware like Fibre Channel and the associated switching hardware can be quite expensive. By
@@ -24,10 +24,10 @@ There are 7 modes for bonding:
 interface (NIC) slave through the last. This mode provides load balancing and fault tolerance.
 
 - Active-backup (active-backup): Only one NIC slave in the bond is active. A different slave becomes
-active if, and only if, the active slave fails. The single logical bonded interface’s MAC address is externally
+active if, and only if, the active slave fails. The single logical bonded interface's MAC address is externally
 visible on only one NIC (port) to avoid distortion in the network switch. This mode provides fault tolerance.
 
-- XOR (balance-xor): Transmit network packets based on [(source MAC address XOR’d with destination
+- XOR (balance-xor): Transmit network packets based on [(source MAC address XOR'd with destination
 MAC address) modulo NIC slave count]. This selects the same NIC slave for each destination MAC
 address. This mode provides load balancing and fault tolerance.
 
@@ -176,7 +176,7 @@ Proxmox VE supports this setup out of the box. You can specify the VLAN tag when
 The VLAN tag is part of the guest network configuration. The networking layer supports different modes to
 implement VLANs, depending on the bridge configuration:
 
-- VLAN awareness on the Linux bridge: In this case, each guest’s virtual network card is assigned to
+- VLAN awareness on the Linux bridge: In this case, each guest's virtual network card is assigned to
 a VLAN tag, which is transparently supported by the Linux bridge. Trunk mode is also possible, but that
 makes configuration in the guest necessary.
 
@@ -284,7 +284,7 @@ This method is preferred to disabling the loading of the IPv6 module on the kern
 By default, MAC learning is enabled on a bridge to ensure a smooth experience with virtual guests and their
 networks.
 But in some environments this can be undesired. Since Proxmox VE 7.3 you can disable MAC learning on the
-bridge by setting the ‘bridge-disable-mac-learning 1` configuration on a bridge in `/etc/network/interfaces’,
+bridge by setting the 'bridge-disable-mac-learning 1` configuration on a bridge in `/etc/network/interfaces',
 for example:
 
 # ...
@@ -305,9 +305,9 @@ their actual MAC address.
 
 
 The Proxmox VE cluster stack itself relies heavily on the fact that all the nodes have precisely synchronized
-time. Some other components, like Ceph, also won’t work properly if the local time on all nodes is not in
+time. Some other components, like Ceph, also won't work properly if the local time on all nodes is not in
 sync.
-Time synchronization between nodes can be achieved using the “Network Time Protocol” (NTP). As of Proxmox VE 7, chrony is used as the default NTP daemon, while Proxmox VE 6 uses systemd-timesyncd.
+Time synchronization between nodes can be achieved using the "Network Time Protocol" (NTP). As of Proxmox VE 7, chrony is used as the default NTP daemon, while Proxmox VE 6 uses systemd-timesyncd.
 Both come preconfigured to use a set of public servers.
 
 

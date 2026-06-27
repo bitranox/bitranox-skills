@@ -126,7 +126,7 @@ tool interactively.
 Since Proxmox VE 8.1, Secure Boot is supported out of the box via signed packages and integration in
 proxmox-boot-tool.
 The following packages are required for secure boot to work. You can install them all at once by using the
-‘proxmox-secure-boot-support’ meta-package.
+'proxmox-secure-boot-support' meta-package.
 
 - shim-signed (shim bootloader signed by Microsoft)
 - shim-helpers-amd64-signed (fallback bootloader and MOKManager, signed by Proxmox)
@@ -309,7 +309,7 @@ However, while KSM can reduce memory usage, it also comes with some security ris
 VMs to side-channel attacks. Research has shown that it is possible to infer information about a running VM
 via a second VM on the same host, by exploiting certain characteristics of KSM.
 Thus, if you are using Proxmox VE to provide hosting services, you should consider disabling KSM, in order
-to provide your users with additional security. Furthermore, you should check your country’s regulations, as
+to provide your users with additional security. Furthermore, you should check your country's regulations, as
 disabling KSM may be a legal requirement.
 
 

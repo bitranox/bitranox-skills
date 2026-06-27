@@ -19,14 +19,14 @@ As a result, you can achieve higher availability, even in smaller setups (for ex
 
 
 The Corosync Quorum Device (QDevice) is a daemon which runs on each cluster node. It provides a
-configured number of votes to the cluster’s quorum subsystem, based on an externally running third-party
-arbitrator’s decision. Its primary use is to allow a cluster to sustain more node failures than standard quorum
+configured number of votes to the cluster's quorum subsystem, based on an externally running third-party
+arbitrator's decision. Its primary use is to allow a cluster to sustain more node failures than standard quorum
 rules allow. This can be done safely as the external device can see all nodes and thus choose only one set
 of nodes to give its vote. This will only be done if said set of nodes can have quorum (again) after receiving
 the third-party vote.
 Currently, only QDevice Net is supported as a third-party arbitrator. This is a daemon which provides a vote
 to a cluster partition, if it can reach the partition members over the network. It will only give votes to one
-partition of a cluster at any time. It’s designed to support multiple clusters and is almost configuration and
+partition of a cluster at any time. It's designed to support multiple clusters and is almost configuration and
 state free. New clusters are handled dynamically and no configuration file is needed on the host running a
 QDevice.
 The only requirements for the external host are that it needs network access to the cluster and to have a
@@ -34,7 +34,7 @@ corosync-qnetd package available. We provide a package for Debian based hosts, a
 
 > **Note:**
 > Unlike corosync itself, a QDevice connects to the cluster over TCP/IP. The daemon can also run outside
-> the LAN of the cluster and isn’t limited to the low latencies requirements of corosync.
+> the LAN of the cluster and isn't limited to the low latencies requirements of corosync.
 
 
 ### 5.10.2 Supported Setups
@@ -45,7 +45,7 @@ they should provide higher availability. For clusters with an odd node count, we
 of QDevices. The reason for this is the difference in the votes which the QDevice provides for each cluster
 type. Even numbered clusters get a single additional vote, which only increases availability, because if the
 QDevice itself fails, you are in the same position as with no QDevice at all.
-On the other hand, with an odd numbered cluster size, the QDevice provides (N-1) votes — where N corresponds to the cluster node count. This alternative behavior makes sense; if it had only one additional vote,
+On the other hand, with an odd numbered cluster size, the QDevice provides (N-1) votes  -  where N corresponds to the cluster node count. This alternative behavior makes sense; if it had only one additional vote,
 the cluster could get into a split-brain situation. This algorithm allows for all nodes but one (and naturally the
 QDevice itself) to fail. However, there are two drawbacks to this:
 
@@ -258,7 +258,7 @@ It is obvious that a cluster is not quorate when all nodes are offline. This is 
 failure.
 
 > **Note:**
-> It is always a good idea to use an uninterruptible power supply (“UPS”, also called “battery backup”) to
+> It is always a good idea to use an uninterruptible power supply ("UPS", also called "battery backup") to
 > avoid this state, especially if you want HA.
 > On node startup, the pve-guests service is started and waits for quorum. Once quorate, it starts all
 > guests which have the onboot flag set.
@@ -278,7 +278,7 @@ To accommodate this use case one can set either lower, upper or both boundaries 
 configuration file, which can be edited in the web interface under Datacenter → Options.
 
 > **Note:**
-> The range is only used for the next-id API call, so it isn’t a hard limit.
+> The range is only used for the next-id API call, so it isn't a hard limit.
 
 
 ## 5.14 Guest Migration
@@ -321,7 +321,7 @@ traffic. This is not optimal both because sensitive cluster traffic can be disru
 have the best bandwidth available on the node.
 Setting the migration network parameter allows the use of a dedicated network for all migration traffic. In
 addition to the memory, this also affects the storage traffic for offline migrations.
-The migration network is set as a network using CIDR notation. This has the advantage that you don’t have
+The migration network is set as a network using CIDR notation. This has the advantage that you don't have
 to set individual IP addresses for each node. Proxmox VE can determine the real address on the destination
 node from the network specified in the CIDR form. To enable this, the network must be specified so that
 each node has exactly one IP in the respective network.

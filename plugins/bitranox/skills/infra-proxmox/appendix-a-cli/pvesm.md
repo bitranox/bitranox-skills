@@ -58,7 +58,7 @@ Allowed content types.
 Overrides for default content type directories.
 
 - `--create-base-path` <boolean> (default = yes)
-Create the base directory if it doesn’t exist.
+Create the base directory if it doesn't exist.
 
 
 - `--create-subdirs` <boolean> (default = yes)
@@ -122,7 +122,7 @@ users with Datastore.Allocate privilege, 5 for other users)
 Maximal number of protected backups per guest. Use -1 for unlimited.
 
 - `--mkdir` <boolean> (default = yes)
-Create the directory if it doesn’t exist and populate it with default sub-dirs. NOTE: Deprecated, use the
+Create the directory if it doesn't exist and populate it with default sub-dirs. NOTE: Deprecated, use the
 create-base-path and create-subdirs options instead.
 
 - `--monhost` <string>
@@ -426,7 +426,7 @@ specified, those from the storage configuration are used.
 The storage identifier.
 
 - `--dry-run` <boolean>
-Only show what would be pruned, don’t delete anything.
+Only show what would be pruned, don't delete anything.
 
 - `--keep-all` <boolean>
 Keep all backups. Conflicts with the other options when true.
@@ -584,7 +584,7 @@ Allowed content types.
 Overrides for default content type directories.
 
 - `--create-base-path` <boolean> (default = yes)
-Create the base directory if it doesn’t exist.
+Create the base directory if it doesn't exist.
 
 - `--create-subdirs` <boolean> (default = yes)
 Populate the directory with the default structure.
@@ -644,7 +644,7 @@ users with Datastore.Allocate privilege, 5 for other users)
 Maximal number of protected backups per guest. Use -1 for unlimited.
 
 - `--mkdir` <boolean> (default = yes)
-Create the directory if it doesn’t exist and populate it with default sub-dirs. NOTE: Deprecated, use the
+Create the directory if it doesn't exist and populate it with default sub-dirs. NOTE: Deprecated, use the
 create-base-path and create-subdirs options instead.
 
 - `--monhost` <string>

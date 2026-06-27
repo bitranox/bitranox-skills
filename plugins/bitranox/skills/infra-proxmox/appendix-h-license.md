@@ -33,7 +33,7 @@ copied verbatim, or with modifications and/or translated into another language.
 
 
 A "Secondary Section" is a named appendix or a front-matter section of the Document that deals exclusively
-with the relationship of the publishers or authors of the Document to the Document’s overall subject (or
+with the relationship of the publishers or authors of the Document to the Document's overall subject (or
 to related matters) and contains nothing that could fall directly within that overall subject. (Thus, if the
 Document is in part a textbook of mathematics, a Secondary Section may not explain any mathematics.)
 The relationship could be a matter of historical connection with the subject or with related matters, or of
@@ -63,7 +63,7 @@ the machine-generated HTML, PostScript or PDF produced by some word processors f
 only.
 The "Title Page" means, for a printed book, the title page itself, plus such following pages as are needed to
 hold, legibly, the material this License requires to appear in the title page. For works in formats which do not
-have any title page as such, "Title Page" means the text near the most prominent appearance of the work’s
+have any title page as such, "Title Page" means the text near the most prominent appearance of the work's
 title, preceding the beginning of the body of the text.
 The "publisher" means any person or entity that distributes copies of the Document to the public.
 A section "Entitled XYZ" means a named subunit of the Document whose title either is precisely XYZ or
@@ -87,7 +87,7 @@ number of copies you must also follow the conditions in section 3.
 You may also lend copies, under the same conditions stated above, and you may publicly display copies.
 3. COPYING IN QUANTITY
 If you publish printed copies (or copies in media that commonly have printed covers) of the Document,
-numbering more than 100, and the Document’s license notice requires Cover Texts, you must enclose the
+numbering more than 100, and the Document's license notice requires Cover Texts, you must enclose the
 copies in covers that carry, clearly and legibly, all these Cover Texts: Front-Cover Texts on the front cover, and
 Back-Cover Texts on the back cover. Both covers must also clearly and legibly identify you as the publisher
 of these copies. The front cover must present the full title with all words of the title equally prominent and
@@ -125,7 +125,7 @@ E. Add an appropriate copyright notice for your modifications adjacent to the ot
 F. Include, immediately after the copyright notices, a license notice giving the public permission to use
 the Modified Version under the terms of this License, in the form shown in the Addendum below.
 G. Preserve in that license notice the full lists of Invariant Sections and required Cover Texts given in the
-Document’s license notice.
+Document's license notice.
 H. Include an unaltered copy of this License.
 I. Preserve the section Entitled "History", Preserve its Title, and add to it an item stating at least the title,
 year, new authors, and publisher of the Modified Version as given on the Title Page. If there is no
@@ -149,9 +149,9 @@ Section.
 O. Preserve any Warranty Disclaimers.
 If the Modified Version includes new front-matter sections or appendices that qualify as Secondary Sections
 and contain no material copied from the Document, you may at your option designate some or all of these
-sections as invariant. To do this, add their titles to the list of Invariant Sections in the Modified Version’s
+sections as invariant. To do this, add their titles to the list of Invariant Sections in the Modified Version's
 license notice. These titles must be distinct from any other section titles.
-You may add a section Entitled "Endorsements", provided it contains nothing but endorsements of your Modified Version by various parties—for example, statements of peer review or that the text has been approved
+You may add a section Entitled "Endorsements", provided it contains nothing but endorsements of your Modified Version by various parties - for example, statements of peer review or that the text has been approved
 by an organization as the authoritative definition of a standard.
 You may add a passage of up to five words as a Front-Cover Text, and a passage of up to 25 words as a
 Back-Cover Text, to the end of the list of Cover Texts in the Modified Version. Only one passage of FrontCover Text and one of Back-Cover Text may be added by (or through arrangements made by) any one entity.
@@ -188,11 +188,11 @@ respects regarding verbatim copying of that document.
 7. AGGREGATION WITH INDEPENDENT WORKS
 A compilation of the Document or its derivatives with other separate and independent documents or works,
 in or on a volume of a storage or distribution medium, is called an "aggregate" if the copyright resulting from
-the compilation is not used to limit the legal rights of the compilation’s users beyond what the individual works
+the compilation is not used to limit the legal rights of the compilation's users beyond what the individual works
 permit. When the Document is included in an aggregate, this License does not apply to the other works in
 the aggregate which are not themselves derivative works of the Document.
 If the Cover Text requirement of section 3 is applicable to these copies of the Document, then if the Document
-is less than one half of the entire aggregate, the Document’s Cover Texts may be placed on covers that
+is less than one half of the entire aggregate, the Document's Cover Texts may be placed on covers that
 bracket the Document within the aggregate, or the electronic equivalent of covers if the Document is in
 electronic form. Otherwise they must appear on printed covers that bracket the whole aggregate.
 
@@ -236,7 +236,7 @@ the terms and conditions either of that specified version or of any later versio
 as a draft) by the Free Software Foundation. If the Document does not specify a version number of this
 License, you may choose any version ever published (not as a draft) by the Free Software Foundation. If
 the Document specifies that a proxy can decide which future versions of this License can be used, that
-proxy’s public statement of acceptance of a version permanently authorizes you to choose that version for
+proxy's public statement of acceptance of a version permanently authorizes you to choose that version for
 the Document.
 
 11. RELICENSING

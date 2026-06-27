@@ -33,8 +33,8 @@ The sendmail binary is a program commonly found on Unix-like operating systems t
 of email messages. It is a command-line utility that allows users and applications to send emails directly
 from the command line or from within scripts.
 The sendmail notification target uses the sendmail binary to send emails to a list of configured users or
-email addresses. If a user is selected as a recipient, the email address configured in user’s settings will be
-used. For the root@pam user, this is the email address entered during installation. A user’s email address
+email addresses. If a user is selected as a recipient, the email address configured in user's settings will be
+used. For the root@pam user, this is the email address entered during installation. A user's email address
 can be configured in Datacenter → Permissions → Users. If a user has no associated email
 address, no email will be sent.
 
@@ -48,7 +48,7 @@ The configuration for Sendmail target plugins has the following options:
 
 - mailto: E-Mail address to which the notification shall be sent to. Can be set multiple times to accommodate multiple recipients.
 
-- mailto-user: Users to which emails shall be sent to. The user’s email address will be looked up in
+- mailto-user: Users to which emails shall be sent to. The user's email address will be looked up in
 users.cfg. Can be set multiple times to accommodate multiple recipients.
 - author: Sets the author of the E-Mail. Defaults to Proxmox VE.
 - from-address: Sets the from address of the E-Mail. If the parameter is not set, the plugin will fall back
@@ -70,7 +70,7 @@ comment Send to multiple users/addresses
 
 
 SMTP notification targets can send emails directly to an SMTP mail relay. This target does not use the
-system’s MTA to deliver emails. Similar to sendmail targets, if a user is selected as a recipient, the user’s
+system's MTA to deliver emails. Similar to sendmail targets, if a user is selected as a recipient, the user's
 configured email address will be used.
 
 > **Note:**
@@ -82,7 +82,7 @@ The configuration for SMTP target plugins has the following options:
 
 - mailto: E-Mail address to which the notification shall be sent to. Can be set multiple times to accommodate multiple recipients.
 
-- mailto-user: Users to which emails shall be sent to. The user’s email address will be looked up in
+- mailto-user: Users to which emails shall be sent to. The user's email address will be looked up in
 users.cfg. Can be set multiple times to accommodate multiple recipients.
 - author: Sets the author of the E-Mail. Defaults to Proxmox VE.
 - from-address: Sets the From-address of the email. SMTP relays might require that this address is
@@ -167,7 +167,7 @@ properties:
 - {{ title }}: The rendered notification title
 - {{ message }}: The rendered notification body
 - {{ severity }}: The severity of the notification (info, notice, warning, error, unknown)
-- {{ timestamp }}: The notification’s timestamp as a UNIX epoch (in seconds).
+- {{ timestamp }}: The notification's timestamp as a UNIX epoch (in seconds).
 - {{ fields.<name> }}: Sub-namespace for any metadata fields of the notification. For instance,
 fields.type contains the notification type - for all available fields refer to Notification Events.
 - {{ secrets.<name> }}: Sub-namespace for secrets. For instance, a secret named token is accessible via secrets.token.
@@ -185,27 +185,27 @@ ntfy.sh
 - Method: POST
 - URL: https://ntfy.sh/{{ secrets.channel }}
 - Headers:
-– Markdown: Yes
+- Markdown: Yes
 - Body:
 ```
 {{ message }}
 ```
 
 - Secrets:
-– channel: <your ntfy.sh channel>
+- channel: <your ntfy.sh channel>
 Discord
 
 - Method: POST
 - URL: https://discord.com/api/webhooks/{{ secrets.token }}
 - Headers:
-– Content-Type: application/json
+- Content-Type: application/json
 - Body:
 {
 "content": " ``` {{ escape message }} ```"
 }
 
 - Secrets:
-– token: <token>
+- token: <token>
 
 
 Slack
@@ -213,7 +213,7 @@ Slack
 - Method: POST
 - URL: https://hooks.slack.com/services/{{ secrets.token }}
 - Headers:
-– Content-Type: application/json
+- Content-Type: application/json
 - Body:
 {
 "text": " ``` {{escape message}} ```",
@@ -221,7 +221,7 @@ Slack
 }
 
 - Secrets:
-– token: <token>
+- token: <token>
 
 
 ## 17.3 Notification Matchers
@@ -250,9 +250,9 @@ to notify multiple targets.
 - mode: Determines how the individual match rules are evaluated to compute the result for the whole
 matcher. If set to all, all matching rules must match. If set to any, at least one rule must match.
 Defaults to all.
-- match-calendar: Match the notification’s timestamp against a schedule.
-- match-field: Match the notification’s metadata fields.
-- match-severity: Match the notification’s severity.
+- match-calendar: Match the notification's timestamp against a schedule.
+- match-field: Match the notification's metadata fields.
+- match-severity: Match the notification's severity.
 - comment: Comment for this matcher.
 
 
@@ -410,7 +410,7 @@ Job ID
 Certain local system daemons, such as smartd, generate notification emails that are initially directed to
 the local root user. These mails are converted into notification events with the type system-mail and a
 severity of unknown and are processed based on the global notification settings.
-When the email is forwarded to a sendmail target, the mail’s content and headers are forwarded as-is. For all
+When the email is forwarded to a sendmail target, the mail's content and headers are forwarded as-is. For all
 other targets, the system tries to extract both a subject line and the main text body from the email content. In
 instances where emails solely consist of HTML content, they will be transformed into plain text format during
 this process.
@@ -431,7 +431,7 @@ Backup jobs allow to choose between two modes for sending backup related notific
 by the notification-mode option in the backup job configuration.
 
 - Send notifications based on the global notification settings (notification-system).
-- Send notification emails via the system’s sendmail command to the email address configured in the
+- Send notification emails via the system's sendmail command to the email address configured in the
 backup job (legacy-sendmail). This mode also allows to select whether the email should be sent
 always or only on failure of the backup. Any targets or matchers from the global notification settings are
 ignored. This mode is equivalent to the notification behavior for Proxmox VE versions before 8.1. This

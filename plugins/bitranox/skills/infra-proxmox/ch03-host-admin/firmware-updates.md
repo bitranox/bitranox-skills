@@ -30,12 +30,12 @@ microcode at boot time.
 
 > **Caution:**
 > With some updates, such as for BIOS/UEFI or storage controller, the device configuration could be
-> reset. Please follow the vendor’s instructions carefully and back up the current configuration.
+> reset. Please follow the vendor's instructions carefully and back up the current configuration.
 
 
 Please check with your vendor which update methods are available.
 
-- Convenient update methods for servers can include Dell’s Lifecycle Manager or Service Packs from HPE.
+- Convenient update methods for servers can include Dell's Lifecycle Manager or Service Packs from HPE.
 - Sometimes there are Linux utilities available as well. Examples are mlxup for NVIDIA ConnectX or
 bnxtnvm/niccli for Broadcom network cards.
 
@@ -105,10 +105,10 @@ To get the current running microcode revision for comparison or debugging purpos
 microcode
 : 0xf0
 A microcode package has updates for many different CPUs. But updates specifically for your CPU might not
-come often. So, just looking at the date on the package won’t tell you when the company actually released
+come often. So, just looking at the date on the package won't tell you when the company actually released
 an update for your specific CPU.
-If you’ve installed a new microcode package and rebooted your Proxmox VE host, and this new microcode
-is newer than both, the version baked into the CPU and the one from the motherboard’s firmware, you’ll see
+If you've installed a new microcode package and rebooted your Proxmox VE host, and this new microcode
+is newer than both, the version baked into the CPU and the one from the motherboard's firmware, you'll see
 a message in the system log saying "microcode updated early".
 
 # dmesg | grep microcode
@@ -184,7 +184,7 @@ cases like redundancy with a bond, vlans or routed and NAT setups.
 The Software Defined Network is an option for more complex virtual networks in Proxmox VE clusters.
 
 > **Warning:**
-> It’s discouraged to use the traditional Debian tools ifup and ifdown if unsure, as they have some
+> It's discouraged to use the traditional Debian tools ifup and ifdown if unsure, as they have some
 > pitfalls like interrupting all guest traffic on ifdown vmbrX but not reconnecting those guest again
 > when doing ifup on the same bridge later.
 

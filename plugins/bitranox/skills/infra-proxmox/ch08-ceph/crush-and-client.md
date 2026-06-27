@@ -22,7 +22,7 @@ and the pg_num_min options.
 > will lead to a considerable shift in data placement and might introduce a high load on the cluster.
 
 
-You can find a more in-depth introduction to the PG autoscaler on Ceph’s Blog - New in Nautilus: PG merging
+You can find a more in-depth introduction to the PG autoscaler on Ceph's Blog - New in Nautilus: PG merging
 and autotuning.
 
 
@@ -137,7 +137,7 @@ cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage. ←ke
 Ceph also provides a filesystem, which runs on top of the same object storage as RADOS block devices do.
 A Metadata Server (MDS) is used to map the RADOS backed objects to files and directories, allowing Ceph
 to provide a POSIX-compliant, replicated filesystem. This allows you to easily configure a clustered, highly
-available, shared filesystem. Ceph’s Metadata Servers guarantee that files are evenly distributed over the
+available, shared filesystem. Ceph's Metadata Servers guarantee that files are evenly distributed over the
 entire Ceph cluster. As a result, even cases of high load will not overwhelm a single host, which can be an
 issue with traditional shared filesystem approaches, for example NFS.
 
@@ -149,7 +149,7 @@ to save backups, ISO files, and container templates.
 
 
 CephFS needs at least one Metadata Server to be configured and running, in order to function. You can
-create an MDS through the Proxmox VE web GUI’s Node -> CephFS panel or from the command line
+create an MDS through the Proxmox VE web GUI's Node -> CephFS panel or from the command line
 with:
 
 

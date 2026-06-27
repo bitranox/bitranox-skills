@@ -17,7 +17,7 @@ And connect your client:
 
 ## Netrefs
 
-We know that we can use `conn.modules.sys` to access the `sys` module the server… But what kind of magical object is that thing anyway?
+We know that we can use `conn.modules.sys` to access the `sys` module the server... But what kind of magical object is that thing anyway?
 
 ```
 >>> type(conn.modules.sys) <netref class 'builtins.module'>

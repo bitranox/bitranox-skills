@@ -16,12 +16,12 @@
 
 ## 21.2 Books about related technology
 
-[6] [Hertzog13] Raphaël Hertzog, Roland Mas., Freexian SARL The Debian Administrator’s
+[6] [Hertzog13] Raphaël Hertzog, Roland Mas., Freexian SARL The Debian Administrator's
 Handbook: Debian Bullseye from Discovery to Mastery, Freexian, 2021. ISBN 979-10-9141420-3
 [7] [Bir96] Kenneth P. Birman. Building Secure and Reliable Network Applications. Manning Publications Co, 1996. ISBN 978-1884777295
-[8] [Walsh10] Norman Walsh. DocBook 5: The Definitive Guide. O’Reilly & Associates, 2010.
+[8] [Walsh10] Norman Walsh. DocBook 5: The Definitive Guide. O'Reilly & Associates, 2010.
 ISBN 978-0596805029
-[9] [Richardson07] Leonard Richardson & Sam Ruby. RESTful Web Services. O’Reilly Media,
+[9] [Richardson07] Leonard Richardson & Sam Ruby. RESTful Web Services. O'Reilly Media,
 2007. ISBN 978-0596529260
 [10] [Singh15] Karan Singh. Learning Ceph. Packt Publishing, 2015. ISBN 978-1783985623
 [11] [Singh16] Karan Signh. Ceph Cookbook Packt Publishing, 2016. ISBN 978-1784393502
@@ -31,9 +31,9 @@ ISBN 978-0596805029
 2008. ISBN 978-0470343432
 [13] [Loshin03] Pete Loshin, IPv6: Theory, Protocol, and Practice, 2nd Edition. Morgan Kaufmann, 2003. ISBN 978-1558608108
 [14] [Loeliger12] Jon Loeliger & Matthew McCullough. Version Control with Git: Powerful tools
-and techniques for collaborative software development. O’Reilly and Associates, 2012. ISBN
+and techniques for collaborative software development. O'Reilly and Associates, 2012. ISBN
 978-1449316389
-[15] [Kreibich10] Jay A. Kreibich. Using SQLite, O’Reilly and Associates, 2010. ISBN 9780596521189
+[15] [Kreibich10] Jay A. Kreibich. Using SQLite, O'Reilly and Associates, 2010. ISBN 9780596521189
 
 
 ## 21.3 Books about related topics

@@ -38,7 +38,7 @@ Proxmox VE is based on Debian GNU/Linux with additional repositories to provide 
 packages. This means that the full range of Debian packages is available including security updates and
 bug fixes. Proxmox VE provides its own Linux kernel based on the Ubuntu kernel. It has all the necessary
 virtualization and container features enabled and includes ZFS and several extra hardware drivers.
-For other topics not included in the following sections, please refer to the Debian documentation. The Debian Administrator’s Handbook is available online, and provides a comprehensive introduction to the Debian
+For other topics not included in the following sections, please refer to the Debian documentation. The Debian Administrator's Handbook is available online, and provides a comprehensive introduction to the Debian
 operating system (see [Hertzog13]).
 
 

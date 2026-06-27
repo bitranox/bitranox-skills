@@ -134,7 +134,7 @@ The `Name` widget has a reactive `who` attribute. When the app modifies that att
 > Textual will check if a value has really changed, so assigning the same value wont prompt an unnecessary refresh.
 
 
-### Disabling refresh
+### Disabling refresh
 
 If you *don't* want an attribute to prompt a refresh or layout but you still want other reactive superpowers, you can use `var` to create an attribute. You can import `var` from `textual.reactive`.
 

@@ -135,7 +135,7 @@ group: mygroup2
 nodes node2,node1
 restricted 1
 The nofailback options is mostly useful to avoid unwanted resource movements during administration
-tasks. For example, if you need to migrate a service to a node which doesn’t have the highest priority in the
+tasks. For example, if you need to migrate a service to a node which doesn't have the highest priority in the
 group, you need to tell the HA manager not to instantly move this service back by setting the nofailback
 option.
 Another scenario is when a service was fenced and it got recovered to another node. The admin tries to
@@ -327,7 +327,7 @@ separated with a colon (example: vm:100,ct:101).
 
 
 HA rules can impose rather complex constraints on the HA resources. To ensure that a new or modified
-HA rule does not introduce uncertainty into the HA stack’s CRS scheduler, HA rules are tested for feasibility
+HA rule does not introduce uncertainty into the HA stack's CRS scheduler, HA rules are tested for feasibility
 before these are applied. For any rules that fail these tests, these rules are disabled until the conflicts and
 errors have been resolved.
 Currently, HA rules are checked for the following feasibility tests:

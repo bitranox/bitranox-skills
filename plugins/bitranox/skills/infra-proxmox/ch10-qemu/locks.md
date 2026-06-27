@@ -66,20 +66,20 @@ like, for example, FreeBSD or Microsoft Windows inside a container.
 - For security reasons, access to host resources needs to be restricted. Therefore, containers run in their
 own separate namespaces. Additionally some syscalls (user space requests to the Linux kernel) are not
 allowed within containers.
-Proxmox VE uses Linux Containers (LXC) as its underlying container technology. The “Proxmox Container
-Toolkit” (pct) simplifies the usage and management of LXC, by providing an interface that abstracts complex
+Proxmox VE uses Linux Containers (LXC) as its underlying container technology. The "Proxmox Container
+Toolkit" (pct) simplifies the usage and management of LXC, by providing an interface that abstracts complex
 tasks.
 Containers are tightly integrated with Proxmox VE. This means that they are aware of the cluster setup, and
 they can use the same network and storage resources as virtual machines. You can also use the Proxmox
 VE firewall, or manage containers using the HA framework.
 Our primary goal has traditionally been to offer an environment that provides the benefits of using a VM, but
 without the additional overhead. This means that Proxmox Containers have been primarily categorized as
-“System Containers”.
+"System Containers".
 With the introduction of OCI (Open Container Initiative) image support, Proxmox VE now also integrates
-“Application Containers” as a technology preview. When creating a container from an OCI image, the image
+"Application Containers" as a technology preview. When creating a container from an OCI image, the image
 is automatically converted to the LXC stack that Proxmox VE uses.
 This approach allows users to benefit from a wide ecosystem of pre-packaged applications while retaining
 the robust management features of Proxmox VE.
-While running lightweight “Application Containers” directly offers significant advantages over a full VM, for
+While running lightweight "Application Containers" directly offers significant advantages over a full VM, for
 use cases demanding maximum isolation and the ability to live-migrate, nesting containers inside a Proxmox
 QEMU VM remains a recommended practice.

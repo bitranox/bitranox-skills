@@ -93,4 +93,4 @@ Allowed content types.
 Overrides for default content type directories.
 
 - `--create-base-path` <boolean> (default = yes)
-Create the base directory if it doesn’t exist.
+Create the base directory if it doesn't exist.

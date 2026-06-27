@@ -133,17 +133,17 @@ you still need and remove the directory afterwards.
 
 
 > **Caution:**
-> This is not the recommended method, proceed with caution. Use the previous method if you’re
+> This is not the recommended method, proceed with caution. Use the previous method if you're
 > unsure.
 
 
 You can also separate a node from a cluster without reinstalling it from scratch. But after removing the
 node from the cluster, it will still have access to any shared storage. This must be resolved before you start
 removing the node from the cluster. A Proxmox VE cluster cannot share the exact same storage with another
-cluster, as storage locking doesn’t work over the cluster boundary. Furthermore, it may also lead to VMID
+cluster, as storage locking doesn't work over the cluster boundary. Furthermore, it may also lead to VMID
 conflicts.
-It’s suggested that you create a new storage, where only the node which you want to separate has access.
-This can be a new export on your NFS or a new Ceph pool, to name a few examples. It’s just important that
+It's suggested that you create a new storage, where only the node which you want to separate has access.
+This can be a new export on your NFS or a new Ceph pool, to name a few examples. It's just important that
 the exact same storage does not get accessed by multiple clusters. After setting up this storage, move all
 data and VMs from the node to it. Then you are ready to separate the node from the cluster.
 
@@ -194,7 +194,7 @@ up too. After making absolutely sure that you have the correct node name, you ca
 directory recursively from /etc/pve/nodes/NODENAME.
 
 > **Caution:**
-> The node’s SSH keys will remain in the authorized_key file. This means that the nodes can still
+> The node's SSH keys will remain in the authorized_key file. This means that the nodes can still
 > connect to each other with public key authentication. You should fix this by removing the respective
 > keys from the /etc/pve/priv/authorized_keys file.
 
@@ -205,7 +205,7 @@ directory recursively from /etc/pve/nodes/NODENAME.
 Proxmox VE use a quorum-based technique to provide a consistent state among all cluster nodes.
 A quorum is the minimum number of votes that a distributed transaction has to obtain in order
 to be allowed to perform an operation in a distributed system.
-— from Wikipedia Quorum (distributed computing)
+ -  from Wikipedia Quorum (distributed computing)
 In case of network partitioning, state changes requires that a majority of nodes are online. The cluster
 switches to read-only mode if it loses quorum.
 

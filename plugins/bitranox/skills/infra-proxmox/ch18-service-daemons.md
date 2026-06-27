@@ -40,7 +40,7 @@ manage your whole cluster by connecting to a single Proxmox VE node.
 ### 18.2.1 Host based Access Control
 
 
-It is possible to configure “apache2”-like access control lists. Values are read from file /etc/default/pveprox
+It is possible to configure "apache2"-like access control lists. Values are read from file /etc/default/pveprox
 For example:
 
 ALLOW_FROM="10.0.0.1-10.0.0.5,192.168.0.0/22"

@@ -76,7 +76,7 @@ is_mountpoint /mnt/data2
 
 
 When taking a snapshot of a subvolume or raw file, the snapshot will be created as a read-only subvolume
-with the same path followed by an @ and the snapshot’s name.
+with the same path followed by an @ and the snapshot's name.
 
 
 ## 7.17 ZFS over ISCSI Backend

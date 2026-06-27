@@ -1,4 +1,4 @@
-# Script Mode — One-File Layered Architecture (CLI-first)
+# Script Mode  -  One-File Layered Architecture (CLI-first)
 
 Use when delivering a **single Python file** (no package install required).
 Respects Domain/Application/Adapters boundaries logically inside one file.
@@ -18,7 +18,7 @@ Inherits all Non-Negotiables from `SKILL.md`; adapt Outbox/Idempotency pragmatic
 
 ---
 
-## PEP 723 — Inline Script Metadata
+## PEP 723  -  Inline Script Metadata
 
 Use when a one-file script needs dependencies. Keep core boundaries: only adapters import 3rd-party.
 
@@ -60,7 +60,7 @@ If you don't need deps, **omit** the PEP 723 block and stay stdlib-only.
 
 ```python
 #!/usr/bin/env python3
-"""<Summary> — minimal, typed, dependency-free CLI with layered ports-and-adapters design."""
+"""<Summary>  -  minimal, typed, dependency-free CLI with layered ports-and-adapters design."""
 
 # === Imports (stdlib only; or adapter-only 3p if PEP 723 used) ===
 # === Observability/Context (trace_id) ===
@@ -83,11 +83,11 @@ If you don't need deps, **omit** the PEP 723 block and stay stdlib-only.
 
 ---
 
-## Complete Example — URL Health Checker
+## Complete Example  -  URL Health Checker
 
 ```python
 #!/usr/bin/env python3
-"""url-health — Check HTTP endpoint health. Stdlib-only, typed, layered."""
+"""url-health  -  Check HTTP endpoint health. Stdlib-only, typed, layered."""
 
 import argparse
 import sys

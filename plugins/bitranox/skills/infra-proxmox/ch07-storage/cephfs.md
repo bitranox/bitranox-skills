@@ -77,7 +77,7 @@ fs-name cephfs
 
 
 > **Note:**
-> Don’t forget to set up the client’s secret key file, if cephx was not disabled.
+> Don't forget to set up the client's secret key file, if cephx was not disabled.
 
 
 ### 7.15.2 Authentication

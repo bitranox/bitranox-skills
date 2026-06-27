@@ -54,10 +54,10 @@ overall performance significantly.
 > **Important:**
 > Do not use ZFS on top of a hardware RAID controller which has its own cache management. ZFS
 > needs to communicate directly with the disks. An HBA adapter or something like an LSI controller
-> flashed in “IT” mode is more appropriate.
+> flashed in "IT" mode is more appropriate.
 
 
-If you are experimenting with an installation of Proxmox VE inside a VM (Nested Virtualization), don’t use
+If you are experimenting with an installation of Proxmox VE inside a VM (Nested Virtualization), don't use
 virtio for disks of that VM, as they are not supported by ZFS. Use IDE or SCSI instead (also works with
 the virtio SCSI controller type).
 
@@ -75,10 +75,10 @@ RAIDZ-1
 RAIDZ-2
 RAIDZ-3
 
-Also called “striping”. The capacity of such volume is the sum of the capacities of all
+Also called "striping". The capacity of such volume is the sum of the capacities of all
 disks. But RAID0 does not add any redundancy, so the failure of a single drive
 makes the volume unusable.
-Also called “mirroring”. Data is written identically to all disks. This mode requires at
+Also called "mirroring". Data is written identically to all disks. This mode requires at
 least 2 disks with the same size. The resulting capacity is that of a single disk.
 A combination of RAID0 and RAID1. Requires at least 4 disks.
 A variation on RAID-5, single parity. Requires at least 3 disks.
@@ -280,7 +280,7 @@ Additional information can be found on the manual page:
 
 Spares and Data
 The number of spares tells the system how many disks it should keep ready in case of a disk failure. The
-default value is 0 spares. Without spares, rebuilding won’t get any speed benefits.
+default value is 0 spares. Without spares, rebuilding won't get any speed benefits.
 
 data defines the number of devices in a redundancy group. The default value is 8. Except when disks parity - spares equal something less than 8, the lower number is used. In general, a smaller number
 of data devices leads to higher IOPS, better compression ratios and faster resilvering, but defining fewer

@@ -35,8 +35,8 @@ local_network 1.2.3.4 # use the single IP address
 ## 13.6 IP Sets
 
 
-IP sets can be used to define groups of networks and hosts. You can refer to them with ‘+name` in the
-firewall rules’ source and dest properties.
+IP sets can be used to define groups of networks and hosts. You can refer to them with '+name` in the
+firewall rules' source and dest properties.
 The following example allows HTTP traffic from the management IP set.
 
 IN HTTP(ACCEPT) -source +management
@@ -58,7 +58,7 @@ The local cluster network is automatically added to this IP set (alias cluster_n
 ### 13.6.2 Standard IP set blacklist
 
 
-Traffic from these IPs is dropped by every host’s and VM’s firewall.
+Traffic from these IPs is dropped by every host's and VM's firewall.
 
 # /etc/pve/firewall/cluster.fw
 [IPSET blacklist]
@@ -69,11 +69,11 @@ Traffic from these IPs is dropped by every host’s and VM’s firewall.
 ### 13.6.3 Standard IP set ipfilter-net*
 
 
-These filters belong to a VM’s network interface and are mainly used to prevent IP spoofing. If such a set
-exists for an interface then any outgoing traffic with a source IP not matching its interface’s corresponding
+These filters belong to a VM's network interface and are mainly used to prevent IP spoofing. If such a set
+exists for an interface then any outgoing traffic with a source IP not matching its interface's corresponding
 ipfilter set will be dropped.
 For containers with configured IP addresses these sets, if they exist (or are activated via the general IP
-Filter option in the VM’s firewall’s options tab), implicitly contain the associated IP addresses.
+Filter option in the VM's firewall's options tab), implicitly contain the associated IP addresses.
 For both virtual machines and containers they also implicitly contain the standard MAC-derived IPv6 link-local
 address in order to allow the neighbor discovery protocol to work.
 
@@ -151,7 +151,7 @@ Please inspect the output of the
 ```
 # iptables-save
 system command to see the firewall chains and rules active on your system. This output is also included in a
-System Report, accessible over a node’s subscription tab in the web GUI, or through the pvereport
+System Report, accessible over a node's subscription tab in the web GUI, or through the pvereport
 command-line tool.
 ```
 
@@ -171,7 +171,7 @@ Again, you can use iptables-save (see above) to inspect all rules and chains app
 
 By default, all logging of traffic filtered by the firewall rules is disabled. To enable logging, the loglevel for
 incoming and/or outgoing traffic has to be set in Firewall → Options. This can be done for the host as well
-as for the VM/CT firewall individually. By this, logging of Proxmox VE’s standard firewall rules is enabled and
+as for the VM/CT firewall individually. By this, logging of Proxmox VE's standard firewall rules is enabled and
 the output can be observed in Firewall → Log. Further, only some dropped or rejected packets are logged
 for the standard rules (see default firewall rules).
 
@@ -186,7 +186,7 @@ alert
 crit
 
 LOGID
-—
+ - 
 0
 1
 2
@@ -248,16 +248,16 @@ and add ip_conntrack_ftp to /etc/modules (so that it works after a reboot).
 ### 13.10.2 Suricata IPS integration
 
 
-If you want to use the Suricata IPS (Intrusion Prevention System), it’s possible.
+If you want to use the Suricata IPS (Intrusion Prevention System), it's possible.
 Packets will be forwarded to the IPS only after the firewall ACCEPTed them.
-Rejected/Dropped firewall packets don’t go to the IPS.
+Rejected/Dropped firewall packets don't go to the IPS.
 Install suricata on proxmox host:
 
 
 ```
 # apt-get install suricata
 # modprobe nfnetlink_queue
-Don’t forget to add nfnetlink_queue to /etc/modules for next reboot.
+Don't forget to add nfnetlink_queue to /etc/modules for next reboot.
 Then, enable IPS for a specific VM with:
 
 # /etc/pve/firewall/<VMID>.fw
@@ -279,15 +279,15 @@ NFQUEUE=0
 
 The firewall contains a few IPv6 specific options. One thing to note is that IPv6 does not use the ARP protocol
 anymore, and instead uses NDP (Neighbor Discovery Protocol) which works on IP level and thus needs IP
-addresses to succeed. For this purpose link-local addresses derived from the interface’s MAC address are
+addresses to succeed. For this purpose link-local addresses derived from the interface's MAC address are
 used. By default the NDP option is enabled on both host and VM level to allow neighbor discovery (NDP)
 packets to be sent and received.
 Beside neighbor discovery NDP is also used for a couple of other things, like auto-configuration and advertising routers.
 By default VMs are allowed to send out router solicitation messages (to query for a router), and to receive
 router advertisement packets. This allows them to use stateless auto configuration. On the other hand VMs
-cannot advertise themselves as routers unless the “Allow Router Advertisement” (radv: 1) option is set.
-As for the link local addresses required for NDP, there’s also an “IP Filter” (ipfilter: 1) option which
-can be enabled which has the same effect as adding an ipfilter-net* ipset for each of the VM’s
+cannot advertise themselves as routers unless the "Allow Router Advertisement" (radv: 1) option is set.
+As for the link local addresses required for NDP, there's also an "IP Filter" (ipfilter: 1) option which
+can be enabled which has the same effect as adding an ipfilter-net* ipset for each of the VM's
 network interfaces containing the corresponding link local addresses. (See the Standard IP set ipfilter-net*
 section for details.)
 

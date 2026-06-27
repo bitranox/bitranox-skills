@@ -4,7 +4,7 @@
 
 
 The Proxmox VE cluster manager pvecm is a tool to create a group of physical servers. Such a group is
-called a cluster. We use the Corosync Cluster Engine for reliable group communication. There’s no explicit
+called a cluster. We use the Corosync Cluster Engine for reliable group communication. There's no explicit
 limit for the number of nodes in a cluster. In practice, the actual possible node count may be limited by the
 host and network performance. Currently (2021), there are reports of clusters (using high-end enterprise
 hardware) with over 50 nodes in production.
@@ -72,7 +72,7 @@ might work otherwise, but this is never guaranteed.
 
 First, install Proxmox VE on all nodes. Make sure that each node is installed with the final hostname and IP
 configuration. Changing the hostname and IP is not possible after cluster creation.
-While it’s common to reference all node names and their IPs in /etc/hosts (or make their names resolvable through other means), this is not necessary for a cluster to work. It may be useful however, as you can
+While it's common to reference all node names and their IPs in /etc/hosts (or make their names resolvable through other means), this is not necessary for a cluster to work. It may be useful however, as you can
 then connect from one node to another via SSH, using the easier to remember node name (see also Link
 Address Types). Note that we always recommend referencing nodes by their IP addresses in the cluster
 configuration.
@@ -93,7 +93,7 @@ interface (Datacenter → Cluster ).
 
 
 Under Datacenter → Cluster, click on Create Cluster. Enter the cluster name and select a network connection from the drop-down list to serve as the main cluster network (Link 0). It defaults to the IP resolved via
-the node’s hostname.
+the node's hostname.
 As of Proxmox VE 6.2, up to 8 fallback links can be added to a cluster. To add a redundant link, click the Add
 button and select a link number and IP address from the respective fields. Prior to Proxmox VE 6.2, to add a
 second link as fallback, you can select the Advanced checkbox and choose an additional network interface
@@ -136,9 +136,9 @@ bigger clusters.
 > **Caution:**
 > All existing configuration in /etc/pve is overwritten when joining a cluster. In particular, a joining
 > node cannot hold any guests, since guest IDs could otherwise conflict, and the node will inherit the
-> cluster’s storage configuration. To join a node with existing guest, as a workaround, you can create
+> cluster's storage configuration. To join a node with existing guest, as a workaround, you can create
 > a backup of each guest (using vzdump) and restore it under a different ID after joining. If the
-> node’s storage layout differs, you will need to re-add the node’s storages, and adapt each storage’s
+> node's storage layout differs, you will need to re-add the node's storages, and adapt each storage's
 > node restriction to reflect on which nodes the storage is actually available.
 
 

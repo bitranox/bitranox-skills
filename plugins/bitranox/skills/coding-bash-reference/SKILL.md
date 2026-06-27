@@ -545,7 +545,7 @@ outer  # prints: 42 (inner sees outer's local!)
 
 ```bash
 read -r var <<< "hello"
-printf '%s' "$var" | xxd  # contains "hello\n" — trailing newline added
+printf '%s' "$var" | xxd  # contains "hello\n"  -  trailing newline added
 # Use printf instead when exact bytes matter:
 read -r var < <(printf '%s' "hello")
 ```

@@ -6,7 +6,7 @@
 ### 12.10.4 OpenFabric
 
 
-OpenFabric is a routing protocol specifically designed for data center fabrics. It’s based on IS-IS and optimized for the spine-leaf topology common in data centers.
+OpenFabric is a routing protocol specifically designed for data center fabrics. It's based on IS-IS and optimized for the spine-leaf topology common in data centers.
 
 Configuration options:
 
@@ -128,7 +128,7 @@ A IPv4 that should get automatically configured on this interface. Must include 
 
 
 > **Note:**
-> The dummy interface will automatically be configured as passive. Every interface which doesn’t have
+> The dummy interface will automatically be configured as passive. Every interface which doesn't have
 > an ip-address configured will be treated as a point-to-point link.
 
 

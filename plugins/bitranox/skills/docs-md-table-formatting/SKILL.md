@@ -18,13 +18,13 @@ Rules for consistently formatted, readable markdown tables. Misaligned tables ar
 Every cell in a column must be padded with trailing spaces to match the widest content in that column.
 
 ```txt
-# BAD — unpadded
+# BAD  -  unpadded
 | Name | Value |
 |------|-------|
 | Type | Settable |
 | Value | String (colon-separated list) |
 
-# GOOD — padded to widest content per column
+# GOOD  -  padded to widest content per column
 | Name  | Value                         |
 |-------|-------------------------------|
 | Type  | Settable                      |
@@ -36,11 +36,11 @@ Every cell in a column must be padded with trailing spaces to match the widest c
 No spaces between pipes and dashes in the separator row. Dash count = column width + 2 (matching the space-padded content cells).
 
 ```txt
-# BAD — spaces around dashes
+# BAD  -  spaces around dashes
 | Name  | Value    |
 | ----- | -------- |
 
-# GOOD — dashes touch pipes
+# GOOD  -  dashes touch pipes
 | Name  | Value    |
 |-------|----------|
 ```
@@ -50,7 +50,7 @@ No spaces between pipes and dashes in the separator row. Dash count = column wid
 Each content cell has exactly one space after `|` and one space before `|`.
 
 ```txt
-# BAD — inconsistent spacing
+# BAD  -  inconsistent spacing
 |Name  |Value                         |
 | Name  |Value                         |
 
@@ -97,7 +97,7 @@ python3 reformat_tables.py -r docs/
 # Reformat specific files
 python3 reformat_tables.py file.md [file2.md ...]
 
-# Dry-run — reports what would change, exits 1 if changes needed
+# Dry-run  -  reports what would change, exits 1 if changes needed
 python3 reformat_tables.py --check -r
 
 # Create .bak backup before writing

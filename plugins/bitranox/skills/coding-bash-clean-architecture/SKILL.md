@@ -140,7 +140,7 @@ domain__parse_record() {
     local val="${input#*:}"
     _out[name]="$key"
     _out[value]="$val"
-    # No I/O, no external commands — pure parameter expansion
+    # No I/O, no external commands  -  pure parameter expansion
 }
 
 # Caller
@@ -237,7 +237,7 @@ readonly _DOMAIN_SH_LOADED=1
 
 | Type            | Purpose                                                                      |
 |-----------------|------------------------------------------------------------------------------|
-| **Unit**        | Domain functions with direct calls (no mocking needed — they're pure)        |
+| **Unit**        | Domain functions with direct calls (no mocking needed  -  they're pure)        |
 | **Stub**        | Use cases with stub adapter functions (bash functions that return test data) |
 | **Integration** | Real adapters against real files/services                                    |
 | **E2E**         | Full script execution with known inputs/outputs                              |
@@ -262,7 +262,7 @@ test_load_settings() {
 
 ## Observability
 
-- **Structured logging** to stderr: `log_info "msg" >&2` (never to stdout — that's for data)
+- **Structured logging** to stderr: `log_info "msg" >&2` (never to stdout  -  that's for data)
 - Thread `TRACE_ID` via environment variable or global (set once in composition root)
 - Log at adapter boundaries only; domain stays silent
 - Use `PS4='+ ${BASH_SOURCE}:${LINENO}: '` with `set -x` for debug tracing
@@ -314,7 +314,7 @@ test_load_settings() {
 | Random exit codes                                | Use structured exit code table; map in composition root                   |
 | `trap` cleanup in random functions               | Single `trap` in composition root; adapters provide cleanup functions     |
 | Sourcing everything at top level                 | Source only what each layer needs; domain sources nothing                 |
-| `eval` for dynamic dispatch                      | Use `"$fn_name" args` (indirect call) — safe, no eval needed              |
+| `eval` for dynamic dispatch                      | Use `"$fn_name" args` (indirect call)  -  safe, no eval needed              |
 
 ## Reference Files
 
@@ -332,6 +332,6 @@ test_load_settings() {
 | **Application Layer**  | Use case functions orchestrating domain + port calls (no direct I/O)                        |
 | **Composition Root**   | `main()` function: parses args, wires adapters to use cases, sets traps                     |
 | **Domain**             | Pure bash functions: validation, computation, transformation (no I/O, no external commands) |
-| **Nameref**            | `declare -n ref="$1"` — Bash 4.3+ mechanism for passing structured data without globals     |
+| **Nameref**            | `declare -n ref="$1"`  -  Bash 4.3+ mechanism for passing structured data without globals     |
 | **Port**               | Documented function signature contract that adapters must implement                         |
 | **Function Reference** | Passing a function name as a string argument for indirect call: `"$fn_name" args`           |

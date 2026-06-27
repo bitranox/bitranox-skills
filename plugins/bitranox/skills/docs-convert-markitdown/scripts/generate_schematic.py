@@ -122,7 +122,7 @@ Environment Variables:
     if args.verbose:
         cmd.append("-v")
     
-    # Execute — pass API key via environment to avoid exposure in process listings
+    # Execute  -  pass API key via environment to avoid exposure in process listings
     try:
         env = os.environ.copy()
         if api_key:

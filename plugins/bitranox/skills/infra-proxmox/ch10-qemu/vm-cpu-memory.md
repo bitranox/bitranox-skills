@@ -14,7 +14,7 @@ the number of sockets to what the license allows you.
 Increasing the number of virtual CPUs (cores and sockets) will usually provide a performance improvement
 though that is heavily dependent on the use of the VM. Multi-threaded applications will of course benefit from
 a large number of virtual CPUs, as for each virtual cpu you add, QEMU will create a new thread of execution
-on the host system. If you’re not sure about the workload of your VM, it is usually a safe bet to set the number
+on the host system. If you're not sure about the workload of your VM, it is usually a safe bet to set the number
 of Total cores to 2.
 
 > **Note:**
@@ -28,7 +28,7 @@ of Total cores to 2.
 
 Resource Limits
 cpulimit
-In addition to the number of virtual cores, the total available “Host CPU Time” for the VM can be set with
+In addition to the number of virtual cores, the total available "Host CPU Time" for the VM can be set with
 the cpulimit option. It is a floating point value representing CPU time in percent, so 1.0 is equal to 100%,
 
 ## 2.5 to 250% and so on. If a single process would fully use one single core it would have 100% CPU Time
@@ -39,7 +39,7 @@ ones.
 This setting can be useful when a VM should have multiple vCPUs because it is running some processes in
 parallel, but the VM as a whole should not be able to run all vCPUs at 100% at the same time.
 For example, suppose you have a virtual machine that would benefit from having 8 virtual CPUs, but you
-don’t want the VM to be able to max out all 8 cores running at full load - because that would overload the
+don't want the VM to be able to max out all 8 cores running at full load - because that would overload the
 server and leave other virtual machines and containers with too little CPU time. To solve this, you could set
 cpulimit to 4.0 (=400%). This means that if the VM fully utilizes all 8 virtual CPUs by running 8 processes
 simultaneously, each vCPU will receive a maximum of 50% CPU time from the physical cores. However, if
@@ -63,7 +63,7 @@ core, for a total of 400%.
 For more information see man systemd.resource-control, here CPUQuota corresponds to cpulimit
 and CPUWeight to our cpuunits setting. Visit its Notes section for references and implementation details.
 affinity
-With the affinity option, you can specify the physical CPU cores that are used to run the VM’s vCPUs.
+With the affinity option, you can specify the physical CPU cores that are used to run the VM's vCPUs.
 Peripheral VM processes, such as those for I/O, are not affected by this setting. Note that the CPU affinity
 is not a security feature.
 Forcing a CPU affinity can make sense in certain cases but is accompanied by an increase in complexity
@@ -93,7 +93,7 @@ The backend default is kvm64 which works on essentially all x86_64 host CPUs and
 creating a new VM is x86-64-v2-AES, which requires a host CPU starting from Westmere for Intel or at least
 a fourth generation Opteron for AMD.
 In short:
-If you don’t care about live migration or have a homogeneous cluster where all nodes have the same CPU
+If you don't care about live migration or have a homogeneous cluster where all nodes have the same CPU
 and same microcode version, set the CPU type to host, as in theory this will give your guests maximum
 performance.
 If you care about live migration and security, and you have only Intel CPUs or only AMD CPUs, choose the
@@ -146,12 +146,12 @@ There are several CPU flags related to the Meltdown and Spectre vulnerabilities 
 manually unless the selected CPU type of your VM already enables them by default.
 There are two requirements that need to be fulfilled in order to use these CPU flags:
 
-- The host CPU(s) must support the feature and propagate it to the guest’s virtual CPU(s)
+- The host CPU(s) must support the feature and propagate it to the guest's virtual CPU(s)
 - The guest operating system must be updated to a version which mitigates the attacks and is able to utilize
 the CPU feature
 Otherwise you need to set the desired CPU flag of the virtual CPU, either by editing the CPU options in the
 web UI, or by setting the flags property of the cpu option in the VM configuration file.
-For Spectre v1,v2,v4 fixes, your CPU or system vendor also needs to provide a so-called “microcode update”
+For Spectre v1,v2,v4 fixes, your CPU or system vendor also needs to provide a so-called "microcode update"
 for your CPU, see chapter Firmware Updates. Note that not all affected CPUs can be updated to support
 spec-ctrl.
 To check if the Proxmox VE host is vulnerable, execute the following command as root:
@@ -172,7 +172,7 @@ To check if the Proxmox VE host supports PCID, execute the following command as 
 
 ```
 # grep ' pcid ' /proc/cpuinfo
-If this does not return empty your host’s CPU has support for pcid.
+If this does not return empty your host's CPU has support for pcid.
 ```
 
 
@@ -241,7 +241,7 @@ You can use a udev rule as follow to automatically set new CPUs as online in the
 SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{ ←online}="1"
 Save this under /etc/udev/rules.d/ as a file ending in .rules.
 Note: CPU hot-remove is machine dependent and requires guest cooperation. The deletion command does
-not guarantee CPU removal to actually happen, typically it’s a request forwarded to guest OS using target
+not guarantee CPU removal to actually happen, typically it's a request forwarded to guest OS using target
 dependent mechanism, such as ACPI on x86/amd64.
 
 
@@ -293,7 +293,7 @@ RAM, and is currently using 16GB, leaving 32 * 80/100 - 16 = 9GB RAM to be alloc
 of their configured minimum memory amount. The database VM will benefit from 9 * 3000 / (3000 + 1000 +
 1000 + 1000) = 4.5 GB extra RAM and each HTTP server from 1.5 GB.
 All Linux distributions released after 2010 have the balloon kernel driver included. For Windows OSes, the
-balloon driver needs to be added manually and can incur a slowdown of the guest, so we don’t recommend
+balloon driver needs to be added manually and can incur a slowdown of the guest, so we don't recommend
 using it on critical systems.
 When allocating RAM to your VMs, a good rule of thumb is always to leave 1GB of RAM available to the
 host.

@@ -92,9 +92,9 @@ Swap partition
 data
 This volume uses LVM-thin, and is used to store VM images. LVM-thin is preferable for this task,
 because it offers efficient support for snapshots and clones.
-For Proxmox VE versions up to 4.1, the installer creates a standard logical volume called “data”, which is
+For Proxmox VE versions up to 4.1, the installer creates a standard logical volume called "data", which is
 mounted at /var/lib/vz.
-Starting from version 4.2, the logical volume “data” is a LVM-thin pool, used to store block based guest
+Starting from version 4.2, the logical volume "data" is a LVM-thin pool, used to store block based guest
 images, and /var/lib/vz is simply a directory on the root file system.
 
 
@@ -116,8 +116,8 @@ apply persistent firmware updates from the user space.
 ### 3.8.3 Creating a Volume Group
 
 
-Let’s assume we have an empty disk /dev/sdb, onto which we want to create a volume group named
-“vmdata”.
+Let's assume we have an empty disk /dev/sdb, onto which we want to create a volume group named
+"vmdata".
 
 
 > **Caution:**
@@ -132,7 +132,7 @@ First create a partition.
 Create a Physical Volume (PV) without confirmation and 250K metadatasize.
 
 # pvcreate --metadatasize 250k -y -ff /dev/sdb1
-Create a volume group named “vmdata” on /dev/sdb1
+Create a volume group named "vmdata" on /dev/sdb1
 
 # vgcreate vmdata /dev/sdb1
 ```
@@ -157,7 +157,7 @@ At last this has to be mounted.
 
 
 > **Warning:**
-> be sure that /var/lib/vz is empty. On a default installation it’s not.
+> be sure that /var/lib/vz is empty. On a default installation it's not.
 
 
 To make it always accessible add the following line in /etc/fstab.

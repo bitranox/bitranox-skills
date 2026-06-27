@@ -150,7 +150,7 @@ ethtool command:
 ethtool -L ens1 combined X
 where X is the number of the number of vCPUs of the VM.
 To configure a Windows guest for Multiqueue install the Redhat VirtIO Ethernet Adapter drivers, then adapt
-the NIC’s configuration as follows. Open the device manager, right click the NIC under "Network adapters",
+the NIC's configuration as follows. Open the device manager, right click the NIC under "Network adapters",
 and select "Properties". Then open the "Advanced" tab and select "Receive Side Scaling" from the list on
 the left. Make sure it is set to "Enabled". Next, navigate to "Maximum number of RSS Queues" in the list
 and set it to the number of vCPUs of your VM. Once you verified that the settings are correct, click "OK" to
@@ -179,8 +179,8 @@ host GPU without requiring special (expensive) models and drivers and neither bi
 completely, allowing reuse between multiple guests and or the host.
 
 > **Note:**
-> VirGL support needs some extra libraries that aren’t installed by default due to being relatively big and
-> also not available as open source for all GPU models/vendors. For most setups you’ll just need to do:
+> VirGL support needs some extra libraries that aren't installed by default due to being relatively big and
+> also not available as open source for all GPU models/vendors. For most setups you'll just need to do:
 
 
 apt install libgl1 libegl1
@@ -206,7 +206,7 @@ You can enable the VNC clipboard by setting clipboard to vnc.
 In order to use the clipboard feature, you must first install the SPICE guest tools. On Debian-based distributions, this can be achieved by installing spice-vdagent. For other Operating Systems search for it in the
 official repositories or see: https://www.spice-space.org/download.html
 Once you have installed the spice guest tools, you can use the VNC clipboard function (e.g. in the noVNC
-console panel). However, if you’re using SPICE, virtio or virgl, you’ll need to choose which clipboard to use.
+console panel). However, if you're using SPICE, virtio or virgl, you'll need to choose which clipboard to use.
 This is because the default SPICE clipboard will be replaced by the VNC clipboard, if clipboard is set to
 vnc.
 9 https://www.kraxel.org/blog/2014/10/qemu-using-cirrus-considered-harmful/ qemu: using cirrus considered harmful

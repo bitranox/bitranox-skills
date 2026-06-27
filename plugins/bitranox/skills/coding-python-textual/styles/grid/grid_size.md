@@ -18,7 +18,7 @@ grid-size: <integer> [<integer>];
 
 The `grid-size` style takes one or two non-negative [`<integer>`](../../css_types/integer.md).
 The first defines how many columns there are in the grid.
-If present, the second one sets the number of rows – regardless of the number of children of the grid –, otherwise the number of rows is computed automatically.
+If present, the second one sets the number of rows - regardless of the number of children of the grid -, otherwise the number of rows is computed automatically.
 
 ## Examples
 

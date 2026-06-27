@@ -6,7 +6,7 @@
 ### 12.6.3 VLAN Zones
 
 
-The VLAN plugin uses an existing local Linux or OVS bridge to connect to the node’s physical interface. It
+The VLAN plugin uses an existing local Linux or OVS bridge to connect to the node's physical interface. It
 uses VLAN tagging defined in the VNet to isolate the network segments. This allows connectivity of VMs
 between different nodes.
 VLAN zone configuration options:
@@ -88,7 +88,7 @@ Nodes that shall be configured as exit gateways from the EVPN network, through t
 The configured nodes will announce a default route in the EVPN network. Optional.
 Primary Exit Node
 If you use multiple exit nodes, force traffic through this primary exit node, instead of load-balancing on
-all nodes. Optional but necessary if you want to use SNAT or if your upstream router doesn’t support
+all nodes. Optional but necessary if you want to use SNAT or if your upstream router doesn't support
 ECMP.
 Exit Nodes Local Routing
 This is a special option if you need to reach a VM/CT service from an exit node. (By default, the exit
@@ -97,10 +97,10 @@ nodes only allow forwarding traffic between real network and EVPN network). Opti
 
 Advertise Subnets
 Announce the full subnet in the EVPN network. If you have silent VMs/CTs (for example, if you have
-multiple IPs and the anycast gateway doesn’t see traffic from these IPs, the IP addresses won’t be
+multiple IPs and the anycast gateway doesn't see traffic from these IPs, the IP addresses won't be
 able to be reached inside the EVPN network). Optional.
 Disable ARP ND Suppression
-Don’t suppress ARP or ND (Neighbor Discovery) packets. This is required if you use floating IPs in
+Don't suppress ARP or ND (Neighbor Discovery) packets. This is required if you use floating IPs in
 your VMs (IP and MAC addresses are being moved between systems). Optional.
 Route-target Import
 Allows you to import a list of external EVPN route targets. Used for cross-DC or different EVPN
@@ -121,7 +121,7 @@ section in this document.
 
 
 > **Warning:**
-> In the current state, some options may have no effect or won’t work in certain zones.
+> In the current state, some options may have no effect or won't work in certain zones.
 
 
 VNet configuration options:
@@ -168,7 +168,7 @@ Subnet configuration options:
 ID
 A CIDR network address, for example 10.0.0.0/8
 Gateway
-The IP address of the network’s default gateway. On layer 3 zones (Simple/EVPN plugins), it will be
+The IP address of the network's default gateway. On layer 3 zones (Simple/EVPN plugins), it will be
 deployed on the VNet.
 SNAT
 Enable Source NAT which allows VMs from inside a VNet to connect to the outside network by forwarding the packets to the nodes outgoing interface. On EVPN zones, forwarding is done on EVPN
@@ -181,7 +181,7 @@ Add a prefix to the domain registration, like <hostname>.prefix.<domain> Optiona
 
 
 Some zones implement a separated control and data plane that require an external controller to manage the
-VNet’s control plane.
+VNet's control plane.
 Currently, only the EVPN zone requires an external controller.
 
 
@@ -194,8 +194,8 @@ To enable the EVPN controller, you need to enable FRR on every node, see install
 EVPN controller configuration options:
 
 ASN #
-A unique BGP ASN number. It’s highly recommended to use a private ASN number (64512 – 65534,
-4200000000 – 4294967294), as otherwise you could end up breaking global routing by mistake.
+A unique BGP ASN number. It's highly recommended to use a private ASN number (64512 - 65534,
+4200000000 - 4294967294), as otherwise you could end up breaking global routing by mistake.
 SDN Fabric
 A Fabric that contains all the nodes part of the EVPN zone. Will be used as the underlay network.
 Peers
@@ -211,7 +211,7 @@ For BGP-EVPN, it can be used to define a different ASN by node, so doing EBGP. I
 export EVPN routes to an external BGP peer.
 
 > **Note:**
-> By default, for a simple full mesh EVPN, you don’t need to define a BGP controller.
+> By default, for a simple full mesh EVPN, you don't need to define a BGP controller.
 
 
 BGP controller configuration options:
@@ -219,7 +219,7 @@ BGP controller configuration options:
 Node
 The node of this BGP controller
 ASN #
-A unique BGP ASN number. It’s highly recommended to use a private ASN number in the range (64512
+A unique BGP ASN number. It's highly recommended to use a private ASN number in the range (64512
 - 65534) or (4200000000 - 4294967294), as otherwise you could break global routing by mistake.
 Peer
 A list of peer IP addresses you want to communicate with using the underlying BGP network.

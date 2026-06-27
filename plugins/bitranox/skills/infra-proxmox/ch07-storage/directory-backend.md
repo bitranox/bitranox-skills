@@ -70,7 +70,7 @@ you cannot create snapshots at the storage level. But there exists a workaround 
 qcow2 file format, because that format supports snapshots internally.
 
 > **Tip:**
-> Some storage types do not support O_DIRECT, so you can’t use cache mode none with such storages.
+> Some storage types do not support O_DIRECT, so you can't use cache mode none with such storages.
 > Simply use cache mode writeback instead.
 
 

@@ -77,9 +77,9 @@ textual-calculator
 ├── README.md
 ├── pyproject.toml
 ├── src
-│   └── textual_calculator
-│       ├── __about__.py
-│       └── __init__.py
+│   └── textual_calculator
+│       ├── __about__.py
+│       └── __init__.py
 └── tests
     └── __init__.py
 ```
@@ -133,11 +133,11 @@ textual-calculator
 ├── README.md
 ├── pyproject.toml
 ├── src
-│   └── textual_calculator
-│       ├── __about__.py
-│       ├── __init__.py
-│       ├── calculator.py
-│       └── calculator.tcss
+│   └── textual_calculator
+│       ├── __about__.py
+│       ├── __init__.py
+│       ├── calculator.py
+│       └── calculator.tcss
 └── tests
     └── __init__.py
 ```

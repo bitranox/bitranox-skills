@@ -1,4 +1,4 @@
-# Library Development — SDK / Package / Plugin (Pure Python)
+# Library Development  -  SDK / Package / Plugin (Pure Python)
 
 Applies when the output is a **reusable library** (imported by other apps), not just an application.
 Inherits all Non-Negotiables from `SKILL.md`. Ports follow `port-contracts.md`. Architecture review via `review-checklists.md`. Target Python >=3.10.

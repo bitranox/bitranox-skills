@@ -29,7 +29,7 @@ disable certain devices for booting altogether.
 
 
 In any case, even devices not appearing in the list or having the checkmark disabled will still be available
-to the guest, once it’s operating system has booted and initialized them. The bootable flag only affects the
+to the guest, once it's operating system has booted and initialized them. The bootable flag only affects the
 guest BIOS and bootloader.
 
 
@@ -96,7 +96,7 @@ Install Guest Agent
 For most Linux distributions, the guest agent is available. The package is usually named qemu-guest-agent.
 For Windows, it can be installed from the Fedora VirtIO driver ISO.
 Enable Guest Agent Communication
-Communication from Proxmox VE with the guest agent can be enabled in the VM’s Options panel. A fresh
+Communication from Proxmox VE with the guest agent can be enabled in the VM's Options panel. A fresh
 start of the VM is necessary for the changes to take effect.
 Automatic TRIM Using QGA
 It is possible to enable the Run guest-trim option. With this enabled, Proxmox VE will issue a trim command
@@ -108,14 +108,14 @@ On a thin provisioned storage, this can help to free up unused space.
 
 > **Note:**
 > There is a caveat with ext4 on Linux, because it uses an in-memory optimization to avoid issuing duplicate
-> TRIM requests. Since the guest doesn’t know about the change in the underlying storage, only the first
+> TRIM requests. Since the guest doesn't know about the change in the underlying storage, only the first
 > guest-trim will run as expected. Subsequent ones, until the next reboot, will only consider parts of the
 > filesystem that changed since then.
 
 
 Filesystem Freeze & Thaw
-By default, if the QEMU Guest Agent is enabled in the guest’s config and if the agent is available inside of
-the guest, then the virtual machine’s filesystems are synced via the fs-freeze QEMU Guest Agent command
+By default, if the QEMU Guest Agent is enabled in the guest's config and if the agent is available inside of
+the guest, then the virtual machine's filesystems are synced via the fs-freeze QEMU Guest Agent command
 when certain operations are performed. This is done to provide data consistency.
 An fs-freeze will be issued for any of the following operations on a VM:
 
@@ -233,7 +233,7 @@ target. If the guest memory on the source changes, those sections are marked dir
 made to send the guest memory data. This loop is repeated until the data difference between running source
 VM and incoming target VM is small enough to be sent in a few milliseconds, because then the source VM
 can be paused completely, without a user or program noticing the pause, so that the remaining data can be
-sent to the target, and then unpause the targets VM’s CPU to make it the new running VM in well under a
+sent to the target, and then unpause the targets VM's CPU to make it the new running VM in well under a
 second.
 
 Requirements

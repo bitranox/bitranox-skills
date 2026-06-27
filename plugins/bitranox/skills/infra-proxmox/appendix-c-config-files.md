@@ -106,7 +106,7 @@ Cluster wide HA settings.
 shutdown_policy=<conditional | failover | freeze | migrate>
 (default = conditional)
 Describes the policy for handling HA services on poweroff or reboot of a node. Freeze will
-always freeze services which are still located on the node on shutdown, those services won’t
+always freeze services which are still located on the node on shutdown, those services won't
 be recovered by the HA manager. Failover will not mark the services as frozen and thus the
 services will get recovered to other nodes, if the shutdown node does not come up again quickly
 (< 1min). conditional chooses automatically depending on the type of shutdown, i.e., on a reboot
@@ -131,16 +131,16 @@ Default GUI language.
 
 mac_prefix: <string> (default = BC:24:11)
 Prefix for the auto-generated MAC addresses of virtual guests. The default BC:24:11 is the Organizationally Unique Identifier (OUI) assigned by the IEEE to Proxmox Server Solutions GmbH for a
-MAC Address Block Large (MA-L). You’re allowed to use this in local networks, i.e., those not directly
+MAC Address Block Large (MA-L). You're allowed to use this in local networks, i.e., those not directly
 reachable by the public (e.g., in a LAN or NAT/Masquerading).
-Note that when you run multiple cluster that (partially) share the networks of their virtual guests, it’s highly
+Note that when you run multiple cluster that (partially) share the networks of their virtual guests, it's highly
 recommended that you extend the default MAC prefix, or generate a custom (valid) one, to reduce the chance
 
 
 of MAC collisions. For example, add a separate extra hexadecimal to the Proxmox OUI for each cluster, like
 BC:24:11:0 for the first, BC:24:11:1 for the second, and so on. Alternatively, you can also separate
 the networks of the guests logically, e.g., by using VLANs.
-+ For publicly accessible guests it’s recommended that you get your own OUI from the IEEE registered or
++ For publicly accessible guests it's recommended that you get your own OUI from the IEEE registered or
 coordinate with your, or your hosting providers, network admins.
 
 max_workers: <integer> (1 - N)

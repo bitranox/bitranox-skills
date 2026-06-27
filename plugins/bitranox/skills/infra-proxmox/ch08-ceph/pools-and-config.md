@@ -61,7 +61,7 @@ pveceph pool create <pool-name> --add_storages
 
 
 > **Tip:**
-> If you would also like to automatically define a storage for your pool, keep the ‘Add as Storage’ checkbox
+> If you would also like to automatically define a storage for your pool, keep the 'Add as Storage' checkbox
 > checked in the web interface, or use the command-line option --add_storages at pool creation.
 
 
@@ -70,7 +70,7 @@ Pool Options
 The following options are available on pool creation, and partially also when editing a pool.
 
 Name
-The name of the pool. This must be unique and can’t be changed afterwards.
+The name of the pool. This must be unique and can't be changed afterwards.
 7 PG calculator https://web.archive.org/web/20210301111112/http://ceph.com/pgcalc/
 8 Placement Groups https://docs.ceph.com/en/squid/rados/operations/placement-groups/
 9 Automated Scaling https://docs.ceph.com/en/squid/rados/operations/placement-groups/#automated-scaling
@@ -110,7 +110,7 @@ Further information on Ceph pool handling can be found in the Ceph pool operatio
 ### 8.9.2 Erasure Coded Pools
 
 
-Erasure coding (EC) is a form of ‘forward error correction’ codes that allows to recover from a certain amount
+Erasure coding (EC) is a form of 'forward error correction' codes that allows to recover from a certain amount
 of data loss. Erasure coded pools can offer more usable space compared to replicated pools, but they do
 that for the price of performance.
 10 Ceph pool operation https://docs.ceph.com/en/squid/rados/operations/pools/
@@ -243,7 +243,7 @@ and the pg_num_min options.
 > will lead to a considerable shift in data placement and might introduce a high load on the cluster.
 
 
-You can find a more in-depth introduction to the PG autoscaler on Ceph’s Blog - New in Nautilus: PG merging
+You can find a more in-depth introduction to the PG autoscaler on Ceph's Blog - New in Nautilus: PG merging
 and autotuning.
 
 

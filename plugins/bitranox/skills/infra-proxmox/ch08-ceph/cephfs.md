@@ -12,7 +12,7 @@ cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage. ←ke
 Ceph also provides a filesystem, which runs on top of the same object storage as RADOS block devices do.
 A Metadata Server (MDS) is used to map the RADOS backed objects to files and directories, allowing Ceph
 to provide a POSIX-compliant, replicated filesystem. This allows you to easily configure a clustered, highly
-available, shared filesystem. Ceph’s Metadata Servers guarantee that files are evenly distributed over the
+available, shared filesystem. Ceph's Metadata Servers guarantee that files are evenly distributed over the
 entire Ceph cluster. As a result, even cases of high load will not overwhelm a single host, which can be an
 issue with traditional shared filesystem approaches, for example NFS.
 
@@ -24,7 +24,7 @@ to save backups, ISO files, and container templates.
 
 
 CephFS needs at least one Metadata Server to be configured and running, in order to function. You can
-create an MDS through the Proxmox VE web GUI’s Node -> CephFS panel or from the command line
+create an MDS through the Proxmox VE web GUI's Node -> CephFS panel or from the command line
 with:
 
 
@@ -55,7 +55,7 @@ in a system. If you want to set this up, please refer to the Ceph documentation.
 ### 8.12.2 Create CephFS
 
 
-With Proxmox VE’s integration of CephFS, you can easily create a CephFS using the web interface, CLI or
+With Proxmox VE's integration of CephFS, you can easily create a CephFS using the web interface, CLI or
 an external API interface. Some prerequisites are required for this to work:
 
 P REREQUISITES FOR A SUCCESSFUL C EPH FS SETUP :
@@ -65,7 +65,7 @@ system to ensure that all CephFS related packages get installed.
 - Setup Monitors
 - Setup your OSDs
 - Setup at least one MDS
-After this is complete, you can simply create a CephFS through either the Web GUI’s Node -> CephFS
+After this is complete, you can simply create a CephFS through either the Web GUI's Node -> CephFS
 panel or the command-line tool pveceph, for example:
 
 
@@ -74,7 +74,7 @@ pveceph fs create --pg_num 128 --add-storage
 ```
 
 This creates a CephFS named cephfs, using a pool for its data named cephfs_data with 128 placement
-groups and a pool for its metadata named cephfs_metadata with one quarter of the data pool’s placement
+groups and a pool for its metadata named cephfs_metadata with one quarter of the data pool's placement
 groups (32). Check the Proxmox VE managed Ceph pool chapter or visit the Ceph documentation for more
 information regarding an appropriate placement group number (pg_num) for your setup 8 . Additionally, the
 - `--add-storage` parameter will add the CephFS to the Proxmox VE storage configuration after it has been
@@ -153,7 +153,7 @@ ceph crash archive-all
 
 
 It is good practice to run fstrim (discard) regularly on VMs and containers. This releases data blocks that the
-filesystem isn’t using anymore. It reduces data usage and resource load. Most modern operating systems
+filesystem isn't using anymore. It reduces data usage and resource load. Most modern operating systems
 issue such discard commands to their disks regularly. You only need to ensure that the Virtual Machines
 enable the disk discard option.
 

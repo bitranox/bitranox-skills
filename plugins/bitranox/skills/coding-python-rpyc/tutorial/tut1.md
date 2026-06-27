@@ -38,15 +38,15 @@ With this alone you are already set to do almost anything. For example, here is 
     >>> rsys.argv
     ['bin/rpyc_classic.py']
 
-…add module search paths for the server's import mechanism:
+...add module search paths for the server's import mechanism:
 
     >>> rsys.path.append('/tmp/totally-secure-package-location)
 
-…change the current working directory of the server process:
+...change the current working directory of the server process:
 
     >>> conn.modules.os.chdir('..')
 
-…or even print something on the server's stdout:
+...or even print something on the server's stdout:
 
 ```
 >>> print("Hello World!", file=conn.modules.sys.stdout)
@@ -62,7 +62,7 @@ The `builtins` property of classic connection exposes all builtin functions avai
 '-----BEGIN RSA PRIVATE KEY-----\nMIIJKQIBAAKCAgEA0...XuVmz/ywq+5m\n-----END RSA PRIVATE KEY-----\n'
 ```
 
-Ooopsies, I just leaked my private key…;)
+Ooopsies, I just leaked my private key...;)
 
 ## The `eval` and `execute` Methods
 

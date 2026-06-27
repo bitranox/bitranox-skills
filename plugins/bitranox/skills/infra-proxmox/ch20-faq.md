@@ -31,7 +31,7 @@ VT and 64-bit)
 In the context of containers, these terms all refer to the concept of operating-system-level virtualization.
 Operating-system-level virtualization is a method of virtualization, in which the kernel of an operating
 system allows for multiple isolated instances, that all share the kernel. When referring to LXC, we
-call such instances containers. Because containers use the host’s kernel rather than emulating a full
+call such instances containers. Because containers use the host's kernel rather than emulating a full
 operating system, they require less overhead, but are limited to Linux guests.
 
 
@@ -171,8 +171,8 @@ simple tools, it lets Linux users easily create and manage system containers. LX
 former OpenVZ, aims at system virtualization. Thus, it allows you to run a complete OS inside a
 container, where you log in using ssh, add users, run apache, etc. . .
 LXD is built on top of LXC to provide a new, better user experience. Under the hood, LXD uses
-LXC through liblxc and its Go binding to create and manage the containers. It’s basically an
-alternative to LXC’s tools and distribution template system with the added features that come from
+LXC through liblxc and its Go binding to create and manage the containers. It's basically an
+alternative to LXC's tools and distribution template system with the added features that come from
 being controllable over the network.
 Proxmox Containers are how we refer to containers that are created and managed using the Proxmox
 Container Toolkit (pct). They also target system virtualization and use LXC as the basis of the
@@ -183,12 +183,12 @@ that it is aware of cluster setups, and it can use the same network and storage 
 virtual machines (VMs). You can even use the Proxmox VE firewall, create and restore backups, or
 manage containers using the HA framework. Everything can be controlled over the network using the
 Proxmox VE API.
-Docker aims at running a single application in an isolated, self-contained environment. These are generally referred to as “Application Containers”, rather than “System Containers”. You manage a Docker
+Docker aims at running a single application in an isolated, self-contained environment. These are generally referred to as "Application Containers", rather than "System Containers". You manage a Docker
 instance from the host, using the Docker Engine command-line interface. It is not recommended to
 run docker directly on your Proxmox VE host.
 
 > **Note:**
-> While it can be convenient to run “Application Containers” directly as Proxmox Containers, doing so
+> While it can be convenient to run "Application Containers" directly as Proxmox Containers, doing so
 > is currently a tech preview. For use cases requiring container orchestration or live migration, it is still
 > recommended to run them inside a Proxmox QEMU virtual machine.
 

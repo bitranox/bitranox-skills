@@ -57,7 +57,7 @@ C EPH CONSISTS OF MULTIPLE DAEMONS , FOR USE AS AN RBD STORAGE :
 
 To build a hyper-converged Proxmox + Ceph Cluster, you must use at least three (preferably) identical servers
 for the setup.
-Check also the recommendations from Ceph’s website.
+Check also the recommendations from Ceph's website.
 
 
 > **Note:**
@@ -72,18 +72,18 @@ Ceph services can be classified into two categories:
 - Intensive CPU usage, benefiting from high CPU base frequencies and multiple cores. Members of that
 category are:
 
-– Object Storage Daemon (OSD) services
-– Meta Data Service (MDS) used for CephFS
+- Object Storage Daemon (OSD) services
+- Meta Data Service (MDS) used for CephFS
 - Moderate CPU usage, not needing multiple CPU cores. These are:
-– Monitor (MON) services
-– Manager (MGR) services
+- Monitor (MON) services
+- Manager (MGR) services
 As a simple rule of thumb, you should assign at least one CPU core (or thread) to each Ceph service to
 provide the minimum resources required for stable and durable Ceph performance.
 For example, if you plan to run a Ceph monitor, a Ceph manager and 6 Ceph OSDs services on a node you
 should reserve 8 CPU cores purely for Ceph when targeting basic and stable performance.
 Note that OSDs CPU usage depend mostly from the disks performance. The higher the possible IOPS (IO
 Operations per Second) of a disk, the more CPU can be utilized by a OSD service. For modern enterprise
-SSD disks, like NVMe’s that can permanently sustain a high IOPS load over 100’000 with sub millisecond
+SSD disks, like NVMe's that can permanently sustain a high IOPS load over 100'000 with sub millisecond
 latency, each OSD can use multiple CPU threads, e.g., four to six CPU threads utilized per NVMe backed
 OSD is likely for very high performance disks.
 
@@ -147,8 +147,8 @@ density, but it also means that a single OSD failure forces Ceph to recover more
 
 Avoid RAID
 As Ceph handles data object redundancy and multiple parallel writes to disks (OSDs) on its own, using a
-RAID controller normally doesn’t improve performance or availability. On the contrary, Ceph is designed to
-handle whole disks on it’s own, without any abstraction in between. RAID controllers are not designed for
+RAID controller normally doesn't improve performance or availability. On the contrary, Ceph is designed to
+handle whole disks on it's own, without any abstraction in between. RAID controllers are not designed for
 the Ceph workload and may complicate things and sometimes even reduce performance, as their write and
 caching algorithms may interfere with the ones from Ceph.
 
@@ -172,18 +172,18 @@ The wizard is divided into multiple sections, where each needs to finish success
 First you need to chose which Ceph version you want to install. Prefer the one from your other nodes, or the
 newest if this is the first node you install Ceph.
 After starting the installation, the wizard will download and install all the required packages from Proxmox
-VE’s Ceph repository.
+VE's Ceph repository.
 
 After finishing the installation step, you will need to create a configuration. This step is only needed once per
 cluster, as this configuration is distributed automatically to all remaining cluster members through Proxmox
-VE’s clustered configuration file system (pmxcfs).
+VE's clustered configuration file system (pmxcfs).
 The configuration step includes the following settings:
 
 - Public Network: This network will be used for public storage communication (e.g., for virtual machines
 using a Ceph RBD backed disk, or a CephFS mount), and communication between the different Ceph
 services. This setting is required.
 Separating your Ceph traffic from the Proxmox VE cluster communication (corosync), and possible the
-front-facing (public) networks of your virtual guests, is highly recommended. Otherwise, Ceph’s highbandwidth IO-traffic could cause interference with other low-latency dependent services.
+front-facing (public) networks of your virtual guests, is highly recommended. Otherwise, Ceph's highbandwidth IO-traffic could cause interference with other low-latency dependent services.
 
 - Cluster Network: Specify to separate the OSD replication and heartbeat traffic as well. This setting is
 optional.
@@ -199,7 +199,7 @@ what you are doing.
 - Number of replicas: Defines how often an object is replicated.
 - Minimum replicas: Defines the minimum number of required replicas for I/O to be marked as complete.
 Additionally, you need to choose your first monitor node. This step is required.
-That’s it. You should now see a success page as the last step, with further instructions on how to proceed.
+That's it. You should now see a success page as the last step, with further instructions on how to proceed.
 Your system is now ready to start using Ceph. To get started, you will need to create some additional
 monitors, OSDs and at least one pool.
 The rest of this chapter will guide you through getting the most out of your Proxmox VE based Ceph setup.
@@ -242,7 +242,7 @@ without the need to specify a configuration file.
 
 
 The Ceph Monitor (MON) 2 maintains a master copy of the cluster map. For high availability, you need at
-least 3 monitors. One monitor will already be installed if you used the installation wizard. You won’t need
+least 3 monitors. One monitor will already be installed if you used the installation wizard. You won't need
 more than 3 monitors, as long as your cluster is small to medium-sized. Only really large clusters will require
 more than this.
 

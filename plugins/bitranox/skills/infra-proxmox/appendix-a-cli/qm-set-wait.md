@@ -169,7 +169,7 @@ Configure additional enhancements for SPICE.
 cloud-init: Setup public SSH keys (one key per line, OpenSSH format).
 
 - `--startdate` (now | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS) (default = now)
-Set the initial date of the real time clock. Valid format for date are:’now’ or 2006-06-17T16:01:21 or
+Set the initial date of the real time clock. Valid format for date are:'now' or 2006-06-17T16:01:21 or
 2006-06-17.
 
 - `--startup` `[[order=]\d+] [,up=\d+] [,down=\d+] `
@@ -310,7 +310,7 @@ The (unique) ID of the VM.
 
 
 - `--force-cpu` <string>
-Override QEMU’s -cpu argument with the given string.
+Override QEMU's -cpu argument with the given string.
 
 - `--machine` [[type=]<machine type>] [,aw-bits=<number>]
 [,enable-s3=<1|0>] [,enable-s4=<1|0>] [,viommu=<intel|virtio>]

@@ -97,7 +97,7 @@ way to share data between containers.
 
 
 > **Warning:**
-> Because of existing issues in the Linux kernel’s freezer subsystem the usage of FUSE mounts inside
+> Because of existing issues in the Linux kernel's freezer subsystem the usage of FUSE mounts inside
 > a container is strongly advised against, as containers need to be frozen for suspend or snapshot
 > mode backups.
 
@@ -130,7 +130,7 @@ Then edit the quotas using the edquota command. Refer to the documentation of th
 inside the container for details.
 
 > **Note:**
-> You need to run the above commands for every mount point by passing the mount point’s path instead of
+> You need to run the above commands for every mount point by passing the mount point's path instead of
 > just /.
 
 

@@ -47,7 +47,7 @@ bps_wr_max_length=<seconds>
 Maximum length of write I/O bursts in seconds.
 
 cache=<directsync | none | unsafe | writeback | writethrough>
-The drive’s cache mode
+The drive's cache mode
 
 detect_zeroes=<boolean>
 Controls whether to detect and try to optimize writes of zeroes.
@@ -56,10 +56,10 @@ discard=<ignore | on>
 Controls whether to pass discard/trim requests to the underlying storage.
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<cloop | qcow | qcow2 | qed | raw | vmdk>
-The drive’s backing file’s data format.
+The drive's backing file's data format.
 
 iops=<iops>
 Maximum r/w I/O in operations per second.
@@ -111,10 +111,10 @@ mbps_wr_max=<mbps>
 Maximum unthrottled write pool in megabytes per second.
 
 media=<cdrom | disk> (default = disk)
-The drive’s media type.
+The drive's media type.
 
 product=<product>
-The drive’s product name, up to 16 bytes long.
+The drive's product name, up to 16 bytes long.
 
 queues=<integer> (2 - N)
 Number of queues.
@@ -138,7 +138,7 @@ whether to use scsi-block for full passthrough of host block device
 
 
 serial=<serial>
-The drive’s reported serial number, url-encoded, up to 20 bytes long.
+The drive's reported serial number, url-encoded, up to 20 bytes long.
 
 shared=<boolean> (default = 0)
 Mark this locally-managed volume as available on all nodes.
@@ -152,20 +152,20 @@ size=<DiskSize>
 Disk size. This is purely informational and has no effect.
 
 snapshot=<boolean>
-Controls qemu’s snapshot mode feature. If activated, changes made to the disk are temporary
+Controls qemu's snapshot mode feature. If activated, changes made to the disk are temporary
 and will be discarded when the VM is shutdown.
 
 ssd=<boolean>
 Whether to expose this drive as an SSD, rather than a rotational hard disk.
 
 vendor=<vendor>
-The drive’s vendor name, up to 8 bytes long.
+The drive's vendor name, up to 8 bytes long.
 
 werror=<enospc | ignore | report | stop>
 Write error action.
 
 wwn=<wwn>
-The drive’s worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
+The drive's worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
 
 scsihw: <lsi | lsi53c810 | megasas | pvscsi | virtio-scsi-pci |
 virtio-scsi-single> (default = lsi)
@@ -244,7 +244,7 @@ sshkeys: <string>
 cloud-init: Setup public SSH keys (one key per line, OpenSSH format).
 
 startdate: (now | YYYY-MM-DD | YYYY-MM-DDTHH:MM:SS) (default = now)
-Set the initial date of the real time clock. Valid format for date are:’now’ or 2006-06-17T16:01:21 or
+Set the initial date of the real time clock. Valid format for date are:'now' or 2006-06-17T16:01:21 or
 2006-06-17.
 
 startup: `[[order=]\d+] [,up=\d+] [,down=\d+] `
@@ -253,7 +253,7 @@ Shutdown in done with reverse ordering. Additionally you can set the up or down 
 which specifies a delay to wait before the next VM is started or stopped.
 
 tablet: <boolean> (default = 1)
-Enable/disable the USB tablet device. This device is usually needed to allow absolute mouse positioning with VNC. Else the mouse runs out of sync with normal VNC clients. If you’re running lots of
+Enable/disable the USB tablet device. This device is usually needed to allow absolute mouse positioning with VNC. Else the mouse runs out of sync with normal VNC clients. If you're running lots of
 console-only guests on one host, you may consider disabling this to save some context switches. This
 is turned off by default if you use spice (qm set <vmid> --vga qxl).
 
@@ -271,7 +271,7 @@ tpmstate0: [file=]<volume> [,format=<raw|qcow2|vmdk>]
 Configure a Disk for storing TPM state. The format is fixed to raw.
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<qcow2 | raw | vmdk>
 Format of the image.
@@ -288,7 +288,7 @@ unused[n]: [file=]<volume>
 Reference to unused volumes. This is used internally, and should not be modified manually.
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 usb[n]: [[host=]<HOSTUSBDEVICE|spice>] [,mapping=<mapping-id>]
 [,usb3=<1|0>]
@@ -385,7 +385,7 @@ bps_wr_max_length=<seconds>
 Maximum length of write I/O bursts in seconds.
 
 cache=<directsync | none | unsafe | writeback | writethrough>
-The drive’s cache mode
+The drive's cache mode
 
 detect_zeroes=<boolean>
 Controls whether to detect and try to optimize writes of zeroes.
@@ -394,10 +394,10 @@ discard=<ignore | on>
 Controls whether to pass discard/trim requests to the underlying storage.
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<cloop | qcow | qcow2 | qed | raw | vmdk>
-The drive’s backing file’s data format.
+The drive's backing file's data format.
 
 iops=<iops>
 Maximum r/w I/O in operations per second.
@@ -449,7 +449,7 @@ mbps_wr_max=<mbps>
 Maximum unthrottled write pool in megabytes per second.
 
 media=<cdrom | disk> (default = disk)
-The drive’s media type.
+The drive's media type.
 
 replicate=<boolean> (default = 1)
 Whether the drive should considered for replication jobs.
@@ -461,7 +461,7 @@ ro=<boolean>
 Whether the drive is read-only.
 
 serial=<serial>
-The drive’s reported serial number, url-encoded, up to 20 bytes long.
+The drive's reported serial number, url-encoded, up to 20 bytes long.
 
 shared=<boolean> (default = 0)
 Mark this locally-managed volume as available on all nodes.
@@ -475,7 +475,7 @@ size=<DiskSize>
 Disk size. This is purely informational and has no effect.
 
 snapshot=<boolean>
-Controls qemu’s snapshot mode feature. If activated, changes made to the disk are temporary
+Controls qemu's snapshot mode feature. If activated, changes made to the disk are temporary
 and will be discarded when the VM is shutdown.
 
 werror=<enospc | ignore | report | stop>

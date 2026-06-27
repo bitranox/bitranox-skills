@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.0.1] - 2026-06-27
+
+### Changed
+- Stripped pre-existing typographic AI-writing tells (em/en dashes, curly quotes, ellipsis,
+  non-breaking/zero-width spaces) to ASCII across 135 shipped reference docs and a few code
+  comments/strings, using the `write-humanize-en` strip tool. The two humanize SKILLs (which teach
+  about tells) and the `coding-python-textual` screenshot SVG are intentionally left as-is.
+
 ## [4.0.0] - 2026-06-27
 
 ### Changed (BREAKING) - every skill renamed to the category-prefix scheme

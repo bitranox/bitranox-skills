@@ -149,7 +149,7 @@ those remote IPs to the web GUI (port 8006). You may also want to allow ssh (por
 > you still have access to the host if something goes wrong .
 
 
-To simplify that task, you can instead create an IPSet called “management”, and add all remote IPs there.
+To simplify that task, you can instead create an IPSet called "management", and add all remote IPs there.
 This creates all required firewall rules to access the GUI from remote.
 
 
@@ -255,7 +255,7 @@ Enable/disable firewall rules.
 ipfilter: <boolean>
 Enable default IP filters. This is equivalent to adding an empty ipfilter-net<id> ipset for every interface.
 Such ipsets implicitly contain sane default restrictions such as restricting IPv6 link local addresses to
-the one derived from the interface’s MAC address. For containers the configured IP addresses will be
+the one derived from the interface's MAC address. For containers the configured IP addresses will be
 implicitly added.
 
 log_level_in: <alert | crit | debug | emerg | err | info | nolog |
@@ -405,15 +405,15 @@ OUT ACCEPT # accept all outgoing packages
 ## 13.4 Security Groups
 
 
-A security group is a collection of rules, defined at cluster level, which can be used in all VMs’ rules. For
-example you can define a group named “webserver” with rules to open the http and https ports.
+A security group is a collection of rules, defined at cluster level, which can be used in all VMs' rules. For
+example you can define a group named "webserver" with rules to open the http and https ports.
 
 
 # /etc/pve/firewall/cluster.fw
 [group webserver]
 IN ACCEPT -p tcp -dport 80
 IN ACCEPT -p tcp -dport 443
-Then, you can add this group to a VM’s firewall
+Then, you can add this group to a VM's firewall
 
 # /etc/pve/firewall/<VMID>.fw
 [RULES]

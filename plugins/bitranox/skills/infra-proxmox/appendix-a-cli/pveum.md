@@ -358,7 +358,7 @@ Server IP address (or DNS name)
 Fallback Server IP address (or DNS name)
 
 - `--sslversion` <tlsv1 | tlsv1_1 | tlsv1_2 | tlsv1_3>
-LDAPS TLS/SSL version. It’s not recommended to use version older than 1.2!
+LDAPS TLS/SSL version. It's not recommended to use version older than 1.2!
 
 - `--sync-defaults-options` [enable-new=<1|0>] [,full=<1|0>]
 [,purge=<1|0>] [,remove-vanished=([acl];[properties];[entry])|none]
@@ -388,7 +388,7 @@ The objectclasses for users.
 OpenID claim used to generate the unique username.
 
 - `--verify` <boolean> (default = 0)
-Verify the server’s SSL certificate
+Verify the server's SSL certificate
 
 ```
 pveum realm delete <realm>
@@ -523,7 +523,7 @@ Server IP address (or DNS name)
 Fallback Server IP address (or DNS name)
 
 - `--sslversion` <tlsv1 | tlsv1_1 | tlsv1_2 | tlsv1_3>
-LDAPS TLS/SSL version. It’s not recommended to use version older than 1.2!
+LDAPS TLS/SSL version. It's not recommended to use version older than 1.2!
 
 - `--sync-defaults-options` [enable-new=<1|0>] [,full=<1|0>]
 [,purge=<1|0>] [,remove-vanished=([acl];[properties];[entry])|none]
@@ -548,7 +548,7 @@ The objectclasses for users.
 
 
 - `--verify` <boolean> (default = 0)
-Verify the server’s SSL certificate
+Verify the server's SSL certificate
 
 ```
 pveum realm sync <realm> [OPTIONS]
@@ -821,7 +821,7 @@ Full User ID, in the name@realm format.
 pveum user tfa unlock <userid>
 ```
 
-Unlock a user’s TFA authentication.
+Unlock a user's TFA authentication.
 
 <userid>: <string>
 Full User ID, in the name@realm format.

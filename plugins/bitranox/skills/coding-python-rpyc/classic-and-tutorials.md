@@ -6,7 +6,7 @@
 
 ### Transparency and Symmetry
 
-RPyC is **transparent**: remote objects can be plugged into existing code with virtually no cost. No definition files, name servers, HTTP servers, or special invocation syntax needed — duck-typing to the extreme. A function that works on a local file object works seamlessly on a remote file object.
+RPyC is **transparent**: remote objects can be plugged into existing code with virtually no cost. No definition files, name servers, HTTP servers, or special invocation syntax needed  -  duck-typing to the extreme. A function that works on a local file object works seamlessly on a remote file object.
 
 **Symmetry** follows from transparency: there is no strict server vs. client distinction. Both parties may serve requests and dispatch replies. The server is simply the party that accepts incoming connections. Both client and server are identical in capability.
 
@@ -16,8 +16,8 @@ Two RPyC-connected processes can be thought of as a **single process** with a un
 
 Objects are transferred between endpoints via "boxing":
 
-- **By Value** — simple, immutable Python objects (strings, integers, tuples, `None`, booleans, frozensets) are serialized and sent. The encoding format is called **Brine**.
-- **By Reference** — all other objects are passed as references. On the other side, these become **netrefs** (network references / transparent object proxies).
+- **By Value**  -  simple, immutable Python objects (strings, integers, tuples, `None`, booleans, frozensets) are serialized and sent. The encoding format is called **Brine**.
+- **By Reference**  -  all other objects are passed as references. On the other side, these become **netrefs** (network references / transparent object proxies).
 
 **Unboxing**: by-value data is deserialized to local objects; by-reference data becomes proxy objects (netrefs).
 
@@ -38,7 +38,7 @@ Internal attributes: `____conn__` (which connection to resolve over) and `____id
 
 ### Services
 
-RPyC 3.0+ is **service-oriented**. RPyC itself is a "sophisticated transport layer" (mechanism); services define policy. Each end of a connection exposes a service that determines what operations are available. Classic RPyC is implemented as `SlaveService` — one specific service that grants full access.
+RPyC 3.0+ is **service-oriented**. RPyC itself is a "sophisticated transport layer" (mechanism); services define policy. Each end of a connection exposes a service that determines what operations are available. Classic RPyC is implemented as `SlaveService`  -  one specific service that grants full access.
 
 ---
 
@@ -79,7 +79,7 @@ import rpyc
 conn = rpyc.classic.connect("localhost")  # default port 18812
 ```
 
-**The `modules` namespace** — access any remote module:
+**The `modules` namespace**  -  access any remote module:
 ```python
 rsys = conn.modules.sys              # top-level: dot notation
 minidom = conn.modules["xml.dom.minidom"]  # nested: bracket notation
@@ -101,7 +101,7 @@ conn.eval('2*math.pi')       # => 6.283185307179586
 conn.namespace                # => {'__builtins__': ..., 'math': ...}
 ```
 
-**`teleport` — send functions to remote side:**
+**`teleport`  -  send functions to remote side:**
 ```python
 def square(x):
     return x**2
@@ -125,7 +125,7 @@ type(conn.modules.sys)           # => <netref class 'builtins.module'>
 type(conn.modules.sys.path)      # => <netref class 'builtins.list'>
 ```
 
-**Exception propagation** — remote exceptions propagate transparently with dual tracebacks (remote + local):
+**Exception propagation**  -  remote exceptions propagate transparently with dual tracebacks (remote + local):
 ```python
 conn.modules.sys.path[300]  # IndexError with both remote and local tracebacks
 ```
@@ -164,7 +164,7 @@ except urllib.error.URLError:
 
 > Source: `tutorial/tut4.md`
 
-Functions are objects, and RPyC is symmetric — local functions can be passed as arguments to remote objects:
+Functions are objects, and RPyC is symmetric  -  local functions can be passed as arguments to remote objects:
 
 ```python
 c = rpyc.classic.connect("localhost")
@@ -178,7 +178,7 @@ list(c.modules.builtins.map(f, rlist))
 # => [0, 1, 8, 27, 64, 125, 216, 343, 512, 729]
 ```
 
-While the client waits for the result (synchronous request), it serves all incoming requests — so the server can invoke the callback it received on the client.
+While the client waits for the result (synchronous request), it serves all incoming requests  -  so the server can invoke the callback it received on the client.
 
 ---
 
@@ -208,7 +208,7 @@ c.modules["xml.dom.minidom"].parseString("<<invalid>>")  # raises ExpatError
 rpyc.classic.pm(c)  # start post-mortem pdb on server's last exception
 ```
 
-**Network tunneling** — use remote machine as bridge:
+**Network tunneling**  -  use remote machine as bridge:
 ```python
 # Machine A connects to machine B through machine C
 machine_c = rpyc.classic.connect("machine-c")
@@ -218,7 +218,7 @@ sock.send(...)
 sock.recv(...)
 ```
 
-**Monkey-patching** — replace local modules with remote ones:
+**Monkey-patching**  -  replace local modules with remote ones:
 ```python
 import rpyc, telnetlib
 machine_c = rpyc.classic.connect("machine-c")

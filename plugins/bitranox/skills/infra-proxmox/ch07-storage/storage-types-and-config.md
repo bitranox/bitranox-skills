@@ -164,8 +164,8 @@ Say for instance you create a VM with a 32GB hard disk, and after installing the
 file system of the VM contains 3 GB of data. In that case only 3GB are written to the storage, even if the
 guest VM sees a 32GB hard drive. In this way thin provisioning allows you to create disk images which are
 larger than the currently available storage blocks. You can create large disk images for your VMs, and when
-the need arises, add more disks to your storage without resizing the VMs’ file systems.
-All storage types which have the “Snapshots” feature also support thin provisioning.
+the need arises, add more disks to your storage without resizing the VMs' file systems.
+All storage types which have the "Snapshots" feature also support thin provisioning.
 
 > **Caution:**
 > If a storage runs full, all guests using volumes on that storage receive IO errors. This can cause file
@@ -179,7 +179,7 @@ All storage types which have the “Snapshots” feature also support thin provi
 All Proxmox VE related storage configuration is stored within a single text file at /etc/pve/storage.cfg.
 As this file is within /etc/pve/, it gets automatically distributed to all cluster nodes. So all nodes share
 the same storage configuration.
-Sharing storage configuration makes perfect sense for shared storage, because the same “shared” storage
+Sharing storage configuration makes perfect sense for shared storage, because the same "shared" storage
 is accessible from all nodes. But it is also useful for local storage types. In this case such local storage is
 available on all nodes, but it is physically different and can have totally different content.
 
@@ -221,7 +221,7 @@ content images,rootdir
 
 > **Caution:**
 > It is problematic to have multiple storage configurations pointing to the exact same underlying storage. Such an aliased storage configuration can lead to two different volume IDs (volid) pointing to
-> the exact same disk image. Proxmox VE expects that the images’ volume IDs point to, are unique.
+> the exact same disk image. Proxmox VE expects that the images' volume IDs point to, are unique.
 > Choosing different content types for aliased storage configurations can be fine, but is not recommended.
 
 
@@ -307,7 +307,7 @@ real life, you are not forced to do any of those low level operations on the com
 and removal of volumes is done by the VM and Container management tools.
 
 
-Nevertheless, there is a command-line tool called pvesm (“Proxmox VE Storage Manager”), which is able
+Nevertheless, there is a command-line tool called pvesm ("Proxmox VE Storage Manager"), which is able
 to perform common storage management tasks.
 
 
@@ -479,6 +479,6 @@ you cannot create snapshots at the storage level. But there exists a workaround 
 qcow2 file format, because that format supports snapshots internally.
 
 > **Tip:**
-> Some storage types do not support O_DIRECT, so you can’t use cache mode none with such storages.
+> Some storage types do not support O_DIRECT, so you can't use cache mode none with such storages.
 > Simply use cache mode writeback instead.
 

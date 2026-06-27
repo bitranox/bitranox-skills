@@ -10,7 +10,7 @@ pass DMA requests directly to the hardware IOMMU. To enable these options, add:
 iommu=pt
 to the kernel commandline.
 Kernel Modules
-You have to make sure the following modules are loaded. This can be achieved by adding them to ‘/etc/modules’.
+You have to make sure the following modules are loaded. This can be achieved by adding them to '/etc/modules'.
 Mediated devices passthrough
 If passing through mediated devices (e.g. vGPUs), the following is not needed. In these cases, the device
 will be owned by the appropriate host-driver directly.
@@ -51,7 +51,7 @@ a another PCI(e) slot, if you do not get the desired IOMMU group separation.
 
 Unsafe interrupts
 For some platforms, it may be necessary to allow unsafe interrupts. For this add the following line in a file
-ending with ‘.conf’ file in /etc/modprobe.d/:
+ending with '.conf' file in /etc/modprobe.d/:
 
 options vfio_iommu_type1 allow_unsafe_interrupts=1
 Please be aware that this option can make your system unstable.
@@ -73,7 +73,7 @@ The most used variant of PCI(e) passthrough is to pass through a whole PCI(e) ca
 a network card.
 
 Host Configuration
-Proxmox VE tries to automatically make the PCI(e) device unavailable for the host. However, if this doesn’t
+Proxmox VE tries to automatically make the PCI(e) device unavailable for the host. However, if this doesn't
 work, there are two things that can be done:
 
 - pass the device IDs to the options of the vfio-pci modules by adding
@@ -162,7 +162,7 @@ or by adding a line to the VM configuration file:
 
 
 hostpci0: 00:02.0
-If your device has multiple functions (e.g., ‘00:02.0’ and ‘00:02.1’ ), you can pass them through all
+If your device has multiple functions (e.g., '00:02.0' and '00:02.1' ), you can pass them through all
 together with the shortened syntax ``00:02`. This is equivalent with checking the ``All Functions` checkbox
 in the web interface.
 There are some options to which may be necessary, depending on the device and guest OS:
@@ -188,11 +188,11 @@ An example of PCIe passthrough with a GPU set to primary:
 
 PCI ID overrides
 You can override the PCI vendor ID, device ID, and subsystem IDs that will be seen by the guest. This is
-useful if your device is a variant with an ID that your guest’s drivers don’t recognize, but you want to force
+useful if your device is a variant with an ID that your guest's drivers don't recognize, but you want to force
 those drivers to be loaded anyway (e.g. if you know your device shares the same chipset as a supported
 variant).
 The available options are vendor-id, device-id, sub-vendor-id, and sub-device-id. You
-can set any or all of these to override your device’s default IDs.
+can set any or all of these to override your device's default IDs.
 For example:
 
 
@@ -231,8 +231,8 @@ change the number of VFs on the fly. For example, to setup 4 VFs on device 0000:
 
 ```
 # echo 4 > /sys/bus/pci/devices/0000:01:00.0/sriov_numvfs
-To make this change persistent you can use the ‘sysfsutils` Debian package. After installation configure it
-via /etc/sysfs.conf or a `FILE.conf’ in /etc/sysfs.d/.
+To make this change persistent you can use the 'sysfsutils` Debian package. After installation configure it
+via /etc/sysfs.conf or a `FILE.conf' in /etc/sysfs.d/.
 VM Configuration
 After creating VFs, you should see them as separate PCI(e) devices when outputting them with lspci. Get
 their ID and pass them through like a normal PCI(e) device.
@@ -242,16 +242,16 @@ their ID and pass them through like a normal PCI(e) device.
 ### 10.9.4 Mediated Devices (vGPU, GVT-g)
 
 
-Mediated devices are another method to reuse features and performance from physical hardware for virtualized hardware. These are found most common in virtualized GPU setups such as Intel’s GVT-g and NVIDIA’s
+Mediated devices are another method to reuse features and performance from physical hardware for virtualized hardware. These are found most common in virtualized GPU setups such as Intel's GVT-g and NVIDIA's
 vGPUs used in their GRID technology.
 With this, a physical Card is able to create virtual cards, similar to SR-IOV. The difference is that mediated
 devices do not appear as PCI(e) devices in the host, and are such only suited for using in virtual machines.
 
 
 Host Configuration
-In general your card’s driver must support that feature, otherwise it will not work. So please refer to your
+In general your card's driver must support that feature, otherwise it will not work. So please refer to your
 vendor for compatible drivers and how to configure them.
-Intel’s drivers for GVT-g are integrated in the Kernel and should work with 5th, 6th and 7th generation Intel
+Intel's drivers for GVT-g are integrated in the Kernel and should work with 5th, 6th and 7th generation Intel
 Core Processors, as well as E3 v4, E3 v5 and E3 v6 Xeon Processors.
 To enable it for Intel Graphics, you have to make sure to load the module kvmgt (for example via /etc/modules)
 and to enable it on the Kernel commandline and add the following parameter:
@@ -382,7 +382,7 @@ if the path or id is still correct.
 
 To handle this better, one can define cluster wide resource mappings, such that a resource has a cluster
 unique, user selected identifier which can correspond to different devices on different hosts. With this, HA
-won’t start a guest with a wrong device, and hardware changes can be detected.
+won't start a guest with a wrong device, and hardware changes can be detected.
 Creating such a mapping can be done with the Proxmox VE web GUI under Datacenter in the relevant
 tab in the Resource Mappings category, or on the cli with
 
@@ -394,7 +394,7 @@ tab in the Resource Mappings category, or on the cli with
 
 Where <type> is the hardware type (currently either pci, usb or dir) and <options> are the device
 mappings and other configuration parameters.
-Note that the options must include a map property with all identifying properties of that hardware, so that it’s
+Note that the options must include a map property with all identifying properties of that hardware, so that it's
 possible to verify the hardware did not change and the correct device is passed through.
 For example to add a PCI device as device1 with the path 0000:01:00.0 that has the device id 0001
 and the vendor id 0002 on the node node1, and 0000:02:00.0 on node2 you can add it with:

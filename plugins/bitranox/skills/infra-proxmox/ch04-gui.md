@@ -78,11 +78,11 @@ User Menu
 
 Opens the virtual machine creation wizard.
 Open the container creation wizard.
-Displays the identity of the user you’re currently logged in with, and clicking it opens
+Displays the identity of the user you're currently logged in with, and clicking it opens
 a menu with user-specific options.
-In the user menu, you’ll find the My Settings dialog, which provides local UI settings.
+In the user menu, you'll find the My Settings dialog, which provides local UI settings.
 Below that, there are shortcuts for TFA (Two-Factor Authentication) and Password
-self-service. You’ll also find options to change the Language and the Color Theme.
+self-service. You'll also find options to change the Language and the Color Theme.
 Finally, at the bottom of the menu is the Logout option.
 
 My Settings
@@ -168,11 +168,11 @@ refer to the corresponding chapters in the reference documentation to get more d
 On the datacenter level, you can access cluster-wide settings and information.
 
 - Search: perform a cluster-wide search for nodes, VMs, containers, storage devices, and pools.
-- Summary: gives a brief overview of the cluster’s health and resource usage.
+- Summary: gives a brief overview of the cluster's health and resource usage.
 - Cluster: provides the functionality and information necessary to create or join a cluster.
 - Options: view and manage cluster-wide default settings.
 - Storage: provides an interface for managing cluster storage.
-- Backup: schedule backup jobs. This operates cluster wide, so it doesn’t matter where the VMs/containers
+- Backup: schedule backup jobs. This operates cluster wide, so it doesn't matter where the VMs/containers
 are on your cluster when scheduling.
 
 
@@ -180,7 +180,7 @@ are on your cluster when scheduling.
 - Permissions: manage user, group, and API token permissions, and LDAP, MS-AD and Two-Factor authentication.
 
 - HA: manage Proxmox VE High Availability.
-- ACME: set up ACME (Let’s Encrypt) certificates for server nodes.
+- ACME: set up ACME (Let's Encrypt) certificates for server nodes.
 - Firewall: configure and make templates for the Proxmox Firewall cluster wide.
 - Metric Server: define external metric servers for Proxmox VE.
 - Notifications: configurate notification behavior and targets for Proxmox VE.
@@ -197,7 +197,7 @@ Migrate.
 
 
 - Search: search a node for VMs, containers, storage devices, and pools.
-- Summary: display a brief overview of the node’s resource usage.
+- Summary: display a brief overview of the node's resource usage.
 - Notes: write custom comments in Markdown syntax.
 - Shell: access to a shell interface for the node.
 - System: configure network, DNS and time settings, and access the syslog.
@@ -225,13 +225,13 @@ cloning, HA, and help. Some of these buttons contain drop-down menus, for exampl
 The panel on the right contains an interface for whatever item is selected from the menu on the left.
 The available interfaces are as follows.
 
-- Summary: provides a brief overview of the VM’s activity and a Notes field for Markdown syntax comments.
+- Summary: provides a brief overview of the VM's activity and a Notes field for Markdown syntax comments.
 
 - Console: access to an interactive console for the VM/container.
 - (KVM)Hardware: define the hardware available to the KVM VM.
 - (LXC)Resources: define the system resources available to the LXC.
-- (LXC)Network: configure a container’s network settings.
-- (LXC)DNS: configure a container’s DNS settings.
+- (LXC)Network: configure a container's network settings.
+- (LXC)DNS: configure a container's DNS settings.
 - Options: manage guest options.
 - Task History: view all previous tasks related to the selected guest.
 - (KVM) Monitor: an interactive communication interface to the KVM process.

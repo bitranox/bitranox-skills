@@ -75,7 +75,7 @@ fold performance improvement. Use of a local tmpdir is also required if you want
 container using ACLs in suspend mode if the backup storage is an NFS server.
 
 snapshot mode
-This mode uses the snapshotting facilities of the underlying storage. First, the container will be suspended to ensure data consistency. A temporary snapshot of the container’s volumes will be made
+This mode uses the snapshotting facilities of the underlying storage. First, the container will be suspended to ensure data consistency. A temporary snapshot of the container's volumes will be made
 and the snapshot content will be archived in a tar file. Finally, the temporary snapshot is deleted again.
 
 
@@ -122,7 +122,7 @@ the format for the fleecing image when the storage supports it), this has the ad
 parts of the image can be re-used later, which can still help save quite a bit of space.
 
 > **Warning:**
-> On a storage that’s not thinly provisioned, for example, LVM or ZFS without the sparse option,
+> On a storage that's not thinly provisioned, for example, LVM or ZFS without the sparse option,
 > the full size of the original disk needs to be reserved for the fleecing image up-front. On a thinly
 > provisioned storage, the fleecing image can grow to the same size as the original image only if the
 > guest re-writes a whole disk while the backup is busy with another disk.
@@ -189,7 +189,7 @@ You can install pigz 4 as a drop-in replacement for gzip to provide better perfo
 For pigz & zstd, the amount of threads/cores can be adjusted. See the configuration options below.
 The extension of the backup file name can usually be used to determine which compression algorithm has
 been used to create the backup.
-1 Lempel–Ziv–Oberhumer a lossless data compression algorithm https://en.wikipedia.org/wiki/Lempel-Ziv-Oberhumer
+1 Lempel-Ziv-Oberhumer a lossless data compression algorithm https://en.wikipedia.org/wiki/Lempel-Ziv-Oberhumer
 2 gzip - based on the DEFLATE algorithm https://en.wikipedia.org/wiki/Gzip
 3 Zstandard a lossless data compression algorithm https://en.wikipedia.org/wiki/Zstandard
 4 pigz - parallel implementation of gzip https://zlib.net/pigz/
@@ -204,7 +204,7 @@ Zstandard (zstd) compression
 gzip compression
 lzo compression
 
-If the backup file name doesn’t end with one of the above file extensions, then it was not compressed by
+If the backup file name doesn't end with one of the above file extensions, then it was not compressed by
 vzdump.
 
 

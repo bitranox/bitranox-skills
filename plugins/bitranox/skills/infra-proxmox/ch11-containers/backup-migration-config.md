@@ -25,7 +25,7 @@ Display the configuration
 
 # pct config 100
 Add a network interface called eth0, bridged to the host bridge vmbr0, set the address and gateway, while
-it’s running
+it's running
 
 # pct set 100 -net0 name=eth0,bridge=vmbr0,ip=192.168.15.147/24,gw ←=192.168.15.1
 Reduce the memory of the container to 512MB
@@ -59,7 +59,7 @@ pct move-volume 100 mp0 --target-vmid 200 --target-volume mp1
 
 
 In case pct start is unable to start a specific container, it might be helpful to collect debugging output
-by passing the --debug flag (replace CTID with the container’s CTID):
+by passing the --debug flag (replace CTID with the container's CTID):
 
 
 ```
@@ -72,7 +72,7 @@ This command will attempt to start the container in foreground mode, to stop the
 CTID or pct stop CTID in a second terminal.
 The collected debug log is written to /tmp/lxc-CTID.log.
 Note
-If you have changed the container’s configuration since the last start attempt with pct start, you need
+If you have changed the container's configuration since the last start attempt with pct start, you need
 to run pct start at least once to also update the configuration used by lxc-start.
 ```
 
@@ -123,7 +123,7 @@ or nano. This is sometimes useful to do small corrections, but keep in mind that
 container to apply such changes.
 For that reason, it is usually better to use the pct command to generate and modify those files, or do the
 whole thing using the GUI. Our toolkit is smart enough to instantaneously apply most changes to running
-containers. This feature is called “hot plug”, and there is no need to restart the container in that case.
+containers. This feature is called "hot plug", and there is no need to restart the container in that case.
 In cases where a change cannot be hot-plugged, it will be registered as a pending change (shown in red
 color in the GUI). They will only be applied after rebooting the container.
 
@@ -150,7 +150,7 @@ The settings are passed directly to the LXC low-level tools.
 ### 11.11.2 Snapshots
 
 
-When you create a snapshot, pct stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called “testsnapshot”, your
+When you create a snapshot, pct stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called "testsnapshot", your
 configuration file will look like this:
 
 Container configuration with snapshot
@@ -209,7 +209,7 @@ debug: <boolean> (default = 0)
 Try to be more verbose. For now this only enables debug log-level on start.
 
 description: <string>
-Description for the Container. Shown in the web-interface CT’s summary. This is saved as comment
+Description for the Container. Shown in the web-interface CT's summary. This is saved as comment
 inside the configuration file.
 
 dev[n]: [[path=]<Path>] [,deny-write=<1|0>] [,gid=<integer>]
@@ -266,9 +266,9 @@ with seccomp trap to user space support (5.3 or newer). This is experimental.
 
 mount=<fstype;fstype;...>
 Allow mounting file systems of specific types. This should be a list of file system types as used
-with the mount command. Note that this can have negative effects on the container’s security.
+with the mount command. Note that this can have negative effects on the container's security.
 With access to a loop device, mounting a file can circumvent the mknod permission of the devices
-cgroup, mounting an NFS file system can block the host’s I/O completely and prevent it from
+cgroup, mounting an NFS file system can block the host's I/O completely and prevent it from
 rebooting, etc.
 
 nesting=<boolean> (default = 0)
@@ -350,7 +350,7 @@ bridge=<bridge>
 Bridge to attach the network device to.
 
 firewall=<boolean>
-Controls whether this interface’s firewall rules should be used.
+Controls whether this interface's firewall rules should be used.
 
 
 gw=<GatewayIPv4>
@@ -360,7 +360,7 @@ gw6=<GatewayIPv6>
 Default gateway for IPv6 traffic.
 
 host-managed=<boolean>
-Whether this interface’s IP configuration should be managed by the host.
+Whether this interface's IP configuration should be managed by the host.
 
 hwaddr=<XX:XX:XX:XX:XX:XX>
 A common MAC address with the I/G (Individual/Group) bit not set.
@@ -401,7 +401,7 @@ OS type. This is used to setup configuration inside the container, and correspon
 in /usr/share/lxc/config/<ostype>.common.conf. Value unmanaged can be used to skip and OS specific setup.
 
 protection: <boolean> (default = 0)
-Sets the protection flag of the container. This will prevent the CT or CT’s disk remove/update operation.
+Sets the protection flag of the container. This will prevent the CT or CT's disk remove/update operation.
 
 
 rootfs: [volume=]<volume> [,acl=<1|0>]
@@ -457,7 +457,7 @@ template: <boolean> (default = 0)
 Enable/disable Template.
 
 timezone: <string>
-Time zone to use in the container. If option isn’t set, then nothing will be done. Can be set to host to
+Time zone to use in the container. If option isn't set, then nothing will be done. Can be set to host to
 match the host time zone, or an arbitrary time zone option from /usr/share/zoneinfo/zone.tab
 
 tty: <integer> (0 - 6) (default = 2)

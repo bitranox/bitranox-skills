@@ -40,7 +40,7 @@ Store resulting files to specified directory.
 Exclude specified guest systems (assumes --all)
 
 - `--exclude-path` <array>
-Exclude certain files/directories (shell globs). Paths starting with / are anchored to the container’s
+Exclude certain files/directories (shell globs). Paths starting with / are anchored to the container's
 root, other paths match relative to each subdirectory.
 
 - `--fleecing` [[enabled=]<1|0>] [,storage=<storage ID>]
@@ -88,7 +88,7 @@ escaped as \n and \\ respectively.
 - `--notification-mode` <auto | legacy-sendmail | notification-system>
 (default = auto)
 Determine which notification system to use. If set to legacy-sendmail, vzdump will consider the mailto/mailnotification parameters and send emails to the specified address(es) via the sendmail command.
-If set to notification-system, a notification will be sent via PVE’s notification system, and the mailto and
+If set to notification-system, a notification will be sent via PVE's notification system, and the mailto and
 mailnotification will be ignored. If set to auto (default setting), an email will be sent if mailto is set, and
 the notification system will be used if not.
 

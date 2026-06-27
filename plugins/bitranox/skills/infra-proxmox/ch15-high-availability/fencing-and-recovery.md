@@ -30,7 +30,7 @@ The start failure policy comes into effect if a service failed to start on a nod
 be used to configure how often a restart should be triggered on the same node and how often a service
 should be relocated, so that it has an attempt to be started on another node. The aim of this policy is to
 circumvent temporary unavailability of shared resources on a specific node. For example, if a shared storage
-isn’t available on a quorate node anymore, for instance due to network problems, but is still available on other
+isn't available on a quorate node anymore, for instance due to network problems, but is still available on other
 nodes, the relocate policy allows the service to start nonetheless.
 There are two service start recover policy settings which can be configured specific for each resource.
 
@@ -49,7 +49,7 @@ the max_restart value is exceeded on the actual node. The default is set to one.
 
 
 If, after all attempts, the service state could not be recovered, it gets placed in an error state. In this state,
-the service won’t get touched by the HA stack anymore. The only way out is disabling a service:
+the service won't get touched by the HA stack anymore. The only way out is disabling a service:
 
 
 ```
@@ -105,7 +105,7 @@ services managed by HA to migrate to other nodes.
 
 The target nodes for these migrations are selected from the other currently available nodes, and determined
 by the HA rules configuration and the configured cluster resource scheduler (CRS) mode. During each
-migration, the original node will be recorded in the HA managers’ state, so that the service can be moved
+migration, the original node will be recorded in the HA managers' state, so that the service can be moved
 back again automatically once the maintenance mode is disabled and the node is back online.
 Currently you can enabled or disable the maintenance mode using the ha-manager CLI tool.
 
@@ -180,7 +180,7 @@ not be possible if too many nodes are powered off at a time, but you still want 
 recovered and started again as soon as possible.
 
 Freeze
-This mode ensures that all services get stopped and frozen, so that they won’t get recovered until the current
+This mode ensures that all services get stopped and frozen, so that they won't get recovered until the current
 node is online again.
 
 Conditional

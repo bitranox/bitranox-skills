@@ -85,7 +85,7 @@ saferemove_throughput
 Wipe throughput (cstream -t parameter value), up to 10 MiB/s by default.
 snapshot-as-volume-chain
 Set this flag to enable snapshot support for virtual machines on LVM with a volume backing chain.
-With this setting, taking a snapshot persists the current state under the snapshot’s name and starts a
+With this setting, taking a snapshot persists the current state under the snapshot's name and starts a
 new volume backed by the snapshot.
 A volume based on a snapshot references its parent snapshot volume as its backing volume and
 records only the differences to that backing volume. Snapshot volumes are currently thick-provisioned
@@ -94,8 +94,8 @@ This design avoids issues with native LVM snapshots, such as significant input/o
 and unexpected, dangerous behavior when running out of pre-allocated space.
 Snapshots as volume chains provide vendor-agnostic support for snapshots on any storage system
 that supports block storage. This includes iSCSI and Fibre Channel-attached SANs.
-Note that, although this feature relies on qcow2, it only uses qcow2’s ability to layer multiple volumes
-in a backing chain, not qcow2’s snapshot functionality. The snapshot functionality is managed by the
+Note that, although this feature relies on qcow2, it only uses qcow2's ability to layer multiple volumes
+in a backing chain, not qcow2's snapshot functionality. The snapshot functionality is managed by the
 PVE storage system.
 Enabling or disabling this flag only affects newly created virtual disk volumes.
 For efficient support of snapshot-as-volume-chain, the backing storage must support thinprovisioning and discard. Each snapshot will appear to use the full volume size on the PVE side, but

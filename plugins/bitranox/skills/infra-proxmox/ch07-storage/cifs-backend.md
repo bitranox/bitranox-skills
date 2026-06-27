@@ -84,7 +84,7 @@ Server IP or DNS name. Required.
 share
 CIFS share to use (get available ones with pvesm scan cifs <address> or the web UI). Required.
 username
-The username for the CIFS storage. Optional, defaults to ‘guest’.
+The username for the CIFS storage. Optional, defaults to 'guest'.
 
 password
 The user password. Optional. It will be saved in a file only readable by root (/etc/pve/priv/storage/
@@ -98,7 +98,7 @@ content-dirs
 Overrides for the default directory layout. Optional.
 options
 Additional CIFS mount options (see man mount.cifs). Some options are set automatically and
-shouldn’t be set here. Proxmox VE will always set the option soft. Depending on the configuration,
+shouldn't be set here. Proxmox VE will always set the option soft. Depending on the configuration,
 these options are set automatically: username, credentials, guest, domain, vers.
 subdir
 The subdirectory of the share to mount. Optional, defaults to the root directory of the share.

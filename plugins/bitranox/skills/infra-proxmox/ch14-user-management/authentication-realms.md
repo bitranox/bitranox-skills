@@ -36,7 +36,7 @@ unreachable
 ### 14.5.5 Syncing LDAP-Based Realms
 
 
-It’s possible to automatically sync users and groups for LDAP-based realms (LDAP & Microsoft Active Directory), rather than having to add them to Proxmox VE manually. You can access the sync options from the Add/Edit window of the web interface’s Authentication panel or via the pveum realm add/modify
+It's possible to automatically sync users and groups for LDAP-based realms (LDAP & Microsoft Active Directory), rather than having to add them to Proxmox VE manually. You can access the sync options from the Add/Edit window of the web interface's Authentication panel or via the pveum realm add/modify
 
 
 commands. You can then carry out the sync operation from the Authentication panel of the GUI or
@@ -62,11 +62,11 @@ Add/Edit window.
 The configuration options are as follows:
 
 - Bind User (bind_dn): Refers to the LDAP account used to query users and groups. This account
-needs access to all desired entries. If it’s set, the search will be carried out via binding; otherwise, the
+needs access to all desired entries. If it's set, the search will be carried out via binding; otherwise, the
 search will be carried out anonymously. The user must be a complete LDAP formatted distinguished name
 (DN), for example, cn=admin,dc=example,dc=com.
 
-- Groupname attr. (group_name_attr): Represents the users’ groups. Only entries which adhere to the
+- Groupname attr. (group_name_attr): Represents the users' groups. Only entries which adhere to the
 usual character limitations of the user.cfg are synced. Groups are synced with -$realm attached
 to the name, in order to avoid naming conflicts. Please ensure that a sync does not overwrite manually
 created groups.
@@ -96,12 +96,12 @@ true.
 - Remove Vanished (remove-vanished): This is a list of options which, when activated, determine
 if they are removed when they are not returned from the sync response. The options are:
 
-– ACL (acl): Remove ACLs of users and groups which were not returned returned in the sync response.
+- ACL (acl): Remove ACLs of users and groups which were not returned returned in the sync response.
 This most often makes sense together with Entry.
-– Entry (entry): Removes entries (i.e. users and groups) when they are not returned in the sync
+- Entry (entry): Removes entries (i.e. users and groups) when they are not returned in the sync
 response.
 
-– Properties (properties): Removes properties of entries where the user in the sync response
+- Properties (properties): Removes properties of entries where the user in the sync response
 did not contain those attributes. This includes all properties, even those never set by a sync. Exceptions
 are tokens and the enable flag, these will be retained even with this option enabled.
 
@@ -180,7 +180,7 @@ oidc, the group name in Proxmox VE would be my-openid-group-oidc).
 Any groups reported by the OpenID provider that do not exist in Proxmox VE are ignored by default. If all
 groups reported by the OpenID provider should exist in Proxmox VE, the groups-autocreate option
 may be used to automatically create these groups on user logins.
-By default, groups are appended to the user’s existing groups. It may be desirable to overwrite any groups
+By default, groups are appended to the user's existing groups. It may be desirable to overwrite any groups
 that the user is already a member in Proxmox VE with those from the OpenID provider. Enabling the
 groups-overwrite setting removes all groups from the user in Proxmox VE before adding the groups
 reported by the OpenID provider.
@@ -265,7 +265,7 @@ configured TFA will be able to log in.
 Currently there are two methods available:
 
 Time-based OATH (TOTP)
-This uses the standard HMAC-SHA1 algorithm, where the current time is hashed with the user’s
+This uses the standard HMAC-SHA1 algorithm, where the current time is hashed with the user's
 configured key. The time step and password length parameters are configurable.
 A user can have multiple keys configured (separated by spaces), and the keys can be specified in
 Base32 (RFC3548) or hexadecimal notation.
@@ -275,7 +275,7 @@ or on Android Google Authenticator, FreeOTP, andOTP or similar applications.
 YubiKey OTP
 For authenticating via a YubiKey a Yubico API ID, API KEY and validation server URL must be configured, and users must have a YubiKey available. In order to get the key ID from a YubiKey, you can
 trigger the YubiKey once after connecting it via USB, and copy the first 12 characters of the typed
-password into the user’s Key IDs field.
+password into the user's Key IDs field.
 Please refer to the YubiKey OTP documentation for how to use the YubiCloud or host your own verification
 server.
 
@@ -286,11 +286,11 @@ server.
 A second factor is meant to protect users if their password is somehow leaked or guessed. However, some
 factors could still be broken by brute force. For this reason, users will be locked out after too many failed 2nd
 factor login attempts.
-For TOTP, 8 failed attempts will disable the user’s TOTP factors. They are unlocked when logging in with a
+For TOTP, 8 failed attempts will disable the user's TOTP factors. They are unlocked when logging in with a
 recovery key. If TOTP was the only available factor, admin intervention is required, and it is highly recommended to require the user to change their password immediately.
 Since FIDO2/Webauthn and recovery keys are less susceptible to brute force attacks, the limit there is higher
 (100 tries), but all second factors are blocked for an hour when exceeded.
-An admin can unlock a user’s Two-Factor Authentication at any time via the user list in the UI or the command
+An admin can unlock a user's Two-Factor Authentication at any time via the user list in the UI or the command
 line:
 
 

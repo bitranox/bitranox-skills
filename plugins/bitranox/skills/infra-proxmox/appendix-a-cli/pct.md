@@ -137,7 +137,7 @@ CPU weight for a container, will be clamped to [1, 10000] in cgroup v2.
 Try to be more verbose. For now this only enables debug log-level on start.
 
 - `--description` <string>
-Description for the Container. Shown in the web-interface CT’s summary. This is saved as comment
+Description for the Container. Shown in the web-interface CT's summary. This is saved as comment
 inside the configuration file.
 
 --dev[n] [[path=]<Path>] [,deny-write=<1|0>] [,gid=<integer>]
@@ -213,7 +213,7 @@ Sets root password inside container.
 Add the VM to the specified pool.
 
 - `--protection` <boolean> (default = 0)
-Sets the protection flag of the container. This will prevent the CT or CT’s disk remove/update operation.
+Sets the protection flag of the container. This will prevent the CT or CT's disk remove/update operation.
 
 
 - `--restore` <boolean>
@@ -252,7 +252,7 @@ Tags of the Container. This is only meta information.
 Enable/disable Template.
 
 - `--timezone` <string>
-Time zone to use in the container. If option isn’t set, then nothing will be done. Can be set to host to
+Time zone to use in the container. If option isn't set, then nothing will be done. Can be set to host to
 match the host time zone, or an arbitrary time zone option from /usr/share/zoneinfo/zone.tab
 
 - `--tty` <integer> (0 - 6) (default = 2)
@@ -311,7 +311,7 @@ Related ACLs and Firewall entries will always be removed.
 pct df <vmid>
 ```
 
-Get the container’s current disk usage.
+Get the container's current disk usage.
 
 <vmid>: <integer> (100 - 999999999)
 The (unique) ID of the VM.

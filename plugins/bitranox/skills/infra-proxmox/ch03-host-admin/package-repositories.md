@@ -7,7 +7,7 @@ Proxmox VE is based on Debian GNU/Linux with additional repositories to provide 
 packages. This means that the full range of Debian packages is available including security updates and
 bug fixes. Proxmox VE provides its own Linux kernel based on the Ubuntu kernel. It has all the necessary
 virtualization and container features enabled and includes ZFS and several extra hardware drivers.
-For other topics not included in the following sections, please refer to the Debian documentation. The Debian Administrator’s Handbook is available online, and provides a comprehensive introduction to the Debian
+For other topics not included in the following sections, please refer to the Debian documentation. The Debian Administrator's Handbook is available online, and provides a comprehensive introduction to the Debian
 operating system (see [Hertzog13]).
 
 
@@ -108,7 +108,7 @@ different support levels, which you can find further details about at https://pr
 
 
 As the name suggests, you do not need a subscription key to access this repository. It can be used for
-testing and non-production use. It’s not recommended to use this on production servers, as these packages
+testing and non-production use. It's not recommended to use this on production servers, as these packages
 are not always as heavily tested and validated.
 We recommend to configure this repository in /etc/apt/sources.list.d/proxmox.sources.
 

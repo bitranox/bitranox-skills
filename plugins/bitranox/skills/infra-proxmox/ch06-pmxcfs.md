@@ -2,7 +2,7 @@
 
 *[Main Index](SKILL.md)*
 
-The Proxmox Cluster file system (“pmxcfs”) is a database-driven file system for storing configuration files,
+The Proxmox Cluster file system ("pmxcfs") is a database-driven file system for storing configuration files,
 replicated in real time to all cluster nodes using corosync. We use this to store all Proxmox VE related
 configuration files.
 Although the file system stores all data inside a persistent database on disk, a copy of the data resides in
@@ -23,10 +23,10 @@ This system provides the following advantages:
 The file system is based on FUSE, so the behavior is POSIX like. But some feature are simply not implemented, because we do not need them:
 
 - You can just generate normal files and directories, but no symbolic links, . . .
-- You can’t rename non-empty directories (because this makes it easier to guarantee that VMIDs are
+- You can't rename non-empty directories (because this makes it easier to guarantee that VMIDs are
 unique).
 
-- You can’t change file permissions (permissions are based on paths)
+- You can't change file permissions (permissions are based on paths)
 - O_EXCL creates were not atomic (like old NFS)
 - O_TRUNC creates are not atomic (FUSE restriction)
 
@@ -91,7 +91,7 @@ JSON-formatted information regarding HA
 services on the cluster
 Resources managed by high availability, and their
 current state
-Rules putting constraints on the HA manager’s
+Rules putting constraints on the HA manager's
 scheduling of HA resources
 Node-specific configuration
 VM configuration data for LXC containers
@@ -160,7 +160,7 @@ nodes/<NAME>/openvz/
 ### 6.4.2 Symbolic links
 
 
-Certain directories within the cluster file system use symbolic links, in order to point to a node’s own configuration files. Thus, the files pointed to in the table below refer to different files on each node of the cluster.
+Certain directories within the cluster file system use symbolic links, in order to point to a node's own configuration files. Thus, the files pointed to in the table below refer to different files on each node of the cluster.
 
 local
 lxc
@@ -208,7 +208,7 @@ echo "0" >/etc/pve/.debug
 If you have major problems with your Proxmox VE host, for example hardware issues, it could be helpful
 to copy the pmxcfs database file /var/lib/pve-cluster/config.db, and move it to a new Proxmox VE host. On the new host (with nothing running), you need to stop the pve-cluster service and
 replace the config.db file (required permissions 0600). Following this, adapt /etc/hostname and
-/etc/hosts according to the lost Proxmox VE host, then reboot and check (and don’t forget your VM/CT
+/etc/hosts according to the lost Proxmox VE host, then reboot and check (and don't forget your VM/CT
 data).
 
 
@@ -230,13 +230,13 @@ configuration changes.
 As a consequence, if the owning node of a guest fails (for example, due to a power outage, fencing event,
 etc.), a regular migration is not possible (even if all the disks are located on shared storage), because such
 a local lock on the (offline) owning node is unobtainable. This is not a problem for HA-managed guests, as
-Proxmox VE’s High Availability stack includes the necessary (cluster-wide) locking and watchdog functionality
+Proxmox VE's High Availability stack includes the necessary (cluster-wide) locking and watchdog functionality
 to ensure correct and automatic recovery of guests from fenced nodes.
 If a non-HA-managed guest has only shared disks (and no other local resources which are only available on
 the failed node), a manual recovery is possible by simply moving the guest configuration file from the failed
 
 
-node’s directory in /etc/pve/ to an online node’s directory (which changes the logical owner or location
+node's directory in /etc/pve/ to an online node's directory (which changes the logical owner or location
 of the guest).
 For example, recovering the VM with ID 100 from an offline node1 to another node node2 works by
 running the following command as root on any member node of the cluster:
@@ -246,7 +246,7 @@ mv /etc/pve/nodes/node1/qemu-server/100.conf /etc/pve/nodes/node2/ ←qemu-serve
 
 > **Warning:**
 > Before manually recovering a guest like this, make absolutely sure that the failed source node
-> is really powered off/fenced. Otherwise Proxmox VE’s locking principles are violated by the mv
+> is really powered off/fenced. Otherwise Proxmox VE's locking principles are violated by the mv
 > command, which can have unexpected consequences.
 
 

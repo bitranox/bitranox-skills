@@ -34,7 +34,7 @@ Each user entry in this file contains the following information:
 ### 14.1.1 System administrator
 
 
-The system’s root user can always log in via the Linux PAM realm and is an unconfined administrator. This
+The system's root user can always log in via the Linux PAM realm and is an unconfined administrator. This
 user cannot be deleted, but attributes can still be changed. System mails will be sent to the email address
 assigned to this user.
 
@@ -58,7 +58,7 @@ API tokens come in two basic types:
 - Separated privileges: The token needs to be given explicit access with ACLs. Its effective permissions are
 calculated by intersecting user and token permissions.
 
-- Full privileges: The token’s permissions are identical to that of the associated user.
+- Full privileges: The token's permissions are identical to that of the associated user.
 
 > **Caution:**
 > The token value is only displayed/returned once when the token is generated. It cannot be retrieved
@@ -66,7 +66,7 @@ calculated by intersecting user and token permissions.
 
 
 To use an API token, set the HTTP header Authorization to the displayed value of the form PVEAPIToken=USER@
-when making API requests, or refer to your API client’s documentation.
+when making API requests, or refer to your API client's documentation.
 
 
 ## 14.4 Resource Pools
@@ -112,7 +112,7 @@ to verify the identity of the user, based on authentication performed by an exte
 
 As Linux PAM corresponds to host system users, a system user must exist on each node which the user
 is allowed to log in on. The user authenticates with their usual system password. This realm is added by
-default and can’t be removed.
+default and can't be removed.
 Password changes via the GUI or, equivalently, the /access/password API endpoint only apply to
 the local node and not cluster-wide. Even though Proxmox VE has a multi-master design, using different
 passwords for different nodes can still offer a security benefit.
@@ -211,4 +211,4 @@ unreachable
 ### 14.5.5 Syncing LDAP-Based Realms
 
 
-It’s possible to automatically sync users and groups for LDAP-based realms (LDAP & Microsoft Active Directory), rather than having to add them to Proxmox VE manually. You can access the sync options from the Add/Edit window of the web interface’s Authentication panel or via the pveum realm add/modify
+It's possible to automatically sync users and groups for LDAP-based realms (LDAP & Microsoft Active Directory), rather than having to add them to Proxmox VE manually. You can access the sync options from the Add/Edit window of the web interface's Authentication panel or via the pveum realm add/modify

@@ -31,7 +31,7 @@ common Linux bridge, locally on each node, to be assigned to VMs and Containers.
 The Proxmox VE SDN stack has been available as an experimental feature since 2019 and has been continuously improved and tested by many developers and users. With its integration into the web interface in
 Proxmox VE 6.2, a significant milestone towards broader integration was achieved. During the Proxmox VE
 7 release cycle, numerous improvements and features were added. Based on user feedback, it became
-apparent that the fundamental design choices and their implementation were quite sound and stable. Consequently, labeling it as ‘experimental’ did not do justice to the state of the SDN stack. For Proxmox VE 8, a
+apparent that the fundamental design choices and their implementation were quite sound and stable. Consequently, labeling it as 'experimental' did not do justice to the state of the SDN stack. For Proxmox VE 8, a
 decision was made to lay the groundwork for full integration of the SDN feature by elevating the management
 of networks and interfaces to a core component in the Proxmox VE access control stack. In Proxmox VE 8.1,
 two major milestones were achieved: firstly, DHCP integration was added to the IP address management
@@ -117,7 +117,7 @@ The Options category allows adding and managing additional services to be used i
 them to the guests via DHCP.
 
 - IPAM: Enables external for IP address management for guests
-- DNS: Define a DNS server integration for registering virtual guests’ hostname and IP addresses
+- DNS: Define a DNS server integration for registering virtual guests' hostname and IP addresses
 
 
 ## 12.5 Technology & Configuration
@@ -177,7 +177,7 @@ interface, and VM traffic is only local on each the node. It can be used in NAT 
 ### 12.6.3 VLAN Zones
 
 
-The VLAN plugin uses an existing local Linux or OVS bridge to connect to the node’s physical interface. It
+The VLAN plugin uses an existing local Linux or OVS bridge to connect to the node's physical interface. It
 uses VLAN tagging defined in the VNet to isolate the network segments. This allows connectivity of VMs
 between different nodes.
 VLAN zone configuration options:

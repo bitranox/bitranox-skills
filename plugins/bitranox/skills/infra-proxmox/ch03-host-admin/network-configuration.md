@@ -42,7 +42,7 @@ cases like redundancy with a bond, vlans or routed and NAT setups.
 The Software Defined Network is an option for more complex virtual networks in Proxmox VE clusters.
 
 > **Warning:**
-> It’s discouraged to use the traditional Debian tools ifup and ifdown if unsure, as they have some
+> It's discouraged to use the traditional Debian tools ifup and ifdown if unsure, as they have some
 > pitfalls like interrupting all guest traffic on ifdown vmbrX but not reconnecting those guest again
 > when doing ifup on the same bridge later.
 
@@ -98,16 +98,16 @@ Systemd defines a versioned naming scheme for network device names. The scheme u
 prefix en for Ethernet network devices. The next characters depends on the device driver, device location
 and other attributes. Some possible patterns are:
 
-- o<index>[n<phys_port_name>|d<dev_port>] — devices on board
-- s<slot>[f<function>][n<phys_port_name>|d<dev_port>] — devices by hotplug id
-- [P<domain>]p<bus>s<slot>[f<function>][n<phys_port_name>|d<dev_port>] —
+- o<index>[n<phys_port_name>|d<dev_port>]  -  devices on board
+- s<slot>[f<function>][n<phys_port_name>|d<dev_port>]  -  devices by hotplug id
+- [P<domain>]p<bus>s<slot>[f<function>][n<phys_port_name>|d<dev_port>]  - 
 devices by bus id
 
-- x<MAC> — devices by MAC address
+- x<MAC>  -  devices by MAC address
 Some examples for the most common patterns are:
 
-- eno1 — is the first on-board NIC
-- enp3s0f1 — is function 1 of the NIC on PCI bus 3, slot 0
+- eno1  -  is the first on-board NIC
+- enp3s0f1  -  is function 1 of the NIC on PCI bus 3, slot 0
 For a full list of possible device name patterns, see the systemd.net-naming-scheme(7) manpage.
 A new version of systemd may define a new version of the network device naming scheme, which it then
 uses by default. Consequently, updating to a newer systemd version, for example during a major Proxmox
@@ -182,7 +182,7 @@ scheme.
 Custom link files should be placed in /etc/systemd/network/ and named <n>-<id>.link, where
 n is a priority smaller than 99 and id is some identifier. A link file has two sections: [Match] determines
 which interfaces the file will apply to; [Link] determines how these interfaces should be configured, including their naming.
-To assign a name to a particular network device, you need a way to uniquely and permanently identify that device in the [Match] section. One possibility is to match the device’s MAC address using the MACAddress
+To assign a name to a particular network device, you need a way to uniquely and permanently identify that device in the [Match] section. One possibility is to match the device's MAC address using the MACAddress
 option, as it is unlikely to change.
 The [Match] section should also contain a Type option to make sure it only matches the expected physical interface, and not bridge/bond/VLAN interfaces with the same MAC address. In most setups, Type
 should be set to ether to match only Ethernet devices, but some setups may require other choices. See
@@ -322,7 +322,7 @@ soon as they detect multiple MAC addresses on a single interface.
 > the problem, but can be clumsy to configure because you need to register a MAC for each of your VMs.
 
 
-You can avoid the problem by “routing” all traffic via a single interface. This makes sure that all network
+You can avoid the problem by "routing" all traffic via a single interface. This makes sure that all network
 packets use the same MAC address.
 
 

@@ -4,7 +4,7 @@
 
 To handle this better, one can define cluster wide resource mappings, such that a resource has a cluster
 unique, user selected identifier which can correspond to different devices on different hosts. With this, HA
-won’t start a guest with a wrong device, and hardware changes can be detected.
+won't start a guest with a wrong device, and hardware changes can be detected.
 Creating such a mapping can be done with the Proxmox VE web GUI under Datacenter in the relevant
 tab in the Resource Mappings category, or on the cli with
 
@@ -16,7 +16,7 @@ tab in the Resource Mappings category, or on the cli with
 
 Where <type> is the hardware type (currently either pci, usb or dir) and <options> are the device
 mappings and other configuration parameters.
-Note that the options must include a map property with all identifying properties of that hardware, so that it’s
+Note that the options must include a map property with all identifying properties of that hardware, so that it's
 possible to verify the hardware did not change and the correct device is passed through.
 For example to add a PCI device as device1 with the path 0000:01:00.0 that has the device id 0001
 and the vendor id 0002 on the node node1, and 0000:02:00.0 on node2 you can add it with:
@@ -33,7 +33,7 @@ API.
 ```
 
 
-It’s also possible for PCI devices to provide multiple devices per node with multiple map properties for the
+It's also possible for PCI devices to provide multiple devices per node with multiple map properties for the
 nodes. If such a device is assigned to a guest, the first free one will be used when the guest is started.
 The order of the paths given is also the order in which they are tried, so arbitrary allocation policies can be
 implemented.
@@ -164,7 +164,7 @@ also ignored.
 ### 10.14.2 Snapshots
 
 
-When you create a snapshot, qm stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called “testsnapshot”, your
+When you create a snapshot, qm stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called "testsnapshot", your
 configuration file will look like this:
 VM configuration with snapshot
 

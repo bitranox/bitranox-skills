@@ -151,7 +151,7 @@ the migration network used to detect the local migration IP
 
 - `--run-command` <boolean>
 Run a command with a tcp socket as standard input. The IP address and port are printed via this
-command’s stdandard output first, each on a separate line.
+command's stdandard output first, each on a separate line.
 
 ```
 pvecm nodes

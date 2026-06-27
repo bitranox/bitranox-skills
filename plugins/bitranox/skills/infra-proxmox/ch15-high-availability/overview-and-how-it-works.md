@@ -46,33 +46,33 @@ errors and do failover. If you only want to serve read-only web pages, then this
 this is generally complex and sometimes impossible, because you cannot modify the software yourself. The
 following solutions works without modifying the software:
 
-- Use reliable “server” components
+- Use reliable "server" components
 
 > **Note:**
 > Computer components with the same functionality can have varying reliability numbers, depending on
-> the component quality. Most vendors sell components with higher reliability as “server” components usually at higher price.
+> the component quality. Most vendors sell components with higher reliability as "server" components usually at higher price.
 
 
 - Eliminate single point of failure (redundant components)
 
 
-– use an uninterruptible power supply (UPS)
-– use redundant power supplies in your servers
-– use ECC-RAM
-– use redundant network hardware
-– use RAID for local storage
-– use distributed, redundant storage for VM data
+- use an uninterruptible power supply (UPS)
+- use redundant power supplies in your servers
+- use ECC-RAM
+- use redundant network hardware
+- use RAID for local storage
+- use distributed, redundant storage for VM data
 - Reduce downtime
-– rapidly accessible administrators (24/7)
-– availability of spare parts (other nodes in a Proxmox VE cluster)
-– automatic error detection (provided by ha-manager)
-– automatic failover (provided by ha-manager)
+- rapidly accessible administrators (24/7)
+- availability of spare parts (other nodes in a Proxmox VE cluster)
+- automatic error detection (provided by ha-manager)
+- automatic failover (provided by ha-manager)
 Virtualization environments like Proxmox VE make it much easier to reach high availability because they
-remove the “hardware” dependency. They also support the setup and use of redundant storage and network
+remove the "hardware" dependency. They also support the setup and use of redundant storage and network
 devices, so if one host fails, you can simply start those services on another host within your cluster.
 Better still, Proxmox VE provides a software stack called ha-manager, which can do that automatically for
 you. It is able to automatically detect errors and do automatic failover.
-Proxmox VE ha-manager works like an “automated” administrator. First, you configure what resources
+Proxmox VE ha-manager works like an "automated" administrator. First, you configure what resources
 (VMs, containers, . . . ) it should manage. Then, ha-manager observes the correct functionality, and
 handles service failover to another node in case of errors. ha-manager can also handle normal user
 requests which may start, stop, relocate and migrate a service.
@@ -94,7 +94,7 @@ You must meet the following requirements before you start with HA:
 - at least three cluster nodes (to get reliable quorum)
 - shared storage for VMs and containers
 - hardware redundancy (everywhere)
-- use reliable “server” components
+- use reliable "server" components
 Optionally, a hardware watchdog can be used - if not available we fall back to the linux kernel software
 watchdog (softdog).
 
@@ -102,7 +102,7 @@ watchdog (softdog).
 ## 15.2 Resources
 
 
-We call the primary management unit handled by ha-manager a resource. A resource (also called “service”) is uniquely identified by a service ID (SID), which consists of the resource type and a type specific ID,
+We call the primary management unit handled by ha-manager a resource. A resource (also called "service") is uniquely identified by a service ID (SID), which consists of the resource type and a type specific ID,
 for example vm:100. That example would be a resource of type vm (virtual machine) with the ID 100.
 For now we have two important resources types - virtual machines and containers. One basic idea here is
 that we can bundle related software into such a VM or container, so there is no need to compose one big
@@ -121,7 +121,7 @@ GUI, or simply use the command-line tool, for example:
 ```
 # ha-manager add vm:100
 The HA stack now tries to start the resources and keep them running. Please note that you can configure
-the “requested” resources state. For example you may want the HA stack to stop the resource:
+the "requested" resources state. For example you may want the HA stack to stop the resource:
 
 # ha-manager set vm:100 --state stopped
 and start it again later:
@@ -242,7 +242,7 @@ recovery
 Wait for recovery of the service. The HA manager tries to find a new node where the service can run
 on. This search depends on the list of online and quorate nodes as well as the affinity rules the service
 is part of, if any. As soon as a new available node is found, the service will be moved there and initially
-placed into stopped state. If it’s configured to run the new node will do so.
+placed into stopped state. If it's configured to run the new node will do so.
 freeze
 Do not touch the service state. We use this state while we reboot a node, or when we restart the LRM
 daemon (see Package Updates).
@@ -325,7 +325,7 @@ the requested state. For example, a service with the requested state started wil
 running. If it crashes it will be automatically started again. Thus the CRM dictates the actions the LRM needs
 to execute.
 When a node leaves the cluster quorum, its state changes to unknown. If the current CRM can then secure
-the failed node’s lock, the services will be stolen and restarted on another node.
+the failed node's lock, the services will be stolen and restarted on another node.
 When a cluster member determines that it is no longer in the cluster quorum, the LRM waits for a new
 quorum to form. Until there is a cluster quorum, the node cannot reset the watchdog. If there are active
 services on the node, or if the LRM or CRM process is not scheduled or is killed, this will trigger a reboot

@@ -89,7 +89,7 @@ ciupgrade: <boolean> (default = 1)
 cloud-init: do an automatic package upgrade after the first boot.
 
 ciuser: <string>
-cloud-init: User name to change ssh keys and password for instead of the image’s configured default
+cloud-init: User name to change ssh keys and password for instead of the image's configured default
 user.
 
 cores: <integer> (1 - N) (default = 1)
@@ -124,7 +124,7 @@ The Hyper-V vendor ID. Some drivers or programs inside Windows guests need a spe
 
 phys-bits=<8-64|host>
 The physical memory address bits that are reported to the guest OS. Should be smaller or equal
-to the host’s. Set to host to use value from host CPU, but note that doing so will break live
+to the host's. Set to host to use value from host CPU, but note that doing so will break live
 migration to CPUs with other values.
 
 
@@ -169,7 +169,7 @@ CPU weight for a VM. Argument is used in the kernel fair scheduler. The larger t
 more CPU time this VM gets. Number is relative to weights of all the other running VMs.
 
 description: <string>
-Description for the VM. Shown in the web-interface VM’s summary. This is saved as comment inside
+Description for the VM. Shown in the web-interface VM's summary. This is saved as comment inside
 the configuration file.
 
 efidisk0: [file=]<volume> [,efitype=<2m|4m>] [,format=<enum>]
@@ -184,10 +184,10 @@ Boot. For backwards compatibility, 2m is used if not otherwise specified. Ignore
 arch=aarch64 (ARM).
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<cloop | qcow | qcow2 | qed | raw | vmdk>
-The drive’s backing file’s data format.
+The drive's backing file's data format.
 
 ms-cert=<2011 | 2023> (default = 2011)
 Informational marker indicating the version of the latest Microsof UEFI certificate that has been
@@ -232,7 +232,7 @@ If set to keep the device will neither be reset nor bound to the vfio-pci driver
 that already have the correct driver loaded.
 
 host=<HOSTPCIID[;HOSTPCIID2...]>
-Host PCI device pass through. The PCI ID of a host’s PCI device or a list of PCI virtual functions
+Host PCI device pass through. The PCI ID of a host's PCI device or a list of PCI virtual functions
 of the host. HOSTPCIID syntax is:
 bus:dev.func (hexadecimal numbers)
 You can use the lspci command to list existing PCI devices.
@@ -253,7 +253,7 @@ pcie=<boolean> (default = 0)
 Choose the PCI-express bus (needs the q35 machine model).
 
 rombar=<boolean> (default = 1)
-Specify whether or not the device’s ROM will be visible in the guest’s memory map.
+Specify whether or not the device's ROM will be visible in the guest's memory map.
 
 romfile=<string>
 Custom pci device rom filename (must be located in /usr/share/kvm/).
@@ -327,7 +327,7 @@ bps_wr_max_length=<seconds>
 Maximum length of write I/O bursts in seconds.
 
 cache=<directsync | none | unsafe | writeback | writethrough>
-The drive’s cache mode
+The drive's cache mode
 
 detect_zeroes=<boolean>
 Controls whether to detect and try to optimize writes of zeroes.
@@ -337,10 +337,10 @@ discard=<ignore | on>
 Controls whether to pass discard/trim requests to the underlying storage.
 
 file=<volume>
-The drive’s backing volume.
+The drive's backing volume.
 
 format=<cloop | qcow | qcow2 | qed | raw | vmdk>
-The drive’s backing file’s data format.
+The drive's backing file's data format.
 
 iops=<iops>
 Maximum r/w I/O in operations per second.
@@ -389,10 +389,10 @@ Maximum unthrottled write pool in megabytes per second.
 
 
 media=<cdrom | disk> (default = disk)
-The drive’s media type.
+The drive's media type.
 
 model=<model>
-The drive’s reported model name, url-encoded, up to 40 bytes long.
+The drive's reported model name, url-encoded, up to 40 bytes long.
 
 replicate=<boolean> (default = 1)
 Whether the drive should considered for replication jobs.
@@ -401,7 +401,7 @@ rerror=<ignore | report | stop>
 Read error action.
 
 serial=<serial>
-The drive’s reported serial number, url-encoded, up to 20 bytes long.
+The drive's reported serial number, url-encoded, up to 20 bytes long.
 
 shared=<boolean> (default = 0)
 Mark this locally-managed volume as available on all nodes.
@@ -415,7 +415,7 @@ size=<DiskSize>
 Disk size. This is purely informational and has no effect.
 
 snapshot=<boolean>
-Controls qemu’s snapshot mode feature. If activated, changes made to the disk are temporary
+Controls qemu's snapshot mode feature. If activated, changes made to the disk are temporary
 and will be discarded when the VM is shutdown.
 
 ssd=<boolean>
@@ -425,7 +425,7 @@ werror=<enospc | ignore | report | stop>
 Write error action.
 
 wwn=<wwn>
-The drive’s worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
+The drive's worldwide name, encoded as 16 bytes hex string, prefixed by 0x.
 
 
 ## See also

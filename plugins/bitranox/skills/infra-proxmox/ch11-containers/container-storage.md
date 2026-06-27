@@ -68,7 +68,7 @@ pvesm extractconfig can be used to view the backed up configuration contained in
 
 archive.
 There are two basic restore modes, only differing by their handling of mount points:
-“Simple” Restore Mode
+"Simple" Restore Mode
 If neither the rootfs parameter nor any of the optional mpX parameters are explicitly set, the mount point
 configuration from the backed up configuration file is restored using the following steps:
 1. Extract mount points and their options from backup
@@ -84,7 +84,7 @@ configuration from the backed up configuration file is restored using the follow
 
 
 This simple mode is also used by the container restore operations in the web interface.
-“Advanced” Restore Mode
+"Advanced" Restore Mode
 By setting the rootfs parameter (and optionally, any combination of mpX parameters), the pct restore
 command is automatically switched into an advanced mode. This advanced mode completely ignores the
 rootfs and mpX configuration options contained in the backup archive, and instead only uses the options
@@ -99,7 +99,7 @@ This mode allows flexible configuration of mount point settings at restore time,
 ## 11.9 Managing Containers with pct
 
 
-The “Proxmox Container Toolkit” (pct) is the command-line tool to manage Proxmox VE containers. It
+The "Proxmox Container Toolkit" (pct) is the command-line tool to manage Proxmox VE containers. It
 enables you to create or destroy containers, as well as control the container execution (start, stop, reboot,
 migrate, etc.). It can be used to set parameters in the config file of a container, for example the network
 configuration or memory limits.
@@ -127,7 +127,7 @@ Display the configuration
 
 # pct config 100
 Add a network interface called eth0, bridged to the host bridge vmbr0, set the address and gateway, while
-it’s running
+it's running
 
 # pct set 100 -net0 name=eth0,bridge=vmbr0,ip=192.168.15.147/24,gw ←=192.168.15.1
 Reduce the memory of the container to 512MB

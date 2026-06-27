@@ -12,7 +12,7 @@ without the need to specify a configuration file.
 
 
 The Ceph Monitor (MON) 2 maintains a master copy of the cluster map. For high availability, you need at
-least 3 monitors. One monitor will already be installed if you used the installation wizard. You won’t need
+least 3 monitors. One monitor will already be installed if you used the installation wizard. You won't need
 more than 3 monitors, as long as your cluster is small to medium-sized. Only really large clusters will require
 more than this.
 

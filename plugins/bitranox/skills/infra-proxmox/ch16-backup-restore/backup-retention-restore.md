@@ -64,7 +64,7 @@ different retention options with various backup schedules.
 
 
 The backup frequency and retention of old backups may depend on how often data changes, and how
-important an older state may be, in a specific work load. When backups act as a company’s document
+important an older state may be, in a specific work load. When backups act as a company's document
 archive, there may also be legal requirements for how long backups must be kept.
 For this example, we assume that you are doing daily backups, have a retention period of 10 years, and the
 period between backups stored gradually grows.
@@ -92,7 +92,7 @@ been removed.
 
 
 You can mark a backup as protected to prevent its removal. Attempting to remove a protected backup
-via Proxmox VE’s UI, CLI or API will fail. However, this is enforced by Proxmox VE and not the file-system,
+via Proxmox VE's UI, CLI or API will fail. However, this is enforced by Proxmox VE and not the file-system,
 that means that a manual removal of a backup file itself is still possible for anyone with write access to the
 underlying backup storage.
 
@@ -119,7 +119,7 @@ by the corresponding value when the backup is executed.
 Currently supported are:
 
 - {{cluster}} the cluster name, if any
-- {{guestname}} the virtual guest’s assigned name
+- {{guestname}} the virtual guest's assigned name
 - {{node}} the host name of the node the backup is being created
 - {{vmid}} the numerical VMID of the guest
 When specified via API or CLI, it needs to be a single line, where newline and backslash need to be escaped
@@ -156,19 +156,19 @@ restoring and archive:
 - per-storage write limit: denotes the maximal amount of bandwidth used for writing to a specific storage
 The read limit indirectly affects the write limit, as we cannot write more than we read. A smaller per-job limit
 will overwrite a bigger per-storage limit. A bigger per-job limit will only overwrite the per-storage limit if you
-have ‘Data.Allocate’ permissions on the affected storage.
-You can use the ‘--bwlimit <integer>` option from the restore CLI commands to set up a restore job specific
-bandwidth limit. KiB/s is used as unit for the limit, this means passing `10240’ will limit the read speed of
+have 'Data.Allocate' permissions on the affected storage.
+You can use the '--bwlimit <integer>` option from the restore CLI commands to set up a restore job specific
+bandwidth limit. KiB/s is used as unit for the limit, this means passing `10240' will limit the read speed of
 the backup to 10 MiB/s, ensuring that the rest of the possible storage bandwidth is available for the already
 running virtual guests, and thus the backup does not impact their operations.
 
 > **Note:**
-> You can use ‘0` for the bwlimit parameter to disable all limits for a specific restore job. This can be
-> helpful if you need to restore a very important virtual guest as fast as possible. (Needs `Data.Allocate’
+> You can use '0` for the bwlimit parameter to disable all limits for a specific restore job. This can be
+> helpful if you need to restore a very important virtual guest as fast as possible. (Needs `Data.Allocate'
 > permissions on storage)
 
 
-Most times your storage’s generally available bandwidth stays the same over time, thus we implemented the
+Most times your storage's generally available bandwidth stays the same over time, thus we implemented the
 possibility to set a default bandwidth limit per configured storage, this can be done with:
 
 
@@ -214,7 +214,7 @@ archive on the fly.
 To enable secure access to VM images, which might contain untrusted data, a temporary VM (not visible as
 a guest) is started. This does not mean that data downloaded from such an archive is inherently safe, but it
 avoids exposing the hypervisor system to danger. The VM will stop itself after a timeout. This entire process
-happens transparently from a user’s point of view.
+happens transparently from a user's point of view.
 
 > **Note:**
 > For troubleshooting

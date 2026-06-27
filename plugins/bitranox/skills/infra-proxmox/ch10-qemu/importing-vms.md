@@ -90,7 +90,7 @@ vmdebootstrap --verbose \
 --customize=./copy_pub_ssh.sh \
 - `--sparse` --image vm600.raw
 You can now create a new target VM, importing the image to the storage pvedir and attaching it to the
-VM’s SCSI controller:
+VM's SCSI controller:
 
 
 ```
@@ -122,7 +122,7 @@ VMs need to have an assigned CD-ROM drive. Usually, a serial console should be a
 
 a display. Many Cloud-Init images rely on this, it is a requirement for OpenStack. However, other images
 might have problems with this configuration. Switch back to the default display configuration if using a serial
-console doesn’t work.
+console doesn't work.
 
 
 ### 10.8.1 Preparing Cloud-Init Templates
@@ -178,7 +178,7 @@ bootable CD-ROM.
 qm set 9000 --boot order=scsi0
 ```
 
-For many Cloud-Init images, it is required to configure a serial console and use it as a display. If the configuration doesn’t work for a given image however, switch back to the default display instead.
+For many Cloud-Init images, it is required to configure a serial console and use it as a display. If the configuration doesn't work for a given image however, switch back to the default display instead.
 
 
 ```

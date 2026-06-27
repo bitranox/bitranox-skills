@@ -117,7 +117,7 @@ Create ZFS pool with a on-disk cache
 ```
 # zpool create -f -o ashift=12 <pool> <device> cache <cache-device>
 Here only a single <device> and a single <cache-device> was used, but it is possible to use more
-devices, like it’s shown in Create a new pool with RAID.
+devices, like it's shown in Create a new pool with RAID.
 Note that for cache devices no mirror or raid modi exist, they are all simply accumulated.
 If any cache device produces errors on read, ZFS will transparently divert that request to the underlying
 storage layer.
@@ -132,11 +132,11 @@ issue fsync operations more frequently.
 
 The pool is used as default ZIL location, diverting the ZIL IO load to a separate device can, help to reduce
 transaction latencies while relieving the main pool at the same time, increasing overall performance.
-For disks to be used as log devices, directly or through a partition, it’s recommend to:
+For disks to be used as log devices, directly or through a partition, it's recommend to:
 
 - use fast SSDs with power-loss protection, as those have much smaller commit latencies.
 - Use at least a few GB for the partition (or whole device), but using more than half of your installed memory
-won’t provide you with any real advantage.
+won't provide you with any real advantage.
 Create ZFS pool with separate log device
 
 
@@ -144,18 +144,18 @@ Create ZFS pool with separate log device
 # zpool create -f -o ashift=12 <pool> <device> log <log-device>
 In the example above, a single <device> and a single <log-device> is used, but you can also combine
 this with other RAID variants, as described in the Create a new pool with RAID section.
-You can also mirror the log device to multiple devices, this is mainly useful to ensure that performance doesn’t
+You can also mirror the log device to multiple devices, this is mainly useful to ensure that performance doesn't
 immediately degrades if a single log device fails.
 If all log devices fail the ZFS main pool itself will be used again, until the log device(s) get replaced.
 Add cache and log to an existing pool
 If you have a pool without cache and log you can still add both, or just one of them, at any time.
-For example, let’s assume you got a good enterprise SSD with power-loss protection that you want to use
+For example, let's assume you got a good enterprise SSD with power-loss protection that you want to use
 for improving the overall performance of your pool.
 As the maximum size of a log device should be about half the size of the installed physical memory, it means
 that the ZIL will most likely only take up a relatively small part of the SSD, the remaining space can be used
 as cache.
 First you have to create two GPT partitions on the SSD with parted or gdisk.
-Then you’re ready to add them to a pool:
+Then you're ready to add them to a pool:
 Add both, a separate log device and a second-level cache, to an existing pool
 
 # zpool add -f <pool> log <device-part1> cache <device-part2>
@@ -290,7 +290,7 @@ load, often seen when starting a Backup to an external Storage.
 We strongly recommend to use enough memory, so that you normally do not run into low memory situations.
 Should you need or want to add swap, it is preferred to create a partition on a physical disk and use it as
 a swap device. You can leave some space free for this purpose in the advanced options of the installer.
-Additionally, you can lower the “swappiness” value. A good value for servers is 10:
+Additionally, you can lower the "swappiness" value. A good value for servers is 10:
 
 
 ```

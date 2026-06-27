@@ -34,7 +34,7 @@ also ignored.
 ### 10.14.2 Snapshots
 
 
-When you create a snapshot, qm stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called “testsnapshot”, your
+When you create a snapshot, qm stores the configuration at snapshot time into a separate snapshot section within the same configuration file. For example, after creating a snapshot called "testsnapshot", your
 configuration file will look like this:
 VM configuration with snapshot
 

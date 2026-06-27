@@ -24,7 +24,7 @@ storage.
 migrating from another Proxmox VE instance.
 
 - using the OVF-specific import command of the qm command-line tool.
-If you import VMs to Proxmox VE from other hypervisors, it’s recommended to familiarize yourself with the
+If you import VMs to Proxmox VE from other hypervisors, it's recommended to familiarize yourself with the
 concepts of Proxmox VE.
 15 https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/get-started/virtual-dc/virtualized-domain-controllerarchitecture
 
@@ -34,11 +34,11 @@ concepts of Proxmox VE.
 
 Proxmox VE provides an integrated VM importer using the storage plugin system for native integration into
 the API and web-based user interface. You can use this to import the VM as a whole, with most of its config
-mapped to Proxmox VE’s config model and reduced downtime.
+mapped to Proxmox VE's config model and reduced downtime.
 
 > **Note:**
 > The import wizard was added during the Proxmox VE 8.2 development cycle and is in tech preview state.
-> While it’s already promising and working stable, it’s still under active development.
+> While it's already promising and working stable, it's still under active development.
 
 
 To use the import wizard you have to first set up a new storage for an import source, you can do so on the

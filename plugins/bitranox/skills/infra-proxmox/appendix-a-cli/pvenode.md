@@ -283,7 +283,7 @@ Restart pveproxy.
 pvenode cert info [FORMAT_OPTIONS]
 ```
 
-Get information about node’s certificates.
+Get information about node's certificates.
 
 ```
 pvenode cert set <certificates> [<key>] [OPTIONS] [FORMAT_OPTIONS]
@@ -372,7 +372,7 @@ Migrate all VMs and Containers.
 Target node.
 
 - `--maxworkers` <integer> (1 - N)
-Maximal number of parallel migration job. If not set, uses’max_workers’ from datacenter.cfg. One of
+Maximal number of parallel migration job. If not set, uses'max_workers' from datacenter.cfg. One of
 both must be set!
 
 - `--vms` <string>
@@ -453,10 +453,10 @@ pvenode task log <upid> [OPTIONS]
 Read task log.
 
 <upid>: <string>
-The task’s unique ID.
+The task's unique ID.
 
 - `--download` <boolean>
-Whether the tasklog file should be downloaded. This parameter can’t be used in conjunction with other
+Whether the tasklog file should be downloaded. This parameter can't be used in conjunction with other
 parameters
 
 - `--start` <integer> (0 - N) (default = 0)
@@ -470,7 +470,7 @@ Read task status.
 
 
 <upid>: <string>
-The task’s unique ID.
+The task's unique ID.
 
 ```
 pvenode wakeonlan <node>

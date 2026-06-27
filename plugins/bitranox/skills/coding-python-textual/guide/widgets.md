@@ -1075,7 +1075,7 @@ The `COMPONENT_CLASSES` class variable above adds two class names: `checkerboard
 
 The `render_line` method calls `get_component_rich_style` to get `Style` objects from the CSS, which we apply to the segments to create a more colorful looking checkerboard.
 
-### Scrolling
+### Scrolling
 
 A Line API widget can be made to scroll by extending the `ScrollView` class (rather than `Widget`).
 The `ScrollView` class will do most of the work, but we will need to manage the following details:
@@ -1310,7 +1310,7 @@ The final step is to update the `render_line` method to use the cursor style whe
 
 You should find that if you move the mouse over the widget now, it will highlight the square underneath the mouse pointer in red.
 
-### Line API examples
+### Line API examples
 
 The following builtin widgets use the Line API. If you are building advanced widgets, it may be worth looking through the code for inspiration!
 

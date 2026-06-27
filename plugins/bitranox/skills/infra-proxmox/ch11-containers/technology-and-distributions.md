@@ -14,21 +14,21 @@ like, for example, FreeBSD or Microsoft Windows inside a container.
 - For security reasons, access to host resources needs to be restricted. Therefore, containers run in their
 own separate namespaces. Additionally some syscalls (user space requests to the Linux kernel) are not
 allowed within containers.
-Proxmox VE uses Linux Containers (LXC) as its underlying container technology. The “Proxmox Container
-Toolkit” (pct) simplifies the usage and management of LXC, by providing an interface that abstracts complex
+Proxmox VE uses Linux Containers (LXC) as its underlying container technology. The "Proxmox Container
+Toolkit" (pct) simplifies the usage and management of LXC, by providing an interface that abstracts complex
 tasks.
 Containers are tightly integrated with Proxmox VE. This means that they are aware of the cluster setup, and
 they can use the same network and storage resources as virtual machines. You can also use the Proxmox
 VE firewall, or manage containers using the HA framework.
 Our primary goal has traditionally been to offer an environment that provides the benefits of using a VM, but
 without the additional overhead. This means that Proxmox Containers have been primarily categorized as
-“System Containers”.
+"System Containers".
 With the introduction of OCI (Open Container Initiative) image support, Proxmox VE now also integrates
-“Application Containers” as a technology preview. When creating a container from an OCI image, the image
+"Application Containers" as a technology preview. When creating a container from an OCI image, the image
 is automatically converted to the LXC stack that Proxmox VE uses.
 This approach allows users to benefit from a wide ecosystem of pre-packaged applications while retaining
 the robust management features of Proxmox VE.
-While running lightweight “Application Containers” directly offers significant advantages over a full VM, for
+While running lightweight "Application Containers" directly offers significant advantages over a full VM, for
 use cases demanding maximum isolation and the ability to live-migrate, nesting containers inside a Proxmox
 QEMU VM remains a recommended practice.
 
@@ -61,7 +61,7 @@ the Graphical User Interface to download them.
 
 
 Alpine Linux is a security-oriented, lightweight Linux distribution based on musl libc and busybox.
-— https://alpinelinux.org
+ -  https://alpinelinux.org
 For currently supported releases see:
 https://alpinelinux.org/releases/
 
@@ -70,7 +70,7 @@ https://alpinelinux.org/releases/
 
 
 Arch Linux, a lightweight and flexible Linux® distribution that tries to Keep It Simple.
-— https://archlinux.org/
+ -  https://archlinux.org/
 Arch Linux is using a rolling-release model, see its wiki for more details:
 https://wiki.archlinux.org/title/Arch_Linux
 
@@ -81,7 +81,7 @@ https://wiki.archlinux.org/title/Arch_Linux
 CentOS / CentOS Stream
 The CentOS Linux distribution is a stable, predictable, manageable and reproducible platform
 derived from the sources of Red Hat Enterprise Linux (RHEL)
-— https://centos.org
+ -  https://centos.org
 For currently supported releases see:
 https://en.wikipedia.org/wiki/CentOS#End-of-support_schedule
 
@@ -89,15 +89,15 @@ Almalinux
 An Open Source, community owned and governed, forever-free enterprise Linux distribution,
 focused on long-term stability, providing a robust production-grade platform. AlmaLinux OS is
 1:1 binary compatible with RHEL® and pre-Stream CentOS.
-— https://almalinux.org
+ -  https://almalinux.org
 For currently supported releases see:
 https://en.wikipedia.org/wiki/AlmaLinux#Releases
 
 Rocky Linux
 Rocky Linux is a community enterprise operating system designed to be 100% bug-for-bug
-compatible with America’s top enterprise Linux distribution now that its downstream partner has
+compatible with America's top enterprise Linux distribution now that its downstream partner has
 shifted direction.
-— https://rockylinux.org
+ -  https://rockylinux.org
 For currently supported releases see:
 https://en.wikipedia.org/wiki/Rocky_Linux#Releases
 
@@ -106,8 +106,8 @@ https://en.wikipedia.org/wiki/Rocky_Linux#Releases
 
 
 Debian is a free operating system, developed and maintained by the Debian project. A free
-Linux distribution with thousands of applications to meet our users’ needs.
-— https://www.debian.org/intro/index#software
+Linux distribution with thousands of applications to meet our users' needs.
+ -  https://www.debian.org/intro/index#software
 For currently supported releases see:
 https://www.debian.org/releases/stable/releasenotes
 
@@ -117,7 +117,7 @@ https://www.debian.org/releases/stable/releasenotes
 
 Devuan GNU+Linux is a fork of Debian without systemd that allows users to reclaim control over
 their system by avoiding unnecessary entanglements and ensuring Init Freedom.
-— https://www.devuan.org
+ -  https://www.devuan.org
 For currently supported releases see:
 https://www.devuan.org/os/releases
 
@@ -127,7 +127,7 @@ https://www.devuan.org/os/releases
 
 Fedora creates an innovative, free, and open source platform for hardware, clouds, and containers that enables software developers and community members to build tailored solutions for
 their users.
-— https://getfedora.org
+ -  https://getfedora.org
 For currently supported releases see:
 https://fedoraproject.org/wiki/Releases
 
@@ -136,15 +136,15 @@ https://fedoraproject.org/wiki/Releases
 
 
 a highly flexible, source-based Linux distribution.
-— https://www.gentoo.org
+ -  https://www.gentoo.org
 Gentoo is using a rolling-release model.
 
 
 ### 11.2.8 OpenSUSE
 
 
-The makers’ choice for sysadmins, developers and desktop users.
-— https://www.opensuse.org
+The makers' choice for sysadmins, developers and desktop users.
+ -  https://www.opensuse.org
 For currently supported releases see:
 https://get.opensuse.org/leap/
 
@@ -154,7 +154,7 @@ https://get.opensuse.org/leap/
 
 Ubuntu is the modern, open source operating system on Linux for the enterprise server, desktop,
 cloud, and IoT.
-— https://ubuntu.com/
+ -  https://ubuntu.com/
 For currently supported releases see:
 https://wiki.ubuntu.com/Releases
 
@@ -162,7 +162,7 @@ https://wiki.ubuntu.com/Releases
 ## 11.3 Container Images
 
 
-Container images, sometimes also referred to as “templates” or “appliances”, are tar archives which contain everything to run a container. Proxmox VE can utilize two main types of images: System Container
+Container images, sometimes also referred to as "templates" or "appliances", are tar archives which contain everything to run a container. Proxmox VE can utilize two main types of images: System Container
 Templates for creating full virtual environments, and Application Container Images based on the OCI
 standard for running specific applications.
 
@@ -222,7 +222,7 @@ system
 ubuntu-20.10-standard_20.10-1_amd64.tar.gz
 system
 ubuntu-21.04-standard_21.04-1_amd64.tar.gz
-Before you can use such a template, you need to download them into one of your storages. If you’re unsure
+Before you can use such a template, you need to download them into one of your storages. If you're unsure
 to which one, you can simply use the local named storage for that purpose. For clustered installations, it
 is preferred to use a shared storage so that all nodes can access those images.
 

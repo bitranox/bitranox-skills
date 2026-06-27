@@ -5,7 +5,7 @@
 Markdown is a text-to-HTML conversion tool for web writers. Markdown allows you to write using
 an easy-to-read, easy-to-write plain text format, then convert it to structurally valid XHTML (or
 HTML).
-— John Gruber https://daringfireball.net/projects/markdown/
+ -  John Gruber https://daringfireball.net/projects/markdown/
 The Proxmox VE web interface has support for using Markdown to rendering rich text formatting in node and
 virtual guest notes.
 Proxmox VE supports CommonMark with most extensions of GFM (GitHub Flavoured Markdown), like tables

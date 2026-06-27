@@ -1324,7 +1324,7 @@ echo-request
 
 sport
 
-VNC traffic for VNC display’s 0 - 99
+VNC traffic for VNC display's 0 - 99
 
 proto
 tcp

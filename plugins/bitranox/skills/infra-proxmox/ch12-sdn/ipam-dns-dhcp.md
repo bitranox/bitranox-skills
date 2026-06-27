@@ -199,7 +199,7 @@ SNAT option.
 Subnet: 172.16.0.0/24
 Gateway: 172.16.0.1
 SNAT: checked
-In the guests configure the static IP address inside the subnet’s IP range.
+In the guests configure the static IP address inside the subnet's IP range.
 The node itself will join this network with the Gateway IP 172.16.0.1 and function as the NAT gateway for
 guests within the subnet range.
 

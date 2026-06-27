@@ -13,7 +13,7 @@ If you see a deprecation warning, you should change the machine version to a new
 a working backup first and be prepared for changes to how the guest sees hardware. In some scenarios,
 re-installing certain drivers might be required. You should also check for snapshots with RAM that were taken
 with these machine versions (i.e. the runningmachine configuration entry). Unfortunately, there is no
-way to change the machine version of a snapshot, so you’d need to load the snapshot to salvage any data
+way to change the machine version of a snapshot, so you'd need to load the snapshot to salvage any data
 from it.
 
 
@@ -77,7 +77,7 @@ to be on a storage of type zfspool, so adding a disk image to other storages whe
 configured requires to skip replication for this disk image.
 Trim/Discard
 If your storage supports thin provisioning (see the storage chapter in the Proxmox VE guide), you can activate
-the Discard option on a drive. With Discard set and a TRIM-enabled guest OS 2 , when the VM’s filesystem
+the Discard option on a drive. With Discard set and a TRIM-enabled guest OS 2 , when the VM's filesystem
 marks blocks as unused after deleting files, the controller will relay this information to the storage, which will
 then shrink the disk image accordingly. For the guest to be able to issue TRIM commands, you must enable
 the Discard option on the drive. Some guest operating systems may also require the SSD Emulation flag

@@ -40,8 +40,8 @@ btrfs filesystem usage /PATH command, for example:
 
 
 The Proxmox VE node management tool (pvenode) allows you to control node specific settings and resources.
-Currently pvenode allows you to set a node’s description, run various bulk operations on the node’s guests,
-view the node’s task history, and manage the node’s SSL certificates, which are used for the API and the
+Currently pvenode allows you to set a node's description, run various bulk operations on the node's guests,
+view the node's task history, and manage the node's SSL certificates, which are used for the API and the
 web GUI through pveproxy.
 
 
@@ -49,9 +49,9 @@ web GUI through pveproxy.
 
 
 Wake-on-LAN (WoL) allows you to switch on a sleeping computer in the network, by sending a magic packet.
-At least one NIC must support this feature, and the respective option needs to be enabled in the computer’s
+At least one NIC must support this feature, and the respective option needs to be enabled in the computer's
 firmware (BIOS/UEFI) configuration. The option name can vary from Enable Wake-on-Lan to Power On By
-PCIE Device; check your motherboard’s vendor manual, if you’re unsure. ethtool can be used to check
+PCIE Device; check your motherboard's vendor manual, if you're unsure. ethtool can be used to check
 the WoL configuration of <interface> by running:
 
 
@@ -97,9 +97,9 @@ pvenode config set -wakeonlan XX:XX:XX:XX:XX:XX,broadcast-address=< ←broadcast
 
 
 When troubleshooting server issues, for example, failed backup jobs, it can often be helpful to have a log of
-the previously run tasks. With Proxmox VE, you can access the nodes’s task history through the pvenode
+the previously run tasks. With Proxmox VE, you can access the nodes's task history through the pvenode
 task command.
-You can get a filtered list of a node’s finished tasks with the list subcommand. For example, to get a list
+You can get a filtered list of a node's finished tasks with the list subcommand. For example, to get a list
 of tasks related to VM 100 that ended with an error, the command would be:
 
 
@@ -195,7 +195,7 @@ pvenode config set --ballooning-target 90
 
 Each Proxmox VE cluster creates by default its own (self-signed) Certificate Authority (CA) and generates
 a certificate for each node which gets signed by the aforementioned CA. These certificates are used for
-encrypted communication with the cluster’s pveproxy service and the Shell/Console feature if SPICE is
+encrypted communication with the cluster's pveproxy service and the Shell/Console feature if SPICE is
 used.
 The CA certificate and key are stored in the Proxmox Cluster File System (pmxcfs).
 

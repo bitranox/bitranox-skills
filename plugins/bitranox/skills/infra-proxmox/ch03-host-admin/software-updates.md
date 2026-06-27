@@ -83,12 +83,12 @@ microcode at boot time.
 
 > **Caution:**
 > With some updates, such as for BIOS/UEFI or storage controller, the device configuration could be
-> reset. Please follow the vendor’s instructions carefully and back up the current configuration.
+> reset. Please follow the vendor's instructions carefully and back up the current configuration.
 
 
 Please check with your vendor which update methods are available.
 
-- Convenient update methods for servers can include Dell’s Lifecycle Manager or Service Packs from HPE.
+- Convenient update methods for servers can include Dell's Lifecycle Manager or Service Packs from HPE.
 - Sometimes there are Linux utilities available as well. Examples are mlxup for NVIDIA ConnectX or
 bnxtnvm/niccli for Broadcom network cards.
 

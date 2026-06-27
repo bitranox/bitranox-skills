@@ -11,7 +11,7 @@ Score a project 0-10, identify issues by severity, walk the user through fixes o
 
 > **Project instructions file** depends on your CLI tool:
 > **Claude Code** → `CLAUDE.md` | **Codex** → `AGENTS.md` | **Kilo Code / Windsurf** → equivalent config file.
-> This skill uses "CLAUDE.md" as shorthand — substitute the correct filename for your environment.
+> This skill uses "CLAUDE.md" as shorthand  -  substitute the correct filename for your environment.
 
 **Core principle:** Respect prior decisions. Check before suggesting. Ask before changing.
 
@@ -111,7 +111,7 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
 
 Cross-reference your findings against **all** deliberately accepted items collected in Step 1 (from the "Code Quality" section AND from inline "by design" documentation throughout the project instructions file). Remove any issue that matches.
 
-**If unsure whether something is deliberately accepted:** include it but note "This may be intentional per the project instructions — please confirm."
+**If unsure whether something is deliberately accepted:** include it but note "This may be intentional per the project instructions  -  please confirm."
 
 ## Step 5: Format and Present One-by-One
 
@@ -130,7 +130,7 @@ Every finding MUST use this exact format:
 - **MEDIUM**: Performance issues, code quality problems, missing tests, unclear code, documentation gaps
 - **MINOR**: Pure style issues (formatting, naming conventions that don't affect readability)
 
-**Every issue MUST have a specific, actionable suggested fix.** Not "improve this" — actual instructions.
+**Every issue MUST have a specific, actionable suggested fix.** Not "improve this"  -  actual instructions.
 
 **Number issues sequentially.** Present in severity order: SEVERE first, then MEDIUM, then MINOR.
 
@@ -149,7 +149,7 @@ Implement the change, verify it works (run relevant tests/lints), show the user 
 **Mandatory for every decline.** Append to `# Code Quality` section in CLAUDE.md / AGENTS.md:
 
 ```markdown
-Deliberately accepted items — do not flag in future reviews:
+Deliberately accepted items  -  do not flag in future reviews:
 
 - **[Short Title]**: [User's reason]. [Brief description so future reviewers understand.]
 ```

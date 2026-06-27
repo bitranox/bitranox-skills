@@ -144,7 +144,7 @@ Supported audio devices are:
 
 - ich9-intel-hda: Intel HD Audio Controller, emulates ICH9
 - intel-hda: Intel HD Audio Controller, emulates ICH6
-- AC97: Audio Codec ’97, useful for older operating systems like Windows XP
+- AC97: Audio Codec '97, useful for older operating systems like Windows XP
 There are two backends available:
 12 Looking Glass: https://looking-glass.io/
 
@@ -153,7 +153,7 @@ There are two backends available:
 - none
 The spice backend can be used in combination with SPICE while the none backend can be useful if an audio
 device is needed in the VM for some software to work. To use the physical audio device of the host use
-device passthrough (see PCI Passthrough and USB Passthrough). Remote protocols like Microsoft’s RDP
+device passthrough (see PCI Passthrough and USB Passthrough). Remote protocols like Microsoft's RDP
 have options to play sound.
 
 
@@ -294,7 +294,7 @@ disable certain devices for booting altogether.
 
 
 In any case, even devices not appearing in the list or having the checkmark disabled will still be available
-to the guest, once it’s operating system has booted and initialized them. The bootable flag only affects the
+to the guest, once it's operating system has booted and initialized them. The bootable flag only affects the
 guest BIOS and bootloader.
 
 

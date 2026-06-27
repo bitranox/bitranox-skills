@@ -172,7 +172,7 @@ Linux network stack.
 
 
 The integrated firewall allows you to filter network packets on any VM or Container interface. Common sets
-of firewall rules can be grouped into “security groups”.
+of firewall rules can be grouped into "security groups".
 
 
 ## 1.7 Hyper-converged Infrastructure
@@ -277,8 +277,8 @@ developers is the:
 ### 1.10.4 Commercial Support
 
 
-Proxmox Server Solutions GmbH also offers enterprise support available as Proxmox VE Subscription Service Plans. All users with a subscription get access to the Proxmox VE Enterprise Repository, and—with
-a Basic, Standard or Premium subscription—also to the Proxmox Customer Portal. The customer portal
+Proxmox Server Solutions GmbH also offers enterprise support available as Proxmox VE Subscription Service Plans. All users with a subscription get access to the Proxmox VE Enterprise Repository, and - with
+a Basic, Standard or Premium subscription - also to the Proxmox Customer Portal. The customer portal
 provides help and support with guaranteed response times from the Proxmox VE developers.
 For volume discounts, or more information in general, please contact sales@proxmox.com.
 
@@ -318,7 +318,7 @@ The most notable change with version 4.0 was the move from OpenVZ to LXC. Contai
 integrated, and they can use the same storage and network features as virtual machines. At the same time
 we introduced the easy-to-use High Availability (HA) manager, simplifying the configuration and management
 of highly available setups.
-During the development of Proxmox VE 5 the asynchronous storage replication as well as automated certificate management using ACME/Let’s Encrypt were introduced, among many other features.
+During the development of Proxmox VE 5 the asynchronous storage replication as well as automated certificate management using ACME/Let's Encrypt were introduced, among many other features.
 The Software Defined Network (SDN) stack was developed in cooperation with our community. It was integrated into the web interface as an experimental feature in version 6.2, simplifying the management of
 sophisticated network configurations. Since version 8.1, the SDN integration is fully supported and installed
 by default.
@@ -366,7 +366,7 @@ then follow the README.adoc document.
 The Proxmox VE user interface is in English by default. However, thanks to the contributions of the community, translations to other languages are also available. We welcome any support in adding new languages,
 translating the latest features, and improving incomplete or inconsistent translations.
 We use gettext for the management of the translation files. Tools like Poedit offer a nice user interface to edit
-the translation files, but you can use whatever editor you’re comfortable with. No programming knowledge is
+the translation files, but you can use whatever editor you're comfortable with. No programming knowledge is
 required for translating.
 
 

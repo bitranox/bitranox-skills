@@ -38,7 +38,7 @@ This is the default option when creating a new container.
 Privileged Containers
 Security in containers is achieved by using mandatory access control AppArmor restrictions, seccomp filters
 and Linux kernel namespaces. The LXC team considers this kind of container as unsafe, and they will not
-consider new container escape exploits to be security issues worthy of a CVE and quick fix. That’s why
+consider new container escape exploits to be security issues worthy of a CVE and quick fix. That's why
 privileged containers should only be used in trusted environments.
 
 

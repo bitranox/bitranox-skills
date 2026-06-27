@@ -46,7 +46,7 @@ a forwards compatible API endpoint for this v2 API.
 To use it, set influxdbproto to http or https (depending on your configuration). By default, Proxmox VE uses
 the organization proxmox and the bucket/db proxmox (They can be set with the configuration organization
 and bucket respectively).
-Since InfluxDB’s v2 API is only available with authentication, you have to generate a token that can write into
+Since InfluxDB's v2 API is only available with authentication, you have to generate a token that can write into
 the correct bucket and set it.
 In the v2 compatible API of 1.8.x, you can use user:password as token (if required), and can omit the
 organization since that has no meaning in InfluxDB 1.x.

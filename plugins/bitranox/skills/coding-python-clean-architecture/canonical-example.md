@@ -1,4 +1,4 @@
-# Canonical Example — Money Transfer (Pure Python)
+# Canonical Example  -  Money Transfer (Pure Python)
 
 Apply this pattern to any multi-aggregate state transition that emits events.
 

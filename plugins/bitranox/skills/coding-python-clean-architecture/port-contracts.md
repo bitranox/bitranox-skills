@@ -1,4 +1,4 @@
-# Port Contracts — Standard Protocol Definitions
+# Port Contracts  -  Standard Protocol Definitions
 
 Reference `Protocol`s for application-layer ports. All ports live in `application/ports/`.
 

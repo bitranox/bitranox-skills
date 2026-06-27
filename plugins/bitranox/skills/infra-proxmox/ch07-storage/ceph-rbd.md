@@ -134,7 +134,7 @@ The keyring will be stored at
 ### 7.14.3 Ceph client configuration (optional)
 
 
-Connecting to an external Ceph storage doesn’t always allow setting client-specific options in the config DB
+Connecting to an external Ceph storage doesn't always allow setting client-specific options in the config DB
 on the external cluster. You can add a ceph.conf beside the Ceph keyring to change the Ceph client
 configuration for the storage.
 The ceph.conf needs to have the same name as the storage.

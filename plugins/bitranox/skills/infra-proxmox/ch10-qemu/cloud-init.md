@@ -20,7 +20,7 @@ bootable CD-ROM.
 qm set 9000 --boot order=scsi0
 ```
 
-For many Cloud-Init images, it is required to configure a serial console and use it as a display. If the configuration doesn’t work for a given image however, switch back to the default display instead.
+For many Cloud-Init images, it is required to configure a serial console and use it as a display. If the configuration doesn't work for a given image however, switch back to the default display instead.
 
 
 ```
@@ -75,7 +75,7 @@ qm set 9000 --cicustom "user=<volume>,network=<volume>,meta=<volume>"
 ```
 
 The custom config files have to be on a storage that supports snippets and have to be available on all nodes
-the VM is going to be migrated to. Otherwise the VM won’t be able to start. For example:
+the VM is going to be migrated to. Otherwise the VM won't be able to start. For example:
 
 
 ```
@@ -84,7 +84,7 @@ qm set 9000 --cicustom "user=local:snippets/userconfig.yaml"
 
 There are three kinds of configs for Cloud-Init. The first one is the user config as seen in the example above.
 The second is the network config and the third the meta config. They can all be specified together or
-mixed and matched however needed. The automatically generated config will be used for any that don’t have
+mixed and matched however needed. The automatically generated config will be used for any that don't have
 a custom config file specified.
 The generated config can be dumped to serve as a base for custom configs:
 
@@ -110,7 +110,7 @@ There are no ready-made cloud images for Windows available for free. Using Cloud
 
 
 The first step is to install Windows in a VM. Download and install Cloudbase-Init in the guest. It may be
-necessary to install the Beta version. Don’t run Sysprep at the end of the installation. Instead configure
+necessary to install the Beta version. Don't run Sysprep at the end of the installation. Instead configure
 Cloudbase-Init first.
 A few common options to set would be:
 
@@ -166,7 +166,7 @@ qm set 123 --sshkey ~/.ssh/id_rsa.pub
 
 Make sure that the ostype is set to any Windows version before setting the password. Otherwise the
 password will be encrypted and Cloudbase-Init will use the encrypted password as plaintext password.
-When everything is set, start the cloned guest. On the first boot the login won’t work and it will reboot
+When everything is set, start the cloned guest. On the first boot the login won't work and it will reboot
 automatically for the changed hostname. After the reboot the new password should be set and login should
 work.
 
@@ -250,7 +250,7 @@ ciupgrade: <boolean> (default = 1)
 do an automatic package upgrade after the first boot.
 
 ciuser: <string>
-User name to change ssh keys and password for instead of the image’s configured default user.
+User name to change ssh keys and password for instead of the image's configured default user.
 
 ipconfig[n]: [gw=<GatewayIPv4>] [,gw6=<GatewayIPv6>]
 [,ip=<IPv4Format/CIDR>] [,ip6=<IPv6Format/CIDR>]
@@ -329,7 +329,7 @@ many modern system can support this.
 Please refer to your hardware vendor to check if they support this feature under Linux for your specific setup.
 
 Determining PCI Card Address
-The easiest way is to use the GUI to add a device of type "Host PCI" in the VM’s hardware tab. Alternatively,
+The easiest way is to use the GUI to add a device of type "Host PCI" in the VM's hardware tab. Alternatively,
 you can use the command line.
 You can locate your card using
 
@@ -356,7 +356,7 @@ pass DMA requests directly to the hardware IOMMU. To enable these options, add:
 iommu=pt
 to the kernel commandline.
 Kernel Modules
-You have to make sure the following modules are loaded. This can be achieved by adding them to ‘/etc/modules’.
+You have to make sure the following modules are loaded. This can be achieved by adding them to '/etc/modules'.
 Mediated devices passthrough
 If passing through mediated devices (e.g. vGPUs), the following is not needed. In these cases, the device
 will be owned by the appropriate host-driver directly.
