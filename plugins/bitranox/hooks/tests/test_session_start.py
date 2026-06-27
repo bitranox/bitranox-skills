@@ -17,8 +17,19 @@ from pathlib import Path
 import pytest
 
 import session_start as S
+import self_improve_signals as SIG
 
 REPO_PLUGIN_ROOT = Path(__file__).resolve().parents[2]  # plugins/bitranox
+
+
+@pytest.fixture(autouse=True)
+def isolate_home(tmp_path, monkeypatch):
+    """Point HOME at a clean tmp dir so audit-file lookup never sees a real report."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
 
 
 def make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nBODY\n"):
@@ -81,3 +92,52 @@ def test_resolves_against_real_repo_skill(monkeypatch, capsys):
 
 def test_real_skill_is_where_the_hook_expects():
     assert (REPO_PLUGIN_ROOT / "skills" / "using-bitranox-skills" / "SKILL.md").is_file()
+
+
+# --------------------------------------------------------------------------
+# SessionEnd audit surfacing (consumed once, appended to the skills context)
+# --------------------------------------------------------------------------
+
+
+def run_with_stdin(monkeypatch, capsys, plugin_root, cwd):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": cwd})))
+    rc = S.main()
+    return rc, capsys.readouterr().out
+
+
+def _write_audit(cwd, text):
+    af = SIG.audit_file(cwd)
+    af.parent.mkdir(parents=True, exist_ok=True)
+    af.write_text(text, encoding="utf-8")
+    return af
+
+
+def test_audit_is_surfaced_and_consumed(tmp_path, monkeypatch, capsys):
+    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nSKILLBODY\n")
+    cwd = "/proj/audit"
+    af = _write_audit(cwd, "<SELF-IMPROVE-AUDIT>\nreview these misses\n</SELF-IMPROVE-AUDIT>\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, cwd)
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "SKILLBODY" in ctx            # skills banner still present
+    assert "review these misses" in ctx  # audit appended
+    assert not af.is_file()              # consumed (deleted) so it is not resurfaced
+
+
+def test_audit_surfaces_even_without_skill(tmp_path, monkeypatch, capsys):
+    cwd = "/proj/auditonly"
+    _write_audit(cwd, "<SELF-IMPROVE-AUDIT>\nonly audit\n</SELF-IMPROVE-AUDIT>\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, tmp_path, cwd)  # tmp_path has no skill
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "only audit" in ctx
+
+
+def test_no_audit_leaves_context_unchanged(tmp_path, monkeypatch, capsys):
+    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nSKILLBODY\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/none")
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "SKILLBODY" in ctx
+    assert "SELF-IMPROVE-AUDIT" not in ctx

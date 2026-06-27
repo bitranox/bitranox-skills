@@ -11,11 +11,17 @@ from pathlib import Path
 
 HOOKS_DIR = Path(__file__).resolve().parent.parent
 
+# Put the hooks dir on sys.path so the hyphenated hooks can import sibling underscore
+# modules (e.g. self_improve_signals) at load time, and test files can import them directly.
+if str(HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(HOOKS_DIR))
+
 # filename stem -> import alias used by the test modules
 _HOOK_MODULES = {
     "validate-structured-files": "validate_structured_files",
     "block-pgrep-self-match": "block_pgrep_self_match",
     "self-improve-gate": "self_improve_gate",
+    "self-improve-audit": "self_improve_audit",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
     "git-footgun-guard": "git_footgun_guard",

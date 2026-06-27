@@ -18,73 +18,20 @@ stdin and, when it fires, prints a {"decision":"block",...} JSON on stdout.
 import hashlib
 import json
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
 
-# High-precision learning signals. Signals cluster in FAMILIES; cover the family, do not
-# wait to be fed each phrase one at a time: (1) USER correction, (2) USER explicit
-# "remember", (3) ENDORSEMENT of a good idea - either direction (see _ENDORSE_PATTERN),
-# (4) ASSISTANT self-admitted miss, (5) ASSISTANT realization/discovery.
-# Split by role: correction/"remember" phrasing is only a learning when the USER says it
-# (the assistant routinely writes "remember to...", "instead of..." in ordinary answers,
-# which would fire spurious blocks); self-admitted misses and realizations are only
-# meaningful from the ASSISTANT; endorsement counts from EITHER side. English and German.
-# Kept narrow to favour precision over recall.
-_USER_PATTERN = re.compile(
-    r"no,|nope|that.?s wrong|that is wrong|incorrect|don.?t do|do not do|stop doing"
-    r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of"
-    r"|that.?s not right|isn.?t right"
-    r"|remember|note that|keep in mind|for next time|for the future|from now on"
-    r"|make a (memory|rule|note)"
-    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran",
-    re.IGNORECASE,
-)
-# Endorsement of a good idea, fired from EITHER side. The high-signal case is the ASSISTANT
-# judging the USER's suggestion good ("good idea", "good call" - the user found the better
-# path, adopt it, kin to a self-admitted miss); it also fires when the USER endorses the
-# assistant's proposal (a confirmed approach). Anchored on praise of a specific
-# idea/call/point/catch so a bare "ok/thanks/nice" does NOT fire.
-_ENDORSE_PATTERN = re.compile(
-    r"(good|great|nice|smart|clever|brilliant|excellent) (idea|call|point|catch|thinking|suggestion)"
-    r"|i like (that|this|your) (idea|approach|plan|suggestion)|let.?s do (that|it)"
-    r"|gute idee|guter (punkt|einfall)|gut(er)? gedacht",
-    re.IGNORECASE,
-)
-_ASST_PATTERN = re.compile(
-    r"you.?re right|you are right|my mistake|i was wrong|apolog"
-    # A deterministic guard/hook blocked the assistant's OWN action -> high-signal
-    # process miss. Require a first-person object (me/my), or the passive "blocked by
-    # ... hook", so merely explaining a hook to the user does not fire. "let me
-    # redo/fix" alone deliberately does NOT match (too noisy, used to spurious-block).
-    r"|(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,10}\b(me|my)\b"
-    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby (a |the )?(hook|guard|gate)"
-    r"|self.?match(ed|ing|es)?",
-    re.IGNORECASE,
-)
-# A realization the assistant reaches AFTER probing - "now I understand the real
-# topology...", "I now realize the data flows through X" - is a durable discovery about
-# infrastructure/architecture/data-flow that should be captured at the right altitude
-# (own infra -> top-level CLAUDE.md; one project -> its CLAUDE.md/memory; unsure -> ask).
-# Anchored on the now/finally realization opener (so a bare "I understand your point"
-# acknowledgement does NOT fire) plus the strong "the real <structure>" / "turns out" forms.
-_REALIZATION_PATTERN = re.compile(
-    r"now i (understand|see|realize|get it)\b"
-    r"|i (now|finally) (understand|see|realize)\b"
-    r"|i(.?ve| have)? figured (it |this )?out|i figured out\b"
-    r"|the (real|actual) (topolog|architect|structure|setup|layout|wiring|flow|picture|story|design)"
-    r"|it turns out\b|turns out (that|the)\b"
-    r"|(that|this) explains (the|why|how|what)\b"
-    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b|root cause is\b"
-    r"|(actually|really) (runs|lives|sits|resides|is hosted|happens|is served) on\b"
-    # "the picture is clear now", "I have a clearer picture", "now it's clear", "makes sense now"
-    r"|clear(er)? picture|the (full|whole|complete|bigger) picture"
-    r"|\b(now|it all|everything|it)('?s| is| are)? (clear|much clearer)\b"
-    r"|\bmakes sense now\b|\bnow [^.\n]{0,20}makes sense\b"
-    r"|jetzt (verstehe ich|wird klar|ergibt)|jetzt ist (alles |es )?klar|klares bild"
-    r"|stellt sich heraus|herausgefunden",
-    re.IGNORECASE,
+# Learning-signal patterns live in the shared self_improve_signals module (single source
+# of truth, also used by the SessionEnd audit hook). Re-bound to the private names this
+# module and its tests use. Signals cluster in FAMILIES (user correction / "remember";
+# endorsement either side; assistant self-admission / realization); extend the family in
+# self_improve_signals, not here.
+from self_improve_signals import (
+    USER_PATTERN as _USER_PATTERN,
+    ASST_PATTERN as _ASST_PATTERN,
+    REALIZATION_PATTERN as _REALIZATION_PATTERN,
+    ENDORSE_PATTERN as _ENDORSE_PATTERN,
 )
 
 _REASON = (

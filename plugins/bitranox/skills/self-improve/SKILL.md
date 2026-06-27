@@ -93,6 +93,19 @@ reflect and find nothing durable, say so in one line and stop. Do not manufactur
 When you notice the gate missed a signal, fix the **whole family**, not just the one phrase you were
 handed - propose the related variants yourself rather than waiting to be fed each one.
 
+### End-of-session miss audit (self-tuning loop)
+
+Because the per-turn Stop gate is precision-tuned, it misses some signals. A two-stage loop catches
+those without making the live gate noisy:
+
+- **SessionEnd** (`self-improve-audit.py`) scans the whole transcript and, using the broader recall
+  patterns in `self_improve_signals.py`, records **candidate misses** (a broad match the strict gate
+  did not catch) to a per-project audit file. It cannot call the model, so it only records.
+- **SessionStart** (`session-start.py`) surfaces that audit once next session, so you **review the
+  candidates**: confirm the genuine misses, capture their learnings here, and for a real gap extend
+  the gate's family patterns in `self_improve_signals.py` (the meta-loop). Patterns live in that one
+  shared module so the gate and the audit never drift.
+
 ## Procedure
 
 Create one todo per step.

@@ -20,6 +20,8 @@ import os
 import sys
 from pathlib import Path
 
+from self_improve_signals import audit_file
+
 BANNER = (
     "<EXTREMELY-IMPORTANT>\n"
     "Below is the full content of your 'bitranox:using-bitranox-skills' skill - your standing "
@@ -46,14 +48,37 @@ def build_context():
     return BANNER + text + "\n</EXTREMELY-IMPORTANT>"
 
 
+def audit_context():
+    """Surface (and consume) a pending SessionEnd miss-audit for this project, if any.
+
+    The SessionEnd hook (self-improve-audit.py) writes candidate gate-misses to a per-project
+    file; here we inject it once so the model reviews them, then delete it so it is not
+    resurfaced. cwd comes from the SessionStart event (stdin), else the env / cwd fallback.
+    """
+    try:
+        event = json.load(sys.stdin)
+    except Exception:  # noqa: BLE001 - no/invalid stdin: fall back, never wedge
+        event = {}
+    proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    try:
+        path = audit_file(proj)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8").strip()
+        path.unlink()  # consume once
+    except Exception:  # noqa: BLE001 - unreadable/undeletable: skip, never wedge
+        return None
+    return text or None
+
+
 def main():
-    context = build_context()
-    if context is None:
+    parts = [p for p in (build_context(), audit_context()) if p]
+    if not parts:
         return 0
     out = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": context,
+            "additionalContext": "\n\n".join(parts),
         }
     }
     sys.stdout.write(json.dumps(out))

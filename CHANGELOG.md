@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.11.0] - 2026-06-27
+
+### Added
+- `self-improve` end-of-session miss audit (self-tuning loop): a new **SessionEnd** hook
+  (`self-improve-audit.py`) scans the whole transcript and records **candidate misses** - turns a
+  broad recall pattern flags but the precision-tuned gate did not catch - to a per-project audit
+  file. The **SessionStart** hook (`session-start.py`) surfaces that audit once next session so the
+  model reviews the misses, captures their learnings, and extends the gate. SessionEnd cannot nudge
+  the model, so the analysis is deterministic and the review is deferred to the next start.
+- `self_improve_signals.py`: shared single source of truth for the strict gate patterns (now
+  imported by the gate) plus the broader recall patterns and the audit-file location, so the gate
+  and the audit can never drift.
+
 ## [3.10.3] - 2026-06-27
 
 ### Changed
