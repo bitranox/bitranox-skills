@@ -167,7 +167,7 @@ def test_main_invalid_blocks_with_feedback(tmp_path, monkeypatch, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "BLOCKED" in err
-    assert "bitranox:edit-json" in err
+    assert "bitranox:files-edit-json" in err
 
 
 def test_main_invalid_yaml_blocks(tmp_path, monkeypatch):

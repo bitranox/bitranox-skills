@@ -2,7 +2,7 @@
 
 Contract: on stdout, emit
   {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": <skill+banner>}}
-when using-bitranox-skills/SKILL.md is readable; emit nothing when it is not. main()
+when meta-using-bitranox-skills/SKILL.md is readable; emit nothing when it is not. main()
 always returns 0. The skill is located via CLAUDE_PLUGIN_ROOT (else relative to the
 hook file).
 
@@ -37,8 +37,8 @@ def isolate_home(tmp_path, monkeypatch):
     return home
 
 
-def make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nBODY\n"):
-    skill = tmp_path / "skills" / "using-bitranox-skills" / "SKILL.md"
+def make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nBODY\n"):
+    skill = tmp_path / "skills" / "meta-using-bitranox-skills" / "SKILL.md"
     skill.parent.mkdir(parents=True, exist_ok=True)
     skill.write_text(skill_body, encoding="utf-8")
     return tmp_path
@@ -54,7 +54,7 @@ def run(monkeypatch, capsys, plugin_root=None):
 
 
 def test_emits_sessionstart_context_with_skill_body(tmp_path, monkeypatch, capsys):
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nUNIQUE_MARKER_XYZ\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nUNIQUE_MARKER_XYZ\n")
     rc, out = run(monkeypatch, capsys, root)
     assert rc == 0
     payload = json.loads(out)
@@ -62,7 +62,7 @@ def test_emits_sessionstart_context_with_skill_body(tmp_path, monkeypatch, capsy
     assert hso["hookEventName"] == "SessionStart"
     ctx = hso["additionalContext"]
     assert "UNIQUE_MARKER_XYZ" in ctx          # the skill body is injected
-    assert "using-bitranox-skills" in ctx          # banner names the skill
+    assert "meta-using-bitranox-skills" in ctx          # banner names the skill
     assert ctx.startswith("<EXTREMELY-IMPORTANT>")
     assert ctx.rstrip().endswith("</EXTREMELY-IMPORTANT>")
 
@@ -89,14 +89,14 @@ def test_empty_skill_emits_nothing(tmp_path, monkeypatch, capsys):
 
 def test_resolves_against_real_repo_skill(monkeypatch, capsys):
     # With no env var, it derives the path from the hook file location and finds the
-    # real using-bitranox-skills skill shipped in this repo.
+    # real meta-using-bitranox-skills skill shipped in this repo.
     rc, out = run(monkeypatch, capsys, None)
     assert rc == 0
-    assert "using-bitranox-skills" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "meta-using-bitranox-skills" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
 
 
 def test_real_skill_is_where_the_hook_expects():
-    assert (REPO_PLUGIN_ROOT / "skills" / "using-bitranox-skills" / "SKILL.md").is_file()
+    assert (REPO_PLUGIN_ROOT / "skills" / "meta-using-bitranox-skills" / "SKILL.md").is_file()
 
 
 # --------------------------------------------------------------------------
@@ -119,7 +119,7 @@ def _write_audit(cwd, text):
 
 
 def test_audit_is_surfaced_and_consumed(tmp_path, monkeypatch, capsys):
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nSKILLBODY\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nSKILLBODY\n")
     cwd = "/proj/audit"
     af = _write_audit(cwd, "<SELF-IMPROVE-AUDIT>\nreview these misses\n</SELF-IMPROVE-AUDIT>\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, cwd)
@@ -140,7 +140,7 @@ def test_audit_surfaces_even_without_skill(tmp_path, monkeypatch, capsys):
 
 
 def test_no_audit_leaves_context_unchanged(tmp_path, monkeypatch, capsys):
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nSKILLBODY\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nSKILLBODY\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/none")
     assert rc == 0
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
@@ -159,7 +159,7 @@ def _optout(home):
 
 def test_nudge_fires_when_autoupdate_off(tmp_path, monkeypatch, capsys, isolate_home):
     _optout(isolate_home).unlink()  # remove the default opt-out so the nudge can fire
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
     assert rc == 0
     assert "auto-update" in json.loads(out).get("systemMessage", "")
@@ -171,13 +171,13 @@ def test_nudge_silent_when_autoupdate_on(tmp_path, monkeypatch, capsys, isolate_
     settings.write_text(
         json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": True}}}),
         encoding="utf-8")
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
     assert "systemMessage" not in json.loads(out)
 
 
 def test_nudge_silent_when_optout_present(tmp_path, monkeypatch, capsys):
     # the autouse fixture leaves the opt-out sentinel in place
-    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
     assert "systemMessage" not in json.loads(out)

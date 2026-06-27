@@ -1,119 +1,242 @@
 {
-  "_comment": "Category-prefix naming registry for bitranox-skills. Skill names are <category>-[<sub>-]<name> (two segments max before the name; lowercase + hyphen). repo-gate.py enforces that every NEW skill's top-level prefix is a key in 'categories' (sub-prefixes are free-form). 'legacy' grandfathers the current flat names until a future retrofit MAJOR; 'retrofit' is the ready worklist for that rename. See CONTRIBUTING.md 'Skill naming'.",
+  "_comment": "Category-prefix naming registry for bitranox-skills. Skill names are <category>-[<sub>-]<name> (two segments max before the name; lowercase + hyphen). repo-gate.py check_skill_naming enforces that every skill's top-level prefix is a key in 'categories' (sub-prefixes are free-form). To open a new category, add a key here with a desc and seed subs, and add a matching grouping to meta-using-bitranox-skills. See CONTRIBUTING.md 'Skill naming'.",
   "categories": {
-    "coding":     {"desc": "Language/runtime-specific craft: architecture, references, idioms, libraries, packaging, perf, tooling bound to one language", "subs": ["python", "bash", "js", "ts", "go", "rust", "java", "cpp", "common"]},
-    "web":        {"desc": "Web app development: frontend UI, backend services, HTTP APIs, fullstack", "subs": ["frontend", "backend", "api", "fullstack"]},
-    "data":       {"desc": "Data engineering and analytics: pipelines, ETL, dataframes, analysis, visualization", "subs": ["analytics", "pipeline", "etl", "viz"]},
-    "db":         {"desc": "Databases: schema, queries, migrations, SQL/NoSQL/vector", "subs": ["sql", "nosql", "vector", "migrate"]},
-    "ai":         {"desc": "ML/AI/LLM systems: model building, prompting, agents, RAG, LLM APIs", "subs": ["llm", "ml", "agents", "prompt", "rag"]},
-    "devops":     {"desc": "CI/CD, build and release automation, observability (provider-agnostic)", "subs": ["cicd", "build", "release", "monitor"]},
-    "cloud":      {"desc": "Managed cloud providers and infrastructure-as-code", "subs": ["aws", "gcp", "azure", "iac"]},
-    "containers": {"desc": "Container runtime and orchestration regardless of host", "subs": ["docker", "k8s", "compose"]},
-    "infra":      {"desc": "Self-hosted/on-prem hardware, hypervisors, virtualization, storage", "subs": ["proxmox", "virt", "baremetal", "storage"]},
-    "net":        {"desc": "Networking: DNS, routing, proxies, firewall, VPN, reverse proxy", "subs": ["dns", "proxy", "firewall", "vpn"]},
-    "sec":        {"desc": "Security posture: appsec, auth, secrets, pentest, privacy/PII", "subs": ["appsec", "auth", "secrets", "pentest", "privacy"]},
-    "test":       {"desc": "Testing/QA tooling and frameworks (the concrete how, not the discipline)", "subs": ["unit", "e2e", "perf", "fixtures"]},
-    "docs":       {"desc": "Technical writing and doc generation, markdown authoring/conversion", "subs": ["api", "format", "convert"]},
-    "files":      {"desc": "Programmatic create/edit/validate of machine-readable file formats", "subs": ["json", "xml", "yaml", "toml", "csv"]},
-    "git":        {"desc": "Version-control workflows: branching, worktrees, gitignore, history", "subs": ["hooks", "worktree"]},
-    "compuse":    {"desc": "Computer-use mechanics: running shell/git/ssh commands, reading exit codes/output, remote control", "subs": ["bash", "ssh", "vnc", "git", "win"]},
-    "process":    {"desc": "Software-engineering workflow discipline: plan, review, debug, agent orchestration, ship", "subs": ["plan", "review", "debug", "agents", "ship"]},
-    "pm":         {"desc": "Project/product/program management: agile, roadmaps, task workflows", "subs": ["agile", "roadmap", "tasks"]},
-    "office":     {"desc": "Business documents and personal productivity: docx/xlsx/pptx/pdf, email, calendar, notes", "subs": ["docx", "xlsx", "pptx", "pdf", "email"]},
-    "write":      {"desc": "General prose/content craft and editing, style, humanizing", "subs": ["copy", "edit", "humanize"]},
-    "marketing":  {"desc": "Marketing/advertising/branding/positioning/pricing/persuasion/growth", "subs": ["seo", "ads", "brand", "growth"]},
-    "biz":        {"desc": "Business/finance/ops beyond marketing: finance, sales, legal, strategy", "subs": ["finance", "sales", "legal", "strategy"]},
-    "design":     {"desc": "Visual and UX design craft (not frontend implementation): UX, UI, branding visuals, theming", "subs": ["ux", "ui", "brand", "theme"]},
-    "comms":      {"desc": "Targeted interpersonal/organizational messaging: status updates, chat, meetings", "subs": ["email", "chat", "status", "meeting"]},
-    "research":   {"desc": "Research and investigation: web research, literature review, fact-checking, citations", "subs": ["web", "lit", "factcheck"]},
-    "meta":       {"desc": "Authoring the marketplace itself: writing/adopting skills, self-improvement, harness/hooks config", "subs": ["skill", "harness", "hooks"]}
-  },
-  "legacy": [
-    "adopting-external-skills",
-    "bash-clean-architecture",
-    "bash-reference",
-    "brainstorming",
-    "computer-use-bash",
-    "computer-use-git",
-    "computer-use-ssh",
-    "computer-use-vnc",
-    "dispatching-parallel-agents",
-    "edit-json",
-    "edit-xml",
-    "edit-yml",
-    "enhance-code-quality",
-    "finishing-development-branch",
-    "git-worktrees",
-    "humanize-de",
-    "humanize-en",
-    "markitdown",
-    "md-table-formatting",
-    "plan-executor",
-    "proxmox",
-    "proxmox-bindsnap",
-    "python-clean-architecture",
-    "python-enforce-data-architecture-strict",
-    "python-gitignore",
-    "python-performance-review",
-    "python-use-modern-libraries",
-    "receiving-code-review",
-    "requesting-code-review",
-    "rory",
-    "rotating-proxies",
-    "rpyc",
-    "self-improve",
-    "skill-writer",
-    "subagent-driven-development",
-    "systematic-debugging",
-    "test-driven-development",
-    "textual",
-    "using-bitranox-skills",
-    "uv",
-    "verification-before-completion",
-    "writing-plans"
-  ],
-  "retrofit": {
-    "adopting-external-skills": "meta-adopting-external-skills",
-    "bash-clean-architecture": "coding-bash-clean-architecture",
-    "bash-reference": "coding-bash-reference",
-    "brainstorming": "process-plan-brainstorming",
-    "computer-use-bash": "compuse-bash",
-    "computer-use-git": "compuse-git",
-    "computer-use-ssh": "compuse-ssh",
-    "computer-use-vnc": "compuse-vnc",
-    "dispatching-parallel-agents": "process-agents-dispatching-parallel",
-    "edit-json": "files-edit-json",
-    "edit-xml": "files-edit-xml",
-    "edit-yml": "files-edit-yml",
-    "enhance-code-quality": "process-review-enhance-code-quality",
-    "finishing-development-branch": "process-ship-finishing-development-branch",
-    "git-worktrees": "git-worktrees",
-    "humanize-de": "write-humanize-de",
-    "humanize-en": "write-humanize-en",
-    "markitdown": "docs-convert-markitdown",
-    "md-table-formatting": "docs-md-table-formatting",
-    "plan-executor": "process-plan-executor",
-    "proxmox": "infra-proxmox",
-    "proxmox-bindsnap": "infra-proxmox-bindsnap",
-    "python-clean-architecture": "coding-python-clean-architecture",
-    "python-enforce-data-architecture-strict": "coding-python-enforce-data-architecture-strict",
-    "python-gitignore": "coding-python-gitignore",
-    "python-performance-review": "coding-python-performance-review",
-    "python-use-modern-libraries": "coding-python-use-modern-libraries",
-    "receiving-code-review": "process-review-receiving-code-review",
-    "requesting-code-review": "process-review-requesting-code-review",
-    "rory": "marketing-rory",
-    "rotating-proxies": "net-rotating-proxies",
-    "rpyc": "coding-python-rpyc",
-    "self-improve": "meta-self-improve",
-    "skill-writer": "meta-skill-writer",
-    "subagent-driven-development": "process-agents-subagent-driven-development",
-    "systematic-debugging": "process-debug-systematic",
-    "test-driven-development": "process-test-driven-development",
-    "textual": "coding-python-textual",
-    "using-bitranox-skills": "meta-using-bitranox-skills",
-    "uv": "coding-python-uv",
-    "verification-before-completion": "process-review-verification-before-completion",
-    "writing-plans": "process-plan-writing-plans"
+    "coding": {
+      "desc": "Language/runtime-specific craft: architecture, references, idioms, libraries, packaging, perf, tooling bound to one language",
+      "subs": [
+        "python",
+        "bash",
+        "js",
+        "ts",
+        "go",
+        "rust",
+        "java",
+        "cpp",
+        "common"
+      ]
+    },
+    "web": {
+      "desc": "Web app development: frontend UI, backend services, HTTP APIs, fullstack",
+      "subs": [
+        "frontend",
+        "backend",
+        "api",
+        "fullstack"
+      ]
+    },
+    "data": {
+      "desc": "Data engineering and analytics: pipelines, ETL, dataframes, analysis, visualization",
+      "subs": [
+        "analytics",
+        "pipeline",
+        "etl",
+        "viz"
+      ]
+    },
+    "db": {
+      "desc": "Databases: schema, queries, migrations, SQL/NoSQL/vector",
+      "subs": [
+        "sql",
+        "nosql",
+        "vector",
+        "migrate"
+      ]
+    },
+    "ai": {
+      "desc": "ML/AI/LLM systems: model building, prompting, agents, RAG, LLM APIs",
+      "subs": [
+        "llm",
+        "ml",
+        "agents",
+        "prompt",
+        "rag"
+      ]
+    },
+    "devops": {
+      "desc": "CI/CD, build and release automation, observability (provider-agnostic)",
+      "subs": [
+        "cicd",
+        "build",
+        "release",
+        "monitor"
+      ]
+    },
+    "cloud": {
+      "desc": "Managed cloud providers and infrastructure-as-code",
+      "subs": [
+        "aws",
+        "gcp",
+        "azure",
+        "iac"
+      ]
+    },
+    "containers": {
+      "desc": "Container runtime and orchestration regardless of host",
+      "subs": [
+        "docker",
+        "k8s",
+        "compose"
+      ]
+    },
+    "infra": {
+      "desc": "Self-hosted/on-prem hardware, hypervisors, virtualization, storage",
+      "subs": [
+        "proxmox",
+        "virt",
+        "baremetal",
+        "storage"
+      ]
+    },
+    "net": {
+      "desc": "Networking: DNS, routing, proxies, firewall, VPN, reverse proxy",
+      "subs": [
+        "dns",
+        "proxy",
+        "firewall",
+        "vpn"
+      ]
+    },
+    "sec": {
+      "desc": "Security posture: appsec, auth, secrets, pentest, privacy/PII",
+      "subs": [
+        "appsec",
+        "auth",
+        "secrets",
+        "pentest",
+        "privacy"
+      ]
+    },
+    "test": {
+      "desc": "Testing/QA tooling and frameworks (the concrete how, not the discipline)",
+      "subs": [
+        "unit",
+        "e2e",
+        "perf",
+        "fixtures"
+      ]
+    },
+    "docs": {
+      "desc": "Technical writing and doc generation, markdown authoring/conversion",
+      "subs": [
+        "api",
+        "format",
+        "convert"
+      ]
+    },
+    "files": {
+      "desc": "Programmatic create/edit/validate of machine-readable file formats",
+      "subs": [
+        "json",
+        "xml",
+        "yaml",
+        "toml",
+        "csv"
+      ]
+    },
+    "git": {
+      "desc": "Version-control workflows: branching, worktrees, gitignore, history",
+      "subs": [
+        "hooks",
+        "worktree"
+      ]
+    },
+    "compuse": {
+      "desc": "Computer-use mechanics: running shell/git/ssh commands, reading exit codes/output, remote control",
+      "subs": [
+        "bash",
+        "ssh",
+        "vnc",
+        "git",
+        "win"
+      ]
+    },
+    "process": {
+      "desc": "Software-engineering workflow discipline: plan, review, debug, agent orchestration, ship",
+      "subs": [
+        "plan",
+        "review",
+        "debug",
+        "agents",
+        "ship"
+      ]
+    },
+    "pm": {
+      "desc": "Project/product/program management: agile, roadmaps, task workflows",
+      "subs": [
+        "agile",
+        "roadmap",
+        "tasks"
+      ]
+    },
+    "office": {
+      "desc": "Business documents and personal productivity: docx/xlsx/pptx/pdf, email, calendar, notes",
+      "subs": [
+        "docx",
+        "xlsx",
+        "pptx",
+        "pdf",
+        "email"
+      ]
+    },
+    "write": {
+      "desc": "General prose/content craft and editing, style, humanizing",
+      "subs": [
+        "copy",
+        "edit",
+        "humanize"
+      ]
+    },
+    "marketing": {
+      "desc": "Marketing/advertising/branding/positioning/pricing/persuasion/growth",
+      "subs": [
+        "seo",
+        "ads",
+        "brand",
+        "growth"
+      ]
+    },
+    "biz": {
+      "desc": "Business/finance/ops beyond marketing: finance, sales, legal, strategy",
+      "subs": [
+        "finance",
+        "sales",
+        "legal",
+        "strategy"
+      ]
+    },
+    "design": {
+      "desc": "Visual and UX design craft (not frontend implementation): UX, UI, branding visuals, theming",
+      "subs": [
+        "ux",
+        "ui",
+        "brand",
+        "theme"
+      ]
+    },
+    "comms": {
+      "desc": "Targeted interpersonal/organizational messaging: status updates, chat, meetings",
+      "subs": [
+        "email",
+        "chat",
+        "status",
+        "meeting"
+      ]
+    },
+    "research": {
+      "desc": "Research and investigation: web research, literature review, fact-checking, citations",
+      "subs": [
+        "web",
+        "lit",
+        "factcheck"
+      ]
+    },
+    "meta": {
+      "desc": "Authoring the marketplace itself: writing/adopting skills, self-improvement, harness/hooks config",
+      "subs": [
+        "skill",
+        "harness",
+        "hooks"
+      ]
+    }
   }
 }

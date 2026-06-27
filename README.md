@@ -76,8 +76,8 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
 
 ## What you get
 
-- **25 skills** under the `bitranox` namespace (`/bitranox:brainstorming`,
-  `/bitranox:systematic-debugging`, ...). Claude can also invoke them automatically when
+- **40+ skills** under the `bitranox` namespace (`/bitranox:process-plan-brainstorming`,
+  `/bitranox:process-debug-systematic`, ...). Claude can also invoke them automatically when
   a task matches a skill's description.
 - **A `Stop` hook** (`hooks/self-improve-gate.py`, launched via `hooks/run-python.sh` and wired
   in `hooks/hooks.json`) that, at the end of a turn, runs a cheap check for a learning signal (a
@@ -97,36 +97,16 @@ set) points at Git Bash. The shim refuses to run under an unexpected shell rathe
 
 ## Skills
 
-| Skill                                   | Description                                                                                                                     |
-|-----------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| bash-clean-architecture                 | Clean ports-and-adapters architecture for Bash 4.3+ scripts and multi-file projects.                                            |
-| bash-reference                          | Exact GNU Bash 5.3 reference: builtins, expansions, redirections, tests, arrays, traps.                                         |
-| brainstorming                           | Collaborative design exploration before any creative work; surfaces intent and requirements.                                    |
-| computer-use-vnc                        | Drive a remote machine/VM/GUI/TUI over VNC (keystrokes, clicks, OCR) when there is no network/SSH/agent; nothing on the target. |
-| enhance-code-quality                    | Rate, audit, and improve a project's code quality with a 0-10 assessment and concrete fixes.                                    |
-| humanize-de                             | Remove signs of AI-generated writing from German text.                                                                          |
-| humanize-en                             | Remove signs of AI-generated writing from English text.                                                                         |
-| markitdown                              | Convert files and office docs (PDF, DOCX, PPTX, XLSX, images, audio, HTML, ...) to Markdown.                                    |
-| md-table-formatting                     | Create, edit, and realign Markdown tables with proper column alignment.                                                         |
-| performance                             | Review Python for performance issues: caching, uncompiled regex, hot-spot profiling.                                            |
-| plan-executor                           | Execute a written implementation plan in a separate session with review checkpoints.                                            |
-| proxmox                                 | Proxmox VE 9.1.2 reference: clusters, VMs, containers, storage, Ceph, SDN, firewall, HA, backups.                               |
-| python-clean-architecture               | Layered ports-and-adapters architecture for Python 3.10+ (domain, UoW, outbox, idempotency).                                    |
-| python-enforce-data-architecture-strict | Refactor Python to a strict data architecture: Pydantic at boundaries, typed models, Enums, minimal conversions.                |
-| python-gitignore                        | Git-exact .gitignore parsing / path filtering (incl. whitelist mode) via the igittigitt library/CLI.                            |
-| python-libraries-to-use                 | Standardized library choices for Python projects; enforces preferred tools.                                                     |
-| python-performance-review               | Performance-analysis sub-agent: profile with real test suites, validate claims with benchmarks.                                 |
-| rory                                    | Marketing, branding, pricing, and behavioural-science angle (what would Rory Sutherland do).                                    |
-| rpyc                                    | Build transparent RPC, distributed computing, and remote object proxying in Python with RPyC.                                   |
-| self-improve                            | Capture a session's learnings into the right memory or CLAUDE.md layer so they are not re-learned.                              |
-| skill-writer                            | Create, structure, test, and deploy SKILL.md skill files (TDD-based).                                                           |
-| systematic-debugging                    | Root-cause-first debugging: find the cause before proposing fixes.                                                              |
-| test-driven-development                 | Write tests first, watch them fail, then write minimal code to pass.                                                            |
-| textual                                 | Textual TUI framework documentation reference (API, guides, CSS, widgets).                                                      |
-| using-bitranox-skills                   | Establishes that applicable skills must be invoked before any response.                                                         |
-| uv                                      | Reference for the uv package manager (v0.10.2): projects, lockfiles, tools, Docker, CI/CD, migration.                           |
-| verification-before-completion          | Require running verification commands and confirming output before claiming success.                                            |
-| writing-plans                           | Turn a spec or requirements into a step-by-step implementation plan before coding.                                              |
+Skills follow a category-prefix naming scheme, `<category>-[<sub>-]<name>` (e.g.
+`coding-python-clean-architecture`, `compuse-ssh`, `marketing-rory`, `files-edit-json`). The
+category vocabulary lives in [`plugins/bitranox/skill-taxonomy.json`](plugins/bitranox/skill-taxonomy.json)
+and is enforced by the repo gate.
+
+The full, always-current catalog - grouped by domain - is the **Skills Span Every Domain** list in
+`bitranox:meta-using-bitranox-skills`
+([`SKILL.md`](plugins/bitranox/skills/meta-using-bitranox-skills/SKILL.md)); the gate keeps it in
+sync with the shipped skill directories, so it never drifts. Browse
+[`plugins/bitranox/skills/`](plugins/bitranox/skills/) for the directories.
 
 ## Layout
 

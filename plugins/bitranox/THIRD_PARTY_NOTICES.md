@@ -15,7 +15,7 @@ redistributed inside this MIT-licensed collection.
 
 ---
 
-### finishing-development-branch
+### process-ship-finishing-development-branch
 
 - Source: Obra Superpowers plugin (https://github.com/obra/superpowers)
 - License: MIT

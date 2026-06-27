@@ -200,11 +200,11 @@ def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# check_skills_index (using-bitranox-skills domains list <-> skill dirs)
+# check_skills_index (meta-using-bitranox-skills domains list <-> skill dirs)
 # --------------------------------------------------------------------------
 
 INDEX_TEMPLATE = """---
-name: using-bitranox-skills
+name: meta-using-bitranox-skills
 ---
 
 ## Skills Span Every Domain, Not Just Process
@@ -228,7 +228,7 @@ def make_skills(root, names):
 
 def make_index(root, listed):
     names = ", ".join(f"`{n}`" for n in listed)
-    write(root / "plugins/bitranox/skills/using-bitranox-skills/SKILL.md",
+    write(root / "plugins/bitranox/skills/meta-using-bitranox-skills/SKILL.md",
           INDEX_TEMPLATE.format(names=names))
 
 
@@ -253,7 +253,7 @@ def test_skills_index_flags_stale_entry(tmp_path):
 
 
 def test_skills_index_ignores_itself_and_non_bullet_names(tmp_path):
-    # using-bitranox-skills need not list itself; names outside the bullets (the caveat
+    # meta-using-bitranox-skills need not list itself; names outside the bullets (the caveat
     # paragraph's `not-a-bullet-name`) must not be treated as listed skills.
     make_skills(tmp_path, ["alpha"])
     make_index(tmp_path, ["alpha"])

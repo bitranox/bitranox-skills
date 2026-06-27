@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PostToolUse(Write|Edit|MultiEdit) validator for JSON / YAML / XML files.
 
-The edit-json / edit-yml / edit-xml skills teach the model to round-trip these
+The files-edit-json / files-edit-yml / files-edit-xml skills teach the model to round-trip these
 formats through a library so the result is valid by construction. This hook is the
 deterministic safety net that does not depend on the model following the skill: it
 parses the file the model just wrote and, if it does not parse, exits 2 so the
@@ -46,7 +46,7 @@ YAML_EXTS = (".yml", ".yaml")
 XML_EXTS = (".xml", ".svg", ".xsd", ".xsl", ".rss", ".wsdl", ".pom")
 
 # Skill names to point the model at in the remediation message.
-SKILL = {"json": "bitranox:edit-json", "yaml": "bitranox:edit-yml", "xml": "bitranox:edit-xml"}
+SKILL = {"json": "bitranox:files-edit-json", "yaml": "bitranox:files-edit-yml", "xml": "bitranox:files-edit-xml"}
 
 
 def looks_jsonc(path: str, text: str) -> bool:

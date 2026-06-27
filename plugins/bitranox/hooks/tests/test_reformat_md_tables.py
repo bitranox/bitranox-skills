@@ -1,7 +1,7 @@
 """Tests for reformat-md-tables.py (auto-realign markdown tables on edit, Mode A).
 
 Drives main() with a PostToolUse event JSON on stdin pointing at a temp file. Uses the real
-reformat_tables.py shipped in the md-table-formatting skill (resolved via the hook's own location).
+reformat_tables.py shipped in the docs-md-table-formatting skill (resolved via the hook's own location).
 All content is ASCII.
 """
 
@@ -18,6 +18,10 @@ MISALIGNED = "# t\n\n| A | Bee |\n|---|---|\n| x | y |\n| longer | z |\n"
 
 
 def run(monkeypatch, path):
+    # Resolve the reformat script against THIS repo (the hook's own location), not the ambient
+    # CLAUDE_PLUGIN_ROOT (which during a commit points at the installed plugin cache - a different,
+    # possibly older version that may not have the docs-md-table-formatting skill dir).
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"file_path": str(path)}})))
     return H.main()
 

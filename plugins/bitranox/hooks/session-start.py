@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SessionStart hook: inject the using-bitranox-skills skill as session context.
+"""SessionStart hook: inject the meta-using-bitranox-skills skill as session context.
 
 Bitranox's counterpart to what the superpowers plugin does for using-superpowers:
 on session startup, /clear, and after compaction, load
-skills/using-bitranox-skills/SKILL.md and return it as additionalContext, so the
+skills/meta-using-bitranox-skills/SKILL.md and return it as additionalContext, so the
 skills-first discipline is active from the first turn and survives compaction -
 without the user having to invoke the skill manually. This is what lets the
 superpowers marketplace be dropped while keeping its bootstrap behaviour.
@@ -26,17 +26,17 @@ from self_improve_signals import audit_file
 
 BANNER = (
     "<EXTREMELY-IMPORTANT>\n"
-    "Below is the full content of your 'bitranox:using-bitranox-skills' skill - your standing "
+    "Below is the full content of your 'bitranox:meta-using-bitranox-skills' skill - your standing "
     "instruction for finding and using skills. It establishes that you MUST invoke a relevant "
     "skill (via the Skill tool) before responding. Follow it for the whole session.\n\n"
 )
 
 
 def skill_path():
-    """Locate using-bitranox-skills/SKILL.md from CLAUDE_PLUGIN_ROOT, else from this file."""
+    """Locate meta-using-bitranox-skills/SKILL.md from CLAUDE_PLUGIN_ROOT, else from this file."""
     root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     base = Path(root) if root else Path(__file__).resolve().parent.parent
-    return base / "skills" / "using-bitranox-skills" / "SKILL.md"
+    return base / "skills" / "meta-using-bitranox-skills" / "SKILL.md"
 
 
 def build_context():

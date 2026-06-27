@@ -39,7 +39,7 @@ _REASON = (
     "endorsed by either side - you judging the user's suggestion good (adopt it), or the user "
     'endorsing yours (a confirmed approach) - a self-admitted miss, or a realization such as '
     '"now I understand the real ..."). Before you '
-    'stop: invoke the self-improve skill (Skill tool, name "self-improve") to capture this '
+    'stop: invoke the self-improve skill (Skill tool, name "meta-self-improve") to capture this '
     "session's learnings into memory/CLAUDE.md per its procedure. A discovered fact about your "
     "own infrastructure or a project's architecture/topology/data-flow goes at the right "
     "altitude (own infra spanning projects -> the top-level CLAUDE.md; one project -> its "

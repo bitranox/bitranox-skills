@@ -17,6 +17,55 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.0.0] - 2026-06-27
+
+### Changed (BREAKING) - every skill renamed to the category-prefix scheme
+
+All skills now carry a category prefix (`<category>-[<sub>-]<name>`). Invocation names changed,
+so update any saved references to the new names below. The full current catalog is the
+`bitranox:meta-using-bitranox-skills` domains list; categories live in `skill-taxonomy.json`.
+
+New invocation names:
+
+- `bitranox:process-plan-brainstorming` (brainstorming)
+- `bitranox:process-plan-writing-plans` (writing-plans)
+- `bitranox:process-plan-executor` (plan-executor)
+- `bitranox:process-agents-dispatching-parallel` (dispatching-parallel-agents)
+- `bitranox:process-agents-subagent-driven-development` (subagent-driven-development)
+- `bitranox:process-debug-systematic` (systematic-debugging)
+- `bitranox:process-test-driven-development` (test-driven-development)
+- `bitranox:process-review-requesting-code-review` (requesting-code-review)
+- `bitranox:process-review-receiving-code-review` (receiving-code-review)
+- `bitranox:process-review-verification-before-completion` (verification-before-completion)
+- `bitranox:process-review-enhance-code-quality` (enhance-code-quality)
+- `bitranox:process-ship-finishing-development-branch` (finishing-development-branch)
+- `bitranox:coding-python-clean-architecture` (python-clean-architecture)
+- `bitranox:coding-python-enforce-data-architecture-strict` (python-enforce-data-architecture-strict)
+- `bitranox:coding-python-performance-review` (python-performance-review)
+- `bitranox:coding-python-use-modern-libraries` (python-use-modern-libraries)
+- `bitranox:coding-python-gitignore` (python-gitignore)
+- `bitranox:coding-python-rpyc` (rpyc), `bitranox:coding-python-textual` (textual),
+  `bitranox:coding-python-uv` (uv)
+- `bitranox:coding-bash-clean-architecture` (bash-clean-architecture),
+  `bitranox:coding-bash-reference` (bash-reference)
+- `bitranox:files-edit-json` (edit-json), `bitranox:files-edit-xml` (edit-xml),
+  `bitranox:files-edit-yml` (edit-yml)
+- `bitranox:docs-md-table-formatting` (md-table-formatting),
+  `bitranox:docs-convert-markitdown` (markitdown)
+- `bitranox:compuse-bash` (computer-use-bash), `bitranox:compuse-git` (computer-use-git),
+  `bitranox:compuse-ssh` (computer-use-ssh), `bitranox:compuse-vnc` (computer-use-vnc)
+- `bitranox:git-worktrees` (unchanged)
+- `bitranox:infra-proxmox` (proxmox), `bitranox:infra-proxmox-bindsnap` (proxmox-bindsnap)
+- `bitranox:net-rotating-proxies` (rotating-proxies)
+- `bitranox:write-humanize-en` (humanize-en), `bitranox:write-humanize-de` (humanize-de)
+- `bitranox:marketing-rory` (rory)
+- `bitranox:meta-self-improve` (self-improve), `bitranox:meta-skill-writer` (skill-writer),
+  `bitranox:meta-adopting-external-skills` (adopting-external-skills),
+  `bitranox:meta-using-bitranox-skills` (using-bitranox-skills)
+
+The `skill-taxonomy.json` registry's `legacy`/`retrofit` migration data is removed now that the
+rename is applied; the registry is just the forward category vocabulary.
+
 ## [3.14.0] - 2026-06-27
 
 ### Added
@@ -252,7 +301,7 @@ installed copies and needs no bump.
   the Scope Check, File Structure, Task Right-Sizing, Global Constraints, Interfaces block,
   checkbox steps, No Placeholders, and Self-Review sections it was missing.
 - Cross-links in the adopted skills now point at their bitranox equivalents
-  (superpowers `writing-plans` -> `bitranox:writing-plans`, `executing-plans` -> `plan-executor`,
+  (superpowers `writing-plans` -> `bitranox:process-plan-writing-plans`, `executing-plans` -> `plan-executor`,
   `using-git-worktrees` -> `git-worktrees`,
   `finishing-a-development-branch` -> `finishing-development-branch`). The SDD workspace dir
   moved from `.superpowers/sdd` to `.bitranox/sdd`. `plan-executor` gained a reciprocal link to

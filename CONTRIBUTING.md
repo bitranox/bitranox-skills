@@ -39,8 +39,8 @@ installed copies and do not need a plugin bump.
 
 Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate.py`) will block you:
 
-- **Update `using-bitranox-skills`.** Add the skill to the domains list in
-  `plugins/bitranox/skills/using-bitranox-skills/SKILL.md` (and drop or rename stale entries). The
+- **Update `meta-using-bitranox-skills`.** Add the skill to the domains list in
+  `plugins/bitranox/skills/meta-using-bitranox-skills/SKILL.md` (and drop or rename stale entries). The
   gate checks both directions: every shipped skill must be listed, and every name listed must exist.
 - **Update cross-links.** A rename changes the invocation name (`bitranox:<name>`); fix every
   reference in other skills, hooks, and the README (`grep -rn '<old-name>'`).
@@ -64,7 +64,7 @@ seed sub-prefixes); it is the single source of truth.
   `office`; craft -> `write`, persuasion -> `marketing`, org messaging -> `comms`).
 - **Open a new top-level category only when nothing fits** (tie-break rule 10). It is a deliberate
   act: add the prefix (short, lowercase, non-overlapping) with a `desc` + seed `subs` to
-  `skill-taxonomy.json`, and add a matching grouping to the `using-bitranox-skills` domains list.
+  `skill-taxonomy.json`, and add a matching grouping to the `meta-using-bitranox-skills` domains list.
   The gate then accepts skills under it.
 - **Legacy names are grandfathered.** The current flat names are listed in the registry's `legacy`
   array and are exempt until a future retrofit MAJOR renames them to their `retrofit` targets
@@ -122,7 +122,7 @@ credit is current-state legal metadata, not provenance narrative. Record it in e
 and - for Apache-2.0 - its `NOTICE` and a "modified" note). Everything else in this section still
 holds: no "ported/migrated from", no internal command or file names, no "formerly known as". The
 distinction is mechanical - a credit line that names source + license is allowed; prose that
-narrates the porting history is not. The `bitranox:adopting-external-skills` skill walks the whole
+narrates the porting history is not. The `bitranox:meta-adopting-external-skills` skill walks the whole
 adoption flow, and `repo-gate.py` keeps the credit lines and notices in sync.
 
 ## Contributor workflow (PR)
