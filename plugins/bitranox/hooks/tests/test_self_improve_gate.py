@@ -66,20 +66,28 @@ def test_user_remember_blocks(tmp_path, monkeypatch, capsys):
     assert decision_of(capsys) == "block"
 
 
+def test_assistant_endorses_user_idea_blocks(tmp_path, monkeypatch, capsys):
+    # The high-signal case: the LLM judges the USER's suggestion good -> adopt it.
+    tp = make_transcript(tmp_path, user="we could cache the sitemap",
+                         asst="Good idea - caching the sitemap would cut the calls.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
 def test_user_endorsement_good_idea_blocks(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="Good idea, let's do that.")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
     assert decision_of(capsys) == "block"
 
 
-def test_user_endorsement_nice_catch_blocks(tmp_path, monkeypatch, capsys):
-    tp = make_transcript(tmp_path, user="nice catch on the license gate")
+def test_endorsement_nice_catch_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="q", asst="Nice catch on the license gate.")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
     assert decision_of(capsys) == "block"
 
 
-def test_user_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
-    tp = make_transcript(tmp_path, user="ok thanks, looks good")
+def test_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="ok thanks, looks good", asst="Great, nice. Done.")
     rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
     assert rc == 0
     assert decision_of(capsys) is None

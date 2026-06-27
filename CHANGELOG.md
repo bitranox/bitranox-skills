@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.10.3] - 2026-06-27
+
+### Changed
+- `self-improve` gate: idea endorsement is now detected from **either side**. The high-signal case
+  is the assistant judging the user's suggestion good ("good idea", "good call" -> the user found the
+  better path, adopt it); it still also fires when the user endorses the assistant's proposal (a
+  confirmed approach). Factored into a shared `_ENDORSE_PATTERN` checked against both messages; a
+  bare "ok/thanks/nice" still does not fire. (Corrects 3.10.2, which only checked the user side.)
+
 ## [3.10.2] - 2026-06-27
 
 ### Changed

@@ -25,25 +25,31 @@ from pathlib import Path
 
 # High-precision learning signals. Signals cluster in FAMILIES; cover the family, do not
 # wait to be fed each phrase one at a time: (1) USER correction, (2) USER explicit
-# "remember", (3) USER endorsement of an idea you proposed -> a confirmed approach worth
-# recording, (4) ASSISTANT self-admitted miss, (5) ASSISTANT realization/discovery.
-# Split by role: intent/correction/endorsement phrasing is only a learning when the USER
-# says it (the assistant routinely writes "remember to...", "good idea", "instead of..."
-# in ordinary answers, which would fire spurious blocks); self-admitted misses and
-# realizations are only meaningful from the ASSISTANT. English and German. Kept narrow to
-# favour precision over recall.
+# "remember", (3) ENDORSEMENT of a good idea - either direction (see _ENDORSE_PATTERN),
+# (4) ASSISTANT self-admitted miss, (5) ASSISTANT realization/discovery.
+# Split by role: correction/"remember" phrasing is only a learning when the USER says it
+# (the assistant routinely writes "remember to...", "instead of..." in ordinary answers,
+# which would fire spurious blocks); self-admitted misses and realizations are only
+# meaningful from the ASSISTANT; endorsement counts from EITHER side. English and German.
+# Kept narrow to favour precision over recall.
 _USER_PATTERN = re.compile(
     r"no,|nope|that.?s wrong|that is wrong|incorrect|don.?t do|do not do|stop doing"
     r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of"
     r"|that.?s not right|isn.?t right"
     r"|remember|note that|keep in mind|for next time|for the future|from now on"
     r"|make a (memory|rule|note)"
-    # USER endorses an idea you proposed -> a confirmed approach to capture (the praise
-    # targets a specific idea/call/point, so it is higher-signal than a bare "ok/nice").
-    r"|(good|great|nice|smart|clever|brilliant) (idea|call|point|catch|thinking|suggestion)"
-    r"|i like (that|this|your) (idea|approach|plan|suggestion)?|let.?s do (that|it)"
-    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran"
-    r"|gute idee|guter (punkt|einfall)",
+    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran",
+    re.IGNORECASE,
+)
+# Endorsement of a good idea, fired from EITHER side. The high-signal case is the ASSISTANT
+# judging the USER's suggestion good ("good idea", "good call" - the user found the better
+# path, adopt it, kin to a self-admitted miss); it also fires when the USER endorses the
+# assistant's proposal (a confirmed approach). Anchored on praise of a specific
+# idea/call/point/catch so a bare "ok/thanks/nice" does NOT fire.
+_ENDORSE_PATTERN = re.compile(
+    r"(good|great|nice|smart|clever|brilliant|excellent) (idea|call|point|catch|thinking|suggestion)"
+    r"|i like (that|this|your) (idea|approach|plan|suggestion)|let.?s do (that|it)"
+    r"|gute idee|guter (punkt|einfall)|gut(er)? gedacht",
     re.IGNORECASE,
 )
 _ASST_PATTERN = re.compile(
@@ -82,9 +88,10 @@ _REALIZATION_PATTERN = re.compile(
 )
 
 _REASON = (
-    'A learning signal was detected this turn (a correction, an explicit "remember", a user '
-    'endorsement of an idea you proposed (a confirmed approach), a self-admitted miss, or a '
-    'realization such as "now I understand the real ..."). Before you '
+    'A learning signal was detected this turn (a correction, an explicit "remember", a good idea '
+    "endorsed by either side - you judging the user's suggestion good (adopt it), or the user "
+    'endorsing yours (a confirmed approach) - a self-admitted miss, or a realization such as '
+    '"now I understand the real ..."). Before you '
     'stop: invoke the self-improve skill (Skill tool, name "self-improve") to capture this '
     "session's learnings into memory/CLAUDE.md per its procedure. A discovered fact about your "
     "own infrastructure or a project's architecture/topology/data-flow goes at the right "
@@ -168,7 +175,8 @@ def main():
         pass
 
     if (_USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
-            or _REALIZATION_PATTERN.search(last_asst)):
+            or _REALIZATION_PATTERN.search(last_asst)
+            or _ENDORSE_PATTERN.search(last_user) or _ENDORSE_PATTERN.search(last_asst)):
         try:
             with open(state, "w", encoding="utf-8") as fh:
                 fh.write(sig)
