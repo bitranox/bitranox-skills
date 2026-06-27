@@ -28,53 +28,48 @@ confirm it is actually active; otherwise learnings get written but never loaded.
   Claude Code v2.1.59+ if older. Until it is on, fall back to recording durable rules as a CLAUDE.md
   guardrail so nothing is lost. (See https://code.claude.com/docs/en/memory.)
 
-The store's **backend is a choice, not fixed to flat files.** By default it is Auto memory's
-`MEMORY.md` + topic files (the push tier, loaded every session). Where a memory MCP server is
-installed - `basic-memory` over those same files, or `server-memory` (see "Scaling memory as it
-grows") - it is the pull-tier backend for the large episodic tail. The split is the rule: the **most
-important standing rules** stay in `MEMORY.md` / CLAUDE.md (push, always in context) and never only
-in a search-only MCP store, while the episodic tail can live in the MCP store.
+The home is **`MEMORY.md` (index) + topic files (bodies)**, the native Auto-memory store. Capture
+every durable learning as BOTH a one-line `MEMORY.md` index entry AND a topic-file body. The index
+line is what makes a learning **present**: `MEMORY.md` is auto-loaded every session (push); topic
+bodies are read on demand (pull-by-Read), like a book's index and its pages. A learning with no
+index line is invisible even if its body exists on disk.
 
-Keep the memory systems in their lanes, and do not duplicate across them:
-- **Auto memory / `MEMORY.md` (this skill):** durable, curated, deduplicated rules and facts, loaded
-  every session. This is where learnings go.
+Keep the memory systems in their lanes:
+- **Auto memory / `MEMORY.md` + topic files (this skill):** durable, curated, deduplicated learnings.
 - **The `remember` plugin / `.remember/`:** session task-continuity only (a time-decaying handoff
   journal: `now.md` -> `today-*.md` -> `recent.md` -> `archive.md`). Never put durable learnings there,
   and never copy handoff/task state into Auto memory.
 
-### Scaling memory as it grows
+### Do not route learnings through a memory MCP
 
-Self-improve adds entries over time, so the store grows. Manage the growth by escalation; do not let
-it bloat:
+A memory MCP server (`basic-memory`, `server-memory`) is **not** the home and **not** a write path.
+Two failure modes, both observed in practice:
+- **Writing through the MCP skips the `MEMORY.md` index.** The body lands on disk but no index line
+  is added, so it is never loaded - "not present in memory.md".
+- **A pull store is only read when searched, and in practice it is not searched** - so the knowledge
+  is effectively lost.
 
-1. **Keep it lean (default, holds for a long time).** One fact per topic file, a one-line `MEMORY.md`
-   index entry (under ~200 chars), and EDIT an existing entry rather than appending a new one (the
-   core anti-bloat rule). The index lines are what keep the loaded-every-session cost small.
-2. **When the `MEMORY.md` index itself gets too big to scan**, add semantic search over the topic
-   files with the `basic-memory` MCP (markdown-file-backed, local `fastembed` embeddings - no cloud). It
-   keeps its own DB/config in `~/.basic-memory` (it does not litter the memory dir) and can point
-   straight at the existing `~/.claude/projects/<project>/memory/` directory, so it augments the
-   native store with search without replacing it and without a migration. Best fit.
-   - **Before pointing it at the files, stop it from rewriting them.** basic-memory's sync can write
-     its OWN frontmatter (permalink, etc.) into the source markdown, which clashes with the
-     self-improve schema (`name`/`description`/`metadata`). In `~/.basic-memory/config.json` set
-     `ensure_frontmatter_on_sync: false`, `disable_permalinks: true`, `format_on_save: false` (edit it
-     with the `edit-json` skill), then back up the memory dir and diff after its first index run to confirm
-     nothing was modified.
-   - Alternative: `@modelcontextprotocol/server-memory` is a knowledge-graph store
-     (entities/relations) - a different model and a separate parallel store, not a search layer over
-     the existing files. Use it only if you actually want the graph model.
+So an MCP that holds learnings but is not searched is pure downside. **Always write to `MEMORY.md` +
+a topic file; never make an MCP the write path or the sole home.** If an index has already drifted
+from its topic files (e.g. earlier MCP writes left bodies unindexed), backfill it with
+`reconcile_memory_index.py` (in this skill dir): it appends a `MEMORY.md` index line for every topic
+file that lacks one - additive, idempotent, never deletes.
 
-Add an MCP server through the `update-config` skill (it edits the MCP/settings config); never wire one
-in silently.
+### Scaling: stay native until you truly cannot
 
-**Push vs pull - keep both in their lanes.** `MEMORY.md` is PUSH: loaded into context every session,
-always present, zero query - the reliable home for critical, always-apply rules. `basic-memory` is
-PULL: semantic search on demand (a tool call), so a memory only surfaces if you actually search for
-it. Keep must-hold rules as short `MEMORY.md` index lines or CLAUDE.md guardrails (push, reliable),
-and use `basic-memory` for the large tail of episodic/topic memories (pull, scalable). Never move a
-must-hold rule into the search-only store: a critical rule has to be in context every time, not only
-when queried.
+Keep it lean: one fact per topic file, a one-line `MEMORY.md` index entry (under ~200 chars), and
+EDIT an existing entry rather than appending a new one (the core anti-bloat rule). Native `MEMORY.md`
++ topic files scales a long way - a per-project index of ~100 short lines still loads fine, and only
+one project's index loads per session.
+
+A search MCP earns its place **only** when BOTH hold: (a) a single project's `MEMORY.md` index is
+genuinely too big to always-load, AND (b) you add a real recall mechanism so it is actually queried.
+Even then it must **index the native `~/.claude/projects/<project>/memory/` files as a search
+augmentation** - point it there and set `ensure_frontmatter_on_sync: false`, `disable_permalinks:
+true`, `format_on_save: false` so it never rewrites them - never a separate store, never the write
+path. Adopting an MCP without both (a) and (b) makes things worse, not better (it caused a real
+regression: learnings became unindexed and unsearched). Add or remove an MCP server through the
+`update-config` skill; never wire one in or out silently.
 
 ## When to run
 
@@ -153,12 +148,10 @@ than auto-committing (see step 4). Private MEMORY.md entries stay auto-apply.
 topology, a project's architecture or data-flow that has to be in context every time - goes in the
 right-altitude **CLAUDE.md** (own infra spanning projects -> the top-level/parent CLAUDE.md; one
 project -> that project's CLAUDE.md), matching where infra already lives. A smaller episodic or
-looked-up detail goes in the **memory** store: a `MEMORY.md` topic file (with its one-line index
-entry), or - where a memory MCP server is installed (`basic-memory`, or `server-memory`; see
-"Scaling memory as it grows") - that MCP store, which is the pull-tier home for the episodic tail.
-Keep must-hold facts in the push tier (CLAUDE.md / `MEMORY.md` index), never move them into a
-search-only MCP store. Use **both** push and a topic entry only as the general-principle (CLAUDE.md)
-plus concrete-instance (memory) split above - cross-linked, never duplicated. When the altitude is
+looked-up detail goes in the **memory** store as a topic file **with its one-line `MEMORY.md` index
+entry** (the index line is what keeps it present; see "Do not route learnings through a memory MCP").
+Use **both** CLAUDE.md and a memory entry only as the general-principle (CLAUDE.md) plus
+concrete-instance (memory) split above - cross-linked, never duplicated. When the altitude is
 genuinely unclear, **ask the user where it belongs** rather than guessing.
 
 ### 4. Risk-classify and apply

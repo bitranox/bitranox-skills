@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.12.0] - 2026-06-27
+
+### Changed
+- `self-improve` is now **native-first** about memory. Durable learnings are written to `MEMORY.md`
+  (one-line index entry) + a topic-file body - the index line is what makes a learning present.
+  A memory MCP server (`basic-memory`/`server-memory`) is no longer treated as a write path or home:
+  routing learnings through it skips the `MEMORY.md` index (not present) and a pull store is not
+  searched (lost). An MCP now earns its place only at genuine scale AND with a real recall mechanism,
+  indexing the native dirs as a search augmentation - never the sole store.
+
+### Added
+- `self-improve/reconcile_memory_index.py`: a maintenance utility that backfills a `MEMORY.md` index
+  line for every topic file that lacks one (additive, idempotent, never deletes; reports orphans).
+  Repairs an index that drifted from its topic files after out-of-band/MCP writes.
+
 ## [3.11.0] - 2026-06-27
 
 ### Added

@@ -1,0 +1,129 @@
+"""Tests for reconcile_memory_index.py.
+
+Builds synthetic memory dirs in tmp_path. All content ASCII.
+"""
+
+import reconcile_memory_index as R
+
+
+def topic(meta_name, description, body="Some body text.", extra=""):
+    fm = "---\nname: %s\ndescription: %s\nmetadata:\n  type: project\n---\n" % (meta_name, description)
+    return fm + extra + "\n" + body + "\n"
+
+
+def write(d, name, text):
+    p = d / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+# --------------------------------------------------------------------------
+# frontmatter parsing
+# --------------------------------------------------------------------------
+
+def test_parse_frontmatter_basic():
+    meta, body = R.parse_frontmatter("---\nname: foo\ndescription: a hook\n---\n\nbody here\n")
+    assert meta["name"] == "foo"
+    assert meta["description"] == "a hook"
+    assert "body here" in body
+
+
+def test_parse_frontmatter_quoted_multiline():
+    text = '---\nname: x\ndescription: "line one\n  line two"\nmetadata:\n  type: project\n---\nB\n'
+    meta, _ = R.parse_frontmatter(text)
+    assert meta["description"].startswith("line one")
+    assert "line two" in meta["description"]
+
+
+def test_parse_frontmatter_none():
+    meta, body = R.parse_frontmatter("no frontmatter here\n")
+    assert meta == {}
+    assert "no frontmatter" in body
+
+
+# --------------------------------------------------------------------------
+# derive helpers
+# --------------------------------------------------------------------------
+
+def test_derive_title_prefers_body_heading():
+    assert R.derive_title({"name": "project_x"}, "# Real Title\n\nbody", "f.md") == "Real Title"
+
+
+def test_derive_title_deslugs_and_drops_type_prefix():
+    assert R.derive_title({"name": "project_matrix_id_scheme"}, "no heading", "f.md") == "Matrix id scheme"
+
+
+def test_derive_hook_uses_description_capped():
+    long = "x" * 400
+    hook = R.derive_hook({"description": long}, "body")
+    assert len(hook) <= R._HOOK_MAX
+    assert hook.endswith("...")
+
+
+def test_derive_hook_falls_back_to_first_sentence():
+    assert R.derive_hook({}, "First sentence here. Second one.") == "First sentence here."
+
+
+# --------------------------------------------------------------------------
+# reconcile
+# --------------------------------------------------------------------------
+
+def test_backfills_missing_line(tmp_path):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    write(tmp_path, "b.md", topic("b", "hook b"))
+    write(tmp_path, "MEMORY.md", "# Memory index\n\n- [A](a.md) - hook a\n")
+    rep = R.reconcile(tmp_path)
+    assert rep["added"] == ["b.md"]
+    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert "(b.md)" in idx
+    assert "(a.md)" in idx  # existing line preserved
+
+
+def test_idempotent(tmp_path):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    R.reconcile(tmp_path)
+    first = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    rep2 = R.reconcile(tmp_path)
+    assert rep2["added"] == []
+    assert (tmp_path / "MEMORY.md").read_text(encoding="utf-8") == first
+
+
+def test_orphan_reported_not_deleted(tmp_path):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    write(tmp_path, "MEMORY.md", "# Memory index\n\n- [A](a.md) - hook a\n- [Ghost](ghost.md) - gone\n")
+    rep = R.reconcile(tmp_path)
+    assert "ghost.md" in rep["orphans"]
+    assert "(ghost.md)" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")  # not deleted
+
+
+def test_frontmatterless_file_still_backfilled(tmp_path):
+    write(tmp_path, "plain.md", "# Plain Heading\n\nsome content.\n")
+    rep = R.reconcile(tmp_path)
+    assert "plain.md" in rep["added"]
+    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert "[Plain Heading](plain.md)" in idx
+
+
+def test_creates_index_when_absent(tmp_path):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    rep = R.reconcile(tmp_path)
+    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert idx.startswith("# Memory index")
+    assert "(a.md)" in idx
+    assert rep["topics"] == 1
+
+
+def test_dry_run_writes_nothing(tmp_path):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    rep = R.reconcile(tmp_path, dry_run=True)
+    assert rep["added"] == ["a.md"]
+    assert not (tmp_path / "MEMORY.md").exists()
+
+
+def test_main_dry_run(tmp_path, capsys):
+    write(tmp_path, "a.md", topic("a", "hook a"))
+    rc = R.main([str(tmp_path), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "would add" in out
+    assert not (tmp_path / "MEMORY.md").exists()
