@@ -24,9 +24,14 @@ REPO_PLUGIN_ROOT = Path(__file__).resolve().parents[2]  # plugins/bitranox
 
 @pytest.fixture(autouse=True)
 def isolate_home(tmp_path, monkeypatch):
-    """Point HOME at a clean tmp dir so audit-file lookup never sees a real report."""
+    """Point HOME at a clean tmp dir so audit-file lookup never sees a real report.
+
+    Also drop the auto-update-nudge opt-out sentinel by default so the nudge stays silent for
+    the non-nudge tests; the nudge tests remove it explicitly.
+    """
     home = tmp_path / "home"
-    home.mkdir()
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".bitranox-no-autoupdate-nudge").write_text("", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     return home
@@ -141,3 +146,38 @@ def test_no_audit_leaves_context_unchanged(tmp_path, monkeypatch, capsys):
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "SKILLBODY" in ctx
     assert "SELF-IMPROVE-AUDIT" not in ctx
+
+
+# --------------------------------------------------------------------------
+# Auto-update nudge (self-silencing systemMessage)
+# --------------------------------------------------------------------------
+
+
+def _optout(home):
+    return home / ".claude" / ".bitranox-no-autoupdate-nudge"
+
+
+def test_nudge_fires_when_autoupdate_off(tmp_path, monkeypatch, capsys, isolate_home):
+    _optout(isolate_home).unlink()  # remove the default opt-out so the nudge can fire
+    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
+    assert rc == 0
+    assert "auto-update" in json.loads(out).get("systemMessage", "")
+
+
+def test_nudge_silent_when_autoupdate_on(tmp_path, monkeypatch, capsys, isolate_home):
+    _optout(isolate_home).unlink()
+    settings = isolate_home / ".claude" / "settings.json"
+    settings.write_text(
+        json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": True}}}),
+        encoding="utf-8")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
+    assert "systemMessage" not in json.loads(out)
+
+
+def test_nudge_silent_when_optout_present(tmp_path, monkeypatch, capsys):
+    # the autouse fixture leaves the opt-out sentinel in place
+    root = make_plugin_root(tmp_path, skill_body="---\nname: using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
+    assert "systemMessage" not in json.loads(out)

@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.13.0] - 2026-06-27
+
+### Added
+- SessionStart auto-update reminder: when marketplace auto-update is OFF for `bitranox-skills`,
+  `session-start.py` emits a one-line `systemMessage` explaining how to enable it (`/plugin` UI or
+  `extraKnownMarketplaces.<name>.autoUpdate` in settings.json). It is **self-silencing** - it stops
+  once auto-update is enabled in user/project settings - and can be dismissed without enabling by
+  creating `~/.claude/.bitranox-no-autoupdate-nudge`. A plugin cannot set auto-update itself; this
+  only reminds. README gained an "Enable auto-update (recommended)" section.
+
 ## [3.12.0] - 2026-06-27
 
 ### Changed

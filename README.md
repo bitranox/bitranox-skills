@@ -31,6 +31,32 @@ Update later with `/plugin marketplace update bitranox-skills`. Because `plugin.
 sets a `version`, bump it when you want installed copies to pick up changes (or remove
 the `version` field to track every commit SHA).
 
+### Enable auto-update (recommended)
+
+By default the marketplace updates only when you run `/plugin marketplace update`. To get fixes
+and new skills automatically, turn on **auto-update** for this marketplace - a one-time opt-in
+(a plugin cannot set this for you; it is a user/admin choice):
+
+- **UI:** `/plugin` -> **Marketplaces** -> `bitranox-skills` -> **Enable auto-update**, or
+- **settings.json** (`~/.claude/settings.json` for you, or `.claude/settings.json` for a team):
+
+  ```json
+  {
+    "extraKnownMarketplaces": {
+      "bitranox-skills": {
+        "source": { "source": "github", "repo": "bitranox/bitranox-skills" },
+        "autoUpdate": true
+      }
+    }
+  }
+  ```
+
+Auto-update runs **at startup**: it refreshes the marketplace and updates installed plugins, then
+asks you to run `/reload-plugins` (a running session still needs `/reload-plugins` or a restart to
+load a new version). Until you enable it, the SessionStart hook shows a one-line reminder; that
+reminder self-silences once auto-update is on. To dismiss it without enabling, create an empty
+`~/.claude/.bitranox-no-autoupdate-nudge` file.
+
 ### Windows: install Git for Windows
 
 On macOS and Linux everything works out of the box. On **Windows**, install

@@ -10,6 +10,8 @@ superpowers marketplace be dropped while keeping its bootstrap behaviour.
 
 Emits the Claude Code SessionStart contract on stdout:
   {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}
+plus an optional top-level "systemMessage" - a one-line, self-silencing reminder to enable
+marketplace auto-update when it is off (it cannot set it; only the user/admin can).
 json.dumps does the escaping (newlines/quotes), so no hand-rolled JSON escaping.
 
 Pure standard library. Every failure path emits nothing and exits 0, so a broken
@@ -48,18 +50,24 @@ def build_context():
     return BANNER + text + "\n</EXTREMELY-IMPORTANT>"
 
 
-def audit_context():
+def _read_event():
+    try:
+        return json.load(sys.stdin)
+    except Exception:  # noqa: BLE001 - no/invalid stdin: fall back, never wedge
+        return {}
+
+
+def _proj(event):
+    return event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+
+
+def audit_context(proj):
     """Surface (and consume) a pending SessionEnd miss-audit for this project, if any.
 
     The SessionEnd hook (self-improve-audit.py) writes candidate gate-misses to a per-project
     file; here we inject it once so the model reviews them, then delete it so it is not
-    resurfaced. cwd comes from the SessionStart event (stdin), else the env / cwd fallback.
+    resurfaced.
     """
-    try:
-        event = json.load(sys.stdin)
-    except Exception:  # noqa: BLE001 - no/invalid stdin: fall back, never wedge
-        event = {}
-    proj = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     try:
         path = audit_file(proj)
         if not path.is_file():
@@ -71,16 +79,60 @@ def audit_context():
     return text or None
 
 
+_NUDGE = (
+    "bitranox-skills: marketplace auto-update is OFF, so you will not get fixes and new skills "
+    "automatically. Enable it: /plugin > Marketplaces > bitranox-skills > Enable auto-update, or "
+    'add "autoUpdate": true to the "bitranox-skills" entry under extraKnownMarketplaces in '
+    "~/.claude/settings.json. (Auto-update runs at startup; a running session still needs "
+    "/reload-plugins or a restart to load an update.) To silence this without enabling, create "
+    "~/.claude/.bitranox-no-autoupdate-nudge"
+)
+
+
+def _autoupdate_enabled(proj):
+    """True if extraKnownMarketplaces['bitranox-skills'].autoUpdate is set in user/project settings."""
+    candidates = [
+        Path.home() / ".claude" / "settings.json",
+        Path(proj) / ".claude" / "settings.json",
+        Path(proj) / ".claude" / "settings.local.json",
+    ]
+    for c in candidates:
+        try:
+            data = json.loads(c.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - missing/invalid: skip this source
+            continue
+        entry = (data.get("extraKnownMarketplaces") or {}).get("bitranox-skills") or {}
+        if entry.get("autoUpdate") is True:
+            return True
+    return False
+
+
+def autoupdate_nudge(proj):
+    """A one-line, self-silencing reminder to enable marketplace auto-update; None when off."""
+    try:
+        optout = Path.home() / ".claude" / ".bitranox-no-autoupdate-nudge"
+        if optout.exists() or _autoupdate_enabled(proj):
+            return None
+    except Exception:  # noqa: BLE001 - never let detection wedge the session
+        return None
+    return _NUDGE
+
+
 def main():
-    parts = [p for p in (build_context(), audit_context()) if p]
-    if not parts:
+    event = _read_event()
+    proj = _proj(event)
+    ctx = [p for p in (build_context(), audit_context(proj)) if p]
+    nudge = autoupdate_nudge(proj)
+    if not ctx and not nudge:
         return 0
-    out = {
-        "hookSpecificOutput": {
+    out = {}
+    if ctx:
+        out["hookSpecificOutput"] = {
             "hookEventName": "SessionStart",
-            "additionalContext": "\n\n".join(parts),
+            "additionalContext": "\n\n".join(ctx),
         }
-    }
+    if nudge:
+        out["systemMessage"] = nudge
     sys.stdout.write(json.dumps(out))
     return 0
 
