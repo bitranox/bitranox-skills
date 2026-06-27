@@ -66,6 +66,25 @@ def test_user_remember_blocks(tmp_path, monkeypatch, capsys):
     assert decision_of(capsys) == "block"
 
 
+def test_user_endorsement_good_idea_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="Good idea, let's do that.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_user_endorsement_nice_catch_blocks(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="nice catch on the license gate")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_user_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = make_transcript(tmp_path, user="ok thanks, looks good")
+    rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert rc == 0
+    assert decision_of(capsys) is None
+
+
 def test_assistant_self_admitted_miss_blocks(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="ok", asst="You're right, my mistake - I'll fix it")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})

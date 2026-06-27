@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.10.2] - 2026-06-27
+
+### Changed
+- `self-improve` gate: user endorsement of a proposed idea is now a learning signal ("good idea",
+  "good call", "nice catch", "let's do that") - it marks a confirmed approach worth recording. A
+  bare "ok/thanks/looks good" still does not fire. The skill and gate now frame signals as families
+  (user correction / remember / endorsement; assistant self-admission / realization) and say to
+  extend the whole family rather than one phrase at a time.
+
 ## [3.10.1] - 2026-06-27
 
 ### Changed

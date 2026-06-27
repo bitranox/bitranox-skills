@@ -23,18 +23,27 @@ import sys
 import tempfile
 from pathlib import Path
 
-# High-precision learning signals. Split by role: intent/correction phrasing is
-# only a learning when the USER says it (the assistant routinely writes "remember
-# to...", "note that...", "instead of..." in ordinary answers, which used to fire
-# spurious blocks); self-admitted misses are only meaningful from the ASSISTANT.
-# English and German. Kept deliberately narrow to favour precision over recall.
+# High-precision learning signals. Signals cluster in FAMILIES; cover the family, do not
+# wait to be fed each phrase one at a time: (1) USER correction, (2) USER explicit
+# "remember", (3) USER endorsement of an idea you proposed -> a confirmed approach worth
+# recording, (4) ASSISTANT self-admitted miss, (5) ASSISTANT realization/discovery.
+# Split by role: intent/correction/endorsement phrasing is only a learning when the USER
+# says it (the assistant routinely writes "remember to...", "good idea", "instead of..."
+# in ordinary answers, which would fire spurious blocks); self-admitted misses and
+# realizations are only meaningful from the ASSISTANT. English and German. Kept narrow to
+# favour precision over recall.
 _USER_PATTERN = re.compile(
     r"no,|nope|that.?s wrong|that is wrong|incorrect|don.?t do|do not do|stop doing"
     r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of"
     r"|that.?s not right|isn.?t right"
     r"|remember|note that|keep in mind|for next time|for the future|from now on"
     r"|make a (memory|rule|note)"
-    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran",
+    # USER endorses an idea you proposed -> a confirmed approach to capture (the praise
+    # targets a specific idea/call/point, so it is higher-signal than a bare "ok/nice").
+    r"|(good|great|nice|smart|clever|brilliant) (idea|call|point|catch|thinking|suggestion)"
+    r"|i like (that|this|your) (idea|approach|plan|suggestion)?|let.?s do (that|it)"
+    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran"
+    r"|gute idee|guter (punkt|einfall)",
     re.IGNORECASE,
 )
 _ASST_PATTERN = re.compile(
@@ -73,8 +82,9 @@ _REALIZATION_PATTERN = re.compile(
 )
 
 _REASON = (
-    'A learning signal was detected this turn (a correction, an explicit "remember", a '
-    'self-admitted miss, or a realization such as "now I understand the real ..."). Before you '
+    'A learning signal was detected this turn (a correction, an explicit "remember", a user '
+    'endorsement of an idea you proposed (a confirmed approach), a self-admitted miss, or a '
+    'realization such as "now I understand the real ..."). Before you '
     'stop: invoke the self-improve skill (Skill tool, name "self-improve") to capture this '
     "session's learnings into memory/CLAUDE.md per its procedure. A discovered fact about your "
     "own infrastructure or a project's architecture/topology/data-flow goes at the right "

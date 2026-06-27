@@ -78,14 +78,18 @@ when queried.
 
 ## When to run
 
-Any turn that contains a learning signal. The gated Stop hook fires this for you when it sees a
-correction, an explicit "remember", a self-admitted miss, or a **realization** - a turn where you
+Any turn that contains a learning signal. Signals come in **families** - the gated Stop hook fires
+on all of them: a user **correction**, an explicit **"remember"**, a user **endorsement** of an
+idea you proposed ("good idea", "good call" - a confirmed approach worth recording), an assistant
+**self-admitted miss** ("you're right", "my mistake"), or a **realization** - a turn where you
 finally work out how something really fits together ("now I understand the real topology...", "I
-figured out that X actually runs on Y", "it turns out the data flows through Z first"). A
-realization about your own infrastructure or a project's architecture, topology, or data-flow is a
-durable discovery: capture the fact, do not let it evaporate when the turn ends. You can also invoke
-this skill manually. If you reflect and find nothing durable, say so in one line and stop. Do not
-manufacture a "learning".
+figured out that X actually runs on Y", "now it's clear"). A realization about your own
+infrastructure or a project's architecture, topology, or data-flow is a durable discovery: capture
+the fact, do not let it evaporate when the turn ends. You can also invoke this skill manually. If you
+reflect and find nothing durable, say so in one line and stop. Do not manufacture a "learning".
+
+When you notice the gate missed a signal, fix the **whole family**, not just the one phrase you were
+handed - propose the related variants yourself rather than waiting to be fed each one.
 
 ## Procedure
 
