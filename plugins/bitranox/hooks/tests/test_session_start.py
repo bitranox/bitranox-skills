@@ -181,3 +181,36 @@ def test_nudge_silent_when_optout_present(tmp_path, monkeypatch, capsys):
     root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/x")
     assert "systemMessage" not in json.loads(out)
+
+
+# --------------------------------------------------------------------------
+# meta-dream due nudge (additionalContext, self-silencing)
+# --------------------------------------------------------------------------
+
+
+def test_dream_nudge_fires_when_due(tmp_path, monkeypatch, capsys, isolate_home):
+    mem = SIG.memory_dir("/proj/dream")
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")  # memory exists, no last-dream -> due
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-DREAM-DUE" in ctx and "meta-dream" in ctx
+
+
+def test_dream_nudge_silent_when_not_due(tmp_path, monkeypatch, capsys):
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/nomem")  # no memory dir -> not due
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-DREAM-DUE" not in ctx
+
+
+def test_dream_nudge_silent_when_off(tmp_path, monkeypatch, capsys, isolate_home):
+    mem = SIG.memory_dir("/proj/dream")
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")
+    (isolate_home / ".claude" / ".bitranox-dream-off").write_text("", encoding="utf-8")
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-DREAM-DUE" not in ctx

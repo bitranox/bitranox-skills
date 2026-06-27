@@ -75,22 +75,22 @@ digraph skill_flow {
 
 These thoughts mean STOP - you're rationalizing:
 
-| Thought                             | Reality                                                                          |
-|-------------------------------------|----------------------------------------------------------------------------------|
-| "This is just a simple question"    | Questions are tasks. Check for skills.                                           |
-| "I need more context first"         | Skill check comes BEFORE clarifying questions.                                   |
-| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first.                                     |
-| "I can check git/files quickly"     | Files lack conversation context. Check for skills.                               |
-| "Let me gather information first"   | Skills tell you HOW to gather information.                                       |
-| "This doesn't need a formal skill"  | If a skill exists, use it.                                                       |
-| "I remember this skill"             | Skills evolve. Read current version.                                             |
-| "This doesn't count as a task"      | Action = task. Check for skills.                                                 |
-| "The skill is overkill"             | Simple things become complex. Use it.                                            |
-| "I'll just do this one thing first" | Check BEFORE doing anything.                                                     |
-| "This feels productive"             | Undisciplined action wastes time. Skills prevent this.                           |
-| "I know what that means"            | Knowing the concept is not using the skill. Invoke it.                           |
+| Thought                             | Reality                                                                                       |
+|-------------------------------------|-----------------------------------------------------------------------------------------------|
+| "This is just a simple question"    | Questions are tasks. Check for skills.                                                        |
+| "I need more context first"         | Skill check comes BEFORE clarifying questions.                                                |
+| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first.                                                  |
+| "I can check git/files quickly"     | Files lack conversation context. Check for skills.                                            |
+| "Let me gather information first"   | Skills tell you HOW to gather information.                                                    |
+| "This doesn't need a formal skill"  | If a skill exists, use it.                                                                    |
+| "I remember this skill"             | Skills evolve. Read current version.                                                          |
+| "This doesn't count as a task"      | Action = task. Check for skills.                                                              |
+| "The skill is overkill"             | Simple things become complex. Use it.                                                         |
+| "I'll just do this one thing first" | Check BEFORE doing anything.                                                                  |
+| "This feels productive"             | Undisciplined action wastes time. Skills prevent this.                                        |
+| "I know what that means"            | Knowing the concept is not using the skill. Invoke it.                                        |
 | "I'll just start planning"          | Brainstorm first (bitranox:process-plan-brainstorming) before plan mode, unless already done. |
-| "I'll read the skill file myself"   | Never open SKILL.md with file tools. Invoke it via the Skill tool.               |
+| "I'll read the skill file myself"   | Never open SKILL.md with file tools. Invoke it via the Skill tool.                            |
 
 ## Skill Priority
 
@@ -106,7 +106,7 @@ When multiple skills could apply, use this order:
 
 bitranox ships far more than the workflow/process skills. Before concluding "no skill applies," scan these domains: there is very likely a relevant one. The authoritative, current list is your injected available-skills - invoke any by name with the Skill tool.
 
-- **Process and quality:** `process-plan-brainstorming`, `process-plan-writing-plans`, `process-plan-executor`, `process-agents-subagent-driven-development`, `process-agents-dispatching-parallel`, `process-test-driven-development`, `process-debug-systematic`, `process-review-verification-before-completion`, `process-review-requesting-code-review`, `process-review-receiving-code-review`, `process-ship-finishing-development-branch`, `git-worktrees`, `process-review-enhance-code-quality`, `meta-self-improve`, `meta-skill-writer`, `meta-adopting-external-skills`
+- **Process and quality:** `process-plan-brainstorming`, `process-plan-writing-plans`, `process-plan-executor`, `process-agents-subagent-driven-development`, `process-agents-dispatching-parallel`, `process-test-driven-development`, `process-debug-systematic`, `process-review-verification-before-completion`, `process-review-requesting-code-review`, `process-review-receiving-code-review`, `process-ship-finishing-development-branch`, `git-worktrees`, `process-review-enhance-code-quality`, `meta-self-improve`, `meta-dream`, `meta-skill-writer`, `meta-adopting-external-skills`
 - **Architecture:** `coding-python-clean-architecture`, `coding-bash-clean-architecture`, `coding-python-enforce-data-architecture-strict`
 - **Language and tooling references:** `coding-bash-reference`, `coding-python-uv`, `coding-python-rpyc`, `coding-python-textual`, `coding-python-performance-review`, `coding-python-use-modern-libraries`, `coding-python-gitignore`
 - **Editing structured files and docs:** `files-edit-json`, `files-edit-xml`, `files-edit-yml`, `docs-md-table-formatting`, `docs-convert-markitdown`

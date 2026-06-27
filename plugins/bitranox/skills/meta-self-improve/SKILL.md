@@ -12,6 +12,10 @@ time. The unit of value is one small, reusable fact or rule recorded in the righ
 **Core constraint: memory is finite. Default to updating an existing entry and to short index lines,
 never to appending blindly.** A self-improver that bloats memory makes the harness worse, not better.
 
+This skill is the per-turn CAPTURE. The periodic BATCH consolidation - dedup/merge/generalize/re-wire/
+prune the whole store, like sleep - is `bitranox:meta-dream`; run it when memory has grown or a
+consolidation is nudged as due. Capture here; consolidate there.
+
 If a project ships its own extension of this skill (a more specific `*-self-improve` for its repo,
 exact memory paths, ledgers, or push gates), read it and honor its extra rules on top of this one.
 

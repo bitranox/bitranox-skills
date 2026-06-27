@@ -22,6 +22,7 @@ _HOOK_MODULES = {
     "block-pgrep-self-match": "block_pgrep_self_match",
     "self-improve-gate": "self_improve_gate",
     "self-improve-audit": "self_improve_audit",
+    "post-compact-nudge": "post_compact_nudge",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
     "git-footgun-guard": "git_footgun_guard",

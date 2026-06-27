@@ -17,6 +17,7 @@ realizations only from the ASSISTANT; endorsement counts from either side. Engli
 
 import hashlib
 import re
+import time
 from pathlib import Path
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
@@ -29,6 +30,79 @@ def proj_key(proj):
 def audit_file(proj):
     """Where the SessionEnd audit writes candidate misses for the next SessionStart to read."""
     return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
+
+
+# ---- meta-dream consolidation: cadence markers + mode (shared by session-start + dream_state) --
+
+_DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often than this
+
+
+def memory_dir(proj):
+    """The native Auto-memory dir for a project cwd (Claude Code sanitizes '/' to '-')."""
+    return Path.home() / ".claude" / "projects" / proj.replace("/", "-") / "memory"
+
+
+def last_dream_file(proj):
+    """Marker holding the unix timestamp of the last completed dream for this project."""
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".dream")
+
+
+def dream_mode(proj):
+    """User control, via opt-out sentinels in ~/.claude (no config edit needed):
+      off     -> no dream nudges; a manual dream consolidates memory only, no CLAUDE.md/skill proposals
+      auto    -> dream applies CLAUDE.md edits and ships skill changes WITHOUT per-change prompts
+      propose -> (default) dream asks before CLAUDE.md edits and routes skill changes to a self-PR
+    """
+    home = Path.home() / ".claude"
+    try:
+        if (home / ".bitranox-dream-off").exists():
+            return "off"
+        if (home / ".bitranox-dream-auto").exists():
+            return "auto"
+    except OSError:
+        pass
+    return "propose"
+
+
+def _newest_mtime(d):
+    newest = 0.0
+    try:
+        for p in d.glob("*.md"):
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
+    return newest
+
+
+def dream_due(proj, threshold_s=_DREAM_THRESHOLD_S, now=None):
+    """True if a memory consolidation is due: mode not off, memory changed since the last dream,
+    and the last dream is older than the threshold. No memory or mode off -> not due."""
+    if dream_mode(proj) == "off":
+        return False
+    mem = memory_dir(proj)
+    newest = _newest_mtime(mem)
+    if newest == 0.0:
+        return False  # no memory to consolidate
+    now = time.time() if now is None else now
+    try:
+        last = float(last_dream_file(proj).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True  # never dreamed but memory exists -> due
+    return newest > last and (now - last) > threshold_s
+
+
+def mark_dream_done(proj, now=None):
+    """Record that a dream just completed (silences the nudge until memory changes again)."""
+    f = last_dream_file(proj)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(time.time() if now is None else now), encoding="utf-8")
+        return True
+    except OSError:
+        return False
 
 
 # ---- STRICT patterns (the gate fires on these; tuned for precision) -----------------

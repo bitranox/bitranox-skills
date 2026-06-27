@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import audit_file
+from self_improve_signals import audit_file, dream_due
 
 BANNER = (
     "<EXTREMELY-IMPORTANT>\n"
@@ -118,10 +118,29 @@ def autoupdate_nudge(proj):
     return _NUDGE
 
 
+_DREAM_NUDGE = (
+    "<BITRANOX-DREAM-DUE>\n"
+    "A memory consolidation is due. Run bitranox:meta-dream to dedup / merge / generalize / prune "
+    "the memory store (it backs up first), or say 'skip'. Switch this off with "
+    "~/.claude/.bitranox-dream-off; stop the per-change asking with ~/.claude/.bitranox-dream-auto.\n"
+    "</BITRANOX-DREAM-DUE>"
+)
+
+
+def dream_nudge(proj):
+    """Self-silencing nudge to run meta-dream when a consolidation is due (off when mode=off)."""
+    try:
+        if not dream_due(proj):
+            return None
+    except Exception:  # noqa: BLE001 - detection must never wedge the session
+        return None
+    return _DREAM_NUDGE
+
+
 def main():
     event = _read_event()
     proj = _proj(event)
-    ctx = [p for p in (build_context(), audit_context(proj)) if p]
+    ctx = [p for p in (build_context(), audit_context(proj), dream_nudge(proj)) if p]
     nudge = autoupdate_nudge(proj)
     if not ctx and not nudge:
         return 0

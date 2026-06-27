@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.1.0] - 2026-06-27
+
+### Added
+- `meta-dream` skill: periodic memory consolidation ("sleep" to self-improve's per-turn capture). It
+  backs up the memory store, then dedups/merges/generalizes/re-wires/prunes it and the session,
+  routes generalized must-hold rules to the right-altitude CLAUDE.md (creating it if missing) with
+  dual representation (combine general+specific, or split across altitudes, cross-linked), and batches
+  skill-worthy generalizations into one self-PR via self-improve's upstream loop. A tri-state mode
+  (opt-out sentinels in ~/.claude) controls it: `off` (no nudges; memory-only), `auto` (apply without
+  asking), `propose` (default). Ships `dream_state.py` (due/done/mode cadence marker).
+- Trigger wiring: a self-silencing SessionStart nudge when a consolidation is due
+  (`dream_due` in `self_improve_signals.py`); the SessionEnd audit hook now also runs at **PreCompact**
+  to salvage candidate learnings from the still-full transcript before compaction; a new
+  **PostCompact** hook (`post-compact-nudge.py`) injects a capture/consolidate reminder afterward.
+
 ## [4.0.1] - 2026-06-27
 
 ### Changed
