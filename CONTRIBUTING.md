@@ -47,6 +47,29 @@ Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate
 - **Bump the version** per semver above (a rename is MAJOR; a new skill is MINOR).
 - **Ship tests** for any script the skill bundles (a `tests/` dir with passing pytest) - also gated.
 
+## Skill naming: category-prefix scheme
+
+Skill names follow `<category>-[<sub>-]<name>` (two segments max before the name; lowercase +
+hyphen): `coding-python-clean-architecture`, `compuse-ssh`, `marketing-rory`, `files-edit-json`.
+The category vocabulary is `plugins/bitranox/skill-taxonomy.json` (26 top-level categories with
+seed sub-prefixes); it is the single source of truth.
+
+- **Enforced:** `repo-gate.py` `check_skill_naming` requires every skill's **top-level** prefix to
+  be a key in the registry's `categories`. Sub-prefixes are free-form (add a sub when a domain
+  grows). `adopt_skill.py` validates the same on adoption.
+- **Pick the most specific category** using the tie-break rules in `skill-taxonomy.json` (meta wins
+  for skill/harness authoring; language-bound craft -> `coding-<lang>`; specific tech domain beats
+  generic buckets; discipline -> `process`, concrete framework -> `test`/`devops`; `compuse` =
+  running-commands mechanics; data formats -> `files`, docs/markdown -> `docs`, business docs ->
+  `office`; craft -> `write`, persuasion -> `marketing`, org messaging -> `comms`).
+- **Open a new top-level category only when nothing fits** (tie-break rule 10). It is a deliberate
+  act: add the prefix (short, lowercase, non-overlapping) with a `desc` + seed `subs` to
+  `skill-taxonomy.json`, and add a matching grouping to the `using-bitranox-skills` domains list.
+  The gate then accepts skills under it.
+- **Legacy names are grandfathered.** The current flat names are listed in the registry's `legacy`
+  array and are exempt until a future retrofit MAJOR renames them to their `retrofit` targets
+  (also in the registry). Do not add new skills to `legacy`; new skills must carry a category prefix.
+
 ## Authoring craft lives in the `skill-writer` skill
 
 The general craft of writing a skill - description/CSO, structure, flowcharts, token efficiency,

@@ -6,6 +6,7 @@ never issues a commit/push/PR/clone.
 
 All content is ASCII.
 """
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -303,6 +304,41 @@ def test_adopt_local_path_does_no_clone(tmp_path, record_subprocess):
     AS.main([str(src), "--dest", str(skills)])
     # The only subprocess that may run is the read-only gate; none is a clone.
     assert all("clone" not in " ".join(c) for c in record_subprocess)
+
+
+# --------------------------------------------------------------------------
+# Category-prefix validation (skill-taxonomy.json)
+# --------------------------------------------------------------------------
+
+
+def _write_taxonomy(repo):
+    (repo / "plugins/bitranox/skill-taxonomy.json").write_text(
+        json.dumps({"categories": {"coding": {"subs": ["python"]}}, "legacy": []}), encoding="utf-8")
+
+
+def test_adopt_rejects_uncategorized_name(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)
+    _write_taxonomy(repo)
+    src = _fake_source(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        AS.main([str(src), "--name", "foobar", "--dest", str(skills)])
+    assert "category prefix" in str(exc.value)
+    assert not (skills / "foobar").exists()
+
+
+def test_adopt_accepts_categorized_name(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)
+    _write_taxonomy(repo)
+    src = _fake_source(tmp_path)
+    AS.main([str(src), "--name", "coding-foobar", "--dest", str(skills)])
+    assert (skills / "coding-foobar").is_dir()
+
+
+def test_adopt_no_taxonomy_skips_validation(tmp_path, record_subprocess):
+    repo, skills = _fake_repo(tmp_path)  # no skill-taxonomy.json
+    src = _fake_source(tmp_path)
+    AS.main([str(src), "--name", "foobar", "--dest", str(skills)])
+    assert (skills / "foobar").is_dir()  # validation skipped, adoption proceeds
 
 
 # --------------------------------------------------------------------------

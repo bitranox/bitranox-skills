@@ -18,6 +18,7 @@ Pure standard library. Cross-platform: paths via pathlib, git via argv lists (ne
 """
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -336,6 +337,27 @@ def run_gate_readonly(repo_root):
     return (out.stdout + out.stderr).strip() or "  (no gate output)"
 
 
+def validate_category(name, repo_root):
+    """If a skill-taxonomy.json registry exists, the name's top-level prefix must be a known
+    category (or a grandfathered legacy name). No registry -> no constraint (skip)."""
+    try:
+        tax = json.loads((repo_root / "plugins" / "bitranox" / "skill-taxonomy.json")
+                         .read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - missing/invalid registry: do not constrain
+        return
+    cats = set((tax.get("categories") or {}).keys())
+    if not cats:
+        return
+    if name in set(tax.get("legacy") or []) or name.split("-", 1)[0] in cats:
+        return
+    raise SystemExit(
+        "error: skill name '%s' has no approved category prefix. Use <category>-[<sub>-]<name>; "
+        "approved categories: %s. To open a new category, add it to "
+        "plugins/bitranox/skill-taxonomy.json (see CONTRIBUTING.md), then pass --name accordingly."
+        % (name, ", ".join(sorted(cats)))
+    )
+
+
 def adopt(args, workdir):
     tree, src_skill = fetch(args.source, args.subdir, workdir)
 
@@ -355,6 +377,9 @@ def adopt(args, workdir):
         raise SystemExit(f"error: could not derive a valid skill name from '{new_name}'. "
                          "Pass --name <lower-hyphen-name>.")
     old_name = normalize_name(src_skill.name)
+
+    repo_root = _find_repo_root(Path(args.dest).resolve())
+    validate_category(new_name, repo_root)
 
     dest = Path(args.dest).resolve() / new_name
     if dest.exists():
@@ -378,7 +403,6 @@ def adopt(args, workdir):
     source_desc = derive_name(args.source, args.subdir) + " (upstream)"
     source_url = args.source if is_url(args.source) else ""
     add_credit_line(dest / "SKILL.md", source_desc, lic["id"])
-    repo_root = _find_repo_root(Path(args.dest).resolve())
     notices = repo_root / "plugins" / "bitranox" / "THIRD_PARTY_NOTICES.md"
     append_notice(notices, new_name, source_desc, source_url, lic["id"],
                   lic["copyright"], lic["text"], lic["notice"])

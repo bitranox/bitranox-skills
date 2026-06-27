@@ -250,6 +250,48 @@ def check_attribution(root):
     return msgs
 
 
+def _load_taxonomy(root):
+    tax = root / "plugins" / "bitranox" / "skill-taxonomy.json"
+    try:
+        return json.loads(tax.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - missing/invalid registry: caller fail-opens
+        return None
+
+
+def check_skill_naming(root):
+    """Every skill dir must use an approved category prefix from skill-taxonomy.json.
+
+    Names are <category>-[<sub>-]<name>; the top-level <category> must be a key in the registry's
+    'categories' (sub-prefixes stay free-form). Existing flat names in 'legacy' are grandfathered
+    until a future retrofit. Fail-open if the registry is absent/invalid so a missing file never
+    blocks commits. This is what forces the scheme on every NEW skill and makes opening a category a
+    deliberate registry edit.
+    """
+    skills_dir = root / "plugins" / "bitranox" / "skills"
+    tax = _load_taxonomy(root)
+    if not skills_dir.is_dir() or not tax:
+        return []
+    cats = set((tax.get("categories") or {}).keys())
+    legacy = set(tax.get("legacy") or [])
+    if not cats:
+        return []
+    bad = []
+    for d in sorted(skills_dir.iterdir()):
+        if not (d.is_dir() and (d / "SKILL.md").is_file()):
+            continue
+        if d.name in legacy or d.name.split("-", 1)[0] in cats:
+            continue
+        bad.append(d.name)
+    if bad:
+        return [
+            "Skills must use an approved category prefix (<category>-...) per skill-taxonomy.json, "
+            "or be grandfathered in its 'legacy' list - these do not: " + ", ".join(bad),
+            "  approved categories: " + ", ".join(sorted(cats)),
+            "  to open a new category, add it to skill-taxonomy.json (see CONTRIBUTING.md).",
+        ]
+    return []
+
+
 # High-signal credential formats that are never legitimate in a shipped skill. Standard
 # secret-scanner patterns (gitleaks/trufflehog family); low false-positive by construction.
 _SECRET_RX = [
@@ -366,6 +408,7 @@ def run_checks(root, ci):
     failures += check_lf_endings(root)
     failures += check_skills_index(root)
     failures += check_attribution(root)
+    failures += check_skill_naming(root)
     failures += check_secrets(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the

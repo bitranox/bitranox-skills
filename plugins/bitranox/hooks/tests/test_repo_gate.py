@@ -307,6 +307,45 @@ def test_attribution_no_credits_no_notices_passes(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# check_skill_naming (category-prefix scheme)
+# --------------------------------------------------------------------------
+
+
+def make_taxonomy(root, categories, legacy=()):
+    write(root / "plugins/bitranox/skill-taxonomy.json",
+          json.dumps({"categories": {c: {"subs": []} for c in categories}, "legacy": list(legacy)}))
+
+
+def test_naming_accepts_valid_prefix(tmp_path):
+    make_skills(tmp_path, ["coding-python-foo"])
+    make_taxonomy(tmp_path, ["coding", "files"])
+    assert RG.check_skill_naming(tmp_path) == []
+
+
+def test_naming_rejects_unprefixed(tmp_path):
+    make_skills(tmp_path, ["foobar"])
+    make_taxonomy(tmp_path, ["coding"])
+    assert any("foobar" in f for f in RG.check_skill_naming(tmp_path))
+
+
+def test_naming_rejects_unknown_prefix(tmp_path):
+    make_skills(tmp_path, ["zzz-foo"])
+    make_taxonomy(tmp_path, ["coding"])
+    assert any("zzz-foo" in f for f in RG.check_skill_naming(tmp_path))
+
+
+def test_naming_grandfathers_legacy(tmp_path):
+    make_skills(tmp_path, ["rory"])
+    make_taxonomy(tmp_path, ["coding"], legacy=["rory"])
+    assert RG.check_skill_naming(tmp_path) == []
+
+
+def test_naming_skipped_when_no_taxonomy(tmp_path):
+    make_skills(tmp_path, ["foobar"])  # no skill-taxonomy.json -> fail-open
+    assert RG.check_skill_naming(tmp_path) == []
+
+
+# --------------------------------------------------------------------------
 # check_secrets (credentials / private keys / sensitive files / infra denylist)
 # Tokens are built via concatenation so the literal patterns are NOT present in this
 # test file (else the gate would flag this file when scanning the real repo).

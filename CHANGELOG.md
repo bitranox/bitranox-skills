@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [3.14.0] - 2026-06-27
+
+### Added
+- Category-prefix naming scheme for skills: `<category>-[<sub>-]<name>` (e.g.
+  `coding-python-clean-architecture`, `compuse-ssh`, `marketing-rory`). A new
+  `plugins/bitranox/skill-taxonomy.json` registry defines 26 top-level categories (with seed
+  sub-prefixes), grounded in real-world skill directories. `repo-gate.py` `check_skill_naming`
+  forces every NEW skill's top-level prefix to be a registry category (sub-prefixes free-form);
+  `adopt_skill.py` validates the same on adoption. Opening a new category is a deliberate registry
+  edit. The 41 existing flat names are grandfathered (`legacy`) until a future retrofit MAJOR, whose
+  full rename map is prepared in the registry (`retrofit`). CONTRIBUTING documents the scheme and
+  tie-break rules; skill-writer points authors at a marketplace's naming registry.
+
 ## [3.13.0] - 2026-06-27
 
 ### Added

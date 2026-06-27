@@ -320,6 +320,12 @@ Use words Claude would search for:
 - OK `creating-skills` not `skill-creation`
 - OK `condition-based-waiting` not `async-test-helpers`
 
+**If the target marketplace defines a naming registry, follow it.** Some marketplaces enforce a
+category-prefix scheme (e.g. `<category>-[<sub>-]<name>` like `coding-python-...`, `marketing-...`)
+via a registry file and a contribution gate. When contributing there, pick the category per that
+repo's rules and keep the verb-first/descriptive style for the `<name>` part. The scheme itself is
+repo-specific - see that repo's `CONTRIBUTING.md` (for this marketplace, `skill-taxonomy.json`).
+
 ### 4. Token Efficiency (Critical)
 
 **Problem:** getting-started and frequently-referenced skills load into EVERY conversation. Every token counts.
