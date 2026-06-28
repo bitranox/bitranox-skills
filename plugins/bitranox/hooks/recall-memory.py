@@ -47,9 +47,12 @@ def main():
     sid = ev.get("session_id") or "default"
 
     try:
-        keywords = gs.extract_keywords(prompt)
+        keywords = gs.extract_keywords(prompt)  # already filler-free (shipped + machine-local list)
         if not keywords:
             return 0
+        # Queue any not-yet-classified keyword for the dream-time filler classifier (deterministic,
+        # no model here). Known filler is already dropped by extract_keywords; known-topical is skipped.
+        sig.note_unknown_keywords(keywords)
         hits = gs.scan(keywords, gs.discover_files(cwd))  # other projects + global; current excluded
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0

@@ -36,11 +36,19 @@ _STOP = {
 
 def extract_keywords(text, max_n=12):
     """Deterministic keyword set from a topic / descriptor: lowercased significant tokens (>=3 chars,
-    not stopwords), de-duplicated in first-seen order, capped. No model. (Synonym recall is traded
-    for speed; a richer pass can run later.)"""
+    not stopwords / filler), de-duplicated in first-seen order, capped. No model. (Synonym recall is
+    traded for speed; a richer pass can run later.)
+
+    Filler words (generic/conversational tokens with no topical signal - the recall-precision bug) are
+    dropped via `self_improve_signals.load_filler_words()` (shipped baseline + machine-local, grown by
+    the dream-time classifier). Combined with the small structural `_STOP` set here."""
+    try:
+        drop = _STOP | sig.load_filler_words()
+    except Exception:  # noqa: BLE001 - missing/corrupt list must never break extraction
+        drop = _STOP
     out = []
     for tok in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", (text or "").lower()):
-        if tok in _STOP or len(tok) < 3 or tok in out:
+        if tok in drop or len(tok) < 3 or tok in out:
             continue
         out.append(tok)
         if len(out) >= max_n:
@@ -77,16 +85,22 @@ def discover_files(exclude_proj=None):
 
 
 def scan(keywords, files):
-    """Map each file that contains any keyword to the list of keywords it matched (case-insensitive
-    substring - grep-like). Files that read-fail are skipped."""
-    kws = [k.lower() for k in keywords if k]
+    """Map each file that contains any keyword to the list of keywords it matched. Matching is
+    WORD-BOUNDARY (a-z0-9 are word chars; `-`/`_` and punctuation are separators), case-insensitive -
+    so `again` does NOT match `against` and `test` does NOT match `latest` (a substring match made
+    recall match half the store). Files that read-fail are skipped."""
+    pats = {}
+    for k in keywords:
+        k = (k or "").lower()
+        if k and k not in pats:
+            pats[k] = re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")
     out = {}
     for p in files:
         try:
             text = Path(p).read_text(encoding="utf-8").lower()
         except OSError:
             continue
-        hits = [k for k in kws if k in text]
+        hits = [k for k, rx in pats.items() if rx.search(text)]
         if hits:
             out[str(p)] = hits
     return out

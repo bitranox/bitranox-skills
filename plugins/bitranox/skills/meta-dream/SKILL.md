@@ -115,6 +115,16 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   propose deleting it from `CLAUDE.md` with an explanation; at an intermediate altitude (no non-CLAUDE.md
   home) just FLAG, do not move. Propose-first in `propose`, apply in `auto`. (CLAUDE.md policy lives in
   `bitranox:meta-self-improve`.)
+- **Filler-word classification (keeps memory recall precise).** The per-prompt recall hook is
+  model-free: it drops known filler words and QUEUES any not-yet-classified keyword
+  (`self_improve_signals.load_pending_keywords()`). Here, the slow pass: if the queue is non-empty,
+  hand it to a **`sonnet`** subagent (per the tier doctrine) to classify each word as **filler**
+  (generic / conversational - no topical signal, e.g. "again", "previous", "normal") or **topical**
+  (a real technical term, e.g. "bindsnap", "stimer"). Apply: `add_filler_words(filler)` (machine-local
+  only - never the shipped `filler_words.json` baseline) and `add_topical_words(topical)` (so they are
+  not re-queued), then `clear_pending_keywords()`. Be CONSERVATIVE - when unsure, classify as topical
+  (a wrongly-blacklisted term would silently suppress useful recall; a missed filler only adds mild
+  noise the rarity ranking already damps). Empty queue -> skip (no-op).
 - **Model-hierarchy review (periodic, time-gated - keeps subagent tiering current).** When
   `self_improve_signals.model_review_due()` is true (no prior review or > ~30 days; model releases are
   infrequent), ask the `claude-code-guide` agent for the current Claude model lineup and compare it to

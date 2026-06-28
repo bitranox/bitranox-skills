@@ -355,6 +355,115 @@ def mark_model_reviewed(now=None):
     return now
 
 
+# --- Recall filler words (memory-recall keyword precision) ---------------------------------------
+# Generic/conversational words must not become recall search keywords (they match half the store).
+# Two tiers: a shipped baseline (filler_words.json next to this module, grows via PRs) UNIONED with a
+# machine-local list the dream-time classifier appends to. The per-prompt hook only USES this list
+# (deterministic, no model); GROWING it is a slow dream pass (a sonnet subagent classifies the queued
+# unknown words). See meta-dream's "Filler-word classification" pass.
+
+def _filler_baseline_path():
+    return Path(__file__).resolve().parent / "filler_words.json"
+
+
+def _filler_local_path():
+    return Path.home() / ".claude" / ".bitranox-filler-words.json"
+
+
+def _topical_words_path():
+    """Words the classifier confirmed are GENUINE topics - cached so they are not re-queued every dream."""
+    return Path.home() / ".claude" / ".bitranox-topical-words.json"
+
+
+def _recall_pending_path():
+    """Queue of as-yet-unclassified recall keywords (out-of-store), drained by the dream classifier."""
+    return Path.home() / ".claude" / "self-improve-audit" / "recall-unknown-keywords.txt"
+
+
+def _read_word_json(path):
+    """Read a word-list JSON that may be a bare list or {"filler"/"words"/"topical": [...]}. Fail-open []."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, list):
+        words = data
+    elif isinstance(data, dict):
+        words = data.get("filler") or data.get("words") or data.get("topical") or []
+    else:
+        words = []
+    return [str(w).strip().lower() for w in words if isinstance(w, str) and str(w).strip()]
+
+
+def _write_word_json(path, words, key="words"):
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps({key: sorted(set(words))}, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_filler_words():
+    """The full filler set: shipped baseline UNION machine-local additions. Lowercased frozenset."""
+    return frozenset(_read_word_json(_filler_baseline_path()) + _read_word_json(_filler_local_path()))
+
+
+def add_filler_words(words):
+    """Append classifier-confirmed filler words to the MACHINE-LOCAL list (never the shipped baseline)."""
+    new = {str(w).strip().lower() for w in words if str(w).strip()}
+    if not new:
+        return
+    _write_word_json(_filler_local_path(), set(_read_word_json(_filler_local_path())) | new, key="filler")
+
+
+def load_topical_words():
+    """Words already classified as genuine topics (not filler) - skip re-queuing them. Lowercased frozenset."""
+    return frozenset(_read_word_json(_topical_words_path()))
+
+
+def add_topical_words(words):
+    """Record classifier-confirmed topical words so they are not re-queued for classification."""
+    new = {str(w).strip().lower() for w in words if str(w).strip()}
+    if not new:
+        return
+    _write_word_json(_topical_words_path(), set(_read_word_json(_topical_words_path())) | new, key="topical")
+
+
+def note_unknown_keywords(words):
+    """Per-prompt: queue recall keywords that are NEITHER known filler NOR known-topical, for the dream
+    classifier to judge. Deterministic, append-only, deduped; never calls a model."""
+    known = load_filler_words() | load_topical_words()
+    cur = load_pending_keywords()
+    add = {str(w).strip().lower() for w in words if str(w).strip()} - known - cur
+    if not add:
+        return
+    f = _recall_pending_path()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with f.open("a", encoding="utf-8") as fh:
+            for w in sorted(add):
+                fh.write(w + "\n")
+    except OSError:
+        pass
+
+
+def load_pending_keywords():
+    """The set of queued-but-unclassified recall keywords (for the dream classifier)."""
+    try:
+        return frozenset(w.strip().lower() for w in _recall_pending_path().read_text(
+            encoding="utf-8").splitlines() if w.strip())
+    except OSError:
+        return frozenset()
+
+
+def clear_pending_keywords():
+    """Drain the queue after the dream classifier has processed it."""
+    try:
+        _recall_pending_path().unlink()
+    except OSError:
+        pass
+
+
 def knowledge_store_empty():
     """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty
     AND no project's memory holds a topic file. Used to suppress the new-project bootstrap nudge on a

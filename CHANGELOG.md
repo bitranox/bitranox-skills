@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.5.1] - 2026-06-28
+
+### Fixed
+- Memory-recall precision. A conversational prompt (e.g. "i got again hits on my previous answer - is
+  that normal?") surfaced several unrelated notes. Two causes: (1) keyword matching was SUBSTRING-based,
+  so "again" matched "against" and "test" matched "latest" - switched to WORD-BOUNDARY matching;
+  (2) generic/conversational words became search keywords - added a filler-word blacklist.
+
+### Added
+- Filler-word blacklist for recall keyword extraction: a shipped baseline (`hooks/filler_words.json`)
+  unioned with a machine-local list. The per-prompt recall hook stays deterministic / model-free - it
+  drops known filler and QUEUES any not-yet-classified keyword; the new `meta-dream` filler-classification
+  pass (a `sonnet` subagent) drains the queue, appending confirmed filler to the machine-local list and
+  topical words to a known-good cache (conservative: unsure -> topical). Classification is off the
+  per-prompt hot path (sleep-time only).
+- `self_improve_signals` helpers: `load_filler_words` / `add_filler_words`, `load_topical_words` /
+  `add_topical_words`, `note_unknown_keywords` / `load_pending_keywords` / `clear_pending_keywords`,
+  plus `model_review_due` / `mark_model_reviewed` (the 4.5.0 model-hierarchy-review marker).
+
+### Changed
+- `docs/self-learning-memory.md`: expanded the notebook-recall reflex with the token-economy rationale
+  (re-deriving costs more than reading a note; the glance gets cheaper and saves tokens over time) and
+  the dream-offload of slow learning; corrected the forgetting section to the no-usage/age-based-decay
+  reality (removal = dedup + obsolete-prune + manual only); added the "right tool for the right job"
+  model-tier analogy.
+
 ## [4.5.0] - 2026-06-28
 
 ### Added

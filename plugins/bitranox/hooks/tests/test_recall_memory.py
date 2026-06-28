@@ -92,6 +92,29 @@ def test_no_keywords_no_output(monkeypatch, capsys):
     assert rc == 0 and out == ""
 
 
+def test_filler_only_prompt_no_output(monkeypatch, capsys):
+    # the reported bug: a conversational prompt of pure filler must surface NOTHING.
+    _mem("/p/other", "make-test.md", "make test note")
+    rc, out = run(monkeypatch, capsys,
+                  "i got again hits on my previous answer - is that normal again")
+    assert rc == 0 and out == ""
+
+
+def test_unknown_keywords_are_queued_for_the_dream(monkeypatch, capsys):
+    # per prompt we do NOT classify (no model); we queue not-yet-classified keywords for the dream.
+    _mem("/p/other", "bindsnap.md", "bindsnap divert shim")
+    run(monkeypatch, capsys, "bindsnap divert details")
+    assert {"bindsnap", "divert", "details"} <= set(sig.load_pending_keywords())
+
+
+def test_known_topical_keyword_not_requeued(monkeypatch, capsys):
+    sig.add_topical_words(["bindsnap"])
+    _mem("/p/other", "bindsnap.md", "bindsnap divert shim")
+    run(monkeypatch, capsys, "bindsnap divert")
+    pending = sig.load_pending_keywords()
+    assert "bindsnap" not in pending and "divert" in pending   # known-topical skipped, new queued
+
+
 def test_malformed_stdin_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     assert R.main() == 0

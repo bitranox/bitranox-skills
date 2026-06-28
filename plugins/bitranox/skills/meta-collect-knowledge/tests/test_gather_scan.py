@@ -30,6 +30,29 @@ def test_scan_matches_and_skips(tmp_path):
     assert str(b) not in hits
 
 
+def test_scan_is_word_boundary_not_substring(tmp_path):
+    # the recall-precision bug: substring matching made "again" match "against", "test" match "latest".
+    f = tmp_path / "c.md"
+    f.write_text("verify the contract against the latest broker; the test passed", encoding="utf-8")
+    hits = G.scan(["again", "test"], [f])
+    assert hits.get(str(f)) == ["test"]              # standalone "test" matches; "again" != "against"
+
+
+def test_extract_keywords_drops_filler(monkeypatch):
+    # filler words (generic/conversational) are dropped via load_filler_words; topical tokens survive.
+    monkeypatch.setattr(sig, "load_filler_words", lambda: frozenset({"again", "previous", "normal"}))
+    kws = G.extract_keywords("again the previous rabbitmq timeout looked normal")
+    assert "rabbitmq" in kws and "timeout" in kws
+    assert "again" not in kws and "previous" not in kws and "normal" not in kws
+
+
+def test_extract_keywords_uses_shipped_baseline():
+    # smoke: the real shipped baseline drops obvious filler but keeps a real topic.
+    kws = G.extract_keywords("got again hits on the previous bindsnap normal run")
+    assert "bindsnap" in kws
+    assert not ({"got", "again", "hits", "previous", "normal"} & set(kws))
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"

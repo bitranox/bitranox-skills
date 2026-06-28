@@ -45,10 +45,26 @@ long details a step away rather than underfoot.
 
 There is one more reflex on top of the always-present layer: when a new request comes in, the system
 does a quick search of everything it has noted before - across all your projects - and, if it finds
-something similar it has done, lays that note open on the desk for this turn. Like glancing at your
-own notebook before reinventing. It is deterministic (a relevance match, not a guess), it only adds
-notes from elsewhere that you do not already have here, and it shows each one once - so it helps
-without crowding the desk.
+something similar it has done, lays that note open on the desk for this turn. Think of it as checking
+your own notebook before reinventing the wheel, or asking "have I solved this before?" instead of
+starting from a blank page. It is deterministic (a relevance match, not a guess), it only adds notes
+from elsewhere that you do not already have here, and it shows each one once - so it helps without
+crowding the desk.
+
+A fair worry here: doesn't pulling in old notes on every turn waste tokens? At the very start it can
+feel that way - a little extra context for notes you may not need. That feeling fades fast, and the
+balance tips the other way. Re-deriving something you already worked out once - re-reading the same
+files, re-making the same mistake, re-discovering the same flag - costs far more tokens than a short
+note that hands you the answer up front. Glancing at the notebook is cheap; reinventing the wheel is
+expensive. The longer you use it, the more it saves.
+
+Two things keep that glance cheap. First, the slow, expensive part of learning - generalizing,
+re-filing, deciding what is worth keeping - does not happen during your live turns at all. It is
+moved into the consolidation pass (the "dream"), which runs out of band: when one is due at the start
+of a session, around a context compaction, or whenever you ask. Your working turns stay fast; the
+heavy lifting happens off the clock. Second, the search itself gets sharper over time: the dream
+learns which words are just conversational filler ("again", "previous", "normal") versus real topics,
+so the notebook check stops matching on noise and only surfaces things that actually relate.
 
 ## 4. Connect, do not copy
 
@@ -60,12 +76,22 @@ Connections only ever point "upward" - from the specific toward the general, fro
 toward the durable. That way deleting a project never leaves a dangling pointer behind: what was
 promoted up survives, and only the local details disappear with it, which is exactly right.
 
-## 5. Forget what you never use
+## 5. Remove what is wrong, not what is quiet
 
-A brain lets unused links fade. So does this. Notes that never get touched drift out of the always-on
-layer over time, archived rather than deleted. Without that, the memory would only ever grow, and a
-memory that only grows eventually drowns out its own signal. Genuine must-follow rules are never
-forgotten - only the clutter.
+It is tempting to let old or rarely-touched notes fade the way a brain drops unused links. We tried
+that and backed it out, because the signal it needs does not exist: a note sits in context and Claude
+reads it silently, so there is no honest way to tell that a note was "used" - and a note being old,
+or long, or quiet says nothing about whether it is still true. Forgetting by the clock would throw
+away good notes.
+
+So nothing is removed just for being old or unused. A note leaves only for a content reason: it
+duplicates another (the two are merged into one sharper note), or it is genuinely obsolete - it points
+at a file or flag that no longer exists, an issue that was resolved, or it has been superseded by a
+newer note - or you ask for it to go. Those are judgment calls the dream makes by reading the note,
+proposing the change, never deleting silently; and the whole store is backed up first, so it is always
+reversible. Must-follow rules are never dropped. The store stays lean not by forgetting, but because
+the always-on part is just tight one-line summaries - the detail lives a step away and costs nothing
+until it is read.
 
 ## 6. Fast thinking and slow thinking
 
@@ -75,6 +101,14 @@ by a small script - so it runs the same way every time instead of being re-deriv
 guessed) on each pass. That is the shift from deliberate effort to habit. It is meant for routines,
 not for the rules that must stay front of mind.
 
+There is a second version of the same idea: the right tool for the right job. When the system hands a
+piece of work to a helper, it picks the model that fits the work - like a craftsperson reaching for
+the right tool rather than using the same one for everything. Deep, get-it-right reasoning goes to the
+most capable model; routine, parallelizable work goes to a fast, capable workhorse; purely mechanical
+steps go to the quickest, cheapest one. You get strong judgment where being wrong is costly, and speed
+and low cost where it is not - matched automatically, job by job. And because the line-up of models
+changes over time, the dream periodically re-checks which tool belongs to which job and adjusts.
+
 ## 7. Your memory, your call
 
 Where a sensible default depends on how you work, the system recommends what it thinks is best,
@@ -83,9 +117,9 @@ applied from then on - it does not ask again. You can review, change, or reset a
 whenever you like.
 
 This covers the questions that do not have one right answer for everyone: how eagerly to share a
-lesson across projects, how aggressively to forget, where new skills should live, and how cautious
-to be with anything sensitive. Before anything is reorganized, the whole store is backed up, so every
-change is reversible.
+lesson across projects, where new skills should live, how much the dream should do on its own versus
+ask first, and how cautious to be with anything sensitive. Before anything is reorganized, the whole
+store is backed up, so every change is reversible.
 
 ## 8. What helps everyone, shared
 
@@ -97,5 +131,5 @@ whole community compounds on.
 ---
 
 In one line: capture quickly, consolidate like sleep, keep the useful things concrete and within
-reach, connect instead of copy, forget the noise, automate the routine, and leave the judgment calls
-to you.
+reach, check the notebook before reinventing, connect instead of copy, prune only what is wrong,
+automate the routine with the right tool for each job, and leave the judgment calls to you.

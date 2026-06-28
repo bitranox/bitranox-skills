@@ -306,3 +306,36 @@ def test_model_review_due_and_mark(home):
     assert S.model_review_due(now=1_000_000.0) is False      # just reviewed -> not due
     assert S.model_review_due(now=1_000_000.0 + 29 * 86400) is False
     assert S.model_review_due(now=1_000_000.0 + 31 * 86400) is True   # past the monthly interval
+
+
+# --- recall filler words ------------------------------------------------------------------------
+def test_filler_baseline_loads_and_is_unioned_with_local(home):
+    base = S.load_filler_words()
+    assert "previous" in base and "again" in base and "normal" in base   # shipped baseline present
+    assert "frobnicate" not in base
+    S.add_filler_words(["Frobnicate", "frobnicate", "  "])               # machine-local, normalized
+    assert "frobnicate" in S.load_filler_words()                          # union of baseline + local
+    assert "previous" in S.load_filler_words()                            # baseline still there
+
+
+def test_add_filler_words_does_not_touch_shipped_baseline(home):
+    S.add_filler_words(["zzznew"])
+    assert "zzznew" not in S._read_word_json(S._filler_baseline_path())   # baseline file untouched
+    assert "zzznew" in S._read_word_json(S._filler_local_path())          # only the local file grows
+
+
+def test_topical_words_roundtrip(home):
+    assert S.load_topical_words() == frozenset()
+    S.add_topical_words(["RabbitMQ", "ept"])
+    assert "rabbitmq" in S.load_topical_words() and "ept" in S.load_topical_words()
+
+
+def test_pending_keywords_queue_skips_known_and_drains(home):
+    S.add_filler_words(["again"])
+    S.add_topical_words(["rabbitmq"])
+    S.note_unknown_keywords(["again", "rabbitmq", "stimer", "ept"])       # 2 known -> only 2 queued
+    assert S.load_pending_keywords() == frozenset({"stimer", "ept"})
+    S.note_unknown_keywords(["stimer", "vmbus"])                          # dedup vs queue; add vmbus
+    assert S.load_pending_keywords() == frozenset({"stimer", "ept", "vmbus"})
+    S.clear_pending_keywords()
+    assert S.load_pending_keywords() == frozenset()
