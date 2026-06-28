@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.9.2] - 2026-06-29
+
+### Fixed
+- `reconcile_memory_index` reference resolver now also matches a note's frontmatter `name:`, not only
+  its filename stem. So a `[[ref]]` resolves whether it used the filename
+  (`feedback_generalize_learnings`) or the note's declared name (`generalize-learnings`) - the
+  name-vs-filename mismatch class no longer becomes a false orphan. A new `_entry_slugs()` indexes each
+  note by stem AND name (both `_canon`-folded); `check_references` and the demotion-safety
+  `has_inbound_refs` (which now expands the queried note to all the slugs it answers to) route through
+  it. (+2 tests.)
+
 ## [4.9.1] - 2026-06-29
 
 ### Fixed

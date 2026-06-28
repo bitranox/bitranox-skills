@@ -193,6 +193,24 @@ def test_has_inbound_refs_separator_insensitive(tmp_path):
     assert R.has_inbound_refs([proj, glob], "fleet-ssh-access") is True
 
 
+def test_check_references_resolves_by_frontmatter_name(tmp_path):
+    # a ref using a note's `name:` (not its filename stem) resolves
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "See [[generalize-learnings]] for the principle.")
+    write(glob, "feedback_generalize_learnings.md", "---\nname: generalize-learnings\n---\nbody")
+    rep = R.check_references([proj, glob])
+    assert rep["orphans"] == [] and rep["downward"] == []
+
+
+def test_has_inbound_refs_by_frontmatter_name(tmp_path):
+    # a ref by NAME is detected even when demotion-safety queries by filename stem
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "Refs [[generalize-learnings]].")
+    write(glob, "feedback_generalize_learnings.md", "---\nname: generalize-learnings\n---\nbody")
+    assert R.has_inbound_refs([proj, glob], "feedback_generalize_learnings") is True  # query by stem
+    assert R.has_inbound_refs([proj, glob], "generalize-learnings") is True           # query by name
+
+
 def test_check_references_recurses_global_subdirs(tmp_path):
     proj, glob = _chain(tmp_path)
     (glob / "net").mkdir()

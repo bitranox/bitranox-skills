@@ -135,6 +135,21 @@ def _ref_slug(token):
     return _canon(token.split(":")[-1])
 
 
+def _entry_slugs(p):
+    """Every canonical slug a note answers to: its filename stem AND its frontmatter `name` (if any).
+    So a `[[ref]]` resolves whether it used the filename (`feedback_generalize_learnings`) or the note's
+    declared name (`generalize-learnings`). Both are folded by `_canon` (case + `-`/`_`)."""
+    slugs = {_canon(p.stem)}
+    try:
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        name = meta.get("name")
+        if name:
+            slugs.add(_canon(name))
+    except OSError:
+        pass
+    return slugs
+
+
 _NON_ENTRY = {MEMORY_INDEX.lower(), "claude.md", "claude.local.md"}
 
 
@@ -178,7 +193,8 @@ def check_references(dirs):
     targets = {}
     for pos, d in enumerate(dirs):
         for p in _altitude_entries(pos, last, d):
-            targets.setdefault(_canon(p.stem), set()).add(pos)
+            for s in _entry_slugs(p):                 # index by filename stem AND frontmatter name
+                targets.setdefault(s, set()).add(pos)
 
     orphans, downward, checked = [], [], 0
     for pos, d in enumerate(dirs):
@@ -203,20 +219,29 @@ def check_references(dirs):
 
 def has_inbound_refs(dirs, slug):
     """True if any OTHER entry across the altitude chain references `[[slug]]` (or `[[x:slug]]`).
-    Demotion safety: never demote a higher entry that lower entries still point UP at."""
-    slug = _canon(slug)
+    Demotion safety: never demote a higher entry that lower entries still point UP at. The target note
+    answers to BOTH its filename stem and its frontmatter `name`, and refs are matched against either -
+    so a ref by name is detected even when the caller queries by stem (and vice versa)."""
+    qcanon = _canon(slug)
     dirs = [Path(x) for x in dirs]
     last = len(dirs) - 1
+    # expand the query to every slug the target note answers to (stem + frontmatter name)
+    target_slugs = {qcanon}
+    for pos, d in enumerate(dirs):
+        for p in _altitude_entries(pos, last, d):
+            es = _entry_slugs(p)
+            if qcanon in es:
+                target_slugs |= es
     for pos, d in enumerate(dirs):
         for p in _altitude_entries(pos, last, d) + ([d / MEMORY_INDEX] if pos == 0 else []):
-            if _canon(p.stem) == slug:
+            if _entry_slugs(p) & target_slugs:        # the target note itself - skip
                 continue
             try:
                 text = p.read_text(encoding="utf-8")
             except OSError:
                 continue
             for m in _WIKILINK_RX.finditer(text):
-                if _ref_slug(m.group(1)) == slug:
+                if _ref_slug(m.group(1)) in target_slugs:
                     return True
     return False
 
