@@ -266,3 +266,27 @@ def test_store_changed(home):
     import os
     os.utime(d / "a.md", (base + 100, base + 100))
     assert S.store_changed(d, base) is True
+
+
+# --------------------------------------------------------------------------
+# forgetting / decay (idle counter)
+# --------------------------------------------------------------------------
+
+
+def test_bump_and_reset_idle(home):
+    assert S.bump_idle("/p/x", "k") == 1
+    assert S.bump_idle("/p/x", "k") == 2
+    S.reset_idle("/p/x", "k")
+    assert S.bump_idle("/p/x", "k") == 1                      # reset -> counted from zero again
+
+
+def test_should_archive_modes(home):
+    assert S.should_archive(5, mode="off") is False          # off: never forget
+    assert S.should_archive(2, mode="conservative", n=3) is False
+    assert S.should_archive(3, mode="conservative", n=3) is True
+    assert S.should_archive(1, mode="aggressive") is True     # aggressive: forget quickly
+
+
+def test_should_archive_reads_config(home):
+    S.save_config({"forgetting": "off"})
+    assert S.should_archive(99) is False                      # config off overrides default

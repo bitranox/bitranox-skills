@@ -308,6 +308,51 @@ def store_changed(memory_dir_path, since_mtime):
     return _newest_mtime(Path(memory_dir_path)) > float(since_mtime)
 
 
+def _idle_file(proj):
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".idle.json")
+
+
+def bump_idle(proj, key):
+    """Increment and return an entry's idle-dream count (how many consecutive dreams saw it unused).
+    Out-of-store, so decay bookkeeping never bumps the dreamed store's mtime (convergence holds)."""
+    f = _idle_file(proj)
+    counts = _read_counts(f)
+    counts[key] = int(counts.get(key, 0)) + 1
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+    return counts[key]
+
+
+def reset_idle(proj, key):
+    """Clear an entry's idle count - call when an observable proxy shows it was used (a skill
+    invocation, an explicit reference) so a used entry is never archived."""
+    f = _idle_file(proj)
+    counts = _read_counts(f)
+    if key in counts:
+        del counts[key]
+        try:
+            f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def should_archive(idle_count, mode=None, n=None):
+    """Whether a NON-must-always entry idle this many dreams should be archived out of the
+    always-present window. Honors the `forgetting` knob: off -> never; conservative -> idle >= N
+    (config `forget_idle_dreams`, default 3); aggressive -> idle >= 1. Bias toward keeping."""
+    cfg = load_config()
+    mode = cfg.get("forgetting", "conservative") if mode is None else mode
+    if mode == "off":
+        return False
+    n = cfg.get("forget_idle_dreams", 3) if n is None else n
+    if mode == "aggressive":
+        return int(idle_count) >= 1
+    return int(idle_count) >= int(n)
+
+
 def knowledge_store_empty():
     """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty
     AND no project's memory holds a topic file. Used to suppress the new-project bootstrap nudge on a

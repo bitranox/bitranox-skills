@@ -19,6 +19,7 @@ Pure standard library; cross-platform (pathlib, UTF-8). ASCII output only.
 
 import argparse
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -168,6 +169,49 @@ def check_references(dirs):
                 elif max(where) < pos:           # every target is strictly below the source
                     downward.append((p.stem.lower(), ref))
     return {"checked": checked, "orphans": sorted(set(orphans)), "downward": sorted(set(downward))}
+
+
+def has_inbound_refs(dirs, slug):
+    """True if any OTHER entry across the altitude chain references `[[slug]]` (or `[[x:slug]]`).
+    Demotion safety: never demote a higher entry that lower entries still point UP at."""
+    slug = slug.lower()
+    for d in (Path(x) for x in dirs):
+        for p in _entry_md_files(d) + [d / MEMORY_INDEX]:
+            if p.stem.lower() == slug:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for m in _WIKILINK_RX.finditer(text):
+                if _ref_slug(m.group(1)) == slug:
+                    return True
+    return False
+
+
+def archive_entry(memory_dir, filename, archive_subdir=".archive"):
+    """Forget a NON-must-always entry: move its body to a cold archive subdir (disk, free; not
+    always-present) and drop its `MEMORY.md` index line. Returns True if archived. The caller
+    decides WHAT to archive (idle + not must-always); this just does the mechanical move."""
+    memory_dir = Path(memory_dir)
+    src = memory_dir / filename
+    if not src.is_file() or filename == MEMORY_INDEX:
+        return False
+    archive = memory_dir / archive_subdir
+    try:
+        archive.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(archive / filename))
+    except OSError:
+        return False
+    index_path = memory_dir / MEMORY_INDEX
+    try:
+        if index_path.is_file():
+            kept = [ln for ln in index_path.read_text(encoding="utf-8").splitlines()
+                    if filename not in referenced_files(ln)]
+            index_path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    except OSError:
+        pass
+    return True
 
 
 def over_cap(memory_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES):

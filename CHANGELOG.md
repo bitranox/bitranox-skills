@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.2.1] - 2026-06-28
+
+### Added
+- Layered memory, Phase 1.5 (counter-gated behavioral passes; counters live outside the dreamed store
+  so consolidation stays a no-op on an unchanged store):
+  - Forgetting / decay: out-of-store per-entry idle counter (`bump_idle`/`reset_idle`),
+    `should_archive` honoring a `forgetting` knob (off / conservative / aggressive), and
+    `reconcile_memory_index.archive_entry` that moves an idle non-must-always body to a cold `.archive/`
+    and drops its index line (bias toward keeping; must-always is never archived).
+  - Demotion safety: `reconcile_memory_index.has_inbound_refs` so an entry that lower entries still
+    reference upward is never demoted; demotion reuses the promotion dwell/hysteresis.
+- `meta-dream` gains the behavioral passes: demotion, forgetting/decay, contradiction/override
+  (CLAUDE.md authoritative; memory override = more-specific wins), and CLAUDE.md reconciliation
+  (back up before edit; integrate overlap into a same-scope always-present home and propose deletion;
+  intermediate-altitude overlaps are flag-only).
+
 ## [4.2.0] - 2026-06-28
 
 ### Added

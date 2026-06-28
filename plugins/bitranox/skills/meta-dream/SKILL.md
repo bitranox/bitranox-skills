@@ -90,6 +90,29 @@ Create one todo per step.
     prunes, any CLAUDE.md edits (applied or proposed), and the skill change (PR link or proposal). In
     `propose` mode, remind the user they can enable `auto` to stop the asking, or `off` to disable.
 
+## Behavioral passes (demotion, forgetting, override, CLAUDE.md reconciliation)
+
+Part of a full dream, all with **out-of-store counters** so a no-change dream stays a no-op (step 11):
+
+- **Demotion (re-file over-promoted entries).** If a global/high entry turns out to apply to only one
+  project, move it back down - but NEVER if lower entries still point UP at it
+  (`reconcile_memory_index.has_inbound_refs`), and apply the SAME dwell/hysteresis as promotion
+  (`note_promotion_candidate`) so a boundary entry cannot promote/demote on alternate dreams.
+- **Forgetting / decay.** For each NON-must-always entry not observed used this dream (no skill
+  invocation, no explicit reference - the only honest "used" proxies; there is no read signal), call
+  `bump_idle`; `reset_idle` when it IS used. When `should_archive(idle)` (honoring the `forgetting`
+  knob: off / conservative / aggressive), run `reconcile_memory_index.archive_entry` to move the body
+  to the cold `.archive/` and drop its index line. Never archive a must-always constraint; bias to keep.
+- **Contradiction / override.** A hand-written `CLAUDE.md` is AUTHORITATIVE: if memory contradicts it,
+  correct OUR memory, do not touch the rule. Memory-vs-memory: a project rule that CONTRADICTS a higher
+  rule becomes a self-contained OVERRIDE (more-specific / lower wins at load), NOT a `[[reference]]`;
+  flag a persistent contradiction for the user.
+- **CLAUDE.md reconciliation.** Back up the `CLAUDE.md` only BEFORE an actual edit (not every dream).
+  Integrate an overlapping / superficial `CLAUDE.md` entry into a SAME-SCOPE always-present home and
+  propose deleting it from `CLAUDE.md` with an explanation; at an intermediate altitude (no non-CLAUDE.md
+  home) just FLAG, do not move. Propose-first in `propose`, apply in `auto`. (CLAUDE.md policy lives in
+  `bitranox:meta-self-improve`.)
+
 ## Boundaries
 
 - **Private memory + the global `~/.claude/rules/bitranox/` layer (machine-local):** back up, then

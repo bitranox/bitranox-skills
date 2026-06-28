@@ -201,3 +201,34 @@ def test_main_check_exit_codes(tmp_path, capsys):
     write(proj, "bad.md", "References [[nope]].")
     assert R.main([str(proj), str(glob), "--check"]) == 1
     assert "orphan ref" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# demotion safety (inbound refs) + forgetting (archive)
+# --------------------------------------------------------------------------
+
+def test_has_inbound_refs(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "References [[fleet-ssh]].")
+    write(glob, "fleet-ssh.md", "the general rule")
+    assert R.has_inbound_refs([proj, glob], "fleet-ssh") is True    # delta points up at it -> keep
+    assert R.has_inbound_refs([proj, glob], "delta") is False       # nothing points at delta
+
+
+def test_archive_entry_moves_body_and_drops_index(tmp_path):
+    d = tmp_path / "memory"
+    d.mkdir()
+    write(d, "stale.md", topic("stale", "an idle note"))
+    write(d, "MEMORY.md", "# Memory index\n- [Stale](stale.md) - an idle note\n- [Keep](keep.md) - x\n")
+    assert R.archive_entry(d, "stale.md") is True
+    assert not (d / "stale.md").exists()
+    assert (d / ".archive" / "stale.md").is_file()                 # body preserved (cold), not deleted
+    idx = (d / "MEMORY.md").read_text(encoding="utf-8")
+    assert "stale.md" not in idx and "keep.md" in idx              # only the stale index line dropped
+
+
+def test_archive_entry_refuses_missing_or_index(tmp_path):
+    d = tmp_path / "memory"
+    d.mkdir()
+    assert R.archive_entry(d, "nope.md") is False
+    assert R.archive_entry(d, "MEMORY.md") is False
