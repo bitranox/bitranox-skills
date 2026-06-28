@@ -349,6 +349,22 @@ invisible AI tells (en-dash and other dashes, curly quotes, guillemets, ellipsis
 blanks like the zero-width space, non-breaking space, and BOM). Sweep generated files for these with
 a `grep -nP` over the tell code points before you call the work done.
 
+## Pathfinder discipline (leave it better)
+
+Capturing learnings is one half of stewardship; the other is the code and files you pass through. Be a
+good pathfinder:
+
+- **Leave every file/area better than you found it.** Fix the adjacent rot you touch and can verify (a
+  stale doc line, a latent bug, an AI-writing tell), not just the line you came for.
+- **No technical debt.** When you spot a mistake, point it out CLEARLY; never pass it silently or wave
+  it off as "works anyway" - a deferred "harmless" issue is how debt accumulates and it masks the next
+  real failure.
+- **Out-of-scope fixes go in their own worktree.** A fix unrelated to the current change belongs in a
+  separate worktree (`bitranox:git-worktrees`), so the current change stays focused and reviewable.
+  Surface, do not silently rewrite, another session's deliberate logic.
+- **Clean up after yourself.** Remove temporary tooling, mounts, scratch files, and one-off scaffolding
+  once the goal is met; keep only what is durable and worth reusing (and say what you kept).
+
 ## Common mistakes
 - Appending a new memory file when an existing one should have been edited (bloats the index).
 - Mixing the two lanes: a one-off task finding logged as a recurring-process rule, or vice versa.

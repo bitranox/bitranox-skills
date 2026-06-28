@@ -11,6 +11,10 @@ Code review requires technical evaluation, not emotional performance.
 
 **Core principle:** Verify before implementing. Ask before assuming. Technical correctness over social comfort.
 
+**Pathfinder:** when a review surfaces a real issue, fix it rather than defer it (no technical debt); a
+valid fix that is out of scope for this change goes in its own worktree, not bolted on. See
+`bitranox:meta-self-improve` ("Pathfinder discipline").
+
 ## The Response Pattern
 
 ```

@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.9.0] - 2026-06-29
+
+### Added
+- **Pathfinder discipline** woven into the marketplace skills: leave every file better than you found it,
+  accept no technical debt (point mistakes out clearly, never "works anyway"), route an out-of-scope fix
+  to its own worktree, and clean up temporary scaffolding when done. Canonical statement is a new
+  "Pathfinder discipline" section in `meta-self-improve`; an always-on reminder is in the
+  SessionStart-loaded `meta-using-bitranox-skills`; and one-line cross-references are in
+  `process-review-enhance-code-quality`, `process-review-receiving-code-review`, and
+  `process-agents-subagent-driven-development` (with the out-of-scope-fix rule cross-linking
+  `git-worktrees`).
+
 ## [4.8.2] - 2026-06-29
 
 ### Changed

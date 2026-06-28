@@ -117,6 +117,13 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 
 This grouping is orientation, not the source of truth: skills get added and renamed. Trust the available-skills list for what currently exists, and never skip a domain skill just because the task looked like "only" a coding task (e.g. editing a YAML file -> `files-edit-yml`; writing a user-facing message -> `write-humanize-en`/`write-humanize-de`; touching a Proxmox host -> `infra-proxmox`).
 
+## Work like a pathfinder
+
+Beyond finding and using skills: while you work, leave every file better than you found it, accept NO
+technical debt (point mistakes out clearly, never "works anyway"), put an out-of-scope fix in its own
+worktree (`bitranox:git-worktrees`) instead of bolting it on, and clean up temporary scaffolding when
+done. The full discipline is in `bitranox:meta-self-improve` ("Pathfinder discipline").
+
 ## Skill Types
 
 **Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline.

@@ -11,6 +11,10 @@ Execute plan by dispatching a fresh implementer subagent per task, a task review
 
 **Core principle:** Fresh subagent per task + task review (spec + quality) + broad final review = high quality, fast iteration
 
+**Pathfinder:** instruct each implementer to leave files better than found and accept no technical debt;
+an out-of-scope fix a subagent spots goes in its own worktree (`bitranox:git-worktrees`), surfaced not
+bolted on. See `bitranox:meta-self-improve` ("Pathfinder discipline").
+
 **Narration:** between tool calls, narrate at most one short line  -  the
 ledger and the tool results carry the record.
 

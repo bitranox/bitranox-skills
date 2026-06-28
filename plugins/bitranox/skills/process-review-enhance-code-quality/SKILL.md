@@ -15,6 +15,10 @@ Score a project 0-10, identify issues by severity, walk the user through fixes o
 
 **Core principle:** Respect prior decisions. Check before suggesting. Ask before changing.
 
+**Pathfinder:** leave each file better than you found it and accept no technical debt - fix adjacent rot
+you can verify, flag (do not silently pass) anything wrong, and route an out-of-scope fix to its own
+worktree. See `bitranox:meta-self-improve` ("Pathfinder discipline").
+
 ## Workflow
 
 ```
