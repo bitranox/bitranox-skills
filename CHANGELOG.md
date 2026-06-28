@@ -17,6 +17,13 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.3.1] - 2026-06-28
+
+### Fixed
+- Renamed the two duplicate-basename `test_strip_typographic_tells.py` files (write-humanize-en/-de) to
+  `_en`/`_de` suffixes so a plain `pytest` over the tree collects without an import-file-mismatch. The
+  CI gate was unaffected (it already runs `--import-mode=importlib`); this fixes the naive developer run.
+
 ## [4.3.0] - 2026-06-28
 
 ### Added
