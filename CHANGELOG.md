@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.9.1] - 2026-06-29
+
+### Fixed
+- `reconcile_memory_index` reference resolver is now SEPARATOR-INSENSITIVE: a `[[ref]]` matches its
+  target note regardless of hyphen/underscore drift (`[[feedback-no-em-dashes]]` resolves to
+  `feedback_no_em_dashes.md` and vice versa). A `-` vs `_` mismatch was the single biggest source of
+  false orphan refs across the stores. A new `_canon()` folds case and `-`/`_`; `_ref_slug`, the target
+  index, the self-ref skip, and `has_inbound_refs` all route through it. (+2 tests.)
+
 ## [4.9.0] - 2026-06-29
 
 ### Added

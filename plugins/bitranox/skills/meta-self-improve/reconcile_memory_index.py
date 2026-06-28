@@ -123,9 +123,16 @@ _CAP_LINES = 200
 _CAP_BYTES = 25_000
 
 
+def _canon(s):
+    """Canonical slug for MATCHING: lowercase and treat `-` and `_` as the same separator. So a ref
+    `[[feedback-no-em-dashes]]` resolves to a file `feedback_no_em_dashes.md` (and vice versa) - a
+    hyphen/underscore drift never becomes a false orphan."""
+    return s.strip().lower().replace("_", "-")
+
+
 def _ref_slug(token):
-    """Normalize a wiki-link token to a bare slug: '[[global:fleet-ssh]]' -> 'fleet-ssh'."""
-    return token.split(":")[-1].strip().lower()
+    """Normalize a wiki-link token to a bare, canonical slug: '[[global:fleet_ssh]]' -> 'fleet-ssh'."""
+    return _canon(token.split(":")[-1])
 
 
 _NON_ENTRY = {MEMORY_INDEX.lower(), "claude.md", "claude.local.md"}
@@ -171,7 +178,7 @@ def check_references(dirs):
     targets = {}
     for pos, d in enumerate(dirs):
         for p in _altitude_entries(pos, last, d):
-            targets.setdefault(p.stem.lower(), set()).add(pos)
+            targets.setdefault(_canon(p.stem), set()).add(pos)
 
     orphans, downward, checked = [], [], 0
     for pos, d in enumerate(dirs):
@@ -183,7 +190,7 @@ def check_references(dirs):
                 continue
             for m in _WIKILINK_RX.finditer(text):
                 ref = _ref_slug(m.group(1))
-                if not ref or ref == p.stem.lower():
+                if not ref or ref == _canon(p.stem):
                     continue
                 checked += 1
                 where = targets.get(ref)
@@ -197,12 +204,12 @@ def check_references(dirs):
 def has_inbound_refs(dirs, slug):
     """True if any OTHER entry across the altitude chain references `[[slug]]` (or `[[x:slug]]`).
     Demotion safety: never demote a higher entry that lower entries still point UP at."""
-    slug = slug.lower()
+    slug = _canon(slug)
     dirs = [Path(x) for x in dirs]
     last = len(dirs) - 1
     for pos, d in enumerate(dirs):
         for p in _altitude_entries(pos, last, d) + ([d / MEMORY_INDEX] if pos == 0 else []):
-            if p.stem.lower() == slug:
+            if _canon(p.stem) == slug:
                 continue
             try:
                 text = p.read_text(encoding="utf-8")

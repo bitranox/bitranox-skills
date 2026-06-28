@@ -175,6 +175,24 @@ def test_check_references_altitude_prefixed_slug(tmp_path):
     assert rep["orphans"] == [] and rep["downward"] == []
 
 
+def test_check_references_separator_insensitive(tmp_path):
+    # a hyphen/underscore drift between a ref and its target filename must NOT be a false orphan
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "See [[fleet_ssh_access]] and [[other-rule]].")
+    write(glob, "fleet-ssh-access.md", "base rule")     # ref uses _, file uses -
+    write(glob, "other_rule.md", "another base rule")   # ref uses -, file uses _
+    rep = R.check_references([proj, glob])
+    assert rep["orphans"] == [] and rep["downward"] == []
+
+
+def test_has_inbound_refs_separator_insensitive(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "References [[fleet-ssh-access]].")   # hyphen ref
+    write(glob, "fleet_ssh_access.md", "base rule")              # underscore file
+    assert R.has_inbound_refs([proj, glob], "fleet_ssh_access") is True   # query in either form
+    assert R.has_inbound_refs([proj, glob], "fleet-ssh-access") is True
+
+
 def test_check_references_recurses_global_subdirs(tmp_path):
     proj, glob = _chain(tmp_path)
     (glob / "net").mkdir()
