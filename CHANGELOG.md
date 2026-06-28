@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.7.0] - 2026-06-28
+
+### Changed
+- Split the dream skill by scope into two explicit commands (the word "dream" alone was ambiguous):
+  - **`meta-dream-project`** - the frequent, cheap consolidation of the CURRENT project (the old
+    `meta-dream`, renamed). Keeps `dream_state.py`, the SessionStart "consolidation due" nudge, and the
+    behavioral passes (demotion, obsolete-prune, override, CLAUDE.md reconcile, per-project
+    filler-classification, model-review). Triggers: "dream", "dream project", "/dream-project",
+    "consolidate memory".
+  - **`meta-dream-global`** (NEW) - the occasional, expensive cross-project pass: the global-dream scan
+    across all project stores (sonnet fan-out -> opus promotion gate), inbound gather, outbound
+    cross-pollination. Triggers: "dream global", "/dream-global", "consolidate across projects".
+  Renaming `meta-dream` -> `meta-dream-project` removes the old `/meta-dream` skill name (the "dream"
+  natural-language trigger is preserved). Updated every cross-reference: `meta-self-improve`,
+  `meta-collect-knowledge` (its inbound-pass pointer now targets `meta-dream-global`), the skills
+  catalog in `meta-using-bitranox-skills`, the SessionStart / PostCompact nudge text, `README.md`, and
+  `docs/self-learning-memory.md` (added the "short nap vs deep sleep" analogy for the two dreams).
+
 ## [4.6.0] - 2026-06-28
 
 ### Changed

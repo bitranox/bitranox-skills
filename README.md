@@ -121,16 +121,20 @@ at `~/.claude/rules/bitranox/` (loaded into every session, and kept separate fro
 `CLAUDE.md`), and `CLAUDE.md` only for must-hold rules at an in-between level. Concrete-but-broadly-
 useful facts are promoted as-is, not watered down.
 
-Four skills run it (the first is nudged automatically; the rest you can invoke, and the memory hooks
+Five skills run it (the first is nudged automatically; the rest you can invoke, and the memory hooks
 call them when relevant):
 
 - **`bitranox:meta-self-improve`** - per-turn capture. A `Stop` hook notices a learning signal (a
   correction, a "remember", a self-admitted miss) and nudges it to record the lesson at the right
   altitude.
-- **`bitranox:meta-dream`** (`/dream`, "consolidate memory") - periodic consolidation, like sleep. It
-  backs up first, then dedups, generalizes, promotes by scope, re-wires, and prunes obsolete or
-  duplicate notes - so memory stays small and sharp. (There is no forgetting by age or use - only
-  content-based removal.) Has an off / auto / propose mode.
+- **`bitranox:meta-dream-project`** (`/dream-project`, "dream", "consolidate memory") - the frequent,
+  cheap consolidation of the *current* project, like sleep. It backs up first, then dedups, generalizes,
+  promotes by scope, re-wires, and prunes obsolete or duplicate notes - so memory stays small and sharp.
+  (There is no forgetting by age or use - only content-based removal.) Has an off / auto / propose mode.
+- **`bitranox:meta-dream-global`** (`/dream-global`, "consolidate across projects") - the occasional,
+  expensive cross-project pass: scans every project store, factors recurring / broadly-useful knowledge
+  up to the global layer, and pulls sibling-tree knowledge into projects. Run it now and then, not every
+  time.
 - **`bitranox:meta-collect-knowledge`** (`/collect-knowledge`) - pulls knowledge from your *other*
   projects that is relevant to the current one (native cascade alone cannot reach sibling trees), and
   seeds a fresh project from what you already know.

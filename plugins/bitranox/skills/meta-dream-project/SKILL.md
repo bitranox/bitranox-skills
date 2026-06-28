@@ -1,17 +1,22 @@
 ---
-name: meta-dream
-description: Use to consolidate memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes the whole MEMORY.md store and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global ~/.claude/rules/bitranox/ layer or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. Honors an off/auto/propose mode.
+name: meta-dream-project
+description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes this project's MEMORY.md store and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global ~/.claude/rules/bitranox/ layer or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. For the cross-project / global scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
 ---
 
-# meta-dream
+# meta-dream-project
 
-Memory consolidation, the way a brain reorganizes during sleep. `bitranox:meta-self-improve` is the
-fast per-turn CAPTURE (note each learning as it happens). **meta-dream is the periodic, batch
-CONSOLIDATION on top:** take the WHOLE memory store plus the session and dedup, merge, generalize,
-re-categorize, re-wire (cross-link), prune detail, and refine concepts - so memory gets smaller and
-sharper, not bigger. It extends `bitranox:meta-self-improve` (its lanes, the step-3b altitude logic,
-the upstream-PR loop, the native-memory backend rules, `reconcile_memory_index.py`); follow that
-skill for the primitives, this one for the batch pass. Do not duplicate its content.
+Memory consolidation for the CURRENT project, the way a brain reorganizes during sleep.
+`bitranox:meta-self-improve` is the fast per-turn CAPTURE (note each learning as it happens).
+**meta-dream-project is the periodic, batch CONSOLIDATION on top, scoped to this project:** take this
+project's WHOLE memory store plus the session and dedup, merge, generalize, re-categorize, re-wire
+(cross-link), prune detail, and refine concepts - so memory gets smaller and sharper, not bigger. It
+extends `bitranox:meta-self-improve` (its lanes, the step-3b altitude logic, the upstream-PR loop, the
+native-memory backend rules, `reconcile_memory_index.py`); follow that skill for the primitives, this
+one for the batch pass. Do not duplicate its content.
+
+This is the FREQUENT, cheap dream (one project). The EXPENSIVE cross-project work - reading across all
+project stores, the global-dream scan, inbound gather, outbound cross-pollination - lives in the
+separate `bitranox:meta-dream-global` skill; run that occasionally, not every time.
 
 **The consolidation must SHRINK noise, never add it.** If a pass would grow the store, it is wrong.
 
@@ -38,7 +43,7 @@ eagerness, forgetting, nudges) live in one machine-local config `~/.claude/.bitr
 - **Around compaction:** the PreCompact hook salvages candidate learnings from the still-full
   transcript and PostCompact nudges you to capture/consolidate them - run a dream then so detail is
   not lost. (A hook cannot run the model, so it can only salvage + nudge; you do the dream.)
-- **Manual:** "dream", "consolidate memory".
+- **Manual:** "dream", "dream project", "/dream-project", "consolidate memory".
 
 Check due-ness with `python3 <this-skill-dir>/dream_state.py due`; you do not need to dream if it
 says `not-due` and nothing notable happened.
@@ -139,28 +144,14 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   ALIASES (`opus`/`sonnet`/`haiku`), so version bumps need no edit - only a hierarchy SHIFT does. Then
   call `mark_model_reviewed()` so it does not re-fire until due. Not due -> skip (no-op).
 
-## Cross-tree passes (inbound gather, outbound cross-pollination)
+## Cross-project work lives in meta-dream-global
 
-Native cascade only flows down one ancestor chain + global, so sibling trees are invisible to each
-other. A full dream bridges them - all via lift-or-copy, NEVER a cross-tree reference:
-
-- **Inbound gather.** Delegate to `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather
-  funnel): pull knowledge from OTHER trees relevant to this project, lifting broadly-useful hits to a
-  common ancestor or writing a self-contained local copy (marked, scrubbed). Single source of truth -
-  do not re-implement it here.
-- **Outbound cross-pollination.** When a learning is useful BEYOND this project, do not write into
-  other projects - **promote it to the lowest common ancestor** (often the global layer) and let native
-  cascade deliver it; a project in a different subtree receives it via ITS inbound gather. A direct
-  self-contained copy into one specific other project is the rare exception (marked so it is not
-  re-promoted; scrubbed; never a cross-tree ref).
-- **Global-dream scan (cross-project read).** Periodically scan ACROSS project memory stores for
-  recurring / broadly-useful content and factor it up to the lowest covering altitude. FAN OUT: one
-  **`sonnet`** subagent per project store (read it -> return recurring/broadly-useful candidate entries),
-  in parallel, to keep N stores out of the main context; reserve **`opus`** (the main agent) for the
-  promotion-gate + altitude/normalization decisions. Here the promotion gate may use the **cross-project
-  corroboration** path (seen in >= 2 distinct projects), whereas the per-project dream uses same-project
-  dwell (>= 2 dreams). Honor the `privacy` knob: with `walled`, gather/promote only within one domain.
-  (Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+This skill is scoped to ONE project. The cross-tree passes - inbound gather, outbound
+cross-pollination, and the global-dream scan that reads across ALL project stores - are the expensive,
+occasional work and live in the separate `bitranox:meta-dream-global` skill. Do not do them here. If
+this project's dream surfaces a learning that is clearly useful BEYOND this project, you may still
+promote it UP to the global `~/.claude/rules/bitranox/` layer in step 5 (gated); the broader
+cross-project scan and sibling-tree gather are meta-dream-global's job.
 
 ## Boundaries
 

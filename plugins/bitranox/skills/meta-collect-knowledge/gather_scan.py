@@ -10,7 +10,7 @@ re-copying what an ancestor already provides.
 Usage:
   gather_scan.py --topic "<text>" [--self <cwd>]
 
-Imports the shared helpers from the plugin's hooks dir, like the meta-dream cadence CLI. Pure stdlib.
+Imports the shared helpers from the plugin's hooks dir, like the meta-dream-project cadence CLI. Pure stdlib.
 """
 
 import argparse

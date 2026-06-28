@@ -22,6 +22,13 @@ consolidates a day. It merges duplicates, sharpens wording, connects related not
 stale, and lifts the broadly useful up where everything can reach it. Capture is quick and additive;
 dreaming makes the store smaller and sharper, not bigger.
 
+There are two kinds of dream, for two depths of rest. The everyday one is a **short nap to sort your
+thoughts** - it tidies only the project you are working in: quick, cheap, run often (`dream-project`).
+The other is the **deep sleep you get when you need it** - it ranges across all your projects at once,
+carrying a lesson learned in one over to where it helps in another and lifting the broadly-useful up so
+everything can reach it (`dream-global`). You take the nap frequently; you get the deep sleep now and
+then.
+
 ## 2. Put knowledge where it belongs, by reach
 
 Some things are true only for one project. Some are true for a whole family of projects. Some are

@@ -4,7 +4,7 @@
 Compaction discards raw transcript detail. The PreCompact hook (self-improve-audit.py) already
 SALVAGED candidate learnings from the still-full transcript into the per-project audit file; this
 PostCompact hook injects (PostCompact can inject context the model acts on) a reminder to run
-meta-self-improve on those candidates - and meta-dream if a consolidation is due - so nothing is
+meta-self-improve on those candidates - and meta-dream-project if a consolidation is due - so nothing is
 lost. It surfaces and consumes the salvaged audit.
 
 Pure standard library. Every failure path exits 0 so a broken hook never disrupts a turn.
@@ -37,7 +37,7 @@ def main():
     msg = ("Context was just compacted; the raw transcript detail is now gone. Before continuing, "
            "run bitranox:meta-self-improve to capture any uncaptured learnings from this session")
     if due:
-        msg += ", then bitranox:meta-dream to consolidate memory (a consolidation is due)"
+        msg += ", then bitranox:meta-dream-project to consolidate memory (a consolidation is due)"
     msg += "."
     parts = [msg]
 

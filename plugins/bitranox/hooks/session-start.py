@@ -127,7 +127,7 @@ def autoupdate_nudge(proj):
 
 _DREAM_NUDGE = (
     "<BITRANOX-DREAM-DUE>\n"
-    "A memory consolidation is due. Run bitranox:meta-dream to dedup / merge / generalize / prune "
+    "A memory consolidation is due. Run bitranox:meta-dream-project to dedup / merge / generalize / prune "
     "the memory store (it backs up first), or say 'skip'. Switch this off with "
     "~/.claude/.bitranox-dream-off; stop the per-change asking with ~/.claude/.bitranox-dream-auto.\n"
     "</BITRANOX-DREAM-DUE>"
@@ -135,7 +135,7 @@ _DREAM_NUDGE = (
 
 
 def dream_nudge(proj):
-    """Self-silencing nudge to run meta-dream when a consolidation is due (off when mode=off)."""
+    """Self-silencing nudge to run meta-dream-project when a consolidation is due (off when mode=off)."""
     try:
         if not dream_due(proj):
             return None

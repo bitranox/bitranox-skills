@@ -33,7 +33,7 @@ def audit_file(proj):
     return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
 
 
-# ---- meta-dream consolidation: cadence markers + mode (shared by session-start + dream_state) --
+# ---- meta-dream-project consolidation: cadence markers + mode (shared by session-start + dream_state) --
 
 _DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often than this
 
@@ -330,7 +330,7 @@ def _model_review_file():
 
 
 def model_review_due(interval_days=30, now=None):
-    """True if the periodic model-hierarchy review (run by meta-dream) is due: no prior review, or the
+    """True if the periodic model-hierarchy review (run by meta-dream-project) is due: no prior review, or the
     last one is older than `interval_days`. GLOBAL (not per-project) and OUT of any memory store, so it
     never bumps a store's mtime (convergence holds). Model releases are infrequent -> a monthly default."""
     import time as _time
@@ -363,7 +363,7 @@ def mark_model_reviewed(now=None):
 #   - PER-PROJECT learned blacklist: filler the dream classified for THAT project.
 #   - PER-PROJECT learned whitelist: topical/known-good words (so they are not re-queued).
 # The per-prompt hook only USES these (deterministic, no model), keyed to the CURRENT project (the
-# prompt's origin); GROWING them is a slow dream pass. See meta-dream's "Filler-word classification".
+# prompt's origin); GROWING them is a slow dream pass. See meta-dream-project's "Filler-word classification".
 
 def _filler_baseline_path():
     return Path(__file__).resolve().parent / "filler_words.json"

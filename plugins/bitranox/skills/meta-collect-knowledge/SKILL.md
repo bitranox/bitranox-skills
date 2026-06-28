@@ -1,6 +1,6 @@
 ---
 name: meta-collect-knowledge
-description: Use to pull in knowledge from your OTHER projects that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Native cascade only flows down one ancestor chain + global, so useful knowledge filed in a sibling tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream.
+description: Use to pull in knowledge from your OTHER projects that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Native cascade only flows down one ancestor chain + global, so useful knowledge filed in a sibling tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream-global.
 ---
 
 # meta-collect-knowledge
@@ -16,7 +16,7 @@ gather**: find knowledge elsewhere that is relevant here, and bring it in safely
 - **New-project init:** seed a fresh project from the existing knowledge tree so it starts informed.
 - **Opportunistic (a learning reveals a topic):** when self-improve captures something, the topic is a
   relevance signal - gather that topic from other trees.
-- **As `bitranox:meta-dream`'s inbound pass** (the dream delegates here - single source of truth).
+- **As `bitranox:meta-dream-global`'s inbound pass** (the dream delegates here - single source of truth).
 
 ## Relevance needs a topic (descriptor-first)
 Gather only makes sense once you know what the project is about. The query is the project's **scope

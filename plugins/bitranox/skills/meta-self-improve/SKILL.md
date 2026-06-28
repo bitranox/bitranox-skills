@@ -14,8 +14,9 @@ cross-project rule** in `~/.claude/rules/bitranox/`, or a **CLAUDE.md** guardrai
 never to appending blindly.** A self-improver that bloats memory makes the harness worse, not better.
 
 This skill is the per-turn CAPTURE. The periodic BATCH consolidation - dedup/merge/generalize/re-wire/
-prune the whole store, like sleep - is `bitranox:meta-dream`; run it when memory has grown or a
-consolidation is nudged as due. Capture here; consolidate there.
+prune the whole store, like sleep - is `bitranox:meta-dream-project` (this project; run it when memory
+has grown or a consolidation is nudged as due) and, for the occasional cross-project pass,
+`bitranox:meta-dream-global`. Capture here; consolidate there.
 
 If a project ships its own extension of this skill (a more specific `*-self-improve` for its repo,
 exact memory paths, ledgers, or push gates), read it and honor its extra rules on top of this one.
@@ -140,7 +141,7 @@ Knowledge lives at always-present homes, narrowest to broadest:
   rule useful across projects.
 - **intermediate / a parent subtree** -> only `CLAUDE.md` cascades there, so an intermediate must-hold
   rule goes in that level's `CLAUDE.md` (a bounded, propose-first touch; see CLAUDE.md policy in
-  `bitranox:meta-dream`).
+  `bitranox:meta-dream-project`).
 
 Decide by **scope of applicability, NOT abstractness.** Record at the narrowest home that still covers
 everywhere the lesson applies. Concrete, specific knowledge that is useful everywhere (e.g. "log into
@@ -170,7 +171,7 @@ comes from `self_improve_signals.altitude_chain(proj)`.
 A USER-stated concrete rule promotes eagerly; a model-INFERRED generalization needs corroboration (seen
 across >= 2 dreams) first - `should_promote()` / `note_promotion_candidate()` in `self_improve_signals.py`,
 controlled by the `promotion` config knob. Per-turn capture usually writes PER-PROJECT and lets
-`bitranox:meta-dream` lift broadly-useful items up; do not eagerly globalize an inferred rule here.
+`bitranox:meta-dream-project` lift broadly-useful items up; do not eagerly globalize an inferred rule here.
 
 A `CLAUDE.md` under version control is a shared artifact: **propose** the edit with a diff (see step 4).
 Private memory and the machine-local `~/.claude/rules/bitranox/` layer stay auto-apply. Read user

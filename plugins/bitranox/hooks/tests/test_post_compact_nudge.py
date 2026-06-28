@@ -49,11 +49,11 @@ def test_mentions_dream_when_due(monkeypatch, capsys, isolate_home):
     (mem / "a.md").write_text("x", encoding="utf-8")  # memory exists, no last-dream -> due
     run(monkeypatch, "/proj/x")
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert "meta-dream" in ctx
+    assert "meta-dream-project" in ctx
 
 
 def test_no_dream_mention_when_not_due(monkeypatch, capsys):
     run(monkeypatch, "/proj/none")  # no memory dir -> not due
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert "meta-dream" not in ctx
+    assert "meta-dream-project" not in ctx
     assert "meta-self-improve" in ctx
