@@ -110,10 +110,29 @@ sync with the shipped skill directories, so it never drifts. Browse
 
 ## How the self-learning memory works
 
-The self-improve hook and the `meta-dream`/`meta-self-improve` skills are part of a memory that is
-meant to get better the more you use it: it captures lessons as you work, consolidates them in the
-background like sleep, and keeps the useful ones within reach across your projects. For the ideas
-behind it - in plain language, concepts over mechanics - see
+A layered memory that is meant to get better the more you use it. Knowledge is filed by how far it
+reaches: per-project notes in Claude Code's native Auto memory, cross-project rules in a global layer
+at `~/.claude/rules/bitranox/` (loaded into every session, and kept separate from your hand-written
+`CLAUDE.md`), and `CLAUDE.md` only for must-hold rules at an in-between level. Concrete-but-broadly-
+useful facts are promoted as-is, not watered down.
+
+Four skills run it (the first is nudged automatically; the rest you can invoke, and the memory hooks
+call them when relevant):
+
+- **`bitranox:meta-self-improve`** - per-turn capture. A `Stop` hook notices a learning signal (a
+  correction, a "remember", a self-admitted miss) and nudges it to record the lesson at the right
+  altitude.
+- **`bitranox:meta-dream`** (`/dream`, "consolidate memory") - periodic consolidation, like sleep. It
+  backs up first, then dedups, generalizes, promotes by scope, re-wires, prunes, and forgets the
+  unused - so memory stays small and sharp. Has an off / auto / propose mode.
+- **`bitranox:meta-collect-knowledge`** (`/collect-knowledge`) - pulls knowledge from your *other*
+  projects that is relevant to the current one (native cascade alone cannot reach sibling trees), and
+  seeds a fresh project from what you already know.
+- **`bitranox:meta-memory-settings`** (`/memory-settings`) - view, change, or reset the behaviour knobs
+  (dream mode, privacy, promotion eagerness, forgetting, nudges). A choice is recorded once and applied
+  automatically.
+
+For the ideas behind all of this, in plain language and concepts over mechanics, see
 [docs/self-learning-memory.md](docs/self-learning-memory.md).
 
 ## Layout
