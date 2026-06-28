@@ -22,7 +22,14 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import audit_file, dream_due
+from self_improve_signals import (
+    audit_file,
+    dream_due,
+    knowledge_store_empty,
+    load_config,
+    mark_seeded,
+    project_unseeded,
+)
 
 BANNER = (
     "<EXTREMELY-IMPORTANT>\n"
@@ -137,10 +144,54 @@ def dream_nudge(proj):
     return _DREAM_NUDGE
 
 
+_NEWPROJECT_NUDGE = (
+    "<BITRANOX-NEW-PROJECT>\n"
+    "This project has no memory yet. Run bitranox:meta-collect-knowledge (/collect-knowledge) to seed "
+    "it from your existing knowledge tree, so it starts informed. Say 'skip' to ignore.\n"
+    "</BITRANOX-NEW-PROJECT>"
+)
+
+
+def _collect_skill_available():
+    """True if the meta-collect-knowledge skill is installed (Phase 2). The new-project nudge stays
+    dormant until it is, so it never points at a missing skill."""
+    try:
+        root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        base = Path(root) if root else Path(__file__).resolve().parent.parent
+        return (base / "skills" / "meta-collect-knowledge" / "SKILL.md").is_file()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def newproject_nudge(proj):
+    """Fire ONCE for a fresh, unseeded project - only when the collect skill is installed AND there
+    is knowledge elsewhere to seed from. Marks the project seeded so it self-silences."""
+    try:
+        if not _collect_skill_available():
+            return None
+        if not project_unseeded(proj) or knowledge_store_empty():
+            return None
+        mark_seeded(proj)  # fire once
+    except Exception:  # noqa: BLE001 - never wedge the session
+        return None
+    return _NEWPROJECT_NUDGE
+
+
+def _nudges_on():
+    """Honor the user's config: nudges can be switched off (decision recorded, not re-asked)."""
+    try:
+        return bool(load_config().get("nudges", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def main():
     event = _read_event()
     proj = _proj(event)
-    ctx = [p for p in (build_context(), audit_context(proj), dream_nudge(proj)) if p]
+    parts = [build_context(), audit_context(proj)]
+    if _nudges_on():  # the user can switch session nudges off (recorded in config)
+        parts += [dream_nudge(proj), newproject_nudge(proj)]
+    ctx = [p for p in parts if p]
     nudge = autoupdate_nudge(proj)
     if not ctx and not nudge:
         return 0

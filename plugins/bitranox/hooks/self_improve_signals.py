@@ -16,6 +16,7 @@ realizations only from the ASSISTANT; endorsement counts from either side. Engli
 """
 
 import hashlib
+import json
 import re
 import time
 from pathlib import Path
@@ -47,21 +48,15 @@ def last_dream_file(proj):
     return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".dream")
 
 
-def dream_mode(proj):
-    """User control, via opt-out sentinels in ~/.claude (no config edit needed):
+def dream_mode(proj=None):
+    """Dream mode (single source of truth = the machine-local config; see load_config):
       off     -> no dream nudges; a manual dream consolidates memory only, no CLAUDE.md/skill proposals
       auto    -> dream applies CLAUDE.md edits and ships skill changes WITHOUT per-change prompts
       propose -> (default) dream asks before CLAUDE.md edits and routes skill changes to a self-PR
+    Reads `~/.claude/.bitranox-memory.json`; until that exists, the legacy
+    `.bitranox-dream-off` / `.bitranox-dream-auto` sentinels still apply (one-way migration).
     """
-    home = Path.home() / ".claude"
-    try:
-        if (home / ".bitranox-dream-off").exists():
-            return "off"
-        if (home / ".bitranox-dream-auto").exists():
-            return "auto"
-    except OSError:
-        pass
-    return "propose"
+    return load_config().get("dream_mode", "propose")
 
 
 def _newest_mtime(d):
@@ -103,6 +98,233 @@ def mark_dream_done(proj, now=None):
         return True
     except OSError:
         return False
+
+
+# ---- machine-local config: one JSON for all informed-consent knobs (recommended defaults) ----
+# Every habit-dependent decision is recorded here and applied automatically (asked once, never
+# re-nagged). The `meta-memory-settings` skill views / sets / resets it.
+
+def _config_path():
+    return Path.home() / ".claude" / ".bitranox-memory.json"
+
+
+DEFAULT_CONFIG = {
+    "dream_mode": "propose",       # off | auto | propose
+    "privacy": "open",             # open (secret/PII scrub only) | walled (by privacy domain)
+    "promotion": "corroborated",   # corroborated (inferred needs dwell) | eager
+    "forgetting": "conservative",  # conservative | aggressive | off
+    "forget_idle_dreams": 3,       # idle dreams before a non-must-always body is archived
+    "skill_placement": "lowest",   # lowest scope that fits; ask before the public marketplace
+    "nudges": True,                # session-start nudges on/off
+}
+
+
+def _legacy_dream_mode():
+    """Pre-config opt-out sentinels in ~/.claude (honored until a config file is written)."""
+    home = Path.home() / ".claude"
+    try:
+        if (home / ".bitranox-dream-off").exists():
+            return "off"
+        if (home / ".bitranox-dream-auto").exists():
+            return "auto"
+    except OSError:
+        pass
+    return "propose"
+
+
+def load_config():
+    """Config merged over DEFAULT_CONFIG. The JSON file is authoritative once it exists; until
+    then the legacy `.bitranox-dream-*` sentinels supply dream_mode (one-way migration). Robust:
+    a missing or corrupt file yields the recommended defaults."""
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        raw = json.loads(_config_path().read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            cfg.update({k: raw[k] for k in raw if k in DEFAULT_CONFIG})
+            return cfg
+    except (OSError, ValueError):
+        pass
+    cfg["dream_mode"] = _legacy_dream_mode()
+    return cfg
+
+
+def save_config(updates):
+    """Merge known keys from `updates` into the config file (created if missing); return the
+    saved dict. Unknown keys are ignored so the file stays a clean, known schema."""
+    cfg = load_config()
+    cfg.update({k: updates[k] for k in updates if k in DEFAULT_CONFIG})
+    try:
+        p = _config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return cfg
+
+
+# ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
+
+def global_rules_dir():
+    """The always-present global rule layer: whole-loaded user rules, namespaced to bitranox."""
+    return Path.home() / ".claude" / "rules" / "bitranox"
+
+
+def altitude_chain(proj):
+    """Ordered always-present homes for `proj`, narrowest -> broadest: the project's Auto-memory
+    dir, then each ancestor directory (project root up toward `/`, each a CLAUDE.md altitude
+    reachable by native cascade), then the global rules layer. Reference-integrity uses this: a
+    `[[ref]]` must resolve to a target at the SAME or a LATER (higher) position - upward only."""
+    chain = [memory_dir(proj)]
+    try:
+        here = Path(proj)
+        chain.append(here)
+        chain.extend(here.parents)
+    except (TypeError, ValueError):
+        pass
+    chain.append(global_rules_dir())
+    return chain
+
+
+# ---- new-project seeding (one-time /collect-knowledge bootstrap nudge) ---------------
+
+def seeded_file(proj):
+    """Marker that this project has been seed-nudged (so the bootstrap nudge fires once)."""
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".seeded")
+
+
+def mark_seeded(proj, now=None):
+    f = seeded_file(proj)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(time.time() if now is None else now), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def project_unseeded(proj):
+    """True if this project has no memory yet AND has not been seed-nudged - a fresh project that
+    could be bootstrapped from the existing knowledge tree via /collect-knowledge."""
+    if seeded_file(proj).exists():
+        return False
+    return _newest_mtime(memory_dir(proj)) == 0.0
+
+
+# ---- quality / dwell gate for global promotion (high blast radius) -------------------
+# The global layer loads into EVERY session, so a wrong entry there is high-blast. A user-stated
+# concrete rule promotes eagerly; a model-INFERRED generalization must be corroborated (seen across
+# >= threshold dreams) first. The dwell counter lives OUT of the dreamed store (here), so counting
+# never bumps the store mtime - the convergence no-op holds.
+
+def _promote_file(proj):
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".promote.json")
+
+
+def _read_counts(path):
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def note_promotion_candidate(proj, key):
+    """Record that this dream saw promotion-candidate `key`; return its dwell count (number of
+    dreams it has appeared in). Out-of-store, so it does not affect convergence."""
+    f = _promote_file(proj)
+    counts = _read_counts(f)
+    counts[key] = int(counts.get(key, 0)) + 1
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+    return counts[key]
+
+
+def clear_promotion_candidate(proj, key):
+    """Forget a candidate's dwell count (call after it is promoted, so it is not re-counted)."""
+    f = _promote_file(proj)
+    counts = _read_counts(f)
+    if key in counts:
+        del counts[key]
+        try:
+            f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def should_promote(source, dwell_count, mode=None, threshold=2):
+    """Whether a generalization may be promoted to the always-everywhere global layer.
+    source is "user" (user-stated concrete rule -> eager) or "inferred" (model generalization ->
+    needs corroboration). mode comes from the config (`promotion`: corroborated | eager)."""
+    mode = load_config().get("promotion", "corroborated") if mode is None else mode
+    if mode == "eager" or source == "user":
+        return True
+    return int(dwell_count) >= threshold
+
+
+# ---- per-level scope descriptor: a bounded, marked block in a CLAUDE.md --------------
+# Each altitude declares "what this level is about" so the classifier can route knowledge. The
+# descriptor is a clearly-delimited block so it never touches the user's hand-written content, and
+# the upsert is DIFF-FREE (a no-change refresh returns the text unchanged -> convergence holds).
+
+SCOPE_MARK_BEGIN = "<!-- bitranox:self-learning -->"
+SCOPE_MARK_END = "<!-- /bitranox:self-learning -->"
+
+
+def read_scope_block(text):
+    """Return the descriptor inside the bitranox:self-learning markers in `text`, or None."""
+    b = (text or "").find(SCOPE_MARK_BEGIN)
+    if b < 0:
+        return None
+    e = text.find(SCOPE_MARK_END, b)
+    if e < 0:
+        return None
+    return text[b + len(SCOPE_MARK_BEGIN):e].strip()
+
+
+def upsert_scope_block(text, descriptor):
+    """Return CLAUDE.md `text` with the marked scope block set to `descriptor` (replaced in place if
+    present, appended if absent). DIFF-FREE: if the block already holds `descriptor`, return `text`
+    unchanged so a no-change refresh writes nothing."""
+    text = text or ""
+    descriptor = (descriptor or "").strip()
+    block = "%s\n%s\n%s" % (SCOPE_MARK_BEGIN, descriptor, SCOPE_MARK_END)
+    b = text.find(SCOPE_MARK_BEGIN)
+    if b >= 0:
+        e = text.find(SCOPE_MARK_END, b)
+        if e >= 0:
+            if text[b + len(SCOPE_MARK_BEGIN):e].strip() == descriptor:
+                return text  # already current -> no write
+            return text[:b] + block + text[e + len(SCOPE_MARK_END):]
+    sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    return text + sep + block + "\n"
+
+
+def store_changed(memory_dir_path, since_mtime):
+    """True if a memory dir changed since `since_mtime` (a 'store changed under me' guard for the
+    dream's read-modify-write; pair with the pre-flight backup)."""
+    return _newest_mtime(Path(memory_dir_path)) > float(since_mtime)
+
+
+def knowledge_store_empty():
+    """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty
+    AND no project's memory holds a topic file. Used to suppress the new-project bootstrap nudge on a
+    fresh machine (nothing to gather yet)."""
+    try:
+        if any(global_rules_dir().rglob("*.md")):
+            return False
+    except OSError:
+        pass
+    try:
+        for memdir in (Path.home() / ".claude" / "projects").glob("*/memory"):
+            for p in memdir.glob("*.md"):
+                if p.name != "MEMORY.md":
+                    return False
+    except OSError:
+        pass
+    return True
 
 
 # ---- STRICT patterns (the gate fires on these; tuned for precision) -----------------

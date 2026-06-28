@@ -127,3 +127,77 @@ def test_main_dry_run(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "would add" in out
     assert not (tmp_path / "MEMORY.md").exists()
+
+
+# --------------------------------------------------------------------------
+# cross-altitude reference integrity (upward-only, no orphans) + over-cap
+# --------------------------------------------------------------------------
+
+def _chain(tmp_path):
+    """Two-altitude chain: project memory (narrow) -> global rules (broad)."""
+    proj = tmp_path / "proj"
+    glob = tmp_path / "global"
+    proj.mkdir()
+    glob.mkdir()
+    return proj, glob
+
+
+def test_check_references_upward_ok(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "References [[fleet-ssh]] plus our subnet detail.")
+    write(glob, "fleet-ssh.md", "Log into the fleet with key X.")
+    rep = R.check_references([proj, glob])
+    assert rep["orphans"] == [] and rep["downward"] == []
+    assert rep["checked"] >= 1
+
+
+def test_check_references_orphan(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "References [[does-not-exist]].")
+    rep = R.check_references([proj, glob])
+    assert ("delta", "does-not-exist") in rep["orphans"]
+
+
+def test_check_references_downward_flagged(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "local-thing.md", "project-only detail")
+    write(glob, "general.md", "Bad: a global rule pointing DOWN to [[local-thing]].")
+    rep = R.check_references([proj, glob])
+    assert ("general", "local-thing") in rep["downward"]
+    assert rep["orphans"] == []
+
+
+def test_check_references_altitude_prefixed_slug(tmp_path):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "See [[global:fleet-ssh]] for the base rule.")
+    write(glob, "fleet-ssh.md", "base rule")
+    rep = R.check_references([proj, glob])
+    assert rep["orphans"] == [] and rep["downward"] == []
+
+
+def test_check_references_recurses_global_subdirs(tmp_path):
+    proj, glob = _chain(tmp_path)
+    (glob / "net").mkdir()
+    write(proj, "delta.md", "References [[fleet-ssh]].")
+    write(glob / "net", "fleet-ssh.md", "nested global rule")
+    rep = R.check_references([proj, glob])
+    assert rep["orphans"] == [] and rep["downward"] == []
+
+
+def test_over_cap_ok_and_exceeds(tmp_path):
+    small = write(tmp_path, "MEMORY.md", "# Memory index\n- a\n- b\n")
+    ok, lines, _ = R.over_cap(small)
+    assert ok and lines == 3
+    big = write(tmp_path, "BIG.md", "x\n" * 250)
+    ok2, lines2, _ = R.over_cap(big)
+    assert not ok2 and lines2 == 250
+
+
+def test_main_check_exit_codes(tmp_path, capsys):
+    proj, glob = _chain(tmp_path)
+    write(proj, "delta.md", "References [[fleet-ssh]].")
+    write(glob, "fleet-ssh.md", "ok")
+    assert R.main([str(proj), str(glob), "--check"]) == 0
+    write(proj, "bad.md", "References [[nope]].")
+    assert R.main([str(proj), str(glob), "--check"]) == 1
+    assert "orphan ref" in capsys.readouterr().out

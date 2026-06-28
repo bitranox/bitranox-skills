@@ -121,3 +121,148 @@ def test_dream_due_off_mode_never(home):
 def test_mark_dream_done_writes_timestamp(home):
     assert S.mark_dream_done("/p/x", now=123.0) is True
     assert S.last_dream_file("/p/x").read_text(encoding="utf-8").strip() == "123.0"
+
+
+# --------------------------------------------------------------------------
+# machine-local config (informed-consent knobs)
+# --------------------------------------------------------------------------
+
+
+def test_load_config_defaults(home):
+    cfg = S.load_config()
+    assert cfg == S.DEFAULT_CONFIG
+    assert cfg["dream_mode"] == "propose"
+
+
+def test_load_config_migrates_legacy_sentinel(home):
+    (home / ".claude" / ".bitranox-dream-auto").write_text("", encoding="utf-8")
+    assert S.load_config()["dream_mode"] == "auto"
+
+
+def test_config_file_authoritative_over_sentinel(home):
+    # legacy sentinel says auto, but the written config says off -> the file wins
+    (home / ".claude" / ".bitranox-dream-auto").write_text("", encoding="utf-8")
+    S.save_config({"dream_mode": "off"})
+    assert S.load_config()["dream_mode"] == "off"
+    assert S.dream_mode("/p/x") == "off"
+
+
+def test_save_config_roundtrip_and_ignores_unknown(home):
+    saved = S.save_config({"privacy": "walled", "forget_idle_dreams": 5, "bogus": 1})
+    assert saved["privacy"] == "walled" and saved["forget_idle_dreams"] == 5
+    assert "bogus" not in saved
+    reloaded = S.load_config()
+    assert reloaded["privacy"] == "walled" and reloaded["forget_idle_dreams"] == 5
+    assert "bogus" not in reloaded
+
+
+def test_load_config_corrupt_file_returns_defaults(home):
+    S._config_path().write_text("{not json", encoding="utf-8")
+    assert S.load_config()["dream_mode"] == "propose"
+
+
+# --------------------------------------------------------------------------
+# altitude homes
+# --------------------------------------------------------------------------
+
+
+def test_global_rules_dir(home):
+    g = S.global_rules_dir()
+    assert g.name == "bitranox" and g.parent.name == "rules"
+    assert ".claude" in str(g)
+
+
+def test_altitude_chain_order_narrow_to_broad(home):
+    chain = S.altitude_chain("/a/b/c")
+    assert chain[0] == S.memory_dir("/a/b/c")          # narrowest: project memory
+    assert chain[-1] == S.global_rules_dir()           # broadest: global rules
+    from pathlib import Path
+    assert Path("/a/b/c") in chain and Path("/a/b") in chain   # ancestor CLAUDE.md altitudes
+    # project memory comes before its ancestors, ancestors before global (upward order)
+    assert chain.index(S.memory_dir("/a/b/c")) < chain.index(Path("/a/b/c")) < chain.index(S.global_rules_dir())
+
+
+# --------------------------------------------------------------------------
+# new-project seeding
+# --------------------------------------------------------------------------
+
+
+def test_project_unseeded_fresh_then_marked(home):
+    assert S.project_unseeded("/p/fresh") is True       # no memory, not nudged
+    assert S.mark_seeded("/p/fresh") is True
+    assert S.project_unseeded("/p/fresh") is False       # nudged once -> quiet
+
+
+def test_project_unseeded_false_when_memory_exists(home):
+    _mem(home, "/p/has")
+    assert S.project_unseeded("/p/has") is False
+
+
+# --------------------------------------------------------------------------
+# quality / dwell gate for global promotion
+# --------------------------------------------------------------------------
+
+
+def test_note_promotion_candidate_increments(home):
+    assert S.note_promotion_candidate("/p/x", "fleet-ssh") == 1
+    assert S.note_promotion_candidate("/p/x", "fleet-ssh") == 2
+    assert S.note_promotion_candidate("/p/x", "other") == 1   # independent per key
+
+
+def test_should_promote_user_stated_is_eager(home):
+    assert S.should_promote("user", 1) is True                # user rule promotes on first sight
+
+
+def test_should_promote_inferred_needs_corroboration(home):
+    assert S.should_promote("inferred", 1) is False           # one sighting: not yet
+    assert S.should_promote("inferred", 2) is True            # corroborated across 2 dreams
+
+
+def test_should_promote_eager_mode_overrides(home):
+    S.save_config({"promotion": "eager"})
+    assert S.should_promote("inferred", 1) is True            # config: promote eagerly
+
+
+def test_clear_promotion_candidate(home):
+    S.note_promotion_candidate("/p/x", "k")
+    S.clear_promotion_candidate("/p/x", "k")
+    assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
+
+
+# --------------------------------------------------------------------------
+# scope-descriptor marked block + writer-race signature
+# --------------------------------------------------------------------------
+
+
+def test_read_scope_block_absent_and_present():
+    assert S.read_scope_block("# hand-written\nrules here\n") is None
+    text = "# c\n%s\nall my python work\n%s\n" % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END)
+    assert S.read_scope_block(text) == "all my python work"
+
+
+def test_upsert_scope_block_appends_preserving_handwritten():
+    orig = "# Project rules\n- be concise\n"
+    out = S.upsert_scope_block(orig, "this repo = the widget service")
+    assert orig in out                                   # hand-written content untouched
+    assert S.read_scope_block(out) == "this repo = the widget service"
+
+
+def test_upsert_scope_block_replaces_in_place():
+    text = S.upsert_scope_block("# c\n", "old scope")
+    text2 = S.upsert_scope_block(text, "new scope")
+    assert S.read_scope_block(text2) == "new scope"
+    assert text2.count(S.SCOPE_MARK_BEGIN) == 1          # not duplicated
+
+
+def test_upsert_scope_block_diff_free_when_unchanged():
+    text = S.upsert_scope_block("# c\n", "same")
+    assert S.upsert_scope_block(text, "same") == text    # no-change refresh writes nothing
+
+
+def test_store_changed(home):
+    d = _mem(home, "/p/sc")
+    base = S._newest_mtime(d)
+    assert S.store_changed(d, base) is False
+    import os
+    os.utime(d / "a.md", (base + 100, base + 100))
+    assert S.store_changed(d, base) is True

@@ -17,6 +17,35 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.2.0] - 2026-06-28
+
+### Added
+- Layered memory, Phase 1 (core). Knowledge is now placed by SCOPE across always-present homes:
+  per-project Auto memory, a global cross-project layer at `~/.claude/rules/bitranox/` (native
+  whole-loaded user rules, recursion confirmed; never touches the user's hand-written CLAUDE.md), and
+  CLAUDE.md only for must-hold intermediate-subtree rules. Concrete-but-universal facts are promoted
+  KEPT CONCRETE, not abstracted away.
+- Normalization instead of duplication: a specialized entry `references [[general]]` and adds only its
+  delta; references point UPWARD only (deletion-safe). `reconcile_memory_index.py --check` verifies
+  reference integrity (orphans, downward refs) across the altitude chain and warns on an over-cap
+  `MEMORY.md`.
+- Quality/dwell gate before global promotion (the global layer loads into every session): user-stated
+  concrete rules promote eagerly; model-inferred generalizations need corroboration across >= 2 dreams.
+  Counters live outside the dreamed store, so consolidation stays convergent.
+- One machine-local config `~/.claude/.bitranox-memory.json` (`load_config`/`save_config`) for the
+  informed-consent knobs (dream mode, promotion eagerness, forgetting, nudges), migrating the legacy
+  `.bitranox-dream-*` sentinels one-way. A `nudges` flag can switch session nudges off.
+- Per-level scope descriptor support (a bounded, diff-free `<!-- bitranox:self-learning -->` block) and
+  new helpers in `self_improve_signals.py`: `global_rules_dir`, `altitude_chain`, project seeding, and a
+  "store changed under me" signature.
+- A dormant new-project bootstrap nudge (activates only once the Phase-2 `meta-collect-knowledge` skill
+  is installed and there is knowledge to seed from).
+
+### Changed
+- `meta-self-improve` and `meta-dream` rewritten to the scope-based multi-altitude model (concrete
+  homes, normalization, upward-only references, descriptor-guided classification, config as the single
+  source of truth for modes/knobs); `self-improve-gate.py` nudge text updated to match.
+
 ## [4.1.0] - 2026-06-27
 
 ### Added

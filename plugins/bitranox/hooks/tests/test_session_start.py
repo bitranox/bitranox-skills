@@ -214,3 +214,63 @@ def test_dream_nudge_silent_when_off(tmp_path, monkeypatch, capsys, isolate_home
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "BITRANOX-DREAM-DUE" not in ctx
+
+
+# --------------------------------------------------------------------------
+# new-project bootstrap nudge + the nudges config flag
+# --------------------------------------------------------------------------
+
+
+def _seed_some_other_knowledge():
+    """Give the store SOMETHING to gather from (a sibling project's memory)."""
+    other = SIG.memory_dir("/proj/other")
+    other.mkdir(parents=True, exist_ok=True)
+    (other / "b.md").write_text("a useful note", encoding="utf-8")
+
+
+def _install_collect_skill(root):
+    """The new-project nudge is gated on the Phase-2 meta-collect-knowledge skill being installed."""
+    p = root / "skills" / "meta-collect-knowledge" / "SKILL.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\nname: meta-collect-knowledge\n---\n\nB\n", encoding="utf-8")
+
+
+def test_newproject_nudge_fires_once_then_silent(tmp_path, monkeypatch, capsys, isolate_home):
+    _seed_some_other_knowledge()
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    _install_collect_skill(root)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")   # fresh, no memory
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-NEW-PROJECT" in ctx and "collect-knowledge" in ctx
+    rc2, out2 = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")  # second time: silent
+    assert "BITRANOX-NEW-PROJECT" not in json.loads(out2)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_newproject_nudge_silent_on_empty_store(tmp_path, monkeypatch, capsys, isolate_home):
+    # nothing anywhere to seed from -> no nudge (fresh machine), even with the skill installed
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    _install_collect_skill(root)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")
+    assert "BITRANOX-NEW-PROJECT" not in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_newproject_nudge_dormant_without_collect_skill(tmp_path, monkeypatch, capsys, isolate_home):
+    # collect skill NOT installed (Phase 1 state) -> nudge stays dormant even for a fresh project
+    _seed_some_other_knowledge()
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")
+    assert "BITRANOX-NEW-PROJECT" not in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+
+def test_nudges_flag_off_suppresses_dream_and_newproject(tmp_path, monkeypatch, capsys, isolate_home):
+    SIG.save_config({"nudges": False})
+    mem = SIG.memory_dir("/proj/dream")          # a due dream
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")
+    _seed_some_other_knowledge()
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-DREAM-DUE" not in ctx        # nudges off -> suppressed
+    rc2, out2 = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")
+    assert "BITRANOX-NEW-PROJECT" not in json.loads(out2)["hookSpecificOutput"]["additionalContext"]

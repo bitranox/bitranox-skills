@@ -40,10 +40,10 @@ _REASON = (
     'endorsing yours (a confirmed approach) - a self-admitted miss, or a realization such as '
     '"now I understand the real ..."). Before you '
     'stop: invoke the self-improve skill (Skill tool, name "meta-self-improve") to capture this '
-    "session's learnings into memory/CLAUDE.md per its procedure. A discovered fact about your "
-    "own infrastructure or a project's architecture/topology/data-flow goes at the right "
-    "altitude (own infra spanning projects -> the top-level CLAUDE.md; one project -> its "
-    "CLAUDE.md/memory; unsure -> ask the user where it belongs). If a project-specific "
+    "session's learnings per its procedure. A discovered fact goes at the right altitude BY SCOPE, "
+    "kept concrete: useful across projects -> ~/.claude/rules/bitranox/ (the global rules layer); "
+    "one project -> its memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; "
+    "unsure -> ask the user where it belongs. If a project-specific "
     "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "
     "reflection there is genuinely nothing worth recording, say so in one line and then stop."
 )

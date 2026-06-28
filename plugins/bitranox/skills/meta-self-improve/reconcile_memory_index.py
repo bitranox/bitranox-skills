@@ -108,6 +108,81 @@ def referenced_files(memory_md_text):
     return {m.group(1) for m in _LINK_RX.finditer(memory_md_text)}
 
 
+# ---- cross-altitude reference integrity (normalization safety) -----------------------
+# Entries may carry `[[name]]` / `[[altitude:name]]` wiki-links to a generalized rule one or
+# more altitudes UP. Two invariants keep that safe (see the plan's normalization section):
+#   * the target must EXIST (no dangling pointer), and
+#   * it must sit at the SAME or a HIGHER altitude (upward only), so deleting a lower project
+#     never orphans a higher entry. A reference pointing DOWN is reported.
+# An altitude CHAIN is a list of dirs ordered narrowest -> broadest (see
+# self_improve_signals.altitude_chain): e.g. [project memory, ...ancestors..., global rules].
+
+_WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
+_CAP_LINES = 200
+_CAP_BYTES = 25_000
+
+
+def _ref_slug(token):
+    """Normalize a wiki-link token to a bare slug: '[[global:fleet-ssh]]' -> 'fleet-ssh'."""
+    return token.split(":")[-1].strip().lower()
+
+
+def _entry_md_files(d):
+    """All entry `*.md` under an altitude dir (recursive, for the whole-loaded global tier),
+    excluding the MEMORY.md index itself."""
+    try:
+        return [p for p in d.rglob("*.md") if p.name != MEMORY_INDEX]
+    except OSError:
+        return []
+
+
+def check_references(dirs):
+    """Verify `[[ref]]` integrity across an ordered altitude chain (narrow -> broad).
+
+    Returns {checked, orphans, downward}: `orphans` are refs whose target exists nowhere in the
+    chain; `downward` are refs whose target lives only at a NARROWER altitude than the source.
+    Both are (source_slug, ref_slug) pairs. A clean store yields empty lists.
+    """
+    dirs = [Path(d) for d in dirs]
+    # target slug -> set of altitude positions where an entry by that slug exists
+    targets = {}
+    for pos, d in enumerate(dirs):
+        for p in _entry_md_files(d):
+            targets.setdefault(p.stem.lower(), set()).add(pos)
+
+    orphans, downward, checked = [], [], 0
+    for pos, d in enumerate(dirs):
+        for p in _entry_md_files(d) + [d / MEMORY_INDEX]:
+            try:
+                text = p.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for m in _WIKILINK_RX.finditer(text):
+                ref = _ref_slug(m.group(1))
+                if not ref or ref == p.stem.lower():
+                    continue
+                checked += 1
+                where = targets.get(ref)
+                if not where:
+                    orphans.append((p.stem.lower(), ref))
+                elif max(where) < pos:           # every target is strictly below the source
+                    downward.append((p.stem.lower(), ref))
+    return {"checked": checked, "orphans": sorted(set(orphans)), "downward": sorted(set(downward))}
+
+
+def over_cap(memory_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES):
+    """(ok, lines, bytes) for a MEMORY.md against the native always-present window. ok is False
+    when content would silently truncate out of presence (route overflow per the plan)."""
+    p = Path(memory_md_path)
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return True, 0, 0
+    lines = raw.count(b"\n") + (1 if raw and not raw.endswith(b"\n") else 0)
+    nbytes = len(raw)
+    return (lines <= max_lines and nbytes <= max_bytes), lines, nbytes
+
+
 def index_line(filename, title, hook):
     return "- [%s](%s) - %s" % (title, filename, hook) if hook else "- [%s](%s)" % (title, filename)
 
@@ -168,7 +243,30 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Backfill MEMORY.md index lines from topic files.")
     ap.add_argument("dirs", nargs="+", help="one or more .../memory/ directories")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    ap.add_argument("--check", action="store_true",
+                    help="treat dirs as an ordered altitude chain (narrow->broad) and verify "
+                         "reference integrity (upward-only, no orphans) + over-cap; exit 1 on issues")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.check:
+        refs = check_references(args.dirs)
+        problems = 0
+        print("reference integrity: %d ref(s) checked" % refs["checked"])
+        for src, ref in refs["orphans"]:
+            print("    ! orphan ref: [[%s]] in %s -> no such entry in the chain" % (ref, src))
+            problems += 1
+        for src, ref in refs["downward"]:
+            print("    ! downward ref: %s -> [[%s]] points to a NARROWER altitude" % (src, ref))
+            problems += 1
+        for d in args.dirs:
+            ok, lines, nbytes = over_cap(Path(d) / MEMORY_INDEX)
+            if not ok:
+                print("    ! over-cap: %s/MEMORY.md is %d lines / %d bytes (route overflow)"
+                      % (d, lines, nbytes))
+                problems += 1
+        print("TOTAL problems: %d" % problems)
+        return 1 if problems else 0
+
     total_added = 0
     for d in args.dirs:
         rep = reconcile(d, dry_run=args.dry_run)

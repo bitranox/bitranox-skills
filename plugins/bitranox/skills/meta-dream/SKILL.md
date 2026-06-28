@@ -1,6 +1,6 @@
 ---
 name: meta-dream
-description: Use to consolidate memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes the whole MEMORY.md store and the session, routes generalized rules to the right-altitude CLAUDE.md, and batches skill-worthy generalizations into one self-PR. Honors an off/auto/propose mode.
+description: Use to consolidate memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes the whole MEMORY.md store and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global ~/.claude/rules/bitranox/ layer or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. Honors an off/auto/propose mode.
 ---
 
 # meta-dream
@@ -17,8 +17,10 @@ skill for the primitives, this one for the batch pass. Do not duplicate its cont
 
 ## Mode (user can switch off the asking)
 
-Read the mode first (or run `dream_state.py mode`). Controlled by opt-out sentinels in `~/.claude`
-(no config edit needed):
+Read the mode first (or run `dream_state.py mode`). The mode (and the other knobs: privacy, promotion
+eagerness, forgetting, nudges) live in one machine-local config `~/.claude/.bitranox-memory.json`
+(`self_improve_signals.load_config()`); until that file exists the legacy `.bitranox-dream-off` /
+`.bitranox-dream-auto` sentinels still apply (one-way migration). The values:
 
 - **`propose`** (default): apply the safe private-memory consolidation, but ASK before editing a
   version-controlled CLAUDE.md and route skill changes to a self-PR for review. End the run by
@@ -53,24 +55,30 @@ Create one todo per step.
    `remember` buffer) for durable items not yet captured.
 4. **Dedup / merge.** Fold near-duplicate or overlapping entries into one sharpened entry; update the
    index line; cross-link related entries with `[[name]]`. Edit-over-append (the core anti-bloat rule).
-5. **Generalize - with dual representation.** Lift broadly-useful specifics into a general principle.
-   For each, choose the representation deliberately:
-   - **Combine** the general rule plus the specialized detail in one entry, OR
-   - **Split** across altitudes: the general principle at the broad layer, the concrete instance at
-     the narrow layer, cross-linked, never duplicated (step-3b).
-   This applies to BOTH tiers: **memory** (a generalized entry linked to a specialized one) and
-   **CLAUDE.md** (a parent/higher-altitude CLAUDE.md holds the generalized rule; the project's
-   CLAUDE.md holds the specialized version; linked). Route a must-hold standing rule to the
-   right-altitude CLAUDE.md; keep the rest as generalized memory.
-   - **If no CLAUDE.md exists at the chosen altitude, create it** (with the rule). Creating/editing a
-     CLAUDE.md that is version-controlled is propose-first in `propose` mode (auto in `auto` mode); a
-     CLAUDE.md outside version control may be created directly.
+5. **Promote by SCOPE; NORMALIZE, don't duplicate.** Lift each learning to the narrowest always-present
+   home whose scope it covers: per-project memory; broadly-useful -> the global `~/.claude/rules/bitranox/`
+   layer KEPT CONCRETE (never water down a concrete-but-universal rule like fleet SSH access); a must-hold
+   intermediate-subtree rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY, not abstractness;
+   abstract only when the specifics fit nowhere else.
+   - **Reference + delta:** when a general and a specific overlap, keep the general ONCE at its altitude
+     and have the lower entry `references [[general]]` + only its delta - they compose at load, never
+     duplicated. **References point UPWARD only** (deleting a project must never dangle a higher entry).
+   - **Promotion to the global layer is gated** (it loads in EVERY session): a USER-stated concrete rule
+     promotes eagerly; a model-INFERRED generalization needs corroboration across >= 2 dreams first
+     (`should_promote` / `note_promotion_candidate` in `self_improve_signals.py`; the `promotion` config
+     knob). Those counters live OUT of the dreamed store, so gating never breaks convergence (step 11).
+   - The global rules layer is machine-local -> auto-apply; editing a version-controlled `CLAUDE.md` is
+     propose-first (auto in `auto` mode), and only through the sanctioned bounded paths (step-3b /
+     CLAUDE.md policy in `bitranox:meta-self-improve`).
 6. **Re-categorize / re-wire.** Move entries to the right layer/altitude; add cross-links; drop stale
    or superseded ones.
 7. **Prune.** Remove unimportant detail, leaked task-state, and obsolete entries (the backup makes
    this safe). Refine wording: state the fact and the why, nothing more.
-8. **Reconcile the index.** Run `reconcile_memory_index.py` (in the meta-self-improve skill dir) so
-   every topic file has a `MEMORY.md` line and there are no orphans after the churn.
+8. **Reconcile the index + check references.** Run `reconcile_memory_index.py <memory-dir>` so every
+   topic file has a `MEMORY.md` line, then `reconcile_memory_index.py --check <altitude-chain>` (the
+   chain from `self_improve_signals.altitude_chain(proj)`) to verify reference integrity and caps. Fix
+   anything flagged: re-point a DOWNWARD ref upward, resolve an orphan, and route an over-cap project
+   `MEMORY.md`'s overflow to that project's own `CLAUDE.md` (never to global, never deferred to a skill).
 9. **Skill-fit -> batched change.** Collect generalizations that match or warrant a skill. Deliver
    them through `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream":
    adjust an existing skill when it fits, propose a new one (via `bitranox:skill-writer`) when it does
@@ -84,9 +92,10 @@ Create one todo per step.
 
 ## Boundaries
 
-- **Private memory:** back up, then apply (the whole point of a dream). Reversible via the backup.
-- **CLAUDE.md (version-controlled):** propose-first in `propose`; apply in `auto`. Create it if the
-  right-altitude file is missing.
+- **Private memory + the global `~/.claude/rules/bitranox/` layer (machine-local):** back up, then
+  apply (the whole point of a dream). Reversible via the backup.
+- **CLAUDE.md (version-controlled):** propose-first in `propose`; apply in `auto` - only through the
+  sanctioned bounded paths. Create it if the right-altitude file is missing.
 - **Skills / hooks (shared, public):** never silently edit; route through the upstream-PR loop
   (self-PR in `propose`, commit-or-PR in `auto`, skipped in `off`).
 - **Circle-breaker still applies:** if the same item has been consolidated twice and keeps coming
@@ -98,4 +107,7 @@ Create one todo per step.
 - Dreaming without capturing first (consolidating a half-recorded session).
 - Auto-editing CLAUDE.md or skills in `propose` mode (those are propose / self-PR).
 - Forgetting `dream_state.py done`, so the nudge keeps firing.
-- Duplicating the general and specific text instead of cross-linking them.
+- Duplicating the general and specific text instead of reference + delta.
+- A DOWNWARD or cross-tree reference (a higher entry pointing at a lower one) - it dangles on deletion.
+- Over-broadening: watering a concrete-but-universal rule into a vague principle, or globalizing a
+  narrowly-applicable one (it then loads in every session for nothing).
