@@ -60,6 +60,8 @@ Create one todo per step.
    `remember` buffer) for durable items not yet captured.
 4. **Dedup / merge.** Fold near-duplicate or overlapping entries into one sharpened entry; update the
    index line; cross-link related entries with `[[name]]`. Edit-over-append (the core anti-bloat rule).
+   Dedup runs TWICE: here on the as-loaded store, and AGAIN in step 8 - because promoting in step 5
+   CREATES new overlap (a lifted general now duplicates what it came from, and may overlap siblings).
 5. **Promote by SCOPE; NORMALIZE, don't duplicate.** Lift each learning to the narrowest always-present
    home whose scope it covers: per-project memory; broadly-useful -> the global `~/.claude/rules/bitranox/`
    layer KEPT CONCRETE (never water down a concrete-but-universal rule like fleet SSH access); a must-hold
@@ -79,8 +81,12 @@ Create one todo per step.
    or superseded ones.
 7. **Prune.** Remove unimportant detail, leaked task-state, and obsolete entries (the backup makes
    this safe). Refine wording: state the fact and the why, nothing more.
-8. **Reconcile the index + check references.** Run `reconcile_memory_index.py <memory-dir>` so every
-   topic file has a `MEMORY.md` line, then `reconcile_memory_index.py --check <altitude-chain>` (the
+8. **Re-dedup after promotion, then reconcile + check references.** FIRST, because promotion (step 5)
+   created overlap, sweep the notes it touched - the promoted-from note AND any sibling that now
+   overlaps a newly-promoted general - and normalize each to `references [[general]] + delta` (the
+   general lives ONCE, upward-only). Do NOT skip this on the assumption step 4 already deduped: step 4
+   ran before the promotions existed. (Net per-note bytes may be a wash; the win is one source of truth,
+   not restating the general in every note.) THEN run `reconcile_memory_index.py <memory-dir>` so every
    chain from `self_improve_signals.altitude_chain(proj)`) to verify reference integrity and caps. Fix
    anything flagged: re-point a DOWNWARD ref upward, resolve an orphan, and route an over-cap project
    `MEMORY.md`'s overflow to that project's own `CLAUDE.md` (never to global, never deferred to a skill).
@@ -171,6 +177,8 @@ cross-project scan and sibling-tree gather are meta-dream-global's job.
 - Auto-editing CLAUDE.md or skills in `propose` mode (those are propose / self-PR).
 - Forgetting `dream_state.py done`, so the nudge keeps firing.
 - Duplicating the general and specific text instead of reference + delta.
+- Deduping ONLY before promotion. Promotion creates the overlap, so the dedup/normalize sweep must run
+  AGAIN as the last content step (step 8), or the just-promoted general sits duplicated below it.
 - A DOWNWARD or cross-tree reference (a higher entry pointing at a lower one) - it dangles on deletion.
 - Over-broadening: watering a concrete-but-universal rule into a vague principle, or globalizing a
   narrowly-applicable one (it then loads in every session for nothing).

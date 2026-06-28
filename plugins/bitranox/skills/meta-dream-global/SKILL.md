@@ -68,10 +68,15 @@ Create one todo per step.
    downward cascade deliver it; a project in a DIFFERENT subtree receives it via ITS inbound gather. A
    direct self-contained copy into one specific other project is the rare exception (marked so a later
    dream does not re-promote it; scrubbed; never a cross-tree ref).
-6. **Normalize + reconcile.** Where a promoted general and a project specific now overlap, leave the
-   general ONCE at its altitude and rewrite the lower entry as `references [[general]]` + its delta
-   (UPWARD-only). Run `reconcile_memory_index.py --check <altitude-chain>` over the affected chains to
-   verify reference integrity (no orphans, no DOWNWARD or cross-tree refs, no over-cap).
+6. **Re-dedup after promotion (the required final sweep), then reconcile.** Promotion is what CREATES
+   the duplication: every rule lifted to a common ancestor or global now overlaps the note it came from
+   AND any sibling note across the stores that holds the same lesson. So after promoting, sweep ALL
+   affected stores and normalize each overlapping lower entry to `references [[general]]` + its delta -
+   the general lives ONCE at its altitude, UPWARD-only. This is not optional and not covered by any
+   earlier dedup: those ran before the promotions existed. (Per-note bytes may be a wash; the win is one
+   source of truth instead of the general restated in every project.) Then run
+   `reconcile_memory_index.py --check <altitude-chain>` over the affected chains to verify reference
+   integrity (no orphans, no DOWNWARD or cross-tree refs, no over-cap).
 7. **Skill-fit -> batched change.** A generalization that warrants a skill goes through
    `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
    `propose`, commit-or-PR in `auto`, skipped in `off`).

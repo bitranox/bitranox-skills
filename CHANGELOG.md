@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.8.2] - 2026-06-29
+
+### Changed
+- Dream skills: make dedup/normalize an explicit **final sweep after promotion**, not only a pre-pass.
+  Promotion is what *creates* duplication (a rule lifted up now overlaps the note it came from and any
+  sibling holding the same lesson), so a dedup that runs only before promoting leaves the just-promoted
+  general duplicated below it. `meta-dream-project` step 8 now re-dedups the promotion-touched notes
+  before reconcile (and step 4 notes that dedup runs twice); `meta-dream-global` step 6 is now an
+  explicit "re-dedup after promotion (required final sweep)". Net per-note bytes can be a wash; the win
+  is one source of truth instead of restating the general in every note.
+
 ## [4.8.1] - 2026-06-29
 
 ### Changed
