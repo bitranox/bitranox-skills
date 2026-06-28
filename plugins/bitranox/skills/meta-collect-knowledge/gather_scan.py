@@ -34,16 +34,18 @@ _STOP = {
 }
 
 
-def extract_keywords(text, max_n=12):
+def extract_keywords(text, max_n=12, proj=None):
     """Deterministic keyword set from a topic / descriptor: lowercased significant tokens (>=3 chars,
     not stopwords / filler), de-duplicated in first-seen order, capped. No model. (Synonym recall is
     traded for speed; a richer pass can run later.)
 
     Filler words (generic/conversational tokens with no topical signal - the recall-precision bug) are
-    dropped via `self_improve_signals.load_filler_words()` (shipped baseline + machine-local, grown by
-    the dream-time classifier). Combined with the small structural `_STOP` set here."""
+    dropped via `self_improve_signals.load_filler_words(proj)`: the GLOBAL shipped baseline UNION the
+    PROJECT's learned filler (so one project's learned classification never suppresses another's recall).
+    Pass `proj` (the current cwd) to get the per-project blacklist; omit it for baseline-only. Combined
+    with the small structural `_STOP` set here."""
     try:
-        drop = _STOP | sig.load_filler_words()
+        drop = _STOP | sig.load_filler_words(proj)
     except Exception:  # noqa: BLE001 - missing/corrupt list must never break extraction
         drop = _STOP
     out = []
@@ -113,11 +115,11 @@ def main(argv=None):
                     help="current project cwd to EXCLUDE (you gather from elsewhere)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
-    keywords = extract_keywords(args.topic)
+    self_proj = args.self_proj or os.getcwd()
+    keywords = extract_keywords(args.topic, proj=self_proj)   # per-project blacklist for the current proj
     if not keywords:
         print("no usable keywords from topic", file=sys.stderr)
         return 0
-    self_proj = args.self_proj or os.getcwd()
     hits = scan(keywords, discover_files(self_proj))
     for path in sorted(hits):
         print("%s\t%s" % (path, ",".join(hits[path])))

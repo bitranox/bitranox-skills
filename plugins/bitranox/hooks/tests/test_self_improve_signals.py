@@ -309,33 +309,46 @@ def test_model_review_due_and_mark(home):
 
 
 # --- recall filler words ------------------------------------------------------------------------
-def test_filler_baseline_loads_and_is_unioned_with_local(home):
-    base = S.load_filler_words()
+_PROJ = "/p/proj"
+
+
+def test_filler_baseline_global_plus_project_local(home):
+    base = S.load_filler_words()                                          # baseline only (proj=None)
     assert "previous" in base and "again" in base and "normal" in base   # shipped baseline present
     assert "frobnicate" not in base
-    S.add_filler_words(["Frobnicate", "frobnicate", "  "])               # machine-local, normalized
-    assert "frobnicate" in S.load_filler_words()                          # union of baseline + local
-    assert "previous" in S.load_filler_words()                            # baseline still there
+    S.add_filler_words(["Frobnicate", "frobnicate", "  "], _PROJ)        # per-project learned, normalized
+    assert "frobnicate" in S.load_filler_words(_PROJ)                     # baseline UNION project-local
+    assert "previous" in S.load_filler_words(_PROJ)                       # baseline still there
+    assert "frobnicate" not in S.load_filler_words()                      # NOT in the baseline-only view
+
+
+def test_learned_filler_is_per_project_not_global(home):
+    S.add_filler_words(["alpha"], "/p/a")
+    assert "alpha" in S.load_filler_words("/p/a")                         # learned in A
+    assert "alpha" not in S.load_filler_words("/p/b")                     # ... never leaks to B
+    assert "alpha" not in S.load_filler_words()                           # ... nor to baseline-only
 
 
 def test_add_filler_words_does_not_touch_shipped_baseline(home):
-    S.add_filler_words(["zzznew"])
+    S.add_filler_words(["zzznew"], _PROJ)
     assert "zzznew" not in S._read_word_json(S._filler_baseline_path())   # baseline file untouched
-    assert "zzznew" in S._read_word_json(S._filler_local_path())          # only the local file grows
+    assert "zzznew" in S._read_word_json(S._filler_local_path(_PROJ))     # only the project file grows
 
 
-def test_topical_words_roundtrip(home):
-    assert S.load_topical_words() == frozenset()
-    S.add_topical_words(["RabbitMQ", "ept"])
-    assert "rabbitmq" in S.load_topical_words() and "ept" in S.load_topical_words()
+def test_topical_words_roundtrip_per_project(home):
+    assert S.load_topical_words(_PROJ) == frozenset()
+    S.add_topical_words(["RabbitMQ", "ept"], _PROJ)
+    assert "rabbitmq" in S.load_topical_words(_PROJ) and "ept" in S.load_topical_words(_PROJ)
+    assert S.load_topical_words("/p/other") == frozenset()                # whitelist is per-project
 
 
 def test_pending_keywords_queue_skips_known_and_drains(home):
-    S.add_filler_words(["again"])
-    S.add_topical_words(["rabbitmq"])
-    S.note_unknown_keywords(["again", "rabbitmq", "stimer", "ept"])       # 2 known -> only 2 queued
-    assert S.load_pending_keywords() == frozenset({"stimer", "ept"})
-    S.note_unknown_keywords(["stimer", "vmbus"])                          # dedup vs queue; add vmbus
-    assert S.load_pending_keywords() == frozenset({"stimer", "ept", "vmbus"})
-    S.clear_pending_keywords()
-    assert S.load_pending_keywords() == frozenset()
+    S.add_filler_words(["again"], _PROJ)
+    S.add_topical_words(["rabbitmq"], _PROJ)
+    S.note_unknown_keywords(["again", "rabbitmq", "stimer", "ept"], _PROJ)   # 2 known -> only 2 queued
+    assert S.load_pending_keywords(_PROJ) == frozenset({"stimer", "ept"})
+    S.note_unknown_keywords(["stimer", "vmbus"], _PROJ)                      # dedup vs queue; add vmbus
+    assert S.load_pending_keywords(_PROJ) == frozenset({"stimer", "ept", "vmbus"})
+    S.clear_pending_keywords(_PROJ)
+    assert S.load_pending_keywords(_PROJ) == frozenset()
+    assert S.load_pending_keywords("/p/other") == frozenset()                # queue is per-project

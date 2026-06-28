@@ -357,27 +357,31 @@ def mark_model_reviewed(now=None):
 
 # --- Recall filler words (memory-recall keyword precision) ---------------------------------------
 # Generic/conversational words must not become recall search keywords (they match half the store).
-# Two tiers: a shipped baseline (filler_words.json next to this module, grows via PRs) UNIONED with a
-# machine-local list the dream-time classifier appends to. The per-prompt hook only USES this list
-# (deterministic, no model); GROWING it is a slow dream pass (a sonnet subagent classifies the queued
-# unknown words). See meta-dream's "Filler-word classification" pass.
+# THREE lists, split by who is universal vs a project-specific judgment (so one project's learned
+# classification never suppresses another project's recall - see the `recall-filler-per-project` memory):
+#   - GLOBAL baseline blacklist: filler_words.json next to this module (generic English; grows via PRs).
+#   - PER-PROJECT learned blacklist: filler the dream classified for THAT project.
+#   - PER-PROJECT learned whitelist: topical/known-good words (so they are not re-queued).
+# The per-prompt hook only USES these (deterministic, no model), keyed to the CURRENT project (the
+# prompt's origin); GROWING them is a slow dream pass. See meta-dream's "Filler-word classification".
 
 def _filler_baseline_path():
     return Path(__file__).resolve().parent / "filler_words.json"
 
 
-def _filler_local_path():
-    return Path.home() / ".claude" / ".bitranox-filler-words.json"
+def _filler_local_path(proj):
+    """PER-PROJECT learned filler blacklist (out-of-store, machine-local)."""
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".filler.json")
 
 
-def _topical_words_path():
-    """Words the classifier confirmed are GENUINE topics - cached so they are not re-queued every dream."""
-    return Path.home() / ".claude" / ".bitranox-topical-words.json"
+def _topical_words_path(proj):
+    """PER-PROJECT learned topical whitelist - confirmed genuine topics, not re-queued for classification."""
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".topical.json")
 
 
-def _recall_pending_path():
-    """Queue of as-yet-unclassified recall keywords (out-of-store), drained by the dream classifier."""
-    return Path.home() / ".claude" / "self-improve-audit" / "recall-unknown-keywords.txt"
+def _recall_pending_path(proj):
+    """PER-PROJECT queue of as-yet-unclassified recall keywords, drained by the dream classifier."""
+    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".recall-unknown.txt")
 
 
 def _read_word_json(path):
@@ -403,41 +407,48 @@ def _write_word_json(path, words, key="words"):
         pass
 
 
-def load_filler_words():
-    """The full filler set: shipped baseline UNION machine-local additions. Lowercased frozenset."""
-    return frozenset(_read_word_json(_filler_baseline_path()) + _read_word_json(_filler_local_path()))
+def load_filler_words(proj=None):
+    """The effective filler blacklist for `proj`: GLOBAL baseline UNION the project's LEARNED filler.
+    Baseline is universal generic-English filler; learned filler is per-project so one project's
+    classification never suppresses another's recall. With proj=None, baseline only. Lowercased frozenset."""
+    words = list(_read_word_json(_filler_baseline_path()))
+    if proj is not None:
+        words += _read_word_json(_filler_local_path(proj))
+    return frozenset(words)
 
 
-def add_filler_words(words):
-    """Append classifier-confirmed filler words to the MACHINE-LOCAL list (never the shipped baseline)."""
+def add_filler_words(words, proj):
+    """Append classifier-confirmed filler to the PROJECT's learned blacklist (never the shipped baseline)."""
     new = {str(w).strip().lower() for w in words if str(w).strip()}
     if not new:
         return
-    _write_word_json(_filler_local_path(), set(_read_word_json(_filler_local_path())) | new, key="filler")
+    p = _filler_local_path(proj)
+    _write_word_json(p, set(_read_word_json(p)) | new, key="filler")
 
 
-def load_topical_words():
-    """Words already classified as genuine topics (not filler) - skip re-queuing them. Lowercased frozenset."""
-    return frozenset(_read_word_json(_topical_words_path()))
+def load_topical_words(proj):
+    """The project's learned topical whitelist (genuine topics, not re-queued). Lowercased frozenset."""
+    return frozenset(_read_word_json(_topical_words_path(proj)))
 
 
-def add_topical_words(words):
-    """Record classifier-confirmed topical words so they are not re-queued for classification."""
+def add_topical_words(words, proj):
+    """Record classifier-confirmed topical words for THIS project so they are not re-queued."""
     new = {str(w).strip().lower() for w in words if str(w).strip()}
     if not new:
         return
-    _write_word_json(_topical_words_path(), set(_read_word_json(_topical_words_path())) | new, key="topical")
+    p = _topical_words_path(proj)
+    _write_word_json(p, set(_read_word_json(p)) | new, key="topical")
 
 
-def note_unknown_keywords(words):
-    """Per-prompt: queue recall keywords that are NEITHER known filler NOR known-topical, for the dream
-    classifier to judge. Deterministic, append-only, deduped; never calls a model."""
-    known = load_filler_words() | load_topical_words()
-    cur = load_pending_keywords()
+def note_unknown_keywords(words, proj):
+    """Per-prompt: queue this project's recall keywords that are NEITHER known filler NOR known-topical,
+    for the dream classifier to judge. Deterministic, append-only, deduped; never calls a model."""
+    known = load_filler_words(proj) | load_topical_words(proj)
+    cur = load_pending_keywords(proj)
     add = {str(w).strip().lower() for w in words if str(w).strip()} - known - cur
     if not add:
         return
-    f = _recall_pending_path()
+    f = _recall_pending_path(proj)
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         with f.open("a", encoding="utf-8") as fh:
@@ -447,19 +458,19 @@ def note_unknown_keywords(words):
         pass
 
 
-def load_pending_keywords():
-    """The set of queued-but-unclassified recall keywords (for the dream classifier)."""
+def load_pending_keywords(proj):
+    """The project's queued-but-unclassified recall keywords (for the dream classifier)."""
     try:
-        return frozenset(w.strip().lower() for w in _recall_pending_path().read_text(
+        return frozenset(w.strip().lower() for w in _recall_pending_path(proj).read_text(
             encoding="utf-8").splitlines() if w.strip())
     except OSError:
         return frozenset()
 
 
-def clear_pending_keywords():
-    """Drain the queue after the dream classifier has processed it."""
+def clear_pending_keywords(proj):
+    """Drain THIS project's queue after the dream classifier has processed it."""
     try:
-        _recall_pending_path().unlink()
+        _recall_pending_path(proj).unlink()
     except OSError:
         pass
 

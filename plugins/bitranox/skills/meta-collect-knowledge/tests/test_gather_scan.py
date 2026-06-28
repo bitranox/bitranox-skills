@@ -39,9 +39,9 @@ def test_scan_is_word_boundary_not_substring(tmp_path):
 
 
 def test_extract_keywords_drops_filler(monkeypatch):
-    # filler words (generic/conversational) are dropped via load_filler_words; topical tokens survive.
-    monkeypatch.setattr(sig, "load_filler_words", lambda: frozenset({"again", "previous", "normal"}))
-    kws = G.extract_keywords("again the previous rabbitmq timeout looked normal")
+    # filler words (generic/conversational) are dropped via load_filler_words(proj); topical tokens survive.
+    monkeypatch.setattr(sig, "load_filler_words", lambda proj=None: frozenset({"again", "previous", "normal"}))
+    kws = G.extract_keywords("again the previous rabbitmq timeout looked normal", proj="/p/x")
     assert "rabbitmq" in kws and "timeout" in kws
     assert "again" not in kws and "previous" not in kws and "normal" not in kws
 

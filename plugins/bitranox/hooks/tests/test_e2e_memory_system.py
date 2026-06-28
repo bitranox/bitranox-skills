@@ -105,13 +105,17 @@ def test_memory_system_end_to_end(sandbox):
     _mem(proj_a, "own-zorblax.md", "my own zorblax note here")
     assert not any("own-zorblax" in n for n in _recall("zorblax frobnicator", proj_a, "o1"))  # self excluded
 
-    # S5 - filler classification flow (per-prompt queue -> dream classifier)
-    pend = sig.load_pending_keywords()
+    # S5 - filler classification flow (per-prompt queue -> dream classifier), all PER-PROJECT
+    pend = sig.load_pending_keywords(proj_a)
     assert "zorblax" in pend or "frobnicator" in pend
-    sig.add_filler_words(["wibble"]); sig.add_topical_words(["zorblax"]); sig.clear_pending_keywords()
-    assert sig.load_pending_keywords() == frozenset()
-    assert "wibble" not in gs.extract_keywords("wibble zorblax test")
-    assert "zorblax" in gs.extract_keywords("wibble zorblax test")
+    sig.add_filler_words(["wibble"], proj_a); sig.add_topical_words(["zorblax"], proj_a)
+    sig.clear_pending_keywords(proj_a)
+    assert sig.load_pending_keywords(proj_a) == frozenset()
+    assert "wibble" not in gs.extract_keywords("wibble zorblax test", proj=proj_a)
+    assert "zorblax" in gs.extract_keywords("wibble zorblax test", proj=proj_a)
+    # wibble is filler ONLY for proj_a -> kept (not dropped) for proj_b and for baseline-only
+    assert "wibble" in gs.extract_keywords("wibble zorblax test", proj=proj_b)   # not leaked to proj B
+    assert "wibble" in gs.extract_keywords("wibble zorblax test")                # nor to baseline-only
 
     # S6 - gather_scan CLI (cross-tree candidate grep)
     _, out, _ = _cli(SK / "meta-collect-knowledge" / "gather_scan.py",

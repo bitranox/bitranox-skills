@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.6.0] - 2026-06-28
+
+### Changed
+- Recall filler/topical lists are now **per-project** (were machine-global). The shipped
+  `filler_words.json` baseline stays **global** (universal generic-English filler, PR-only); the
+  **learned filler blacklist**, the **topical whitelist**, and the **pending classification queue** are
+  now keyed per project (`~/.claude/self-improve-audit/<proj_key>.{filler,topical,recall-unknown}`).
+  This fixes a cross-project contamination bug: a word a dream classified as filler in one project no
+  longer suppresses recall of that word in another project where it is a real topic (e.g. `compression`
+  is noise in a docs project but a topic in a codec project). The effective blacklist for a prompt is
+  `global baseline UNION the current project's learned filler`. `extract_keywords`, `load_filler_words`,
+  `add_filler_words`, `load_topical_words`, `add_topical_words`, `note_unknown_keywords`,
+  `load_pending_keywords`, `clear_pending_keywords` now take the project; the recall hook and gather CLI
+  pass the current `cwd`. The meta-dream filler-classification pass writes per-project.
+- Legacy machine-global learned lists (`~/.claude/.bitranox-filler-words.json` etc., a 4.5.x artifact)
+  are NOT auto-migrated - the next per-project dream re-learns them. (On the maintainer machine they
+  were migrated into the originating project by hand.)
+
 ## [4.5.3] - 2026-06-28
 
 ### Added
