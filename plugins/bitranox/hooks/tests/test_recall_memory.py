@@ -86,6 +86,19 @@ def test_single_rare_keyword_still_surfaces(monkeypatch, capsys):
     assert "bindsnap-note" in out
 
 
+def test_corpus_common_keyword_is_dropped(monkeypatch, capsys):
+    # a word present in a LARGE fraction of the whole store carries no signal for THIS user
+    # (e.g. "memory" in a memory-centric store) - it must not drive recall, even though it is not
+    # generic-English filler. A note matching ONLY such words is dropped; a rare term still surfaces.
+    for i in range(8):
+        _mem("/p/o%d" % i, "n%d.md" % i, "widget gadget item number %d" % i)  # 'widget' in 9 notes
+    _mem("/p/rare", "frob.md", "widget gadget frobnitz special")              # also a RARE term
+    rc, out = run(monkeypatch, capsys, "widget frobnitz")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "frob" in ctx                                  # the note with the rare term surfaces
+    assert "n0" not in ctx and "n7" not in ctx            # widget-only notes dropped (corpus-common)
+
+
 def test_no_keywords_no_output(monkeypatch, capsys):
     _mem("/p/other", "make-test.md", "make test note")
     rc, out = run(monkeypatch, capsys, "do it")     # all stopwords/short

@@ -28,6 +28,7 @@ import self_improve_signals as sig  # noqa: E402
 MAX_HITS = 4
 MAX_BODY = 1800
 SPECIFIC_MAX = 6  # a keyword matching <= this many candidate notes is a specific (strong) signal
+COMMON_FRACTION = 0.25  # a keyword in > this fraction of the whole store is a corpus-stopword (no signal)
 
 
 def _state_file(cwd, sid):
@@ -53,27 +54,39 @@ def main():
         # Queue any not-yet-classified keyword for the dream-time filler classifier (deterministic,
         # no model here). Known filler is already dropped by extract_keywords; known-topical is skipped.
         sig.note_unknown_keywords(keywords)
-        hits = gs.scan(keywords, gs.discover_files(cwd))  # other projects + global; current excluded
+        files = gs.discover_files(cwd)                     # other projects + global; current excluded
+        hits = gs.scan(keywords, files)
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0
     if not hits:
         return 0
-    # Precision by keyword RARITY (specificity), not a flat count: a keyword matching FEW candidate
-    # notes is a strong/specific signal; one matching MANY (e.g. "test") is weak. Document frequency:
+    # Precision by keyword RARITY (specificity), not a flat count: a keyword matching FEW notes is a
+    # strong/specific signal; one matching MANY is weak. df[k] = notes containing k (only matched notes
+    # contain a keyword, so this IS the corpus document-frequency).
     df = {}
     for ks in hits.values():
         for k in set(ks):
             df[k] = df.get(k, 0) + 1
     ndocs = len(hits)
-    # inverse-frequency score: a note matching one RARE term outranks one matching only a common term.
+    # CORPUS-stopword: a keyword present in a large FRACTION of the whole store carries no signal FOR
+    # THIS user (e.g. "memory" in a memory-centric store - 83%). A static filler list cannot catch a
+    # word that is common only in your corpus; this can. Such keywords neither count toward specificity
+    # nor score - so a note that matched ONLY corpus-common words is dropped.
+    # corpus-common = a LARGE fraction AND absolutely not-rare (> SPECIFIC_MAX); the absolute floor
+    # stops a tiny store - where any word is a big fraction - from treating a rare term as common.
+    total = max(len(files), 1)
+    common = {k for k, c in df.items() if c > SPECIFIC_MAX and c > COMMON_FRACTION * total}
+
+    def _useful(p):
+        return set(hits[p]) - common
+    # inverse-frequency score over the USEFUL (non-corpus-common) matches only.
     def _score(p):
-        return sum(ndocs / df[k] for k in set(hits[p]))
-    # drop notes whose ONLY matches are very common: keep if >= 2 distinct keywords, or a single
-    # keyword that is SPECIFIC (matches few notes in ABSOLUTE terms - robust for tiny candidate sets).
-    # Strongest-first.
+        return sum(ndocs / df[k] for k in _useful(p))
+    # keep a note if its USEFUL matches are >= 2 distinct, or one that is SPECIFIC in absolute terms
+    # (df <= SPECIFIC_MAX - robust for tiny candidate sets). Corpus-common matches do not qualify it.
     def _specific(p):
-        ks = set(hits[p])
-        return len(ks) >= 2 or any(df[k] <= SPECIFIC_MAX for k in ks)
+        u = _useful(p)
+        return len(u) >= 2 or any(df[k] <= SPECIFIC_MAX for k in u)
     ranked = sorted((p for p in hits if _specific(p)), key=lambda p: (-_score(p), p))
     if not ranked:
         return 0

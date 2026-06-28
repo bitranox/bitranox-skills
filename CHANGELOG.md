@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.5.2] - 2026-06-28
+
+### Fixed
+- Memory-recall precision, round 2 - corpus-stopwording. A keyword can carry no signal yet not be
+  generic-English filler: a word common in YOUR store (e.g. "memory" in a memory-centric knowledge
+  base - 83% of notes) is a de-facto stopword the static filler list cannot catch. Recall now drops
+  such corpus-common keywords (present in > 25% of the store AND not absolutely rare, `df > 6`) from
+  both the qualify gate and the inverse-frequency score, so a note matching ONLY corpus-common words
+  is no longer surfaced. The absolute-rarity floor keeps a tiny store (where any word is a big
+  fraction) from misfiring. Ranking remains an additive IDF sum (one independent weight per useful
+  keyword - no combinatorial scoring).
+
 ## [4.5.1] - 2026-06-28
 
 ### Fixed
