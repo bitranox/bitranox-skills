@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.5.3] - 2026-06-28
+
+### Added
+- End-to-end integration test for the memory system (`hooks/tests/test_e2e_memory_system.py`). Unlike
+  the per-script unit tests, it drives every component through its REAL entry point - subprocess
+  stdin/stdout for the hooks (`recall-memory`, `session-start`, `self-improve-gate`) and CLI argv for
+  the helpers (`settings`, `dream_state`, `gather_scan`, `reconcile_memory_index`) - against an
+  isolated sandbox HOME, proving they are wired together (settings round-trip, model-review marker,
+  new-project nudge self-silencing, recall surfacing + session-dedup + filler/corpus-common
+  suppression + self-exclusion, filler-classification queue, cross-tree gather, dream cadence, index
+  backfill + dangling-reference `--check`, learning-signal detection). Runs in CI with the unit suite.
+
 ## [4.5.2] - 2026-06-28
 
 ### Fixed
