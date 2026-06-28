@@ -142,6 +142,13 @@ call them when relevant):
   (dream mode, privacy, promotion eagerness, nudges). A choice is recorded once and applied
   automatically.
 
+> **Back up before your first full dream - especially the global one.** Each dream backs itself up
+> first, but until you have watched it a few times and trust how it reshapes things, take your own
+> backup of your memory and `CLAUDE.md` files before running it. The global pass (`/dream-global`) can
+> lift rules into the layer that loads in *every* project, so verify it behaves the way you want on your
+> own data before letting it run unwatched. A simple copy works:
+> `zip -r ~/memory-backup.zip ~/.claude/projects/*/memory ~/.claude/rules` (add your `CLAUDE.md` files).
+
 For the ideas behind all of this, in plain language and concepts over mechanics, see
 [docs/self-learning-memory.md](docs/self-learning-memory.md).
 

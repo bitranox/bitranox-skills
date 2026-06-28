@@ -29,6 +29,12 @@ carrying a lesson learned in one over to where it helps in another and lifting t
 everything can reach it (`dream-global`). You take the nap frequently; you get the deep sleep now and
 then.
 
+One caution before you rely on either, and the deep one most of all: take your own backup of your
+memory and `CLAUDE.md` files before the first full dream, and keep doing it until you have watched it a
+few times and trust how it reshapes things. The dream always backs itself up first, so every run is
+reversible - but the global pass can lift rules into the layer that loads in every project, and it is
+worth seeing that behave on your own data before you let it run unwatched.
+
 ## 2. Put knowledge where it belongs, by reach
 
 Some things are true only for one project. Some are true for a whole family of projects. Some are
