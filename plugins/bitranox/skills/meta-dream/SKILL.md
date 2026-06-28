@@ -113,6 +113,26 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   home) just FLAG, do not move. Propose-first in `propose`, apply in `auto`. (CLAUDE.md policy lives in
   `bitranox:meta-self-improve`.)
 
+## Cross-tree passes (inbound gather, outbound cross-pollination)
+
+Native cascade only flows down one ancestor chain + global, so sibling trees are invisible to each
+other. A full dream bridges them - all via lift-or-copy, NEVER a cross-tree reference:
+
+- **Inbound gather.** Delegate to `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather
+  funnel): pull knowledge from OTHER trees relevant to this project, lifting broadly-useful hits to a
+  common ancestor or writing a self-contained local copy (marked, scrubbed). Single source of truth -
+  do not re-implement it here.
+- **Outbound cross-pollination.** When a learning is useful BEYOND this project, do not write into
+  other projects - **promote it to the lowest common ancestor** (often the global layer) and let native
+  cascade deliver it; a project in a different subtree receives it via ITS inbound gather. A direct
+  self-contained copy into one specific other project is the rare exception (marked so it is not
+  re-promoted; scrubbed; never a cross-tree ref).
+- **Global-dream scan (cross-project read).** Periodically scan ACROSS project memory stores for
+  recurring / broadly-useful content and factor it up to the lowest covering altitude. Here the
+  promotion gate may use the **cross-project corroboration** path (seen in >= 2 distinct projects),
+  whereas the per-project dream uses same-project dwell (>= 2 dreams). Honor the `privacy` knob: with
+  `walled`, gather/promote only within one domain.
+
 ## Boundaries
 
 - **Private memory + the global `~/.claude/rules/bitranox/` layer (machine-local):** back up, then

@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.3.0] - 2026-06-28
+
+### Added
+- Layered memory, Phase 2 (cross-tree): knowledge can now flow between sibling project trees, not just
+  down one ancestor chain.
+- New skill `meta-collect-knowledge` (`/collect-knowledge`): the inbound cross-tree gather via a
+  grep -> inspect -> gather funnel. Ships `gather_scan.py` (deterministic stage-1: derive keywords,
+  grep other projects' memory + the global rules layer, excluding the current project) so the model
+  step runs only on a hit. Brings knowledge in by lifting to a common ancestor or a self-contained
+  copy - never a cross-tree reference - with a secret/PII scrub on cross-boundary writes. Also runs as
+  meta-dream's inbound pass, and powers the new-project bootstrap nudge (now active).
+- New skill `meta-memory-settings` (`/memory-settings`): view/set/reset the informed-consent knobs
+  (dream mode, privacy, promotion eagerness, forgetting, nudges) in `~/.claude/.bitranox-memory.json`,
+  via a small `settings.py` CLI. A recorded choice is applied automatically, never re-asked.
+- `meta-dream` gains the cross-tree passes: inbound gather (delegated), outbound cross-pollination
+  (promote to the lowest common ancestor; native cascade delivers it; rare self-contained copy), and a
+  global-dream cross-project scan with a cross-project corroboration path. All honor the `privacy` knob.
+
 ## [4.2.1] - 2026-06-28
 
 ### Added
