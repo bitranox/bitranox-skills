@@ -27,7 +27,7 @@ call, and own the result.
   pointer), a corroboration gate before anything reaches the always-loaded global layer, and the
   decision that there is NO forgetting by age or use (because "used" cannot be honestly measured) -
   only dedup, obsolete-pruning, and manual removal. The "look in the notebook before reinventing"
-  recall reflex, the filler-word handlin that keeps it precise, and the rule that the slow
+  recall reflex, the filler-word handling that keeps it precise, and the rule that the slow
   classification happens off the per-prompt hot path were the human's calls too.
 - The operating policy is the human's: the propose / auto / off modes; the informed-consent knobs
   (a recommendation plus the consequence, recorded once, never re-asked); the "right tool for the
