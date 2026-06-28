@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.4.0] - 2026-06-28
+
+### Added
+- Per-prompt memory recall: a `UserPromptSubmit` hook (`recall-memory.py`) that, on each prompt, does a
+  fast keyword grep across your OTHER projects' memory and the global rules layer (reusing the existing
+  `gather_scan.py` engine; the current project is excluded, so what it draws in is de-duplicated against
+  your own memory) and injects the strongest matching notes' bodies as advisory context - once per
+  session. The "look in my notebook before reinventing" reflex on top of the always-present index.
+  Read-only (it surfaces; it does not copy/promote - that stays meta-collect-knowledge). Fail-open.
+
 ## [4.3.1] - 2026-06-28
 
 ### Fixed

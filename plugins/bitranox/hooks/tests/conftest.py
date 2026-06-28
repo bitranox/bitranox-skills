@@ -28,6 +28,7 @@ _HOOK_MODULES = {
     "git-footgun-guard": "git_footgun_guard",
     "session-start": "session_start",
     "reformat-md-tables": "reformat_md_tables",
+    "recall-memory": "recall_memory",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

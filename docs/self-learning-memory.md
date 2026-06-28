@@ -43,6 +43,13 @@ The flip side is discipline. Context is finite, so what is always present has to
 a big part of what dreaming is for - keeping the always-on layer short and high-signal, with the
 long details a step away rather than underfoot.
 
+There is one more reflex on top of the always-present layer: when a new request comes in, the system
+does a quick search of everything it has noted before - across all your projects - and, if it finds
+something similar it has done, lays that note open on the desk for this turn. Like glancing at your
+own notebook before reinventing. It is deterministic (a relevance match, not a guess), it only adds
+notes from elsewhere that you do not already have here, and it shows each one once - so it helps
+without crowding the desk.
+
 ## 4. Connect, do not copy
 
 When a general rule and a specific case overlap, the system does not store both in full. It keeps
