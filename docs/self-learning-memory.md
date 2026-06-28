@@ -66,6 +66,12 @@ heavy lifting happens off the clock. Second, the search itself gets sharper over
 learns which words are just conversational filler ("again", "previous", "normal") versus real topics,
 so the notebook check stops matching on noise and only surfaces things that actually relate.
 
+That last filter is learned per project, not globally, and the reason matters. A word can be noise in
+one project and a real subject in another - "compression" is chatter in a documentation project but a
+genuine topic in a codec one. So each project keeps its own learned filter, and only the
+universally-generic words - the kind that are noise everywhere - are shared across all of them. One
+project's judgment never silences a word you actually search on in another.
+
 ## 4. Connect, do not copy
 
 When a general rule and a specific case overlap, the system does not store both in full. It keeps
