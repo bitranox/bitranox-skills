@@ -145,6 +145,20 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 | `SSL_CERT_FILE`            | Custom CA certificate bundle      | `11-authentication.md`  |
 | `SSL_CLIENT_CERT`          | Client TLS certificate            | `11-authentication.md`  |
 
+### Gotcha: a stray `VIRTUAL_ENV` hijacks tools
+
+An ambient `VIRTUAL_ENV` (set by an IDE like PyCharm, or carried over from another project's shell)
+leaks into tools that otherwise manage their own environment - `uv`, `pip-audit`, `tox`, `nox`, and
+Makefile targets that fall back to `python3` on PATH. The symptom is a tool running against the WRONG
+interpreter: `ModuleNotFoundError` inside an isolated venv, or `pip-audit` failing on CVEs from an
+unrelated shared env. Fix by unsetting it and pinning the project venv for that one invocation:
+
+```bash
+env -u VIRTUAL_ENV uv run pytest
+# or pin explicitly:
+VIRTUAL_ENV="$PWD/.venv" PIPAPI_PYTHON_LOCATION="$PWD/.venv/bin/python" pip-audit
+```
+
 ---
 
 ## Key Configuration Snippets

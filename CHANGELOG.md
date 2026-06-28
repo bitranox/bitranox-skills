@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.8.1] - 2026-06-29
+
+### Changed
+- Folded two universal learnings from the global-dream scan into their right skills:
+  - **`compuse-bash`**: exit 0 is necessary but NOT sufficient - ALSO verify the real artifact/output
+    (some tools exit 0 while writing nothing or silently ignoring options, e.g. `vips out.tif[opts]`).
+  - **`coding-python-uv`**: gotcha - a stray `VIRTUAL_ENV` (IDE / other project) hijacks `uv` /
+    `pip-audit` / `tox` / Makefile targets; unset it (`env -u VIRTUAL_ENV`) or pin the project venv.
+- The remaining cross-cutting working rules from the scan (no secrets in tracked files, read-before-Edit,
+  docs-describe-current-state, inline-comments-explain-WHY) were promoted to the machine-local global
+  rules layer (`~/.claude/rules/bitranox/`), which is not shipped in this repo.
+
 ## [4.8.0] - 2026-06-29
 
 ### Added
