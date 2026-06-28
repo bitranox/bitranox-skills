@@ -27,20 +27,14 @@ def test_set_string_knob(capsys):
     assert sig.load_config()["privacy"] == "walled"
 
 
-def test_set_bool_and_int_coercion(capsys):
+def test_set_bool_coercion(capsys):
     ST.main(["set", "nudges", "off"])
-    ST.main(["set", "forget_idle_dreams", "5"])
-    cfg = sig.load_config()
-    assert cfg["nudges"] is False and cfg["forget_idle_dreams"] == 5
+    assert sig.load_config()["nudges"] is False
 
 
 def test_set_rejects_unknown_key(capsys):
     assert ST.main(["set", "bogus", "x"]) == 2
     assert "unknown key" in capsys.readouterr().err
-
-
-def test_set_rejects_bad_int(capsys):
-    assert ST.main(["set", "forget_idle_dreams", "notanint"]) == 2
 
 
 def test_reset_restores_defaults(capsys):

@@ -98,15 +98,14 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   project, move it back down - but NEVER if lower entries still point UP at it
   (`reconcile_memory_index.has_inbound_refs`), and apply the SAME dwell/hysteresis as promotion
   (`note_promotion_candidate`) so a boundary entry cannot promote/demote on alternate dreams.
-- **Forgetting / decay (OFF by default; USAGE-based only - never age, never size).** Do NOT archive by
-  idle-dream-count (that is age) or by how long/detailed a note is. Detail belongs in the pulled body
-  (representation), which is near-free and never a delete reason. A note is a forget candidate ONLY if
-  it has NO usage signal AND no inbound `[[refs]]` - and a complete usage meter does not exist yet
-  (recall hits are cross-project and exclude the current project; an in-project memory-Read signal is
-  not built). So the `forgetting` knob defaults to `off` and a dream does not auto-archive. When a real
-  usage meter exists, forgetting may be enabled (config), conservative and propose-first, archiving via
-  `reconcile_memory_index.archive_entry`; until then, do not forget. (See the
-  `forgetting-is-usage-based-only` rule.)
+- **Removal = obsolete-pruning + manual (NO usage/age/size decay).** There is no automatic forgetting:
+  usage cannot be measured (a note sits in context; reasoning is silent, so absence of a signal does NOT
+  mean unused), and age and detail/size are not valid forget metrics. Detail belongs in the pulled body
+  (representation), near-free, never a delete reason. The ONLY removals, all content-based + propose-first
+  (the backup makes them safe): (1) dedup/merge duplicates; (2) **obsolete/superseded pruning** - read a
+  note and archive it ONLY if its CONTENT is dead (references a deleted file/flag, a resolved/closed
+  issue, superseded by a newer entry, leaked task-state), via `reconcile_memory_index.archive_entry`;
+  (3) a manual "forget this". Never archive a still-valid but quiet note. (See `forgetting-is-usage-based-only`.)
 - **Contradiction / override.** A hand-written `CLAUDE.md` is AUTHORITATIVE: if memory contradicts it,
   correct OUR memory, do not touch the rule. Memory-vs-memory: a project rule that CONTRADICTS a higher
   rule becomes a self-contained OVERRIDE (more-specific / lower wins at load), NOT a `[[reference]]`;

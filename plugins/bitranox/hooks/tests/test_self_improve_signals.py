@@ -148,11 +148,11 @@ def test_config_file_authoritative_over_sentinel(home):
 
 
 def test_save_config_roundtrip_and_ignores_unknown(home):
-    saved = S.save_config({"privacy": "walled", "forget_idle_dreams": 5, "bogus": 1})
-    assert saved["privacy"] == "walled" and saved["forget_idle_dreams"] == 5
+    saved = S.save_config({"privacy": "walled", "promotion": "eager", "bogus": 1})
+    assert saved["privacy"] == "walled" and saved["promotion"] == "eager"
     assert "bogus" not in saved
     reloaded = S.load_config()
-    assert reloaded["privacy"] == "walled" and reloaded["forget_idle_dreams"] == 5
+    assert reloaded["privacy"] == "walled" and reloaded["promotion"] == "eager"
     assert "bogus" not in reloaded
 
 
@@ -291,25 +291,9 @@ def test_store_changed(home):
     assert S.store_changed(d, base) is True
 
 
-# --------------------------------------------------------------------------
-# forgetting / decay (idle counter)
-# --------------------------------------------------------------------------
-
-
-def test_bump_and_reset_idle(home):
-    assert S.bump_idle("/p/x", "k") == 1
-    assert S.bump_idle("/p/x", "k") == 2
-    S.reset_idle("/p/x", "k")
-    assert S.bump_idle("/p/x", "k") == 1                      # reset -> counted from zero again
-
-
-def test_should_archive_modes(home):
-    assert S.should_archive(5, mode="off") is False          # off: never forget
-    assert S.should_archive(2, mode="conservative", n=3) is False
-    assert S.should_archive(3, mode="conservative", n=3) is True
-    assert S.should_archive(1, mode="aggressive") is True     # aggressive: forget quickly
-
-
-def test_should_archive_reads_config(home):
-    S.save_config({"forgetting": "off"})
-    assert S.should_archive(99) is False                      # config off overrides default
+# No usage/age/size forgetting exists (usage is unmeasurable) - removal is dedup + obsolete-prune +
+# manual only, done by the dream. So there are no bump_idle/should_archive helpers to test.
+def test_no_age_based_forgetting_helpers(home):
+    assert not hasattr(S, "should_archive")
+    assert not hasattr(S, "bump_idle")
+    assert "forgetting" not in S.DEFAULT_CONFIG and "forget_idle_dreams" not in S.DEFAULT_CONFIG

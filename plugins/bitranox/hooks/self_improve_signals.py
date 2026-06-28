@@ -112,8 +112,6 @@ DEFAULT_CONFIG = {
     "dream_mode": "propose",       # off | auto | propose
     "privacy": "open",             # open (secret/PII scrub only) | walled (by privacy domain)
     "promotion": "corroborated",   # corroborated (inferred needs dwell) | eager
-    "forgetting": "off",           # off (default) | conservative | aggressive - see should_archive note
-    "forget_idle_dreams": 3,       # idle dreams before a non-must-always body is archived
     "skill_placement": "lowest",   # lowest scope that fits; ask before the public marketplace
     "nudges": True,                # session-start nudges on/off
 }
@@ -321,54 +319,10 @@ def store_changed(memory_dir_path, since_mtime):
     return _newest_mtime(Path(memory_dir_path)) > float(since_mtime)
 
 
-def _idle_file(proj):
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".idle.json")
-
-
-def bump_idle(proj, key):
-    """Increment and return an entry's idle-dream count (how many consecutive dreams saw it unused).
-    Out-of-store, so decay bookkeeping never bumps the dreamed store's mtime (convergence holds)."""
-    f = _idle_file(proj)
-    counts = _read_counts(f)
-    counts[key] = int(counts.get(key, 0)) + 1
-    try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
-    except OSError:
-        pass
-    return counts[key]
-
-
-def reset_idle(proj, key):
-    """Clear an entry's idle count - call when an observable proxy shows it was used (a skill
-    invocation, an explicit reference) so a used entry is never archived."""
-    f = _idle_file(proj)
-    counts = _read_counts(f)
-    if key in counts:
-        del counts[key]
-        try:
-            f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
-        except OSError:
-            pass
-
-
-def should_archive(idle_count, mode=None, n=None):
-    """Whether a NON-must-always entry idle this many dreams should be archived. Honors the
-    `forgetting` knob: off -> never (the DEFAULT); conservative -> idle >= N; aggressive -> idle >= 1.
-
-    NOTE (2026-06-28): `idle_count` is dreams-since-reset - an AGE/dream-count proxy, NOT a usage
-    signal. Per the user's rule, forgetting must be USAGE-based only, never by age OR by detail/size
-    (see the `forgetting-is-usage-based-only` memory). So forgetting is OFF by default and dreams do
-    NOT drive archiving by idle-count; this helper stays only until a real usage meter (recall hits +
-    a memory-Read hook + inbound refs) replaces idle_count as the input. Do not enable age-based use."""
-    cfg = load_config()
-    mode = cfg.get("forgetting", "conservative") if mode is None else mode
-    if mode == "off":
-        return False
-    n = cfg.get("forget_idle_dreams", 3) if n is None else n
-    if mode == "aggressive":
-        return int(idle_count) >= 1
-    return int(idle_count) >= int(n)
+# NOTE: there is deliberately NO usage/age/size "forgetting" mechanism. Usage cannot be measured (the
+# note sits in context; the model reasons over it silently), and age/size are not valid forget metrics
+# (see the `forgetting-is-usage-based-only` memory). Removal happens only via dedup, obsolete/superseded
+# pruning (model-judged, propose-first), or a manual request - the dream does that; no helper here.
 
 
 def knowledge_store_empty():

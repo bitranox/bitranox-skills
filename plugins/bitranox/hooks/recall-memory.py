@@ -27,6 +27,7 @@ import self_improve_signals as sig  # noqa: E402
 
 MAX_HITS = 4
 MAX_BODY = 1800
+SPECIFIC_MAX = 6  # a keyword matching <= this many candidate notes is a specific (strong) signal
 
 
 def _state_file(cwd, sid):
@@ -52,15 +53,27 @@ def main():
         hits = gs.scan(keywords, gs.discover_files(cwd))  # other projects + global; current excluded
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0
-    # Precision: require a real match, not one common token. With >=2 keywords, demand >=2 distinct
-    # hits; with a single keyword, that one must hit. Cuts broad-token noise (e.g. just "test").
-    need = 2 if len(keywords) >= 2 else 1
-    hits = {p: ks for p, ks in hits.items() if len(ks) >= need}
     if not hits:
         return 0
-
-    # strongest first (most keywords matched), stable by path
-    ranked = sorted(hits, key=lambda p: (-len(hits[p]), p))
+    # Precision by keyword RARITY (specificity), not a flat count: a keyword matching FEW candidate
+    # notes is a strong/specific signal; one matching MANY (e.g. "test") is weak. Document frequency:
+    df = {}
+    for ks in hits.values():
+        for k in set(ks):
+            df[k] = df.get(k, 0) + 1
+    ndocs = len(hits)
+    # inverse-frequency score: a note matching one RARE term outranks one matching only a common term.
+    def _score(p):
+        return sum(ndocs / df[k] for k in set(hits[p]))
+    # drop notes whose ONLY matches are very common: keep if >= 2 distinct keywords, or a single
+    # keyword that is SPECIFIC (matches few notes in ABSOLUTE terms - robust for tiny candidate sets).
+    # Strongest-first.
+    def _specific(p):
+        ks = set(hits[p])
+        return len(ks) >= 2 or any(df[k] <= SPECIFIC_MAX for k in ks)
+    ranked = sorted((p for p in hits if _specific(p)), key=lambda p: (-_score(p), p))
+    if not ranked:
+        return 0
 
     state = _state_file(cwd, sid)
     try:

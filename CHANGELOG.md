@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.4.2] - 2026-06-28
+
+### Changed
+- Forgetting is gone as an automatic mechanism, because usage cannot be measured (a note sits in
+  context and the model reasons over it silently, so absence of a signal does not mean unused) and age
+  and detail/size are not valid forget metrics. Removed the dead idle helpers
+  (`bump_idle`/`reset_idle`/`should_archive` + the idle file) and the `forgetting` / `forget_idle_dreams`
+  config knobs. Memory removal is now ONLY: dedup/merge, obsolete/superseded pruning (model-judged on
+  content - a deleted file/flag, a resolved issue, a superseded entry - propose-first), or a manual
+  request. `archive_entry` and `has_inbound_refs` are kept (mechanical move + demotion safety).
+- Recall hook precision: candidates are ranked by keyword RARITY (inverse document frequency) instead
+  of a flat >= 2-keyword filter. A note matching one rare/specific term outranks one matching only a
+  common token like "test"; common-only matches are dropped; a lone specific keyword still surfaces.
+
 ## [4.4.1] - 2026-06-28
 
 ### Fixed
