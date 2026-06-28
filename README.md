@@ -1,8 +1,13 @@
 # bitranox-skills
 
-A Claude Code plugin marketplace that distributes the **bitranox** skill collection:
-software-engineering workflow skills (planning, debugging, code review, clean
-architecture, language and tool references, humanizing) plus a self-improvement loop.
+A Claude Code plugin marketplace: the **bitranox** skill collection - a set of
+software-engineering skills refined over real day-to-day work (planning, debugging, code
+review, clean architecture, language and tool references, humanizing) - finally gathered into
+one tidy, installable marketplace. On top of the skills it adds two things that make the
+collection compound rather than just sit there: **automatic self-learning** (a layered memory
+that turns each session's lessons into durable, reusable knowledge) and **user contribution**
+(when a lesson proves broadly useful, the system can package it as a skill and propose it back
+upstream, so the shared marketplace grows).
 
 > **If you install just one thing, make it `self-improve`.** It turns each session's corrections,
 > gotchas, and discoveries into durable, layered memory - so the same lesson is not re-learned - and
@@ -123,17 +128,27 @@ call them when relevant):
   correction, a "remember", a self-admitted miss) and nudges it to record the lesson at the right
   altitude.
 - **`bitranox:meta-dream`** (`/dream`, "consolidate memory") - periodic consolidation, like sleep. It
-  backs up first, then dedups, generalizes, promotes by scope, re-wires, prunes, and forgets the
-  unused - so memory stays small and sharp. Has an off / auto / propose mode.
+  backs up first, then dedups, generalizes, promotes by scope, re-wires, and prunes obsolete or
+  duplicate notes - so memory stays small and sharp. (There is no forgetting by age or use - only
+  content-based removal.) Has an off / auto / propose mode.
 - **`bitranox:meta-collect-knowledge`** (`/collect-knowledge`) - pulls knowledge from your *other*
   projects that is relevant to the current one (native cascade alone cannot reach sibling trees), and
   seeds a fresh project from what you already know.
 - **`bitranox:meta-memory-settings`** (`/memory-settings`) - view, change, or reset the behaviour knobs
-  (dream mode, privacy, promotion eagerness, forgetting, nudges). A choice is recorded once and applied
+  (dream mode, privacy, promotion eagerness, nudges). A choice is recorded once and applied
   automatically.
 
 For the ideas behind all of this, in plain language and concepts over mechanics, see
 [docs/self-learning-memory.md](docs/self-learning-memory.md).
+
+## AI transparency
+
+This project is built by a human, with an AI assistant used as a tool under that direction. Two short
+pages spell out how:
+
+- [ai-transparency.md](ai-transparency.md) - exactly where AI was and was not used in *this* repo,
+  what is tested, and how to check the work yourself.
+- [ai-stance.md](ai-stance.md) - the general view on AI-assisted development behind that choice.
 
 ## Layout
 
