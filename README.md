@@ -108,6 +108,14 @@ The full, always-current catalog - grouped by domain - is the **Skills Span Ever
 sync with the shipped skill directories, so it never drifts. Browse
 [`plugins/bitranox/skills/`](plugins/bitranox/skills/) for the directories.
 
+## How the self-learning memory works
+
+The self-improve hook and the `meta-dream`/`meta-self-improve` skills are part of a memory that is
+meant to get better the more you use it: it captures lessons as you work, consolidates them in the
+background like sleep, and keeps the useful ones within reach across your projects. For the ideas
+behind it - in plain language, concepts over mechanics - see
+[docs/self-learning-memory.md](docs/self-learning-memory.md).
+
 ## Layout
 
 ```text

@@ -20,3 +20,6 @@ plugins/bitranox/skills/python-libraries-to-use/
 
 # Local, per-developer settings (Claude Code etc.) - never commit
 *.local.json
+
+# Internal planning docs - design plans, not shipped
+PLANS/
