@@ -112,7 +112,7 @@ DEFAULT_CONFIG = {
     "dream_mode": "propose",       # off | auto | propose
     "privacy": "open",             # open (secret/PII scrub only) | walled (by privacy domain)
     "promotion": "corroborated",   # corroborated (inferred needs dwell) | eager
-    "forgetting": "conservative",  # conservative | aggressive | off
+    "forgetting": "off",           # off (default) | conservative | aggressive - see should_archive note
     "forget_idle_dreams": 3,       # idle dreams before a non-must-always body is archived
     "skill_placement": "lowest",   # lowest scope that fits; ask before the public marketplace
     "nudges": True,                # session-start nudges on/off
@@ -171,14 +171,27 @@ def global_rules_dir():
 
 def altitude_chain(proj):
     """Ordered always-present homes for `proj`, narrowest -> broadest: the project's Auto-memory
-    dir, then each ancestor directory (project root up toward `/`, each a CLAUDE.md altitude
-    reachable by native cascade), then the global rules layer. Reference-integrity uses this: a
-    `[[ref]]` must resolve to a target at the SAME or a LATER (higher) position - upward only."""
+    dir, then each ancestor directory THAT ACTUALLY HOLDS A `CLAUDE.md` (a real cascade altitude),
+    then the global rules layer (always LAST). Only CLAUDE.md-bearing ancestors are altitudes - we
+    never return every dir up to `/`, so a consumer never has to scan unrelated trees. Reference-
+    integrity uses this: a `[[ref]]` must resolve to a target at the SAME or a LATER (higher)
+    position - upward only; the last position (global) is the recursive layer."""
     chain = [memory_dir(proj)]
     try:
         here = Path(proj)
-        chain.append(here)
-        chain.extend(here.parents)
+        ladder = [here, *here.parents]            # project dir up toward /
+        highest = None                            # index of the HIGHEST ancestor that HAS a CLAUDE.md
+        for i, d in enumerate(ladder):
+            try:
+                if (d / "CLAUDE.md").is_file():
+                    highest = i
+            except OSError:
+                continue
+        if highest is not None:
+            # contiguous tree from the project up to the highest existing CLAUDE.md, INCLUDING gap
+            # levels in between (a missing CLAUDE.md is a gap to fill, not a stop - see the dream's
+            # descriptor step). We never go above the highest existing CLAUDE.md (no walk to / beyond).
+            chain.extend(ladder[:highest + 1])
     except (TypeError, ValueError):
         pass
     chain.append(global_rules_dir())
@@ -340,9 +353,14 @@ def reset_idle(proj, key):
 
 
 def should_archive(idle_count, mode=None, n=None):
-    """Whether a NON-must-always entry idle this many dreams should be archived out of the
-    always-present window. Honors the `forgetting` knob: off -> never; conservative -> idle >= N
-    (config `forget_idle_dreams`, default 3); aggressive -> idle >= 1. Bias toward keeping."""
+    """Whether a NON-must-always entry idle this many dreams should be archived. Honors the
+    `forgetting` knob: off -> never (the DEFAULT); conservative -> idle >= N; aggressive -> idle >= 1.
+
+    NOTE (2026-06-28): `idle_count` is dreams-since-reset - an AGE/dream-count proxy, NOT a usage
+    signal. Per the user's rule, forgetting must be USAGE-based only, never by age OR by detail/size
+    (see the `forgetting-is-usage-based-only` memory). So forgetting is OFF by default and dreams do
+    NOT drive archiving by idle-count; this helper stays only until a real usage meter (recall hits +
+    a memory-Read hook + inbound refs) replaces idle_count as the input. Do not enable age-based use."""
     cfg = load_config()
     mode = cfg.get("forgetting", "conservative") if mode is None else mode
     if mode == "off":

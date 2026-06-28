@@ -128,32 +128,55 @@ def _ref_slug(token):
     return token.split(":")[-1].strip().lower()
 
 
-def _entry_md_files(d):
-    """All entry `*.md` under an altitude dir (recursive, for the whole-loaded global tier),
-    excluding the MEMORY.md index itself."""
+_NON_ENTRY = {MEMORY_INDEX.lower(), "claude.md", "claude.local.md"}
+
+
+def _entry_md_files(d, recursive=False):
+    """Slugged memory/rule entry `*.md` directly in an altitude dir. Excludes the MEMORY.md index AND
+    `CLAUDE.md`/`CLAUDE.local.md` (hand-written prose/code, not memory entries - scanning them for
+    `[[ ]]` matches things like `Callable[[...]]` in code, a false positive). `recursive=True` ONLY
+    for the whole-loaded global tier (it may nest); everything else NON-recursively so an ancestor
+    altitude never triggers a walk of the whole project tree under it."""
     try:
-        return [p for p in d.rglob("*.md") if p.name != MEMORY_INDEX]
+        it = d.rglob("*.md") if recursive else d.glob("*.md")
+        return [p for p in it if p.name.lower() not in _NON_ENTRY]
     except OSError:
         return []
 
 
+def _altitude_entries(pos, last, d):
+    """Slugged ref entries at an altitude. ONLY the project memory dir (pos 0, flat) and the global
+    layer (last, recursive) hold slugged entries. MIDDLE positions are ancestor CLAUDE.md altitudes -
+    real repo/filesystem dirs whose other `*.md` (CHANGELOG/README/docs) are NOT memory entries - so
+    they contribute nothing to reference scanning (their CLAUDE.md is a descriptor, not a ref target)."""
+    if pos == 0:
+        return _entry_md_files(d, recursive=False)
+    if pos == last:
+        return _entry_md_files(d, recursive=True)
+    return []
+
+
 def check_references(dirs):
-    """Verify `[[ref]]` integrity across an ordered altitude chain (narrow -> broad).
+    """Verify `[[ref]]` integrity across an ordered altitude chain (narrow -> broad): the first dir is
+    the project memory, the last is the global layer (recursive), the middle ones are ancestor CLAUDE.md
+    altitudes (scanned for nothing). See `_altitude_entries`.
 
     Returns {checked, orphans, downward}: `orphans` are refs whose target exists nowhere in the
     chain; `downward` are refs whose target lives only at a NARROWER altitude than the source.
     Both are (source_slug, ref_slug) pairs. A clean store yields empty lists.
     """
     dirs = [Path(d) for d in dirs]
+    last = len(dirs) - 1
     # target slug -> set of altitude positions where an entry by that slug exists
     targets = {}
     for pos, d in enumerate(dirs):
-        for p in _entry_md_files(d):
+        for p in _altitude_entries(pos, last, d):
             targets.setdefault(p.stem.lower(), set()).add(pos)
 
     orphans, downward, checked = [], [], 0
     for pos, d in enumerate(dirs):
-        for p in _entry_md_files(d) + [d / MEMORY_INDEX]:
+        sources = _altitude_entries(pos, last, d) + ([d / MEMORY_INDEX] if pos == 0 else [])
+        for p in sources:
             try:
                 text = p.read_text(encoding="utf-8")
             except OSError:
@@ -175,8 +198,10 @@ def has_inbound_refs(dirs, slug):
     """True if any OTHER entry across the altitude chain references `[[slug]]` (or `[[x:slug]]`).
     Demotion safety: never demote a higher entry that lower entries still point UP at."""
     slug = slug.lower()
-    for d in (Path(x) for x in dirs):
-        for p in _entry_md_files(d) + [d / MEMORY_INDEX]:
+    dirs = [Path(x) for x in dirs]
+    last = len(dirs) - 1
+    for pos, d in enumerate(dirs):
+        for p in _altitude_entries(pos, last, d) + ([d / MEMORY_INDEX] if pos == 0 else []):
             if p.stem.lower() == slug:
                 continue
             try:

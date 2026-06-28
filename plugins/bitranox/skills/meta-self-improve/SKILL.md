@@ -150,6 +150,14 @@ project-bound they fit nowhere else; then lift the reusable principle up and kee
 local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` block in each level's
 `CLAUDE.md`) say what each altitude is about; when the altitude is genuinely unclear, **ask the user**.
 
+**Fill descriptor gaps up to the highest existing `CLAUDE.md`.** The altitude tree should be contiguous:
+find the HIGHEST existing `CLAUDE.md` in the ancestor chain (search up to `/`, but never create above
+it), then at EVERY level between the project and that highest one that LACKS a `CLAUDE.md`, CREATE one
+holding just the marked scope-descriptor block ("what this level is about") so the classifier has a
+descriptor at every altitude - do not skip a gap. `altitude_chain(proj)` returns exactly this contiguous
+set (gap levels included). Creating/editing a version-controlled `CLAUDE.md` is propose-first (auto in
+`auto` mode); a brand-new descriptor-only `CLAUDE.md` outside version control may be created directly.
+
 **Normalization (reference + delta), not duplication.** When a general rule and a specific case
 overlap, store the general ONCE at its altitude and have the lower entry `references [[general]]` plus
 only its delta - they compose at load (the general is always-present above), never duplicated.

@@ -98,11 +98,15 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   project, move it back down - but NEVER if lower entries still point UP at it
   (`reconcile_memory_index.has_inbound_refs`), and apply the SAME dwell/hysteresis as promotion
   (`note_promotion_candidate`) so a boundary entry cannot promote/demote on alternate dreams.
-- **Forgetting / decay.** For each NON-must-always entry not observed used this dream (no skill
-  invocation, no explicit reference - the only honest "used" proxies; there is no read signal), call
-  `bump_idle`; `reset_idle` when it IS used. When `should_archive(idle)` (honoring the `forgetting`
-  knob: off / conservative / aggressive), run `reconcile_memory_index.archive_entry` to move the body
-  to the cold `.archive/` and drop its index line. Never archive a must-always constraint; bias to keep.
+- **Forgetting / decay (OFF by default; USAGE-based only - never age, never size).** Do NOT archive by
+  idle-dream-count (that is age) or by how long/detailed a note is. Detail belongs in the pulled body
+  (representation), which is near-free and never a delete reason. A note is a forget candidate ONLY if
+  it has NO usage signal AND no inbound `[[refs]]` - and a complete usage meter does not exist yet
+  (recall hits are cross-project and exclude the current project; an in-project memory-Read signal is
+  not built). So the `forgetting` knob defaults to `off` and a dream does not auto-archive. When a real
+  usage meter exists, forgetting may be enabled (config), conservative and propose-first, archiving via
+  `reconcile_memory_index.archive_entry`; until then, do not forget. (See the
+  `forgetting-is-usage-based-only` rule.)
 - **Contradiction / override.** A hand-written `CLAUDE.md` is AUTHORITATIVE: if memory contradicts it,
   correct OUR memory, do not touch the rule. Memory-vs-memory: a project rule that CONTRADICTS a higher
   rule becomes a self-contained OVERRIDE (more-specific / lower wins at load), NOT a `[[reference]]`;

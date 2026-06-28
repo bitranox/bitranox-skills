@@ -52,6 +52,10 @@ def main():
         hits = gs.scan(keywords, gs.discover_files(cwd))  # other projects + global; current excluded
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0
+    # Precision: require a real match, not one common token. With >=2 keywords, demand >=2 distinct
+    # hits; with a single keyword, that one must hit. Cuts broad-token noise (e.g. just "test").
+    need = 2 if len(keywords) >= 2 else 1
+    hits = {p: ks for p, ks in hits.items() if len(ks) >= need}
     if not hits:
         return 0
 

@@ -69,6 +69,17 @@ def test_no_match_no_output(monkeypatch, capsys):
     assert rc == 0 and out == ""
 
 
+def test_precision_drops_single_keyword_weak_match(monkeypatch, capsys):
+    # note hits only ONE of two prompt keywords -> below the >=2 bar -> not surfaced
+    _mem("/p/other", "weak.md", "this note mentions deploy but nothing else relevant")
+    rc, out = run(monkeypatch, capsys, "deploy database migration")  # 3 keywords; only 'deploy' hits
+    assert rc == 0 and out == ""
+    # but a note hitting two keywords IS surfaced
+    _mem("/p/other2", "strong.md", "deploy the database carefully")
+    rc2, out2 = run(monkeypatch, capsys, "deploy database migration", sid="strong")
+    assert "strong" in out2
+
+
 def test_no_keywords_no_output(monkeypatch, capsys):
     _mem("/p/other", "make-test.md", "make test note")
     rc, out = run(monkeypatch, capsys, "do it")     # all stopwords/short

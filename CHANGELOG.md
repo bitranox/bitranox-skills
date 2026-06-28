@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.4.1] - 2026-06-28
+
+### Fixed
+- Reference-integrity `--check` no longer hangs or false-positives. `altitude_chain` previously walked
+  to `/` and the check `rglob`'d every ancestor (scanning the whole filesystem for `*.md`). Now: the
+  chain is the contiguous set from the project up to the HIGHEST existing `CLAUDE.md` (gap levels
+  included, never above it); only the project memory (flat) and the global layer (recursive) are scanned
+  for slugged entries; ancestor `CLAUDE.md` altitudes and non-entry files (`CLAUDE.md`, `CHANGELOG.md`,
+  `README.md`, ...) are excluded - so code like `Callable[[...]]` or a CHANGELOG mention of `[[general]]`
+  is no longer mis-read as a dangling reference.
+- Recall precision: the per-prompt recall hook now requires >= 2 keyword hits (or the single keyword
+  when only one is significant), so a common token like "test" no longer surfaces dozens of weak matches.
+
+### Changed
+- Forgetting is OFF by default and must be USAGE-based, never age/dream-count, never detail-level/size.
+  The accidental age-based archive pass is removed from the dream; detail still goes to pulled bodies
+  (representation, not deletion). A real usage meter (recall hits + an in-project memory-read signal +
+  inbound references) is required before any usage-based, propose-first forgetting is enabled.
+- The dream's descriptor step fills `CLAUDE.md` scope-descriptor GAPS up to the highest existing
+  `CLAUDE.md` (create the missing levels, propose-first) so the classifier has a descriptor at every
+  altitude, rather than skipping gaps.
+
 ## [4.4.0] - 2026-06-28
 
 ### Added

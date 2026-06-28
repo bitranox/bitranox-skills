@@ -172,14 +172,37 @@ def test_global_rules_dir(home):
     assert ".claude" in str(g)
 
 
-def test_altitude_chain_order_narrow_to_broad(home):
-    chain = S.altitude_chain("/a/b/c")
-    assert chain[0] == S.memory_dir("/a/b/c")          # narrowest: project memory
-    assert chain[-1] == S.global_rules_dir()           # broadest: global rules
-    from pathlib import Path
-    assert Path("/a/b/c") in chain and Path("/a/b") in chain   # ancestor CLAUDE.md altitudes
-    # project memory comes before its ancestors, ancestors before global (upward order)
-    assert chain.index(S.memory_dir("/a/b/c")) < chain.index(Path("/a/b/c")) < chain.index(S.global_rules_dir())
+def test_altitude_chain_only_claude_md_ancestors(home, tmp_path):
+    proj = tmp_path / "repo"
+    sub = proj / "pkg"
+    sub.mkdir(parents=True)
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")     # ancestor WITH CLAUDE.md -> altitude
+    (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
+    chain = S.altitude_chain(str(sub))
+    assert chain[0] == S.memory_dir(str(sub))          # narrowest: project memory
+    assert chain[-1] == S.global_rules_dir()           # broadest: global rules (always last)
+    assert sub in chain and proj in chain              # CLAUDE.md-bearing ancestors included
+    assert tmp_path not in chain                        # an ancestor WITHOUT CLAUDE.md is excluded
+    assert chain.index(sub) < chain.index(proj) < chain.index(S.global_rules_dir())  # upward order
+
+
+def test_altitude_chain_no_claude_md_is_just_memory_and_global(home):
+    chain = S.altitude_chain("/no/such/path")          # nonexistent -> no CLAUDE.md ancestors
+    assert chain == [S.memory_dir("/no/such/path"), S.global_rules_dir()]
+
+
+def test_altitude_chain_fills_gaps_up_to_highest(home, tmp_path):
+    top = tmp_path / "top"            # highest existing CLAUDE.md
+    mid = top / "mid"                 # GAP: no CLAUDE.md here
+    proj = mid / "proj"              # project, has CLAUDE.md
+    proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
+    chain = S.altitude_chain(str(proj))
+    assert proj in chain and top in chain
+    assert mid in chain                # the GAP level is INCLUDED (to be filled), not skipped
+    assert tmp_path not in chain       # above the highest existing CLAUDE.md -> excluded
+    assert chain.index(proj) < chain.index(mid) < chain.index(top) < chain.index(S.global_rules_dir())
 
 
 # --------------------------------------------------------------------------
