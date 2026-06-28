@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.8.0] - 2026-06-29
+
+### Added
+- New skill **`coding-rust`** - Rust idioms / review checks distilled from real review learnings
+  (surfaced by a global-dream scan across all project memory stores): no `std::io::Error` for non-IO
+  conditions (add a `thiserror` variant), preserve the error chain, constant-time secret comparison,
+  `--password-file` over inline `--password`, minimal purpose-specific crates + feature-gating heavy
+  optional deps, and making invalid states unrepresentable. Added to the skills catalog.
+
+### Notes
+- This release is the productive output of testing `meta-dream-global`: the cross-project scan
+  (12 sonnet readers over 32 stores, privacy scrub excluding all domain-private content) found that
+  almost all universal knowledge is already encoded in skills/hooks, so it proposed no new global-rule
+  bloat - except the user-stated "no Claude/AI commit attribution" rule, promoted to the machine-local
+  global layer (`~/.claude/rules/bitranox/`, not shipped in this repo), and the Rust idioms above, which
+  belong in a skill rather than the always-loaded global layer.
+
 ## [4.7.0] - 2026-06-28
 
 ### Changed
