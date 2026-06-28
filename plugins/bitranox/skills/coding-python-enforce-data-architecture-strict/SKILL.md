@@ -150,7 +150,9 @@ INITIALIZATION:
   STEP A - PARALLEL ANALYSIS (use subagents):
      - Read `.data_arch_violations.json`
      - Increment "pass" counter
-     - Launch subagents (Task tool, subagent_type="Explore") in PARALLEL for each file
+     - Launch subagents (Task tool, subagent_type="Explore", model="sonnet") in PARALLEL for each file
+       (pin the tier; per-file scanning is bounded sonnet work - see "Concrete tiers" in
+       bitranox:process-agents-subagent-driven-development)
      - Each subagent prompt MUST include:
        * The file path to analyze
        * The violation patterns to search for (from Architecture Rules above)
@@ -164,7 +166,8 @@ INITIALIZATION:
 
   STEP B - PARALLEL REFACTORING (use subagents):
      - Read `.data_arch_violations.json`
-     - For files with violations, launch subagents (Task tool, subagent_type="general-purpose") in PARALLEL
+     - For files with violations, launch subagents (Task tool, subagent_type="general-purpose", model="sonnet") in PARALLEL
+       (per-file refactor is bounded sonnet work; pin the tier)
      - Each subagent prompt MUST include:
        * The full Architecture Rules section (copy from this document)
        * The specific violations for that file (from state file)

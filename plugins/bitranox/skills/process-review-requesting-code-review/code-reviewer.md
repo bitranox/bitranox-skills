@@ -7,6 +7,9 @@ Use this template when dispatching a code reviewer subagent.
 ```
 Subagent (general-purpose):
   description: "Review code changes"
+  model: "sonnet"   # pin a tier (see bitranox:process-agents-subagent-driven-development "Concrete
+                    # tiers"): sonnet by default; opus for a large/high-risk/subtle-concurrency diff;
+                    # for a big diff, fan out parallel sonnet per-concern reviewers + one opus meta-review.
   prompt: |
     You are a Senior Code Reviewer with expertise in software architecture,
     design patterns, and best practices. Your job is to review completed work

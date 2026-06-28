@@ -297,3 +297,12 @@ def test_no_age_based_forgetting_helpers(home):
     assert not hasattr(S, "should_archive")
     assert not hasattr(S, "bump_idle")
     assert "forgetting" not in S.DEFAULT_CONFIG and "forget_idle_dreams" not in S.DEFAULT_CONFIG
+
+
+def test_model_review_due_and_mark(home):
+    assert S.model_review_due() is True                      # no prior review -> due
+    t = S.mark_model_reviewed(now=1_000_000.0)
+    assert t == 1_000_000.0
+    assert S.model_review_due(now=1_000_000.0) is False      # just reviewed -> not due
+    assert S.model_review_due(now=1_000_000.0 + 29 * 86400) is False
+    assert S.model_review_due(now=1_000_000.0 + 31 * 86400) is True   # past the monthly interval

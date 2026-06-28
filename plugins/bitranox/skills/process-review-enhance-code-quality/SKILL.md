@@ -61,6 +61,11 @@ Record tool output (pass/fail, coverage %, lint warnings). Use this objective da
 
 ## Step 3: Score With Rubric
 
+For a large project, FAN OUT: dispatch one **`sonnet`** subagent per rubric dimension (each returns its
+0-10 score + concrete evidence) in parallel, then one **`opus`** pass to synthesize the weighted total
+and adversarially sanity-check the score. Small project: score inline. (Tiers: see "Concrete tiers" in
+`bitranox:process-agents-subagent-driven-development`; fan-out pattern: `bitranox:process-agents-dispatching-parallel`.)
+
 Use this rubric to score the project. Each dimension is 0-10, final score is the weighted average.
 
 | Dimension       | Weight | What to Check                                                  |

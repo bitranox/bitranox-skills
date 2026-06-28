@@ -71,7 +71,7 @@ def convert_with_ai(
     input_file: Path,
     output_file: Path,
     api_key: str,
-    model: str = "anthropic/claude-opus-4.5",
+    model: str = "anthropic/claude-sonnet-4.5",
     prompt_type: str = "general",
     custom_prompt: str = None
 ) -> bool:
@@ -82,7 +82,7 @@ def convert_with_ai(
         input_file: Path to input file
         output_file: Path to output Markdown file
         api_key: OpenRouter API key
-        model: Model name (default: anthropic/claude-opus-4.5)
+        model: Model name (default: anthropic/claude-sonnet-4.5; use opus for hard vision/OCR)
         prompt_type: Type of prompt to use
         custom_prompt: Custom prompt (overrides prompt_type)
         
@@ -180,8 +180,8 @@ Popular Models (use with --model):
     )
     parser.add_argument(
         '--model', '-m',
-        default='anthropic/claude-opus-4.5',
-        help='Model to use via OpenRouter (default: anthropic/claude-opus-4.5)'
+        default='anthropic/claude-sonnet-4.5',
+        help='Model via OpenRouter (default: anthropic/claude-sonnet-4.5; pass an opus model for hard vision/OCR)'
     )
     parser.add_argument(
         '--prompt-type', '-t',

@@ -116,6 +116,26 @@ most capable model; a subtle concurrency change does.
 omitted model inherits your session's model  -  often the most capable and
 most expensive  -  which silently defeats this section.
 
+### Concrete tiers (canonical mapping - other skills reference this section)
+
+Map the generic tiers to the current Claude lineup, and pass the **stable tier ALIAS**
+(`haiku` / `sonnet` / `opus`), never a pinned version like `claude-opus-4-8` - the alias
+auto-resolves to the latest model in that tier, so a new version needs no edit.
+
+- **`haiku`** (cheap, fastest) = mechanical / transcription / pattern-scan: secret/PII scans,
+  license accept-reject mapping, formatting, 1-2-file complete-spec implementers.
+- **`sonnet`** (standard, fast, cheaper than opus - the DEFAULT fan-out tier) = bounded judgment and
+  the workhorse for parallel fan-out: per-file/per-dimension/per-store reviewers and scanners,
+  relevance filtering, extraction, summarize, integration, reference hunting, most implementers.
+- **`opus`** (most capable, slowest/priciest) = reserve for deep reasoning where being wrong is
+  costly: architecture/design, final SYNTHESIS, adversarial CORRECTNESS verification, root-cause
+  judgment, the final whole-branch review.
+
+Reserve `opus` for genuine deep reasoning; do NOT use it for mechanical or pure fan-out work, and do
+NOT leave fan-out work on the session default (often opus). The lineup ages: the model hierarchy is
+re-evaluated periodically by `bitranox:meta-dream` (it asks the `claude-code-guide` agent for the
+current Claude model lineup and proposes a re-tier if the ordering shifts), so this mapping stays current.
+
 **Turn count beats token price.** Wall-clock and context cost scale with how
 many turns a subagent takes, and the cheapest models routinely take 2-3× the
 turns on multi-step work  -  costing more overall. Use a mid-tier model as the

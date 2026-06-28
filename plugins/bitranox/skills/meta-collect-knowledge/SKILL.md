@@ -30,8 +30,10 @@ package metadata, the parent tree's descriptor, the first request); if scope is 
    or learning topic>" --self "<cwd>"`. It derives keywords and greps OTHER projects' memory + the
    global rules layer (the current project is excluded), printing candidate files. Nothing matched ->
    stop; the whole gather cost one grep.
-2. **Stage 2 - inspect (model).** Read the candidate files. Keep only what is genuinely useful to THIS
-   project. Discard near-misses.
+2. **Stage 2 - inspect (model).** Dispatch a **`sonnet`** subagent (bounded relevance/extraction work -
+   keeps candidate bodies out of the main context): read the candidate files, return only what is
+   genuinely useful to THIS project, privacy-scrubbed; discard near-misses. (Tier: "Concrete tiers" in
+   `bitranox:process-agents-subagent-driven-development`.)
 3. **Bring it in by ONE of two SAFE moves - never a cross-tree reference** (it is not loaded here and
    would dangle if that tree is deleted):
    - **Lift to the lowest common ancestor** (often the global `~/.claude/rules/bitranox/` layer) when

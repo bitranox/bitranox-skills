@@ -34,6 +34,12 @@ lives only in a project's own `.claude/skills/` (that stays in that project).
 
 ## Step 1 - License gate (blocking)
 
+> Tiering: offload the bounded analysis of a large external repo to a **`sonnet`** subagent (summarize
+> behavior, surface license evidence, list naming/cross-reference normalization deltas) so the whole
+> third-party tree stays out of your context; the license accept/reject mapping is mechanical
+> (**`haiku`**). The no-license-found path stays a user decision. Tiers: "Concrete tiers" in
+> `bitranox:process-agents-subagent-driven-development`.
+
 Find the license. Look beyond the skill's own folder: the source repo root (`LICENSE`/`COPYING`),
 SPDX headers, the `license` field of any `plugin.json` / `package.json` / `pyproject.toml` /
 marketplace manifest, and a README license section.

@@ -325,6 +325,36 @@ def store_changed(memory_dir_path, since_mtime):
 # pruning (model-judged, propose-first), or a manual request - the dream does that; no helper here.
 
 
+def _model_review_file():
+    return Path.home() / ".claude" / "self-improve-audit" / "model-review.txt"
+
+
+def model_review_due(interval_days=30, now=None):
+    """True if the periodic model-hierarchy review (run by meta-dream) is due: no prior review, or the
+    last one is older than `interval_days`. GLOBAL (not per-project) and OUT of any memory store, so it
+    never bumps a store's mtime (convergence holds). Model releases are infrequent -> a monthly default."""
+    import time as _time
+    now = _time.time() if now is None else now
+    try:
+        last = float(_model_review_file().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    return (now - last) >= interval_days * 86400
+
+
+def mark_model_reviewed(now=None):
+    """Record that the model-hierarchy review just ran, so it does not re-fire until due again."""
+    import time as _time
+    now = _time.time() if now is None else now
+    f = _model_review_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass
+    return now
+
+
 def knowledge_store_empty():
     """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty
     AND no project's memory holds a topic file. Used to suppress the new-project bootstrap nudge on a

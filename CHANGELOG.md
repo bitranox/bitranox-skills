@@ -17,6 +17,34 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.5.0] - 2026-06-28
+
+### Added
+- Subagent model-tier doctrine. A canonical "Concrete tiers" mapping in
+  `process-agents-subagent-driven-development`: `opus` for deep reasoning / synthesis / adversarial
+  correctness-verify / architecture; `sonnet` as the default fan-out workhorse (bounded extraction,
+  relevance, per-dimension/per-file/per-store reviewers); `haiku` for mechanical work. Dispatches use the
+  stable tier ALIASES so a new model version is picked up with no edit. Cross-referenced from
+  `process-agents-dispatching-parallel` and baked into `meta-skill-writer` scaffolding (a skill that
+  dispatches subagents must pin a tier).
+- Pinned model tiers in the existing dispatchers (`process-review-requesting-code-review`,
+  `coding-python-enforce-data-architecture-strict`, `process-agents-dispatching-parallel`,
+  `meta-skill-writer`).
+- Added subagent fan-out (with tiers) to skills that did heavy/parallel/judgment work inline:
+  `process-review-enhance-code-quality` (parallel `sonnet` per rubric dimension -> `opus` synthesis),
+  `meta-dream` global scan (`sonnet` per-store -> `opus` judgment), `meta-collect-knowledge` inspect
+  (`sonnet`), `process-review-verification-before-completion` (`opus` adversarial verifier),
+  `coding-python-performance-review` (`sonnet`), `process-debug-systematic` Phase 2 (`sonnet` finders),
+  `meta-adopting-external-skills` (`sonnet` repo analysis, `haiku` license map).
+- Periodic model-hierarchy review in `meta-dream` (time-gated via `model_review_due` /
+  `mark_model_reviewed`): asks the `claude-code-guide` agent for the current lineup and proposes a
+  re-tier via the self-PR loop when the capability/cost ordering shifts. Model releases are infrequent,
+  so it runs monthly-ish, not every dream.
+
+### Changed
+- `docs-convert-markitdown` default model is now `anthropic/claude-sonnet-4.5` (cheaper/faster);
+  opus remains recommended for hard vision / presentations / OCR.
+
 ## [4.4.2] - 2026-06-28
 
 ### Changed

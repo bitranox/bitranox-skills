@@ -123,6 +123,12 @@ You MUST complete each phase before proceeding to the next.
 
 **Find the pattern before fixing:**
 
+> Offload the bounded search here to a **`sonnet`** finder subagent (locate similar working code, read
+> the reference implementation fully, return only the relevant slices) - it keeps large reference files
+> out of your context. Keep hypothesis/root-cause reasoning in the main (`opus`) agent. Multiple
+> independent failures -> `bitranox:process-agents-dispatching-parallel`. Tiers: "Concrete tiers" in
+> `bitranox:process-agents-subagent-driven-development`.
+
 1. **Find Working Examples**
    - Locate similar working code in same codebase
    - What works that's similar to what's broken?

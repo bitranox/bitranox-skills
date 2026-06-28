@@ -65,6 +65,11 @@ Use the Read tool to load referenced files for full details.
 
 ## Workflow
 
+> Tiering: the profiling runs (Step 3) are mechanical - run them in parallel/background, no model. The
+> bounded judgment work (Step 4's existing-cache audit, and review-pipeline claim-validation below) is
+> ideal **`sonnet`** subagent work. Reserve **`opus`** for the final synthesis/prioritization call.
+> See "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.
+
 ```
 Step 1 (Read instructions) -> Step 2 (Setup) -> Step 3 (Profile) ->
 Step 4 (Analyze: candidates + regex + hotspots + prioritize + audit existing caches) ->

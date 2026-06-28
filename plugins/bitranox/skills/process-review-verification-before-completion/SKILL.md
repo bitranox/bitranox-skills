@@ -75,6 +75,12 @@ Skip any step = lying, not verifying
 
 ## Key Patterns
 
+**For a risky/large completion claim, get an INDEPENDENT verifier.** You cannot fully check your own
+work (you share the doer's optimism). Dispatch an **`opus`** adversarial verifier subagent with fresh
+context (re-run the commands, check requirements line-by-line, try to DISPROVE "done") - correctness
+verification is exactly the deep-reasoning role that warrants opus. (Command execution itself stays in
+the main agent; tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+
 **Tests:**
 ```
 ✅ [Run test command] [See: 34/34 pass] "All tests pass"

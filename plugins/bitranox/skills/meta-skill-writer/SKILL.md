@@ -833,6 +833,7 @@ Run pressure scenario with subagent WITHOUT the skill. Document exact behavior:
 ```
 Task tool call:
   subagent_type: "general-purpose"
+  model: "sonnet"   # pin a tier; never inherit the session model (often opus). See note below.
   prompt: |
     IMPORTANT: This is a real scenario. Choose and act.
     [Your pressure scenario here]
@@ -842,6 +843,10 @@ Task tool call:
   # Do NOT include the skill in the prompt - this is the baseline test.
   # The subagent must work without skill guidance to reveal natural behavior.
 ```
+
+**If a skill you author dispatches subagents, it MUST pin a `model` tier per dispatch** (haiku /
+sonnet / opus by task - see "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`),
+never inherit the session model. Default fan-out to `sonnet`; `opus` only for deep-reasoning roles.
 
 This is "watch the test fail" - you must see what agents naturally do before writing the skill.
 

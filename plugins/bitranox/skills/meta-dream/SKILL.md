@@ -115,6 +115,15 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   propose deleting it from `CLAUDE.md` with an explanation; at an intermediate altitude (no non-CLAUDE.md
   home) just FLAG, do not move. Propose-first in `propose`, apply in `auto`. (CLAUDE.md policy lives in
   `bitranox:meta-self-improve`.)
+- **Model-hierarchy review (periodic, time-gated - keeps subagent tiering current).** When
+  `self_improve_signals.model_review_due()` is true (no prior review or > ~30 days; model releases are
+  infrequent), ask the `claude-code-guide` agent for the current Claude model lineup and compare it to
+  the tier mapping in `bitranox:process-agents-subagent-driven-development` "Concrete tiers". If a NEW model/tier
+  appeared or the capability/cost ordering shifted (e.g. a newer Sonnet now covers work currently on
+  Opus -> downshift; a new fast tier fits fan-out better), PROPOSE a re-tier of that one mapping via the
+  upstream self-PR loop (shared skill -> propose-first, version-bumped). Dispatches use the stable tier
+  ALIASES (`opus`/`sonnet`/`haiku`), so version bumps need no edit - only a hierarchy SHIFT does. Then
+  call `mark_model_reviewed()` so it does not re-fire until due. Not due -> skip (no-op).
 
 ## Cross-tree passes (inbound gather, outbound cross-pollination)
 
@@ -131,10 +140,13 @@ other. A full dream bridges them - all via lift-or-copy, NEVER a cross-tree refe
   self-contained copy into one specific other project is the rare exception (marked so it is not
   re-promoted; scrubbed; never a cross-tree ref).
 - **Global-dream scan (cross-project read).** Periodically scan ACROSS project memory stores for
-  recurring / broadly-useful content and factor it up to the lowest covering altitude. Here the
-  promotion gate may use the **cross-project corroboration** path (seen in >= 2 distinct projects),
-  whereas the per-project dream uses same-project dwell (>= 2 dreams). Honor the `privacy` knob: with
-  `walled`, gather/promote only within one domain.
+  recurring / broadly-useful content and factor it up to the lowest covering altitude. FAN OUT: one
+  **`sonnet`** subagent per project store (read it -> return recurring/broadly-useful candidate entries),
+  in parallel, to keep N stores out of the main context; reserve **`opus`** (the main agent) for the
+  promotion-gate + altitude/normalization decisions. Here the promotion gate may use the **cross-project
+  corroboration** path (seen in >= 2 distinct projects), whereas the per-project dream uses same-project
+  dwell (>= 2 dreams). Honor the `privacy` knob: with `walled`, gather/promote only within one domain.
+  (Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
 
 ## Boundaries
 
