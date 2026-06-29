@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.16.0] - 2026-06-29
+
+### Changed
+- `coding-bash-reference`: new "Before you reach for Bash (and before you ship)" section - prefer a
+  Python script over shell for real logic (the global working rule, woven in), and gate every Bash
+  script you do ship with `shellcheck -x` + `bash -n` (required checks) before committing. Surfaced by
+  the deep dream as a fleet-wide host-ops practice; it is good practice everywhere, so it lives in the
+  skill rather than in any one project rung.
+
 ## [4.15.0] - 2026-06-29
 
 ### Changed

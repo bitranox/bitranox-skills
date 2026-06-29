@@ -33,6 +33,18 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 - Zsh, Fish, or other shell syntax
 - Structuring multi-file Bash projects (use `bash_clean_architecture` instead)
 
+## Before you reach for Bash (and before you ship)
+
+- **Prefer a Python script over shell for any real logic** (global working rule). Shell has sharp edges
+  that bite repeatedly - a leading-dash path makes `dirname`/`grep` treat it as an option, `sed -i`
+  can double-apply, and `cmd | head` reports `head`'s exit status not `cmd`'s. For path handling, text
+  transforms, or multi-step automation, write a Python (stdlib) script. Reserve Bash for a simple
+  one-shot command invocation (including launching a Python script).
+- **Gate every Bash script you DO ship with `shellcheck` and `bash -n` before committing** - required
+  checks, not optional. `shellcheck -x script.sh` (follows `source`d files) catches quoting,
+  word-splitting, and unset-variable bugs; `bash -n script.sh` catches syntax errors without executing
+  it. Add `shfmt -i 4 -d script.sh` where the project formats shell.
+
 ## Reference Files
 
 | File                                 | Contents                                                                                                                                                                                               |
