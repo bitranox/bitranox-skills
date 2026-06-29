@@ -47,6 +47,24 @@ the scan in step 3 is run; do not duplicate the rest.
    it lets shared rules live at a TIGHTER common altitude AND the projects genuinely share a domain.
    Strictly propose-only and user-gated - the dream never relocates a directory, migrates a slug, or
    touches a repo; it hands you the proposal + the exact migration steps.
+   - **Missing rung (department / HQ) - evidence-gated.** Also detect a rung that SHOULD exist but does
+     not: a folder that ought to carry a `CLAUDE.md` (scope descriptor + a home for shared rules) but has
+     none. A **missing department** = the nearest common-ancestor folder of >= 2 RELATED projects has no
+     `CLAUDE.md`; a **missing HQ** = the top of the tree has no head-office rung. The trigger is EVIDENCE,
+     not structure: a rung is "missing" only when something wants to live there - a rule duplicated across
+     those related siblings that would consolidate into the rung (so it surfaces straight out of the
+     cross-tree consolidation above), or a truly-universal rule with no top home. Propose CREATING that
+     folder's `CLAUDE.md` (its scope-descriptor block + the lifted shared rule[s]) at the LOWEST common
+     ancestor whose children share a domain - NEVER a generic bucket (`projects/`, `apps/`, `public/`);
+     a structural-only look-alike (siblings that merely seem related, no shared-rule evidence) is SURFACED
+     as a question, not auto-proposed. Two HQ senses: the machine-global layer `~/.claude/rules/bitranox/`
+     is auto-created on the first promotion (no detection needed); the **workspace-root `CLAUDE.md`** is the
+     file-tree HQ, and proposing a brand-new one ABOVE the current highest existing `CLAUDE.md` is the one
+     case allowed to go above the highest rung (the reactive gap-fill in `bitranox:meta-self-improve` never
+     does this on its own). Creating a rung is light - a new `CLAUDE.md`, NO slug migration - but it adds a
+     tier to the ancestor chain of every project beneath it, so recheck their deltas. Reuse the descriptor
+     mechanism (`meta-self-improve` "Fill descriptor gaps" + the `<!-- bitranox:self-learning -->` block);
+     propose-first, never created without confirmation.
 5. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check`, skill-fit batched change, report counts).
 

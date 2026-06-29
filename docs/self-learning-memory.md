@@ -96,6 +96,11 @@ make the layering save room instead of wasting it. And if the shape drifts - a p
 into a different domain - the deep dream will notice and suggest moving it; only ever a suggestion, you
 make the call.
 
+It also spots a missing rung. When several related projects keep learning the same rule but the folder
+that contains them has no shared shelf - no department - the deep dream sees the rule trying to settle
+with nowhere to land, and offers to create that department (and, at the very top, a head office if there
+is none). It only suggests; you decide whether the department is real.
+
 ## 4. Always within reach, never "maybe"
 
 A note that might be loaded when relevant is a note that will be missed when it matters. So the

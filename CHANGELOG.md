@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.15.0] - 2026-06-29
+
+### Changed
+- **`meta-dream-global-deep` org-chart audit now detects MISSING rungs (departments and HQ)**,
+  evidence-gated. A missing department = the nearest common-ancestor folder of >= 2 RELATED projects has
+  no `CLAUDE.md`; a missing HQ = the top of the tree has no head-office rung. Trigger is evidence (a rule
+  duplicated across related siblings that wants to consolidate into a rung that does not exist), not bare
+  structure - placed at the lowest common ancestor whose children share a domain, never a generic bucket;
+  structural-only look-alikes are surfaced as a question. The deep dream MAY propose a brand-new
+  workspace-root HQ above the current highest `CLAUDE.md` (the one exception to gap-fill's conservative
+  rule); the machine-global layer auto-creates on first promotion. Propose-only, user-gated; creating a
+  rung is light (a new `CLAUDE.md`, no slug migration) but adds a tier to children's ancestor chain.
+- `meta-self-improve`: noted that descriptor gap-fill stays conservative (never above the highest
+  existing `CLAUDE.md`); proposing a new top-level HQ is the deep dream's job, user-gated.
+
+### Docs
+- `docs/self-learning-memory.md`: the departments section now covers the deep dream spotting a missing
+  department / head office (a related cluster whose folder has no shared shelf) and offering to create it.
+
 ## [4.14.0] - 2026-06-29
 
 ### Changed

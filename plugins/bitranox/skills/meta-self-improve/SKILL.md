@@ -158,6 +158,10 @@ holding just the marked scope-descriptor block ("what this level is about") so t
 descriptor at every altitude - do not skip a gap. `altitude_chain(proj)` returns exactly this contiguous
 set (gap levels included). Creating/editing a version-controlled `CLAUDE.md` is propose-first (auto in
 `auto` mode); a brand-new descriptor-only `CLAUDE.md` outside version control may be created directly.
+This gap-fill stays CONSERVATIVE - it never creates a `CLAUDE.md` ABOVE the highest existing one. The
+sole exception is `bitranox:meta-dream-global-deep`'s org-chart audit, which (with the cross-tree view)
+may PROPOSE a brand-new top-level headquarters above the current highest rung when a truly-universal rule
+has no top home - always user-gated, never automatic here.
 
 **Normalization (reference + delta), not duplication.** When a general rule and a specific case
 overlap, store the general ONCE at its altitude and have the lower entry `references [[general]]` plus
