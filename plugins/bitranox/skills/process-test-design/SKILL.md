@@ -61,6 +61,19 @@ not crash".
   (marked, opt-in), not the unit suite. The unit suite runs offline and identically every time.
 - A flaky test is a bug in the test or the code, never "just re-run it" - fix the determinism.
 
+## Run in a clean, project-correct environment
+
+- **Run tests in the project's OWN venv, never the IDE's.** An ambient `VIRTUAL_ENV` (PyCharm, or carried
+  over from another project's shell) silently hijacks the interpreter, so the suite runs against the
+  wrong env. Isolate it: `env -u VIRTUAL_ENV uv run pytest` (mechanism + the bmk variant:
+  `bitranox:coding-python-uv` "stray VIRTUAL_ENV"). "Fresh" = the project venv, isolated - only recreate
+  (`uv venv --clear && uv sync`) when debugging suspected env corruption.
+- **A wrong-venv failure masquerades as a code failure.** `ModuleNotFoundError` for a dep you know is
+  installed, a flood of phantom type-check errors, or pip-audit CVEs for packages not in your tree are a
+  WRONG-VENV smell, not a real defect. Before trusting such a failure, verify the interpreter:
+  `uv run python -c "import sys; print(sys.executable)"` should point at `./.venv`. (Evidence before
+  conclusions - see `bitranox:process-review-verification-before-completion`.)
+
 ## Prune low-value tests
 
 Delete a test when it:
@@ -78,6 +91,7 @@ Fewer, behavior-focused tests beat many brittle ones. Coverage percent is a smel
 - [ ] Boundary inputs covered (UTF/emoji/CJK/binary/wrong-type/oversized/edge numbers), asserting specific behavior
 - [ ] Order-independent (passes alone and shuffled); no shared mutable state
 - [ ] No real `sleep`; time/randomness injected; unit suite offline
+- [ ] Run in the project venv, not the IDE's (`env -u VIRTUAL_ENV uv run ...`); a ModuleNotFound / phantom-type / pip-audit-noise failure is a wrong-venv smell, not a code bug
 - [ ] One behavior per test; name states the behavior
 - [ ] No test that cannot fail for a real reason
 

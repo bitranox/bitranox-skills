@@ -150,14 +150,24 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 An ambient `VIRTUAL_ENV` (set by an IDE like PyCharm, or carried over from another project's shell)
 leaks into tools that otherwise manage their own environment - `uv`, `pip-audit`, `tox`, `nox`, and
 Makefile targets that fall back to `python3` on PATH. The symptom is a tool running against the WRONG
-interpreter: `ModuleNotFoundError` inside an isolated venv, or `pip-audit` failing on CVEs from an
-unrelated shared env. Fix by unsetting it and pinning the project venv for that one invocation:
+interpreter: `ModuleNotFoundError` inside an isolated venv, a flood of phantom type-check errors, or
+`pip-audit` failing on CVEs from an unrelated shared env.
+
+**Default: strip the ambient env for every local test/lint/build, do not wait for it to break.** Prefix
+the invocation rather than relying on the inherited environment:
 
 ```bash
-env -u VIRTUAL_ENV uv run pytest
-# or pin explicitly:
-VIRTUAL_ENV="$PWD/.venv" PIPAPI_PYTHON_LOCATION="$PWD/.venv/bin/python" pip-audit
+env -u VIRTUAL_ENV uv run pytest          # tests/lint/type-check: isolate to the project venv
+env -u VIRTUAL_ENV uv run pyright
+# for the bmk pipeline (Makefile targets), pin the project interpreter too:
+env -u VIRTUAL_ENV BMK_PYTHON_CMD="$PWD/.venv/bin/python" \
+  PIPAPI_PYTHON_LOCATION="$PWD/.venv/bin/python" make test
 ```
+
+"Fresh" means the project's own venv, isolated - only RECREATE it (`uv venv --clear .venv && uv sync`)
+when a failure looks like genuine env corruption; recreating on every run is slow and rarely needed.
+Confirm which interpreter you got with `uv run python -c "import sys; print(sys.executable)"` (it should
+point at `./.venv`) before trusting a "missing module" or phantom-type failure.
 
 ---
 

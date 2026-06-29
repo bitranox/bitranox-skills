@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.19.0] - 2026-06-29
+
+### Changed
+- Test-venv isolation made a first-class rule (the recurring "wrong interpreter under PyCharm" bug).
+  `process-test-design`: new "Run in a clean, project-correct environment" section + checklist item -
+  run in the project's own venv not the IDE's (`env -u VIRTUAL_ENV uv run pytest`); a ModuleNotFound /
+  phantom type-error / pip-audit-noise failure is a WRONG-VENV smell, verify the interpreter before
+  trusting it. `coding-python-uv`: the stray-VIRTUAL_ENV gotcha is sharpened into a DEFAULT (strip the
+  ambient env for every local test/lint/build, do not wait for it to break) with the bmk variant and
+  the interpreter-check one-liner; "fresh" = isolate to the project venv, recreate only when debugging
+  corruption.
+
 ## [4.18.0] - 2026-06-29
 
 ### Changed
