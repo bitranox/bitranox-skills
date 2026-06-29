@@ -17,6 +17,13 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.21.0] - 2026-06-29
+
+### Changed
+- `coding-python-uv`: the venv section now states `.venv/` is a per-machine build artifact - never commit
+  it; ensure it (plus `__pycache__/`, `*.pyc`, `*.egg-info/`) is in `.gitignore`, and if already tracked,
+  untrack with `git rm -r --cached .venv`. Completes the test-venv-isolation guidance.
+
 ## [4.20.0] - 2026-06-29
 
 ### Changed
