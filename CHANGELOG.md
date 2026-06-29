@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.11.0] - 2026-06-29
+
+### Added
+- New skill **`process-test-design`** - the WHAT-to-write companion to `process-test-driven-development`
+  (which owns red-green). Consolidates the scattered test-quality rules: prefer real/integration/e2e
+  over mocks; dependency injection over monkeypatching (patch only a true external edge); the
+  adversarial boundary-input battery (unusual UTF, emoji, CJK, binary, wrong types, oversized, edge
+  numbers - the test side of `coding-input-sanitization`); determinism + order-independence (no
+  execution-order dependence, no real `sleep`, injected clock/seed, offline unit suite); and pruning
+  low-value tests (assert-nothing, impl-mirroring, mock-testing, duplicate). Added to the catalog;
+  cross-referenced from `process-test-driven-development` and `coding-input-sanitization`.
+
 ## [4.10.0] - 2026-06-29
 
 ### Added

@@ -39,6 +39,9 @@ DOES NOT APPLY - internal seams between trusted code:
 - **Handle arbitrary bytes/chars.** non-ASCII, emoji, CJK, control chars, NUL, binary: reject,
   normalize (e.g. Unicode NFC), or escape - never trust raw. Decide the allowed charset explicitly.
 
+Test the edge with the adversarial input battery (UTF/emoji/CJK/binary/wrong-type/oversized) in
+`bitranox:process-test-design`.
+
 ## On the way OUT - escape at the SINK, for that sink's context
 
 The same value is safe for one sink and dangerous for another, so escaping belongs at the sink, not
