@@ -36,6 +36,34 @@ def _state_file(cwd, sid):
     return Path.home() / ".claude" / "self-improve-audit" / ("%s.recall-%s.txt" % (sig.proj_key(cwd), safe))
 
 
+def _label(path):
+    """A readable source label. A memory topic file -> its stem; a CLAUDE.md -> '<parent-dir>/CLAUDE.md'
+    so OTHER projects' rule files are distinguishable (every one is named CLAUDE.md)."""
+    p = Path(path)
+    if p.name == "CLAUDE.md":
+        return "%s/CLAUDE.md" % p.parent.name
+    return p.stem
+
+
+def _snippet(path, keywords, maxlen):
+    """Body to inject. Small files: the whole thing (trimmed). Large files (CLAUDE.md can be tens of
+    KB): a window CENTERED on the first matched keyword, so the relevant rule is shown, not just the
+    file head (which often would not contain the match at all)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if len(text) <= maxlen:
+        return text.strip()
+    low = text.lower()
+    pos = min((i for i in (low.find((k or "").lower()) for k in keywords) if i != -1), default=-1)
+    if pos < 0:
+        return text.strip()[:maxlen]
+    start = max(0, pos - maxlen // 3)
+    end = start + maxlen
+    return ("..." if start > 0 else "") + text[start:end].strip() + ("..." if end < len(text) else "")
+
+
 def main():
     try:
         ev = json.load(sys.stdin)
@@ -55,7 +83,10 @@ def main():
         # no model here). Known filler is already dropped by extract_keywords; known-topical is skipped.
         # Keyed to THIS project so its learned lists never leak into another project's recall.
         sig.note_unknown_keywords(keywords, cwd)
-        files = gs.discover_files(cwd)                     # other projects + global; current excluded
+        # other projects' memory + global rules, PLUS other projects' CLAUDE.md across the workspace
+        # tree (lots of cross-project rules still live in CLAUDE.md). The current project's own memory
+        # and its ancestor-chain CLAUDE.md are excluded - they are already loaded in this session.
+        files = gs.discover_files(cwd) + gs.discover_claude_md(cwd)
         hits = gs.scan(keywords, files)
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0
@@ -103,12 +134,9 @@ def main():
 
     blocks = []
     for p in fresh:
-        try:
-            body = Path(p).read_text(encoding="utf-8", errors="replace").strip()[:MAX_BODY]
-        except OSError:
-            continue
+        body = _snippet(p, hits.get(p, keywords), MAX_BODY)
         if body:
-            blocks.append("### %s\n%s" % (Path(p).stem, body))
+            blocks.append("### %s\n%s" % (_label(p), body))
     if not blocks:
         return 0
 
@@ -120,9 +148,9 @@ def main():
     except OSError:
         pass
 
-    ctx = ("Relevant prior work found in your OTHER project memory / global rules - read it and draw on "
-           "it before reinventing; verify any named file/flag still exists, and de-duplicate against this "
-           "project's own memory:\n\n" + "\n\n".join(blocks))
+    ctx = ("Relevant prior work found in your OTHER projects' memory / CLAUDE.md / global rules - read it "
+           "and draw on it before reinventing; verify any named file/flag still exists, and de-duplicate "
+           "against this project's own memory:\n\n" + "\n\n".join(blocks))
     out = {
         "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": ctx},
         "systemMessage": "Recalled %d related memory note(s) from elsewhere." % len(blocks),

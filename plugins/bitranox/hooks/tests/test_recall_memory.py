@@ -44,6 +44,25 @@ def test_surfaces_relevant_note_from_another_project(monkeypatch, capsys):
     assert payload.get("suppressOutput") is True
 
 
+def test_surfaces_sibling_claude_md(monkeypatch, capsys, tmp_path, home):
+    # cross-project rules still live in CLAUDE.md (conversion phase) -> recall must search them too.
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "CLAUDE.md").write_text("workspace root rules", encoding="utf-8")
+    cur = ws / "cur"
+    cur.mkdir()
+    (cur / "CLAUDE.md").write_text("current project rules", encoding="utf-8")
+    sib = ws / "sib"
+    sib.mkdir()
+    (sib / "CLAUDE.md").write_text(
+        "To drive the widget frobnicator, set FROB_LEVEL=9 in the service unit.", encoding="utf-8")
+    rc, out = run(monkeypatch, capsys, "how do I set the frobnicator frob level", cwd=str(cur))
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "sib/CLAUDE.md" in ctx and "frobnicator" in ctx   # sibling CLAUDE.md surfaced + labelled
+    assert "cur/CLAUDE.md" not in ctx                         # current chain excluded (already loaded)
+
+
 def test_excludes_current_project(monkeypatch, capsys):
     _mem("/p/cur", "current-make.md", "make test current only secret")
     _mem("/p/other", "make-test.md", "make test elsewhere")

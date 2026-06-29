@@ -30,6 +30,55 @@ def test_scan_matches_and_skips(tmp_path):
     assert str(b) not in hits
 
 
+def _ws(tmp_path, monkeypatch):
+    h = tmp_path / "home"
+    (h / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    ws = tmp_path / "ws"
+    (ws).mkdir()
+    (ws / "CLAUDE.md").write_text("root rules", encoding="utf-8")
+    cur = ws / "projA"
+    cur.mkdir()
+    (cur / "CLAUDE.md").write_text("projA rules", encoding="utf-8")
+    sib = ws / "projB"
+    sib.mkdir()
+    (sib / "CLAUDE.md").write_text("projB rules", encoding="utf-8")
+    vend = ws / "node_modules" / "pkg"
+    vend.mkdir(parents=True)
+    (vend / "CLAUDE.md").write_text("vendor", encoding="utf-8")
+    return ws, cur
+
+
+def test_discover_claude_md_finds_siblings_excludes_chain_and_vendor(tmp_path, monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    names = {Path(p).parent.name for p in G.discover_claude_md(str(cur))}
+    assert "projB" in names        # sibling project's CLAUDE.md surfaced
+    assert "projA" not in names    # current project's own CLAUDE.md excluded (already loaded)
+    assert "ws" not in names       # workspace-root CLAUDE.md is in the current chain -> excluded
+    assert "pkg" not in names      # vendored dir pruned
+
+
+def test_discover_claude_md_caches_until_ttl(tmp_path, monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    first = {Path(p).parent.name for p in G.discover_claude_md(str(cur))}
+    newer = ws / "projC"
+    newer.mkdir()
+    (newer / "CLAUDE.md").write_text("projC rules", encoding="utf-8")
+    assert {Path(p).parent.name for p in G.discover_claude_md(str(cur))} == first   # cached: projC unseen
+    assert "projC" in {Path(p).parent.name for p in G.discover_claude_md(str(cur), cache_ttl=0)}  # rebuild
+
+
+def test_discover_claude_md_no_workspace_root(tmp_path, monkeypatch):
+    h = tmp_path / "home"
+    (h / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    lonely = tmp_path / "nowhere" / "proj"
+    lonely.mkdir(parents=True)
+    assert G.discover_claude_md(str(lonely)) == []   # no ancestor CLAUDE.md -> nothing
+
+
 def test_scan_is_word_boundary_not_substring(tmp_path):
     # the recall-precision bug: substring matching made "again" match "against", "test" match "latest".
     f = tmp_path / "c.md"

@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.12.0] - 2026-06-29
+
+### Changed
+- **Recall hook now also searches other projects' `CLAUDE.md`**, not only their Auto-memory. A lot of
+  cross-project knowledge still lives in `CLAUDE.md` (conversion phase), so the per-prompt "check the
+  notebook" pass would otherwise miss it. New `gather_scan.discover_claude_md(cwd)` walks up to the
+  workspace root (highest ancestor holding a CLAUDE.md), finds every CLAUDE.md under it, EXCLUDES the
+  current project's ancestor chain (already loaded in-session) and vendored dirs, and caches the file
+  list per root with a 1h TTL so the per-prompt cost stays grep-only. The recall hook injects a snippet
+  CENTERED on the first matched keyword (large CLAUDE.md files would miss the match under head-trunc)
+  and labels each as `<parent-dir>/CLAUDE.md`. (+4 tests.)
+
 ## [4.11.0] - 2026-06-29
 
 ### Added

@@ -14,9 +14,11 @@ Imports the shared helpers from the plugin's hooks dir, like the meta-dream-proj
 """
 
 import argparse
+import hashlib
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-collect-knowledge -> skills -> bitranox -> hooks
@@ -84,6 +86,85 @@ def discover_files(exclude_proj=None):
     except OSError:
         pass
     return files
+
+
+# Dirs never worth walking for CLAUDE.md (vendored / build / VCS / cache).
+_VENDOR = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages", ".mypy_cache",
+    ".pytest_cache", ".tox", ".idea", ".ruff_cache", "dist", "build", ".eggs",
+}
+
+
+def _workspace_root(cwd, max_up=8):
+    """The highest ancestor of `cwd` (within `max_up` levels, never above $HOME) that still holds a
+    CLAUDE.md - the root of the knowledge tree to search. None if no ancestor has one."""
+    try:
+        p = Path(cwd).resolve()
+    except OSError:
+        return None
+    home = Path.home()
+    root = None
+    for _ in range(max_up):
+        try:
+            if (p / "CLAUDE.md").is_file():
+                root = p
+        except OSError:
+            pass
+        if p.parent == p or p == home:
+            break
+        p = p.parent
+    return root
+
+
+def _find_claude_md(root):
+    """Every CLAUDE.md under `root`, pruning vendored/build/hidden dirs. os.walk so we can prune."""
+    out = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in _VENDOR and not d.startswith(".")]
+            if "CLAUDE.md" in filenames:
+                out.append(str(Path(dirpath) / "CLAUDE.md"))
+    except OSError:
+        pass
+    return out
+
+
+def discover_claude_md(self_cwd, cache_ttl=3600):
+    """OTHER projects' CLAUDE.md across the workspace tree, for the recall "check the notebook" pass.
+
+    EXCLUDES the current project's ancestor chain (cwd up to the workspace root) - those CLAUDE.md
+    cascade into the session already, so surfacing them would just echo loaded context. The expensive
+    `os.walk` is CACHED per workspace root with a TTL (default 1h), so the per-prompt cost is reading a
+    small path list, not a tree walk. Returns absolute path strings; empty if no workspace root found."""
+    root = _workspace_root(self_cwd)
+    if root is None:
+        return []
+    chain = set()
+    try:
+        p = Path(self_cwd).resolve()
+        while True:
+            chain.add(str(p / "CLAUDE.md"))
+            if p == root or p.parent == p:
+                break
+            p = p.parent
+    except OSError:
+        pass
+    h = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+    cache = Path.home() / ".claude" / "self-improve-audit" / ("claude-md-paths.%s.txt" % h)
+    paths = None
+    try:
+        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
+            paths = [ln for ln in cache.read_text(encoding="utf-8").splitlines() if ln]
+    except OSError:
+        paths = None
+    if paths is None:
+        paths = _find_claude_md(root)
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text("\n".join(paths), encoding="utf-8")
+        except OSError:
+            pass
+    return [p for p in paths if p not in chain]
 
 
 def scan(keywords, files):
