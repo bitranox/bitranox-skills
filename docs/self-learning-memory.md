@@ -202,8 +202,28 @@ package it as a skill and offer it back to the shared marketplace, so other peop
 is opt-in and proposed, never automatic - but it is how individual learning turns into something the
 whole community compounds on.
 
+## 10. A curated library you can still mark up
+
+Think of every skill out there as a library of books by different authors. They overlap, and now and
+then they flatly contradict each other. What you want is not the raw pile but a good compilation - an
+Encyclopaedia Britannica: the best of it gathered in one place, the duplicates merged, the
+disagreements reconciled, the whole thing aligned into one coherent voice. That is what bringing in a
+good outside skill does here - it is adopted, deduplicated against what you already have, and aligned
+to the rest, instead of dumped in next to three near-copies.
+
+But even the best encyclopaedia has a line or two that does not match how YOU see the world. You do not
+throw the volume out - you take a marker and cross that line out, or write your correction in the
+margin. Same here: when a skill does something you would rather it did not, you do not fork it or delete
+it. You just say so, and it is recorded as your override - "when using skill X, do this instead; do it
+my way like ...". Your instruction outranks the skill (you are in control), and that note rides along
+every time the skill comes up, exactly like your annotation in the book.
+
+So the collection grows by pulling in the best from elsewhere and harmonising it, and it stays YOURS:
+any part of it can be overruled by a single note in your own hand.
+
 ---
 
 In one line: capture quickly, consolidate like sleep, keep the useful things concrete and within
 reach, check the notebook before reinventing, connect instead of copy, prune only what is wrong,
-automate the routine with the right tool for each job, and leave the judgment calls to you.
+automate the routine with the right tool for each job, draw in the best from elsewhere and align it,
+mark up whatever does not fit your way, and leave the judgment calls to you.
