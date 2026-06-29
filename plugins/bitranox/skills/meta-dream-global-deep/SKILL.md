@@ -25,20 +25,38 @@ the scan in step 3 is run; do not duplicate the rest.
    workflow practice), pre-filtered against the existing global rules and shipped skills. Reserve
    **`opus`** (the main agent) for the promotion gate and altitude/normalization decisions. (Tiers:
    "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
-3. **Promotion gate - dedup against CLAUDE.md too.** Before promoting any candidate to the global layer,
+3. **Promotion gate + CLAUDE.md reconciliation.** Before promoting any candidate to the global layer,
    dedup it against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree
    (project roots + ancestors + the workspace), not just the memory stores. During the conversion phase
    many rules still live in `CLAUDE.md`; promoting one already there would DUPLICATE it. Classify:
-   already-global/skill -> skip; already in a `CLAUDE.md` -> do NOT duplicate, FLAG for the user;
-   new + corroborated (>= 2 distinct projects, or user-stated) + nowhere-else -> promote, kept CONCRETE.
-4. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
+   already-global/skill -> skip; already in a `CLAUDE.md` -> ROUTE through the reconciliation model
+   (delete the lower copy if a broader tier covers it / lift it up + leave the delta / keep if local),
+   and CONSOLIDATE a rule duplicated across many sibling `CLAUDE.md` UP to their common ancestor (the
+   biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
+   nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-project`
+   "CLAUDE.md reconciliation"; every `CLAUDE.md` edit is propose-first, never without confirmation.)
+4. **Org-chart audit (deep dream only - propose, never apply).** With the cross-tree view, assess whether
+   the directory structure still fits. Using each project's scope descriptor + what it has learned, look
+   for: a project whose domain has drifted so it shares more rules with a DIFFERENT subtree (propose
+   MOVING it there); a flat cluster of related projects with no common parent (propose CREATING a
+   department folder and grouping them); a department gone incoherent (propose SPLITTING it). Each
+   proposal MUST spell out the consequences, because a move is heavy and human-executed: moving a
+   project's directory changes its path -> its Auto-memory store slug (`~/.claude/projects/<slug>`)
+   must be migrated or it orphans; its `CLAUDE.md` ancestor chain changes (recheck inherited rules +
+   deltas); git remotes / deploy / import paths may need updating. Decision criterion: propose only if
+   it lets shared rules live at a TIGHTER common altitude AND the projects genuinely share a domain.
+   Strictly propose-only and user-gated - the dream never relocates a directory, migrates a slug, or
+   touches a repo; it hands you the proposal + the exact migration steps.
+5. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check`, skill-fit batched change, report counts).
 
 ## Boundaries (unchanged from meta-dream-global)
 
 - Global `~/.claude/rules/bitranox/` layer + private project memory (machine-local): back up, then apply.
 - **`CLAUDE.md` (version-controlled): never edit without user confirmation** - propose-first in `propose`,
-  apply in `auto`, only through the sanctioned bounded paths. Surfacing a duplicate is a FLAG, not an edit.
+  apply in `auto`, only through the sanctioned bounded paths. A reconciliation delete/lift or an org-chart
+  move is always PROPOSED (with consequences), never an unconfirmed edit; the dream never relocates a
+  directory or migrates a memory slug itself.
 - Skills / hooks (shared, public): never silently edit; route through the upstream-PR loop.
 - **Never a cross-tree reference.** Bridge trees only by lift-to-common-ancestor or self-contained copy.
 

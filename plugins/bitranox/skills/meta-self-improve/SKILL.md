@@ -165,7 +165,10 @@ only its delta - they compose at load (the general is always-present above), nev
 **References point UPWARD only**: a project entry may reference a global rule; a higher entry must NEVER
 reference a lower one (deleting a project would dangle it). Verify with
 `reconcile_memory_index.py --check <altitude-chain>` (upward-only, no orphans, no over-cap); the chain
-comes from `self_improve_signals.altitude_chain(proj)`.
+comes from `self_improve_signals.altitude_chain(proj)`. The `CLAUDE.md` tiers in the ancestor chain are
+altitudes in this same model (each cascades into a project's context), so a rule duplicated across them
+normalizes the same way - general at the broadest covering tier, delta below; the dream skills carry the
+full reconciliation cases (`bitranox:meta-dream-project` "CLAUDE.md reconciliation").
 
 **Promotion to the global layer is gated** (it loads into EVERY session, so a wrong entry is high-blast).
 A USER-stated concrete rule promotes eagerly; a model-INFERRED generalization needs corroboration (seen

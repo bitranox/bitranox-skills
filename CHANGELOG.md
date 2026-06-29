@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.14.0] - 2026-06-29
+
+### Changed
+- **CLAUDE.md tiers are treated as altitudes; dreams now RECONCILE them to save context** instead of just
+  flagging duplicates. The ancestor `CLAUDE.md` chain + memory + global form one altitude lattice under
+  the existing reference+delta model, decided by "reduce total always-loaded context". When a rule is
+  found duplicated: covered by a broader tier -> propose DELETING the lower copy (now valid at
+  intermediate altitudes too, not just project-root/global); belongs higher -> lift up + leave the delta;
+  only-here -> keep; contradiction -> fix memory, not the rule. Runs in both `meta-dream-project` (own
+  chain) and `meta-dream-global` / `meta-dream-global-deep` (consolidate sibling duplicates UP across
+  trees). All `CLAUDE.md` edits stay propose-first, never without confirmation.
+- **`meta-dream-global-deep` gains an org-chart audit** (deep dream only, propose-only): assess whether
+  the directory structure still fits and propose moving a drifted project to another department, creating
+  a department folder for a flat cluster, or splitting an incoherent one - with the slug-migration +
+  ancestor-chain + repo-path consequences spelled out. The dream never relocates a directory itself.
+
+### Docs
+- `docs/self-learning-memory.md`: new section "Group your projects like departments in a company"
+  (HQ = global, grouping folder = department, project = desk; group related projects so shared rules live
+  once at the department altitude). Section 1 now covers that a dream may take several cycles to converge
+  (recurring-dream analogy), escalates a non-converging loop to you (intervention), and asks you for
+  genuinely-yours decisions (therapist).
+
 ## [4.13.0] - 2026-06-29
 
 ### Added

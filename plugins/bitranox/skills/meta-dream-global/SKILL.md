@@ -69,9 +69,14 @@ Create one todo per step.
    candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
    (project roots + ancestors + the workspace), not only the memory stores - during the conversion phase
    many rules still live in `CLAUDE.md`, and promoting one that is already there would DUPLICATE it.
-   Classify each candidate: already-global/skill -> skip; already in a `CLAUDE.md` -> do NOT duplicate,
-   FLAG it for the user (a possible declutter, but never edit `CLAUDE.md` without confirmation);
-   new + corroborated + nowhere-else -> promote. Keep promoted rules CONCRETE (never water a
+   Classify each candidate: already-global/skill -> skip; already in a `CLAUDE.md` -> do NOT just
+   duplicate-avoid, ROUTE it through the CLAUDE.md reconciliation model (delete the lower copy if a
+   broader tier covers it / lift it up and leave only the delta / keep it if it is genuinely local),
+   and across trees CONSOLIDATE the same rule duplicated in many sibling `CLAUDE.md` UP to their common
+   ancestor - the highest-leverage context saving; new + corroborated + nowhere-else -> promote. (The
+   case model + guards live in `bitranox:meta-dream-project` "CLAUDE.md reconciliation"; every
+   `CLAUDE.md` edit stays propose-first and never happens without user confirmation.) Keep promoted
+   rules CONCRETE (never water a
    concrete-but-universal rule down); abstract only when specifics fit nowhere else. `should_promote` /
    `note_promotion_candidate` in `self_improve_signals.py`; counters live OUT of the dreamed store so a
    converged re-run is a no-op.

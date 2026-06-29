@@ -126,11 +126,23 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   correct OUR memory, do not touch the rule. Memory-vs-memory: a project rule that CONTRADICTS a higher
   rule becomes a self-contained OVERRIDE (more-specific / lower wins at load), NOT a `[[reference]]`;
   flag a persistent contradiction for the user.
-- **CLAUDE.md reconciliation.** Back up the `CLAUDE.md` only BEFORE an actual edit (not every dream).
-  Integrate an overlapping / superficial `CLAUDE.md` entry into a SAME-SCOPE always-present home and
-  propose deleting it from `CLAUDE.md` with an explanation; at an intermediate altitude (no non-CLAUDE.md
-  home) just FLAG, do not move. Propose-first in `propose`, apply in `auto`. (CLAUDE.md policy lives in
-  `bitranox:meta-self-improve`.)
+- **CLAUDE.md reconciliation (tiers ARE altitudes; reconcile to save context).** Every `CLAUDE.md` in
+  this project's ancestor chain cascades into its context, so the chain + memory + global form ONE
+  altitude lattice; apply the same reference+delta normalization to it, with "reduce total always-loaded
+  context" as the decision rule. Back up a `CLAUDE.md` only BEFORE an actual edit. For a rule found in
+  this project's chain:
+  - **Already covered by a broader always-present home** (memory at the same scope, the global layer, or
+    a BROADER ancestor `CLAUDE.md` that already cascades here) -> propose DELETING the lower duplicate.
+    (This supersedes the old blanket "intermediate altitude = flag only": an intermediate copy IS safely
+    deletable when a broader covering tier exists. Flag-only is the fallback ONLY when no broader covering
+    home exists and there is no same-scope non-CLAUDE.md home.)
+  - **Belongs higher** (recurs across the subtree) -> lift the general up to the broadest covering tier,
+    leave only the DELTA below (`references [[general]]` + delta), or remove it if there is no delta.
+  - **Genuinely only-here** -> leave it (it is the delta). **Contradiction** -> the hand-written
+    `CLAUDE.md` is authoritative; correct OUR memory, never the rule.
+  - Guard: never LIFT a narrow rule into a tier that loads where it is irrelevant (net context LOSS);
+    never demote a must-always directive into a pulled/lazy body. Propose-first in `propose`, apply in
+    `auto`; never touch `CLAUDE.md` without confirmation. (CLAUDE.md policy: `bitranox:meta-self-improve`.)
 - **Filler-word classification (keeps memory recall precise) - PER PROJECT.** The per-prompt recall
   hook is model-free: it drops known filler and QUEUES any not-yet-classified keyword for THIS project
   (`self_improve_signals.load_pending_keywords(proj)`). Here, the slow pass: if the queue is non-empty,

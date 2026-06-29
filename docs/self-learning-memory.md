@@ -35,6 +35,21 @@ few times and trust how it reshapes things. The dream always backs itself up fir
 reversible - but the global pass can lift rules into the layer that loads in every project, and it is
 worth seeing that behave on your own data before you let it run unwatched.
 
+A dream does not always finish in one night. Some tangles take several passes to settle: the system
+keeps dreaming the same store until a pass changes nothing, the way a mind returns to the same dream
+night after night until the open question is worked through. A single consolidation that does not catch
+everything is normal - the next one picks up where it left off, and eventually the dreams go quiet
+because there is nothing left to resolve.
+
+What is not healthy is going in circles - redoing the same change every pass and never settling. The
+system watches for that and, instead of looping forever, stops and hands it to you, the way friends step
+in with an intervention when someone is stuck repeating the same pattern. You break the cycle and point
+it the right way.
+
+And for the choices that are simply yours to make - where a rule belongs, whether a duplicate should go,
+whether the folders should be reshaped - it does not guess either. It asks, the way you would talk
+something through with a therapist, then carries out what you decide.
+
 ## 2. Put knowledge where it belongs, by reach
 
 Some things are true only for one project. Some are true for a whole family of projects. Some are
@@ -46,7 +61,42 @@ in every project - so it lives at the top, kept concrete and ready to use. Water
 vague principle would only make it useless. Things get abstracted only when the specifics genuinely
 fit nowhere else; then the reusable idea moves up and the local detail stays home.
 
-## 3. Always within reach, never "maybe"
+## 3. Group your projects like departments in a company
+
+That filing only works if your folders mirror how your knowledge is actually divided. Picture a company:
+there is head office, there are departments - accounting, production, sales - and there are individual
+desks. Each department owns the knowledge its people share; head office holds what everyone must follow;
+a desk keeps its own notes.
+
+Your project tree is that org chart. The top is head office - the layer known in every project. Each
+grouping folder is a department, and its shared shelf holds what everything inside it needs. A single
+project is a desk with its own memory. A lesson settles at the lowest department whose whole domain it
+serves, so it reaches exactly the people who need it and no one else.
+
+This is why the shape of your folders matters. Put related projects together under a common parent and
+that parent becomes a real department, with a real place to keep their shared rules. Leave everything
+flat and unrelated and there are no departments - only desks and head office - so a rule shared by five
+related projects has nowhere sensible to live: it gets pushed all the way up to head office (where it
+loads for everyone, needed or not) or copied into all five desks (wasted room in every session).
+
+The rule of thumb is simple: if two projects would share a rule, they belong in the same department -
+put them under the same parent folder. A rough shape:
+
+    workspace/                 head office: rules for everything
+      python-libs/             a department: shared Python-library rules
+        lib-a/  lib-b/         desks
+      client-acme/             a department: one client's work
+        app-1/  app-2/
+      infra/                   a department: fleet and host rules
+        host-1/  host-2/
+
+Each department folder carries a one-line note about what it is for, so the system knows which shelf a
+lesson belongs on. Shaping the tree to match your real domains is the single biggest thing you can do to
+make the layering save room instead of wasting it. And if the shape drifts - a project that has grown
+into a different domain - the deep dream will notice and suggest moving it; only ever a suggestion, you
+make the call.
+
+## 4. Always within reach, never "maybe"
 
 A note that might be loaded when relevant is a note that will be missed when it matters. So the
 knowledge the system relies on is always present in context, not fetched on a hunch. We learned this
@@ -85,7 +135,7 @@ genuine topic in a codec one. So each project keeps its own learned filter, and 
 universally-generic words - the kind that are noise everywhere - are shared across all of them. One
 project's judgment never silences a word you actually search on in another.
 
-## 4. Connect, do not copy
+## 5. Connect, do not copy
 
 When a general rule and a specific case overlap, the system does not store both in full. It keeps
 the general rule once and lets the specific note point at it and add only what is different. You get
@@ -95,7 +145,7 @@ Connections only ever point "upward" - from the specific toward the general, fro
 toward the durable. That way deleting a project never leaves a dangling pointer behind: what was
 promoted up survives, and only the local details disappear with it, which is exactly right.
 
-## 5. Remove what is wrong, not what is quiet
+## 6. Remove what is wrong, not what is quiet
 
 It is tempting to let old or rarely-touched notes fade the way a brain drops unused links. We tried
 that and backed it out, because the signal it needs does not exist: a note sits in context and Claude
@@ -112,7 +162,7 @@ reversible. Must-follow rules are never dropped. The store stays lean not by for
 the always-on part is just tight one-line summaries - the detail lives a step away and costs nothing
 until it is read.
 
-## 6. Fast thinking and slow thinking
+## 7. Fast thinking and slow thinking
 
 Some work is genuinely novel and deserves real reasoning. Other work is the same handful of steps,
 again and again. When a routine gets repetitive, the system can turn it into a skill - often backed
@@ -128,7 +178,7 @@ steps go to the quickest, cheapest one. You get strong judgment where being wron
 and low cost where it is not - matched automatically, job by job. And because the line-up of models
 changes over time, the dream periodically re-checks which tool belongs to which job and adjusts.
 
-## 7. Your memory, your call
+## 8. Your memory, your call
 
 Where a sensible default depends on how you work, the system recommends what it thinks is best,
 explains the trade-off in plain terms, and then lets you decide. Your choice is remembered and
@@ -140,7 +190,7 @@ lesson across projects, where new skills should live, how much the dream should 
 ask first, and how cautious to be with anything sensitive. Before anything is reorganized, the whole
 store is backed up, so every change is reversible.
 
-## 8. What helps everyone, shared
+## 9. What helps everyone, shared
 
 Now and then a lesson turns out to be useful far beyond your setup. When that happens, the system can
 package it as a skill and offer it back to the shared marketplace, so other people benefit too. That
