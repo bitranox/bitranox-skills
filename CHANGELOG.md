@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.20.0] - 2026-06-29
+
+### Changed
+- `compuse-git`: new "Private git deps in CI need a read-only token" section (+ quick-ref row). A private
+  repo depending on other private `git+https://github.com/<Org>/...` repos fails CI install with
+  `could not read Username for 'https://github.com'`; fix = a read-only PAT Actions secret + a
+  `git config url.insteadOf` rewrite. The token is loaded from a password file via stdin (gh secret set),
+  never read or echoed by the agent; ask the user for the directory where their password files live, and
+  to create the file if missing. Generic (no org/host names).
+
 ## [4.19.0] - 2026-06-29
 
 ### Changed

@@ -16,6 +16,7 @@ description: Use when running git - commit, push, tag, rev-parse, marking a hook
 | A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                |
 | Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF. |
 | Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                               |
+| Private repo with private git deps in CI     | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                           |
 
 ## Exec bit + fileMode (the silent hook failure)
 
@@ -29,6 +30,39 @@ git ls-files -s path/to/hook.sh   # 100755 = executable in git
 ## Confusing failures are deterministic
 
 A git command that "fails confusingly" has a knowable cause; reproduce the minimal form rather than waving it off. `git rev-parse --short A B` is the canonical example: it always fails because `--short` takes a single revision.
+
+## Private git deps in CI need a read-only token
+
+A private repo that depends on OTHER private repos (`git+https://github.com/<Org>/<repo>` in its
+requirements) builds fine locally but fails in CI: the GitHub Actions runner has no read access to those
+other private repos, so dependency install dies with `could not read Username for 'https://github.com'`.
+
+The fix is a **read-only token + a git URL rewrite**, with the token loaded so it never reaches the
+model or a command line:
+
+1. **Get a read-only PAT into CI as a secret.** The user creates a fine-grained GitHub PAT with only
+   `contents: read` on the needed org/repos. They keep it in a **password file** (the agent never reads
+   or echoes the literal). Set it as an Actions secret by streaming the file via STDIN:
+   ```bash
+   # token stays out of argv / ps / scrollback - read in-process, piped to gh on stdin
+   python3 -c "import pathlib,subprocess as s; \
+   t=pathlib.Path('<creds-dir>/<org>_readonly.token').read_text().strip(); \
+   s.run(['gh','secret','set','GIT_PRIVATE_TOKEN_<Org>'],input='<Org>@'+t,text=True,check=True)"
+   ```
+2. **Where the password files live:** ASK the user for the directory that holds their credential/password
+   files (they usually keep them all in ONE place) and look there first; if the file is not there, ASK
+   them to create it. Never inline, invent, or hard-code the token, and never print it.
+3. **Make CI use it.** If the workflow template already auto-rewrites from a secret convention (e.g. a
+   `GIT_PRIVATE_TOKEN_<Org>` secret valued `<Org>@<pat>`), just setting that secret is enough - do not
+   hand-edit a template-managed workflow. Otherwise add a rewrite step before the install, one per org:
+   ```yaml
+   - run: git config --global url."https://${GIT_TOKEN}@github.com/<Org>/".insteadOf "https://github.com/<Org>/"
+     env:
+       GIT_TOKEN: ${{ secrets.GIT_PRIVATE_TOKEN }}   # the read-only PAT, never the literal in YAML
+   ```
+
+A freshly created private repo with private git deps needs this BEFORE its first green CI / release.
+(See the global no-secrets rule: load secrets from a keyfile via stdin/env, never echo the literal.)
 
 ## Before you push / PR / publish: review for leaked data
 
