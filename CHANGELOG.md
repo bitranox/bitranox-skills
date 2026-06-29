@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.17.0] - 2026-06-29
+
+### Changed
+- `infra-proxmox` 7.3: new "Running Docker on a Proxmox host / inside an LXC (host-ops)" note - Docker in
+  an unprivileged LXC needs nesting+keyctl + iptables-legacy; kernel-global sysctls set inside an LXC are
+  ignored (set them on the host under root_volume/etc/sysctl.d/); a wrapper that restarts Docker uses
+  Wants=docker.service not Requires=; use `docker compose` v2 not `docker-compose` v1. Surfaced by the
+  deep dream as shared fleet host-ops; folded into the shared skill (the host tree had no umbrella repo,
+  so a tree rung could not be shared and trimming the per-host repos would have lost version-controlled
+  knowledge).
+
 ## [4.16.0] - 2026-06-29
 
 ### Changed
