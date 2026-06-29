@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.10.0] - 2026-06-29
+
+### Added
+- New skill **`coding-input-sanitization`** - the single canonical home for untrusted-input handling,
+  scoped to the TRUST BOUNDARY (application / facing-API edge), explicitly NOT the libraries between
+  boundaries. Two directions: validate-and-bound on the way IN (typed model, length/size limits,
+  charset), escape-per-sink on the way OUT - parametrized SQL (SQL injection), HTML autoescape (XSS),
+  argv-not-shell (command injection), path-traversal, deserialization, SSRF, header/log injection.
+  Five skills now cross-reference it instead of restating the rules: `coding-python-clean-architecture`,
+  `coding-python-enforce-data-architecture-strict`, `process-review-enhance-code-quality`,
+  `coding-rust`, `coding-bash-reference`. (The always-on baseline lives in the machine-local global
+  rules layer, not shipped here.)
+
 ## [4.9.2] - 2026-06-29
 
 ### Fixed

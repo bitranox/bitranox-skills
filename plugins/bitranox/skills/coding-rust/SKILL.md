@@ -66,3 +66,9 @@ reviewing Rust; each rule states the failure it prevents.
   public type - build/test the whole workspace before pushing, or downstream consumers break silently.
 - Forking/extending an upstream crate: keep changes at the edges (new files, additive methods, existing
   extension points) rather than editing core types, to keep the merge-conflict surface small.
+
+## See also
+
+For untrusted input at a service/CLI boundary (validate at the edge, escape per sink - SQL/HTML/shell/
+path), the language-agnostic rules are in `bitranox:coding-input-sanitization`. Sanitize at the
+boundary, not in the libraries between.

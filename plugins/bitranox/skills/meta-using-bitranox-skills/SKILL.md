@@ -108,7 +108,7 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 
 - **Process and quality:** `process-plan-brainstorming`, `process-plan-writing-plans`, `process-plan-executor`, `process-agents-subagent-driven-development`, `process-agents-dispatching-parallel`, `process-test-driven-development`, `process-debug-systematic`, `process-review-verification-before-completion`, `process-review-requesting-code-review`, `process-review-receiving-code-review`, `process-ship-finishing-development-branch`, `git-worktrees`, `process-review-enhance-code-quality`, `meta-self-improve`, `meta-dream-project`, `meta-dream-global`, `meta-collect-knowledge`, `meta-memory-settings`, `meta-skill-writer`, `meta-adopting-external-skills`
 - **Architecture:** `coding-python-clean-architecture`, `coding-bash-clean-architecture`, `coding-python-enforce-data-architecture-strict`
-- **Language and tooling references:** `coding-bash-reference`, `coding-rust`, `coding-python-uv`, `coding-python-rpyc`, `coding-python-textual`, `coding-python-performance-review`, `coding-python-use-modern-libraries`, `coding-python-gitignore`
+- **Language and tooling references:** `coding-bash-reference`, `coding-rust`, `coding-input-sanitization`, `coding-python-uv`, `coding-python-rpyc`, `coding-python-textual`, `coding-python-performance-review`, `coding-python-use-modern-libraries`, `coding-python-gitignore`
 - **Editing structured files and docs:** `files-edit-json`, `files-edit-xml`, `files-edit-yml`, `docs-md-table-formatting`, `docs-convert-markitdown`
 - **Shell / git / ssh / remote-control mechanics:** `compuse-bash`, `compuse-git`, `compuse-ssh`, `compuse-vnc`
 - **Writing:** `write-humanize-de`, `write-humanize-en`

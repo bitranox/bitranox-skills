@@ -73,6 +73,10 @@ Data passed across a boundary must always be in the form most convenient for the
 
 Adapters/edges are the only place external data enters, so two rules are enforced there:
 
+> Full per-sink escaping rules (SQL parametrization, HTML/XSS, shell, path traversal, deserialization)
+> and the boundary-vs-internal-libs scope live in `bitranox:coding-input-sanitization`. Sanitize at the
+> app/facing-API edge, NOT in the libraries between boundaries.
+
 - **Sanitize and bound every external input.** Validate type and shape, enforce length limits
   (guard overflow/underflow), and handle arbitrary bytes/characters safely - non-ASCII, emoji,
   CJK, control characters, and binary data are rejected, normalized, or escaped, never trusted

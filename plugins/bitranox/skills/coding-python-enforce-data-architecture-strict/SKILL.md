@@ -7,6 +7,10 @@ description: Use when refactoring or reviewing Python code to enforce a strict d
 
 Refactor Python code to follow strict data architecture rules using Pydantic models and Enums.
 
+> Pydantic-at-the-boundary is also the input-sanitization edge. For the full per-sink output escaping
+> (parametrized SQL, HTML autoescape, shell argv) and the boundary-vs-internal-libs scope, see
+> `bitranox:coding-input-sanitization`.
+
 ---
 
 ## Architecture Rules

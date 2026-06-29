@@ -560,6 +560,9 @@ echo "$num"  # prints: 2 (string was evaluated!)
 # declare -i x; x="a]$(cmd)" would execute cmd
 ```
 
+For handling untrusted input at a script/CLI boundary in general (validate at the edge, never eval it,
+pass argv not a shell string, escape per sink), see `bitranox:coding-input-sanitization`.
+
 ### `trap EXIT` is reset in subshells
 
 ```bash

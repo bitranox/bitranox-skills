@@ -111,7 +111,9 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
 - **Sanitized, bounded input.** External input is length-bounded (guard overflow/underflow),
   type-validated, and encoding-safe - non-ASCII, emoji, CJK, control characters, and binary data
   are rejected/normalized/escaped, never trusted raw - and the handling is tested with adversarial
-  and edge inputs.
+  and edge inputs. Check input validation AND per-sink output escaping (parametrized SQL, HTML
+  autoescape, shell argv) per `bitranox:coding-input-sanitization` - at the boundary, not internal
+  libs; do not flag internal library calls for "missing input sanitization".
 - **Validated structured input.** Structured data passed in (a dict, JSON, an API/IPC payload, a
   deserialized object) is parsed into a typed model before use - never trusted to have the right
   keys, types, or shape. Exception: items the project instructions deliberately accept.
