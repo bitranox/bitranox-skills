@@ -73,6 +73,9 @@ not crash".
   WRONG-VENV smell, not a real defect. Before trusting such a failure, verify the interpreter:
   `uv run python -c "import sys; print(sys.executable)"` should point at `./.venv`. (Evidence before
   conclusions - see `bitranox:process-review-verification-before-completion`.)
+- **Keep `.venv` out of git.** The project venv is a per-machine build artifact - never commit it;
+  gitignore it (and untrack it if it slipped in). Mechanics: `bitranox:compuse-git` "Don't track local
+  build artifacts".
 
 ## Prune low-value tests
 

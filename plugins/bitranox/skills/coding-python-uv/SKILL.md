@@ -169,15 +169,9 @@ when a failure looks like genuine env corruption; recreating on every run is slo
 Confirm which interpreter you got with `uv run python -c "import sys; print(sys.executable)"` (it should
 point at `./.venv`) before trusting a "missing module" or phantom-type failure.
 
-**`.venv/` is local - never commit it.** It is a per-machine build artifact (absolute paths, platform
-binaries); committing it bloats the repo and breaks on every other machine. Ensure `.venv/` is in
-`.gitignore` (along with `__pycache__/`, `*.pyc`, `*.egg-info/`). If it was already committed, untrack it
-without deleting your working copy and commit the removal:
-
-```bash
-git check-ignore -q .venv || printf '%s\n' '.venv/' '__pycache__/' '*.pyc' >> .gitignore
-git ls-files --error-unmatch .venv >/dev/null 2>&1 && git rm -r --cached .venv   # untrack if tracked
-```
+**`.venv/` is local - never commit it.** uv's project venv is a per-machine artifact (absolute paths,
+platform binaries); ensure `.venv/` is gitignored and untrack it if it slipped in. Mechanics (and the
+full artifact list) live in `bitranox:compuse-git` "Don't track local build artifacts".
 
 ---
 

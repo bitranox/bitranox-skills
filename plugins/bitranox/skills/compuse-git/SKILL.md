@@ -7,16 +7,17 @@ description: Use when running git - commit, push, tag, rev-parse, marking a hook
 
 ## Quick reference
 
-| Situation                                    | Rule                                                                                                                                                                                                                                                                               |
-|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `git rev-parse --short` with 2+ revs         | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev.                                                                                                                  |
-| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk.                                                                                                                                                |
-| Make a hook/script executable                | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`.                                                                      |
-| Did a mode change "take"?                    | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`.                                                                                                                                                                  |
-| A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                |
-| Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF. |
-| Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                               |
-| Private repo with private git deps in CI     | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                           |
+| Situation                                    | Rule                                                                                                                                                                                                                                                                                                                     |
+|----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `git rev-parse --short` with 2+ revs         | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev.                                                                                                                                                        |
+| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk.                                                                                                                                                                                      |
+| Make a hook/script executable                | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`.                                                                                                            |
+| Did a mode change "take"?                    | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`.                                                                                                                                                                                                        |
+| A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                                                      |
+| Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF.                                       |
+| Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                                                                     |
+| Local build artifacts (`.venv`, caches)      | NEVER track per-machine artifacts: `.venv/`, `__pycache__/`, `*.pyc`, `*.egg-info/`, `node_modules/`, `dist/`, `build/`, `.pytest_cache/`. Tool-agnostic (a `.venv` from `python -m venv`/`virtualenv`/`poetry`/`uv` is equally off-limits). Gitignore them; if already tracked, `git rm -r --cached <path>`. See below. |
+| Private repo with private git deps in CI     | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                                                                 |
 
 ## Exec bit + fileMode (the silent hook failure)
 
@@ -30,6 +31,22 @@ git ls-files -s path/to/hook.sh   # 100755 = executable in git
 ## Confusing failures are deterministic
 
 A git command that "fails confusingly" has a knowable cause; reproduce the minimal form rather than waving it off. `git rev-parse --short A B` is the canonical example: it always fails because `--short` takes a single revision.
+
+## Don't track local build artifacts
+
+Per-machine, regenerable artifacts must never be committed - they carry absolute paths and platform
+binaries that break on every other machine and bloat the repo. This is TOOL-AGNOSTIC: a `.venv/` from
+`python -m venv`, `virtualenv`, `poetry`, or `uv` is equally off-limits, as are `__pycache__/`, `*.pyc`,
+`*.egg-info/`, `node_modules/`, `dist/`, `build/`, `.pytest_cache/`, and coverage files. Keep them out of
+git, and untrack any that slipped in (without deleting the working copy):
+
+```bash
+git check-ignore -q .venv || printf '%s\n' '.venv/' '__pycache__/' '*.pyc' '*.egg-info/' >> .gitignore
+git ls-files --error-unmatch .venv >/dev/null 2>&1 && git rm -r --cached .venv   # untrack if committed
+```
+
+A file already tracked is NOT covered by `.gitignore` until you `git rm --cached` it - gitignore only
+stops UNtracked files from being added.
 
 ## Private git deps in CI need a read-only token
 

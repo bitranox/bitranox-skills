@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.22.0] - 2026-06-29
+
+### Changed
+- "Never track `.venv` / local build artifacts" is now a tool-agnostic git-hygiene rule with one
+  canonical home and cross-refs (no duplication). `compuse-git` carries the full rule (new "Don't track
+  local build artifacts" section + quick-ref row): a `.venv` from python -m venv / virtualenv / poetry /
+  uv is equally off-limits, as are `__pycache__/`/`*.pyc`/`*.egg-info/`/`node_modules/`/`dist/`/`build/`;
+  gitignore them and `git rm -r --cached` if already tracked (gitignore does not untrack). `coding-python-uv`
+  and `process-test-design` now carry a one-line cross-ref to it instead of restating it.
+
 ## [4.21.0] - 2026-06-29
 
 ### Changed
