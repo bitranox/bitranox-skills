@@ -22,6 +22,18 @@ def test_strict_asst_hit():
     assert not S.strict_asst_hit("Done, added the helper and a test.")
 
 
+def test_strict_asst_hit_found_it_discovery():
+    # "found it" and discovery phrasings are realization signals
+    assert S.strict_asst_hit("Found it - the bug was in the parser.")
+    assert S.strict_asst_hit("I found the root cause: a stale cache.")
+    assert S.strict_asst_hit("found out why it hangs on reboot")
+    assert S.strict_asst_hit("the culprit is the iptables backend")
+    assert S.strict_asst_hit("Ursache gefunden: falscher Interpreter.")  # German
+    # negatives: a NOT-found phrasing must not trip the strict gate
+    assert not S.strict_asst_hit("I haven't found it yet.")
+    assert not S.strict_asst_hit("could not find it anywhere")
+
+
 def test_broad_user_flags_near_miss_not_caught_by_strict():
     text = "why did you change that? it's not working again"
     assert S.broad_matches("user", text)          # broad flags it

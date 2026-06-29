@@ -521,6 +521,9 @@ REALIZATION_PATTERN = re.compile(
     r"now i (understand|see|realize|get it)\b"
     r"|i (now|finally) (understand|see|realize)\b"
     r"|i(.?ve| have)? figured (it |this )?out|i figured out\b"
+    r"|(?<!not )(?<!n't )\bfound it\b"
+    r"|\bfound (the|a|its) (bug|cause|culprit|problem|issue|leak|regression|reason|root cause)\b"
+    r"|\bfound out (that|why|how|where)\b|\bthe culprit (is|was)\b"
     r"|the (real|actual) (topolog|architect|structure|setup|layout|wiring|flow|picture|story|design)"
     r"|it turns out\b|turns out (that|the)\b"
     r"|(that|this) explains (the|why|how|what)\b"
@@ -530,7 +533,8 @@ REALIZATION_PATTERN = re.compile(
     r"|\b(now|it all|everything|it)('?s| is| are)? (clear|much clearer)\b"
     r"|\bmakes sense now\b|\bnow [^.\n]{0,20}makes sense\b"
     r"|jetzt (verstehe ich|wird klar|ergibt)|jetzt ist (alles |es )?klar|klares bild"
-    r"|stellt sich heraus|herausgefunden",
+    r"|stellt sich heraus|herausgefunden"
+    r"|\b(fehler|ursache|problem|grund|bug) gefunden\b|\bda (ist|war) (es|der fehler|das problem)\b",
     re.IGNORECASE,
 )
 
@@ -564,6 +568,7 @@ BROAD_ASST_PATTERN = re.compile(
     r"|\bthe (issue|problem|bug|root cause|reason) (is|was|turned out|ended up)\b"
     r"|\b(in hindsight|as it turns out)\b"
     r"|\bi see (why|how|what|now|the)\b"
+    r"|\bfound (it|the|out)\b|\bthe culprit\b|\bgefunden\b"
     r"|\b(ah|oh|oops|whoops)[, ]|\bwait[, ]",
     re.IGNORECASE,
 )

@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.23.0] - 2026-06-29
+
+### Changed
+- self-improve gate now recognizes "found it" / discovery phrasing as a realization signal.
+  `self_improve_signals.py`: `REALIZATION_PATTERN` (live strict gate) gains `found it`, `found the
+  bug/cause/culprit/...`, `found out why/how`, `the culprit is/was`, and German `<x> gefunden` / `da ist
+  es` - with a negative lookbehind so "haven't found it" / "could not find it" do NOT trip it;
+  `BROAD_ASST_PATTERN` (SessionEnd audit) gains the looser `found it/the/out`, `culprit`, `gefunden`.
+  `meta-self-improve` realization examples updated to include "found it / found the root cause". (+1 test.)
+
 ## [4.22.0] - 2026-06-29
 
 ### Changed
