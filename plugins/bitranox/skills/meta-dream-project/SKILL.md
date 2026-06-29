@@ -74,6 +74,11 @@ Create one todo per step.
      promotes eagerly; a model-INFERRED generalization needs corroboration across >= 2 dreams first
      (`should_promote` / `note_promotion_candidate` in `self_improve_signals.py`; the `promotion` config
      knob). Those counters live OUT of the dreamed store, so gating never breaks convergence (step 11).
+   - **Dedup the promotion against `CLAUDE.md`, not just memory.** Before lifting a rule to global, grep
+     it against the project root + ancestor `CLAUDE.md` (and the global layer); during the conversion
+     phase many rules still live in `CLAUDE.md`, so promoting one already there would DUPLICATE it. If
+     it is already in a `CLAUDE.md`, do NOT duplicate - FLAG it (a possible declutter) and never edit
+     `CLAUDE.md` without user confirmation.
    - The global rules layer is machine-local -> auto-apply; editing a version-controlled `CLAUDE.md` is
      propose-first (auto in `auto` mode), and only through the sanctioned bounded paths (step-3b /
      CLAUDE.md policy in `bitranox:meta-self-improve`).

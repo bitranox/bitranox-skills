@@ -146,6 +146,8 @@ Brief, practical guidelines for structuring modules in Python layered architectu
 
 **Depend on abstractions for volatile code.** Domain and application layers import only `Protocol`s and dataclasses. Stable things (stdlib, well-established libraries) are fine to depend on directly. The composition root is the only place that imports concrete adapter classes.
 
+**No concrete paths, URLs, or hostnames in the domain.** Filesystem paths, endpoint URLs, hostnames, and external-service strings live ONLY in config passed (as a Pydantic model) from the composition root into adapters. The domain/application layers never read an env var or hardcode a path. This is testable: a unit test that instantiates an adapter with explicit values and reads NO env var proves the layer is pure -- if a test needs an env var or a real path constant, a config value leaked into the wrong layer.
+
 **Prefer immutability in the domain.** Use `@dataclass(frozen=True, slots=True)` for entities and value objects. Push mutable state to adapters where it belongs, protected by the Unit of Work pattern.
 
 **Use `Protocol` to invert dependencies.** When the natural direction of a function call opposes the desired dependency direction, introduce a `Protocol` in the inner layer and implement it in the outer layer. This is what makes the dependency rule possible.

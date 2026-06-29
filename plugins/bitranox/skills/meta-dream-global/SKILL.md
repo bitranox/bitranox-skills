@@ -50,19 +50,31 @@ Create one todo per step.
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**
    or writing a **self-contained local copy** (marked so it is not re-promoted; scrubbed). Single source
    of truth - do not re-implement the funnel here.
-3. **Global-dream scan (the cross-project read).** Scan ACROSS project memory stores for recurring or
-   broadly-useful content and factor it up to the lowest covering altitude. **FAN OUT:** one **`sonnet`**
-   subagent per project store (read it, return recurring / broadly-useful candidate entries), in
-   parallel, to keep N stores out of the main context; reserve **`opus`** (the main agent) for the
-   promotion-gate and the altitude / normalization decisions. (Tiers: "Concrete tiers" in
-   `bitranox:process-agents-subagent-driven-development`.)
-4. **Promotion gate (cross-project corroboration).** A promotion to the global layer loads into EVERY
-   session, so it is high-blast. Here the gate may use the **cross-project corroboration** path - a
-   model-inferred generalization promotes once it is seen in **>= 2 distinct projects** (vs the
-   same-project >= 2-dreams dwell that meta-dream-project uses). A USER-stated concrete rule still
-   promotes eagerly. Keep promoted rules CONCRETE (never water down a concrete-but-universal rule);
-   abstract only when the specifics fit nowhere else. `should_promote` / `note_promotion_candidate` in
-   `self_improve_signals.py`; counters live OUT of the dreamed store so a converged re-run is a no-op.
+3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
+   fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
+   cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
+   --check` over the altitude chains (orphans / downward / over-cap), `model_review_due()`, any pending
+   filler queue. If nothing material changed since the last run, report convergence and STOP - a global
+   dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
+   (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
+   always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-global-deep`.
+   - **Deep scan (on confirmation): FAN OUT** one **`sonnet`** subagent per project store (or per thematic
+     batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries;
+     reserve **`opus`** (the main agent) for the promotion gate and altitude / normalization decisions.
+     (Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to the global layer loads
+   into EVERY session, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
+   generalization promotes once seen in **>= 2 distinct projects** (vs the same-project >= 2-dreams dwell
+   meta-dream-project uses); a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
+   candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
+   (project roots + ancestors + the workspace), not only the memory stores - during the conversion phase
+   many rules still live in `CLAUDE.md`, and promoting one that is already there would DUPLICATE it.
+   Classify each candidate: already-global/skill -> skip; already in a `CLAUDE.md` -> do NOT duplicate,
+   FLAG it for the user (a possible declutter, but never edit `CLAUDE.md` without confirmation);
+   new + corroborated + nowhere-else -> promote. Keep promoted rules CONCRETE (never water a
+   concrete-but-universal rule down); abstract only when specifics fit nowhere else. `should_promote` /
+   `note_promotion_candidate` in `self_improve_signals.py`; counters live OUT of the dreamed store so a
+   converged re-run is a no-op.
 5. **Outbound cross-pollination.** When a learning is useful BEYOND its project, do not write into other
    projects - **promote it to the lowest common ancestor** (often the global layer) and let the native
    downward cascade deliver it; a project in a DIFFERENT subtree receives it via ITS inbound gather. A

@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.13.0] - 2026-06-29
+
+### Added
+- New skill **`meta-dream-global-deep`** - the exhaustive cross-project dream that ALWAYS runs the full
+  semantic fan-out scan (every store + every CLAUDE.md), no convergence shortcut, no asking. The normal
+  `meta-dream-global` now convergence-checks cheaply first and ASKS before launching the expensive scan;
+  `-deep` is for when you want the thorough read regardless.
+
+### Changed
+- **Dreams now dedup promotions against CLAUDE.md, not only memory stores.** During the conversion phase
+  many cross-project rules still live in `CLAUDE.md`; promoting one already there would duplicate it.
+  `meta-dream-global` (step 4 gate) and `meta-dream-project` (promotion step) now grep each candidate
+  against the project + ancestor + workspace `CLAUDE.md` before promoting: already-there -> do NOT
+  duplicate, FLAG for the user; never edit `CLAUDE.md` without confirmation.
+- `meta-dream-global` step 3: cheap convergence/integrity pre-check, then ask before the deep fan-out
+  (was: unconditional fan-out).
+- Skill content from the cross-project scan: `compuse-ssh` (long remote reload outlives the SSH timeout
+  -> verify real state, never infer failure from a dropped connection); `coding-python-clean-architecture`
+  (no concrete paths/URLs/hostnames in the domain - config flows from the composition root; a no-env-read
+  test proves layer purity); `coding-python-use-modern-libraries` (httpx2 is the legit Pydantic-org
+  successor, scanner typosquat flags are false positives - re-verify, do not auto-swap).
+
 ## [4.12.0] - 2026-06-29
 
 ### Changed
