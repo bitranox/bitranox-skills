@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.18.0] - 2026-06-29
+
+### Changed
+- Missing-rung detection now handles the "no shared/tracked home" case. When the folder that should hold
+  a department/HQ rung is not itself a tracked shareable repo (a plain dir whose members are each their
+  own repo), `meta-dream-global-deep` no longer proposes a bare untracked rung or an unsafe trim; it
+  PROPOSES an umbrella repo named `umbrella-<topic>` (e.g. `umbrella-machines`) that version-controls
+  only the rung CLAUDE.md files and ignores the nested member repos, and ASKS private or public
+  (default private) and local-only vs remote. `meta-dream-project`'s reconciliation guard gains the
+  matching trim-safety rule: never trim a tracked/shared lower copy into a less-durable broader home;
+  propose the umbrella first.
+
 ## [4.17.0] - 2026-06-29
 
 ### Changed

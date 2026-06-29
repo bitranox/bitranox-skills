@@ -65,6 +65,18 @@ the scan in step 3 is run; do not duplicate the rest.
      tier to the ancestor chain of every project beneath it, so recheck their deltas. Reuse the descriptor
      mechanism (`meta-self-improve` "Fill descriptor gaps" + the `<!-- bitranox:self-learning -->` block);
      propose-first, never created without confirmation.
+   - **No shared/tracked home for the rung? Propose an umbrella repo.** If the folder that should hold the
+     rung is NOT itself a tracked, shareable git repo (it is a plain directory whose members are each
+     their OWN independent repos - common for a fleet/host tree), then a `CLAUDE.md` placed there is
+     untracked and machine-local, and trimming the members' TRACKED copies into it would LOSE
+     version-controlled knowledge (other clones never see the rung). In that case do NOT create a bare
+     untracked rung and do NOT trim; instead PROPOSE an **umbrella repo** to host the rung: a thin repo
+     named **`umbrella-<topic>`** (e.g. `umbrella-machines`) that version-controls ONLY the rung
+     `CLAUDE.md` files and ignores the nested member repos (a whitelist `.gitignore`; see
+     `bitranox:coding-python-gitignore`). ASK the user whether it should be **private or public
+     (default: private)**, and whether it stays local-only or gets a remote (a remote is needed only to
+     share the rung to other machines/people; local-only still gives version history + makes a trim
+     safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
 5. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check`, skill-fit batched change, report counts).
 

@@ -141,8 +141,12 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   - **Genuinely only-here** -> leave it (it is the delta). **Contradiction** -> the hand-written
     `CLAUDE.md` is authoritative; correct OUR memory, never the rule.
   - Guard: never LIFT a narrow rule into a tier that loads where it is irrelevant (net context LOSS);
-    never demote a must-always directive into a pulled/lazy body. Propose-first in `propose`, apply in
-    `auto`; never touch `CLAUDE.md` without confirmation. (CLAUDE.md policy: `bitranox:meta-self-improve`.)
+    never demote a must-always directive into a pulled/lazy body; never trim a TRACKED/shared lower copy
+    into a broader home that is LESS durable/shared (e.g. an untracked dir) - that loses version-controlled
+    knowledge. If the broader home is not itself a tracked, shareable repo, propose an `umbrella-<topic>`
+    repo to host it first (ask private/public, default private; see `bitranox:meta-dream-global-deep`).
+    Propose-first in `propose`, apply in `auto`; never touch `CLAUDE.md` without confirmation.
+    (CLAUDE.md policy: `bitranox:meta-self-improve`.)
 - **Filler-word classification (keeps memory recall precise) - PER PROJECT.** The per-prompt recall
   hook is model-free: it drops known filler and QUEUES any not-yet-classified keyword for THIS project
   (`self_improve_signals.load_pending_keywords(proj)`). Here, the slow pass: if the queue is non-empty,
