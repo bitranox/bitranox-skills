@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.6.1] - 2026-06-30
+
+### Fixed
+- Restore master consistency after a shared-checkout sweep in 5.6.0 (`c5ad104` accidentally committed
+  foreign already-staged files): removed the superseded opt-in copy
+  `skills/compuse-git/scripts/git-commit-branch-guard.py` (it shipped without tests -> tests-exist fail;
+  the real hook lives at `hooks/git-commit-branch-guard.py`), and added the `sec-appsec-web-baseline`
+  entry to the `meta-using-bitranox-skills` catalog (it was shipped without its catalog line ->
+  skills-index fail).
+
 ## [5.6.0] - 2026-06-30
 
 ### Added
