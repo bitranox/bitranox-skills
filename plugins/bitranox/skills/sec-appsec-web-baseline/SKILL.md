@@ -15,7 +15,7 @@ locks users out.
 The skill owns these dimensions and nothing else:
 
 1. **Security response headers** - CSP, HSTS, X-Content-Type-Options, X-Frame-Options/`frame-ancestors`,
-   Referrer-Policy, Permissions-Policy, X-XSS-Protection (must be `0`).
+   Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy, X-XSS-Protection (must be `0`).
 2. **Cookie flags** - `Secure` / `HttpOnly` / `SameSite` on every `Set-Cookie`.
 3. **Transport** - HTTP->HTTPS 301/308 redirect, TLS 1.2/1.3 only, no mixed content.
 4. **Information leakage** - server/framework version tokens.
@@ -30,9 +30,9 @@ Use the Read tool to load the reference below before proposing fixes.
 
 ## Bundled scripts
 
-| Script             | Purpose                                                                                                                                                                                                                            |
-|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `audit_headers.py` | `uv run audit_headers.py https://host` - one GET + a plain-HTTP HEAD, grades headers/cookies/redirect/mixed-content SEVERE/MEDIUM/MINOR/OK, exits non-zero if not clean. `--json` for machine output. No external grading service. |
+| Script             | Purpose                                                                                                                                                                                                                                                                                                                                            |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `audit_headers.py` | `uv run audit_headers.py https://host` - one GET + a plain-HTTP HEAD, grades headers/cookies/redirect/mixed-content SEVERE/MEDIUM/MINOR/OK, exits non-zero if not clean. `--json` for machine output. `--proxy URL` egresses through an external proxy (audit a public site from outside - see net-rotating-proxies). No external grading service. |
 
 ## Workflow
 
@@ -60,6 +60,13 @@ Defaults this skill prescribes; deviate only with a reason. Full values + snippe
 - **`X-XSS-Protection: 0`** (or omit). The legacy auditor is removed and buggy; never `1`.
 - **Gate on the local scanner**, not an external grader (Observatory/csp-evaluator move and rate-limit) -
   use those only as a bonus cross-check.
+- **Audit a PUBLIC site from OUTSIDE the internal network.** Headers/TLS/redirects are usually added at
+  the edge (Traefik/CDN); a scan from inside hits the origin (internal DNS -> internal IP, no edge
+  headers) and grades the wrong thing. Egress externally: `--proxy http://<proxy>` for one page, or fan a
+  multi-page worklist across `net-rotating-proxies` (fast, parallel), ideally in SUBAGENTS (cross-ref
+  `bitranox:process-agents-dispatching-parallel`) so each scan's output stays out of the main context.
+  Gate proxy-health on a written output file, NOT the scanner's exit code (which is the security verdict,
+  not a connection signal).
 
 ## Scope boundary (hand off to sibling skills)
 
@@ -87,4 +94,5 @@ Defaults this skill prescribes; deviate only with a reason. Full values + snippe
 | Verifying only an external grade                  | Observatory/csp-evaluator/hstspreload move + rate-limit + go offline; gate on the local scanner                                                |
 | Scanning only `/`                                 | The app may inject inline scripts or set cookies on other paths; scan representative pages                                                     |
 | Auto-applying fixes                               | Diagnose + propose diffs; apply only after the user confirms                                                                                   |
+| Auditing a public site from INSIDE the network    | You grade the internal origin, not the edge visitors hit; egress outside via `--proxy` / `net-rotating-proxies`                                |
 | Pulling in GDPR/auth/pentest/perf work            | Out of scope - hand off to the sibling skill above                                                                                             |

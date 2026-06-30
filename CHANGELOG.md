@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.7.0] - 2026-06-30
+
+### Fixed
+- `sec-appsec-web-baseline`: fix blocking bugs found in review of the 5.6.0 debut. The scanner now
+  imports `httpx2` (it had imported `httpx`, which breaks in a clean `uv run`); mixed-content detection no
+  longer false-positives on a plain `<a href="http://">` link (only subresource-loading elements count)
+  and now also catches `srcset`; a report-only CSP is graded MINOR (not OK) and never counts as
+  clickjacking protection; `no-referrer-when-downgrade` is no longer graded OK; the server-version check
+  no longer false-fires on a product name with a digit (e.g. `AmazonS3`).
+
+### Added
+- `sec-appsec-web-baseline`: a `Cross-Origin-Opener-Policy` check + reference entry; a `--proxy URL` egress
+  on `audit_headers.py` and a workflow note to audit PUBLIC sites from OUTSIDE the internal network (route
+  via `net-rotating-proxies`, ideally in subagents) so the edge is measured, not the internal origin.
+  (+9 tests, 39 total.)
+
 ## [5.6.3] - 2026-06-30
 
 ### Fixed
@@ -56,10 +72,6 @@ installed copies and needs no bump.
   testable graders + 30 pytest tests, `references/security-headers.md` (values, nginx snippets, safe
   rollout, and gotchas such as the nginx `add_header` inheritance reset), and the safe-rollout discipline
   (staged HSTS, CSP report-only first). Added a new "Security" grouping to the orientation index.
-
-## [5.6.0] - 2026-06-30
-
-### Added
 - New always-active hook **`git-commit-branch-guard`** (PreToolUse Bash, warn-only, fail-open): warns
   before a `git commit` when local HEAD is behind/diverged from its upstream (origin advanced under you -
   the shared-checkout / multi-session hazard). Low-noise everywhere - the behind/diverged check runs in

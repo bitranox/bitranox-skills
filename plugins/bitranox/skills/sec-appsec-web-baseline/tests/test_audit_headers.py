@@ -160,3 +160,53 @@ def test_summarize_counts_all_levels():
     findings = [a.Finding("a", "SEVERE", ""), a.Finding("b", "MEDIUM", ""), a.Finding("c", "OK", "")]
     counts = a.summarize(findings)
     assert counts["SEVERE"] == 1 and counts["MEDIUM"] == 1 and counts["OK"] == 1 and counts["MINOR"] == 0
+
+
+# ---- regression: review fixes ----
+def test_mixed_content_ignores_anchor_href():
+    # a plain <a href="http://"> navigates away - it is NOT a mixed-content subresource
+    assert a._mixed_content('<a href="http://wikipedia.org/x">link</a>', https=True) == []
+
+
+def test_mixed_content_flags_srcset():
+    findings = a._mixed_content('<img srcset="http://cdn/x.png 1x, https://cdn/x2.png 2x">', https=True)
+    assert findings and findings[0].severity == "SEVERE"
+
+
+def test_mixed_content_flags_link_stylesheet():
+    findings = a._mixed_content('<link rel="stylesheet" href="http://cdn/x.css">', https=True)
+    assert findings and findings[0].severity == "SEVERE"
+
+
+def test_csp_report_only_is_minor():
+    assert a._csp("default-src 'self'", enforced=False).severity == "MINOR"
+
+
+def test_grade_report_only_csp_is_minor_and_clickjacking_still_flags():
+    # report-only CSP protects nothing: csp -> MINOR, and clickjacking must NOT read it as OK
+    headers = {"Content-Security-Policy-Report-Only": "default-src 'self'; frame-ancestors 'none'"}
+    findings = a.grade(headers, [], https=True, http_status=301, http_location="https://x/", html="")
+    by = {f.check: f.severity for f in findings}
+    assert by["csp"] == "MINOR"
+    assert by["clickjacking"] == "MEDIUM"
+
+
+def test_referrer_no_referrer_when_downgrade_is_minor():
+    assert a._referrer_policy("no-referrer-when-downgrade").severity == "MINOR"
+
+
+def test_coop_present_ok_missing_minor():
+    assert a._coop("same-origin-allow-popups").severity == "OK"
+    assert a._coop("same-origin").severity == "OK"
+    assert a._coop(None).severity == "MINOR"
+
+
+def test_redirect_302_to_https_is_medium():
+    assert a._redirect(302, "https://x/").severity == "MEDIUM"
+    assert a._redirect(307, "https://x/").severity == "MEDIUM"
+
+
+def test_server_token_product_name_with_digit_is_ok():
+    # AmazonS3 has a digit but no version pattern - must not be flagged
+    assert a._server_token("AmazonS3").severity == "OK"
+    assert a._server_token("nginx/1.24.0").severity == "MINOR"
