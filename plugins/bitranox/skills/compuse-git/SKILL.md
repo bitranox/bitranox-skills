@@ -111,9 +111,15 @@ session's uncommitted files. Before any commit, verify state (cheap, determinist
 ```bash
 git branch --show-current                            # the branch you expect? (not a sibling's, not detached)
 git rev-list --left-right --count HEAD...@{upstream}  # "<ahead> <behind>"; behind/diverged = origin advanced
-git add path/to/your/file ...                         # stage ONLY your files - never `git add -A` / `-u`
+git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (pathspec); -m BEFORE --
 ```
 
+- **`git add <paths>` is NOT enough - use a pathspec commit.** `git commit` records the WHOLE index, so a
+  sibling session's ALREADY-staged files get swept into your commit even when you only `git add`ed your
+  own. Commit only your paths: `git commit -m "msg" -- <pathA> <pathB>` (the `-m` must come BEFORE `--`,
+  or git reads it as a pathspec). Never `git add -A` / `-u`. Glance at `git status --short` first for any
+  first-column `A`/`M` (already-staged) entries you did not create - those are the sweep risk, and the
+  branch-guard below does NOT catch them (HEAD is not behind).
 - A commit that succeeds but whose `git push` then says "Everything up-to-date" means you are NOT on the
   branch you think (detached, or a sibling's branch) - diagnose before re-pushing.
 - **Durable fix: give each session its own `git worktree`** (`git worktree add ../wt-<name> <branch>`), so

@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.6.2] - 2026-06-30
+
+### Changed
+- `compuse-git` (shared-checkout section): add the pathspec-commit defense - staging only your own paths
+  is NOT enough, because a commit records the WHOLE index, so a sibling session's already-staged files
+  get swept in. Commit only your paths with a pathspec (`-- <paths>`, the `-m` message before `--`). Notes
+  that the branch-guard does not catch this (HEAD is not behind). Generalized from the 5.6.1 incident.
+
 ## [5.6.1] - 2026-06-30
 
 ### Fixed
