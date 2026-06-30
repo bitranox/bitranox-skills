@@ -848,6 +848,14 @@ Task tool call:
 sonnet / opus by task - see "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`),
 never inherit the session model. Default fan-out to `sonnet`; `opus` only for deep-reasoning roles.
 
+**Design-time, first decide WHETHER the skill should dispatch to subagents at all.** Before settling on a
+single-process tool, ask: does this skill do heavy, parallelizable, or context-bloating work - an audit or
+scan over many files/pages/items, a multi-source sweep, or work whose raw output you only need a verdict
+from? If so, fan that work across SUBAGENTS for context isolation (each returns only its findings, not the
+raw output) and parallel speed (cross-ref `bitranox:process-agents-dispatching-parallel`), and bake the
+fan-out into the skill's WORKFLOW rather than bolting it on later. Then pin the model tier per the rule
+above. A skill that runs a worklist is the default candidate; a skill that only emits guidance is not.
+
 This is "watch the test fail" - you must see what agents naturally do before writing the skill.
 
 ### GREEN: Write Minimal Skill

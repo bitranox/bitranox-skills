@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.9.0] - 2026-06-30
+
+### Added
+- `files-edit-toml` skill: edit TOML (`pyproject.toml`, config TOML) via a Python library, never
+  sed/regex. Routes by whether comments must survive - `tomlkit` for a style-preserving round-trip edit
+  (the right tool for `pyproject.toml`), `tomllib` for read (stdlib, read-only), `rtoml`/`tomli_w` for
+  machine-owned data. Listed under "Editing structured files and docs" in the orientation index.
+
+### Changed
+- `meta-skill-writer`: add a design-time rule - before settling on a single-process tool, decide WHETHER
+  the authored skill should fan its heavy / parallelizable / context-bloating work across subagents
+  (context isolation + parallel speed), baking the fan-out into the workflow, then pin the model tier.
+
 ## [5.8.0] - 2026-06-30
 
 ### Added
