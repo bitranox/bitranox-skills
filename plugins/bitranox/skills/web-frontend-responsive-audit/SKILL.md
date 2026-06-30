@@ -141,10 +141,21 @@ prescribes (proven in real galleries). Deviate only with a reason.
   orientations.
 - **Grow tap targets, don't shrink them on mobile.** Keep >=44px; enlarge the hit area with
   `min-block/inline-size` or padding while the icon stays small.
-- **Iterate without deploying.** Overlay your local CSS/JS onto the LIVE remote page with
-  `audit_responsive.py --route GLOB=LOCALPATH`; use `open_viewports.py` to open one interactive
+- **Float controls OVER a large interactive surface, don't sit them beside it.** A full-bleed
+  interactive surface (a deep-zoom/OSD canvas, a map, an image-pan area) trips the touch-target
+  spacing check against nearby controls (arrows, a thumbnail rail) whenever the gap is a few px - the
+  detector flags `gap < 8px` between any two interactive boxes. A fixed inset only relocates the
+  failing viewport (the gap shifts with the breakpoint). Fix by making the controls OVERLAP the
+  surface (position them inside it / above it so the rects intersect) - the detector skips overlapping
+  boxes - rather than parking them in a gutter a sliver away.
+- **Iterate without deploying, and release ONCE.** Overlay your local CSS/JS onto the LIVE remote page
+  with `audit_responsive.py --route GLOB=LOCALPATH`; use `open_viewports.py` to open one interactive
   window per viewport and operate each by hand; re-run the headless matrix to confirm 0 SEVERE/MEDIUM.
-  Never edit the real server to test a layout change.
+  Never edit the real server to test a layout change. Converge the WHOLE change on the overlay (every
+  dimension green) BEFORE cutting a single production release - never release-then-hotfix. If perf
+  matters, note that `--route` cannot drive Lighthouse (it audits a URL): run the app LOCALLY and
+  Lighthouse THAT, or reason the metric from observable local behaviour (e.g. a heavy viewer/canvas
+  that paints on load will own the LCP), rather than deploying first and measuring after.
 - **Stagger when opening many windows.** Opening a dozen headed windows at once floods a
   single-worker backend (transient 5xx/404 under load) and the windows paint incompletely.
   `open_viewports.py` opens them one at a time with a `--delay` (default 1s) and waits for each to
@@ -193,21 +204,23 @@ Stay sharp - these belong elsewhere:
 
 ## Common mistakes
 
-| Mistake                                       | Reality                                                                                                                                                                       |
-|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Testing only desktop / only portrait          | Defects hide in landscape and on the smallest phone - sweep the matrix                                                                                                        |
-| Eyeballing instead of measuring               | Measure `scrollWidth`/rects/axe; a screenshot alone misses overflow                                                                                                           |
-| Shrinking tap targets at mobile breakpoints   | Mobile needs BIGGER targets (>=44px), not smaller                                                                                                                             |
-| Swipe as the only navigation                  | WCAG 2.5.1: always keep buttons + keyboard alongside swipe                                                                                                                    |
-| `viewport-fit=cover` with no safe-area insets | Notch/home-indicator covers content; add `env(safe-area-inset-*)`                                                                                                             |
-| `100vh` on mobile                             | Use `svh` (or `dvh`); `100vh` overflows when the address bar shows                                                                                                            |
-| Flex/grid child overflowing                   | Set `min-width: 0` / `min-height: 0` so it can shrink                                                                                                                         |
-| Claiming "responsive now" without a re-run    | Re-run the audit; report 0 SEVERE / 0 MEDIUM with the numbers                                                                                                                 |
-| Auto-applying fixes                           | Diagnose and propose diffs; apply only after the user confirms                                                                                                                |
-| Trusting axe for all contrast                 | axe misses SVG-icon buttons + gradient/overlay bg; probe the WCAG ratio explicitly                                                                                            |
-| Patching a revealed symptom, not the cause    | A change that exposes a gap is often a latent bug - measure the model (e.g. `gridTemplateRows`)                                                                               |
-| `display:contents` on a `<picture>` to center | It exposes the element's children (`<source>`) as grid/flex items - phantom rows push the `<img>` off-center; center/cap with a real `display:flex` box (`width/height:100%`) |
-| "Phone" == narrow width                       | A landscape phone is WIDE (e.g. 852px) but short; a `max-width` rule misses it - gate phone tweaks on width OR `(orientation: landscape) and (max-height: 600px)`             |
-| `margin:auto` shoving a group to the far edge | On a narrow bar it leaves a big gap after the logo; anchor the brand/identity at the start and put `auto` only on the trailing control                                        |
-| Caption that fits wide but truncates narrow   | Hide it responsively - and landscape phones need the orientation+height query, not just `max-width`                                                                           |
-| Pulling in perf/SEO/font/i18n-infra work      | Out of scope - hand off to the sibling skill above                                                                                                                            |
+| Mistake                                         | Reality                                                                                                                                                                       |
+|-------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Testing only desktop / only portrait            | Defects hide in landscape and on the smallest phone - sweep the matrix                                                                                                        |
+| Eyeballing instead of measuring                 | Measure `scrollWidth`/rects/axe; a screenshot alone misses overflow                                                                                                           |
+| Shrinking tap targets at mobile breakpoints     | Mobile needs BIGGER targets (>=44px), not smaller                                                                                                                             |
+| Swipe as the only navigation                    | WCAG 2.5.1: always keep buttons + keyboard alongside swipe                                                                                                                    |
+| `viewport-fit=cover` with no safe-area insets   | Notch/home-indicator covers content; add `env(safe-area-inset-*)`                                                                                                             |
+| `100vh` on mobile                               | Use `svh` (or `dvh`); `100vh` overflows when the address bar shows                                                                                                            |
+| Flex/grid child overflowing                     | Set `min-width: 0` / `min-height: 0` so it can shrink                                                                                                                         |
+| Claiming "responsive now" without a re-run      | Re-run the audit; report 0 SEVERE / 0 MEDIUM with the numbers                                                                                                                 |
+| Releasing to prod to test / release-then-hotfix | Converge the WHOLE change on the `--route` overlay (and a LOCAL app run for Lighthouse) first; cut ONE release - do not deploy to measure then hotfix                         |
+| Insetting a big canvas to clear nearby buttons  | A fixed inset just moves the failing viewport; float controls OVER the surface so the rects overlap (the spacing check skips overlapping boxes)                               |
+| Auto-applying fixes                             | Diagnose and propose diffs; apply only after the user confirms                                                                                                                |
+| Trusting axe for all contrast                   | axe misses SVG-icon buttons + gradient/overlay bg; probe the WCAG ratio explicitly                                                                                            |
+| Patching a revealed symptom, not the cause      | A change that exposes a gap is often a latent bug - measure the model (e.g. `gridTemplateRows`)                                                                               |
+| `display:contents` on a `<picture>` to center   | It exposes the element's children (`<source>`) as grid/flex items - phantom rows push the `<img>` off-center; center/cap with a real `display:flex` box (`width/height:100%`) |
+| "Phone" == narrow width                         | A landscape phone is WIDE (e.g. 852px) but short; a `max-width` rule misses it - gate phone tweaks on width OR `(orientation: landscape) and (max-height: 600px)`             |
+| `margin:auto` shoving a group to the far edge   | On a narrow bar it leaves a big gap after the logo; anchor the brand/identity at the start and put `auto` only on the trailing control                                        |
+| Caption that fits wide but truncates narrow     | Hide it responsively - and landscape phones need the orientation+height query, not just `max-width`                                                                           |
+| Pulling in perf/SEO/font/i18n-infra work        | Out of scope - hand off to the sibling skill above                                                                                                                            |
