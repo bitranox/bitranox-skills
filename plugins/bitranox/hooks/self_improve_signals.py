@@ -514,8 +514,8 @@ ASST_PATTERN = re.compile(
     r"|\bi did(?:n'?t| not) (realize|notice|account|consider|catch)\b|\bin hindsight\b"
     r"|\b(from now on|going forward|next time)\b[^.\n]{0,20}\bi('?ll| will| should)\b"
     r"|\bi('?ll| will) (make sure|remember) (to|not)\b"
-    r"|(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,10}\b(me|my)\b"
-    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby (a |the )?(hook|guard|gate)"
+    r"|\b(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b"
+    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,30}\b(hook|guard|gate)\b"
     r"|self.?match(ed|ing|es)?",
     re.IGNORECASE,
 )

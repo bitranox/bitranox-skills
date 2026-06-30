@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.4.4] - 2026-06-30
+
+### Fixed
+- self-improve gate now catches a NAMED guard blocking the assistant. `ASST_PATTERN` matched
+  "gate blocked me" but missed "rejected by the repo-gate hook" / "the venv-guard hook flagged my
+  command" - the old patterns assumed `by the hook` (no name between) or `<guard> ... verb ... me`.
+  Replaced with bidirectional proximity (`<guard> ... <verb>` OR `<verb> ... <guard>`, within 30 chars),
+  so a named guard in either order fires. "gateway" still does not match "gate" (word boundary). (+1 test.)
+
 ## [5.4.3] - 2026-06-30
 
 ### Changed

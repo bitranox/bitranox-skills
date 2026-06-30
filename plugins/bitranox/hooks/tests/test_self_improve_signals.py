@@ -42,6 +42,16 @@ def test_broad_user_flags_near_miss_not_caught_by_strict():
     assert not S.strict_user_hit(text)            # strict misses it -> a candidate
 
 
+def test_strict_asst_hit_guard_blocked_named():
+    # a guard/hook blocking the assistant is a self-admitted miss - including a NAMED guard, in either order
+    assert S.strict_asst_hit("The gate blocked me - origin is ahead.")
+    assert S.strict_asst_hit("My commit was rejected by the repo-gate hook.")
+    assert S.strict_asst_hit("the venv-guard hook flagged my command")
+    assert S.strict_asst_hit("blocked by a pre-commit hook")
+    assert not S.strict_asst_hit("the gateway blocked the request")     # 'gateway' is not 'gate'
+    assert not S.strict_asst_hit("I refactored the guard clause for clarity")  # no verb adjacent
+
+
 def test_strict_asst_hit_hindsight_miss():
     # "I should have ..." and sibling hindsight admissions are STRICT live-gate signals
     assert S.strict_asst_hit("I should have run the tests first.")
