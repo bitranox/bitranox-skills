@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.3.0] - 2026-06-30
+
+### Changed
+- `compuse-bash`: new Quick-reference row "Keep / prune the NEWEST timestamped file(s)" - sort by MTIME
+  (`ls -t`, or `find ... -printf '%T@ %p\n' | sort -zrn`), never by name/glob order. A varying prefix
+  breaks lexical order, so a stale file is kept and a newer one deleted. (Surfaced by a real mis-prune
+  of timestamped backups.)
+
 ## [5.2.1] - 2026-06-30
 
 ### Fixed
