@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.4.0] - 2026-06-30
+
+### Changed
+- `meta-self-improve`: per-turn capture of a clearly-universal, non-sensitive rule whose topic matches a
+  shipped skill's domain now also SURFACES it as a public-contribution candidate (route via the upstream
+  self-PR loop, self-contained + provenance-free) - opt-in and propose-first, never auto-publish. Closes
+  a gap where a universal rule stopped silently at the machine-local global layer (`~/.claude/rules/bitranox/`,
+  which teaches only the maintainer) and the public-skill option was only raised by the dream's batch
+  skill-fit pass or a manual nudge. The machine-local layer is your brain; a shipped skill is the shared brain.
+
 ## [5.3.0] - 2026-06-30
 
 ### Changed

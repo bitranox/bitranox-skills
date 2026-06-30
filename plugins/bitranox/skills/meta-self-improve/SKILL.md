@@ -162,6 +162,17 @@ project-bound they fit nowhere else; then lift the reusable principle up and kee
 local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` block in each level's
 `CLAUDE.md`) say what each altitude is about; when the altitude is genuinely unclear, **ask the user**.
 
+**A universal rule can also belong in a SHIPPED skill (the shared brain) - do not stop silently at your
+private layer.** `~/.claude/rules/bitranox/` is machine-local: it teaches only YOU. When a captured rule
+is clearly universal AND non-sensitive (no private paths/hosts/setup specifics) AND its topic matches a
+shipped skill's domain (a shell gotcha -> `bitranox:compuse-bash`, a git gotcha -> `bitranox:compuse-git`,
+etc.), ALSO surface it as a public-contribution candidate so other users get it, routed through the
+upstream self-PR loop (see **Propagating skill improvements upstream**) as a self-contained,
+provenance-free addition. This is OPT-IN and propose-first: publishing exposes content and is a deliberate
+act, so never auto-publish - but do not let a clearly-shippable universal rule reach ONLY your private
+layer without raising the option. (The dream's skill-fit pass, `bitranox:meta-dream-project` step 9, is
+the batch backstop; raise it here at capture time when it is obvious.)
+
 **Fill descriptor gaps up to the highest existing `CLAUDE.md`.** The altitude tree should be contiguous:
 find the HIGHEST existing `CLAUDE.md` in the ancestor chain (search up to `/`, but never create above
 it), then at EVERY level between the project and that highest one that LACKS a `CLAUDE.md`, CREATE one
