@@ -499,11 +499,11 @@ def knowledge_store_empty():
 # USER correction / explicit remember.
 USER_PATTERN = re.compile(
     r"no,|nope|that.?s wrong|that is wrong|incorrect|don.?t do|do not do|stop doing"
-    r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of"
+    r"|you (forgot|missed|should have|shouldn.?t)|not what i|instead of|rather than"
     r"|that.?s not right|isn.?t right"
     r"|remember|note that|keep in mind|for next time|for the future|from now on"
     r"|make a (memory|rule|note)"
-    r"|falsch|nein,|stattdessen|merke? dir|in zukunft|denk dran",
+    r"|falsch|nein,|stattdessen|anstatt|anstelle|merke? dir|in zukunft|denk dran",
     re.IGNORECASE,
 )
 
@@ -571,6 +571,7 @@ BROAD_ASST_PATTERN = re.compile(
     r"|\b(in hindsight|as it turns out)\b"
     r"|\bi see (why|how|what|now|the)\b"
     r"|\bfound (it|the|out)\b|\bthe culprit\b|\bgefunden\b"
+    r"|\blet me (stop|inspect|double.?check|re.?check|look (again|closer)|take a closer look)\b"
     r"|\b(ah|oh|oops|whoops)[, ]|\bwait[, ]",
     re.IGNORECASE,
 )

@@ -12,6 +12,8 @@ def test_strict_user_hit():
     assert S.strict_user_hit("no, that's wrong, the path is /etc")
     assert S.strict_user_hit("from now on always run the tests")
     assert S.strict_user_hit("good idea, let's do that")  # endorsement counts
+    assert S.strict_user_hit("rather than hardcoding it, load it from config")  # directive, like "instead of"
+    assert S.strict_user_hit("anstatt das zu hardcoden, lies es aus der config")  # German
     assert not S.strict_user_hit("please add a function to sum a list")
 
 
@@ -54,6 +56,15 @@ def test_broad_assistant_flags_near_miss():
     text = "let me reconsider the approach here"   # broad-only: not an explicit admission
     assert S.broad_matches("assistant", text)
     assert not S.strict_asst_hit(text)
+
+
+def test_broad_flags_midcourse_inspection_not_strict():
+    # a mid-course pause is a premature precursor: an audit candidate, NEVER a live-gate trigger
+    for text in ("let me stop and inspect the diff",
+                 "let me double-check the config",
+                 "let me inspect what actually happened"):
+        assert S.broad_matches("assistant", text), text   # surfaced for next-session review
+        assert not S.strict_asst_hit(text), text           # but NOT an immediate nudge
 
 
 def test_broad_quiet_on_neutral_turns():

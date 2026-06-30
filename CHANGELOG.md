@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.1.0] - 2026-06-30
+
+### Changed
+- self-improve SessionEnd audit (broad recall) now flags mid-course inspection pauses ("let me stop and
+  inspect", "let me double-check", "let me inspect/look again/take a closer look") as review candidates.
+  These are deliberately BROAD-audit-only, NOT live-gate triggers: a pause only hints at a lesson, which
+  resolves later into a discovery ("found it") or self-admission ("I should have") that the strict gate
+  already catches. So they surface for next-session human review (lesson? anti-pattern?), never a
+  premature per-turn nudge. `meta-self-improve` audit section documents the precursor-vs-resolved rule.
+- self-improve strict USER gate now also fires on "rather than X, do Y" (+ German "anstatt"/"anstelle"),
+  the synonym of the already-recognized "instead of"/"stattdessen" - a user directive that was slipping
+  through. Assistant-side "rather than" is intentionally NOT a trigger (ordinary planning prose, too
+  noisy). (+2 tests total.)
+
 ## [5.0.0] - 2026-06-30
 
 ### Changed
