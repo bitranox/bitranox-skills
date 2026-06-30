@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.8.0] - 2026-06-30
+
+### Added
+- New always-active hook **`block-sed-structured-files`** (PreToolUse Bash): BLOCKS an in-place text
+  editor (`sed -i` / `gsed -i` / `perl -i`) whose argv targets a `.json/.yaml/.yml/.toml/.xml` file -
+  editing structured config as raw text is the `no-hand-edit-config` footgun - and steers to the
+  `files-edit-json` / `files-edit-yml` / `files-edit-xml` / `files-edit-toml` skills (load -> edit ->
+  dump -> re-validate). WARNs on a `>`/`>>` redirect onto such a file. Command-position anchored (a
+  quoted `sed -i x.json` inside an `echo` does not trip it) and fail-open. (+19 tests.)
+
 ## [5.7.0] - 2026-06-30
 
 ### Fixed

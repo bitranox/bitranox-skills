@@ -27,6 +27,7 @@ _HOOK_MODULES = {
     "tell-sweep": "tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
     "git-commit-branch-guard": "git_commit_branch_guard",
+    "block-sed-structured-files": "block_sed_structured_files",
     "session-start": "session_start",
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
