@@ -133,8 +133,11 @@ prescribes (proven in real galleries). Deviate only with a reason.
 - **Thumbnail/film-strip rails: scrollable AND mouse-drag-pannable.** They must scroll when items
   overflow (horizontal for a bottom strip, vertical for a side rail). Add click-and-drag panning with
   Pointer Events (mouse only - leave touch to native momentum scroll): on drag set
-  `scrollLeft`/`scrollTop`, show `cursor: grab`/`grabbing`, and suppress the thumbnail's click when the
-  pointer actually moved (capture-phase) so a drag doesn't also select a thumbnail.
+  `scrollLeft`/`scrollTop`, show `cursor: grab`/`grabbing`, and suppress the click ONLY after a real
+  drag (capture-phase) so a plain click still selects the thumbnail. Do NOT `setPointerCapture` on
+  pointerdown - it redirects the subsequent `click` to the rail and silently kills the thumbnail
+  link's navigation; instead gate "dragging" on actual movement past a threshold and persist a
+  `dragged` flag for the click-suppression.
 - **Size the hero media to the actual cell, not a fixed `svh`.** A magic `max-height: 78svh` clips in
   landscape and leaves dead space. Make the image the grid item of a definite-height cell
   (`.frame-pic { display: contents }` + `img { max-height: 100%; max-width: 100% }`) so it fits both
@@ -187,6 +190,26 @@ prescribes (proven in real galleries). Deviate only with a reason.
   px values: a logo at the golden-ratio major of its bar (`logo ~= bar-height / 1.618`), a modular
   type/space scale, and tight-but-even gaps. A brand mark usually wants to be a bit larger and closer
   to its container edges than a first draft makes it; size it against the reference page's mark.
+- **Pre-mount a deferred heavy viewer HIDDEN so the first gesture works.** Deferring a heavy viewer
+  (OpenSeadragon, a map, a video) to the first interaction makes that first gesture get consumed by the
+  mount - lost on touch, where there is no hover to pre-warm. Mount it on idle (after `load`) but keep
+  it `opacity:0` (opacity:0 excludes an element from being the LCP; and a `<canvas>` like
+  OpenSeadragon's is never an LCP candidate by type at all - so the static `<img>` stays the LCP and PSI
+  is unaffected) and reveal it on the first zoom intent. Note an `opacity:0` layer still RECEIVES pointer
+  events (unlike `display:none`) - that is the point: keep the hidden viewer as the top interactive layer
+  so the first gesture lands on the ready viewer (it zooms) AND triggers the reveal. Confirm the LCP
+  element with a `PerformanceObserver` on the live page under `--route` (no deploy) - the canvas must not be it.
+- **Compact content-rich pages on phones - shrink, don't just reflow.** A page that fits desktop/tablet
+  (hero number, headline, lead, cards) overflows a 375x667 phone and especially a ~375-tall landscape.
+  Add phone (`max-width`) AND short-height (`max-height`) overrides that SHRINK the big elements (hero
+  size, card padding, gaps, spacing) and reflow cards to one row when wide-but-short, not only stack
+  them. Drive sizes/spacing with `clamp()` over vw/vh so they scale with the viewport.
+- **Keep a shared element the SAME rendered size across pages.** The logo/brand mark (and other shared
+  chrome) should measure the same height on every page template at a given viewport - not 40px on one
+  page, 34px on another. Render each page at one fixed viewport and compare; reconcile via a shared
+  token (brand-token reconciliation itself: `design-brand-consistency`). Error pages (404/50x) are real
+  pages too: audit and fit them at every viewport/locale like any other - a permanently-open menu or
+  content overflow there is still a bug.
 
 ## Scope boundary (hand off to sibling skills)
 
@@ -204,23 +227,26 @@ Stay sharp - these belong elsewhere:
 
 ## Common mistakes
 
-| Mistake                                         | Reality                                                                                                                                                                       |
-|-------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Testing only desktop / only portrait            | Defects hide in landscape and on the smallest phone - sweep the matrix                                                                                                        |
-| Eyeballing instead of measuring                 | Measure `scrollWidth`/rects/axe; a screenshot alone misses overflow                                                                                                           |
-| Shrinking tap targets at mobile breakpoints     | Mobile needs BIGGER targets (>=44px), not smaller                                                                                                                             |
-| Swipe as the only navigation                    | WCAG 2.5.1: always keep buttons + keyboard alongside swipe                                                                                                                    |
-| `viewport-fit=cover` with no safe-area insets   | Notch/home-indicator covers content; add `env(safe-area-inset-*)`                                                                                                             |
-| `100vh` on mobile                               | Use `svh` (or `dvh`); `100vh` overflows when the address bar shows                                                                                                            |
-| Flex/grid child overflowing                     | Set `min-width: 0` / `min-height: 0` so it can shrink                                                                                                                         |
-| Claiming "responsive now" without a re-run      | Re-run the audit; report 0 SEVERE / 0 MEDIUM with the numbers                                                                                                                 |
-| Releasing to prod to test / release-then-hotfix | Converge the WHOLE change on the `--route` overlay (and a LOCAL app run for Lighthouse) first; cut ONE release - do not deploy to measure then hotfix                         |
-| Insetting a big canvas to clear nearby buttons  | A fixed inset just moves the failing viewport; float controls OVER the surface so the rects overlap (the spacing check skips overlapping boxes)                               |
-| Auto-applying fixes                             | Diagnose and propose diffs; apply only after the user confirms                                                                                                                |
-| Trusting axe for all contrast                   | axe misses SVG-icon buttons + gradient/overlay bg; probe the WCAG ratio explicitly                                                                                            |
-| Patching a revealed symptom, not the cause      | A change that exposes a gap is often a latent bug - measure the model (e.g. `gridTemplateRows`)                                                                               |
-| `display:contents` on a `<picture>` to center   | It exposes the element's children (`<source>`) as grid/flex items - phantom rows push the `<img>` off-center; center/cap with a real `display:flex` box (`width/height:100%`) |
-| "Phone" == narrow width                         | A landscape phone is WIDE (e.g. 852px) but short; a `max-width` rule misses it - gate phone tweaks on width OR `(orientation: landscape) and (max-height: 600px)`             |
-| `margin:auto` shoving a group to the far edge   | On a narrow bar it leaves a big gap after the logo; anchor the brand/identity at the start and put `auto` only on the trailing control                                        |
-| Caption that fits wide but truncates narrow     | Hide it responsively - and landscape phones need the orientation+height query, not just `max-width`                                                                           |
-| Pulling in perf/SEO/font/i18n-infra work        | Out of scope - hand off to the sibling skill above                                                                                                                            |
+| Mistake                                          | Reality                                                                                                                                                                                                                                    |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Testing only desktop / only portrait             | Defects hide in landscape and on the smallest phone - sweep the matrix                                                                                                                                                                     |
+| Eyeballing instead of measuring                  | Measure `scrollWidth`/rects/axe; a screenshot alone misses overflow                                                                                                                                                                        |
+| Shrinking tap targets at mobile breakpoints      | Mobile needs BIGGER targets (>=44px), not smaller                                                                                                                                                                                          |
+| Swipe as the only navigation                     | WCAG 2.5.1: always keep buttons + keyboard alongside swipe                                                                                                                                                                                 |
+| `viewport-fit=cover` with no safe-area insets    | Notch/home-indicator covers content; add `env(safe-area-inset-*)`                                                                                                                                                                          |
+| `100vh` on mobile                                | Use `svh` (or `dvh`); `100vh` overflows when the address bar shows                                                                                                                                                                         |
+| Flex/grid child overflowing                      | Set `min-width: 0` / `min-height: 0` so it can shrink                                                                                                                                                                                      |
+| Claiming "responsive now" without a re-run       | Re-run the audit; report 0 SEVERE / 0 MEDIUM with the numbers                                                                                                                                                                              |
+| Releasing to prod to test / release-then-hotfix  | Converge the WHOLE change on the `--route` overlay (and a LOCAL app run for Lighthouse) first; cut ONE release - do not deploy to measure then hotfix                                                                                      |
+| Insetting a big canvas to clear nearby buttons   | A fixed inset just moves the failing viewport; float controls OVER the surface so the rects overlap (the spacing check skips overlapping boxes)                                                                                            |
+| Auto-applying fixes                              | Diagnose and propose diffs; apply only after the user confirms                                                                                                                                                                             |
+| Trusting axe for all contrast                    | axe misses SVG-icon buttons + gradient/overlay bg; probe the WCAG ratio explicitly                                                                                                                                                         |
+| Patching a revealed symptom, not the cause       | A change that exposes a gap is often a latent bug - measure the model (e.g. `gridTemplateRows`)                                                                                                                                            |
+| `display:contents` on a `<picture>` to center    | It exposes the element's children (`<source>`) as grid/flex items - phantom rows push the `<img>` off-center; center/cap with a real `display:flex` box (`width/height:100%`)                                                              |
+| "Phone" == narrow width                          | A landscape phone is WIDE (e.g. 852px) but short; a `max-width` rule misses it - gate phone tweaks on width OR `(orientation: landscape) and (max-height: 600px)`                                                                          |
+| `margin:auto` shoving a group to the far edge    | On a narrow bar it leaves a big gap after the logo; anchor the brand/identity at the start and put `auto` only on the trailing control                                                                                                     |
+| Caption that fits wide but truncates narrow      | Hide it responsively - and landscape phones need the orientation+height query, not just `max-width`                                                                                                                                        |
+| All profiles overflow by the same small constant | Phantom scroll, not content - usually the default 8px `<body>` margin under a `min-height:100svh/vh` element (or an unreset `<ul>`/`<h1>`/`<p>`). Reset `margin:0`; shrinking content never moves an identical-constant overage            |
+| A `<details>`/disclosure menu shows when closed  | An explicit `display` (e.g. `display:grid`) on the menu overrides the native `<details>` closed-hide, so it is permanently open (and every menu link gets touch-target-audited). Hide it when closed: `.x:not([open]) .menu{display:none}` |
+| Editing a `@media` rule has no visible effect    | CSS source-order: the override sits BEFORE the base rule it targets, so the base (later, equal specificity) wins. Put responsive overrides AFTER the base rules, or raise specificity                                                      |
+| Pulling in perf/SEO/font/i18n-infra work         | Out of scope - hand off to the sibling skill above                                                                                                                                                                                         |

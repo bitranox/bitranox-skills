@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.4.2] - 2026-06-30
+
+### Changed
+- `web-frontend-responsive-ux`: corrected the thumbnail-rail drag-pan pattern (do NOT
+  `setPointerCapture` on pointerdown - it redirects the click to the rail and kills the thumbnail
+  link's navigation; gate dragging on actual movement and persist a `dragged` flag). Added patterns and
+  common-mistakes for: pre-mounting a deferred heavy viewer hidden (`opacity:0`, still interactive) so
+  the first gesture works without owning the LCP; compacting content-rich pages on phones (shrink, do
+  not just reflow); keeping a shared element the same rendered size across pages; phantom scroll (an
+  unreset `<body>` margin under `min-height:100svh/vh` overflows every profile by a constant); an
+  always-open `<details>` menu (an explicit `display` overrides the native closed-hide); and the CSS
+  source-order trap (a `@media` override placed before its base rule loses by source order).
+
 ## [5.4.1] - 2026-06-30
 
 ### Changed
