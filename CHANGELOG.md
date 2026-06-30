@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.4.3] - 2026-06-30
+
+### Changed
+- `meta-self-improve`: the public-contribution path now covers a universal rule that does NOT fit any
+  existing skill - if it is substantial enough to warrant a NEW skill domain, propose one (built with
+  `bitranox:meta-skill-writer`, named per the taxonomy in `skill-taxonomy.json` / `CONTRIBUTING.md`;
+  the gated step-5 path - propose first, scaffold only on explicit permission), not only "enrich an
+  existing skill".
+
 ## [5.4.2] - 2026-06-30
 
 ### Changed

@@ -164,9 +164,12 @@ local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` bl
 
 **A universal rule can also belong in a SHIPPED skill (the shared brain) - do not stop silently at your
 private layer.** `~/.claude/rules/bitranox/` is machine-local: it teaches only YOU. When a captured rule
-is clearly universal AND its topic matches a shipped skill's domain (a shell gotcha ->
-`bitranox:compuse-bash`, a git gotcha -> `bitranox:compuse-git`, etc.), ALSO surface it as a
-public-contribution candidate so other users get it. **Sensitivity is NOT a disqualifier - it is
+is clearly universal AND it EITHER matches a shipped skill's domain (a shell gotcha ->
+`bitranox:compuse-bash`, a git gotcha -> `bitranox:compuse-git`, etc.) OR is substantial enough to
+warrant a NEW skill domain of its own, ALSO surface it as a public-contribution candidate so other users
+get it: enrich the existing skill, or propose a NEW skill (built with `bitranox:meta-skill-writer`, named
+per the taxonomy in `skill-taxonomy.json` / `CONTRIBUTING.md`; creating a new skill is the gated path -
+propose first, scaffold only on explicit permission, see step 5). **Sensitivity is NOT a disqualifier - it is
 something to STRIP:** if the rule still teaches its lesson once the private specifics (paths, hosts,
 secrets, org/setup details) are removed or replaced with generic placeholders, scrub them and contribute
 the cleaned version; only a rule that is USELESS without those specifics stays private. Route it through
