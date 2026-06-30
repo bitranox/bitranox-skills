@@ -40,9 +40,13 @@ from pathlib import Path
 EXCLUDE_DIRS = {"tests", "demos", "examples", "__pycache__", "scripts_examples"}
 EXCLUDE_FILES = {"conftest.py", "__init__.py"}
 
-# git commit / gh pr create detection (loose: over-matching only runs a passing gate).
-_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-\S+|\s+--\S+|\s+-C\s+\S+)*\s+commit\b")
-_PR_RE = re.compile(r"\bgh\b.*\bpr\b.*\bcreate\b")
+# git commit / gh pr create detection. Anchored at a COMMAND position (statement start, after a shell
+# separator) so the literal text "git commit" inside a quoted string or heredoc body - e.g. a CHANGELOG
+# line ABOUT committing - does NOT trip the gate. Over-matching is NOT harmless: it false-fires the
+# version-bump BLOCK, since plugins/ is normally dirty-and-not-yet-bumped mid-work.
+_SEP = re.compile(r"&&|\|\||[;\n|]")
+_COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
+_PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 
 
 def _git(root, *args):
@@ -423,7 +427,13 @@ def run_checks(root, ci):
 
 
 def is_commit_or_pr(command):
-    return bool(_COMMIT_RE.search(command) or _PR_RE.search(command))
+    # Match per statement, anchored at its start, so "git commit" embedded in a quoted string or
+    # heredoc body does not count - only an actual `git commit` / `gh pr create` command does.
+    for seg in _SEP.split(command or ""):
+        seg = seg.strip().lstrip("(").strip()
+        if _COMMIT_RE.match(seg) or _PR_RE.match(seg):
+            return True
+    return False
 
 
 def main():

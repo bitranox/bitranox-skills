@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.6.3] - 2026-06-30
+
+### Fixed
+- `repo-gate` commit-detection no longer false-fires on the literal text `git commit` inside a quoted
+  string or heredoc body (e.g. a Bash command that writes a CHANGELOG line about committing). Detection
+  is now anchored at a command position (statement start, after a shell separator) instead of a loose
+  substring search - over-matching was not harmless, it false-fired the version-bump BLOCK because
+  plugins/ is normally dirty-and-not-yet-bumped mid-work. Real commits (incl. `-C`, `--no-pager`, an
+  env-assignment prefix, a subshell) still match. (+6 detector test cases.)
+
 ## [5.6.2] - 2026-06-30
 
 ### Changed

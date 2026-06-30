@@ -61,11 +61,18 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_o
         ("git commit -m 'x'", True),
         ("git add -A && git commit -m 'x'", True),
         ("git -C /repo commit --amend", True),
+        ("git --no-pager commit -m x", True),
+        ("FOO=bar git commit -m x", True),          # env-assignment prefix
+        ("(git commit -m x)", True),                # subshell
         ("gh pr create --fill", True),
         ("git status", False),
         ("git push", False),
         ("ls && echo commit done", False),
         ("git log --oneline", False),
+        # the false-positive this fix targets: "git commit" only INSIDE a string / heredoc body
+        ('echo "use git commit -m msg -- paths"', False),
+        ("python3 -c \"print('git commit -m x')\"", False),
+        ("sed -i s/a/b/ f; echo 'commit only your paths: git commit -- f'", False),
     ],
 )
 def test_is_commit_or_pr(cmd, expected):
