@@ -7,17 +7,18 @@ description: Use when running git - commit, push, tag, rev-parse, marking a hook
 
 ## Quick reference
 
-| Situation                                    | Rule                                                                                                                                                                                                                                                                                                                     |
-|----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `git rev-parse --short` with 2+ revs         | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev.                                                                                                                                                        |
-| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk.                                                                                                                                                                                      |
-| Make a hook/script executable                | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`.                                                                                                            |
-| Did a mode change "take"?                    | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`.                                                                                                                                                                                                        |
-| A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                                                      |
-| Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF.                                       |
-| Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                                                                     |
-| Local build artifacts (`.venv`, caches)      | NEVER track per-machine artifacts: `.venv/`, `__pycache__/`, `*.pyc`, `*.egg-info/`, `node_modules/`, `dist/`, `build/`, `.pytest_cache/`. Tool-agnostic (a `.venv` from `python -m venv`/`virtualenv`/`poetry`/`uv` is equally off-limits). Gitignore them; if already tracked, `git rm -r --cached <path>`. See below. |
-| Private repo with private git deps in CI     | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                                                                 |
+| Situation                                    | Rule                                                                                                                                                                                                                                                                                                                                                                        |
+|----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `git rev-parse --short` with 2+ revs         | Fails `fatal: needed a single commit` (exit 128). `--short` abbreviates ONE revision. Drop `--short` for multiple (full hashes print fine), or call once per rev.                                                                                                                                                                                                           |
+| `push`/`commit`/`tag` + a verify in one call | Run the mutation in its own call; a trailing command's exit masks or misattributes it. Don't dismiss the resulting exit as a quirk.                                                                                                                                                                                                                                         |
+| Make a hook/script executable                | `chmod +x` is NOT recorded when `core.fileMode=false` - the file clones/installs non-executable and silently fails. Use `git update-index --chmod=+x <file>`; verify `git ls-files -s <file>` shows `100755`.                                                                                                                                                               |
+| Did a mode change "take"?                    | `git config core.fileMode` may be `false` (git ignores permission changes). Trust `git ls-files -s`, not `ls -l`.                                                                                                                                                                                                                                                           |
+| A module run via an interpreter/launcher     | Does NOT need the exec bit (`100644` is fine); only a directly-invoked file (`./x.sh`, a hook path) needs `100755`.                                                                                                                                                                                                                                                         |
+| Line endings                                 | A script committed with CRLF fails at runtime (`#!/usr/bin/env bash\r` -> `bad interpreter: ...^M`; Python shebangs the same). Pin LF with `.gitattributes` (`*.sh text eol=lf`, `*.py text eol=lf`, `* text=auto`); a Windows checkout or `core.autocrlf=true` reintroduces CRLF.                                                                                          |
+| Interactive flags                            | `-i` (`rebase -i`, `add -i`) is unsupported in a non-interactive agent shell. Use non-interactive forms (`rebase --onto`, `commit --fixup` + `rebase --autosquash`, scripted edits).                                                                                                                                                                                        |
+| Local build artifacts (`.venv`, caches)      | NEVER track per-machine artifacts: `.venv/`, `__pycache__/`, `*.pyc`, `*.egg-info/`, `node_modules/`, `dist/`, `build/`, `.pytest_cache/`. Tool-agnostic (a `.venv` from `python -m venv`/`virtualenv`/`poetry`/`uv` is equally off-limits). Gitignore them; if already tracked, `git rm -r --cached <path>`. See below.                                                    |
+| Private repo with private git deps in CI     | The runner cannot read the OTHER private repos -> install fails `could not read Username for 'https://github.com'`. Give CI a read-only PAT secret + a `url.insteadOf` rewrite; load the token from a password file via stdin, never echo it. See below.                                                                                                                    |
+| Multiple agents/sessions share one checkout  | Branch/HEAD/index can change UNDER you between reads, so a commit lands on the wrong branch or a stale base. Before committing: verify `git branch --show-current`, check `git rev-list --left-right --count HEAD...@{upstream}` (behind/diverged = origin advanced), and stage only YOUR files (never `git add -A`). Durable fix: a `git worktree` per session. See below. |
 
 ## Exec bit + fileMode (the silent hook failure)
 
@@ -99,6 +100,28 @@ So before `git push` / `gh pr create` / a release, review what will ACTUALLY lea
   the RFC5737 ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for IPs.
 - A deterministic secret/denylist gate (pre-commit / CI) catches the unambiguous cases, but the
   judgement call - a real internal IP vs a generic example - is yours. Do it BEFORE the push.
+
+## Committing safely when sessions/agents share a checkout
+
+Running more than one agent or session in the SAME working copy (or you alongside an automation) means
+the branch, HEAD, index, and uncommitted files can change UNDER you between two reads - one checkout has
+no per-session isolation. A commit then lands on the wrong branch, on a stale base, or sweeps in another
+session's uncommitted files. Before any commit, verify state (cheap, deterministic):
+
+```bash
+git branch --show-current                            # the branch you expect? (not a sibling's, not detached)
+git rev-list --left-right --count HEAD...@{upstream}  # "<ahead> <behind>"; behind/diverged = origin advanced
+git add path/to/your/file ...                         # stage ONLY your files - never `git add -A` / `-u`
+```
+
+- A commit that succeeds but whose `git push` then says "Everything up-to-date" means you are NOT on the
+  branch you think (detached, or a sibling's branch) - diagnose before re-pushing.
+- **Durable fix: give each session its own `git worktree`** (`git worktree add ../wt-<name> <branch>`), so
+  they never share a branch, index, or HEAD.
+- **Optional enforcement:** a warn-only `PreToolUse(Bash)` hook can run these checks before a `git commit`
+  and warn (never block), fail-open. SCOPE it to the repo(s) where you actually run parallel sessions AND
+  work on one branch directly - in a normal feature-branch workflow "not on the default branch" is
+  expected, so an unscoped "warn off the default branch" hook is just noise.
 
 ## Hooks
 

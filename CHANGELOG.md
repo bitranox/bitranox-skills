@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.5.0] - 2026-06-30
+
+### Changed
+- `compuse-git`: new section "Committing safely when sessions/agents share a checkout" (+ quick-ref row) -
+  when multiple agents/sessions share ONE working copy, branch/HEAD/index can change under you, so a commit
+  lands on the wrong branch or a stale base. Verify `git branch --show-current` + `git rev-list --left-right
+  --count HEAD...@{upstream}` and stage only your own files (never `git add -A`); durable fix is a `git
+  worktree` per session; optional warn-only PreToolUse guard, scoped to single-branch repos (an unscoped
+  "off default branch" warning is noise in feature-branch workflows). Generic - the universal half of the
+  machine-local git-commit-branch-guard.
+
 ## [5.4.4] - 2026-06-30
 
 ### Fixed
