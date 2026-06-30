@@ -42,7 +42,7 @@ def run_audit(monkeypatch, transcript, cwd):
 def test_writes_audit_for_candidate_misses(tmp_path, monkeypatch):
     tp = make_transcript(tmp_path, [
         ("user", "no, that's wrong"),                          # strict hit -> not a candidate
-        ("assistant", "I missed the edge case in the parser"),  # candidate (broad, not strict)
+        ("assistant", "let me reconsider the parser approach"), # candidate (broad, not strict)
         ("user", "why did you skip the tests again?"),          # candidate (broad, not strict)
         ("assistant", "Done, added it."),                       # neutral
     ])
@@ -53,7 +53,7 @@ def test_writes_audit_for_candidate_misses(tmp_path, monkeypatch):
     body = out.read_text(encoding="utf-8")
     assert "<SELF-IMPROVE-AUDIT>" in body
     assert "2 message(s)" in body              # exactly the two candidates
-    assert "i missed" in body.lower()
+    assert "reconsider" in body.lower()
     assert "why did you" in body.lower()
     assert "that's wrong" not in body.lower()  # the strict hit is not listed as a miss
 
@@ -86,7 +86,7 @@ def test_missing_transcript_is_noop(tmp_path, monkeypatch):
 
 
 def test_candidates_are_capped(tmp_path, monkeypatch):
-    turns = [("assistant", "I missed item %d" % i) for i in range(30)]
+    turns = [("assistant", "let me reconsider item %d" % i) for i in range(30)]
     tp = make_transcript(tmp_path, turns)
     run_audit(monkeypatch, tp, "/proj/cap")
     body = S.audit_file("/proj/cap").read_text(encoding="utf-8")

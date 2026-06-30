@@ -510,6 +510,8 @@ USER_PATTERN = re.compile(
 # ASSISTANT self-admitted miss (incl. a guard/hook blocking the assistant's own action).
 ASST_PATTERN = re.compile(
     r"you.?re right|you are right|my mistake|i was wrong|apolog"
+    r"|\bi should(?: have|'?ve)\b|\bi (missed|overlooked|forgot|misread|misunderstood)\b"
+    r"|\bi did(?:n'?t| not) (realize|notice|account|consider|catch)\b|\bin hindsight\b"
     r"|(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,10}\b(me|my)\b"
     r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby (a |the )?(hook|guard|gate)"
     r"|self.?match(ed|ing|es)?",

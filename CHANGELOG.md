@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [4.25.0] - 2026-06-30
+
+### Changed
+- self-improve LIVE gate now fires on hindsight self-admissions, not just explicit ones.
+  `self_improve_signals.py` `ASST_PATTERN` (strict Stop-gate) gains "I should have / I should've",
+  "I missed / overlooked / forgot / misread / misunderstood", "I didn't realize/notice/account/
+  consider/catch", and "in hindsight" - previously these surfaced only via the SessionEnd audit
+  (`BROAD_ASST_PATTERN`), so the per-turn nudge missed them. "you should ..." (not a self-admission)
+  is not matched. `meta-self-improve` self-admitted-miss examples updated. (+1 strict test; the two
+  audit tests' broad-only example swapped to "let me reconsider".)
+
+## [4.24.1] - 2026-06-30
+
+### Changed
+- `web-frontend-responsive-audit`: enforce iterate-on-overlay and release-once; add a large-surface
+  spacing pattern. (Changelog entry backfilled - the version was bumped without one.)
+
+## [4.24.0] - 2026-06-29
+
+### Added
+- New skill **`web-frontend-responsive-audit`**: responsive/usability audit for web frontends across
+  device viewports, with detectors, device profiles, and verification engines. (Changelog entry
+  backfilled - the version was bumped without one.)
+
 ## [4.23.0] - 2026-06-29
 
 ### Changed

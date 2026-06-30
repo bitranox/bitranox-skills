@@ -84,7 +84,8 @@ on all of them: a user **correction**, an explicit **"remember"**, an **endorsem
 from either side** ("good idea", "good call") - when YOU judge the user's suggestion good, the user
 found the better path, so adopt and record it (kin to a self-admitted miss); when the user endorses
 your proposal, it is a confirmed approach - an assistant **self-admitted miss** ("you're right", "my
-mistake"), or a **realization or discovery** - a turn where you finally work out how something really
+mistake", "I should have ...", "I missed ...", "in hindsight ..."), or a **realization or discovery** -
+a turn where you finally work out how something really
 fits together OR locate the thing you were hunting ("now I understand the real topology...", "I figured
 out that X actually runs on Y", "now it's clear", "found it - the bug was ...", "found the root cause").
 A realization about your own

@@ -40,8 +40,18 @@ def test_broad_user_flags_near_miss_not_caught_by_strict():
     assert not S.strict_user_hit(text)            # strict misses it -> a candidate
 
 
+def test_strict_asst_hit_hindsight_miss():
+    # "I should have ..." and sibling hindsight admissions are STRICT live-gate signals
+    assert S.strict_asst_hit("I should have run the tests first.")
+    assert S.strict_asst_hit("I should've pinned the version.")
+    assert S.strict_asst_hit("I missed the edge case in the parser.")
+    assert S.strict_asst_hit("In hindsight, the guard order was wrong.")
+    assert S.strict_asst_hit("I didn't realize the venv was stale.")
+    assert not S.strict_asst_hit("You should have the latest version.")  # 'you should', not a self-admission
+
+
 def test_broad_assistant_flags_near_miss():
-    text = "I missed the edge case in the parser"
+    text = "let me reconsider the approach here"   # broad-only: not an explicit admission
     assert S.broad_matches("assistant", text)
     assert not S.strict_asst_hit(text)
 
