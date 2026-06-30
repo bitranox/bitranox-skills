@@ -51,6 +51,18 @@ def test_non_git_command_ignored():
     assert G.broken_revparse("echo rev-parse --short A B") is False
 
 
+def test_redirection_not_counted_as_operand():
+    # the bug: a redirection target was miscounted as a second revision -> false block
+    assert G.broken_revparse("git rev-parse --short origin/master 2>/dev/null") is False
+    assert G.broken_revparse("git rev-parse --short HEAD 2> /dev/null") is False
+    assert G.broken_revparse("git rev-parse --short HEAD >out 2>&1") is False
+
+
+def test_redirection_does_not_mask_real_breakage():
+    # two genuine revisions are still broken even with a trailing redirection
+    assert G.broken_revparse("git rev-parse --short A B 2>/dev/null") is True
+
+
 def _run(monkeypatch, command):
     payload = {"tool_input": {"command": command}}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))

@@ -35,6 +35,27 @@ _STOP = {
     "how", "what", "why", "where", "which", "should", "must", "can", "will", "rule", "rules", "note",
 }
 
+# Opaque identifiers that are never a topical signal but slip past the token regex (they are valid
+# [a-z0-9_-] runs): tool-use IDs, session UUIDs, long hex hashes, pure numbers, path slugs. Dropping
+# them keeps the recall grep + the pending-keyword queue clean. Conservative on purpose - it must NOT
+# drop a real multi-word technical term like "meta-dream-global-deep" (3 hyphens) or "px-websrv-media".
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_HEX_RE = re.compile(r"^[0-9a-f]{16,}$")   # long hex run: hashes, commit/id fragments
+_DIGITS_RE = re.compile(r"^\d+$")
+
+
+def _is_junk_token(tok):
+    """True for opaque identifiers (tool-use IDs, UUIDs, long hex hashes, pure digits, path slugs,
+    absurdly long tokens) - never a topical keyword. Must not drop real hyphenated terms (<=3 hyphens)."""
+    return bool(
+        "toolu" in tok                 # Claude tool-use IDs (toolu_01...)
+        or _DIGITS_RE.match(tok)       # pure numbers
+        or _UUID_RE.match(tok)         # session UUIDs
+        or _HEX_RE.match(tok)          # long hex hashes / id fragments
+        or tok.count("-") >= 4         # path slug (a-b-c-d-e-...); real terms top out ~3 hyphens
+        or len(tok) >= 40              # nothing real is this long
+    )
+
 
 def extract_keywords(text, max_n=12, proj=None):
     """Deterministic keyword set from a topic / descriptor: lowercased significant tokens (>=3 chars,
@@ -52,7 +73,7 @@ def extract_keywords(text, max_n=12, proj=None):
         drop = _STOP
     out = []
     for tok in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", (text or "").lower()):
-        if tok in drop or len(tok) < 3 or tok in out:
+        if tok in drop or len(tok) < 3 or tok in out or _is_junk_token(tok):
             continue
         out.append(tok)
         if len(out) >= max_n:

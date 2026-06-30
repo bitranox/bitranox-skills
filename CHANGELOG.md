@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.2.1] - 2026-06-30
+
+### Fixed
+- `gather_scan.extract_keywords` (recall + cross-tree gather) now drops opaque identifiers that slipped
+  past the token regex - Claude tool-use IDs (`toolu_...`), session UUIDs, long hex hashes, pure digits,
+  and path slugs (>=4 hyphens) - which were polluting recall ranking and the per-project pending-keyword
+  queue. Conservative: real hyphenated terms (`meta-dream-global-deep`, `px-websrv-media`) are kept. (+2 tests.)
+- `git-footgun-guard` no longer false-fires on a valid single-revision `git rev-parse --short` that has a
+  shell redirection: a redirection like `2>/dev/null` (or its space-separated target) was miscounted as a
+  second revision. Redirections are now stripped before counting operands; a genuine 2-revision command
+  still blocks. (+2 tests.)
+
 ## [5.2.0] - 2026-06-30
 
 ### Changed

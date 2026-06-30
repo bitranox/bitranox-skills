@@ -21,17 +21,25 @@ import sys
 # on its own operands, not tokens from a neighbouring command.
 SEP = re.compile(r"&&|\|\||[;\n|]")
 
+# Strip shell redirections BEFORE counting operands, else a `2>/dev/null` (or its
+# target when spaced, `2> /dev/null`) is miscounted as a second revision and the
+# guard false-fires on a valid single-rev command. Covers `2>/dev/null`, `> out`,
+# `>>out`, `2>&1`, `&>out`, `<in` (operator + attached or space-separated target).
+REDIR = re.compile(r"(?:&|\d+)?>>?(?:&\d+|\s*\S+)|<\s*\S+")
+
 
 def broken_revparse(command: str) -> bool:
     for segment in SEP.split(command):
+        segment = REDIR.sub(" ", segment)
         toks = segment.split()
         if "git" not in toks or "rev-parse" not in toks:
             continue
         rest = toks[toks.index("rev-parse") + 1 :]
         if not any(t == "--short" or t.startswith("--short=") for t in rest):
             continue
-        # Operands are the non-option tokens after rev-parse (the revisions).
-        operands = [t for t in rest if not t.startswith("-")]
+        # Operands are the non-option tokens after rev-parse (the revisions);
+        # redirections are already stripped, `&` is backgrounding, not a revision.
+        operands = [t for t in rest if not t.startswith("-") and t != "&"]
         if len(operands) >= 2:
             return True
     return False

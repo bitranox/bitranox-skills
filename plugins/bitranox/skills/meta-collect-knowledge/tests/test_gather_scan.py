@@ -20,6 +20,23 @@ def test_extract_keywords_caps():
     assert len(kws) == 5
 
 
+def test_extract_keywords_drops_opaque_ids():
+    # tool-use IDs, UUIDs, long hex hashes, pure digits, and path slugs are not topical signal
+    text = ("fix the bindsnap regression toolu_01wwyudqrf8jwnj7rk7xk2q5 "
+            "e5b12557-c410-4fef-9212-ce9d71b146eb a367bb47f4cb34eb5 12345 "
+            "home-user-projects-app-src-main-module")   # path slug: >=4 hyphens
+    kws = G.extract_keywords(text)
+    assert "bindsnap" in kws and "regression" in kws        # real terms kept
+    assert not any(G._is_junk_token(k) for k in kws)        # no junk survives
+    assert "12345" not in kws and "a367bb47f4cb34eb5" not in kws
+
+
+def test_extract_keywords_keeps_real_hyphenated_terms():
+    # the junk guard must NOT eat legitimate multi-word technical terms
+    kws = G.extract_keywords("run meta-dream-global-deep against px-websrv-media")
+    assert "meta-dream-global-deep" in kws and "px-websrv-media" in kws
+
+
 def test_scan_matches_and_skips(tmp_path):
     a = tmp_path / "a.md"
     a.write_text("Fleet SSH keyfile location and subnet", encoding="utf-8")
