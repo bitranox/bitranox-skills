@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.2.0] - 2026-06-30
+
+### Changed
+- self-improve gate now catches the "I forgot a rule, now applying it" turn, which slipped through
+  entirely. STRICT `ASST_PATTERN` gains assistant forward-commitment / rule-adoption ("from now on /
+  going forward / next time I'll|will|should ...", "I'll make sure/remember to ..."). BROAD SessionEnd
+  audit (`BROAD_ASST_PATTERN`) gains rule-citation ("per the <...> rule", the "<...>" rule, "following
+  the <...> rule/convention") - a judgement-call signal routed to next-session review, not a live nudge.
+  A bare "understood" stays excluded by design (it acknowledges a directive; the directive is the signal).
+  `meta-self-improve` examples document forward-commitment + the understood/rule-citation rule. (+2 tests.)
+
 ## [5.1.0] - 2026-06-30
 
 ### Changed

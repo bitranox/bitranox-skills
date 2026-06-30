@@ -67,6 +67,26 @@ def test_broad_flags_midcourse_inspection_not_strict():
         assert not S.strict_asst_hit(text), text           # but NOT an immediate nudge
 
 
+def test_strict_asst_hit_forward_commitment():
+    # committing to a standing behaviour / rule going forward is a confirmed adoption -> live gate
+    assert S.strict_asst_hit("Going forward I'll fix every sibling at once.")
+    assert S.strict_asst_hit("From now on I'll apply the rule.")
+    assert S.strict_asst_hit("Next time I'll check the siblings.")
+    assert S.strict_asst_hit("I'll make sure to fix the sibling too.")
+    assert S.strict_asst_hit("I'll remember to update the changelog.")
+    assert not S.strict_asst_hit("going forward is the next step")  # no commitment ("I'll")
+
+
+def test_broad_flags_rule_citation_not_strict():
+    # the real forgotten-rule case: the assistant cites a rule it had overlooked. The citation is a
+    # judgement-call signal (sometimes a miss, sometimes routine) -> audit candidate, not a live nudge.
+    msg = ('Understood - media likely shares the same generator and bugs; I\'ll fix it there too '
+           '(per the "fix a shared bug in every sibling at once" rule). Let me confirm the fix first.')
+    assert S.broad_matches("assistant", msg)        # surfaced for next-session review
+    assert not S.strict_asst_hit(msg)               # not an immediate nudge
+    assert S.broad_matches("assistant", "following the pathfinder convention here")
+
+
 def test_broad_quiet_on_neutral_turns():
     assert S.broad_matches("user", "thanks, ship it") == []
     assert S.broad_matches("assistant", "Done, added the helper function.") == []

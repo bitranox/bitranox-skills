@@ -512,6 +512,8 @@ ASST_PATTERN = re.compile(
     r"you.?re right|you are right|my mistake|i was wrong|apolog"
     r"|\bi should(?: have|'?ve)\b|\bi (missed|overlooked|forgot|misread|misunderstood)\b"
     r"|\bi did(?:n'?t| not) (realize|notice|account|consider|catch)\b|\bin hindsight\b"
+    r"|\b(from now on|going forward|next time)\b[^.\n]{0,20}\bi('?ll| will| should)\b"
+    r"|\bi('?ll| will) (make sure|remember) (to|not)\b"
     r"|(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,10}\b(me|my)\b"
     r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby (a |the )?(hook|guard|gate)"
     r"|self.?match(ed|ing|es)?",
@@ -572,6 +574,7 @@ BROAD_ASST_PATTERN = re.compile(
     r"|\bi see (why|how|what|now|the)\b"
     r"|\bfound (it|the|out)\b|\bthe culprit\b|\bgefunden\b"
     r"|\blet me (stop|inspect|double.?check|re.?check|look (again|closer)|take a closer look)\b"
+    r"|\bper the .{1,80}? rule\b|\bthe \".{1,80}?\" rule\b|\bfollowing the .{1,60}? (rule|convention)\b"
     r"|\b(ah|oh|oops|whoops)[, ]|\bwait[, ]",
     re.IGNORECASE,
 )
