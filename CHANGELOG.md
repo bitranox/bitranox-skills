@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.4.1] - 2026-06-30
+
+### Changed
+- `meta-self-improve`: reworded the public-contribution criterion - sensitivity is NOT a disqualifier but
+  a SCRUB step. If a universal rule still teaches its lesson once private specifics (paths, hosts, secrets,
+  org/setup details) are removed or replaced with placeholders, clean it and contribute the scrubbed
+  version; only a rule USELESS without those specifics stays private. (Was: "clearly universal AND
+  non-sensitive", which wrongly excluded a useful rule that merely carried strippable specifics.)
+
 ## [5.4.0] - 2026-06-30
 
 ### Changed
