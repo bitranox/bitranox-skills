@@ -118,11 +118,13 @@ git add path/to/your/file ...                         # stage ONLY your files - 
   branch you think (detached, or a sibling's branch) - diagnose before re-pushing.
 - **Durable fix: give each session its own `git worktree`** (`git worktree add ../wt-<name> <branch>`), so
   they never share a branch, index, or HEAD.
-- **Optional enforcement:** a warn-only `PreToolUse(Bash)` hook can run these checks before a `git commit`
-  and warn (never block), fail-open. SCOPE it to the repo(s) where you actually run parallel sessions AND
-  work on one branch directly - in a normal feature-branch workflow "not on the default branch" is
-  expected, so an unscoped "warn off the default branch" hook is just noise.
+- **Enforced by this plugin:** the always-active `git-commit-branch-guard` hook runs these checks before a
+  `git commit` and WARNS (never blocks), fail-open. It stays low-noise everywhere: the behind/diverged
+  check runs in every repo (it fires only when origin moved under you - silent in normal feature-branch
+  work, where you are ahead), while the louder "not on the default branch" check is OFF by default and
+  enabled per-repo via `GIT_GUARD_STRICT_REPOS="repoA,repoB"` (basenames) - turn it on only for repos you
+  work on a single branch directly, since "not on the default branch" is normal in a feature-branch flow.
 
 ## Hooks
 
-`repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the meta-using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error.
+`repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the meta-using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error. `git-commit-branch-guard` warns (never blocks) before a `git commit` when local HEAD is behind/diverged from its upstream (origin moved under you), and - for repos in `GIT_GUARD_STRICT_REPOS` - when you are off the default branch or detached.

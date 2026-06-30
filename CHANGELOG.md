@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.6.0] - 2026-06-30
+
+### Added
+- `sec-appsec-web-baseline` skill: audit + harden a site's HTTP web-security baseline - security headers
+  (CSP, HSTS, X-Content-Type-Options, X-Frame-Options/`frame-ancestors`, Referrer-Policy,
+  Permissions-Policy, `X-XSS-Protection: 0`), cookie `Secure`/`HttpOnly`/`SameSite` flags, the
+  HTTP->HTTPS redirect, TLS, mixed content, and server-version leakage. Ships `audit_headers.py` (httpx2,
+  one GET + a plain-HTTP HEAD, grades SEVERE/MEDIUM/MINOR/OK, no external grading service) with pure
+  testable graders + 30 pytest tests, `references/security-headers.md` (values, nginx snippets, safe
+  rollout, and gotchas such as the nginx `add_header` inheritance reset), and the safe-rollout discipline
+  (staged HSTS, CSP report-only first). Added a new "Security" grouping to the orientation index.
+
+## [5.6.0] - 2026-06-30
+
+### Added
+- New always-active hook **`git-commit-branch-guard`** (PreToolUse Bash, warn-only, fail-open): warns
+  before a `git commit` when local HEAD is behind/diverged from its upstream (origin advanced under you -
+  the shared-checkout / multi-session hazard). Low-noise everywhere - the behind/diverged check runs in
+  every repo but fires only when origin moved under you (silent in normal feature-branch work); the louder
+  "not on the default branch / detached HEAD" check is OFF by default and enabled per-repo via
+  `GIT_GUARD_STRICT_REPOS="repoA,repoB"`. Default branch auto-detected from `origin/HEAD`. (+11 tests.)
+  `compuse-git` documents it.
+
 ## [5.5.0] - 2026-06-30
 
 ### Changed
