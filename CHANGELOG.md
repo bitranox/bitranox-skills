@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.0.0] - 2026-06-30
+
+### Changed
+- BREAKING: renamed skill `web-frontend-responsive-audit` -> `web-frontend-responsive-ux`. It covers
+  responsive layout plus cross-device usability/UX (no overflow, vertical fit, touch targets, gestures,
+  safe-area, responsive images, i18n layout), so "ux" fits the breadth better than "audit", which
+  undersold its fix-and-prescribe role. Invoke it as `bitranox:web-frontend-responsive-ux` and update
+  any reference to the old name; the skill's content is otherwise unchanged.
+
 ## [4.25.0] - 2026-06-30
 
 ### Changed
