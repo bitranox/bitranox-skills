@@ -37,11 +37,14 @@ def _state_file(cwd, sid):
 
 
 def _label(path):
-    """A readable source label. A memory topic file -> its stem; a CLAUDE.md -> '<parent-dir>/CLAUDE.md'
-    so OTHER projects' rule files are distinguishable (every one is named CLAUDE.md)."""
+    """A readable source label. A native topic file / curated `facts/<slug>.md` -> its stem; a
+    CLAUDE.md -> '<parent-dir>/CLAUDE.md'; a curated `memory.md` -> '<project-dir>/memory' (every
+    curated index is named memory.md, so name it by its owning project - same fix as CLAUDE.md)."""
     p = Path(path)
     if p.name == "CLAUDE.md":
         return "%s/CLAUDE.md" % p.parent.name
+    if p.name == "memory.md" and p.parent.name == sig.CURATED_DIRNAME:
+        return "%s/memory" % p.parent.parent.name
     return p.stem
 
 
@@ -53,6 +56,8 @@ def _snippet(path, keywords, maxlen):
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    if Path(path).name == "memory.md":            # strip the scope descriptor (meta, not a fact) from a curated index
+        text = sig._strip_scope(text)
     if len(text) <= maxlen:
         return text.strip()
     low = text.lower()
@@ -86,7 +91,7 @@ def main():
         # other projects' memory + global rules, PLUS other projects' CLAUDE.md across the workspace
         # tree (lots of cross-project rules still live in CLAUDE.md). The current project's own memory
         # and its ancestor-chain CLAUDE.md are excluded - they are already loaded in this session.
-        files = gs.discover_files(cwd) + gs.discover_claude_md(cwd)
+        files = gs.discover_files(cwd) + gs.discover_claude_md(cwd) + gs.discover_curated(cwd, cwd)
         hits = gs.scan(keywords, files)
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0

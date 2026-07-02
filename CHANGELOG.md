@@ -47,6 +47,12 @@ installed copies and needs no bump.
   gap-fill and writes churn) and `mark_dream_done` records it; `project_unseeded` and
   `knowledge_store_empty(proj)` count real facts / the curated store; `altitude_chain` now returns
   each level's `.claude-bx-selflearning/` (curated) dir + the loose global layer.
+- Cross-project recall now discovers curated stores (`gather_scan.discover_curated`): walks the
+  workspace tree for `.claude-bx-selflearning/` (memory.md + facts/), ALLOW-listing that one dot-dir
+  past the hidden-dir prune (else it was never found), excluding backups, cached per workspace root;
+  excludes the current project's own `memory.md` (already @imported) but keeps its `facts/`.
+  `recall-memory.py` labels a curated index `<project>/memory` and strips the scope descriptor before
+  snippeting (so meta is not injected as a fact).
 
 ## [5.12.0] - 2026-07-02
 

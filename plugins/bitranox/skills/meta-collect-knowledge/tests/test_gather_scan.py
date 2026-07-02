@@ -156,3 +156,26 @@ def test_main_reports_candidates_from_other_tree(home, capsys):
     assert "CANDIDATES:" in out
     assert "/-p-other/" in out          # found the other tree's note
     assert "/-p-self/" not in out       # not the current project's own
+
+
+def test_discover_curated_finds_sibling_excludes_own_and_backups(tmp_path, monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    scope = "<!-- bitranox:self-learning -->\ns\n<!-- /bitranox:self-learning -->\n\n# Memory index\n"
+    sib = ws / "projB" / ".claude-bx-selflearning"
+    (sib / "facts").mkdir(parents=True)
+    (sib / "memory.md").write_text(scope + "\n- [X](#x) - projB fact\n", encoding="utf-8")
+    (sib / "facts" / "big.md").write_text("projB heavy body", encoding="utf-8")
+    own = cur / ".claude-bx-selflearning"
+    (own / "facts").mkdir(parents=True)
+    (own / "memory.md").write_text(scope, encoding="utf-8")
+    (own / "facts" / "mine.md").write_text("own heavy", encoding="utf-8")
+    bak = ws / "projB" / ".claude-bx-selflearning.bak-123"
+    bak.mkdir()
+    (bak / "memory.md").write_text("stale", encoding="utf-8")
+
+    got = G.discover_curated(str(cur), str(cur))
+    assert any(p.endswith("projB/.claude-bx-selflearning/memory.md") for p in got)   # sibling surfaced
+    assert any(p.endswith("/facts/big.md") for p in got)
+    assert str(own / "memory.md") not in got                                          # own memory.md excluded
+    assert any(p.endswith("/facts/mine.md") for p in got)                             # own facts KEPT
+    assert not any(".bak-" in p for p in got)                                         # backups ignored

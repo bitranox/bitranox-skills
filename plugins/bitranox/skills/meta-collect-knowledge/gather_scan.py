@@ -188,6 +188,70 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
     return [p for p in paths if p not in chain]
 
 
+def _find_curated_stores(root):
+    """Every `.claude-bx-selflearning/{memory.md, facts/*.md}` under `root`. Allow-lists that ONE
+    dot-dir past the hidden-dir prune (else the walk would never find it), excludes vendored/other-
+    hidden/backup dirs, and does not descend INTO a store (so `.archive`/backups are skipped)."""
+    out = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            if os.path.basename(dirpath) == sig.CURATED_DIRNAME:
+                d = Path(dirpath)
+                if (d / "memory.md").is_file():
+                    out.append(str(d / "memory.md"))
+                fdir = d / "facts"
+                if fdir.is_dir():
+                    out += [str(p) for p in sorted(fdir.glob("*.md"))]
+                dirnames[:] = []                      # do not descend into the store
+                continue
+            dirnames[:] = [x for x in dirnames
+                           if (x == sig.CURATED_DIRNAME or (x not in _VENDOR and not x.startswith(".")))
+                           and ".bak-" not in x and not x.endswith(".bak")]
+    except OSError:
+        pass
+    return out
+
+
+def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
+    """OTHER projects' curated `.claude-bx-selflearning/` stores across the workspace tree (memory.md
+    + facts/), for cross-project recall. EXCLUDES the current project's own `memory.md` (already
+    @imported into this session) but KEEPS its `facts/` (eligible for push-when-relevant). Cached per
+    workspace root (TTL); empty if no workspace root."""
+    root = _workspace_root(self_cwd)
+    if root is None:
+        return []
+    h = hashlib.sha1(("cur:" + str(root)).encode("utf-8")).hexdigest()[:12]
+    cache = Path.home() / ".claude" / "self-improve-audit" / ("curated-paths.%s.txt" % h)
+    paths = None
+    try:
+        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
+            paths = [ln for ln in cache.read_text(encoding="utf-8").splitlines() if ln]
+    except OSError:
+        paths = None
+    if paths is None:
+        paths = _find_curated_stores(root)
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text("\n".join(paths), encoding="utf-8")
+        except OSError:
+            pass
+    own_mem = None
+    if exclude_proj:
+        try:
+            own_mem = str(sig.curated_index(exclude_proj).resolve())
+        except OSError:
+            own_mem = None
+    kept = []
+    for p in paths:
+        try:
+            if own_mem and Path(p).name == "memory.md" and str(Path(p).resolve()) == own_mem:
+                continue                              # own memory.md already loaded; keep its facts
+        except OSError:
+            pass
+        kept.append(p)
+    return kept
+
+
 def scan(keywords, files):
     """Map each file that contains any keyword to the list of keywords it matched. Matching is
     WORD-BOUNDARY (a-z0-9 are word chars; `-`/`_` and punctuation are separators), case-insensitive -
