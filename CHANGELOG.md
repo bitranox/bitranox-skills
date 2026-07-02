@@ -64,6 +64,11 @@ installed copies and needs no bump.
   both tiers; reconcile the curated store and `--check` the curated altitude chain; over-cap overflow
   moves inline bodies to `facts/` (never CLAUDE.md); promotion into the loose global layer is a
   materialize (global stays whole-loaded); and a closing `/clear` nudge.
+- Remaining skill prose repointed to the curated model: `meta-collect-knowledge` (descriptor now in
+  `memory.md`; the gather CLI also scans other projects' curated stores via `discover_curated`),
+  `meta-memory-settings` (documents the `track_private`, `mcp_search`, `discovery_roots` knobs), and
+  `meta-skill-writer` (durable state uses the curated store; the MCP is only an optional read-only
+  search index, never a backend). Phase 1 complete.
 
 ## [5.12.0] - 2026-07-02
 

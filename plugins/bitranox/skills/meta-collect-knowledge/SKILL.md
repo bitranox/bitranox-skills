@@ -20,7 +20,8 @@ gather**: find knowledge elsewhere that is relevant here, and bring it in safely
 
 ## Relevance needs a topic (descriptor-first)
 Gather only makes sense once you know what the project is about. The query is the project's **scope
-descriptor** (the `<!-- bitranox:self-learning -->` block in its CLAUDE.md), or the topic of the
+descriptor** (the `<!-- bitranox:self-learning -->` block at the top of its
+`.claude-bx-selflearning/memory.md`), or the topic of the
 learning that triggered this. At a brand-new project: first infer the descriptor (README, dir name,
 package metadata, the parent tree's descriptor, the first request); if scope is still unknown, defer.
 

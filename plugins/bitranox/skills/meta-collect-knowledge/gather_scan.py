@@ -286,7 +286,10 @@ def main(argv=None):
     if not keywords:
         print("no usable keywords from topic", file=sys.stderr)
         return 0
-    hits = scan(keywords, discover_files(self_proj))
+    files = discover_files(self_proj)
+    if self_proj:                                 # also other projects' curated stores across the tree
+        files += discover_curated(self_proj, self_proj)
+    hits = scan(keywords, files)
     for path in sorted(hits):
         print("%s\t%s" % (path, ",".join(hits[path])))
     print("CANDIDATES: %d (keywords: %s)" % (len(hits), ", ".join(keywords)))
