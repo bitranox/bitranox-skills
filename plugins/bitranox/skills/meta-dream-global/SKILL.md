@@ -42,9 +42,11 @@ Same machine-local config as the project dream (`self_improve_signals.load_confi
 
 Create one todo per step.
 
-1. **Back up first.** Snapshot every store this run may touch (the global `~/.claude/rules/bitranox/`
-   layer and any project memory dir you will write) to timestamped copies before any edit. The
-   one-time whole-store backup is the safety net; this is the per-run one.
+1. **Back up first.** Snapshot every store this run may touch - the global `~/.claude/rules/bitranox/`
+   layer and any project's curated `.claude-bx-selflearning/` (+ native `memory/`) you will write - to
+   timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
+   never re-discovered as live memory) before any edit. Curated writes go through the engine, not a
+   hand-edit. The one-time whole-store backup is the safety net; this is the per-run one.
 2. **Inbound gather (delegate).** For each project that should be enriched, run
    `bitranox:meta-collect-knowledge` (the grep -> inspect -> gather funnel): pull knowledge from OTHER
    trees relevant to that project and bring it in by **lifting broadly-useful hits to a common ancestor**

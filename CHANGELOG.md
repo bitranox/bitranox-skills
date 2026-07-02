@@ -58,6 +58,12 @@ installed copies and needs no bump.
   two-tier model (native raw kept, curated captured, dream de-doubles/promotes), the engine as the
   single write path, per-turn capture at the PROJECT level only (promotion deferred to the dream), the
   version gate, and the MCP reframed as an optional read-only search index (never the store).
+- Dream skills (`meta-dream-project`, `meta-dream-global`) rewritten for the two-tier model: a
+  de-double + promote step (a fact lives in exactly one tier; worthwhile native-only entries promote
+  into the curated store via the engine; some-value raw entries stay native); out-of-tree backups of
+  both tiers; reconcile the curated store and `--check` the curated altitude chain; over-cap overflow
+  moves inline bodies to `facts/` (never CLAUDE.md); promotion into the loose global layer is a
+  materialize (global stays whole-loaded); and a closing `/clear` nudge.
 
 ## [5.12.0] - 2026-07-02
 
