@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.16.2] - 2026-07-02
+
+### Fixed
+- Repo `.gitignore`: also ignore `CLAUDE.local.md` (not only `.claude-bx-selflearning/`). With the
+  5.14.0 default the memory `@import` wiring lives in an untracked `CLAUDE.local.md`; on this PUBLIC
+  repo it must be gitignored so a session's local memory wiring can never be committed. Refreshed the
+  stale comment (`memory.md` -> `index.md`; the import lives in `CLAUDE.local.md`).
+
 ## [5.16.1] - 2026-07-02
 
 ### Changed

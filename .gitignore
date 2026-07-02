@@ -25,5 +25,6 @@ plugins/bitranox/skills/python-libraries-to-use/
 PLANS/
 
 # Curated self-learning memory store (per-project; local, never committed on this public repo).
-# The tracked CLAUDE.md @imports .claude-bx-selflearning/memory.md; the store itself stays local.
+# A CLAUDE.local.md @imports .claude-bx-selflearning/index.md; both stay local (untracked).
 .claude-bx-selflearning/
+CLAUDE.local.md
