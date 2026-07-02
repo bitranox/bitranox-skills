@@ -19,7 +19,17 @@ def env(tmp_path, monkeypatch):
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(M, "_EXCLUDE_PREFIXES", ())   # pytest tmp_path is under /tmp; don't exclude it here
     return tmp_path, home
+
+
+def test_is_excluded():
+    import os
+    assert M.is_excluded("/tmp") is True
+    assert M.is_excluded("/tmp/whatever/proj") is True
+    assert M.is_excluded(os.path.expanduser("~")) is True     # $HOME itself
+    assert M.is_excluded("/media/srv-main-softdev/projects/x") is False
+    assert M.is_excluded(None) is False
 
 
 def _native_store(home, slug, topics):
@@ -154,3 +164,15 @@ def test_ensure_gitignore_track_private_leaves_tracked(env):
     subprocess.run(["git", "init", "-q", str(proj)], check=False)
     assert "left tracked" in M.ensure_gitignore(str(proj))
     assert not (proj / ".gitignore").exists()
+
+
+def test_migrate_redirect_forces_target(env):
+    tmp_path, home = env
+    target = tmp_path / "renamed-target"
+    target.mkdir()
+    slug = "-media-old-removed-location-proj"          # would NOT resolve (renamed/moved)
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    rep = M.migrate_store(slug, dry_run=False, redirect=str(target))
+    assert rep["redirected"] and rep["placed"] == 1 and not rep["parked"]
+    _, entries, _ = ME.read_store(str(target))
+    assert entries and entries[0].source == {"project-a"}

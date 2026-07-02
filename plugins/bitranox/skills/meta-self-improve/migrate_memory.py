@@ -107,6 +107,24 @@ def resolve_one(slug):
     return marked[0] if len(marked) == 1 else None
 
 
+# roots that resolve but are NOT real projects to seed a curated store into (transient / the home dir)
+_EXCLUDE_PREFIXES = ("/tmp",)
+
+
+def is_excluded(path):
+    """True for a resolved path we should NOT create a curated store in: `$HOME` itself, or anything
+    under a transient root (`/tmp`). Such native stores are skipped (not migrated, not parked)."""
+    if not path:
+        return False
+    try:
+        p = str(Path(path).resolve())
+    except OSError:
+        return False
+    if p == str(Path.home().resolve()):
+        return True
+    return any(p == pref or p.startswith(pref + "/") for pref in _EXCLUDE_PREFIXES)
+
+
 # ---- reading a native store --------------------------------------------------------------------
 
 def read_native_entries(memdir):
@@ -199,15 +217,19 @@ def ensure_gitignore(proj):
 
 # ---- migrate one store -------------------------------------------------------------------------
 
-def migrate_store(slug, dry_run=True, scope_default=""):
+def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
     """Migrate one native store. Returns a report dict. On apply: backs up out-of-tree, curates each
-    native entry into the resolved project's curated store via the engine, records a receipt. Idempotent:
-    an entry whose source slug is already in the receipt is skipped. Unresolved -> parked, reported."""
+    native entry into the resolved (or `redirect`-forced) project's curated store via the engine,
+    records a receipt. Idempotent (receipt-skipped). Unresolved -> parked; an excluded target
+    (`/tmp`, `$HOME`) -> skipped, not migrated. `redirect` forces the target for a renamed/moved slug."""
     memdir = _projects_dir() / slug / "memory"
     entries = read_native_entries(memdir)
-    proj = resolve_one(slug)
+    proj = redirect or resolve_one(slug)
     rep = {"slug": slug, "resolved": proj, "in": len(entries), "placed": 0, "skipped": 0,
-           "parked": False, "dry_run": dry_run}
+           "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run}
+    if proj and is_excluded(proj):
+        rep["excluded"] = True
+        return rep
     if proj is None:
         rep["parked"] = True
         if not dry_run and entries:
@@ -261,36 +283,56 @@ def enumerate_slugs():
         return []
 
 
+def _parse_redirects(items):
+    """Parse `--redirect SLUG=TARGET` items into {slug: target_path}. TARGET must be an existing dir."""
+    out = {}
+    for it in (items or []):
+        if "=" not in it:
+            continue
+        slug, target = it.split("=", 1)
+        out[slug.strip()] = target.strip()
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Migrate native memory stores into the curated model.")
     ap.add_argument("--apply", action="store_true", help="write (default is dry-run/report-only)")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing (default)")
     ap.add_argument("--slug", action="append", default=None,
                     help="limit to specific slug(s); slugs start with '-', so use the =form: --slug=-media-...")
+    ap.add_argument("--redirect", action="append", default=None,
+                    help="force a renamed/moved slug into a target dir: --redirect=<slug>=<target-path>")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     dry = not args.apply
+    redirects = _parse_redirects(args.redirect)
 
     slugs = args.slug if args.slug else enumerate_slugs()
-    total_in = total_placed = total_parked = 0
+    total_in = total_placed = total_parked = total_excluded = 0
     parked = []
     print("%s %d store(s)%s" % ("DRY-RUN over" if dry else "MIGRATING", len(slugs),
                                 "" if dry else " (writing)"))
     for slug in slugs:
-        rep = migrate_store(slug, dry_run=dry)
+        rep = migrate_store(slug, dry_run=dry, redirect=redirects.get(slug))
         total_in += rep["in"]
         total_placed += rep["placed"]
-        if rep["parked"]:
+        if rep["excluded"]:
+            total_excluded += rep["in"]
+            if rep["in"]:
+                print("  - excluded (transient/home): %s -> %s (%d entries skipped)"
+                      % (slug, rep["resolved"], rep["in"]))
+        elif rep["parked"]:
             total_parked += rep["in"]
             parked.append(slug)
             print("  ! PARKED (unresolved): %s (%d entries)" % (slug, rep["in"]))
-        else:
-            print("  %s -> %s : in=%d %s=%d skip=%d"
-                  % (slug, rep["resolved"], rep["in"],
+        elif rep["in"] or rep["redirected"]:            # suppress 0-entry no-op noise
+            print("  %s%s -> %s : in=%d %s=%d skip=%d"
+                  % ("[redirect] " if rep["redirected"] else "", slug, rep["resolved"], rep["in"],
                      "would-place" if dry else "placed", rep["placed"], rep["skipped"]))
-    print("TOTAL in=%d %s=%d parked=%d (in == placed+skipped+parked must hold)"
-          % (total_in, "would-place" if dry else "placed", total_placed, total_parked))
+    print("TOTAL in=%d %s=%d parked=%d excluded=%d (in == placed+skipped+parked+excluded)"
+          % (total_in, "would-place" if dry else "placed", total_placed, total_parked, total_excluded))
     if parked:
-        print("PARKED slugs (resolve manually, then re-run): %s" % ", ".join(parked))
+        print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
+              % ", ".join(parked))
     return 0
 
 
