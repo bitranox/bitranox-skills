@@ -64,207 +64,128 @@ def test_derive_hook_falls_back_to_first_sentence():
     assert R.derive_hook({}, "First sentence here. Second one.") == "First sentence here."
 
 
+
+
 # --------------------------------------------------------------------------
-# reconcile
+# curated store: reconcile + reference integrity (memory.md + facts/)
 # --------------------------------------------------------------------------
 
-def test_backfills_missing_line(tmp_path):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    write(tmp_path, "b.md", topic("b", "hook b"))
-    write(tmp_path, "MEMORY.md", "# Memory index\n\n- [A](a.md) - hook a\n")
-    rep = R.reconcile(tmp_path)
-    assert rep["added"] == ["b.md"]
-    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
-    assert "(b.md)" in idx
-    assert "(a.md)" in idx  # existing line preserved
+import pytest  # noqa: E402
+
+import memory_engine as ME  # noqa: E402  (reconcile put hooks/ on sys.path at import)
 
 
-def test_idempotent(tmp_path):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    R.reconcile(tmp_path)
-    first = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
-    rep2 = R.reconcile(tmp_path)
+@pytest.fixture
+def proj(tmp_path):
+    p = tmp_path / "proj"
+    p.mkdir()
+    return str(p)
+
+
+def _curated(proj):
+    return ME.sig.claude_memory_dir(proj)
+
+
+def test_is_curated_detection(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert R.is_curated(plain) is False
+    cur = tmp_path / ".claude-bx-selflearning"
+    cur.mkdir()
+    (cur / "memory.md").write_text("x", encoding="utf-8")
+    assert R.is_curated(cur) is True
+
+
+def test_reconcile_backfills_orphan_facts_file(proj):
+    ME.add_or_update_entry(proj, "Tiny", "hook", body="small", scope_default="lvl")
+    d = _curated(proj)
+    (d / "facts").mkdir(exist_ok=True)
+    (d / "facts" / "extra-note.md").write_text(
+        "---\nname: extra-note\ndescription: an extra note\n---\nbody", encoding="utf-8")
+    rep = R.reconcile(d)
+    assert "extra-note.md" in rep["added"]
+    _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+    assert "extra-note" in [e.slug for e in entries]
+
+
+def test_reconcile_idempotent(proj):
+    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
+    d = _curated(proj)
+    R.reconcile(d)
+    rep2 = R.reconcile(d)
     assert rep2["added"] == []
-    assert (tmp_path / "MEMORY.md").read_text(encoding="utf-8") == first
 
 
-def test_orphan_reported_not_deleted(tmp_path):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    write(tmp_path, "MEMORY.md", "# Memory index\n\n- [A](a.md) - hook a\n- [Ghost](ghost.md) - gone\n")
-    rep = R.reconcile(tmp_path)
-    assert "ghost.md" in rep["orphans"]
-    assert "(ghost.md)" in (tmp_path / "MEMORY.md").read_text(encoding="utf-8")  # not deleted
+def test_reconcile_dry_run_writes_nothing(proj):
+    ME.add_or_update_entry(proj, "Tiny", "hook", body="small", scope_default="lvl")
+    d = _curated(proj)
+    (d / "facts").mkdir(exist_ok=True)
+    (d / "facts" / "new.md").write_text("---\nname: new\ndescription: d\n---\nb", encoding="utf-8")
+    before = (d / "memory.md").read_text(encoding="utf-8")
+    rep = R.reconcile(d, dry_run=True)
+    assert rep["added"] == ["new.md"] and (d / "memory.md").read_text(encoding="utf-8") == before
 
 
-def test_frontmatterless_file_still_backfilled(tmp_path):
-    write(tmp_path, "plain.md", "# Plain Heading\n\nsome content.\n")
-    rep = R.reconcile(tmp_path)
-    assert "plain.md" in rep["added"]
-    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
-    assert "[Plain Heading](plain.md)" in idx
+def test_reconcile_reports_orphan_heavy_entry(proj):
+    # a heavy entry whose facts/ file was deleted -> reported, not removed
+    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
+    d = _curated(proj)
+    (d / "facts" / "heavy.md").unlink()
+    rep = R.reconcile(d)
+    assert "heavy" in rep["orphans"]
 
 
-def test_creates_index_when_absent(tmp_path):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    rep = R.reconcile(tmp_path)
-    idx = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
-    assert idx.startswith("# Memory index")
-    assert "(a.md)" in idx
-    assert rep["topics"] == 1
+def test_check_references_inline_target_is_not_a_false_orphan(proj):
+    # the KEY fix: a [[ref]] to an INLINED fact resolves (inline #slug is a valid target)
+    ME.add_or_update_entry(proj, "General", "the general rule", body="short", scope_default="lvl")
+    ME.add_or_update_entry(proj, "Specific", "see [[general]] for the base", body="short2")
+    d = _curated(proj)
+    refs = R.check_references([d, str(_curated(proj)) + "-glob"])
+    assert refs["orphans"] == [] and refs["checked"] >= 1
 
 
-def test_dry_run_writes_nothing(tmp_path):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    rep = R.reconcile(tmp_path, dry_run=True)
-    assert rep["added"] == ["a.md"]
-    assert not (tmp_path / "MEMORY.md").exists()
-
-
-def test_main_dry_run(tmp_path, capsys):
-    write(tmp_path, "a.md", topic("a", "hook a"))
-    rc = R.main([str(tmp_path), "--dry-run"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "would add" in out
-    assert not (tmp_path / "MEMORY.md").exists()
-
-
-# --------------------------------------------------------------------------
-# cross-altitude reference integrity (upward-only, no orphans) + over-cap
-# --------------------------------------------------------------------------
-
-def _chain(tmp_path):
-    """Two-altitude chain: project memory (narrow) -> global rules (broad)."""
-    proj = tmp_path / "proj"
-    glob = tmp_path / "global"
-    proj.mkdir()
-    glob.mkdir()
-    return proj, glob
-
-
-def test_check_references_upward_ok(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "References [[fleet-ssh]] plus our subnet detail.")
-    write(glob, "fleet-ssh.md", "Log into the fleet with key X.")
-    rep = R.check_references([proj, glob])
-    assert rep["orphans"] == [] and rep["downward"] == []
-    assert rep["checked"] >= 1
-
-
-def test_check_references_orphan(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "References [[does-not-exist]].")
-    rep = R.check_references([proj, glob])
-    assert ("delta", "does-not-exist") in rep["orphans"]
+def test_check_references_orphan_flagged(proj):
+    ME.add_or_update_entry(proj, "Only", "refers [[nowhere]]", body="b", scope_default="lvl")
+    d = _curated(proj)
+    refs = R.check_references([d])
+    assert ("only", "nowhere") in refs["orphans"]
 
 
 def test_check_references_downward_flagged(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "local-thing.md", "project-only detail")
-    write(glob, "general.md", "Bad: a global rule pointing DOWN to [[local-thing]].")
-    rep = R.check_references([proj, glob])
-    assert ("general", "local-thing") in rep["downward"]
-    assert rep["orphans"] == []
+    # source at a BROADER altitude (pos 1) referencing a target only at a NARROWER one (pos 0)
+    lower = str(tmp_path / "lower")
+    upper = str(tmp_path / "upper")
+    (tmp_path / "lower").mkdir(); (tmp_path / "upper").mkdir()
+    ME.add_or_update_entry(lower, "Low fact", "narrow", body="b", scope_default="l")
+    ME.add_or_update_entry(upper, "High fact", "points [[low-fact]] down", body="b", scope_default="u")
+    refs = R.check_references([_curated(lower), _curated(upper)])
+    assert ("high-fact", "low-fact") in refs["downward"]
 
 
-def test_check_references_altitude_prefixed_slug(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "See [[global:fleet-ssh]] for the base rule.")
-    write(glob, "fleet-ssh.md", "base rule")
-    rep = R.check_references([proj, glob])
-    assert rep["orphans"] == [] and rep["downward"] == []
+def test_has_inbound_refs_detects_and_is_separator_insensitive(proj):
+    ME.add_or_update_entry(proj, "Base rule", "b", body="x", scope_default="lvl")
+    ME.add_or_update_entry(proj, "User", "cites [[base_rule]]", body="x")  # underscore form
+    d = _curated(proj)
+    assert R.has_inbound_refs([d], "base-rule") is True
+    assert R.has_inbound_refs([d], "base_rule") is True
+    assert R.has_inbound_refs([d], "nonexistent") is False
 
 
-def test_check_references_separator_insensitive(tmp_path):
-    # a hyphen/underscore drift between a ref and its target filename must NOT be a false orphan
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "See [[fleet_ssh_access]] and [[other-rule]].")
-    write(glob, "fleet-ssh-access.md", "base rule")     # ref uses _, file uses -
-    write(glob, "other_rule.md", "another base rule")   # ref uses -, file uses _
-    rep = R.check_references([proj, glob])
-    assert rep["orphans"] == [] and rep["downward"] == []
+def test_over_cap_ok_and_pin_budget(proj):
+    ME.add_or_update_entry(proj, "R", "h", body="small", pin=True, scope_default="lvl")
+    ok, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "memory.md")
+    assert ok is True and pin_bytes > 0
+    ok2, *_ = R.over_cap(_curated(proj) / "memory.md", max_pin_bytes=1)  # pinned exceeds tiny budget
+    assert ok2 is False
 
 
-def test_has_inbound_refs_separator_insensitive(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "References [[fleet-ssh-access]].")   # hyphen ref
-    write(glob, "fleet_ssh_access.md", "base rule")              # underscore file
-    assert R.has_inbound_refs([proj, glob], "fleet_ssh_access") is True   # query in either form
-    assert R.has_inbound_refs([proj, glob], "fleet-ssh-access") is True
-
-
-def test_check_references_resolves_by_frontmatter_name(tmp_path):
-    # a ref using a note's `name:` (not its filename stem) resolves
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "See [[generalize-learnings]] for the principle.")
-    write(glob, "feedback_generalize_learnings.md", "---\nname: generalize-learnings\n---\nbody")
-    rep = R.check_references([proj, glob])
-    assert rep["orphans"] == [] and rep["downward"] == []
-
-
-def test_has_inbound_refs_by_frontmatter_name(tmp_path):
-    # a ref by NAME is detected even when demotion-safety queries by filename stem
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "Refs [[generalize-learnings]].")
-    write(glob, "feedback_generalize_learnings.md", "---\nname: generalize-learnings\n---\nbody")
-    assert R.has_inbound_refs([proj, glob], "feedback_generalize_learnings") is True  # query by stem
-    assert R.has_inbound_refs([proj, glob], "generalize-learnings") is True           # query by name
-
-
-def test_check_references_recurses_global_subdirs(tmp_path):
-    proj, glob = _chain(tmp_path)
-    (glob / "net").mkdir()
-    write(proj, "delta.md", "References [[fleet-ssh]].")
-    write(glob / "net", "fleet-ssh.md", "nested global rule")
-    rep = R.check_references([proj, glob])
-    assert rep["orphans"] == [] and rep["downward"] == []
-
-
-def test_over_cap_ok_and_exceeds(tmp_path):
-    small = write(tmp_path, "MEMORY.md", "# Memory index\n- a\n- b\n")
-    ok, lines, _ = R.over_cap(small)
-    assert ok and lines == 3
-    big = write(tmp_path, "BIG.md", "x\n" * 250)
-    ok2, lines2, _ = R.over_cap(big)
-    assert not ok2 and lines2 == 250
-
-
-def test_main_check_exit_codes(tmp_path, capsys):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "References [[fleet-ssh]].")
-    write(glob, "fleet-ssh.md", "ok")
-    assert R.main([str(proj), str(glob), "--check"]) == 0
-    write(proj, "bad.md", "References [[nope]].")
-    assert R.main([str(proj), str(glob), "--check"]) == 1
-    assert "orphan ref" in capsys.readouterr().out
-
-
-# --------------------------------------------------------------------------
-# demotion safety (inbound refs) + forgetting (archive)
-# --------------------------------------------------------------------------
-
-def test_has_inbound_refs(tmp_path):
-    proj, glob = _chain(tmp_path)
-    write(proj, "delta.md", "References [[fleet-ssh]].")
-    write(glob, "fleet-ssh.md", "the general rule")
-    assert R.has_inbound_refs([proj, glob], "fleet-ssh") is True    # delta points up at it -> keep
-    assert R.has_inbound_refs([proj, glob], "delta") is False       # nothing points at delta
-
-
-def test_archive_entry_moves_body_and_drops_index(tmp_path):
-    d = tmp_path / "memory"
-    d.mkdir()
-    write(d, "stale.md", topic("stale", "an idle note"))
-    write(d, "MEMORY.md", "# Memory index\n- [Stale](stale.md) - an idle note\n- [Keep](keep.md) - x\n")
-    assert R.archive_entry(d, "stale.md") is True
-    assert not (d / "stale.md").exists()
-    assert (d / ".archive" / "stale.md").is_file()                 # body preserved (cold), not deleted
-    idx = (d / "MEMORY.md").read_text(encoding="utf-8")
-    assert "stale.md" not in idx and "keep.md" in idx              # only the stale index line dropped
-
-
-def test_archive_entry_refuses_missing_or_index(tmp_path):
-    d = tmp_path / "memory"
-    d.mkdir()
-    assert R.archive_entry(d, "nope.md") is False
-    assert R.archive_entry(d, "MEMORY.md") is False
+def test_archive_entry_inline_and_heavy(proj):
+    ME.add_or_update_entry(proj, "Tiny", "h", body="small", scope_default="lvl")
+    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400)
+    d = _curated(proj)
+    assert R.archive_entry(d, "heavy") is True
+    assert (d / ".archive" / "heavy.md").is_file()
+    assert R.archive_entry(d, "tiny") is True
+    _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+    assert entries == []
+    assert R.archive_entry(d, "nonexistent") is False

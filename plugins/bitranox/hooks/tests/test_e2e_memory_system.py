@@ -131,13 +131,20 @@ def test_memory_system_end_to_end(sandbox):
     _, out, _ = _cli(dream, "due", proj_b)
     assert out == "not-due"
 
-    # S8 - reconcile_memory_index (index backfill + reference --check)
+    # S8 - reconcile a CURATED .claude-bx-selflearning store (backfill from facts/ + reference --check)
+    import memory_engine as ME
+    ME.add_or_update_entry(proj_b, "Zorblax config", "set the zorblax flag before deploy",
+                           body="Configure the zorblax frobnicator.", scope_default="projB notes")
+    cur_b = sig.claude_memory_dir(proj_b)
+    (cur_b / "facts").mkdir(parents=True, exist_ok=True)
+    (cur_b / "facts" / "extra.md").write_text(
+        "---\nname: extra\ndescription: an extra widget note\n---\nbody", encoding="utf-8")
     recon = SK / "meta-self-improve" / "reconcile_memory_index.py"
-    _cli(recon, str(sig.memory_dir(proj_b)))
-    mindex = sig.memory_dir(proj_b) / "MEMORY.md"
-    assert mindex.is_file() and "zorblax" in mindex.read_text(encoding="utf-8")
-    _mem(proj_b, "orphan.md", "see [[does-not-exist-anywhere]] for details")
-    rc, out, err = _cli(recon, "--check", str(sig.memory_dir(proj_b)), str(g))
+    _cli(recon, str(cur_b))                                         # backfills the orphan facts file
+    mindex = cur_b / "memory.md"
+    assert mindex.is_file() and "extra" in mindex.read_text(encoding="utf-8")
+    ME.add_or_update_entry(proj_b, "Bad ref", "see [[does-not-exist-anywhere]]", body="x")
+    rc, out, err = _cli(recon, "--check", str(cur_b))              # orphan [[ref]] is flagged
     assert rc != 0 or "does-not-exist-anywhere" in (out + err)
 
     # S9 - self-improve-gate (Stop-hook learning detection)

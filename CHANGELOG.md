@@ -35,6 +35,12 @@ installed copies and needs no bump.
   to a non-imported `facts/` file), `add_or_update_entry` (upsert, merge provenance, locked,
   mtime-neutral) and `ensure_level` (create the CLAUDE.md `@import` block + `memory.md` scope, and
   relocate a legacy in-CLAUDE.md scope block into `memory.md` byte-safe).
+- `reconcile_memory_index.py` rewritten for the curated model: format-aware (curated `memory.md`+
+  `facts/` vs the loose whole-loaded global tier); an INLINE `#slug` entry AND a heavy
+  `facts/<slug>.md` are both valid `[[wikilink]]` targets (fixes false-orphan -> a still-referenced
+  inlined fact is no longer flagged/deletable); per-entry reference attribution; backfill `memory.md`
+  from orphan `facts/` files; `over_cap` guards `memory.md` with a separate pinned-body budget;
+  `archive_entry` drops an entry and moves its heavy body to `.archive/`.
 
 ## [5.12.0] - 2026-07-02
 
