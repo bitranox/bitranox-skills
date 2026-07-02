@@ -28,12 +28,19 @@ def isolate_home(tmp_path, monkeypatch):
 
     Also drop the auto-update-nudge opt-out sentinel by default so the nudge stays silent for
     the non-nudge tests; the nudge tests remove it explicitly.
+
+    Also chdir to a clean tmp dir: the run() helper sends no stdin, so _proj() falls back to
+    os.getcwd(); without this it would resolve the REAL repo, whose in-tree curated store makes
+    dream_due() fire and pollutes the context the non-nudge tests assert on. The nudge tests are
+    unaffected - they pass an explicit cwd via run_with_stdin().
     """
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (home / ".claude" / ".bitranox-no-autoupdate-nudge").write_text("", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     return home
 
 

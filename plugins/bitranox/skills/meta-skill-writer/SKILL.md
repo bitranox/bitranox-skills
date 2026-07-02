@@ -778,6 +778,19 @@ description: use when implementing any feature or bugfix, before writing impleme
 
 **Before writing any skill, plan the work.** Use your task/todo tooling (e.g. TodoWrite) to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.
 
+### Survey prior art first
+
+Before planning a new skill, survey what already exists across the public Claude skill/plugin catalogs. The goal is not to avoid a duplicate but to LEARN from prior art: find the skills nearest your intended domain and mine them for ideas, useful hints, and proven procedures, then fold the good ones into your design.
+
+Catalogs worth reading (2026):
+
+- `github.com/anthropics/skills` - official Anthropic Agent Skills (canonical reference set; also a plugin marketplace)
+- `github.com/anthropics/claude-plugins-official` - official plugin directory
+- `github.com/rohitg00/awesome-claude-code-toolkit` - large plugins + skills toolkit
+- `github.com/ComposioHQ/awesome-claude-plugins` and `github.com/ComposioHQ/awesome-claude-skills`
+- `github.com/hesreallyhim/awesome-claude-code`, `github.com/jqueryscript/awesome-claude-code` - broad community lists
+- aggregators: `awesome-skills.com`, `awesomeclaude.ai`
+
 ### Step 0: Create a Plan
 
 1. **Identify skill type** - Is this a discipline skill, technique, pattern, or reference? (See "Skill Types" above.) This determines the test approach.

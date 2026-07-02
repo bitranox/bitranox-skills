@@ -28,7 +28,7 @@ def test_is_excluded():
     assert M.is_excluded("/tmp") is True
     assert M.is_excluded("/tmp/whatever/proj") is True
     assert M.is_excluded(os.path.expanduser("~")) is True     # $HOME itself
-    assert M.is_excluded("/media/srv-main-softdev/projects/x") is False
+    assert M.is_excluded("/data/projects/x") is False        # a normal project path (not /tmp, not $HOME)
     assert M.is_excluded(None) is False
 
 
