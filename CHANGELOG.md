@@ -17,6 +17,13 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.15.1] - 2026-07-02
+
+### Added
+- `coding-python-use-modern-libraries`: added `ftfy` as the pick for text-encoding / mojibake repair
+  (repairs mixed or double-encoded text like `Ã¼`->`ü` while leaving already-correct text untouched),
+  over blanket `.encode('latin-1').decode('utf-8')` round-trips or manual character swaps.
+
 ## [5.15.0] - 2026-07-02
 
 ### Added
