@@ -69,6 +69,14 @@ installed copies and needs no bump.
   `meta-memory-settings` (documents the `track_private`, `mcp_search`, `discovery_roots` knobs), and
   `meta-skill-writer` (durable state uses the curated store; the MCP is only an optional read-only
   search index, never a backend). Phase 1 complete.
+- Phase 2 - migration (`meta-self-improve/migrate_memory.py` + tests): a dry-run/report-first sweep of
+  native `~/.claude/projects/<slug>/memory/` stores into the curated model. A filesystem-guided
+  slug->path resolver (Claude encodes `/`, `.`, `_` all to `-`, so it DFS-probes each `-` against the
+  real tree and parks anything ambiguous/nonexistent - never guesses). Per store: back up BOTH tiers
+  out of tree, curate each native topic into the resolved project's curated store via the engine
+  (carrying provenance), write an idempotency/resume receipt, and gitignore the store (R11: skip
+  non-git, warn if already tracked, honor `track_private`). Native stores are never deleted; other
+  repos are never auto-committed.
 
 ## [5.12.0] - 2026-07-02
 
