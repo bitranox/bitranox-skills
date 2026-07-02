@@ -113,6 +113,7 @@ bitranox ships far more than the workflow/process skills. Before concluding "no 
 - **Shell / git / ssh / remote-control mechanics:** `compuse-bash`, `compuse-git`, `compuse-ssh`, `compuse-vnc`
 - **Writing:** `write-humanize-de`, `write-humanize-en`
 - **Infrastructure and ops:** `infra-proxmox`, `infra-proxmox-bindsnap`, `net-rotating-proxies`
+- **Build / test / release tooling:** `devops-bmk`
 - **Web / frontend:** `web-frontend-responsive-ux`
 - **Security:** `sec-appsec-web-baseline`
 - **Persuasion and business:** `marketing-rory`
