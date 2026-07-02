@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.15.2] - 2026-07-02
+
+### Fixed
+- Self-improve gate/audit: the assistant self-admission patterns (`ASST_PATTERN` and the audit's
+  `BROAD_ASST_PATTERN` in `self_improve_signals.py`) missed common admissions - PAST-tense "you were
+  right/correct" (only "you're right" was caught), the noun form "was a misread", and "misdiagnosed".
+  Broadened both families (and added a regression test) so a genuine self-admitted miss triggers the
+  Stop-hook nudge instead of slipping through. Benign state descriptions still do not fire.
+
 ## [5.15.1] - 2026-07-02
 
 ### Added

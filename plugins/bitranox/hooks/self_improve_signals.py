@@ -829,7 +829,8 @@ USER_PATTERN = re.compile(
 
 # ASSISTANT self-admitted miss (incl. a guard/hook blocking the assistant's own action).
 ASST_PATTERN = re.compile(
-    r"you.?re right|you are right|my mistake|i was wrong|apolog"
+    r"you(?:'?re| are| were) (?:right|correct)|my mistake|i was wrong|apolog"
+    r"|\bmisdiagnos\w+|\bmy\b[^.\n]{0,40}\bwas (?:an? )?(?:misread|mistake|error|wrong|misjudged)\b"
     r"|\bi should(?: have|'?ve)\b|\bi (missed|overlooked|forgot|misread|misunderstood)\b"
     r"|\bi did(?:n'?t| not) (realize|notice|account|consider|catch)\b|\bin hindsight\b"
     r"|\b(from now on|going forward|next time)\b[^.\n]{0,20}\bi('?ll| will| should)\b"
@@ -887,6 +888,7 @@ BROAD_USER_PATTERN = re.compile(
 
 BROAD_ASST_PATTERN = re.compile(
     r"\bi (missed|overlooked|forgot|misread|misunderstood|didn.?t (realize|notice|account))\b"
+    r"|you(?:'?re| are| were) (?:right|correct)|\bmisdiagnos\w+|\bwas (?:an? )?(?:misread|mistake)\b"
     r"|\bi should (have|.?ve) \w+|\bon reflection\b|\blet me reconsider\b"
     r"|\bgood (point|catch)\b"
     r"|\bthe (issue|problem|bug|root cause|reason) (is|was|turned out|ended up)\b"

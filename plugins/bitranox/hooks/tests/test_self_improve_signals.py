@@ -26,6 +26,17 @@ def test_strict_asst_hit():
     assert not S.strict_asst_hit("Done, added the helper and a test.")
 
 
+def test_strict_asst_hit_past_tense_admission():
+    # regression: the gate used to miss PAST-tense "you were right" and noun-form / "misdiagnosed"
+    # self-admissions (only "you're right" and the verb "i misread" were caught).
+    assert S.strict_asst_hit("You were right; my earlier claim was a misread of the config.")
+    assert S.strict_asst_hit("you were correct")
+    assert S.strict_asst_hit("I misdiagnosed the DHCP scope - no change was needed.")
+    # benign lines that describe state (not an admission) must NOT fire
+    assert not S.strict_asst_hit("the new value is correct and the test passes")
+    assert not S.strict_asst_hit("the old config was fine")
+
+
 def test_strict_asst_hit_found_it_discovery():
     # "found it" and discovery phrasings are realization signals
     assert S.strict_asst_hit("Found it - the bug was in the parser.")
