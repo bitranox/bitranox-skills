@@ -25,6 +25,7 @@ _HOOK_MODULES = {
     "post-compact-nudge": "post_compact_nudge",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",
+    "commit-tell-sweep": "commit_tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
     "git-commit-branch-guard": "git_commit_branch_guard",
     "block-sed-structured-files": "block_sed_structured_files",

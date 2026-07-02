@@ -15,27 +15,17 @@ examples. A genuine reference to the character itself belongs in backticks anywa
 Code files are skipped (legit unicode in test data / identifiers); commit messages
 and code comments rely on the manual sweep plus the humanizer skill.
 
-The tell codepoints are listed as hex ranges so this source stays pure ASCII.
-Allowed-on-purpose symbols are NOT in the set: arrow U+2192, multiplication U+00D7,
->= U+2265, <= U+2264, != U+2260, check U+2713, bullet U+2022.
+The tell codepoints and the ignore-code-span scanner live in the shared `tell_chars` module
+(so the `commit-tell-sweep` PreToolUse hook uses the exact same set). This source stays pure ASCII.
 
 Pure standard library. Reads the PostToolUse event JSON on stdin. Exit 2 surfaces
 the hit list to the model (the tool already ran); every other path (including any
 error) exits 0, so a broken guard never wedges a turn.
 """
 import json
-import re
 import sys
 
-# Inclusive codepoint ranges to flag (matches the umbrella CLAUDE.md sweep).
-RANGES = [
-    (0x0085, 0x0085), (0x00A0, 0x00A0), (0x00AB, 0x00AB), (0x00AD, 0x00AD),
-    (0x00BB, 0x00BB), (0x061C, 0x061C), (0x180E, 0x180E), (0x2000, 0x200F),
-    (0x2010, 0x2015), (0x2018, 0x201F), (0x2024, 0x2026), (0x2028, 0x202F),
-    (0x2039, 0x2039), (0x203A, 0x203A), (0x205F, 0x205F), (0x2060, 0x2064),
-    (0x2066, 0x2069), (0x2212, 0x2212), (0x2E3A, 0x2E3A), (0x2E3B, 0x2E3B),
-    (0x3000, 0x3000), (0xFEFF, 0xFEFF), (0xFFFC, 0xFFFC), (0xFFFD, 0xFFFD),
-]
+import tell_chars
 
 
 def main() -> int:
@@ -49,25 +39,11 @@ def main() -> int:
         return 0
     try:
         with open(fp, encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().splitlines()
+            text = fh.read()
     except Exception:
         return 0
 
-    cls = "".join(chr(a) if a == b else "%c-%c" % (a, b) for a, b in RANGES)
-    tell = re.compile("[" + cls + "]")
-    inline = re.compile(r"`[^`]*`")
-
-    hits = []
-    in_fence = False
-    for n, line in enumerate(lines, 1):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if tell.search(inline.sub("", line)):
-            hits.append("%d: %s" % (n, line))
+    hits = tell_chars.find_tell_lines(text)
     if not hits:
         return 0
 

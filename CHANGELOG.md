@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.14.2] - 2026-07-02
+
+### Added
+- New `commit-tell-sweep` PreToolUse(Bash) hook: blocks a `git commit`/`merge`/`tag` whose inline
+  `-m`/`--message`/`-F`/`--file` message carries a typographic or invisible AI-writing tell (em/en-dash,
+  curly quote, ellipsis, NBSP, ZWSP, BOM, ...), closing the gap the file-only `tell-sweep` hook left in
+  git commit messages. Ignores tells inside backtick spans; cannot see an editor-composed message (bare
+  `git commit`) - that path stays with the humanizer skill. Fail-open (any error exits 0).
+- New shared `tell_chars` module holds the canonical tell codepoint `RANGES` + the code-span-aware line
+  scanner, used by BOTH `tell-sweep` and `commit-tell-sweep` (one source of truth). `tell-sweep` refactored
+  to use it (behavior unchanged). Sibling tests for both new modules.
+
 ## [5.14.1] - 2026-07-02
 
 ### Changed
