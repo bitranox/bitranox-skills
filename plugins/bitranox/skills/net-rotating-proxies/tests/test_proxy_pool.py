@@ -313,3 +313,193 @@ def test_run_item_cmd_not_found_returns_none(store):
     item, proxy = pp._run_item(store, "JOB", argv_tpl, 4, 30, None, dead_re)
     assert (item, proxy) == ("JOB", None)
     assert pp._read(pp._p(store, "good.txt")) == set()
+
+
+# ----------------------------------------------------------------------------
+# _weighted_lru_pick (rotation / cool-down so no proxy is hammered)
+# ----------------------------------------------------------------------------
+def test_weighted_lru_pick_empty_or_zero_n():
+    assert pp._weighted_lru_pick({}, {}, now=100.0, cooldown=5, n=1) == []
+    assert pp._weighted_lru_pick({"a:1": 1.0}, {}, now=100.0, cooldown=5, n=0) == []
+
+
+def test_weighted_lru_pick_rests_recently_used():
+    # b was used 1s ago (within a 5s cool-down); a is fully rested -> a must be picked.
+    weights = {"a:1": 1.0, "b:1": 100.0}   # b is "faster" (heavier) but resting
+    last_used = {"b:1": 99.0}
+    picked = pp._weighted_lru_pick(weights, last_used, now=100.0, cooldown=5, n=1)
+    assert picked == ["a:1"]
+
+
+def test_weighted_lru_pick_relaxes_when_all_resting():
+    # both used within the cool-down; the LEAST-recently-used (oldest) is added back first.
+    weights = {"a:1": 1.0, "b:1": 1.0}
+    last_used = {"a:1": 98.0, "b:1": 99.5}   # a is older -> more rested
+    picked = pp._weighted_lru_pick(weights, last_used, now=100.0, cooldown=5, n=1)
+    assert picked == ["a:1"]
+
+
+def test_weighted_lru_pick_favours_heavier_weight_when_eligible():
+    # nothing rested; over many picks the heavier-weighted (faster) one dominates.
+    weights = {"fast:1": 50.0, "slow:1": 1.0}
+    random.seed(2024)
+    counts = {"fast:1": 0, "slow:1": 0}
+    for _ in range(3000):
+        picked = pp._weighted_lru_pick(weights, {}, now=0.0, cooldown=0, n=1)
+        counts[picked[0]] += 1
+    assert counts["fast:1"] > 5 * max(counts["slow:1"], 1), counts
+
+
+def test_weighted_lru_pick_without_replacement():
+    weights = {"a:1": 1.0, "b:1": 1.0, "c:1": 1.0}
+    random.seed(7)
+    picked = pp._weighted_lru_pick(weights, {}, now=0.0, cooldown=0, n=2)
+    assert len(picked) == 2 and len(set(picked)) == 2
+
+
+# ----------------------------------------------------------------------------
+# _swap_candidate (swap-up: fresh fast proxy replaces slowest idle in-pool one)
+# ----------------------------------------------------------------------------
+def test_swap_candidate_replaces_slowest_idle_when_faster():
+    pool_speed = {"s1:1": 5.0, "s2:1": 3.0, "f1:1": 0.5}
+    victim = pp._swap_candidate(pool_speed, in_use=set(), candidate_speed=0.2)
+    assert victim == "s1:1"   # slowest
+
+
+def test_swap_candidate_none_when_candidate_not_faster():
+    pool_speed = {"s1:1": 5.0, "s2:1": 3.0}
+    assert pp._swap_candidate(pool_speed, in_use=set(), candidate_speed=6.0) is None
+
+
+def test_swap_candidate_skips_in_use_proxy():
+    # the slowest (s1) is mid-request -> it must NOT be swapped out; s2 is the next slowest idle.
+    pool_speed = {"s1:1": 5.0, "s2:1": 3.0}
+    victim = pp._swap_candidate(pool_speed, in_use={"s1:1"}, candidate_speed=1.0)
+    assert victim == "s2:1"
+
+
+def test_swap_candidate_none_when_all_in_use():
+    pool_speed = {"s1:1": 5.0, "s2:1": 3.0}
+    assert pp._swap_candidate(pool_speed, in_use={"s1:1", "s2:1"}, candidate_speed=0.1) is None
+
+
+# ----------------------------------------------------------------------------
+# _is_flaky (evict intermittently-failing proxies past a threshold)
+# ----------------------------------------------------------------------------
+def test_is_flaky_below_min_samples_is_never_flaky():
+    # 2 failures, 0 successes but below the 4-sample floor -> not judged yet.
+    assert pp._is_flaky(0, 2, min_samples=4, max_fail_ratio=0.5) is False
+
+
+def test_is_flaky_above_ratio_is_flaky():
+    # 3/4 = 0.75 > 0.5 -> flaky.
+    assert pp._is_flaky(1, 3, min_samples=4, max_fail_ratio=0.5) is True
+
+
+def test_is_flaky_at_or_below_ratio_is_ok():
+    # exactly 0.5 is NOT over the threshold; a mostly-good proxy stays.
+    assert pp._is_flaky(2, 2, min_samples=4, max_fail_ratio=0.5) is False
+    assert pp._is_flaky(8, 2, min_samples=4, max_fail_ratio=0.5) is False
+
+
+# ----------------------------------------------------------------------------
+# ProxyPool (integration of the pure logic with locked, file-backed state)
+# ----------------------------------------------------------------------------
+def test_pool_active_seeds_fastest_need_from_live(store):
+    _seed_store(
+        store,
+        live=["a:1", "b:1", "c:1"],
+        speeds={"a:1": 0.1, "b:1": 0.2, "c:1": 5.0},
+    )
+    pool = pp.ProxyPool(store, need=2)
+    # the 2 FASTEST (a, b) form the active set; the slow c is left out.
+    assert pool.active() == {"a:1", "b:1"}
+
+
+def test_pool_acquire_rotates_and_rests(store):
+    _seed_store(store, live=["a:1", "b:1"], speeds={"a:1": 0.1, "b:1": 5.0})
+    pool = pp.ProxyPool(store, need=2, cooldown=100)
+    random.seed(1)
+    first = pool.acquire(1)
+    second = pool.acquire(1)
+    # first is stamped used; with a long cool-down the second acquire must pick the OTHER
+    # proxy - the fast one is rested rather than hammered again.
+    assert len(first) == 1 and len(second) == 1
+    assert first[0] != second[0]
+
+
+def test_pool_record_evicts_flaky_and_persists(store):
+    _seed_store(store, live=["flaky:1", "spare:1"], speeds={"flaky:1": 0.1, "spare:1": 0.2})
+    pool = pp.ProxyPool(store, need=1, flaky_min_samples=4, flaky_max_fail_ratio=0.5)
+    # 3 failures + 1 success = 0.75 fail ratio -> evicted, banned to bad.txt, backfilled.
+    for _ in range(3):
+        pool.record("flaky:1", False)
+    pool.record("flaky:1", True)
+    assert "flaky:1" not in pool.active()
+    assert "flaky:1" in pp._read(pp._p(store, "bad.txt"))
+    # a spare fast proxy backfills the freed slot.
+    assert "spare:1" in pool.active()
+
+
+def test_pool_ban_evicts_and_backfills(store):
+    _seed_store(store, live=["dead:1", "spare:1"], speeds={"dead:1": 0.1, "spare:1": 0.2})
+    pool = pp.ProxyPool(store, need=1)
+    assert pool.active() == {"dead:1"}   # fastest first
+    pool.ban("dead:1")
+    assert "dead:1" in pp._read(pp._p(store, "bad.txt"))
+    assert pool.active() == {"spare:1"}  # backfilled from live
+
+
+def test_pool_benchmark_swaps_fast_candidate_for_slow_member(store, monkeypatch):
+    # active starts as the two slow proxies; a fresh fast candidate is in live but not active.
+    _seed_store(
+        store,
+        live=["slow1:1", "slow2:1", "fast:1"],
+        speeds={"slow1:1": 5.0, "slow2:1": 4.0, "fast:1": 9.0},
+    )
+    pool = pp.ProxyPool(store, need=2, test_url="https://x/")
+    assert pool.active() == {"slow1:1", "slow2:1"}   # fast starts out (seeded slowest)
+    # re-benchmark reports each proxy's true latency by name; fast is genuinely fastest now,
+    # and slow1 stays the slowest idle member (distinct latencies -> deterministic victim).
+    lat = {"slow1:1": 5.0, "slow2:1": 4.0, "fast:1": 0.1}
+    def fake_reachable(proxy, url, timeout):
+        return (True, lat[proxy])
+    monkeypatch.setattr(pp, "_reachable", fake_reachable)
+    pool.benchmark_once()
+    active = pool.active()
+    assert "fast:1" in active          # swapped up
+    assert len(active) == 2            # still N
+    assert "slow1:1" not in active     # slowest idle member swapped out
+
+
+def test_pool_benchmark_evicts_dead_active_member(store, monkeypatch):
+    _seed_store(store, live=["gone:1", "ok:1"], speeds={"gone:1": 0.1, "ok:1": 0.2})
+    pool = pp.ProxyPool(store, need=2, test_url="https://x/")
+    def fake_reachable(proxy, url, timeout):
+        return (False, None) if proxy == "gone:1" else (True, 0.2)
+    monkeypatch.setattr(pp, "_reachable", fake_reachable)
+    pool.benchmark_once()
+    assert "gone:1" not in pool.active()
+    assert "gone:1" in pp._read(pp._p(store, "bad.txt"))
+
+
+def test_run_item_with_pool_records_success(store, tmp_path):
+    _seed_store(store, live=["px:1"], speeds={"px:1": 1.0})
+    pool = pp.ProxyPool(store, need=1)
+    marker = tmp_path / "m.txt"
+    code = "open(r'%s','w').write('{proxy}')" % marker
+    dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
+    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 2, 30, str(marker), dead_re, pool)
+    assert proxy == "px:1"
+    assert "px:1" in pp._read(pp._p(store, "good.txt"))
+
+
+def test_run_item_with_pool_bans_dead_proxy(store):
+    _seed_store(store, live=["dead:1"], speeds={"dead:1": 1.0})
+    pool = pp.ProxyPool(store, need=1)
+    code = "import sys; sys.stderr.write('connection refused by proxy'); sys.exit(1)"
+    dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
+    item, proxy = pp._run_item(store, "JOB", _argv_tpl(code), 1, 30, None, dead_re, pool)
+    assert proxy is None
+    assert "dead:1" in pp._read(pp._p(store, "bad.txt"))
+    assert "dead:1" not in pool.active()

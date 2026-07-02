@@ -207,6 +207,218 @@ def _pick(store, n):
     return [p for _, p in keyed[:n]]
 
 
+def _weighted_lru_pick(weights, last_used, now, cooldown, n):
+    """Efraimidis-Spirakis weighted pick of up to n proxies that also SPREADS load.
+
+    ``weights`` maps proxy -> selection weight (higher = fitter, e.g. faster). A proxy
+    used within ``cooldown`` seconds is RESTED (held out) so no single fast proxy gets
+    hammered back-to-back; the pick is drawn from the rested remainder by weight so fast
+    proxies are still favoured among the eligible. If cool-down would leave fewer than n
+    eligible, the most-rested recently-used proxies (oldest ``last_used`` first) are added
+    back until n are available, so a small pool never starves. Pure and deterministic given
+    the ``random`` state; holds no shared state and does no I/O."""
+    if not weights or n <= 0:
+        return []
+    eligible = [p for p in weights if now - last_used.get(p, float("-inf")) >= cooldown]
+    if len(eligible) < n:
+        resting = sorted((p for p in weights if p not in eligible), key=lambda p: last_used.get(p, float("-inf")))
+        eligible += resting[: n - len(eligible)]
+    keyed = []
+    for p in eligible:
+        w = max(weights[p], 1e-9)
+        u = random.random() or 1e-12
+        keyed.append((u ** (1.0 / w), p))
+    keyed.sort(reverse=True)
+    return [p for _, p in keyed[:n]]
+
+
+def _swap_candidate(pool_speed, in_use, candidate_speed):
+    """Return the in-pool proxy a fresh candidate should replace, or None.
+
+    Steady state is the N FASTEST healthy proxies. A fresh candidate measured at
+    ``candidate_speed`` (latency, seconds) swaps out the SLOWEST currently-idle in-pool
+    proxy when it is strictly faster than that one; a proxy that is mid-request (in
+    ``in_use``) is never swapped out. Returns None when no idle member is slower than the
+    candidate, so a swap only ever raises pool speed. Pure; no shared state, no I/O."""
+    idle = [(lat, p) for p, lat in pool_speed.items() if p not in in_use]
+    if not idle:
+        return None
+    slowest_lat, slowest = max(idle)
+    return slowest if candidate_speed < slowest_lat else None
+
+
+def _is_flaky(successes, failures, min_samples=4, max_fail_ratio=0.5):
+    """True when a proxy fails intermittently past the tolerated ratio.
+
+    Requires at least ``min_samples`` recorded attempts before judging (so one early
+    failure does not evict an otherwise-good proxy), then flags it when the failure
+    fraction exceeds ``max_fail_ratio``. A flaky proxy is evicted and replaced just like a
+    hard-dead one. Pure; no shared state, no I/O."""
+    total = successes + failures
+    if total < min_samples:
+        return False
+    return failures / total > max_fail_ratio
+
+
+class ProxyPool:
+    """Self-optimizing in-memory working set of proxies for one ``run``.
+
+    Holds the ``need`` fastest healthy proxies as the ACTIVE set and hands them out
+    rotated (cool-down / weighted-LRU via ``_weighted_lru_pick``) so load spreads instead
+    of hammering the single fastest exit-IP. Tracks per-proxy latency, last-used time,
+    in-flight status, and success/failure counts; a proxy that goes hard-dead OR turns
+    flaky (``_is_flaky``) is evicted and backfilled from the live pool. A background
+    benchmark loop (``benchmark_loop``) continuously re-times active proxies and trials
+    fresh candidates, swapping a faster fresh one in for the slowest idle member
+    (``_swap_candidate``) so steady state stays the N fastest.
+
+    All mutation is guarded by ``self._lock``; the decision logic lives in the pure module
+    functions so it is unit-testable without threads. ``self._lock`` and the module-level
+    ``_lock`` (used by ``_append`` / ``_upsert_speeds``) are distinct objects that are
+    never held in a cycle, so calling those helpers while holding ``self._lock`` is safe."""
+
+    def __init__(self, store, need, test_url=None, vtimeout=7.0, cooldown=5.0,
+                 flaky_min_samples=4, flaky_max_fail_ratio=0.5, bench_batch=25):
+        self.store = store
+        self.need = need or 0
+        self.test_url = test_url
+        self.vtimeout = vtimeout
+        self.cooldown = cooldown
+        self.flaky_min_samples = flaky_min_samples
+        self.flaky_max_fail_ratio = flaky_max_fail_ratio
+        self.bench_batch = bench_batch
+        self._lock = threading.Lock()
+        self._speed = _read_speeds(_p(store, "speeds.tsv"))
+        self._last_used = {}
+        self._in_use = set()
+        self._ok = {}
+        self._fail = {}
+        self._banned = set()
+        self._active = set()
+        with self._lock:
+            self._refill_active_locked()
+
+    # -- internal helpers; caller must hold self._lock -----------------------
+    def _candidates_locked(self):
+        bad = _read(_p(self.store, "bad.txt"))
+        live = _read(_p(self.store, "live.txt"))
+        good = _read(_p(self.store, "good.txt"))
+        return (live | good) - bad - self._banned
+
+    def _refill_active_locked(self):
+        cands = self._candidates_locked()
+        default_lat = _median(list(self._speed.values())) or 3.0
+        ranked = sorted(cands, key=lambda p: self._speed.get(p) or default_lat)
+        target = self.need or len(ranked)
+        self._active = set(ranked[:target])
+
+    def _weights_locked(self):
+        good = _read(_p(self.store, "good.txt")) - self._banned
+        default_lat = _median(list(self._speed.values())) or 3.0
+        weights = {}
+        for p in self._active:
+            base = 3.0 if p in good else 1.0
+            lat = self._speed.get(p) or default_lat
+            weights[p] = base / max(lat, 0.05)
+        return weights
+
+    def _ban_locked(self, proxy):
+        self._banned.add(proxy)
+        self._active.discard(proxy)
+        self._in_use.discard(proxy)
+
+    def _try_swap_locked(self, candidate, cand_lat):
+        target = self.need or (len(self._active) + 1)
+        if len(self._active) < target:
+            self._active.add(candidate)
+            return
+        default_lat = _median(list(self._speed.values())) or 3.0
+        pool_speed = {p: (self._speed.get(p) or default_lat) for p in self._active}
+        victim = _swap_candidate(pool_speed, self._in_use, cand_lat)
+        if victim is not None:
+            self._active.discard(victim)
+            self._active.add(candidate)
+
+    # -- public API ----------------------------------------------------------
+    def active(self):
+        with self._lock:
+            return set(self._active)
+
+    def acquire(self, n):
+        """Pick up to n proxies for one item, rotated so no proxy is hammered.
+
+        Refills the active set first if it has dropped below target, then draws a
+        speed-weighted, cool-down-respecting pick and stamps each with the current time so
+        the next acquire rests them. Returns the ordered fallback chain to try for the item."""
+        now = time.monotonic()
+        with self._lock:
+            if len(self._active) < (self.need or 1):
+                self._refill_active_locked()
+            picks = _weighted_lru_pick(self._weights_locked(), self._last_used, now, self.cooldown, n)
+            for p in picks:
+                self._last_used[p] = now
+            return picks
+
+    def mark_in_use(self, proxy):
+        with self._lock:
+            self._in_use.add(proxy)
+
+    def record(self, proxy, ok):
+        """Record an attempt's outcome; evict + backfill if the proxy has turned flaky."""
+        with self._lock:
+            self._in_use.discard(proxy)
+            counter = self._ok if ok else self._fail
+            counter[proxy] = counter.get(proxy, 0) + 1
+            if _is_flaky(self._ok.get(proxy, 0), self._fail.get(proxy, 0),
+                         self.flaky_min_samples, self.flaky_max_fail_ratio):
+                self._ban_locked(proxy)
+                _append(_p(self.store, "bad.txt"), proxy)
+                self._refill_active_locked()
+
+    def ban(self, proxy):
+        """Evict a hard-dead proxy (connection-level failure), persist it, and backfill."""
+        with self._lock:
+            self._ban_locked(proxy)
+            _append(_p(self.store, "bad.txt"), proxy)
+            self._refill_active_locked()
+
+    def benchmark_once(self):
+        """Re-time active proxies (evicting any gone dead) and trial fresh candidates,
+        swapping a faster fresh one in for the slowest idle member (swap-up)."""
+        if not self.test_url:
+            return
+        with self._lock:
+            members = list(self._active)
+            fresh = list(self._candidates_locked() - self._active)[: self.bench_batch]
+        for p in members:
+            ok, lat = _reachable(p, self.test_url, self.vtimeout)
+            with self._lock:
+                if ok and lat is not None:
+                    self._speed[p] = lat
+                elif not ok:
+                    self._ban_locked(p)
+                    _append(_p(self.store, "bad.txt"), p)
+        for c in fresh:
+            ok, lat = _reachable(c, self.test_url, self.vtimeout)
+            if not ok or lat is None:
+                continue
+            with self._lock:
+                self._speed[c] = lat
+                self._try_swap_locked(c, lat)
+        with self._lock:
+            snapshot = {p: self._speed[p] for p in members + fresh if p in self._speed}
+        _upsert_speeds(_p(self.store, "speeds.tsv"), snapshot)
+
+    def benchmark_loop(self, stop, interval=120):
+        while not stop.is_set():
+            if stop.wait(interval):
+                break
+            try:
+                self.benchmark_once()
+            except Exception as e:
+                print(f"benchmark error: {e}")
+
+
 def _bg_refresh(store, test_url, workers, timeout, stop, need=None):
     """Keep live.txt healthy while a job runs. Proxies that die get banned to bad.txt by the worker,
     which shrinks the effective pool (live - bad); this loop refills it. With ``need`` set it tops up
@@ -228,8 +440,13 @@ def _bg_refresh(store, test_url, workers, timeout, stop, need=None):
             print(f"bg refresh error: {e}")
 
 
-def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_re):
-    for proxy in _pick(store, per_item):
+def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool=None):
+    # With a ProxyPool the chain is drawn rotated (cool-down/weighted-LRU) and outcomes are
+    # fed back for flaky tracking; without one it falls back to the stateless speed-weighted pick.
+    proxies = pool.acquire(per_item) if pool is not None else _pick(store, per_item)
+    for proxy in proxies:
+        if pool is not None:
+            pool.mark_in_use(proxy)
         # argv list, NO shell: identical behaviour on Linux/macOS/Windows, injection-safe.
         argv = [tok.replace("{proxy}", proxy).replace("{item}", item) for tok in argv_tpl]
         try:
@@ -238,33 +455,46 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
         except subprocess.TimeoutExpired:
             rc, out = 124, ""
         except FileNotFoundError:
-            print(f"cmd not found: {argv[0]!r}"); return (item, None)
+            print(f"cmd not found: {argv[0]!r}")
+            return (item, None)
         ok = rc == 0
         if ok and success_glob:
             ok = bool(glob.glob(success_glob.replace("{item}", item)))
         if ok:
             _append(_p(store, "good.txt"), proxy)
+            if pool is not None:
+                pool.record(proxy, True)
             return (item, proxy)
         if dead_re.search(out):          # connection-level failure: ban this proxy
-            _append(_p(store, "bad.txt"), proxy)
-        # otherwise transient / blocked (e.g. 429): rotate to next proxy, do not ban
+            if pool is not None:
+                pool.ban(proxy)
+            else:
+                _append(_p(store, "bad.txt"), proxy)
+        elif pool is not None:           # transient / blocked (e.g. 429): rotate, count as a failure
+            pool.record(proxy, False)
     return (item, None)
 
 
-def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout, success_glob, dead_regex, need=None):
+def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout,
+        success_glob, dead_regex, need=None, cooldown=5.0, bench_interval=120, flaky_fail_ratio=0.5):
     argv_tpl = shlex.split(cmd)          # parse template once; substituted per attempt, no shell
     dead_re = re.compile(dead_regex, re.I)
     items = [l.strip() for l in open(worklist, encoding="utf-8") if l.strip()]
+    # Self-optimizing working set: rotates the pick (no hammering), tracks flaky proxies,
+    # and (with --background-discovery) benchmarks + swaps fresh fast proxies in for slow ones.
+    pool = ProxyPool(store, need, test_url=test_url, vtimeout=vtimeout, cooldown=cooldown,
+                     flaky_max_fail_ratio=flaky_fail_ratio)
     stop = threading.Event()
-    bg_t = None
     if bg:
-        bg_t = threading.Thread(target=_bg_refresh, args=(store, test_url, vworkers, vtimeout, stop, need), daemon=True)
-        bg_t.start()
-        print("background discover+validate loop started (every 10 min)")
+        refresh_t = threading.Thread(target=_bg_refresh, args=(store, test_url, vworkers, vtimeout, stop, need), daemon=True)
+        bench_t = threading.Thread(target=pool.benchmark_loop, args=(stop, bench_interval), daemon=True)
+        refresh_t.start()
+        bench_t.start()
+        print("background discover+validate and benchmark+swap loops started")
     ok = 0
     try:
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_run_item, store, it, argv_tpl, per_item, item_timeout, success_glob, dead_re) for it in items]
+            futs = [ex.submit(_run_item, store, it, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool) for it in items]
             for fut in cf.as_completed(futs):
                 item, proxy = fut.result()
                 if proxy:
@@ -298,6 +528,12 @@ def main():
     r.add_argument("--need", type=int, default=None,
                    help="target live-pool size to maintain (right-size: concurrency + margin); the "
                         "background refresh tops up to this when proxies die, instead of re-validating all")
+    r.add_argument("--cooldown", type=float, default=5.0,
+                   help="seconds a proxy rests between uses so no single fast exit-IP is hammered")
+    r.add_argument("--bench-interval", type=float, default=120,
+                   help="seconds between background re-benchmark + swap-up passes (needs --background-discovery)")
+    r.add_argument("--flaky-fail-ratio", type=float, default=0.5,
+                   help="evict a proxy once its failure fraction exceeds this (after a few attempts)")
     a = ap.parse_args()
     os.makedirs(a.store, exist_ok=True)
     if a.action == "discover":
@@ -306,7 +542,8 @@ def main():
         validate(a.store, a.test_url, a.workers, a.timeout, a.need)
     elif a.action == "run":
         run(a.store, a.worklist, a.cmd, a.workers, a.per_item_proxies, a.item_timeout,
-            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob, a.dead_regex, a.need)
+            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob, a.dead_regex,
+            a.need, a.cooldown, a.bench_interval, a.flaky_fail_ratio)
 
 
 if __name__ == "__main__":

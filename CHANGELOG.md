@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.11.0] - 2026-07-02
+
+### Added
+- `net-rotating-proxies`: self-optimizing proxy pool. `run` now holds an in-memory working set of the
+  `--need` fastest healthy proxies (`ProxyPool`) that maintains itself while the job runs:
+  - Rotation so no exit-IP is hammered - a `--cooldown` rest (weighted-LRU) holds a just-used proxy out
+    of the next pick, spreading load across the fast half of the pool while still favouring speed;
+    relaxes oldest-rested-first so a small pool never starves.
+  - Background benchmark + swap-up (with `--background-discovery`, every `--bench-interval` seconds):
+    re-times in-pool proxies, trials fresh candidates, and swaps a faster fresh proxy in for the
+    slowest IDLE in-pool one (never one mid-request), so steady state stays the N fastest.
+  - Flaky eviction: per-proxy success/failure is tracked; a proxy whose failure fraction exceeds
+    `--flaky-fail-ratio` is evicted and replaced like a hard-dead one, not just connection-dead ones.
+  The pure decision logic (`_weighted_lru_pick`, `_swap_candidate`, `_is_flaky`) is separated from the
+  locked, threaded pool state and unit-tested. Existing right-size (`--need`), top-up-to-target, and the
+  100% margin behaviour are kept intact. (+20 tests.)
+
 ## [5.10.0] - 2026-06-30
 
 ### Added

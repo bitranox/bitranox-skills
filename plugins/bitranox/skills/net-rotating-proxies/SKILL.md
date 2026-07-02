@@ -36,15 +36,26 @@ in the background while downloading.
    across the pool so no single exit-IP is hammered.
 4. **Download in parallel, wide.** Most free proxies are awfully slow (tens of seconds each), so
    parallelism is the only way to make progress: 8 workers minimum, 16 when the pool is large.
-5. **Keep good/bad lists and weight by speed.** A proxy that completes a real download goes in
-   `good.txt` (higher base weight); one that fails at the connection level goes in `bad.txt` and
-   is excluded. Within the remaining pool, select proxies by **weighted random sampling where the
-   weight rises as latency falls**, so faster proxies are used far more often than slow ones (the
-   stored validation latency drives this; unknown-latency proxies default to the median). Rotate
-   to the next proxy on any per-item failure.
-6. **Refresh in the background during the download.** Run discovery + revalidation on a loop
-   while the workers run, so the live/good/bad lists stay fresh and dead proxies get replaced
-   without stopping the job.
+5. **Keep good/bad lists and weight by speed, but ROTATE so no proxy is hammered.** A proxy that
+   completes a real download goes in `good.txt` (higher base weight); one that fails at the
+   connection level goes in `bad.txt` and is excluded. Within the remaining pool, select proxies by
+   **weighted random sampling where the weight rises as latency falls**, so faster proxies are used
+   far more often than slow ones (the stored validation latency drives this; unknown-latency proxies
+   default to the median). Layer a **cool-down / least-recently-used rest** on top of the speed
+   weighting: a proxy used within the last `--cooldown` seconds is held out of the pick so the single
+   fastest exit-IP is not hit back-to-back; load spreads across the fast half of the pool and the
+   cool-down relaxes (oldest-rested first) if it would otherwise starve the pick. Rotate to the next
+   proxy on any per-item failure.
+6. **Self-optimize in the background: benchmark, swap up, and evict flaky.** While the workers run,
+   a background loop keeps the working set = the N FASTEST healthy proxies:
+   - discovery + revalidation tops `live.txt` back up so dead proxies get replaced without stopping
+     the job (right-sized to `--need`);
+   - a benchmark pass re-times the in-pool proxies and trials fresh candidates; when a fresh
+     candidate is faster than the slowest **idle** in-pool proxy (never one mid-request), it swaps
+     the slow one out for the fast one (`--bench-interval` controls the cadence);
+   - per-proxy success/failure is tracked, and a proxy that fails intermittently past
+     `--flaky-fail-ratio` is evicted and replaced just like a hard-dead one - so steady state is the
+     N fastest, still-functioning proxies.
 7. **Resumable.** Make the worklist skip items already done, so a killed run resumes cheaply.
 
 ## Tool
@@ -71,6 +82,11 @@ header) is fetched into an isolated env. Subcommands:
 `shlex.split` and run as an argv list with NO shell (OS-independent, injection-safe), so it must
 be a single command: no pipes, `||`, `$?`, redirects, or `case`. It runs once per proxy until one
 succeeds.
+
+`run` holds a self-optimizing working set of the `--need` fastest healthy proxies: it rotates the
+pick with a `--cooldown` rest so no exit-IP is hammered, evicts a proxy once its failure fraction
+exceeds `--flaky-fail-ratio`, and (with `--background-discovery`) re-benchmarks the pool every
+`--bench-interval` seconds, swapping a freshly-found faster proxy in for the slowest idle one.
 
 ### How success / failure is decided (no shell glue)
 
