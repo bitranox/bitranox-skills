@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.15.0] - 2026-07-02
+
+### Added
+- `meta-dream-project`: new propose-first **Skill-gap review** behavioral pass. During consolidation the
+  dream looks for a bug/correction/rework that landed on work done while following a bitranox skill whose
+  domain plausibly governed that file/area, and proposes a skill update (pattern/checklist/test) via the
+  upstream self-PR loop. This is the deliberate home for the "flag a skill when a real bug slips past it"
+  rule: the deterministic per-turn/audit hooks cannot judge a skill's coverage gap, so that fuzzy
+  generalization is routed to the dream. `meta-self-improve` cross-references it from the end-of-session
+  audit section.
+
+### Fixed
+- `ensure_gitignored` no longer fights the global `~/.claude` durability repo. It skips when the git
+  toplevel is `~/.claude` (whose whitelist `.gitignore` intentionally tracks the curated store +
+  `CLAUDE.local.md`); previously every curated write to the global store appended blanket ignore lines
+  that silently untracked global memory. Ordinary project repos still get gitignored as before.
+
 ## [5.14.3] - 2026-07-02
 
 ### Changed

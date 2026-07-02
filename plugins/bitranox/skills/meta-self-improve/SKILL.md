@@ -115,6 +115,10 @@ those without making the live gate noisy:
   candidates**: confirm the genuine misses, capture their learnings here, and for a real gap extend
   the gate's family patterns in `self_improve_signals.py` (the meta-loop). Patterns live in that one
   shared module so the gate and the audit never drift.
+- **Skill-coverage gaps are NOT this loop's job - they go to the dream.** When a defect slipped past a
+  skill you followed (as opposed to a gate miss), the "does this skill have a coverage gap?" judgment is
+  fuzzy and belongs in `bitranox:meta-dream-project`'s propose-first Skill-gap review pass, not this
+  deterministic audit. See the global rule `flag-a-skill-when-a-real-bug-slips-past-it`.
 - **Premature signals belong in the audit, NOT the live gate.** A mid-course pause ("let me stop and
   inspect", "let me double-check", "wait, ...") only HINTS at a lesson - the lesson is not formed yet;
   it resolves later into a discovery ("found it") or a self-admission ("I should have"), which the live

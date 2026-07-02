@@ -90,6 +90,15 @@ def ensure_gitignored(proj, *patterns):
         return
     if not top:
         return
+    # The global ~/.claude durability repo INTENTIONALLY tracks the curated store + CLAUDE.local.md
+    # via an airtight whitelist .gitignore. Appending blanket ignores here fights that whitelist and
+    # silently untracks global memory, so leave the global repo's .gitignore alone (projects still get
+    # gitignored as normal).
+    try:
+        if Path(top).resolve() == (Path.home() / ".claude").resolve():
+            return
+    except OSError:
+        return
     try:
         gi = Path(top) / ".gitignore"
         cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""

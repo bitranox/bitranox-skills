@@ -224,6 +224,18 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   upstream self-PR loop (shared skill -> propose-first, version-bumped). Dispatches use the stable tier
   ALIASES (`opus`/`sonnet`/`haiku`), so version bumps need no edit - only a hierarchy SHIFT does. Then
   call `mark_model_reviewed()` so it does not re-fire until due. Not due -> skip (no-op).
+- **Skill-gap review (propose-first, fuzzy - the batch backstop for shipped-bug-past-a-skill).** When
+  consolidating, look for a case where a bug, a user correction, or rework landed on work the session did
+  WHILE following a bitranox skill that plausibly governed that file/area (e.g. a `web-frontend-*` skill
+  and a later CSS/JS defect; a `coding-<lang>` skill and a bug in that language's file). If found, treat it
+  as a candidate skill COVERAGE/METHODOLOGY gap: propose a skill update (a pattern, a checklist item, or a
+  test) via "Propagating skill improvements upstream" in `bitranox:meta-self-improve` - do NOT let the fix
+  land only in local memory. The correlation is fuzzy (a skill merely active in a session does not govern
+  every file it touched), so keep it PROPOSE-FIRST and human-gated, and only when the skill's DOMAIN
+  plausibly covers the defect - never auto-edit a skill from this. This is the deliberate home for the
+  global rule `flag-a-skill-when-a-real-bug-slips-past-it`: the per-turn/audit hooks are deterministic and
+  cannot judge "did this skill have a gap?", so that generalization is routed here, to the dream. Nothing
+  correlating -> skip (no-op).
 - **Durability: keep each memory store LOCALLY git-tracked (auto, safe machine-local move).** A loose
   untracked store is lost to an accidental `rm`/reset with no recovery. So every dream, ensure each
   `.claude-bx-selflearning/` store it wrote is version-controlled by a LOCAL git repo, then commit the

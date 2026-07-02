@@ -481,6 +481,19 @@ def test_ensure_gitignored(home, tmp_path):
     assert not (plain / ".gitignore").exists()
 
 
+def test_ensure_gitignored_skips_global_home(home, tmp_path):
+    # The global ~/.claude durability repo tracks the curated store + CLAUDE.local.md via its own
+    # whitelist; ensure_gitignored must NOT append blanket ignores there (that would silently untrack
+    # global memory). Projects still get gitignored (covered by test_ensure_gitignored above).
+    import subprocess
+    from pathlib import Path
+    gdir = Path.home() / ".claude"
+    gdir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(gdir)], check=False)
+    S.ensure_gitignored(str(gdir), S.CURATED_DIRNAME + "/", "CLAUDE.local.md")
+    assert not (gdir / ".gitignore").exists()
+
+
 def test_claude_code_version_detection():
     assert S.claude_code_version({"CLAUDE_CODE_EXECPATH": "/x/versions/2.1.198/bin"}) == (2, 1, 198)
     assert S.claude_code_version({"AI_AGENT": "claude-code_2-1-198_agent"}) == (2, 1, 198)
