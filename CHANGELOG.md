@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.16.1] - 2026-07-02
+
+### Changed
+- `meta-dream-project` Gate-coverage audit pass: made explicit that a missed gate-signal is a proxy for a
+  missed LEARNING - the pass must handle BOTH halves, first capturing the actual learning through the normal
+  lane (step 3), THEN proposing the pattern extension. Fixing the regex while dropping the flagged content
+  was the failure mode this closes.
+
 ## [5.16.0] - 2026-07-02
 
 ### Added

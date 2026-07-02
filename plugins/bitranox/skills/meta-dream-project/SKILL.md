@@ -242,7 +242,9 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   phrasing that matches NEITHER is invisible to it (it records nothing, so nothing surfaces at SessionStart).
   On dreaming you DO have the model, so semantically re-read the session (transcript tail) + recent captures
   for real self-admissions / corrections / discoveries / "remember this" directives that did NOT fire the
-  gate this session. For a genuine, recurring phrasing gap, propose broadening the family patterns in
+  gate this session. Each such signal is a PROXY FOR A MISSED LEARNING, so HANDLE BOTH HALVES: FIRST capture
+  the actual learning through the normal lane (this is step 3's job - the missed content is the point, not
+  the trigger word), THEN, for a genuine recurring phrasing gap, propose broadening the family patterns in
   `self_improve_signals.py` - the ROLE-SPLIT strict sets (`USER_PATTERN` on the user message, `ASST_PATTERN`
   / `REALIZATION_PATTERN` on the assistant message) AND the matching `BROAD_*` audit nets - via the upstream
   self-PR loop, always with a regression test and guarding against false positives on benign phrasing (never
