@@ -7,8 +7,9 @@ description: Use at the end of a turn that produced a learning, such as a correc
 
 Turn what this session taught into a durable improvement, so the same lesson is not re-learned next
 time. The unit of value is one small, reusable fact or rule recorded in the right place at the right
-altitude: a project **memory** entry (the `MEMORY.md` index plus its topic files), a **global
-cross-project rule** in `~/.claude/rules/bitranox/`, or a **CLAUDE.md** guardrail (see step 3b).
+altitude: a project **memory** entry (in the curated store `.claude-bx-selflearning/`: the `memory.md`
+index plus `facts/` bodies), a **global cross-project rule** in `~/.claude/rules/bitranox/`, or a
+**CLAUDE.md** guardrail (see step 3b).
 
 **Core constraint: memory is finite. Default to updating an existing entry and to short index lines,
 never to appending blindly.** A self-improver that bloats memory makes the harness worse, not better.
@@ -22,60 +23,59 @@ If a project ships its own extension of this skill (a more specific `*-self-impr
 exact memory paths, ledgers, or push gates), read it and honor its extra rules on top of this one.
 
 ## Memory backend
-This skill writes durable learnings to Claude Code's **Auto memory**: the native per-project store
-at `~/.claude/projects/<project>/memory/`, whose `MEMORY.md` index is loaded into context each
-session. Auto memory is on by default in recent Claude Code (v2.1.59+), so before relying on it,
-confirm it is actually active; otherwise learnings get written but never loaded.
+Durable learnings live in the project-local **curated store** `<project>/.claude-bx-selflearning/`:
+- **`memory.md`** - the index the project's `CLAUDE.md` pulls into context with ONE `@import` line
+  (a scope-descriptor block on top + one markdown-link line per fact, with tiny bodies inlined).
+  Because it is `@import`ed, every line is always in context. It is gitignored on public repos (the
+  import line leaks nothing; a fresh clone with no store loads clean).
+- **`facts/<slug>.md`** - heavy bodies, kept OUT of the always-loaded index and Read on demand.
 
-- **Detect:** the `~/.claude/projects/<project>/memory/` directory exists, and settings do not set
-  `"autoMemoryEnabled": false` (and the env var `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is unset).
-- **If absent or disabled, recommend to the user (do not silently skip):** run `/memory` and toggle
-  Auto memory on, or set `"autoMemoryEnabled": true` in `~/.claude/settings.json`, and upgrade to
-  Claude Code v2.1.59+ if older. Until it is on, fall back to recording durable rules as a CLAUDE.md
-  guardrail so nothing is lost. (See https://code.claude.com/docs/en/memory.)
+**The write path is the engine, never a hand-write.** Capture ONE fact by invoking
+`hooks/memory_engine.py` (via the plugin's `hooks/run-python.sh` launcher, cross-platform):
 
-The home is **`MEMORY.md` (index) + topic files (bodies)**, the native Auto-memory store. Capture
-every durable learning as BOTH a one-line `MEMORY.md` index entry AND a topic-file body. The index
-line is what makes a learning **present**: `MEMORY.md` is auto-loaded every session (push); topic
-bodies are read on demand (pull-by-Read), like a book's index and its pages. A learning with no
-index line is invisible even if its body exists on disk.
+    add --proj "<cwd>" --type feedback|project|reference|user --title "..." --hook "one line"
+        --body-file <tmpfile> [--source <native-slug>] [--pin] [--scope "what this level is for"]
+
+The engine upserts by slug (merging provenance + pin), decides inline-vs-`facts/` by size and by
+whether the body contains an import-like `@token` (such a body goes to `facts/`, never inlined),
+ensures the `CLAUDE.md` `@import` block + the `memory.md` scope block, takes a lock, and is
+mtime-neutral. **Do NOT Write/Edit `memory.md`/`facts/` yourself** - the PostToolUse hooks would
+then churn the file every turn; the engine writes directly and bypasses them.
+
+**Two tiers (native raw + curated).** Claude Code's native Auto memory (`~/.claude/projects/<proj>/
+memory/MEMORY.md`) stays ON as the raw/uncurated tier; it also loads at session start. Capture goes
+to the CURATED tier (the engine above). Both load; their union is your memory. The dream de-doubles
+(a fact lives in exactly one tier) and promotes worthwhile raw entries into the curated store; it
+leaves some-value raw entries in native. You do not need Auto memory on for capture to work, but
+keeping it on preserves the raw tier - do not disable it.
+
+**Version gate.** `@import` needs a new-enough Claude Code. If `self_improve_signals.import_supported()`
+is false, the store will not load; recommend the user upgrade rather than hand-writing bodies into
+CLAUDE.md (never do that).
 
 Keep the memory systems in their lanes:
-- **Auto memory / `MEMORY.md` + topic files (this skill):** durable, curated, deduplicated learnings.
+- **The curated store + native raw tier (this skill):** durable, curated, deduplicated learnings.
 - **The `remember` plugin / `.remember/`:** session task-continuity only (a time-decaying handoff
-  journal: `now.md` -> `today-*.md` -> `recent.md` -> `archive.md`). Never put durable learnings there,
-  and never copy handoff/task state into Auto memory.
+  journal). Never put durable learnings there, and never copy handoff/task state into memory.
 
-### Do not route learnings through a memory MCP
+### A memory MCP is an optional SEARCH index, never the store
 
-A memory MCP server (`basic-memory`, `server-memory`) is **not** the home and **not** a write path.
-Two failure modes, both observed in practice:
-- **Writing through the MCP skips the `MEMORY.md` index.** The body lands on disk but no index line
-  is added, so it is never loaded - "not present in memory.md".
-- **A pull store is only read when searched, and in practice it is not searched** - so the knowledge
-  is effectively lost.
+A memory MCP (`basic-memory`) is **not** the home and **not** a write path - routing learnings
+through it skips the index and they become unindexed + unsearched (a real regression). Its ONLY
+sanctioned role is an optional, full-text + knowledge-graph SEARCH index OVER the local
+`.claude-bx-selflearning/` files, to sharpen CROSS-project recall. When present it must be read-only
+over those files (`ensure_frontmatter_on_sync: false`, `disable_permalinks: true`,
+`format_on_save: false` so it never rewrites them); when absent, recall falls back to the built-in
+keyword scan (never a hard dependency - self-healing). Add or remove it through the `update-config`
+skill; never wire one in or out silently.
 
-So an MCP that holds learnings but is not searched is pure downside. **Always write to `MEMORY.md` +
-a topic file; never make an MCP the write path or the sole home.** If an index has already drifted
-from its topic files (e.g. earlier MCP writes left bodies unindexed), backfill it with
-`reconcile_memory_index.py` (in this skill dir): it appends a `MEMORY.md` index line for every topic
-file that lacks one - additive, idempotent, never deletes.
+### Scaling: keep it lean
 
-### Scaling: stay native until you truly cannot
-
-Keep it lean: one fact per topic file, a one-line `MEMORY.md` index entry (under ~200 chars), and
-EDIT an existing entry rather than appending a new one (the core anti-bloat rule). Native `MEMORY.md`
-+ topic files scales a long way - a per-project index of ~100 short lines still loads fine, and only
-one project's index loads per session.
-
-A search MCP earns its place **only** when BOTH hold: (a) a single project's `MEMORY.md` index is
-genuinely too big to always-load, AND (b) you add a real recall mechanism so it is actually queried.
-Even then it must **index the native `~/.claude/projects/<project>/memory/` files as a search
-augmentation** - point it there and set `ensure_frontmatter_on_sync: false`, `disable_permalinks:
-true`, `format_on_save: false` so it never rewrites them - never a separate store, never the write
-path. Adopting an MCP without both (a) and (b) makes things worse, not better (it caused a real
-regression: learnings became unindexed and unsearched). Add or remove an MCP server through the
-`update-config` skill; never wire one in or out silently.
+One fact per entry, a one-line hook (under ~200 chars), and EDIT an existing entry (re-run the engine
+with the same title -> it upserts) rather than appending a near-duplicate. `memory.md` is capped
+(`reconcile_memory_index.over_cap`); when it grows, the dream moves inline bodies out to `facts/` and
+prunes. If the index ever drifts from `facts/`, `reconcile_memory_index.py <curated-dir>` backfills
+missing lines - additive, idempotent.
 
 ## When to run
 
@@ -138,14 +138,19 @@ that is task state, already recorded in the repo or git history, or only mattere
 | Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                 |
 
 ### 3. Dedup BEFORE writing (mandatory)
-For each surviving candidate, search first (`grep -ril "<keyword>"` over the memory dir and the
-CLAUDE.md files). If a related entry exists, **edit it** (sharpen it, add the new example, bump the
-count) instead of creating a new file. New file only when nothing covers it. Keep a new `MEMORY.md`
-index line to one line under ~200 chars; put the detail in the topic file, not the index.
+For each surviving candidate, search first (`grep -ril "<keyword>"` over `.claude-bx-selflearning/`
+(`memory.md` + `facts/`), the native memory dir, and the CLAUDE.md files). If a related entry exists,
+**update it**: re-run the engine `add` with the SAME `--title` - it upserts (merges provenance, keeps
+the pin), so sharpening a fact is the same command, not a new entry. New entry only when nothing
+covers it. Keep the `--hook` to one line under ~200 chars; put the detail in `--body`/`--body-file`
+(the engine inlines a tiny body, sends a heavy one to `facts/`).
 
 ### 3b. Choose the altitude(s) - by SCOPE, placed concretely
 Knowledge lives at always-present homes, narrowest to broadest:
-- **per-project** -> the project's Auto memory (`MEMORY.md` index + topic bodies).
+- **per-project** -> the project's curated store (`.claude-bx-selflearning/memory.md` + `facts/`),
+  written with the engine. **Per-turn capture writes at the PROJECT level only** (`--proj "<cwd>"`);
+  it does NOT reach up to edit an ancestor's CLAUDE.md. Raising a fact to a higher altitude is the
+  DREAM's job (promotion), not per-turn capture - so a routine capture never touches a parent tree.
 - **global / cross-project** -> `~/.claude/rules/bitranox/`, the native user-rules layer
   (`global_rules_dir()`). It is whole-loaded every session and recurses into subdirs (spike-confirmed),
   and it is NOT `CLAUDE.md`, so it never disturbs the user's hand-written rules. This is the home for a
@@ -214,9 +219,10 @@ preferences (dream mode, promotion eagerness, nudges) via `self_improve_signals.
 machine-local config, never re-asking a decision the user already made.
 
 ### 4. Risk-classify and apply
-- **Auto-apply (low risk, additive):** a new memory topic file plus one short index line; appending a
-  guardrail line to a CLAUDE.md that is not under version control; bumping a recurring-error count and
-  date. Do these directly.
+- **Auto-apply (low risk, additive):** capturing a curated fact via the engine `add` at the project
+  level (it upserts, so this covers both new and sharpened entries); appending a guardrail line to a
+  CLAUDE.md that is not under version control; bumping a recurring-error count and date. Do these
+  directly. The engine writes the private, gitignored curated store - additive and safe.
 - **Propose, then wait (higher risk):** rewriting or deleting an existing entry, restructuring a
   CLAUDE.md section, editing a version-controlled CLAUDE.md at any layer, pruning the index, or any
   change you are unsure how to classify. Show the diff

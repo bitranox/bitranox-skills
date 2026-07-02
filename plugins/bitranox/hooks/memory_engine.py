@@ -31,7 +31,9 @@ Design points:
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
 
+import argparse
 import re
+import sys
 from pathlib import Path
 
 import self_improve_signals as sig
@@ -280,3 +282,39 @@ def _strip_scope_block(text):
     if head and tail:
         return head + "\n\n" + tail
     return (head or tail) + ("\n" if (head or tail) else "")
+
+
+# ---- CLI: the capture procedure invokes this (never hand-writes memory files) ------------------
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Curated memory write engine (the single write path).")
+    sub = ap.add_subparsers(dest="cmd")
+    a = sub.add_parser("add", help="upsert one curated fact into <proj>/.claude-bx-selflearning")
+    a.add_argument("--proj", required=True, help="project cwd (the level to capture at)")
+    a.add_argument("--title", required=True)
+    a.add_argument("--hook", required=True, help="one-line hook (what makes the fact present)")
+    a.add_argument("--type", dest="type_", default=None,
+                   choices=[None, "feedback", "project", "reference", "user"])
+    a.add_argument("--body", default="", help="the fact body (inline if tiny, else -> facts/)")
+    a.add_argument("--body-file", default=None, help="read the body from a file (multi-line safe)")
+    a.add_argument("--source", default="", help="comma-separated provenance keys")
+    a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded index")
+    a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
+    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "add":
+        body = args.body
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        slug = add_or_update_entry(
+            args.proj, title=args.title, hook=args.hook, body=body, type_=args.type_,
+            source=[s.strip() for s in args.source.split(",") if s.strip()],
+            pin=args.pin, scope_default=args.scope)
+        print(slug)
+        return 0
+    ap.print_help(sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

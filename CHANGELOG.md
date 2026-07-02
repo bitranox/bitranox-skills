@@ -53,6 +53,11 @@ installed copies and needs no bump.
   excludes the current project's own `memory.md` (already @imported) but keeps its `facts/`.
   `recall-memory.py` labels a curated index `<project>/memory` and strips the scope descriptor before
   snippeting (so meta is not injected as a fact).
+- `memory_engine.py` gains an `add` CLI (the capture procedure invokes it, never hand-writing memory
+  files). `meta-self-improve/SKILL.md` rewritten: the curated `.claude-bx-selflearning/` backend, the
+  two-tier model (native raw kept, curated captured, dream de-doubles/promotes), the engine as the
+  single write path, per-turn capture at the PROJECT level only (promotion deferred to the dream), the
+  version gate, and the MCP reframed as an optional read-only search index (never the store).
 
 ## [5.12.0] - 2026-07-02
 

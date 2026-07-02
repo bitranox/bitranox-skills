@@ -129,3 +129,23 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
     assert "more user text" in md and md.startswith("# Proj")
     mem = sig.curated_index(proj).read_text(encoding="utf-8")
     assert sig.read_scope_block(mem) == "legacy descriptor"   # relocated into memory.md
+
+
+def test_cli_add(proj, capsys, tmp_path):
+    rc = E.main(["add", "--proj", proj, "--type", "feedback", "--title", "No em dashes",
+                 "--hook", "use ASCII", "--body", "Always ASCII.", "--source", "a,b", "--scope", "lvl"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "feedback-no-em-dashes"
+    scope, entries, bodies = E.read_store(proj)
+    e = entries[0]
+    assert e.slug == "feedback-no-em-dashes" and e.source == {"a", "b"} and scope == "lvl"
+
+
+def test_cli_add_body_file(proj, tmp_path):
+    bf = tmp_path / "body.txt"
+    bf.write_text("line one\nline two\n", encoding="utf-8")
+    rc = E.main(["add", "--proj", proj, "--title", "Multi", "--hook", "h", "--body-file", str(bf),
+                 "--scope", "lvl"])
+    assert rc == 0
+    _, _, _ = E.read_store(proj)
+    assert "line one" in (E.sig.curated_index(proj).read_text(encoding="utf-8"))
