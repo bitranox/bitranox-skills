@@ -41,6 +41,12 @@ installed copies and needs no bump.
   inlined fact is no longer flagged/deletable); per-entry reference attribution; backfill `memory.md`
   from orphan `facts/` files; `over_cap` guards `memory.md` with a separate pinned-body budget;
   `archive_entry` drops an entry and moves its heavy body to `.archive/`.
+- Detectors made two-tier + fact-based (`self_improve_signals.py`): `store_signature`/`has_any_facts`
+  count REAL facts across the native raw tier AND the curated store (scope block excluded, so a
+  gap-fill empty `memory.md` never counts). `dream_due` keys on the signature (not mtime, which
+  gap-fill and writes churn) and `mark_dream_done` records it; `project_unseeded` and
+  `knowledge_store_empty(proj)` count real facts / the curated store; `altitude_chain` now returns
+  each level's `.claude-bx-selflearning/` (curated) dir + the loose global layer.
 
 ## [5.12.0] - 2026-07-02
 

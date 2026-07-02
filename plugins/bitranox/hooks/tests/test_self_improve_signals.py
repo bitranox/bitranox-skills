@@ -183,9 +183,27 @@ def test_dream_due_off_mode_never(home):
     assert S.dream_due("/p/x") is False
 
 
-def test_mark_dream_done_writes_timestamp(home):
+def test_mark_dream_done_writes_timestamp_and_signature(home):
     assert S.mark_dream_done("/p/x", now=123.0) is True
-    assert S.last_dream_file("/p/x").read_text(encoding="utf-8").strip() == "123.0"
+    ts, sig = S._read_dream_record("/p/x")
+    assert ts == 123.0 and isinstance(sig, str)   # new format: JSON {ts, sig}
+
+
+def test_dream_due_signature_based_not_mtime(home, tmp_path):
+    # a real fact makes it due; after mark_dream_done (records the signature) it is quiet; a mere
+    # gap-fill scope-only memory.md does NOT re-trigger (no fact changed).
+    proj = str(tmp_path / "sigproj")
+    later = 1000.0 + 10 * 86400
+    S.mark_dream_done(proj, now=1000.0)                          # no facts -> quiet baseline
+    assert S.dream_due(proj, now=later) is False                 # still no facts
+    d = S.claude_memory_dir(proj)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "memory.md").write_text("%s\nscope only\n%s\n\n# Memory index\n"
+                                 % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
+    assert S.dream_due(proj, now=later) is False                 # scope-only -> no real fact
+    (d / "memory.md").write_text("%s\nscope\n%s\n\n# Memory index\n\n- [X](#x) - a real fact\n  body\n"
+                                 % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
+    assert S.dream_due(proj, now=later) is True                  # a real fact appeared -> due
 
 
 # --------------------------------------------------------------------------
@@ -243,17 +261,18 @@ def test_altitude_chain_only_claude_md_ancestors(home, tmp_path):
     sub.mkdir(parents=True)
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")     # ancestor WITH CLAUDE.md -> altitude
     (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
+    cm = S.claude_memory_dir
     chain = S.altitude_chain(str(sub))
-    assert chain[0] == S.memory_dir(str(sub))          # narrowest: project memory
+    assert chain[0] == cm(str(sub))                    # narrowest: the project's curated store
     assert chain[-1] == S.global_rules_dir()           # broadest: global rules (always last)
-    assert sub in chain and proj in chain              # CLAUDE.md-bearing ancestors included
-    assert tmp_path not in chain                        # an ancestor WITHOUT CLAUDE.md is excluded
-    assert chain.index(sub) < chain.index(proj) < chain.index(S.global_rules_dir())  # upward order
+    assert cm(str(sub)) in chain and cm(str(proj)) in chain     # CLAUDE.md-bearing ancestors included
+    assert cm(str(tmp_path)) not in chain              # an ancestor WITHOUT CLAUDE.md is excluded
+    assert chain.index(cm(str(sub))) < chain.index(cm(str(proj))) < chain.index(S.global_rules_dir())
 
 
-def test_altitude_chain_no_claude_md_is_just_memory_and_global(home):
+def test_altitude_chain_no_claude_md_is_just_curated_and_global(home):
     chain = S.altitude_chain("/no/such/path")          # nonexistent -> no CLAUDE.md ancestors
-    assert chain == [S.memory_dir("/no/such/path"), S.global_rules_dir()]
+    assert chain == [S.claude_memory_dir("/no/such/path"), S.global_rules_dir()]
 
 
 def test_altitude_chain_fills_gaps_up_to_highest(home, tmp_path):
@@ -263,11 +282,13 @@ def test_altitude_chain_fills_gaps_up_to_highest(home, tmp_path):
     proj.mkdir(parents=True)
     (top / "CLAUDE.md").write_text("x", encoding="utf-8")
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
+    cm = S.claude_memory_dir
     chain = S.altitude_chain(str(proj))
-    assert proj in chain and top in chain
-    assert mid in chain                # the GAP level is INCLUDED (to be filled), not skipped
-    assert tmp_path not in chain       # above the highest existing CLAUDE.md -> excluded
-    assert chain.index(proj) < chain.index(mid) < chain.index(top) < chain.index(S.global_rules_dir())
+    assert cm(str(proj)) in chain and cm(str(top)) in chain
+    assert cm(str(mid)) in chain       # the GAP level is INCLUDED (to be filled), not skipped
+    assert cm(str(tmp_path)) not in chain   # above the highest existing CLAUDE.md -> excluded
+    assert (chain.index(cm(str(proj))) < chain.index(cm(str(mid)))
+            < chain.index(cm(str(top))) < chain.index(S.global_rules_dir()))
 
 
 # --------------------------------------------------------------------------

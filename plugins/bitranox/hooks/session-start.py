@@ -169,7 +169,7 @@ def newproject_nudge(proj):
     try:
         if not _collect_skill_available():
             return None
-        if not project_unseeded(proj) or knowledge_store_empty():
+        if not project_unseeded(proj) or knowledge_store_empty(proj):
             return None
         mark_seeded(proj)  # fire once
     except Exception:  # noqa: BLE001 - never wedge the session

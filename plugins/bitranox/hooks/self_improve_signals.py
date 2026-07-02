@@ -187,29 +187,120 @@ def _newest_mtime(d):
     return newest
 
 
+# ---- real-fact accounting across BOTH tiers (native raw + curated) ------------------------------
+# The dream cadence + new-project seeding must react to REAL facts, not file mtimes (gap-fill creates
+# an empty scope-only `memory.md`, and mtimes churn) and must see BOTH the native raw tier and the
+# curated `.claude-bx-selflearning/` tier. `store_signature` is a content hash over the facts in both
+# tiers, scope-block EXCLUDED - it changes only when a fact is added/edited/removed, so it is stable
+# under gap-fill and non-content writes (and self_improve_signals does not import the memory engine,
+# to avoid a cycle - it reads the curated store with a light, grammar-free scan).
+
+def _strip_scope(text):
+    b = (text or "").find(SCOPE_MARK_BEGIN)
+    if b < 0:
+        return text or ""
+    e = text.find(SCOPE_MARK_END, b)
+    if e < 0:
+        return text
+    return text[:b] + text[e + len(SCOPE_MARK_END):]
+
+
+def _curated_fact_parts(proj):
+    """Signature parts for the curated tier: `memory.md` index/inline-bodies (scope block removed) +
+    each `facts/<slug>.md` content. Empty when the store holds no real facts (a scope-only memory.md
+    contributes nothing)."""
+    parts = []
+    try:
+        text = _strip_scope(curated_index(proj).read_text(encoding="utf-8"))
+        region = "\n".join(ln for ln in text.splitlines()
+                           if ln.startswith("- [") or ln.startswith("  "))
+        if region.strip():
+            parts.append(region)
+    except OSError:
+        pass
+    try:
+        for p in sorted((claude_memory_dir(proj) / "facts").glob("*.md")):
+            try:
+                parts.append(p.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return parts
+
+
+def _native_fact_parts(proj):
+    """Signature parts for the native raw tier: each topic `*.md` (excluding the MEMORY.md index)."""
+    parts = []
+    try:
+        for p in sorted(memory_dir(proj).glob("*.md")):
+            if p.name == "MEMORY.md":
+                continue
+            try:
+                parts.append(p.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return parts
+
+
+def store_signature(proj):
+    """Content hash over the REAL facts in BOTH tiers (scope block excluded). '' when there are none.
+    Stable under gap-fill / mtime churn; changes only when a fact is added, edited, or removed."""
+    parts = sorted(_native_fact_parts(proj) + _curated_fact_parts(proj))
+    if not parts:
+        return ""
+    return hashlib.sha1("\x00".join(parts).encode("utf-8", "replace")).hexdigest()
+
+
+def has_any_facts(proj):
+    """True if the project holds at least one real fact in either tier (native or curated)."""
+    return bool(_native_fact_parts(proj) or _curated_fact_parts(proj))
+
+
+def _read_dream_record(proj):
+    """(last_ts, last_sig) from the .dream marker, or None. New format = JSON {ts, sig}; a legacy
+    bare-float timestamp yields (ts, '') so the first post-upgrade check re-dreams once."""
+    try:
+        raw = last_dream_file(proj).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        d = json.loads(raw)
+        return float(d["ts"]), str(d.get("sig", ""))
+    except (ValueError, KeyError, TypeError):
+        try:
+            return float(raw), ""
+        except ValueError:
+            return None
+
+
 def dream_due(proj, threshold_s=_DREAM_THRESHOLD_S, now=None):
-    """True if a memory consolidation is due: mode not off, memory changed since the last dream,
-    and the last dream is older than the threshold. No memory or mode off -> not due."""
+    """True if a memory consolidation is due: mode not off, the fact SIGNATURE changed since the last
+    dream (real facts added/edited/removed - not mtime churn, not a gap-fill scope-only write), and
+    the last dream is older than the threshold. No facts or mode off -> not due."""
     if dream_mode(proj) == "off":
         return False
-    mem = memory_dir(proj)
-    newest = _newest_mtime(mem)
-    if newest == 0.0:
-        return False  # no memory to consolidate
+    sig_now = store_signature(proj)
+    if not sig_now:
+        return False  # no facts to consolidate
     now = time.time() if now is None else now
-    try:
-        last = float(last_dream_file(proj).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return True  # never dreamed but memory exists -> due
-    return newest > last and (now - last) > threshold_s
+    rec = _read_dream_record(proj)
+    if rec is None:
+        return True  # never dreamed but facts exist -> due
+    last_ts, last_sig = rec
+    return sig_now != last_sig and (now - last_ts) > threshold_s
 
 
 def mark_dream_done(proj, now=None):
-    """Record that a dream just completed (silences the nudge until memory changes again)."""
+    """Record that a dream just completed: store the current timestamp AND fact signature, so the
+    nudge stays silent until a real fact changes (not merely a file mtime)."""
     f = last_dream_file(proj)
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(str(time.time() if now is None else now), encoding="utf-8")
+        f.write_text(json.dumps({"ts": time.time() if now is None else now,
+                                 "sig": store_signature(proj)}), encoding="utf-8")
         return True
     except OSError:
         return False
@@ -317,7 +408,7 @@ def altitude_chain(proj):
     never return every dir up to `/`, so a consumer never has to scan unrelated trees. Reference-
     integrity uses this: a `[[ref]]` must resolve to a target at the SAME or a LATER (higher)
     position - upward only; the last position (global) is the recursive layer."""
-    chain = [memory_dir(proj)]
+    chain = []
     try:
         here = Path(proj)
         ladder = [here, *here.parents]            # project dir up toward /
@@ -328,14 +419,14 @@ def altitude_chain(proj):
                     highest = i
             except OSError:
                 continue
-        if highest is not None:
-            # contiguous tree from the project up to the highest existing CLAUDE.md, INCLUDING gap
-            # levels in between (a missing CLAUDE.md is a gap to fill, not a stop - see the dream's
-            # descriptor step). We never go above the highest existing CLAUDE.md (no walk to / beyond).
-            chain.extend(ladder[:highest + 1])
+        # contiguous tree from the project up to the highest existing CLAUDE.md (gap levels included);
+        # each altitude is that level's CURATED store (`.claude-bx-selflearning`). Never above the
+        # highest existing CLAUDE.md. The project level (ladder[0]) is always an altitude.
+        upto = ladder[:(highest + 1) if highest is not None else 1]
+        chain.extend(d / CURATED_DIRNAME for d in upto)
     except (TypeError, ValueError):
-        pass
-    chain.append(global_rules_dir())
+        chain.append(claude_memory_dir(proj))
+    chain.append(global_rules_dir())              # global stays the loose whole-loaded layer (last)
     return chain
 
 
@@ -357,11 +448,12 @@ def mark_seeded(proj, now=None):
 
 
 def project_unseeded(proj):
-    """True if this project has no memory yet AND has not been seed-nudged - a fresh project that
-    could be bootstrapped from the existing knowledge tree via /collect-knowledge."""
+    """True if this project has no REAL facts in EITHER tier yet AND has not been seed-nudged - a fresh
+    project that could be bootstrapped from the existing knowledge tree via /collect-knowledge. Counts
+    real facts (not a gap-fill scope-only memory.md), so the nudge never misfires on an empty store."""
     if seeded_file(proj).exists():
         return False
-    return _newest_mtime(memory_dir(proj)) == 0.0
+    return not has_any_facts(proj)
 
 
 # ---- quality / dwell gate for global promotion (high blast radius) -------------------
@@ -618,10 +710,10 @@ def clear_pending_keywords(proj):
         pass
 
 
-def knowledge_store_empty():
-    """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty
-    AND no project's memory holds a topic file. Used to suppress the new-project bootstrap nudge on a
-    fresh machine (nothing to gather yet)."""
+def knowledge_store_empty(proj=None):
+    """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty,
+    no native project memory holds a topic file, AND (if `proj` is given) the current project's curated
+    store holds no facts. Used to suppress the new-project bootstrap nudge on a fresh machine."""
     try:
         if any(global_rules_dir().rglob("*.md")):
             return False
@@ -634,6 +726,8 @@ def knowledge_store_empty():
                     return False
     except OSError:
         pass
+    if proj is not None and _curated_fact_parts(proj):
+        return False
     return True
 
 
