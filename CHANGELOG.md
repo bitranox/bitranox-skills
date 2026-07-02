@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.16.0] - 2026-07-02
+
+### Added
+- `meta-dream-project`: new **Gate-coverage audit** behavioral pass - the model-driven complement to the
+  regex SessionEnd miss-audit. Because the audit hook cannot call the model, it shares the strict gate's
+  blind spots and a novel self-admission phrasing that matches neither pattern set is invisible to it. On
+  dreaming the model semantically re-reads the session for admissions/corrections/discoveries that did not
+  fire the gate, and proposes broadening the role-split family patterns in `self_improve_signals.py` (strict
+  + BROAD) via the self-PR loop, with a regression test. Closes the "regex only catches anticipated variants"
+  gap in the self-tuning loop.
+
 ## [5.15.2] - 2026-07-02
 
 ### Fixed

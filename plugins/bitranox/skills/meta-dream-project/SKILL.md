@@ -236,6 +236,19 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   global rule `flag-a-skill-when-a-real-bug-slips-past-it`: the per-turn/audit hooks are deterministic and
   cannot judge "did this skill have a gap?", so that generalization is routed here, to the dream. Nothing
   correlating -> skip (no-op).
+- **Gate-coverage audit (self-tune the self-improve gate - the MODEL-DRIVEN complement to the regex
+  audit).** The SessionEnd miss-audit (`self-improve-audit.py`) is a HOOK and cannot call the model, so it
+  can only regex-match the BROAD patterns - it shares the STRICT gate's blind spots, and a genuinely novel
+  phrasing that matches NEITHER is invisible to it (it records nothing, so nothing surfaces at SessionStart).
+  On dreaming you DO have the model, so semantically re-read the session (transcript tail) + recent captures
+  for real self-admissions / corrections / discoveries / "remember this" directives that did NOT fire the
+  gate this session. For a genuine, recurring phrasing gap, propose broadening the family patterns in
+  `self_improve_signals.py` - the ROLE-SPLIT strict sets (`USER_PATTERN` on the user message, `ASST_PATTERN`
+  / `REALIZATION_PATTERN` on the assistant message) AND the matching `BROAD_*` audit nets - via the upstream
+  self-PR loop, always with a regression test and guarding against false positives on benign phrasing (never
+  concatenate the role-split sets). This is the meta-loop's proactive arm (see `bitranox:meta-self-improve`
+  "Improving this skill"); a regex net only ever catches variants someone already anticipated, so the novel
+  ones can only be caught here. Nothing slipped the gate -> skip (no-op).
 - **Durability: keep each memory store LOCALLY git-tracked (auto, safe machine-local move).** A loose
   untracked store is lost to an accidental `rm`/reset with no recovery. So every dream, ensure each
   `.claude-bx-selflearning/` store it wrote is version-controlled by a LOCAL git repo, then commit the
