@@ -457,7 +457,28 @@ def test_curated_paths():
     assert S.curated_index("/p/proj").name == "index.md"
     assert S.curated_index("/p/proj").parent.name == ".claude-bx-selflearning"
     assert S.claude_md_path("/p/proj").name == "CLAUDE.md"
+    assert S.claude_local_md_path("/p/proj").name == "CLAUDE.local.md"   # default @import home (untracked)
     assert S.curated_state_dir("/p/proj").name == "state"
+
+
+def test_ensure_gitignored(home, tmp_path):
+    import subprocess
+    proj = tmp_path / "repo"; proj.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj)], check=False)
+    S.ensure_gitignored(str(proj), S.CURATED_DIRNAME + "/", "CLAUDE.local.md")
+    gi = (proj / ".gitignore").read_text(encoding="utf-8")
+    assert ".claude-bx-selflearning/" in gi and "CLAUDE.local.md" in gi
+    assert subprocess.run(["git", "-C", str(proj), "check-ignore", "-q", "CLAUDE.local.md"]).returncode == 0
+    # track_private on -> leaves the repo tracked (no gitignore write)
+    S.save_config({"track_private": True})
+    proj2 = tmp_path / "repo2"; proj2.mkdir()
+    subprocess.run(["git", "init", "-q", str(proj2)], check=False)
+    S.ensure_gitignored(str(proj2), "CLAUDE.local.md")
+    assert not (proj2 / ".gitignore").exists()
+    # non-git dir -> skip, no crash
+    plain = tmp_path / "plain"; plain.mkdir()
+    S.ensure_gitignored(str(plain), "CLAUDE.local.md")
+    assert not (plain / ".gitignore").exists()
 
 
 def test_claude_code_version_detection():

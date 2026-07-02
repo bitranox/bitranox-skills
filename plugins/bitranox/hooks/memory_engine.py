@@ -42,7 +42,7 @@ SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
 SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
 INDEX_HEADING = "# Memory index"
 IMPORT_BEGIN = "<!-- BITRANOX-MEMORY:BEGIN managed by bitranox self-improve; do not hand-edit."
-IMPORT_NOTE = "     Target is gitignored/local; a fresh clone has none and the import resolves to nothing. -->"
+IMPORT_NOTE = "     Target is gitignored/local (this block lives in CLAUDE.local.md unless track_private); a fresh clone has none and the import resolves to nothing. -->"
 IMPORT_LINE = "@%s/%s" % (sig.CURATED_DIRNAME, sig.CURATED_INDEX)   # @.claude-bx-selflearning/index.md
 IMPORT_END = "<!-- BITRANOX-MEMORY:END -->"
 
@@ -203,7 +203,8 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                         scope_default="", slug=None):
     """Upsert a curated fact into `<proj>/.claude-bx-selflearning/` (the single write path). Merges the
     provenance `source` set on update, decides inline-vs-`facts/` by size + leading-`@`, ensures the
-    level's CLAUDE.md `@import` block + scope, and writes under a lock, mtime-neutral. Returns the slug."""
+    level's `@import` block (CLAUDE.local.md by default, CLAUDE.md if track_private) + scope, and writes
+    under a lock, mtime-neutral. Returns the slug."""
     slug = slug or slugify(title, type_)
     src = set(source or ())
     lock_target = sig.curated_index(proj)
@@ -227,27 +228,55 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     return slug
 
 
+def _import_target(proj):
+    """Which file carries the `@import` block. DEFAULT: the UNTRACKED `CLAUDE.local.md` (symmetric with
+    the gitignored store - the wiring never touches tracked git, no clone gets a dangling line, no
+    commit is needed to set up memory). When `track_private` is on (the store is committed with the
+    repo) the import goes in the TRACKED `CLAUDE.md` so a teammate's clone loads it too."""
+    if sig.load_config().get("track_private"):
+        return sig.claude_md_path(proj)
+    return sig.claude_local_md_path(proj)
+
+
 def ensure_level(proj, scope_default="", _locked=False):
-    """Ensure this level can load its curated memory: (1) a marked `@import` block in the level's
-    CLAUDE.md (created if absent; nothing else in CLAUDE.md touched), (2) `index.md` exists with its
-    scope block, and (3) any LEGACY `<!-- bitranox:self-learning -->` scope block is MOVED out of
-    CLAUDE.md into `index.md` (byte-safe outside the markers). Idempotent + mtime-neutral."""
+    """Ensure this level can load its curated memory: (1) a marked `@import` block in the level's import
+    file (`CLAUDE.local.md` by default, `CLAUDE.md` when `track_private`; created if absent, nothing
+    else touched), (2) `index.md` exists with its scope block, and (3) any LEGACY
+    `<!-- bitranox:self-learning -->` scope block is MOVED out of `CLAUDE.md` into `index.md` (byte-safe
+    outside the markers). Idempotent + mtime-neutral."""
     def _do():
         md_path = sig.claude_md_path(proj)
+        local_path = sig.claude_local_md_path(proj)
+        tracked = bool(sig.load_config().get("track_private"))
         try:
             md = md_path.read_text(encoding="utf-8")
         except OSError:
             md = ""
-        # (3) harvest + strip a legacy scope block that lives in CLAUDE.md
+        md_changed = False
+        # (3) harvest + strip a legacy scope block that lives in CLAUDE.md (regardless of import target)
         legacy_scope = sig.read_scope_block(md)
         if legacy_scope is not None:
             md = _strip_scope_block(md)
-        # (1) ensure the import block (set-once, idempotent)
-        if IMPORT_LINE not in md:
-            block = "%s\n%s\n%s\n%s" % (IMPORT_BEGIN, IMPORT_NOTE, IMPORT_LINE, IMPORT_END)
-            sep = "" if not md or md.endswith("\n\n") else ("\n" if md.endswith("\n") else "\n\n")
-            md = md + sep + block + "\n"
-        _write_if_changed(md_path, md)
+            md_changed = True
+        try:
+            local_txt = local_path.read_text(encoding="utf-8")
+        except OSError:
+            local_txt = ""
+        # (1) ensure the import block once, in the RIGHT file; skip if already present in EITHER file
+        block = "%s\n%s\n%s\n%s" % (IMPORT_BEGIN, IMPORT_NOTE, IMPORT_LINE, IMPORT_END)
+        if IMPORT_LINE not in md and IMPORT_LINE not in local_txt:
+            if tracked:
+                sep = "" if not md or md.endswith("\n\n") else ("\n" if md.endswith("\n") else "\n\n")
+                md = md + sep + block + "\n"
+                md_changed = True
+            else:
+                sep = "" if not local_txt or local_txt.endswith("\n\n") else ("\n" if local_txt.endswith("\n") else "\n\n")
+                local_txt = local_txt + sep + block + "\n"
+                _write_if_changed(local_path, local_txt)
+        if md_changed:                            # touch CLAUDE.md only when we actually changed it
+            _write_if_changed(md_path, md)
+        if not tracked:                           # keep the untracked wiring + store out of a public push
+            sig.ensure_gitignored(proj, sig.CURATED_DIRNAME + "/", "CLAUDE.local.md")
         # (2) ensure index.md with a scope block (prefer an existing scope, else the legacy, else default)
         mem_path = sig.curated_index(proj)
         try:

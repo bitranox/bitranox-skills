@@ -47,8 +47,9 @@ def memory_dir(proj):
 
 # ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
 # The curated tier lives IN the project tree (travels with it; gitignored on public repos) so a
-# single `@import` line in the project CLAUDE.md pulls its `index.md` into context. The native
-# `memory_dir()` above stays as the raw second tier. See the design plan for the two-tier model.
+# single `@import` line pulls its `index.md` into context. That line lives in the UNTRACKED
+# `CLAUDE.local.md` by default (symmetric with the gitignored store), or the TRACKED `CLAUDE.md` when
+# `track_private` is on. The native `memory_dir()` above stays as the raw second tier.
 
 CURATED_DIRNAME = ".claude-bx-selflearning"
 CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md`) so it is never
@@ -62,8 +63,44 @@ def claude_memory_dir(proj):
 
 
 def claude_md_path(proj):
-    """The project's own CLAUDE.md (the file that carries the one-line `@import` of `index.md`)."""
+    """The project's TRACKED CLAUDE.md. Carries the `@import` of `index.md` only when `track_private`
+    is on (memory committed with the repo); otherwise the import lives in `claude_local_md_path`."""
     return Path(proj) / "CLAUDE.md"
+
+
+def claude_local_md_path(proj):
+    """The project's UNTRACKED `CLAUDE.local.md` - the DEFAULT home for the `@import` of `index.md`
+    (track_private off). Symmetric with the gitignored store: the memory wiring never touches tracked
+    git, a fresh clone has neither the wiring nor the store, and no commit is needed to set up memory."""
+    return Path(proj) / "CLAUDE.local.md"
+
+
+def ensure_gitignored(proj, *patterns):
+    """Best-effort: on a git repo, ensure each `pattern` is in the repo-root `.gitignore`. Honors
+    `track_private` (skip if set - the user wants memory committed). Non-git dir or any error -> skip
+    (fail-open). Used by per-turn capture so a fresh untracked `CLAUDE.local.md` + curated store are
+    never accidentally staged into a public repo."""
+    if load_config().get("track_private"):
+        return
+    import subprocess
+    try:
+        top = subprocess.run(["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return
+    if not top:
+        return
+    try:
+        gi = Path(top) / ".gitignore"
+        cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
+        have = set(cur.splitlines())
+        add = [p for p in patterns if p not in have and p.rstrip("/") not in have]
+        if add:
+            gi.write_text((cur.rstrip("\n") + "\n" if cur.strip() else "")
+                          + "# bitranox curated memory (local; CLAUDE.local.md @imports it)\n"
+                          + "\n".join(add) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def curated_index(proj):

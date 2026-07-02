@@ -119,7 +119,8 @@ Create one todo per step.
    from `self_improve_signals.altitude_chain(proj)`, which is the curated dirs + global) to verify
    reference integrity and caps. Fix anything flagged: re-point a DOWNWARD ref upward, resolve an orphan,
    and route an over-cap `index.md`'s overflow by moving inline fact bodies OUT to `facts/` (shrinking
-   the always-loaded index) - NEVER into `CLAUDE.md` (which holds only the one `@import` line), and a
+   the always-loaded index) - NEVER into the `@import` file (`CLAUDE.local.md`/`CLAUDE.md`, which holds
+   only the one `@import` line), and a
    PINNED-budget overflow fails loud (re-examine what is pinned).
 9. **Skill-fit -> batched change.** Collect generalizations that match or warrant a skill. Deliver
    them through `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream":

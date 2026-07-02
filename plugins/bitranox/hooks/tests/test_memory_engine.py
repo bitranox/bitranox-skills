@@ -100,28 +100,40 @@ def test_import_line_targets_index_md():
     assert E.IMPORT_LINE == "@.claude-bx-selflearning/index.md"
 
 
-def test_ensure_level_creates_import_and_scope(proj):
+def test_ensure_level_creates_import_in_claude_local_md(proj):
     E.ensure_level(proj, scope_default="what this level is for")
-    md = sig.claude_md_path(proj).read_text(encoding="utf-8")
-    assert E.IMPORT_LINE in md and E.IMPORT_BEGIN in md and E.IMPORT_END in md
+    # default (track_private off): the @import lives in the UNTRACKED CLAUDE.local.md, never CLAUDE.md
+    local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+    assert E.IMPORT_LINE in local and E.IMPORT_BEGIN in local and E.IMPORT_END in local
+    assert not sig.claude_md_path(proj).exists()          # tracked CLAUDE.md untouched (not even created)
     mem = sig.curated_index(proj).read_text(encoding="utf-8")
     assert sig.read_scope_block(mem) == "what this level is for"
 
 
 def test_ensure_level_idempotent(proj):
     E.ensure_level(proj, scope_default="x")
-    md1 = sig.claude_md_path(proj).read_text(encoding="utf-8")
+    local1 = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
     E.ensure_level(proj, scope_default="x")
-    assert sig.claude_md_path(proj).read_text(encoding="utf-8") == md1   # no duplicate block
+    assert sig.claude_local_md_path(proj).read_text(encoding="utf-8") == local1   # no duplicate block
 
 
 def test_ensure_level_preserves_user_claude_md(proj):
     md_path = sig.claude_md_path(proj)
     md_path.write_text("# My project\n\nHand-written user instructions.\n", encoding="utf-8")
     E.ensure_level(proj, scope_default="x")
-    md = md_path.read_text(encoding="utf-8")
-    assert "Hand-written user instructions." in md and md.startswith("# My project")
-    assert E.IMPORT_LINE in md
+    # tracked CLAUDE.md is left byte-identical; the import goes to CLAUDE.local.md
+    assert md_path.read_text(encoding="utf-8") == "# My project\n\nHand-written user instructions.\n"
+    assert E.IMPORT_LINE in sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+
+
+def test_ensure_level_track_private_uses_claude_md(proj, tmp_path, monkeypatch):
+    home = tmp_path / "home"; (home / ".claude").mkdir(parents=True)   # isolate config; don't pollute real
+    monkeypatch.setenv("HOME", str(home)); monkeypatch.setenv("USERPROFILE", str(home))
+    sig.save_config({"track_private": True})
+    E.ensure_level(proj, scope_default="x")
+    # track_private on: import goes in the TRACKED CLAUDE.md (so a clone loads it), not CLAUDE.local.md
+    assert E.IMPORT_LINE in sig.claude_md_path(proj).read_text(encoding="utf-8")
+    assert not sig.claude_local_md_path(proj).exists()
 
 
 def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
@@ -132,6 +144,7 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
     md = md_path.read_text(encoding="utf-8")
     assert sig.SCOPE_MARK_BEGIN not in md                 # legacy block removed from CLAUDE.md
     assert "more user text" in md and md.startswith("# Proj")
+    assert E.IMPORT_LINE in sig.claude_local_md_path(proj).read_text(encoding="utf-8")   # import in local
     mem = sig.curated_index(proj).read_text(encoding="utf-8")
     assert sig.read_scope_block(mem) == "legacy descriptor"   # relocated into index.md
 

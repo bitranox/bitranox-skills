@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.14.0] - 2026-07-02
+
+### Changed
+- The curated store's `@import` line now lives in the UNTRACKED `CLAUDE.local.md` by DEFAULT (symmetric
+  with the gitignored store: the memory wiring never touches tracked git, a fresh clone gets neither the
+  wiring nor the store, and no commit is needed to set up memory). It goes in the TRACKED `CLAUDE.md`
+  only when `track_private` is on (store committed with the repo, so a teammate's clone loads it too).
+  `memory_engine.ensure_level` writes to the right file via `_import_target`, and per-turn capture now
+  gitignores `CLAUDE.local.md` + the store on a git repo (new `self_improve_signals.ensure_gitignored`;
+  `migrate_memory.ensure_gitignore` also covers `CLAUDE.local.md`). New `claude_local_md_path` helper.
+  Skill/prose updated across `meta-self-improve`, `meta-dream-project`, `meta-skill-writer`.
+
 ## [5.13.2] - 2026-07-02
 
 ### Added

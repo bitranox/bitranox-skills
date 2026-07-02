@@ -25,10 +25,12 @@ exact memory paths, ledgers, or push gates), read it and honor its extra rules o
 
 ## Memory backend
 Durable learnings live in the project-local **curated store** `<project>/.claude-bx-selflearning/`:
-- **`index.md`** - the index the project's `CLAUDE.md` pulls into context with ONE `@import` line
-  (a scope-descriptor block on top + one markdown-link line per fact, with tiny bodies inlined).
-  Because it is `@import`ed, every line is always in context. It is gitignored on public repos (the
-  import line leaks nothing; a fresh clone with no store loads clean).
+- **`index.md`** - the index pulled into context with ONE `@import` line (a scope-descriptor block on
+  top + one markdown-link line per fact, with tiny bodies inlined). Because it is `@import`ed, every
+  line is always in context. The import line lives in the UNTRACKED **`CLAUDE.local.md`** by default
+  (symmetric with the gitignored store - nothing memory-related touches tracked git, a fresh clone has
+  neither the wiring nor the store), or the TRACKED **`CLAUDE.md`** when `track_private` is on (so a
+  teammate's clone loads it too).
 - **`facts/<slug>.md`** - heavy bodies, kept OUT of the always-loaded index and Read on demand.
 
 **The write path is the engine, never a hand-write.** Capture ONE fact by invoking
@@ -39,7 +41,7 @@ Durable learnings live in the project-local **curated store** `<project>/.claude
 
 The engine upserts by slug (merging provenance + pin), decides inline-vs-`facts/` by size and by
 whether the body contains an import-like `@token` (such a body goes to `facts/`, never inlined),
-ensures the `CLAUDE.md` `@import` block + the `index.md` scope block, takes a lock, and is
+ensures the `@import` block (in `CLAUDE.local.md` by default, `CLAUDE.md` if `track_private`) + the `index.md` scope block, takes a lock, and is
 mtime-neutral. **Do NOT Write/Edit `index.md`/`facts/` yourself** - the PostToolUse hooks would
 then churn the file every turn; the engine writes directly and bypasses them.
 

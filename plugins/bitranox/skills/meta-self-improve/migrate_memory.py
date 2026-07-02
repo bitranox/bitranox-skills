@@ -187,29 +187,30 @@ def _git(proj, *args):
 
 
 def ensure_gitignore(proj):
-    """Ensure `.claude-bx-selflearning/` is gitignored in the repo owning `proj`. Honors `track_private`
-    (if set, the user WANTS it tracked -> do nothing). R11 checks: non-git dir -> skip; already ignored
-    -> no-op; already TRACKED -> WARN (a possible existing leak) and do NOT append; else append the
-    ignore line to the repo-root `.gitignore`. Returns a status string. Fail-open."""
+    """Ensure `.claude-bx-selflearning/` AND `CLAUDE.local.md` (the untracked memory wiring) are
+    gitignored in the repo owning `proj`. Honors `track_private` (if set, the user WANTS it tracked ->
+    do nothing). R11 checks: non-git dir -> skip; already ignored -> no-op; the store already TRACKED
+    -> WARN (a possible existing leak) and do NOT append; else append the ignore lines to the repo-root
+    `.gitignore`. Returns a status string. Fail-open."""
     if sig.load_config().get("track_private"):
         return "track_private: left tracked"
     rc, top = _git(proj, "rev-parse", "--show-toplevel")
     if rc != 0 or not top:
         return "not a git repo: skipped"
     root = Path(top)
-    if _git(proj, "check-ignore", "-q", sig.CURATED_DIRNAME)[0] == 0:
-        return "already ignored"
     if _git(proj, "ls-files", "--error-unmatch", sig.CURATED_DIRNAME + "/")[0] == 0:
         return "WARNING: .claude-bx-selflearning is TRACKED (possible existing leak) - not modifying .gitignore"
     gi = root / ".gitignore"
-    line = sig.CURATED_DIRNAME + "/"
     try:
         cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
-        if line in cur.splitlines() or sig.CURATED_DIRNAME in cur.splitlines():
+        have = set(cur.splitlines())
+        wanted = [sig.CURATED_DIRNAME + "/", "CLAUDE.local.md"]
+        add = [w for w in wanted if w not in have and w.rstrip("/") not in have]
+        if not add:
             return "already ignored"
         gi.write_text((cur.rstrip("\n") + "\n" if cur.strip() else "")
-                      + "# bitranox curated self-learning memory (local; CLAUDE.md @imports it)\n"
-                      + line + "\n", encoding="utf-8")
+                      + "# bitranox curated self-learning memory (local; CLAUDE.local.md @imports it)\n"
+                      + "\n".join(add) + "\n", encoding="utf-8")
         return "gitignored"
     except OSError:
         return "gitignore write failed"
