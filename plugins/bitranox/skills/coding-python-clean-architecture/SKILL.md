@@ -200,6 +200,9 @@ class UnitOfWork(Protocol[D]):
 | **Idempotency**   | `run_once(key, fn)` with uniqueness guard                      |
 | **Timeouts**      | `asyncio.wait_for(coro, timeout=)`; propagate `CancelledError` |
 
+For resilience/self-healing at the adapter boundary (retry+backoff, health-check/evict/replace,
+circuit breaker, graceful degradation), see `bitranox:coding-resilience`.
+
 ## Boundaries
 
 ### Plugin Architecture

@@ -35,7 +35,9 @@ DOES NOT APPLY - internal seams between trusted code:
   validates type and shape, coerces, and REJECTS what does not fit. Never pass a raw dict / JSON /
   ORM row inward; convert to a typed domain object immediately.
 - **Bound length and size.** Max string length, collection size, numeric range, request-body size.
-  Unbounded input is a DoS vector; stream or paginate large data, never materialize unbounded.
+  Unbounded input is a DoS vector; stream or paginate large data, never materialize unbounded. For
+  the wider self-healing/resource-guard patterns (bounding concurrency/memory, headroom checks), see
+  `bitranox:coding-resilience`.
 - **Handle arbitrary bytes/chars.** non-ASCII, emoji, CJK, control chars, NUL, binary: reject,
   normalize (e.g. Unicode NFC), or escape - never trust raw. Decide the allowed charset explicitly.
 

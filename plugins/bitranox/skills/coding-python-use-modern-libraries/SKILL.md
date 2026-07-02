@@ -56,6 +56,7 @@ rows silently competing for the same job:
 | Type checking                               | `mypy`                                                                                       | none                                                              |
 | CLI args / parsing                          | `rich-click` (Click-based, rich-formatted --help; drop-in for click)                         | `argparse`, `optparse`, `getopt`, bare `click`                    |
 | Subprocess                                  | `subprocess.run([...])` (argv list)                                                          | `os.system`, `shell=True`                                         |
+| Retry / backoff                             | `tenacity` (declarative retry, exponential backoff + jitter; see bitranox:coding-resilience) | hand-rolled `while`/`sleep` retry loops                           |
 | .gitignore parse / file filtering           | `igittigitt` (git-exact, include mode, memory-bounded; see bitranox:coding-python-gitignore) | hand-rolled `fnmatch`/`glob`/`re`; `gitignore_parser`; `pathspec` |
 
 ## Structured data: pydantic at the edges, dataclasses inside

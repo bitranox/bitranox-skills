@@ -9,6 +9,10 @@ description: >-
 
 # Proxmox VE Operations Reference (Release 9.1.2)
 
+Nodes, guests, and services can be down, unreachable, or vanish mid-operation. Never assume one is
+up: re-query real state, retry under a timeout, and degrade gracefully. For the self-healing
+patterns, see `bitranox:coding-resilience`.
+
 ---
 
 ## 1. Cluster Configuration (Auto-Detect)

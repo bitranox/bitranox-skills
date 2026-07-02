@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.12.0] - 2026-07-02
+
+### Added
+- `coding-resilience`: new reference skill on never assuming an external resource is available and
+  designing for self-healing. Covers retry with backoff + jitter under a hard timeout (tenacity),
+  health-check/evict/replace, maintaining a pool at a target size with margin (net-rotating-proxies
+  as the worked example), rediscover-do-not-cache, background top-up-to-target, circuit breaker,
+  graceful degradation (partial result + warning + non-zero exit), and resource guards
+  (bound concurrency/memory/payload, disk/CPU headroom checks). Cross-referenced from
+  `coding-python-clean-architecture`, `coding-python-use-modern-libraries`, `compuse-ssh`,
+  `compuse-vnc`, `infra-proxmox`, and `coding-input-sanitization`.
+
 ## [5.11.0] - 2026-07-02
 
 ### Added

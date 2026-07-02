@@ -22,6 +22,8 @@ description: Use when running commands over SSH or driving a remote host - check
 
 A command in `ssh host '...'` is parsed by the LOCAL shell, then the REMOTE shell, then (for Windows) `cmd.exe`, then PowerShell. Each layer strips a level of quoting and can self-match patterns. A file moved with `scp` and run by path crosses none of those layers, which is why a detached on-host script beats a clever one-liner for anything non-trivial.
 
+An SSH session is a flaky external resource: it can drop, hang, or time out mid-command. Never infer failure from a dropped connection - retry under a timeout and re-query the real state. For the self-healing patterns (retry+backoff, timeouts, graceful degradation), see `bitranox:coding-resilience`.
+
 ## Authentication and host keys
 
 - **Never ask for, type, or accept an SSH password.** A password in a command or prompt leaks into

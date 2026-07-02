@@ -79,6 +79,9 @@ coordinate. (Past "wrong pixel" failures came from reading coordinates off a sca
 - **Sluggish guests drop fast input.** Slow it down: `--delay-scale 2` multiplies every delay, or set
   individual gaps via `--set vnc.key_up_gap=0.2` (keys: `key_down_hold`, `key_up_gap`, `click_move_gap`,
   `click_hold`, `click_release_gap`).
+- **A VNC console is a flaky external resource** - it can freeze, drop, or lag mid-session. Verify the
+  screen state before acting on it, retry under a timeout, and never assume a keystroke landed. For the
+  self-healing patterns, see `bitranox:coding-resilience`.
 
 ## Authentication
 
