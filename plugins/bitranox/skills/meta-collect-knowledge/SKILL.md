@@ -28,9 +28,15 @@ package metadata, the parent tree's descriptor, the first request); if scope is 
 ## Procedure (grep -> inspect -> gather)
 
 1. **Stage 1 - cheap grep (no model).** Run `python3 <this-skill-dir>/gather_scan.py --topic "<scope
-   or learning topic>" --self "<cwd>"`. It derives keywords and greps OTHER projects' memory + the
-   global rules layer (the current project is excluded), printing candidate files. Nothing matched ->
-   stop; the whole gather cost one grep.
+   or learning topic>" --self "<cwd>"`. It derives keywords and greps OTHER projects' curated stores
+   (`.claude-bx-selflearning/`) + native memory + the global rules layer (the current project is
+   excluded), printing candidate files. Nothing matched -> stop; the whole gather cost one grep.
+   - **Optional MCP boost:** when the `mcp_search` knob is `auto` and a `basic-memory` project's index
+     COVERS this tree, the same command also prints `MCP-CANDIDATES` (semantic/full-text hits from
+     `basic-memory tool search-notes`, read-only). Treat those as extra Stage-2 inputs. Absent or
+     misconfigured MCP -> nothing printed; the keyword grep is always the base (self-healing). The MCP
+     is only a search index over the local files - never the store; a memory MCP's file-writing SYNC
+     is the user's opt-in setup, wired only via the `update-config` skill.
 2. **Stage 2 - inspect (model).** Dispatch a **`sonnet`** subagent (bounded relevance/extraction work -
    keeps candidate bodies out of the main context): read the candidate files, return only what is
    genuinely useful to THIS project, privacy-scrubbed; discard near-misses. (Tier: "Concrete tiers" in

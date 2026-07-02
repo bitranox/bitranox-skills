@@ -179,3 +179,24 @@ def test_discover_curated_finds_sibling_excludes_own_and_backups(tmp_path, monke
     assert str(own / "memory.md") not in got                                          # own memory.md excluded
     assert any(p.endswith("/facts/mine.md") for p in got)                             # own facts KEPT
     assert not any(".bak-" in p for p in got)                                         # backups ignored
+
+
+def test_gather_cli_adds_mcp_candidates_when_enabled(tmp_path, monkeypatch, capsys):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    (cur / "note.md").write_text("zorblax frobnicator config", encoding="utf-8")  # ensure a keyword exists
+    import mcp_search
+    monkeypatch.setattr(mcp_search, "enabled", lambda: True)
+    monkeypatch.setattr(mcp_search, "covers", lambda p: True)
+    monkeypatch.setattr(mcp_search, "search", lambda topic, **k: ["notes/relevant"])
+    G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
+    out = capsys.readouterr().out
+    assert "MCP\tnotes/relevant" in out and "MCP-CANDIDATES: 1" in out
+
+
+def test_gather_cli_no_mcp_when_disabled(tmp_path, monkeypatch, capsys):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    import mcp_search
+    monkeypatch.setattr(mcp_search, "enabled", lambda: False)
+    G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
+    out = capsys.readouterr().out
+    assert "MCP-CANDIDATES" not in out

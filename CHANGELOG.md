@@ -77,6 +77,13 @@ installed copies and needs no bump.
   (carrying provenance), write an idempotency/resume receipt, and gitignore the store (R11: skip
   non-git, warn if already tracked, honor `track_private`). Native stores are never deleted; other
   repos are never auto-committed.
+- Phase 3 - optional MCP search index (`hooks/mcp_search.py` + tests): a fallback-safe integration of a
+  memory MCP (`basic-memory`) as a READ-ONLY full-text/semantic search over the local files to sharpen
+  cross-project gather. `available`/`enabled` (honors the `mcp_search` knob), `search` (calls
+  `basic-memory tool search-notes`, returns ranked ids or None on any failure), `watched_roots`/`covers`
+  (does an indexed project span this tree?). The gather CLI adds `MCP-CANDIDATES` when enabled + covering;
+  absent/misconfigured -> keyword scan only (never a hard dependency). SAFETY: only reads; the MCP's
+  file-writing sync is the user's opt-in setup (via `update-config`), never triggered here.
 
 ## [5.12.0] - 2026-07-02
 

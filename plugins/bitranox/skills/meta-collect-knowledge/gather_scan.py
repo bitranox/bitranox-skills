@@ -293,6 +293,19 @@ def main(argv=None):
     for path in sorted(hits):
         print("%s\t%s" % (path, ",".join(hits[path])))
     print("CANDIDATES: %d (keywords: %s)" % (len(hits), ", ".join(keywords)))
+    # Optional: when a memory MCP (basic-memory) is enabled and its index covers this tree, add its
+    # semantic/full-text hits as EXTRA candidates for the agent to read-note. Read-only; keyword scan
+    # above is always the base, so this is a pure augmentation (absent/misconfigured MCP -> nothing).
+    try:
+        import mcp_search as _mx
+        if _mx.enabled() and (self_proj is None or _mx.covers(self_proj)):
+            mhits = _mx.search(args.topic)
+            if mhits:
+                for h in mhits:
+                    print("MCP\t%s" % h)
+                print("MCP-CANDIDATES: %d (via basic-memory search)" % len(mhits))
+    except Exception:  # noqa: BLE001 - the MCP path must never break the keyword gather
+        pass
     return 0
 
 
