@@ -28,6 +28,13 @@ installed copies and needs no bump.
   lockfile, no `fcntl`/`msvcrt`, Windows-safe); and new config knobs (`track_private`, `mcp_search`,
   `discovery_roots`) with list-valued coercion in `meta-memory-settings` and a derived
   `discovery_roots()` default (no hardcoded maintainer paths in the shipped config).
+- `memory_engine.py`: the single write path for the curated store + the `memory.md` grammar
+  (parse/render), reconciler-compatible markdown-link entries (`[Title](facts/<slug>.md)` heavy vs
+  `[Title](#slug)` inline), provenance as a `<!-- bx:src=... -->` set on the entry line, inline-vs-heavy
+  by size AND import-like-`@` detection (an inline `@token` would fire an `@import`, so such bodies go
+  to a non-imported `facts/` file), `add_or_update_entry` (upsert, merge provenance, locked,
+  mtime-neutral) and `ensure_level` (create the CLAUDE.md `@import` block + `memory.md` scope, and
+  relocate a legacy in-CLAUDE.md scope block into `memory.md` byte-safe).
 
 ## [5.12.0] - 2026-07-02
 
