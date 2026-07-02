@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.14.1] - 2026-07-02
+
+### Changed
+- `meta-dream-project` dedup/reconciliation now considers HOOKS as a coverage source, not only skills
+  and loaded memory/CLAUDE.md tiers. A rule a hook ENFORCES automatically (typographic tells in prose
+  files -> `tell-sweep`; SSH pgrep self-match -> `block-pgrep-self-match`; structured-file sed edits ->
+  `block-sed-structured-files`) is even more redundant as prose, so judge "covered" against the UNION of
+  {hook enforcement + skill + always-loaded memory}. A hook is the strongest layer but BOUNDARY-LIMITED
+  (fires only at its trigger - e.g. file edits, not commit messages/replies/comments - and only where
+  the plugin is installed), so the memory/skill layer is kept for what the hook cannot reach.
+
 ## [5.14.0] - 2026-07-02
 
 ### Changed

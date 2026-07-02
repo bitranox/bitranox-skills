@@ -86,13 +86,20 @@ Create one todo per step.
      goes through the write engine exactly like any other altitude (an `index.md` hook + a lazy
      `facts/` body, de-doubled from the lower tier), NOT a loose whole-loaded `.md`. Do NOT write into
      or recreate the old `~/.claude/rules/bitranox/` loose layer - it was converted to this store.
-   - **Point a rule at its skill; do not restate it.** During consolidation, check each rule fact for a
-     bitranox SKILL that already covers its topic (input sanitization -> `bitranox:coding-input-sanitization`,
-     resilience/self-healing -> `coding-resilience`, writing/reply tells -> `write-humanize-en`/`-de`,
-     shell traps -> `compuse-bash`, remote PowerShell/SSH -> `compuse-ssh`). If one matches, keep the
-     always-loaded hook as the trigger and make the body a CONCISE POINTER to that skill (`Detail:
-     bitranox:<skill>`) instead of duplicating the skill's content. The dream does not delete such a
-     rule (the always-on hook is its value), it just keeps the body from drifting into a skill copy.
+   - **Point a rule at its skill OR HOOK; do not restate it.** During consolidation, check each rule
+     fact for a bitranox SKILL or HOOK that already covers/ENFORCES its topic: skills -
+     input sanitization -> `bitranox:coding-input-sanitization`, resilience/self-healing ->
+     `coding-resilience`, writing/reply tells -> `write-humanize-en`/`-de`, shell traps -> `compuse-bash`,
+     remote PowerShell/SSH -> `compuse-ssh`; hooks - typographic/invisible tells in PROSE FILES ->
+     the `tell-sweep` PostToolUse hook auto-flags them on every Write/Edit, SSH pgrep/pkill self-match ->
+     the `block-pgrep-self-match` hook, structured-file sed edits -> `block-sed-structured-files`. A HOOK
+     is the STRONGEST coverage (automated, no reliance on the model remembering) but BOUNDARY-LIMITED: it
+     fires only at its trigger (tell-sweep only on prose-FILE edits, NOT commit messages / replies / code
+     comments, and only where the plugin is installed), so keep the memory/skill layer for what the hook
+     cannot reach. When a skill/hook covers a rule, keep the always-loaded index hook as the trigger and
+     make the body a CONCISE POINTER (`Detail: bitranox:<skill>` / `enforced by the <hook> hook`) instead
+     of restating the content. The dream does not delete such a rule (the always-on trigger is its value),
+     it just keeps the body from drifting into a skill/hook copy.
    - **Promotion to the global layer is gated** (it loads in EVERY session): a USER-stated concrete rule
      promotes eagerly; a model-INFERRED generalization needs corroboration across >= 2 dreams first
      (`should_promote` / `note_promotion_candidate` in `self_improve_signals.py`; the `promotion` config
@@ -176,6 +183,13 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
     - **If the source `CLAUDE.md` is itself UNTRACKED:** deleting it into untracked memory loses no
       version control (there was none) but CONCENTRATES the rule in fragile untracked memory. So ensure
       the covering store is LOCALLY GIT-TRACKED FIRST (the Durability pass below), then fold + delete.
+    - **Coverage can also be a HOOK or a SKILL, not only a loaded memory/CLAUDE.md tier.** A rule that a
+      HOOK enforces automatically (e.g. typographic tells in prose files -> `tell-sweep`) or a SKILL
+      details on demand (`write-humanize-en`) is even more redundant as prose - but a hook is
+      BOUNDARY-LIMITED (fires only at its trigger, e.g. file edits, not commit messages / replies, and
+      only where the plugin is installed). So judge "covered" against the UNION of {hook enforcement +
+      skill + always-loaded memory}, and keep the memory/prose layer for what the hook/skill cannot reach
+      (non-file prose, plugin-less clones). Fold any unique detail into the surviving tier before deleting.
   - **Belongs higher** (recurs across the subtree) -> lift the general up to the broadest covering tier,
     leave only the DELTA below (`references [[general]]` + delta), or remove it if there is no delta.
   - **Genuinely only-here** -> leave it (it is the delta). **Contradiction** -> the hand-written
