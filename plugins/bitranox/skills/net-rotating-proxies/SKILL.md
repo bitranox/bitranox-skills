@@ -27,7 +27,13 @@ in the background while downloading.
    lists, proxyscrape API). Expect thousands of candidates; only a few percent will be usable.
 3. **Validate reachability in parallel** against a cheap endpoint on the target host before using
    a proxy for real work, and **record each proxy's latency** (response time of that test) so
-   selection can favour fast proxies.
+   selection can favour fast proxies. **Right-size to the job:** pass `validate --need N` to stop as
+   soon as N live proxies are found (and cancel the rest) instead of testing the whole pool - a small
+   job needs only a few. Size with a generous `~100%` margin: `N ~= 2 x concurrency` (e.g. 8-wide is
+   `--need ~16`, not thousands). The over-provision is what lets the speed-weighted pick run the load on
+   the FASTEST proxies while the slower half idles as warm backup (effectively phased out - rarely
+   picked), and the background refresh draws in a replacement the moment one dies. Distribute requests
+   across the pool so no single exit-IP is hammered.
 4. **Download in parallel, wide.** Most free proxies are awfully slow (tens of seconds each), so
    parallelism is the only way to make progress: 8 workers minimum, 16 when the pool is large.
 5. **Keep good/bad lists and weight by speed.** A proxy that completes a real download goes in
@@ -52,7 +58,7 @@ header) is fetched into an isolated env. Subcommands:
 
     # 2. test reachability against the target host, grow live.txt (parallel)
     uv run scripts/proxy_pool.py --store ./.proxies validate \
-        --test-url https://www.youtube.com/generate_204 --workers 150
+        --test-url https://www.youtube.com/generate_204 --workers 150 --need 10   # stop at 10 live (right-size)
 
     # 3. run a worklist through rotating proxies, 16-wide, refreshing the pool in the background
     uv run scripts/proxy_pool.py --store ./.proxies run \

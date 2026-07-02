@@ -149,18 +149,34 @@ def _reachable(proxy, test_url, timeout):
     return (ok, time.perf_counter() - t0)
 
 
-def validate(store, test_url, workers, timeout):
+def validate(store, test_url, workers, timeout, need=None):
+    """Test pool candidates for reachability, growing live.txt.
+
+    ``need`` right-sizes the work: stop as soon as ``need`` live proxies are found this run and
+    cancel the rest, instead of testing the whole pool. A small job (a handful of requests) only
+    needs a few live proxies plus a flakiness margin - pass ``need = concurrency + margin`` rather
+    than validating thousands. ``need=None`` tests every candidate (the exhaustive default).
+    """
     pool = _read(_p(store, "pool.txt"))
     live = _read(_p(store, "live.txt"))
     bad = _read(_p(store, "bad.txt"))
     todo = sorted(pool - live - bad)  # only test ones we have not already cleared
-    print(f"validating {len(todo)} candidates against {test_url} ({workers}-wide)...")
+    goal = f", stopping at +{need} live" if need else ""
+    print(f"validating up to {len(todo)} candidates against {test_url} ({workers}-wide){goal}...")
     winners, speeds = [], {}
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-        for proxy, (ok, lat) in zip(todo, ex.map(lambda p: _reachable(p, test_url, timeout), todo)):
-            if ok:
-                winners.append(proxy)
-                speeds[proxy] = lat
+        futures = {ex.submit(_reachable, p, test_url, timeout): p for p in todo}
+        try:
+            for fut in cf.as_completed(futures):
+                ok, lat = fut.result()
+                if ok:
+                    winners.append(futures[fut])
+                    speeds[futures[fut]] = lat
+                    if need and len(winners) >= need:
+                        break  # right-sized: enough live found, do not test the rest
+        finally:
+            for fut in futures:  # cancel any not-yet-started work after an early stop
+                fut.cancel()
     _grow(_p(store, "live.txt"), winners)
     _upsert_speeds(_p(store, "speeds.tsv"), speeds)
     med = _median(list(speeds.values()))
@@ -191,13 +207,23 @@ def _pick(store, n):
     return [p for _, p in keyed[:n]]
 
 
-def _bg_refresh(store, test_url, workers, timeout, stop):
+def _bg_refresh(store, test_url, workers, timeout, stop, need=None):
+    """Keep live.txt healthy while a job runs. Proxies that die get banned to bad.txt by the worker,
+    which shrinks the effective pool (live - bad); this loop refills it. With ``need`` set it tops up
+    ONLY to the target (validating just the deficit), so it replaces proxies that went away without
+    re-over-provisioning; with ``need=None`` it re-validates the whole pool (exhaustive)."""
     while not stop.is_set():
         if stop.wait(600):              # every 10 min
             break
         try:
             discover(store, DEFAULT_SOURCES)
-            validate(store, test_url, workers, timeout)
+            if need is None:
+                validate(store, test_url, workers, timeout)
+                continue
+            available = _read(_p(store, "live.txt")) - _read(_p(store, "bad.txt"))
+            deficit = need - len(available)
+            if deficit > 0:             # one (or more) went away -> top back up to the target
+                validate(store, test_url, workers, timeout, need=deficit)
         except Exception as e:
             print(f"bg refresh error: {e}")
 
@@ -225,14 +251,14 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
     return (item, None)
 
 
-def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout, success_glob, dead_regex):
+def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout, success_glob, dead_regex, need=None):
     argv_tpl = shlex.split(cmd)          # parse template once; substituted per attempt, no shell
     dead_re = re.compile(dead_regex, re.I)
     items = [l.strip() for l in open(worklist, encoding="utf-8") if l.strip()]
     stop = threading.Event()
     bg_t = None
     if bg:
-        bg_t = threading.Thread(target=_bg_refresh, args=(store, test_url, vworkers, vtimeout, stop), daemon=True)
+        bg_t = threading.Thread(target=_bg_refresh, args=(store, test_url, vworkers, vtimeout, stop, need), daemon=True)
         bg_t.start()
         print("background discover+validate loop started (every 10 min)")
     ok = 0
@@ -257,6 +283,9 @@ def main():
     v = sub.add_parser("validate")
     v.add_argument("--test-url", default="https://www.youtube.com/generate_204")
     v.add_argument("--workers", type=int, default=150); v.add_argument("--timeout", type=float, default=7)
+    v.add_argument("--need", type=int, default=None,
+                   help="stop once N live proxies are found (right-size: N = concurrency + margin); "
+                        "omit to test the whole pool")
     r = sub.add_parser("run")
     r.add_argument("--worklist", required=True); r.add_argument("--cmd", required=True)
     r.add_argument("--workers", type=int, default=8); r.add_argument("--per-item-proxies", type=int, default=8)
@@ -266,15 +295,18 @@ def main():
     r.add_argument("--background-discovery", action="store_true")
     r.add_argument("--test-url", default="https://www.youtube.com/generate_204")
     r.add_argument("--vworkers", type=int, default=150); r.add_argument("--vtimeout", type=float, default=7)
+    r.add_argument("--need", type=int, default=None,
+                   help="target live-pool size to maintain (right-size: concurrency + margin); the "
+                        "background refresh tops up to this when proxies die, instead of re-validating all")
     a = ap.parse_args()
     os.makedirs(a.store, exist_ok=True)
     if a.action == "discover":
         discover(a.store, a.sources)
     elif a.action == "validate":
-        validate(a.store, a.test_url, a.workers, a.timeout)
+        validate(a.store, a.test_url, a.workers, a.timeout, a.need)
     elif a.action == "run":
         run(a.store, a.worklist, a.cmd, a.workers, a.per_item_proxies, a.item_timeout,
-            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob, a.dead_regex)
+            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob, a.dead_regex, a.need)
 
 
 if __name__ == "__main__":

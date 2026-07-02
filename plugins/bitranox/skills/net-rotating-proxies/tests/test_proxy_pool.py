@@ -53,6 +53,24 @@ def test_grow_result_is_sorted(store):
 
 
 # ----------------------------------------------------------------------------
+# validate --need (right-size: stop early instead of testing the whole pool)
+# ----------------------------------------------------------------------------
+def test_validate_need_stops_at_n_live(store, monkeypatch):
+    pp._grow(pp._p(store, "pool.txt"), [f"10.0.0.{i}:80" for i in range(50)])
+    monkeypatch.setattr(pp, "_reachable", lambda p, u, t: (True, 0.1))
+    pp.validate(store, "https://x/", workers=8, timeout=1, need=3)
+    # only the first 3 found are kept; the rest of the 50 are not validated into live.txt
+    assert len(pp._read(pp._p(store, "live.txt"))) == 3
+
+
+def test_validate_without_need_tests_whole_pool(store, monkeypatch):
+    pp._grow(pp._p(store, "pool.txt"), [f"10.0.0.{i}:80" for i in range(20)])
+    monkeypatch.setattr(pp, "_reachable", lambda p, u, t: (True, 0.1))
+    pp.validate(store, "https://x/", workers=8, timeout=1, need=None)
+    assert len(pp._read(pp._p(store, "live.txt"))) == 20
+
+
+# ----------------------------------------------------------------------------
 # _append
 # ----------------------------------------------------------------------------
 def test_append_adds_lines(store):

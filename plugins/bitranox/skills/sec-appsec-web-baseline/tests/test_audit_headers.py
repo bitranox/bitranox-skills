@@ -210,3 +210,18 @@ def test_server_token_product_name_with_digit_is_ok():
     # AmazonS3 has a digit but no version pattern - must not be flagged
     assert a._server_token("AmazonS3").severity == "OK"
     assert a._server_token("nginx/1.24.0").severity == "MINOR"
+
+
+# ---- same-subnet / internal-target detection (enforce egress for public sites) ----
+def test_is_internal_ip_private_loopback_linklocal():
+    assert a._is_internal_ip("192.168.168.62")  # same-subnet split-horizon
+    assert a._is_internal_ip("10.0.0.1")
+    assert a._is_internal_ip("172.16.5.5")
+    assert a._is_internal_ip("127.0.0.1")  # loopback
+    assert a._is_internal_ip("169.254.1.1")  # link-local
+
+
+def test_is_internal_ip_public_and_garbage():
+    assert not a._is_internal_ip("88.116.105.146")  # public WAN
+    assert not a._is_internal_ip("8.8.8.8")
+    assert not a._is_internal_ip("not-an-ip")

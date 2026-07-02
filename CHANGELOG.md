@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.10.0] - 2026-06-30
+
+### Added
+- `net-rotating-proxies`: `validate --need N` early-stop - stop as soon as N live proxies are found (and
+  cancel the rest) instead of testing the whole pool, so a small job validates a handful, not thousands.
+  The background refresh (`run --need N`) tops the pool back up to N when proxies die, instead of
+  re-validating everything. SKILL.md sizing rule: `N ~= 2 x concurrency` (a ~100% margin) so the
+  speed-weighted pick runs the fastest while the slower half stays as warm backup. (+2 tests.)
+- `sec-appsec-web-baseline`: the scanner detects a same-subnet / internal target - if the URL resolves to
+  a private (RFC1918/loopback/link-local) IP and no `--proxy` is given, it warns that the scan measures
+  the internal path (origin / split-horizon edge), not what external visitors get, and steers to an
+  external egress via net-rotating-proxies. (+2 tests.)
+
 ## [5.9.0] - 2026-06-30
 
 ### Added

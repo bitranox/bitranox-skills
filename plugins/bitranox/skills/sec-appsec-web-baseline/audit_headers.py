@@ -22,8 +22,10 @@ network; only `fetch` touches the wire. Run: `uv run audit_headers.py https://ho
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
+import socket
 import sys
 from dataclasses import asdict, dataclass
 
@@ -250,6 +252,38 @@ def summarize(findings: list[Finding]) -> dict[str, int]:
     return counts
 
 
+def _is_internal_ip(ip: str) -> bool:
+    """True if ip is private / loopback / link-local (RFC1918 etc.) - an INTERNAL address, not a
+    public edge. Used to detect a same-subnet/internal target."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback or addr.is_link_local
+
+
+def internal_target_warning(url: str, proxy: str | None) -> str | None:  # pragma: no cover - DNS I/O
+    """Warn when a public-site audit is actually hitting an INTERNAL address with no proxy.
+
+    For a site in your own subnet (split-horizon DNS resolving to an RFC1918 IP), a direct scan
+    measures the internal origin/edge, not the public path external visitors get. Returns the warning
+    text, or None when a proxy is set or the host resolves to a public IP.
+    """
+    if proxy:
+        return None
+    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
+    try:
+        ip = socket.gethostbyname(host)
+    except OSError:
+        return None
+    if _is_internal_ip(ip):
+        return (f"{host} resolves to an INTERNAL address ({ip}) and no --proxy was given - this measures the "
+                f"internal path (origin / split-horizon edge), NOT what external visitors get. For a public "
+                f"site, re-run through an external egress: --proxy http://<proxy> (get a few via the "
+                f"net-rotating-proxies skill).")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit a URL's HTTP web-security baseline.")
     parser.add_argument("url")
@@ -258,11 +292,17 @@ def main(argv: list[str] | None = None) -> int:
                                         "internal network (public sites; see the net-rotating-proxies skill)")
     args = parser.parse_args(argv)
 
+    warning = internal_target_warning(args.url, args.proxy)
     findings = fetch(args.url, proxy=args.proxy)
     counts = summarize(findings)
     if args.json:
-        print(json.dumps({"url": args.url, "counts": counts, "findings": [asdict(f) for f in findings]}, indent=2))
+        out: dict[str, object] = {"url": args.url, "counts": counts, "findings": [asdict(f) for f in findings]}
+        if warning:
+            out["internal_target_warning"] = warning
+        print(json.dumps(out, indent=2))
     else:
+        if warning:
+            sys.stderr.write("WARNING: " + warning + "\n")
         for f in findings:
             if f.severity != "OK":
                 print(f"  [{f.severity}] {f.check}: {f.detail}" + (f"  -> {f.fix}" if f.fix else ""))
