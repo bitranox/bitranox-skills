@@ -10,9 +10,10 @@ fact, tiny bodies inlined) + `facts/<slug>.md` (heavy bodies). This tool:
     targets (so a ref to an inlined fact is never a false orphan), and the always-loaded `index.md`
     is within the cap (with a separate bounded budget for pinned entries).
 
-It is FORMAT-AWARE: a dir holding `index.md`/`facts/` is CURATED; any other dir (the loose global
-rules layer) is scanned as whole-loaded `*.md` files. `archive_entry` forgets a fact (move its body
-to `.archive/`, drop its index line).
+It is FORMAT-AWARE: a dir holding `index.md`/`facts/` is CURATED; any other dir (e.g. a legacy loose
+whole-loaded rules layer) is scanned as `*.md` files. All bitranox altitudes are now curated stores,
+including the global one at `~/.claude/.claude-bx-selflearning/`; the loose branch is kept only for a
+foreign/legacy layer. `archive_entry` forgets a fact (move its body to `.archive/`, drop its index line).
 
 Pure standard library; cross-platform; ASCII output only.
 """
@@ -156,7 +157,7 @@ def _facts_frontmatter_slugs(facts_dir):
 def altitude_targets(d):
     """Every canonical slug an altitude offers as a `[[wikilink]]` target.
     CURATED: each entry's slug (inline `#slug` AND heavy `facts/<slug>.md`) + facts/ frontmatter names.
-    LOOSE (global): each `*.md` stem + frontmatter name (recursive)."""
+    LOOSE (legacy/foreign): each `*.md` stem + frontmatter name (recursive)."""
     d = Path(d)
     slugs = set()
     if is_curated(d):

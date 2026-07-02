@@ -375,8 +375,11 @@ def save_config(updates):
 # ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
 
 def global_rules_dir():
-    """The always-present global rule layer: whole-loaded user rules, namespaced to bitranox."""
-    return Path.home() / ".claude" / "rules" / "bitranox"
+    """The machine-wide global rule altitude: the curated `.claude-bx-selflearning/` store at the
+    `~/.claude` user-scope level (its `index.md` is @imported by `~/.claude/CLAUDE.md`, so it loads in
+    every project). This is a normal curated store - promotion into it goes through the write engine
+    like any other altitude, not a loose whole-load."""
+    return claude_memory_dir(Path.home() / ".claude")
 
 
 def discovery_roots():
@@ -428,7 +431,7 @@ def altitude_chain(proj):
         chain.extend(d / CURATED_DIRNAME for d in upto)
     except (TypeError, ValueError):
         chain.append(claude_memory_dir(proj))
-    chain.append(global_rules_dir())              # global stays the loose whole-loaded layer (last)
+    chain.append(global_rules_dir())              # global = the curated ~/.claude store (last/broadest)
     return chain
 
 

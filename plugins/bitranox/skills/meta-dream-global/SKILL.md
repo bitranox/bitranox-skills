@@ -1,6 +1,6 @@
 ---
 name: meta-dream-global
-description: The CROSS-PROJECT dream - consolidate memory ACROSS all your projects, the expensive pass that reads every project store. Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", or occasionally after several per-project dreams. Scans all project memory stores for recurring / broadly-useful knowledge and factors it up to the global ~/.claude/rules/bitranox/ layer (or the lowest common ancestor), pulls sibling-tree knowledge into projects (inbound gather), and cross-pollinates outward - all via lift-or-copy, never a cross-tree reference. For one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
+description: The CROSS-PROJECT dream - consolidate memory ACROSS all your projects, the expensive pass that reads every project store. Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", or occasionally after several per-project dreams. Scans all project memory stores for recurring / broadly-useful knowledge and factors it up to the global ~/.claude/.claude-bx-selflearning/ layer (or the lowest common ancestor), pulls sibling-tree knowledge into projects (inbound gather), and cross-pollinates outward - all via lift-or-copy, never a cross-tree reference. For one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-global
@@ -22,7 +22,7 @@ cross-tree reference** (a sideways pointer dangles when the other tree is delete
 Same machine-local config as the project dream (`self_improve_signals.load_config()`; legacy
 `.bitranox-dream-off` / `.bitranox-dream-auto` sentinels still apply until it exists):
 
-- **`propose`** (default): apply the safe machine-local moves (the global `~/.claude/rules/bitranox/`
+- **`propose`** (default): apply the safe machine-local moves (the global `~/.claude/.claude-bx-selflearning/`
   layer and private project memory), but ASK before editing a version-controlled `CLAUDE.md` and route
   any skill change to a self-PR.
 - **`auto`**: apply `CLAUDE.md` edits and ship skill changes without per-change prompts.
@@ -42,7 +42,7 @@ Same machine-local config as the project dream (`self_improve_signals.load_confi
 
 Create one todo per step.
 
-1. **Back up first.** Snapshot every store this run may touch - the global `~/.claude/rules/bitranox/`
+1. **Back up first.** Snapshot every store this run may touch - the global `~/.claude/.claude-bx-selflearning/`
    layer and any project's curated `.claude-bx-selflearning/` (+ native `memory/`) you will write - to
    timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
    never re-discovered as live memory) before any edit. Curated writes go through the engine, not a
@@ -111,7 +111,7 @@ re-moving the same item, stop and treat it as a bug (the circle-breaker), do not
 
 ## Boundaries
 
-- **The global `~/.claude/rules/bitranox/` layer + private project memory (machine-local):** back up,
+- **The global `~/.claude/.claude-bx-selflearning/` layer + private project memory (machine-local):** back up,
   then apply.
 - **CLAUDE.md (version-controlled):** propose-first in `propose`, apply in `auto`, only through the
   sanctioned bounded paths (CLAUDE.md policy in `bitranox:meta-self-improve`).

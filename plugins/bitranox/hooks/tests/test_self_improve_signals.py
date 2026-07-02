@@ -251,8 +251,9 @@ def test_load_config_corrupt_file_returns_defaults(home):
 
 def test_global_rules_dir(home):
     g = S.global_rules_dir()
-    assert g.name == "bitranox" and g.parent.name == "rules"
-    assert ".claude" in str(g)
+    # global is now the curated store at the ~/.claude user-scope altitude (not a loose rules/ dir)
+    assert g.name == S.CURATED_DIRNAME and g.parent.name == ".claude"
+    assert g == S.claude_memory_dir(S.Path.home() / ".claude")
 
 
 def test_altitude_chain_only_claude_md_ancestors(home, tmp_path):

@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.13.1] - 2026-07-02
+
+### Changed
+- The machine-wide global rule altitude is now a curated `.claude-bx-selflearning/` store at the
+  `~/.claude` user-scope level (its `index.md` @imported by `~/.claude/CLAUDE.md`), not the old loose
+  whole-loaded `~/.claude/rules/bitranox/` layer. `self_improve_signals.global_rules_dir()` returns
+  the curated store; `altitude_chain` treats the global rung as a normal curated altitude; the
+  reconciler's format-awareness keeps the loose branch only for a legacy/foreign layer. Promotion into
+  global now goes through the write engine like any altitude (index hook + lazy `facts/` body),
+  de-doubled from the lower tier. Repointed the promotion-target prose in `meta-dream-project`,
+  `meta-dream-global`, `meta-dream-global-deep`, `meta-self-improve`, `meta-collect-knowledge` and the
+  `self-improve-gate` capture nudge so a dream never recreates the old loose layer.
+
+### Added
+- Dream step (`meta-dream-project` step 5): during consolidation, check each rule fact for a bitranox
+  SKILL that already covers its topic (input sanitization -> `bitranox:coding-input-sanitization`,
+  resilience -> `coding-resilience`, writing tells -> `write-humanize-en`/`-de`, shell -> `compuse-bash`,
+  remote PowerShell/SSH -> `compuse-ssh`); if one matches, keep the always-loaded hook as the trigger and
+  make the body a concise pointer (`Detail: bitranox:<skill>`) instead of duplicating the skill's content.
+
 ## [5.13.0] - 2026-07-02
 
 ### Added

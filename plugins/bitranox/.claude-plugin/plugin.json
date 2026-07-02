@@ -1,7 +1,7 @@
 {
   "name": "bitranox",
   "description": "Bitranox skill collection: software-engineering workflow skills (planning, debugging, code review, clean architecture, language and tool references, humanizing) plus a self-improvement loop that captures session learnings into memory and CLAUDE.md, and PostToolUse hooks that validate JSON/YAML/XML edits and flag AI-writing tells in prose, feeding issues back for correction.",
-  "version": "5.13.0",
+  "version": "5.13.1",
   "author": {
     "name": "bitranox"
   },

@@ -8,7 +8,8 @@ description: Use at the end of a turn that produced a learning, such as a correc
 Turn what this session taught into a durable improvement, so the same lesson is not re-learned next
 time. The unit of value is one small, reusable fact or rule recorded in the right place at the right
 altitude: a project **memory** entry (in the curated store `.claude-bx-selflearning/`: the `index.md`
-index plus `facts/` bodies), a **global cross-project rule** in `~/.claude/rules/bitranox/`, or a
+index plus `facts/` bodies), a **global cross-project rule** in the curated `~/.claude` store
+(`~/.claude/.claude-bx-selflearning/`), or a
 **CLAUDE.md** guardrail (see step 3b).
 
 **Core constraint: memory is finite. Default to updating an existing entry and to short index lines,
@@ -128,14 +129,14 @@ List the concrete, reusable things this session surfaced, one plain sentence eac
 that is task state, already recorded in the repo or git history, or only mattered to this conversation.
 
 ### 2. Classify each candidate
-| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                    |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                      |
-| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                          |
-| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                   |
-| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): useful across projects -> `~/.claude/rules/bitranox/` (kept concrete); one project's scope -> that project's memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; **unsure which -> ask the user** |
-| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                   |
-| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                 |
+| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                                               |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                                                 |
+| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                                                     |
+| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                                              |
+| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): useful across projects -> the curated `~/.claude/.claude-bx-selflearning/` store (kept concrete); one project's scope -> that project's memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; **unsure which -> ask the user** |
+| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                                              |
+| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                                            |
 
 ### 3. Dedup BEFORE writing (mandatory)
 For each surviving candidate, search first (`grep -ril "<keyword>"` over `.claude-bx-selflearning/`
@@ -151,10 +152,12 @@ Knowledge lives at always-present homes, narrowest to broadest:
   written with the engine. **Per-turn capture writes at the PROJECT level only** (`--proj "<cwd>"`);
   it does NOT reach up to edit an ancestor's CLAUDE.md. Raising a fact to a higher altitude is the
   DREAM's job (promotion), not per-turn capture - so a routine capture never touches a parent tree.
-- **global / cross-project** -> `~/.claude/rules/bitranox/`, the native user-rules layer
-  (`global_rules_dir()`). It is whole-loaded every session and recurses into subdirs (spike-confirmed),
-  and it is NOT `CLAUDE.md`, so it never disturbs the user's hand-written rules. This is the home for a
-  rule useful across projects.
+- **global / cross-project** -> the curated store at the `~/.claude` user-scope altitude
+  (`~/.claude/.claude-bx-selflearning/`, `global_rules_dir()`), whose `index.md` is @imported by
+  `~/.claude/CLAUDE.md` so it loads in every session. It is a normal curated store (index hook +
+  lazy `facts/` body), written with the engine like any altitude, and it is NOT `CLAUDE.md`, so it
+  never disturbs the user's hand-written rules. This is the home for a rule useful across projects.
+  (The old loose `~/.claude/rules/bitranox/` layer was converted into this store; do not recreate it.)
 - **intermediate / a parent subtree** -> only `CLAUDE.md` cascades there, so an intermediate must-hold
   rule goes in that level's `CLAUDE.md` (a bounded, propose-first touch; see CLAUDE.md policy in
   `bitranox:meta-dream-project`).
@@ -168,7 +171,7 @@ local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` bl
 `CLAUDE.md`) say what each altitude is about; when the altitude is genuinely unclear, **ask the user**.
 
 **A universal rule can also belong in a SHIPPED skill (the shared brain) - do not stop silently at your
-private layer.** `~/.claude/rules/bitranox/` is machine-local: it teaches only YOU. When a captured rule
+private layer.** The `~/.claude` curated store is machine-local: it teaches only YOU. When a captured rule
 is clearly universal AND it EITHER matches a shipped skill's domain (a shell gotcha ->
 `bitranox:compuse-bash`, a git gotcha -> `bitranox:compuse-git`, etc.) OR is substantial enough to
 warrant a NEW skill domain of its own, ALSO surface it as a public-contribution candidate so other users
@@ -214,7 +217,7 @@ controlled by the `promotion` config knob. Per-turn capture usually writes PER-P
 `bitranox:meta-dream-project` lift broadly-useful items up; do not eagerly globalize an inferred rule here.
 
 A `CLAUDE.md` under version control is a shared artifact: **propose** the edit with a diff (see step 4).
-Private memory and the machine-local `~/.claude/rules/bitranox/` layer stay auto-apply. Read user
+Private memory and the machine-local `~/.claude/.claude-bx-selflearning/` store stay auto-apply. Read user
 preferences (dream mode, promotion eagerness, nudges) via `self_improve_signals.load_config()` - one
 machine-local config, never re-asking a decision the user already made.
 

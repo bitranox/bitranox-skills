@@ -1,6 +1,6 @@
 ---
 name: meta-dream-project
-description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes this project's curated .claude-bx-selflearning store (de-doubling it against the native raw tier) and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global ~/.claude/rules/bitranox/ layer or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. For the cross-project / global scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
+description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes this project's curated .claude-bx-selflearning store (de-doubling it against the native raw tier) and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global curated store at ~/.claude (.claude-bx-selflearning/) or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. For the cross-project / global scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-project
@@ -73,17 +73,26 @@ Create one todo per step.
    Dedup runs TWICE: here on the as-loaded store, and AGAIN in step 8 - because promoting in step 5
    CREATES new overlap (a lifted general now duplicates what it came from, and may overlap siblings).
 5. **Promote by SCOPE; NORMALIZE, don't duplicate.** Lift each learning to the narrowest always-present
-   home whose scope it covers: per-project memory; broadly-useful -> the global `~/.claude/rules/bitranox/`
-   layer KEPT CONCRETE (never water down a concrete-but-universal rule like fleet SSH access); a must-hold
-   intermediate-subtree rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY, not abstractness;
-   abstract only when the specifics fit nowhere else.
+   home whose scope it covers: per-project memory; broadly-useful -> the global curated store at
+   `~/.claude` (`.claude-bx-selflearning/`, @imported by `~/.claude/CLAUDE.md`) KEPT CONCRETE (never
+   water down a concrete-but-universal rule like fleet SSH access); a must-hold intermediate-subtree
+   rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY, not abstractness; abstract only when the
+   specifics fit nowhere else.
    - **Reference + delta:** when a general and a specific overlap, keep the general ONCE at its altitude
      and have the lower entry `references [[general]]` + only its delta - they compose at load, never
      duplicated. **References point UPWARD only** (deleting a project must never dangle a higher entry).
-     This holds BETWEEN CURATED altitudes (each has its own `index.md`). Promotion INTO the loose
-     GLOBAL layer (`~/.claude/rules/bitranox/`, which has no `index.md`/`@import`) is a MATERIALIZE:
-     write the fact as a loose `.md` file there and de-double it from the lower tier - the global layer
-     is NOT rewritten into `index.md`/`facts/` (Gap-7 deferral); it stays whole-loaded loose `.md`.
+     This holds ACROSS ALL CURATED altitudes, INCLUDING global (each has its own `index.md`). The
+     global altitude is now a normal curated store: promotion into `~/.claude/.claude-bx-selflearning/`
+     goes through the write engine exactly like any other altitude (an `index.md` hook + a lazy
+     `facts/` body, de-doubled from the lower tier), NOT a loose whole-loaded `.md`. Do NOT write into
+     or recreate the old `~/.claude/rules/bitranox/` loose layer - it was converted to this store.
+   - **Point a rule at its skill; do not restate it.** During consolidation, check each rule fact for a
+     bitranox SKILL that already covers its topic (input sanitization -> `bitranox:coding-input-sanitization`,
+     resilience/self-healing -> `coding-resilience`, writing/reply tells -> `write-humanize-en`/`-de`,
+     shell traps -> `compuse-bash`, remote PowerShell/SSH -> `compuse-ssh`). If one matches, keep the
+     always-loaded hook as the trigger and make the body a CONCISE POINTER to that skill (`Detail:
+     bitranox:<skill>`) instead of duplicating the skill's content. The dream does not delete such a
+     rule (the always-on hook is its value), it just keeps the body from drifting into a skill copy.
    - **Promotion to the global layer is gated** (it loads in EVERY session): a USER-stated concrete rule
      promotes eagerly; a model-INFERRED generalization needs corroboration across >= 2 dreams first
      (`should_promote` / `note_promotion_candidate` in `self_improve_signals.py`; the `promotion` config
@@ -199,12 +208,12 @@ This skill is scoped to ONE project. The cross-tree passes - inbound gather, out
 cross-pollination, and the global-dream scan that reads across ALL project stores - are the expensive,
 occasional work and live in the separate `bitranox:meta-dream-global` skill. Do not do them here. If
 this project's dream surfaces a learning that is clearly useful BEYOND this project, you may still
-promote it UP to the global `~/.claude/rules/bitranox/` layer in step 5 (gated); the broader
+promote it UP to the global curated store at `~/.claude` in step 5 (gated); the broader
 cross-project scan and sibling-tree gather are meta-dream-global's job.
 
 ## Boundaries
 
-- **Private memory + the global `~/.claude/rules/bitranox/` layer (machine-local):** back up, then
+- **Private memory + the global `~/.claude/.claude-bx-selflearning/` store (machine-local):** back up, then
   apply (the whole point of a dream). Reversible via the backup.
 - **CLAUDE.md (version-controlled):** propose-first in `propose`; apply in `auto` - only through the
   sanctioned bounded paths. Create it if the right-altitude file is missing.

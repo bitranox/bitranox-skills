@@ -57,7 +57,7 @@ the scan in step 3 is run; do not duplicate the rest.
      folder's `CLAUDE.md` (its scope-descriptor block + the lifted shared rule[s]) at the LOWEST common
      ancestor whose children share a domain - NEVER a generic bucket (`projects/`, `apps/`, `public/`);
      a structural-only look-alike (siblings that merely seem related, no shared-rule evidence) is SURFACED
-     as a question, not auto-proposed. Two HQ senses: the machine-global layer `~/.claude/rules/bitranox/`
+     as a question, not auto-proposed. Two HQ senses: the machine-global layer `~/.claude/.claude-bx-selflearning/`
      is auto-created on the first promotion (no detection needed); the **workspace-root `CLAUDE.md`** is the
      file-tree HQ, and proposing a brand-new one ABOVE the current highest existing `CLAUDE.md` is the one
      case allowed to go above the highest rung (the reactive gap-fill in `bitranox:meta-self-improve` never
@@ -82,7 +82,7 @@ the scan in step 3 is run; do not duplicate the rest.
 
 ## Boundaries (unchanged from meta-dream-global)
 
-- Global `~/.claude/rules/bitranox/` layer + private project memory (machine-local): back up, then apply.
+- Global `~/.claude/.claude-bx-selflearning/` layer + private project memory (machine-local): back up, then apply.
 - **`CLAUDE.md` (version-controlled): never edit without user confirmation** - propose-first in `propose`,
   apply in `auto`, only through the sanctioned bounded paths. A reconciliation delete/lift or an org-chart
   move is always PROPOSED (with consequences), never an unconfirmed edit; the dream never relocates a
