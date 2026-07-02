@@ -395,6 +395,14 @@ def test_model_review_due_and_mark(home):
     assert S.model_review_due(now=1_000_000.0 + 31 * 86400) is True   # past the monthly interval
 
 
+def test_backup_reminder_due_and_mark(home):
+    assert S.backup_reminder_due() is True                    # no prior reminder -> due
+    assert S.mark_backup_reminded(now=1_000_000.0) == 1_000_000.0
+    assert S.backup_reminder_due(now=1_000_000.0) is False    # just reminded -> not due
+    assert S.backup_reminder_due(now=1_000_000.0 + 29 * 86400) is False
+    assert S.backup_reminder_due(now=1_000_000.0 + 31 * 86400) is True   # past the monthly interval
+
+
 # --- recall filler words ------------------------------------------------------------------------
 _PROJ = "/p/proj"
 

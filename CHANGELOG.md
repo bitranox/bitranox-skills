@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.13.2] - 2026-07-02
+
+### Added
+- Memory-store durability, driven by `meta-dream-project` (auto, safe machine-local): every dream
+  keeps each `.claude-bx-selflearning/` store version-controlled by a LOCAL git repo (never pushed)
+  and commits its changes. The global store is tracked by a repo AT `~/.claude` with an airtight
+  WHITELIST `.gitignore` (only `CLAUDE.md` + `.claude-bx-selflearning/`; never the transcripts,
+  `plugins/` clones, `security/`, caches); a private project uses `track_private`; a public/non-git
+  project uses the store's own isolated repo (parent keeps gitignoring it, so private memory never
+  enters a public push). Bounds `.git` growth by squashing a store repo's history to a snapshot when
+  the commit count grows (count-gated), and a time-gated reminder (`backup_reminder_due` /
+  `mark_backup_reminded` in `self_improve_signals.py`) to push the repo(s) to a PRIVATE remote for
+  off-machine backup (propose-first; never auto-creates or pushes a remote).
+- `meta-dream-project` CLAUDE.md reconciliation now requires ENHANCE-BEFORE-DELETE: before proposing
+  to delete a `CLAUDE.md` rule as "covered by memory", fold its unique detail/example into the
+  surviving memory rule and verify full subsumption (never delete on topic-overlap alone); if the
+  source `CLAUDE.md` is untracked, make the covering store locally tracked first, then fold + delete.
+
 ## [5.13.1] - 2026-07-02
 
 ### Changed

@@ -167,6 +167,14 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
     (This supersedes the old blanket "intermediate altitude = flag only": an intermediate copy IS safely
     deletable when a broader covering tier exists. Flag-only is the fallback ONLY when no broader covering
     home exists and there is no same-scope non-CLAUDE.md home.)
+    - **ENHANCE-BEFORE-DELETE (unconditional precondition, so nothing is lost).** "Covered" is usually
+      PARTIAL - the `CLAUDE.md` rule often carries a specific example, a why, or a nuance the memory hook
+      lacks. Never delete on topic-overlap alone. First READ both, FOLD every unique detail/example from
+      the `CLAUDE.md` rule INTO the surviving memory rule (via the engine), and VERIFY the survivor fully
+      SUBSUMES it (nothing unique left). Only THEN propose the deletion.
+    - **If the source `CLAUDE.md` is itself UNTRACKED:** deleting it into untracked memory loses no
+      version control (there was none) but CONCENTRATES the rule in fragile untracked memory. So ensure
+      the covering store is LOCALLY GIT-TRACKED FIRST (the Durability pass below), then fold + delete.
   - **Belongs higher** (recurs across the subtree) -> lift the general up to the broadest covering tier,
     leave only the DELTA below (`references [[general]]` + delta), or remove it if there is no delta.
   - **Genuinely only-here** -> leave it (it is the delta). **Contradiction** -> the hand-written
@@ -201,6 +209,36 @@ Part of a full dream, all with **out-of-store counters** so a no-change dream st
   upstream self-PR loop (shared skill -> propose-first, version-bumped). Dispatches use the stable tier
   ALIASES (`opus`/`sonnet`/`haiku`), so version bumps need no edit - only a hierarchy SHIFT does. Then
   call `mark_model_reviewed()` so it does not re-fire until due. Not due -> skip (no-op).
+- **Durability: keep each memory store LOCALLY git-tracked (auto, safe machine-local move).** A loose
+  untracked store is lost to an accidental `rm`/reset with no recovery. So every dream, ensure each
+  `.claude-bx-selflearning/` store it wrote is version-controlled by a LOCAL git repo, then commit the
+  dream's changes. LOCAL-ONLY, never a remote. Pick the smallest repo that covers the store WITHOUT
+  leaking private memory into a shared push:
+  - **Global (`~/.claude`):** a repo AT `~/.claude` with an AIRTIGHT WHITELIST `.gitignore` that tracks
+    ONLY `CLAUDE.md` + `.claude-bx-selflearning/` and ignores everything else (`/*` then `!/CLAUDE.md`
+    `!/.claude-bx-selflearning/`, plus `.claude-bx-selflearning/state/` and `*.lock`). This captures the
+    one-line `@import` `CLAUDE.md` AND the global store in one repo. NEVER blanket-`git add` `~/.claude`
+    (it holds session transcripts, `plugins/` clones with their own `.git`, `security/`, caches). VERIFY
+    the whitelist with `git add -A -n` before the first commit: nothing outside the two paths may appear.
+  - **Private project (`track_private` on):** commit the store IN the project's own repo (the `track_private`
+    knob un-gitignores `.claude-bx-selflearning/`).
+  - **Public project / non-git / isolation wanted:** the store as its OWN isolated local repo
+    (`git init` inside the store dir); the parent keeps gitignoring it, so private memory never enters a
+    public push. Ephemeral `state/` and `*.lock` stay gitignored.
+  This is a safe machine-local move -> auto-apply even in `propose` mode.
+- **Bound history growth (squash, count-gated).** Memory stores accrue a commit per dream; over time the
+  `.git` grows. When a store repo's commit count exceeds a threshold (e.g. `git rev-list --count HEAD` >
+  ~50), SQUASH its history to a single fresh snapshot commit (`git checkout --orphan`, re-add, commit,
+  replace the branch) so the repo stays small. Memory values the CURRENT state, not granular history, so
+  a snapshot is enough. Safe for these LOCAL/personal repos (no shared history to break); if a private
+  backup remote exists, the squash needs a force-push - fine for a PERSONAL backup, but NEVER squash/
+  force-push a shared or published repo (see the marketplace append-only rule).
+- **Off-machine backup reminder (periodic, time-gated).** Local git protects against `rm`/reset, NOT
+  against disk failure. When `self_improve_signals.backup_reminder_due()` is true (no prior reminder or
+  > ~30 days), REMIND the user they can push the local memory store repo(s) to a PRIVATE remote
+  (GitHub/Gitea) so nothing is lost to hardware failure. Propose-first: the USER creates/approves the
+  private remote and does the push; never auto-create a remote or push. Then call `mark_backup_reminded()`
+  so it does not re-fire until due. Not due -> skip (no-op).
 
 ## Cross-project work lives in meta-dream-global
 

@@ -595,6 +595,38 @@ def mark_model_reviewed(now=None):
     return now
 
 
+def _backup_reminder_file():
+    return Path.home() / ".claude" / "self-improve-audit" / "offsite-backup-reminder.txt"
+
+
+def backup_reminder_due(interval_days=30, now=None):
+    """True if the periodic off-machine-backup reminder (run by meta-dream-project) is due: no prior
+    reminder, or the last one is older than `interval_days`. The curated memory stores are LOCAL git
+    repos (durable against rm/reset) but NOT against disk failure - so from time to time the dream
+    reminds the user they can push the store repo(s) to a PRIVATE remote. GLOBAL and OUT of any store
+    (never bumps a store's mtime, so convergence holds). Monthly default."""
+    import time as _time
+    now = _time.time() if now is None else now
+    try:
+        last = float(_backup_reminder_file().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+    return (now - last) >= interval_days * 86400
+
+
+def mark_backup_reminded(now=None):
+    """Record that the off-machine-backup reminder just fired, so it does not re-fire until due again."""
+    import time as _time
+    now = _time.time() if now is None else now
+    f = _backup_reminder_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(now), encoding="utf-8")
+    except OSError:
+        pass
+    return now
+
+
 # --- Recall filler words (memory-recall keyword precision) ---------------------------------------
 # Generic/conversational words must not become recall search keywords (they match half the store).
 # THREE lists, split by who is universal vs a project-specific judgment (so one project's learned
