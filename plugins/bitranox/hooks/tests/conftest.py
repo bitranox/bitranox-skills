@@ -32,6 +32,7 @@ _HOOK_MODULES = {
     "session-start": "session_start",
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
+    "warn-unpinned-subagent-model": "warn_unpinned_subagent_model",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

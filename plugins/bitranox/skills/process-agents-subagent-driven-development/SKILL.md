@@ -118,7 +118,10 @@ most capable model; a subtle concurrency change does.
 
 **Always specify the model explicitly when dispatching a subagent.** An
 omitted model inherits your session's model  -  often the most capable and
-most expensive  -  which silently defeats this section.
+most expensive  -  which silently defeats this section. This is enforced, not
+just documented: the PreToolUse `warn-unpinned-subagent-model` hook prints a
+reminder whenever a `Task`/`Agent` dispatch omits `model` (it warns, never
+blocks  -  a `fork` legitimately inherits the parent model).
 
 ### Concrete tiers (canonical mapping - other skills reference this section)
 

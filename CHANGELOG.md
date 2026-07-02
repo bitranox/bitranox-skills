@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.17.0] - 2026-07-02
+
+### Added
+- `warn-unpinned-subagent-model` PreToolUse hook: warns (never blocks) when a `Task`/`Agent`
+  subagent is dispatched without an explicit `model`, so per-role model tiering is not silently
+  defeated by inheriting the session model (often `opus`, the priciest). Skips a `fork`, which
+  inherits the parent model by design. Fail-open, pure stdlib, cross-OS via `run-python.sh`,
+  with tests.
+
+### Changed
+- `process-agents-subagent-driven-development` and `process-agents-dispatching-parallel` now note
+  that the "always pin the model" rule is enforced by the new hook, not only documented.
+
 ## [5.16.2] - 2026-07-02
 
 ### Fixed

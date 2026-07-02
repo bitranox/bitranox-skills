@@ -65,7 +65,8 @@ Each agent gets:
 - **An explicit model tier:** pin `model` per agent (do not inherit the session model - it is often
   `opus`, the most expensive). Default fan-out to `sonnet`; use `haiku` for mechanical domains and
   `opus` only for a domain needing deep design judgment. Full mapping: see "Concrete tiers" in
-  `bitranox:process-agents-subagent-driven-development`.
+  `bitranox:process-agents-subagent-driven-development`. Omitting `model` triggers the PreToolUse
+  `warn-unpinned-subagent-model` hook (a non-blocking reminder), so pin it up front.
 
 ### 3. Dispatch in Parallel
 
