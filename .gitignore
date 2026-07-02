@@ -26,5 +26,6 @@ PLANS/
 
 # Curated self-learning memory store (per-project; local, never committed on this public repo).
 # A CLAUDE.local.md @imports .claude-bx-selflearning/index.md; both stay local (untracked).
+notes.md
 .claude-bx-selflearning/
 CLAUDE.local.md
