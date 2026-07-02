@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.14.3] - 2026-07-02
+
+### Changed
+- `web-frontend-responsive-ux`: added guidance for JS-driven zoom/pan/media viewers (OpenSeadragon,
+  maps, custom canvases) that do NOT re-fit on container reshape the way CSS `object-fit` does. New
+  preferred-pattern entry (re-fit on `resize`/`orientationchange` only if the user was fitted; poll
+  until the viewer settles then `goHome`; covers `prefers-reduced-motion`; avoid a shared flag an
+  unrelated animation can steal) and a matching Common-mistakes row. Also documented that the
+  matrix sweep is STATELESS (fresh load per profile), so it cannot catch a stateful rotate bug -
+  such pages need a manual interact-then-rotate check.
+
 ## [5.14.2] - 2026-07-02
 
 ### Added
