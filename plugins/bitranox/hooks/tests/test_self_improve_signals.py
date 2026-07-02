@@ -191,17 +191,17 @@ def test_mark_dream_done_writes_timestamp_and_signature(home):
 
 def test_dream_due_signature_based_not_mtime(home, tmp_path):
     # a real fact makes it due; after mark_dream_done (records the signature) it is quiet; a mere
-    # gap-fill scope-only memory.md does NOT re-trigger (no fact changed).
+    # gap-fill scope-only index.md does NOT re-trigger (no fact changed).
     proj = str(tmp_path / "sigproj")
     later = 1000.0 + 10 * 86400
     S.mark_dream_done(proj, now=1000.0)                          # no facts -> quiet baseline
     assert S.dream_due(proj, now=later) is False                 # still no facts
     d = S.claude_memory_dir(proj)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "memory.md").write_text("%s\nscope only\n%s\n\n# Memory index\n"
+    (d / "index.md").write_text("%s\nscope only\n%s\n\n# Memory index\n"
                                  % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
     assert S.dream_due(proj, now=later) is False                 # scope-only -> no real fact
-    (d / "memory.md").write_text("%s\nscope\n%s\n\n# Memory index\n\n- [X](#x) - a real fact\n  body\n"
+    (d / "index.md").write_text("%s\nscope\n%s\n\n# Memory index\n\n- [X](#x) - a real fact\n  body\n"
                                  % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
     assert S.dream_due(proj, now=later) is True                  # a real fact appeared -> due
 
@@ -443,8 +443,9 @@ def test_pending_keywords_queue_skips_known_and_drains(home):
 # ---- curated-store relocation, version gate, and cross-platform lock (Phase 1) --------------------
 
 def test_curated_paths():
+    assert S.CURATED_INDEX == "index.md"          # named index.md, never confused with native MEMORY.md
     assert S.claude_memory_dir("/p/proj") == __import__("pathlib").Path("/p/proj/.claude-bx-selflearning")
-    assert S.curated_index("/p/proj").name == "memory.md"
+    assert S.curated_index("/p/proj").name == "index.md"
     assert S.curated_index("/p/proj").parent.name == ".claude-bx-selflearning"
     assert S.claude_md_path("/p/proj").name == "CLAUDE.md"
     assert S.curated_state_dir("/p/proj").name == "state"
@@ -480,8 +481,8 @@ def test_discovery_roots_derives_home_and_config(home):
 
 
 def test_memory_lock_acquire_release(tmp_path):
-    target = tmp_path / "memory.md"
-    lock = tmp_path / "memory.md.lock"
+    target = tmp_path / "index.md"
+    lock = tmp_path / "index.md.lock"
     with S.memory_lock(target):
         assert lock.exists()
     assert not lock.exists()                          # released

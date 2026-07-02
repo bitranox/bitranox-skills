@@ -67,7 +67,7 @@ def test_derive_hook_falls_back_to_first_sentence():
 
 
 # --------------------------------------------------------------------------
-# curated store: reconcile + reference integrity (memory.md + facts/)
+# curated store: reconcile + reference integrity (index.md + facts/)
 # --------------------------------------------------------------------------
 
 import pytest  # noqa: E402
@@ -92,7 +92,7 @@ def test_is_curated_detection(tmp_path):
     assert R.is_curated(plain) is False
     cur = tmp_path / ".claude-bx-selflearning"
     cur.mkdir()
-    (cur / "memory.md").write_text("x", encoding="utf-8")
+    (cur / "index.md").write_text("x", encoding="utf-8")
     assert R.is_curated(cur) is True
 
 
@@ -104,7 +104,7 @@ def test_reconcile_backfills_orphan_facts_file(proj):
         "---\nname: extra-note\ndescription: an extra note\n---\nbody", encoding="utf-8")
     rep = R.reconcile(d)
     assert "extra-note.md" in rep["added"]
-    _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+    _, entries = ME.parse((d / "index.md").read_text(encoding="utf-8"))
     assert "extra-note" in [e.slug for e in entries]
 
 
@@ -121,9 +121,9 @@ def test_reconcile_dry_run_writes_nothing(proj):
     d = _curated(proj)
     (d / "facts").mkdir(exist_ok=True)
     (d / "facts" / "new.md").write_text("---\nname: new\ndescription: d\n---\nb", encoding="utf-8")
-    before = (d / "memory.md").read_text(encoding="utf-8")
+    before = (d / "index.md").read_text(encoding="utf-8")
     rep = R.reconcile(d, dry_run=True)
-    assert rep["added"] == ["new.md"] and (d / "memory.md").read_text(encoding="utf-8") == before
+    assert rep["added"] == ["new.md"] and (d / "index.md").read_text(encoding="utf-8") == before
 
 
 def test_reconcile_reports_orphan_heavy_entry(proj):
@@ -173,9 +173,9 @@ def test_has_inbound_refs_detects_and_is_separator_insensitive(proj):
 
 def test_over_cap_ok_and_pin_budget(proj):
     ME.add_or_update_entry(proj, "R", "h", body="small", pin=True, scope_default="lvl")
-    ok, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "memory.md")
+    ok, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "index.md")
     assert ok is True and pin_bytes > 0
-    ok2, *_ = R.over_cap(_curated(proj) / "memory.md", max_pin_bytes=1)  # pinned exceeds tiny budget
+    ok2, *_ = R.over_cap(_curated(proj) / "index.md", max_pin_bytes=1)  # pinned exceeds tiny budget
     assert ok2 is False
 
 
@@ -186,6 +186,6 @@ def test_archive_entry_inline_and_heavy(proj):
     assert R.archive_entry(d, "heavy") is True
     assert (d / ".archive" / "heavy.md").is_file()
     assert R.archive_entry(d, "tiny") is True
-    _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+    _, entries = ME.parse((d / "index.md").read_text(encoding="utf-8"))
     assert entries == []
     assert R.archive_entry(d, "nonexistent") is False

@@ -38,12 +38,12 @@ def _state_file(cwd, sid):
 
 def _label(path):
     """A readable source label. A native topic file / curated `facts/<slug>.md` -> its stem; a
-    CLAUDE.md -> '<parent-dir>/CLAUDE.md'; a curated `memory.md` -> '<project-dir>/memory' (every
-    curated index is named memory.md, so name it by its owning project - same fix as CLAUDE.md)."""
+    CLAUDE.md -> '<parent-dir>/CLAUDE.md'; a curated `index.md` -> '<project-dir>/memory' (every
+    curated index is named index.md, so name it by its owning project - same fix as CLAUDE.md)."""
     p = Path(path)
     if p.name == "CLAUDE.md":
         return "%s/CLAUDE.md" % p.parent.name
-    if p.name == "memory.md" and p.parent.name == sig.CURATED_DIRNAME:
+    if p.name == sig.CURATED_INDEX and p.parent.name == sig.CURATED_DIRNAME:
         return "%s/memory" % p.parent.parent.name
     return p.stem
 
@@ -56,7 +56,7 @@ def _snippet(path, keywords, maxlen):
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    if Path(path).name == "memory.md":            # strip the scope descriptor (meta, not a fact) from a curated index
+    if Path(path).name == sig.CURATED_INDEX:      # strip the scope descriptor (meta, not a fact) from a curated index
         text = sig._strip_scope(text)
     if len(text) <= maxlen:
         return text.strip()

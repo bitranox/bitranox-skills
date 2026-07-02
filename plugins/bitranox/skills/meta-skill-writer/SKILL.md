@@ -603,7 +603,7 @@ for one repo's release machinery, it belongs in **that repo's** `CONTRIBUTING.md
 If the skill you author persists durable facts, learnings, preferences, or state across sessions,
 use the bitranox memory backend rather than inventing one - and never route learnings through a
 memory MCP as their home. The model is a project-local **curated store**
-`<project>/.claude-bx-selflearning/`: `memory.md` (the index the project's CLAUDE.md `@import`s into
+`<project>/.claude-bx-selflearning/`: `index.md` (the index the project's CLAUDE.md `@import`s into
 context - always loaded) + `facts/<slug>.md` (heavy bodies, pulled on demand). The push/pull split is
 built in: a one-line hook lands in the always-loaded index, the detail in `facts/`. Write through the
 engine (`bitranox:meta-self-improve` -> `memory_engine.py`), never by hand.

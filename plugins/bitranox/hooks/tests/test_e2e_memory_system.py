@@ -141,7 +141,7 @@ def test_memory_system_end_to_end(sandbox):
         "---\nname: extra\ndescription: an extra widget note\n---\nbody", encoding="utf-8")
     recon = SK / "meta-self-improve" / "reconcile_memory_index.py"
     _cli(recon, str(cur_b))                                         # backfills the orphan facts file
-    mindex = cur_b / "memory.md"
+    mindex = cur_b / "index.md"
     assert mindex.is_file() and "extra" in mindex.read_text(encoding="utf-8")
     ME.add_or_update_entry(proj_b, "Bad ref", "see [[does-not-exist-anywhere]]", body="x")
     rc, out, err = _cli(recon, "--check", str(cur_b))              # orphan [[ref]] is flagged

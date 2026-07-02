@@ -189,7 +189,7 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
 
 
 def _find_curated_stores(root):
-    """Every `.claude-bx-selflearning/{memory.md, facts/*.md}` under `root`. Allow-lists that ONE
+    """Every `.claude-bx-selflearning/{index.md, facts/*.md}` under `root`. Allow-lists that ONE
     dot-dir past the hidden-dir prune (else the walk would never find it), excludes vendored/other-
     hidden/backup dirs, and does not descend INTO a store (so `.archive`/backups are skipped)."""
     out = []
@@ -197,8 +197,8 @@ def _find_curated_stores(root):
         for dirpath, dirnames, filenames in os.walk(root):
             if os.path.basename(dirpath) == sig.CURATED_DIRNAME:
                 d = Path(dirpath)
-                if (d / "memory.md").is_file():
-                    out.append(str(d / "memory.md"))
+                if (d / sig.CURATED_INDEX).is_file():
+                    out.append(str(d / sig.CURATED_INDEX))
                 fdir = d / "facts"
                 if fdir.is_dir():
                     out += [str(p) for p in sorted(fdir.glob("*.md"))]
@@ -213,8 +213,8 @@ def _find_curated_stores(root):
 
 
 def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
-    """OTHER projects' curated `.claude-bx-selflearning/` stores across the workspace tree (memory.md
-    + facts/), for cross-project recall. EXCLUDES the current project's own `memory.md` (already
+    """OTHER projects' curated `.claude-bx-selflearning/` stores across the workspace tree (index.md
+    + facts/), for cross-project recall. EXCLUDES the current project's own `index.md` (already
     @imported into this session) but KEEPS its `facts/` (eligible for push-when-relevant). Cached per
     workspace root (TTL); empty if no workspace root."""
     root = _workspace_root(self_cwd)
@@ -244,8 +244,8 @@ def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
     kept = []
     for p in paths:
         try:
-            if own_mem and Path(p).name == "memory.md" and str(Path(p).resolve()) == own_mem:
-                continue                              # own memory.md already loaded; keep its facts
+            if own_mem and Path(p).name == sig.CURATED_INDEX and str(Path(p).resolve()) == own_mem:
+                continue                              # own index.md already loaded; keep its facts
         except OSError:
             pass
         kept.append(p)

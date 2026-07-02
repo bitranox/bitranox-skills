@@ -7,7 +7,7 @@ description: Use at the end of a turn that produced a learning, such as a correc
 
 Turn what this session taught into a durable improvement, so the same lesson is not re-learned next
 time. The unit of value is one small, reusable fact or rule recorded in the right place at the right
-altitude: a project **memory** entry (in the curated store `.claude-bx-selflearning/`: the `memory.md`
+altitude: a project **memory** entry (in the curated store `.claude-bx-selflearning/`: the `index.md`
 index plus `facts/` bodies), a **global cross-project rule** in `~/.claude/rules/bitranox/`, or a
 **CLAUDE.md** guardrail (see step 3b).
 
@@ -24,7 +24,7 @@ exact memory paths, ledgers, or push gates), read it and honor its extra rules o
 
 ## Memory backend
 Durable learnings live in the project-local **curated store** `<project>/.claude-bx-selflearning/`:
-- **`memory.md`** - the index the project's `CLAUDE.md` pulls into context with ONE `@import` line
+- **`index.md`** - the index the project's `CLAUDE.md` pulls into context with ONE `@import` line
   (a scope-descriptor block on top + one markdown-link line per fact, with tiny bodies inlined).
   Because it is `@import`ed, every line is always in context. It is gitignored on public repos (the
   import line leaks nothing; a fresh clone with no store loads clean).
@@ -38,8 +38,8 @@ Durable learnings live in the project-local **curated store** `<project>/.claude
 
 The engine upserts by slug (merging provenance + pin), decides inline-vs-`facts/` by size and by
 whether the body contains an import-like `@token` (such a body goes to `facts/`, never inlined),
-ensures the `CLAUDE.md` `@import` block + the `memory.md` scope block, takes a lock, and is
-mtime-neutral. **Do NOT Write/Edit `memory.md`/`facts/` yourself** - the PostToolUse hooks would
+ensures the `CLAUDE.md` `@import` block + the `index.md` scope block, takes a lock, and is
+mtime-neutral. **Do NOT Write/Edit `index.md`/`facts/` yourself** - the PostToolUse hooks would
 then churn the file every turn; the engine writes directly and bypasses them.
 
 **Two tiers (native raw + curated).** Claude Code's native Auto memory (`~/.claude/projects/<proj>/
@@ -72,7 +72,7 @@ skill; never wire one in or out silently.
 ### Scaling: keep it lean
 
 One fact per entry, a one-line hook (under ~200 chars), and EDIT an existing entry (re-run the engine
-with the same title -> it upserts) rather than appending a near-duplicate. `memory.md` is capped
+with the same title -> it upserts) rather than appending a near-duplicate. `index.md` is capped
 (`reconcile_memory_index.over_cap`); when it grows, the dream moves inline bodies out to `facts/` and
 prunes. If the index ever drifts from `facts/`, `reconcile_memory_index.py <curated-dir>` backfills
 missing lines - additive, idempotent.
@@ -139,7 +139,7 @@ that is task state, already recorded in the repo or git history, or only mattere
 
 ### 3. Dedup BEFORE writing (mandatory)
 For each surviving candidate, search first (`grep -ril "<keyword>"` over `.claude-bx-selflearning/`
-(`memory.md` + `facts/`), the native memory dir, and the CLAUDE.md files). If a related entry exists,
+(`index.md` + `facts/`), the native memory dir, and the CLAUDE.md files). If a related entry exists,
 **update it**: re-run the engine `add` with the SAME `--title` - it upserts (merges provenance, keeps
 the pin), so sharpening a fact is the same command, not a new entry. New entry only when nothing
 covers it. Keep the `--hook` to one line under ~200 chars; put the detail in `--body`/`--body-file`
@@ -147,7 +147,7 @@ covers it. Keep the `--hook` to one line under ~200 chars; put the detail in `--
 
 ### 3b. Choose the altitude(s) - by SCOPE, placed concretely
 Knowledge lives at always-present homes, narrowest to broadest:
-- **per-project** -> the project's curated store (`.claude-bx-selflearning/memory.md` + `facts/`),
+- **per-project** -> the project's curated store (`.claude-bx-selflearning/index.md` + `facts/`),
   written with the engine. **Per-turn capture writes at the PROJECT level only** (`--proj "<cwd>"`);
   it does NOT reach up to edit an ancestor's CLAUDE.md. Raising a fact to a higher altitude is the
   DREAM's job (promotion), not per-turn capture - so a routine capture never touches a parent tree.

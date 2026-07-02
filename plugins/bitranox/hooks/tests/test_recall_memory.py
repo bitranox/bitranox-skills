@@ -156,14 +156,14 @@ def test_malformed_stdin_exits_zero(monkeypatch, capsys):
 
 def test_label_curated_memory_and_facts():
     import recall_memory as R
-    assert R._label("/x/projZ/.claude-bx-selflearning/memory.md") == "projZ/memory"
+    assert R._label("/x/projZ/.claude-bx-selflearning/index.md") == "projZ/memory"
     assert R._label("/x/projZ/.claude-bx-selflearning/facts/foo.md") == "foo"
     assert R._label("/x/projZ/CLAUDE.md") == "projZ/CLAUDE.md"
 
 
 def test_snippet_strips_scope_block(tmp_path):
     import recall_memory as R
-    m = tmp_path / "memory.md"
+    m = tmp_path / "index.md"
     m.write_text("<!-- bitranox:self-learning -->\nSCOPE DESCRIPTOR TEXT\n<!-- /bitranox:self-learning -->\n\n"
                  "# Memory index\n\n- [X](#x) - a keyword fact\n", encoding="utf-8")
     snip = R._snippet(str(m), ["keyword"], 10000)

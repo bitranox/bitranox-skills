@@ -20,6 +20,9 @@ installed copies and needs no bump.
 ## [5.13.0] - 2026-07-02
 
 ### Added
+- The always-`@import`ed curated index is the file `.claude-bx-selflearning/index.md` (exposed as
+  `self_improve_signals.CURATED_INDEX`), named `index.md` so it is never confused with Claude Code's
+  native `MEMORY.md` Auto-memory tier or a stray project `memory.md`.
 - Memory-system redesign, phase 1 foundations (`self_improve_signals.py`): curated per-project store
   helpers (`claude_memory_dir`/`curated_index`/`claude_md_path`/`curated_state_dir`) for the
   `.claude-bx-selflearning/` relocation; a Claude Code version gate (`claude_code_version`/
@@ -28,29 +31,29 @@ installed copies and needs no bump.
   lockfile, no `fcntl`/`msvcrt`, Windows-safe); and new config knobs (`track_private`, `mcp_search`,
   `discovery_roots`) with list-valued coercion in `meta-memory-settings` and a derived
   `discovery_roots()` default (no hardcoded maintainer paths in the shipped config).
-- `memory_engine.py`: the single write path for the curated store + the `memory.md` grammar
+- `memory_engine.py`: the single write path for the curated store + the `index.md` grammar
   (parse/render), reconciler-compatible markdown-link entries (`[Title](facts/<slug>.md)` heavy vs
   `[Title](#slug)` inline), provenance as a `<!-- bx:src=... -->` set on the entry line, inline-vs-heavy
   by size AND import-like-`@` detection (an inline `@token` would fire an `@import`, so such bodies go
   to a non-imported `facts/` file), `add_or_update_entry` (upsert, merge provenance, locked,
-  mtime-neutral) and `ensure_level` (create the CLAUDE.md `@import` block + `memory.md` scope, and
-  relocate a legacy in-CLAUDE.md scope block into `memory.md` byte-safe).
-- `reconcile_memory_index.py` rewritten for the curated model: format-aware (curated `memory.md`+
+  mtime-neutral) and `ensure_level` (create the CLAUDE.md `@import` block + `index.md` scope, and
+  relocate a legacy in-CLAUDE.md scope block into `index.md` byte-safe).
+- `reconcile_memory_index.py` rewritten for the curated model: format-aware (curated `index.md`+
   `facts/` vs the loose whole-loaded global tier); an INLINE `#slug` entry AND a heavy
   `facts/<slug>.md` are both valid `[[wikilink]]` targets (fixes false-orphan -> a still-referenced
-  inlined fact is no longer flagged/deletable); per-entry reference attribution; backfill `memory.md`
-  from orphan `facts/` files; `over_cap` guards `memory.md` with a separate pinned-body budget;
+  inlined fact is no longer flagged/deletable); per-entry reference attribution; backfill `index.md`
+  from orphan `facts/` files; `over_cap` guards `index.md` with a separate pinned-body budget;
   `archive_entry` drops an entry and moves its heavy body to `.archive/`.
 - Detectors made two-tier + fact-based (`self_improve_signals.py`): `store_signature`/`has_any_facts`
   count REAL facts across the native raw tier AND the curated store (scope block excluded, so a
-  gap-fill empty `memory.md` never counts). `dream_due` keys on the signature (not mtime, which
+  gap-fill empty `index.md` never counts). `dream_due` keys on the signature (not mtime, which
   gap-fill and writes churn) and `mark_dream_done` records it; `project_unseeded` and
   `knowledge_store_empty(proj)` count real facts / the curated store; `altitude_chain` now returns
   each level's `.claude-bx-selflearning/` (curated) dir + the loose global layer.
 - Cross-project recall now discovers curated stores (`gather_scan.discover_curated`): walks the
-  workspace tree for `.claude-bx-selflearning/` (memory.md + facts/), ALLOW-listing that one dot-dir
+  workspace tree for `.claude-bx-selflearning/` (index.md + facts/), ALLOW-listing that one dot-dir
   past the hidden-dir prune (else it was never found), excluding backups, cached per workspace root;
-  excludes the current project's own `memory.md` (already @imported) but keeps its `facts/`.
+  excludes the current project's own `index.md` (already @imported) but keeps its `facts/`.
   `recall-memory.py` labels a curated index `<project>/memory` and strips the scope descriptor before
   snippeting (so meta is not injected as a fact).
 - `memory_engine.py` gains an `add` CLI (the capture procedure invokes it, never hand-writing memory
@@ -65,7 +68,7 @@ installed copies and needs no bump.
   moves inline bodies to `facts/` (never CLAUDE.md); promotion into the loose global layer is a
   materialize (global stays whole-loaded); and a closing `/clear` nudge.
 - Remaining skill prose repointed to the curated model: `meta-collect-knowledge` (descriptor now in
-  `memory.md`; the gather CLI also scans other projects' curated stores via `discover_curated`),
+  `index.md`; the gather CLI also scans other projects' curated stores via `discover_curated`),
   `meta-memory-settings` (documents the `track_private`, `mcp_search`, `discovery_roots` knobs), and
   `meta-skill-writer` (durable state uses the curated store; the MCP is only an optional read-only
   search index, never a backend). Phase 1 complete.

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Reconcile + reference-check a curated `.claude-bx-selflearning/` store (and the loose global tier).
 
-The curated store is `memory.md` (the @imported index: a scope block + one markdown-link line per
+The curated store is `index.md` (the @imported index: a scope block + one markdown-link line per
 fact, tiny bodies inlined) + `facts/<slug>.md` (heavy bodies). This tool:
-  * BACKFILLS `memory.md` from any `facts/<slug>.md` that has no index line (additive/idempotent),
+  * BACKFILLS `index.md` from any `facts/<slug>.md` that has no index line (additive/idempotent),
     and reports orphan heavy entries whose `facts/` file is missing;
   * with `--check`, verifies `[[wikilink]]` integrity across an ordered altitude chain (upward-only,
     no dangling), where BOTH an inline `#slug` entry AND a heavy `facts/<slug>.md` are valid link
-    targets (so a ref to an inlined fact is never a false orphan), and the always-loaded `memory.md`
+    targets (so a ref to an inlined fact is never a false orphan), and the always-loaded `index.md`
     is within the cap (with a separate bounded budget for pinned entries).
 
-It is FORMAT-AWARE: a dir holding `memory.md`/`facts/` is CURATED; any other dir (the loose global
+It is FORMAT-AWARE: a dir holding `index.md`/`facts/` is CURATED; any other dir (the loose global
 rules layer) is scanned as whole-loaded `*.md` files. `archive_entry` forgets a fact (move its body
 to `.archive/`, drop its index line).
 
@@ -23,7 +23,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# reuse the memory.md grammar (single source of truth) from the plugin's hooks dir
+# reuse the index.md grammar (single source of truth) from the plugin's hooks dir
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
 
@@ -33,7 +33,7 @@ _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
 _CAP_LINES = 200
 _CAP_BYTES = 25_000
 _PIN_CAP_BYTES = 8_000            # pinned inline bodies get their own bounded budget within the cap
-_NON_ENTRY = {"memory.md", "claude.md", "claude.local.md"}
+_NON_ENTRY = {ME.sig.CURATED_INDEX, "claude.md", "claude.local.md"}
 
 
 # ---- frontmatter parsing (facts/ bodies still carry name/description frontmatter) ---------------
@@ -126,10 +126,10 @@ def _ref_slug(token):
 
 
 def is_curated(d):
-    """A dir is CURATED when it holds the curated store (`memory.md` and/or a `facts/` subdir)."""
+    """A dir is CURATED when it holds the curated store (`index.md` and/or a `facts/` subdir)."""
     d = Path(d)
     try:
-        return (d / "memory.md").is_file() or (d / "facts").is_dir() or d.name == ME.sig.CURATED_DIRNAME
+        return (d / ME.sig.CURATED_INDEX).is_file() or (d / "facts").is_dir() or d.name == ME.sig.CURATED_DIRNAME
     except OSError:
         return False
 
@@ -161,7 +161,7 @@ def altitude_targets(d):
     slugs = set()
     if is_curated(d):
         try:
-            _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+            _, entries = ME.parse((d / ME.sig.CURATED_INDEX).read_text(encoding="utf-8"))
         except OSError:
             entries = []
         for e in entries:
@@ -188,13 +188,13 @@ def altitude_targets(d):
 def altitude_sources(d):
     """[(source_slug, text)] to scan for `[[wikilinks]]` at an altitude - one source PER ENTRY so a
     ref is attributed to the entry that made it (not the whole file).
-    CURATED: each memory.md entry -> its hook + inline body; plus each `facts/<slug>.md` body -> slug.
+    CURATED: each index.md entry -> its hook + inline body; plus each `facts/<slug>.md` body -> slug.
     LOOSE: each `*.md` file's text -> stem."""
     d = Path(d)
     out = []
     if is_curated(d):
         try:
-            _, entries = ME.parse((d / "memory.md").read_text(encoding="utf-8"))
+            _, entries = ME.parse((d / ME.sig.CURATED_INDEX).read_text(encoding="utf-8"))
         except OSError:
             entries = []
         for e in entries:
@@ -269,13 +269,13 @@ def has_inbound_refs(dirs, slug):
     return False
 
 
-# ---- cap / pinned budget on the always-loaded memory.md ----------------------------------------
+# ---- cap / pinned budget on the always-loaded index.md -----------------------------------------
 
-def over_cap(memory_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES, max_pin_bytes=_PIN_CAP_BYTES):
-    """(ok, lines, bytes, pin_bytes) for a `memory.md` against the always-loaded window. ok is False
+def over_cap(index_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES, max_pin_bytes=_PIN_CAP_BYTES):
+    """(ok, lines, bytes, pin_bytes) for an `index.md` against the always-loaded window. ok is False
     when the file exceeds the line/byte cap OR the pinned inline bodies alone exceed their budget
     (route overflow: move non-pinned inline bodies out to `facts/`; a pinned overflow fails LOUD)."""
-    p = Path(memory_md_path)
+    p = Path(index_md_path)
     try:
         raw = p.read_bytes()
     except OSError:
@@ -292,14 +292,14 @@ def over_cap(memory_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES, max_pin
     return ok, lines, nbytes, pin_bytes
 
 
-# ---- reconcile (backfill memory.md from orphan facts/ files) -----------------------------------
+# ---- reconcile (backfill index.md from orphan facts/ files) ------------------------------------
 
 def reconcile(curated_dir, dry_run=False):
-    """Backfill `memory.md` index lines for any `facts/<slug>.md` lacking one (additive/idempotent),
+    """Backfill `index.md` index lines for any `facts/<slug>.md` lacking one (additive/idempotent),
     deriving title/hook from the file's frontmatter. Report orphan heavy entries whose facts file is
     missing (never removed here). Returns a report dict."""
     d = Path(curated_dir)
-    mem = d / "memory.md"
+    mem = d / ME.sig.CURATED_INDEX
     facts = d / "facts"
     try:
         scope, entries = ME.parse(mem.read_text(encoding="utf-8"))
@@ -331,10 +331,10 @@ def reconcile(curated_dir, dry_run=False):
 
 
 def archive_entry(curated_dir, slug, archive_subdir=".archive"):
-    """Forget a fact: drop its `memory.md` index line and (if heavy) move `facts/<slug>.md` to
+    """Forget a fact: drop its `index.md` index line and (if heavy) move `facts/<slug>.md` to
     `.archive/`. Returns True if an entry was removed. Inline bodies are dropped with the line."""
     d = Path(curated_dir)
-    mem = d / "memory.md"
+    mem = d / ME.sig.CURATED_INDEX
     try:
         scope, entries = ME.parse(mem.read_text(encoding="utf-8"))
     except OSError:
@@ -389,10 +389,10 @@ def main(argv=None):
             problems += 1
         for d in args.dirs:
             if is_curated(d):
-                ok, lines, nbytes, pin_bytes = over_cap(Path(d) / "memory.md")
+                ok, lines, nbytes, pin_bytes = over_cap(Path(d) / ME.sig.CURATED_INDEX)
                 if not ok:
-                    print("    ! over-cap: %s/memory.md is %d lines / %d bytes (pinned %d) - route overflow"
-                          % (d, lines, nbytes, pin_bytes))
+                    print("    ! over-cap: %s/%s is %d lines / %d bytes (pinned %d) - route overflow"
+                          % (d, ME.sig.CURATED_INDEX, lines, nbytes, pin_bytes))
                     problems += 1
         print("TOTAL problems: %d" % problems)
         return 1 if problems else 0

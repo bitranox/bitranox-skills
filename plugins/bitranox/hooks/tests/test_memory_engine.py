@@ -1,4 +1,4 @@
-"""Tests for memory_engine.py (the single write path + memory.md grammar). All content ASCII."""
+"""Tests for memory_engine.py (the single write path + index.md grammar). All content ASCII."""
 
 import re
 
@@ -95,6 +95,11 @@ def test_mtime_neutral_noop(proj):
 
 # ---- ensure_level ------------------------------------------------------------------------------
 
+def test_import_line_targets_index_md():
+    assert E.IMPORT_LINE.endswith("/index.md")          # never memory.md (confusable with native MEMORY.md)
+    assert E.IMPORT_LINE == "@.claude-bx-selflearning/index.md"
+
+
 def test_ensure_level_creates_import_and_scope(proj):
     E.ensure_level(proj, scope_default="what this level is for")
     md = sig.claude_md_path(proj).read_text(encoding="utf-8")
@@ -128,7 +133,7 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
     assert sig.SCOPE_MARK_BEGIN not in md                 # legacy block removed from CLAUDE.md
     assert "more user text" in md and md.startswith("# Proj")
     mem = sig.curated_index(proj).read_text(encoding="utf-8")
-    assert sig.read_scope_block(mem) == "legacy descriptor"   # relocated into memory.md
+    assert sig.read_scope_block(mem) == "legacy descriptor"   # relocated into index.md
 
 
 def test_cli_add(proj, capsys, tmp_path):

@@ -2,11 +2,11 @@
 """The single write path for the curated `.claude-bx-selflearning/` memory store.
 
 Every memory mutation (per-turn capture, migration, reconcile backfill) goes through here - NEVER
-hand-write `memory.md`/`facts/` via the Write/Edit tools, or the PostToolUse hooks (tell-sweep,
+hand-write `index.md`/`facts/` via the Write/Edit tools, or the PostToolUse hooks (tell-sweep,
 reformat-md-tables) fire and churn the mtime every turn. This module writes files directly with
 `Path.write_text`, so those hooks do not run; it is mtime-neutral (a no-op write writes nothing).
 
-`memory.md` grammar - kept markdown-link compatible with `reconcile_memory_index.py`:
+`index.md` grammar - kept markdown-link compatible with `reconcile_memory_index.py`:
 
     <!-- bitranox:self-learning -->
     <scope descriptor: what this level is for; the dream's placement compass>
@@ -43,7 +43,7 @@ SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
 INDEX_HEADING = "# Memory index"
 IMPORT_BEGIN = "<!-- BITRANOX-MEMORY:BEGIN managed by bitranox self-improve; do not hand-edit."
 IMPORT_NOTE = "     Target is gitignored/local; a fresh clone has none and the import resolves to nothing. -->"
-IMPORT_LINE = "@.claude-bx-selflearning/memory.md"
+IMPORT_LINE = "@%s/%s" % (sig.CURATED_DIRNAME, sig.CURATED_INDEX)   # @.claude-bx-selflearning/index.md
 IMPORT_END = "<!-- BITRANOX-MEMORY:END -->"
 
 INLINE_MAX_BYTES = 280                       # bodies larger than this go to facts/ (kept lazy)
@@ -119,7 +119,7 @@ def _parse_meta(meta):
 
 
 def parse(text):
-    """Parse `memory.md` text -> (scope_descriptor, [Entry]). Inline bodies (indented lines under an
+    """Parse `index.md` text -> (scope_descriptor, [Entry]). Inline bodies (indented lines under an
     `(#slug)` entry) are attached to their entry; heavy entries carry no body here."""
     scope = sig.read_scope_block(text) or ""
     entries, cur = [], None
@@ -145,7 +145,7 @@ def parse(text):
 
 
 def render(scope, entries):
-    """Render (scope_descriptor, [Entry]) back to canonical `memory.md` text. Deterministic."""
+    """Render (scope_descriptor, [Entry]) back to canonical `index.md` text. Deterministic."""
     out = ["%s\n%s\n%s" % (SCOPE_BEGIN, (scope or "").strip(), SCOPE_END), "", INDEX_HEADING, ""]
     for e in entries:
         out.append(e.index_line())
@@ -154,7 +154,7 @@ def render(scope, entries):
     return "\n".join(out).rstrip("\n") + "\n"
 
 
-# ---- store IO (memory.md + facts/), locked + mtime-neutral -------------------------------------
+# ---- store IO (index.md + facts/), locked + mtime-neutral --------------------------------------
 
 def read_store(proj):
     """Return (scope, [Entry], {slug: facts_body}) for a project's curated store. Heavy bodies are
@@ -189,7 +189,7 @@ def _write_if_changed(path, text):
 
 
 def _commit_store(proj, scope, entries, bodies):
-    """Write memory.md (index + inline) and each heavy entry's facts/<slug>.md; mtime-neutral."""
+    """Write index.md (index + inline) and each heavy entry's facts/<slug>.md; mtime-neutral."""
     changed = False
     changed |= _write_if_changed(sig.curated_index(proj), render(scope, entries))
     facts_dir = sig.claude_memory_dir(proj) / "facts"
@@ -229,9 +229,9 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
 
 def ensure_level(proj, scope_default="", _locked=False):
     """Ensure this level can load its curated memory: (1) a marked `@import` block in the level's
-    CLAUDE.md (created if absent; nothing else in CLAUDE.md touched), (2) `memory.md` exists with its
+    CLAUDE.md (created if absent; nothing else in CLAUDE.md touched), (2) `index.md` exists with its
     scope block, and (3) any LEGACY `<!-- bitranox:self-learning -->` scope block is MOVED out of
-    CLAUDE.md into `memory.md` (byte-safe outside the markers). Idempotent + mtime-neutral."""
+    CLAUDE.md into `index.md` (byte-safe outside the markers). Idempotent + mtime-neutral."""
     def _do():
         md_path = sig.claude_md_path(proj)
         try:
@@ -248,7 +248,7 @@ def ensure_level(proj, scope_default="", _locked=False):
             sep = "" if not md or md.endswith("\n\n") else ("\n" if md.endswith("\n") else "\n\n")
             md = md + sep + block + "\n"
         _write_if_changed(md_path, md)
-        # (2) ensure memory.md with a scope block (prefer an existing scope, else the legacy, else default)
+        # (2) ensure index.md with a scope block (prefer an existing scope, else the legacy, else default)
         mem_path = sig.curated_index(proj)
         try:
             mem_text = mem_path.read_text(encoding="utf-8")
@@ -269,7 +269,7 @@ def ensure_level(proj, scope_default="", _locked=False):
 
 def _strip_scope_block(text):
     """Remove a marked `<!-- bitranox:self-learning -->...<!-- /... -->` block from CLAUDE.md text,
-    leaving everything else byte-identical (used to relocate a legacy scope block into memory.md)."""
+    leaving everything else byte-identical (used to relocate a legacy scope block into index.md)."""
     b = text.find(SCOPE_BEGIN)
     if b < 0:
         return text

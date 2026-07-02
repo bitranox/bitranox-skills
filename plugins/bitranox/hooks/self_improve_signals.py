@@ -47,26 +47,28 @@ def memory_dir(proj):
 
 # ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
 # The curated tier lives IN the project tree (travels with it; gitignored on public repos) so a
-# single `@import` line in the project CLAUDE.md pulls its `memory.md` index into context. The native
+# single `@import` line in the project CLAUDE.md pulls its `index.md` into context. The native
 # `memory_dir()` above stays as the raw second tier. See the design plan for the two-tier model.
 
 CURATED_DIRNAME = ".claude-bx-selflearning"
+CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md`) so it is never
+                                              # confused with Claude Code's native `MEMORY.md` tier
 
 
 def claude_memory_dir(proj):
     """The project-local curated memory dir: `<proj>/.claude-bx-selflearning`.
-    Holds `memory.md` (the @imported index), `facts/<slug>.md` (lazy bodies), `state/`, `.archive/`."""
+    Holds `index.md` (the @imported index), `facts/<slug>.md` (lazy bodies), `state/`, `.archive/`."""
     return Path(proj) / CURATED_DIRNAME
 
 
 def claude_md_path(proj):
-    """The project's own CLAUDE.md (the file that carries the one-line `@import` of `memory.md`)."""
+    """The project's own CLAUDE.md (the file that carries the one-line `@import` of `index.md`)."""
     return Path(proj) / "CLAUDE.md"
 
 
 def curated_index(proj):
-    """The always-@imported curated index file (`memory.md`) for a project."""
-    return claude_memory_dir(proj) / "memory.md"
+    """The always-@imported curated index file (`index.md`) for a project."""
+    return claude_memory_dir(proj) / CURATED_INDEX
 
 
 def curated_state_dir(proj):
@@ -110,7 +112,7 @@ IMPORT_UPGRADE_NOTICE = (
 
 
 # ---- cross-platform advisory lock for memory read-modify-write --------------------------------
-# The write engine, dream, and migration all read-modify-write `memory.md`/`facts/`; two sessions (or
+# The write engine, dream, and migration all read-modify-write `index.md`/`facts/`; two sessions (or
 # the migration fan-out) on a shared/NFS checkout can lost-update. An atomic O_EXCL lockfile is used
 # (NOT fcntl/msvcrt) so this module imports cleanly on EVERY OS - a top-level `import fcntl` would
 # ImportError on Windows and kill every hook. On contention past `timeout` we raise so the caller can
@@ -189,7 +191,7 @@ def _newest_mtime(d):
 
 # ---- real-fact accounting across BOTH tiers (native raw + curated) ------------------------------
 # The dream cadence + new-project seeding must react to REAL facts, not file mtimes (gap-fill creates
-# an empty scope-only `memory.md`, and mtimes churn) and must see BOTH the native raw tier and the
+# an empty scope-only `index.md`, and mtimes churn) and must see BOTH the native raw tier and the
 # curated `.claude-bx-selflearning/` tier. `store_signature` is a content hash over the facts in both
 # tiers, scope-block EXCLUDED - it changes only when a fact is added/edited/removed, so it is stable
 # under gap-fill and non-content writes (and self_improve_signals does not import the memory engine,
@@ -206,8 +208,8 @@ def _strip_scope(text):
 
 
 def _curated_fact_parts(proj):
-    """Signature parts for the curated tier: `memory.md` index/inline-bodies (scope block removed) +
-    each `facts/<slug>.md` content. Empty when the store holds no real facts (a scope-only memory.md
+    """Signature parts for the curated tier: `index.md` index/inline-bodies (scope block removed) +
+    each `facts/<slug>.md` content. Empty when the store holds no real facts (a scope-only index.md
     contributes nothing)."""
     parts = []
     try:
@@ -450,7 +452,7 @@ def mark_seeded(proj, now=None):
 def project_unseeded(proj):
     """True if this project has no REAL facts in EITHER tier yet AND has not been seed-nudged - a fresh
     project that could be bootstrapped from the existing knowledge tree via /collect-knowledge. Counts
-    real facts (not a gap-fill scope-only memory.md), so the nudge never misfires on an empty store."""
+    real facts (not a gap-fill scope-only index.md), so the nudge never misfires on an empty store."""
     if seeded_file(proj).exists():
         return False
     return not has_any_facts(proj)

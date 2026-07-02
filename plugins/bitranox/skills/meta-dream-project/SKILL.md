@@ -58,7 +58,7 @@ Create one todo per step.
    is never re-discovered as live memory): `cp -r <proj>/.claude-bx-selflearning
    ~/.claude/self-improve-audit/backups/<key>-<ts>/curated` and `cp -r ~/.claude/projects/<proj>/memory
    ~/.claude/self-improve-audit/backups/<key>-<ts>/native`.
-3. **Load** the curated store (`.claude-bx-selflearning/memory.md` + `facts/`) AND the native raw tier
+3. **Load** the curated store (`.claude-bx-selflearning/index.md` + `facts/`) AND the native raw tier
    (`~/.claude/projects/<proj>/memory/` MEMORY.md + topic files). Also skim the session (transcript
    tail / the `remember` buffer) for durable items not yet captured.
 3b. **De-double the two tiers (curated + native).** A fact must live in exactly ONE tier. For each
@@ -80,10 +80,10 @@ Create one todo per step.
    - **Reference + delta:** when a general and a specific overlap, keep the general ONCE at its altitude
      and have the lower entry `references [[general]]` + only its delta - they compose at load, never
      duplicated. **References point UPWARD only** (deleting a project must never dangle a higher entry).
-     This holds BETWEEN CURATED altitudes (each has its own `memory.md`). Promotion INTO the loose
-     GLOBAL layer (`~/.claude/rules/bitranox/`, which has no `memory.md`/`@import`) is a MATERIALIZE:
+     This holds BETWEEN CURATED altitudes (each has its own `index.md`). Promotion INTO the loose
+     GLOBAL layer (`~/.claude/rules/bitranox/`, which has no `index.md`/`@import`) is a MATERIALIZE:
      write the fact as a loose `.md` file there and de-double it from the lower tier - the global layer
-     is NOT rewritten into `memory.md`/`facts/` (Gap-7 deferral); it stays whole-loaded loose `.md`.
+     is NOT rewritten into `index.md`/`facts/` (Gap-7 deferral); it stays whole-loaded loose `.md`.
    - **Promotion to the global layer is gated** (it loads in EVERY session): a USER-stated concrete rule
      promotes eagerly; a model-INFERRED generalization needs corroboration across >= 2 dreams first
      (`should_promote` / `note_promotion_candidate` in `self_improve_signals.py`; the `promotion` config
@@ -109,7 +109,7 @@ Create one todo per step.
    to backfill any `facts/` orphan, and `reconcile_memory_index.py --check <altitude-chain>` (the chain
    from `self_improve_signals.altitude_chain(proj)`, which is the curated dirs + global) to verify
    reference integrity and caps. Fix anything flagged: re-point a DOWNWARD ref upward, resolve an orphan,
-   and route an over-cap `memory.md`'s overflow by moving inline fact bodies OUT to `facts/` (shrinking
+   and route an over-cap `index.md`'s overflow by moving inline fact bodies OUT to `facts/` (shrinking
    the always-loaded index) - NEVER into `CLAUDE.md` (which holds only the one `@import` line), and a
    PINNED-budget overflow fails loud (re-examine what is pinned).
 9. **Skill-fit -> batched change.** Collect generalizations that match or warrant a skill. Deliver
