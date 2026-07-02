@@ -3,6 +3,8 @@
 All content is ASCII.
 """
 
+import time
+
 import pytest
 
 import self_improve_signals as S
@@ -415,3 +417,70 @@ def test_pending_keywords_queue_skips_known_and_drains(home):
     S.clear_pending_keywords(_PROJ)
     assert S.load_pending_keywords(_PROJ) == frozenset()
     assert S.load_pending_keywords("/p/other") == frozenset()                # queue is per-project
+
+
+# ---- curated-store relocation, version gate, and cross-platform lock (Phase 1) --------------------
+
+def test_curated_paths():
+    assert S.claude_memory_dir("/p/proj") == __import__("pathlib").Path("/p/proj/.claude-bx-selflearning")
+    assert S.curated_index("/p/proj").name == "memory.md"
+    assert S.curated_index("/p/proj").parent.name == ".claude-bx-selflearning"
+    assert S.claude_md_path("/p/proj").name == "CLAUDE.md"
+    assert S.curated_state_dir("/p/proj").name == "state"
+
+
+def test_claude_code_version_detection():
+    assert S.claude_code_version({"CLAUDE_CODE_EXECPATH": "/x/versions/2.1.198/bin"}) == (2, 1, 198)
+    assert S.claude_code_version({"AI_AGENT": "claude-code_2-1-198_agent"}) == (2, 1, 198)
+    assert S.claude_code_version({"CLAUDE_CODE_EXECPATH": "/no/version/here"}) is None
+    assert S.claude_code_version({}) is None
+
+
+def test_import_supported_gate():
+    assert S.import_supported({"CLAUDE_CODE_EXECPATH": "/x/versions/2.1.198/"}) is True
+    assert S.import_supported({"CLAUDE_CODE_EXECPATH": "/x/versions/1.9.9/"}) is False
+    assert S.import_supported({}) is True            # unknown -> fail-open (assume supported)
+
+
+def test_default_config_new_knobs():
+    for k in ("track_private", "mcp_search", "discovery_roots"):
+        assert k in S.DEFAULT_CONFIG
+    assert S.DEFAULT_CONFIG["discovery_roots"] == []  # derived at runtime, never hardcoded paths
+
+
+def test_discovery_roots_derives_home_and_config(home):
+    roots = S.discovery_roots()
+    assert str(home) in [str(r) for r in roots]       # $HOME always included
+    extra = home / "elsewhere"
+    extra.mkdir()
+    S.save_config({"discovery_roots": [str(extra)]})
+    roots2 = [str(r) for r in S.discovery_roots()]
+    assert str(extra) in roots2 and str(home) in roots2
+
+
+def test_memory_lock_acquire_release(tmp_path):
+    target = tmp_path / "memory.md"
+    lock = tmp_path / "memory.md.lock"
+    with S.memory_lock(target):
+        assert lock.exists()
+    assert not lock.exists()                          # released
+
+
+def test_memory_lock_contention_raises(tmp_path):
+    target = tmp_path / "m2"
+    with S.memory_lock(target):
+        with pytest.raises(TimeoutError):
+            with S.memory_lock(target, timeout=0.05):
+                pass
+
+
+def test_memory_lock_reclaims_stale(tmp_path):
+    target = tmp_path / "m3"
+    stale = tmp_path / "m3.lock"
+    stale.write_text("", encoding="utf-8")
+    import os as _os
+    old = time.time() - (S._LOCK_STALE_S + 10)
+    _os.utime(stale, (old, old))                      # make the lock look stale (crashed holder)
+    with S.memory_lock(target, timeout=0.05):         # reclaims it instead of timing out
+        assert stale.exists()
+    assert not stale.exists()

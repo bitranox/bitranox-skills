@@ -23,10 +23,21 @@ import self_improve_signals as sig  # noqa: E402
 
 
 def _coerce(key, raw):
-    """Coerce a string value to the type of that knob's default (bool / int / str)."""
+    """Coerce a string value to the type of that knob's default (bool / int / list / str).
+    A list knob accepts a JSON array (`["/a","/b"]`) or a comma/os.pathsep-separated string."""
+    import json as _json
     default = sig.DEFAULT_CONFIG[key]
-    if isinstance(default, bool):
+    if isinstance(default, bool):  # bool BEFORE int (bool is an int subclass)
         return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(default, list):
+        s = str(raw).strip()
+        if s.startswith("["):
+            parsed = _json.loads(s)
+            if not isinstance(parsed, list):
+                raise ValueError("expected a JSON list")
+            return [str(x) for x in parsed]
+        import os as _os
+        return [part.strip() for part in s.replace(_os.pathsep, ",").split(",") if part.strip()]
     if isinstance(default, int):
         return int(raw)
     return str(raw)

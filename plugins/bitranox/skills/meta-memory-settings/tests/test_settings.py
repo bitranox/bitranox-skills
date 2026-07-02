@@ -43,3 +43,18 @@ def test_reset_restores_defaults(capsys):
     assert ST.main(["reset"]) == 0
     cfg = sig.load_config()
     assert cfg["dream_mode"] == "propose" and cfg["privacy"] == "open"
+
+
+def test_set_list_knob_json(capsys):
+    assert ST.main(["set", "discovery_roots", '["/a", "/b"]']) == 0
+    assert sig.load_config()["discovery_roots"] == ["/a", "/b"]
+
+
+def test_set_list_knob_csv(capsys):
+    assert ST.main(["set", "discovery_roots", "/x, /y"]) == 0
+    assert sig.load_config()["discovery_roots"] == ["/x", "/y"]
+
+
+def test_set_track_private_bool(capsys):
+    assert ST.main(["set", "track_private", "yes"]) == 0
+    assert sig.load_config()["track_private"] is True

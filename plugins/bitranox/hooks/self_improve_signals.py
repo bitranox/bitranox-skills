@@ -15,8 +15,10 @@ Role split: correction/"remember" count only from the USER; self-admitted misses
 realizations only from the ASSISTANT; endorsement counts from either side. English + German.
 """
 
+import contextlib
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -41,6 +43,119 @@ _DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often 
 def memory_dir(proj):
     """The native Auto-memory dir for a project cwd (Claude Code sanitizes '/' to '-')."""
     return Path.home() / ".claude" / "projects" / proj.replace("/", "-") / "memory"
+
+
+# ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
+# The curated tier lives IN the project tree (travels with it; gitignored on public repos) so a
+# single `@import` line in the project CLAUDE.md pulls its `memory.md` index into context. The native
+# `memory_dir()` above stays as the raw second tier. See the design plan for the two-tier model.
+
+CURATED_DIRNAME = ".claude-bx-selflearning"
+
+
+def claude_memory_dir(proj):
+    """The project-local curated memory dir: `<proj>/.claude-bx-selflearning`.
+    Holds `memory.md` (the @imported index), `facts/<slug>.md` (lazy bodies), `state/`, `.archive/`."""
+    return Path(proj) / CURATED_DIRNAME
+
+
+def claude_md_path(proj):
+    """The project's own CLAUDE.md (the file that carries the one-line `@import` of `memory.md`)."""
+    return Path(proj) / "CLAUDE.md"
+
+
+def curated_index(proj):
+    """The always-@imported curated index file (`memory.md`) for a project."""
+    return claude_memory_dir(proj) / "memory.md"
+
+
+def curated_state_dir(proj):
+    """Per-project machine-local state, relocated under the curated dir's `state/`."""
+    return claude_memory_dir(proj) / "state"
+
+
+# ---- Claude Code version gate (the @import load-path depends on a new-enough Claude Code) ---------
+# @import is only honored by a new-enough Claude Code. Detect the running version from
+# CLAUDE_CODE_EXECPATH (`.../versions/X.Y.Z`), fall back to AI_AGENT (`claude-code_X-Y-Z_agent`). No
+# shell-out. Unknown version -> assume supported (fail-open toward functioning; the gate only catches
+# a KNOWN-too-old Claude Code, where it tells the user to upgrade rather than silently misbehaving).
+
+# Conservative floor: @import + the CLAUDE.md cascade predate the changelog's memory entries and work
+# on 2.1.198 (Phase-0 verified). Keep this low; bump only if a real regression pins a higher floor.
+MIN_IMPORT_VERSION = (2, 0, 0)
+
+
+def claude_code_version(env=None):
+    """(major, minor, patch) of the running Claude Code, or None if undetectable.
+    Parses CLAUDE_CODE_EXECPATH then AI_AGENT; both are exposed to hooks (Phase-0 verified)."""
+    env = os.environ if env is None else env
+    m = re.search(r"versions[/\\](\d+)\.(\d+)\.(\d+)", env.get("CLAUDE_CODE_EXECPATH", ""))
+    if not m:
+        m = re.search(r"claude-code[_-](\d+)[._-](\d+)[._-](\d+)", env.get("AI_AGENT", ""))
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def import_supported(env=None):
+    """True if the running Claude Code is new enough to honor CLAUDE.md `@import`. Unknown -> True
+    (fail-open). A hook uses this to decide whether to load/capture or to emit the upgrade notice."""
+    v = claude_code_version(env)
+    return True if v is None else v >= MIN_IMPORT_VERSION
+
+
+IMPORT_UPGRADE_NOTICE = (
+    "bitranox memory: this Claude Code is too old for CLAUDE.md `@import` "
+    "(need >= %d.%d.%d); curated memory is not loaded/captured until you upgrade."
+    % MIN_IMPORT_VERSION
+)
+
+
+# ---- cross-platform advisory lock for memory read-modify-write --------------------------------
+# The write engine, dream, and migration all read-modify-write `memory.md`/`facts/`; two sessions (or
+# the migration fan-out) on a shared/NFS checkout can lost-update. An atomic O_EXCL lockfile is used
+# (NOT fcntl/msvcrt) so this module imports cleanly on EVERY OS - a top-level `import fcntl` would
+# ImportError on Windows and kill every hook. On contention past `timeout` we raise so the caller can
+# skip-and-report the WHOLE target (never a partial write).
+
+_LOCK_STALE_S = 120.0
+
+
+@contextlib.contextmanager
+def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
+    """Advisory exclusive lock around a memory read-modify-write, via an atomic `<target>.lock`
+    O_EXCL create (cross-platform, no fcntl/msvcrt). Raises TimeoutError on contention past `timeout`;
+    reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests."""
+    clock = time.time if now is None else now
+    lock = Path(str(target_path) + ".lock")
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    deadline = clock() + timeout
+    fd = None
+    while fd is None:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                if clock() - lock.stat().st_mtime > _LOCK_STALE_S:
+                    lock.unlink()
+                    continue
+            except OSError:
+                pass
+            if clock() >= deadline:
+                raise TimeoutError("memory_lock: contention on %s" % lock)
+            time.sleep(poll)
+    try:
+        yield
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            lock.unlink()
+        except OSError:
+            pass
 
 
 def last_dream_file(proj):
@@ -114,6 +229,10 @@ DEFAULT_CONFIG = {
     "promotion": "corroborated",   # corroborated (inferred needs dwell) | eager
     "skill_placement": "lowest",   # lowest scope that fits; ask before the public marketplace
     "nudges": True,                # session-start nudges on/off
+    "track_private": False,        # git-track .claude-bx-selflearning on a private repo? (public: never)
+    "mcp_search": "auto",          # off | auto (use a full-text+graph MCP for cross-project recall if present)
+    "discovery_roots": [],         # extra roots to walk for curated stores; [] -> derive at runtime (never
+                                   # ship hardcoded maintainer absolute paths in this tracked default)
 }
 
 
@@ -165,6 +284,30 @@ def save_config(updates):
 def global_rules_dir():
     """The always-present global rule layer: whole-loaded user rules, namespaced to bitranox."""
     return Path.home() / ".claude" / "rules" / "bitranox"
+
+
+def discovery_roots():
+    """Filesystem roots to WALK for other projects' curated `.claude-bx-selflearning/` stores (used by
+    cross-project recall + as the MCP's watched roots). The config `discovery_roots` list (a machine-
+    local override in ~/.claude/.bitranox-memory.json) UNION the DERIVED default `$HOME` - so the
+    tracked DEFAULT_CONFIG never ships hardcoded maintainer absolute paths (public-plugin safe). The
+    walk is additionally backstopped by reverse-resolving native slugs (see resolve_slug), so a
+    project outside these roots is still discoverable. Deduped, existing dirs only."""
+    roots = set()
+    for r in (load_config().get("discovery_roots") or []):
+        try:
+            roots.add(Path(str(r)).expanduser())
+        except (OSError, ValueError):
+            continue
+    roots.add(Path.home())
+    return sorted({p for p in roots if _is_dir(p)}, key=str)
+
+
+def _is_dir(p):
+    try:
+        return Path(p).is_dir()
+    except OSError:
+        return False
 
 
 def altitude_chain(proj):

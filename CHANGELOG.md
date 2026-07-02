@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.13.0] - 2026-07-02
+
+### Added
+- Memory-system redesign, phase 1 foundations (`self_improve_signals.py`): curated per-project store
+  helpers (`claude_memory_dir`/`curated_index`/`claude_md_path`/`curated_state_dir`) for the
+  `.claude-bx-selflearning/` relocation; a Claude Code version gate (`claude_code_version`/
+  `import_supported`, parsed from `CLAUDE_CODE_EXECPATH`) so the `@import` load path degrades with a
+  loud notice on a too-old Claude Code; a cross-platform advisory `memory_lock` (atomic `O_EXCL`
+  lockfile, no `fcntl`/`msvcrt`, Windows-safe); and new config knobs (`track_private`, `mcp_search`,
+  `discovery_roots`) with list-valued coercion in `meta-memory-settings` and a derived
+  `discovery_roots()` default (no hardcoded maintainer paths in the shipped config).
+
 ## [5.12.0] - 2026-07-02
 
 ### Added
