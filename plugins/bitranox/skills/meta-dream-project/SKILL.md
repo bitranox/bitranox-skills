@@ -89,6 +89,11 @@ Create one todo per step.
    water down a concrete-but-universal rule like fleet SSH access); a must-hold intermediate-subtree
    rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY, not abstractness; abstract only when the
    specifics fit nowhere else.
+   - **Tier of the promotion decision.** Promoting to the global layer is high-blast (it loads in every
+     session) and runs INLINE on the main agent (it needs the whole loaded store), so it is the deep-
+     reasoning judgment that warrants the **`opus`** tier. The main agent cannot self-switch its model,
+     so if the session is not on `opus`, offer switch-model-or-continue per "The session model is fixed"
+     in `bitranox:process-agents-subagent-driven-development` (in `auto` mode: continue + log the note).
    - **Reference + delta:** when a general and a specific overlap, keep the general ONCE at its altitude
      and have the lower entry `references [[general]]` + only its delta - they compose at load, never
      duplicated. **References point UPWARD only** (deleting a project must never dangle a higher entry).

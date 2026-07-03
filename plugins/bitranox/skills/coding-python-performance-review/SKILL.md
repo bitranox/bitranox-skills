@@ -67,8 +67,10 @@ Use the Read tool to load referenced files for full details.
 
 > Tiering: the profiling runs (Step 3) are mechanical - run them in parallel/background, no model. The
 > bounded judgment work (Step 4's existing-cache audit, and review-pipeline claim-validation below) is
-> ideal **`sonnet`** subagent work. Reserve **`opus`** for the final synthesis/prioritization call.
-> See "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.
+> ideal **`sonnet`** subagent work. The final synthesis/prioritization call warrants **`opus`**: if it
+> runs inline (not dispatched), and the session is not on `opus`, offer switch-model-or-continue per
+> "The session model is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent
+> cannot self-switch its model). See "Concrete tiers" in the same skill.
 
 ```
 Step 1 (Read instructions) -> Step 2 (Setup) -> Step 3 (Profile) ->
