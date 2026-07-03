@@ -14,9 +14,16 @@ def _tree(tmp_path):
     proj.mkdir(parents=True)
     (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     (proj / "CLAUDE.md").write_text("x\n", encoding="utf-8")
-    # seed legacy facts at two altitudes via the (untouched) legacy write path
-    E.add_or_update_entry(str(anchor), "Global rule", "always", body="A" * 400, source=["g"], scope_default="anchor scope")
-    E.add_or_update_entry(str(proj), "Tiny fact", "a hook", body="small body", source=["p"], pin=True, scope_default="proj scope")
+    # seed LEGACY-ONLY facts at two altitudes (suppress the capture->UUID mirror so these tests start
+    # from the real migration scenario: pre-existing legacy facts, no UUID store yet). The mirror
+    # itself is covered by test_memory_engine.py.
+    _orig = E.add_uuid_entry
+    E.add_uuid_entry = lambda *a, **k: None
+    try:
+        E.add_or_update_entry(str(anchor), "Global rule", "always", body="A" * 400, source=["g"], scope_default="anchor scope")
+        E.add_or_update_entry(str(proj), "Tiny fact", "a hook", body="small body", source=["p"], pin=True, scope_default="proj scope")
+    finally:
+        E.add_uuid_entry = _orig
     return str(anchor), str(proj)
 
 
@@ -83,3 +90,39 @@ def test_cli_dry_run_is_the_default(tmp_path, capsys):
     assert not (tmp_path / "tree" / ".claude-memory").exists()
     out = capsys.readouterr().out
     assert "DRY-RUN" in out and "2" in out
+
+
+# ---- sync + prune: keep the UUID projection faithful as legacy facts are deleted ----------------
+
+def _drop_legacy_fact(proj, slug):
+    """Simulate a dream pruning one fact out of the legacy store."""
+    scope, entries, bodies = E.read_store(proj)
+    entries = [e for e in entries if e.slug != slug]
+    E._commit_store(proj, scope, entries, bodies)
+
+
+def test_sync_prunes_orphan_pointer_and_body_when_legacy_fact_is_gone(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    M.migrate(str(tmp_path), dry_run=False)
+    u_kept = us.fact_uuid(proj, "tiny-fact")
+    u_gone = us.fact_uuid(anchor, "global-rule")
+    _drop_legacy_fact(anchor, "global-rule")          # dream removed the anchor's heavy fact
+    rep = M.sync(str(tmp_path), prune=True)
+    assert rep["pruned"] == 1
+    # orphan pointer gone from the anchor altitude, kept pointer still present at proj
+    _s, ptrs = us.parse_pointer_index((tmp_path / "tree" / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert u_gone not in {p.uuid for p in ptrs}
+    got = {r.uuid for r in us.resolve(proj)}
+    assert u_kept in got and u_gone not in got
+    # orphan body file deleted from the central store
+    assert not us.body_path(anchor, u_gone).exists()
+    assert us.body_path(anchor, u_kept).exists()
+
+
+def test_sync_without_prune_leaves_orphans(tmp_path):
+    anchor, proj = _tree(tmp_path)
+    M.migrate(str(tmp_path), dry_run=False)
+    u_gone = us.fact_uuid(anchor, "global-rule")
+    _drop_legacy_fact(anchor, "global-rule")
+    M.sync(str(tmp_path), prune=False)
+    assert us.body_path(anchor, u_gone).exists()      # not pruned -> orphan remains

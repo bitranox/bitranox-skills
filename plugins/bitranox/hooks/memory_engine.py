@@ -233,6 +233,16 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
+        final = (e.title, e.hook, e.body, set(e.source), e.pin, scope or scope_default)
+    # Coexistence mirror: keep the additive UUID store current so a fact captured after the one-time
+    # migration still resolves through the mount-independent path. Best-effort and OUTSIDE the legacy
+    # lock - a mirror failure must never break or roll back the canonical legacy write above.
+    try:
+        t, hk, bd, srcset, pn, sc = final
+        add_uuid_entry(proj, title=t, hook=hk, body=bd, source=srcset, pin=pn,
+                       scope_default=sc, slug=slug)
+    except Exception:  # noqa: BLE001 - mirror is advisory; legacy store is the source of truth
+        pass
     return slug
 
 

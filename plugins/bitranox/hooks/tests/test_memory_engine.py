@@ -309,3 +309,25 @@ def test_add_uuid_cli_prints_uuid(tmp_path, capsys):
     assert rc == 0
     printed = capsys.readouterr().out.strip()
     assert printed == us.fact_uuid(proj, "t")
+
+
+# ---- coexistence: capture mirrors into the UUID store (best-effort) -----------------------------
+
+def test_add_or_update_entry_mirrors_into_the_uuid_store(tmp_path):
+    anchor, proj = _anchored_tree(tmp_path)
+    E.add_or_update_entry(proj, "Mirror me", "a hook", body="mirrored body", source=["s"])
+    # legacy store has it (unchanged behavior)
+    _sc, entries, _b = E.read_store(proj)
+    assert any(e.slug == "mirror-me" for e in entries)
+    # AND it now resolves through the UUID store
+    got = {r.title: r.body for r in us.resolve(proj)}
+    assert got.get("Mirror me") == "mirrored body"
+
+
+def test_mirror_failure_never_breaks_the_legacy_write(tmp_path, monkeypatch):
+    anchor, proj = _anchored_tree(tmp_path)
+    monkeypatch.setattr(E, "add_uuid_entry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    slug = E.add_or_update_entry(proj, "Still works", "h", body="b")   # must not raise
+    assert slug == "still-works"
+    _sc, entries, _b = E.read_store(proj)
+    assert any(e.slug == "still-works" for e in entries)               # legacy write succeeded
