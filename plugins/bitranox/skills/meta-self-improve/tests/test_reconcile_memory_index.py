@@ -171,12 +171,27 @@ def test_has_inbound_refs_detects_and_is_separator_insensitive(proj):
     assert R.has_inbound_refs([d], "nonexistent") is False
 
 
-def test_over_cap_ok_and_pin_budget(proj):
+def test_over_cap_within_advisory_budget_and_pin(proj):
     ME.add_or_update_entry(proj, "R", "h", body="small", pin=True, scope_default="lvl")
-    ok, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "index.md")
-    assert ok is True and pin_bytes > 0
-    ok2, *_ = R.over_cap(_curated(proj) / "index.md", max_pin_bytes=1)  # pinned exceeds tiny budget
-    assert ok2 is False
+    within, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "index.md")
+    assert within is True and pin_bytes > 0
+    within2, *_ = R.over_cap(_curated(proj) / "index.md", max_pin_bytes=1)  # pinned past tiny budget
+    assert within2 is False
+
+
+def test_oversize_index_is_advisory_warning_not_a_failure(proj, capsys):
+    # An index.md past the soft byte threshold WARNS but never fails --check (exit 0, not counted).
+    d = _curated(proj)
+    d.mkdir(parents=True, exist_ok=True)
+    big = "<!-- scope -->\n" + ("- [T](facts/n.md) - a hook line\n" * 2000)  # > _WARN_BYTES bytes
+    (d / "index.md").write_text(big, encoding="utf-8")
+    assert len(big.encode("utf-8")) > R._WARN_BYTES
+    rc = R.main(["--check", str(d)])
+    out = capsys.readouterr().out
+    assert rc == 0                          # size never contributes to the exit code
+    assert "~ warning:" in out
+    assert "TOTAL warnings:" in out
+    assert "TOTAL problems: 0" in out
 
 
 def test_archive_entry_inline_and_heavy(proj):

@@ -31,9 +31,8 @@ import memory_engine as ME  # noqa: E402
 _HOOK_MAX = 160
 _TYPE_PREFIXES = ("project", "feedback", "reference", "user")
 _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
-_CAP_LINES = 200
-_CAP_BYTES = 25_000
-_PIN_CAP_BYTES = 8_000            # pinned inline bodies get their own bounded budget within the cap
+_WARN_BYTES = 50_000             # SOFT: warn (never fail) when the always-loaded index grows past this
+_PIN_WARN_BYTES = 8_000          # SOFT: pinned inline bodies this large probably belong in facts/
 _NON_ENTRY = {ME.sig.CURATED_INDEX, "claude.md", "claude.local.md"}
 
 
@@ -270,12 +269,14 @@ def has_inbound_refs(dirs, slug):
     return False
 
 
-# ---- cap / pinned budget on the always-loaded index.md -----------------------------------------
+# ---- advisory size probe on the always-loaded index.md -----------------------------------------
 
-def over_cap(index_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES, max_pin_bytes=_PIN_CAP_BYTES):
-    """(ok, lines, bytes, pin_bytes) for an `index.md` against the always-loaded window. ok is False
-    when the file exceeds the line/byte cap OR the pinned inline bodies alone exceed their budget
-    (route overflow: move non-pinned inline bodies out to `facts/`; a pinned overflow fails LOUD)."""
+def over_cap(index_md_path, max_bytes=_WARN_BYTES, max_pin_bytes=_PIN_WARN_BYTES):
+    """(within, lines, bytes, pin_bytes) for an `index.md`. `index.md` is NOT hard-capped: `within`
+    is False only to raise an ADVISORY warning (never a failure) when the always-loaded index grows
+    large (bytes past the soft threshold) OR its pinned inline bodies alone grow large. The remedy
+    is to let the dream lift/dedup/promote; an index that legitimately stays large is fine, since a
+    project index loads only in that project's sessions."""
     p = Path(index_md_path)
     try:
         raw = p.read_bytes()
@@ -289,8 +290,8 @@ def over_cap(index_md_path, max_lines=_CAP_LINES, max_bytes=_CAP_BYTES, max_pin_
         pin_bytes = sum(len(e.body.encode("utf-8")) for e in entries if e.pin and not e.heavy)
     except (ValueError, UnicodeError):
         pass
-    ok = lines <= max_lines and nbytes <= max_bytes and pin_bytes <= max_pin_bytes
-    return ok, lines, nbytes, pin_bytes
+    within = nbytes <= max_bytes and pin_bytes <= max_pin_bytes
+    return within, lines, nbytes, pin_bytes
 
 
 # ---- reconcile (backfill index.md from orphan facts/ files) ------------------------------------
@@ -375,7 +376,8 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
     ap.add_argument("--check", action="store_true",
                     help="treat dirs as an ordered altitude chain (narrow->broad) and verify reference "
-                         "integrity (upward-only, no orphans) + over-cap; exit 1 on issues")
+                         "integrity (upward-only, no orphans) + emit advisory index-size warnings; "
+                         "exit 1 only on reference-integrity issues")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.check:
@@ -388,14 +390,18 @@ def main(argv=None):
         for src, ref in refs["downward"]:
             print("    ! downward ref: %s -> [[%s]] points to a NARROWER altitude" % (src, ref))
             problems += 1
+        warnings = 0
         for d in args.dirs:
             if is_curated(d):
-                ok, lines, nbytes, pin_bytes = over_cap(Path(d) / ME.sig.CURATED_INDEX)
-                if not ok:
-                    print("    ! over-cap: %s/%s is %d lines / %d bytes (pinned %d) - route overflow"
-                          % (d, ME.sig.CURATED_INDEX, lines, nbytes, pin_bytes))
-                    problems += 1
+                within, lines, nbytes, pin_bytes = over_cap(Path(d) / ME.sig.CURATED_INDEX)
+                if not within:
+                    print("    ~ warning: %s/%s is %d bytes / %d lines (pinned %d) - large "
+                          "always-loaded index; let the dream lift/dedup/promote, else it loads "
+                          "only for this project" % (d, ME.sig.CURATED_INDEX, nbytes, lines, pin_bytes))
+                    warnings += 1
         print("TOTAL problems: %d" % problems)
+        if warnings:
+            print("TOTAL warnings: %d (advisory, not failures)" % warnings)
         return 1 if problems else 0
 
     total_added = 0

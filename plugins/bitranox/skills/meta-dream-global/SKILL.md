@@ -55,7 +55,8 @@ Create one todo per step.
 3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
    fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
    cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
-   --check` over the altitude chains (orphans / downward / over-cap), `model_review_due()`, any pending
+   --check` over the altitude chains (orphans / downward; index size is an advisory warning),
+   `model_review_due()`, any pending
    filler queue. If nothing material changed since the last run, report convergence and STOP - a global
    dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
    (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
@@ -97,7 +98,8 @@ Create one todo per step.
    earlier dedup: those ran before the promotions existed. (Per-note bytes may be a wash; the win is one
    source of truth instead of the general restated in every project.) Then run
    `reconcile_memory_index.py --check <altitude-chain>` over the affected chains to verify reference
-   integrity (no orphans, no DOWNWARD or cross-tree refs, no over-cap).
+   integrity (no orphans, no DOWNWARD or cross-tree refs; index size is an advisory warning, not a
+   failure).
 7. **Skill-fit -> batched change.** A generalization that warrants a skill goes through
    `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
    `propose`, commit-or-PR in `auto`, skipped in `off`).

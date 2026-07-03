@@ -75,9 +75,11 @@ skill; never wire one in or out silently.
 ### Scaling: keep it lean
 
 One fact per entry, a one-line hook (under ~200 chars), and EDIT an existing entry (re-run the engine
-with the same title -> it upserts) rather than appending a near-duplicate. `index.md` is capped
-(`reconcile_memory_index.over_cap`); when it grows, the dream moves inline bodies out to `facts/` and
-prunes. If the index ever drifts from `facts/`, `reconcile_memory_index.py <curated-dir>` backfills
+with the same title -> it upserts) rather than appending a near-duplicate. `index.md` is NOT
+hard-capped (`reconcile_memory_index.over_cap`): `--check` emits an ADVISORY warning (never a failure)
+once it grows past ~50 KB, so growth is visible. When it grows, the dream lifts/dedups/promotes what it
+can; an index that legitimately stays large is fine - a project index loads only in that project's
+sessions. If the index ever drifts from `facts/`, `reconcile_memory_index.py <curated-dir>` backfills
 missing lines - additive, idempotent.
 
 ## When to run
@@ -210,7 +212,8 @@ overlap, store the general ONCE at its altitude and have the lower entry `refere
 only its delta - they compose at load (the general is always-present above), never duplicated.
 **References point UPWARD only**: a project entry may reference a global rule; a higher entry must NEVER
 reference a lower one (deleting a project would dangle it). Verify with
-`reconcile_memory_index.py --check <altitude-chain>` (upward-only, no orphans, no over-cap); the chain
+`reconcile_memory_index.py --check <altitude-chain>` (upward-only, no orphans; index size is an
+advisory warning, not a failure); the chain
 comes from `self_improve_signals.altitude_chain(proj)`. The `CLAUDE.md` tiers in the ancestor chain are
 altitudes in this same model (each cascades into a project's context), so a rule duplicated across them
 normalizes the same way - general at the broadest covering tier, delta below; the dream skills carry the
