@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.21.1] - 2026-07-03
+
+### Changed
+- `meta-dream-project`: hoisted an imperative capture gate to "When to run" and step 1 so a
+  MANUAL/explicit dream ALWAYS captures - `not-due`, an absent `.claude-bx-selflearning/` store, and
+  "it's already in some CLAUDE.md" are no longer treated as reasons to skip. An absent store is now
+  stated as the trigger to CREATE one, and an absent right-altitude `CLAUDE.md` as the trigger to
+  CREATE it, before any due-ness/coverage/no-op reasoning. Hardens the anti-rationalization already
+  in step 3b after it kept being skipped in practice.
+
 ## [5.17.0] - 2026-07-02
 
 ### Added

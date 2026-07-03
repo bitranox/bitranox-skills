@@ -48,12 +48,27 @@ eagerness, forgetting, nudges) live in one machine-local config `~/.claude/.bitr
 Check due-ness with `python3 <this-skill-dir>/dream_state.py due`; you do not need to dream if it
 says `not-due` and nothing notable happened.
 
+**A MANUAL/explicit dream ALWAYS captures - `not-due` NEVER suppresses capture on a manual run.**
+Before ANY due-ness, CLAUDE.md-coverage, or no-op reasoning: enumerate this session's durable
+learnings, and if there are any, CAPTURE them into the store FIRST. **An absent store is the TRIGGER
+TO CREATE ONE** (the engine's first `add` bootstraps it), never a reason to skip; **likewise, if the
+right-altitude `CLAUDE.md` is missing, CREATE it.** The three rationalizations that have skipped
+capture before - "no store/CLAUDE.md exists here", "`not-due`", and "it's already in some CLAUDE.md"
+(routing a learning ONLY into a CLAUDE.md is NOT capturing it into the store) - are each a no-op ONLY
+after you have verified there is genuinely nothing durable to record, NEVER assumed up front. Proceed
+to dedup/promote/reconcile only AFTER capturing.
+
 ## Procedure
 
 Create one todo per step.
 
-1. **Capture first.** If the gate/audit flagged anything this session, run `bitranox:meta-self-improve`
-   so the dream consolidates a COMPLETE store, not a half-captured one.
+1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings and
+   capture them via `bitranox:meta-self-improve` so the dream consolidates a COMPLETE store, not a
+   half-captured one. Do NOT gate this on the gate/audit having fired, on due-ness, or on a store /
+   CLAUDE.md already existing: if the store is absent, CREATE it (the first `add` bootstraps it); if
+   the right-altitude `CLAUDE.md` is absent, CREATE it. Routing a learning only into a `CLAUDE.md` is
+   NOT a substitute for capturing it into the store (a repo-local CLAUDE.md loads only inside that
+   repo; the store loads at its altitude).
 2. **Back up** BOTH tiers to a timestamped copy OUT of the project tree before any edit (so a backup
    is never re-discovered as live memory): `cp -r <proj>/.claude-bx-selflearning
    ~/.claude/self-improve-audit/backups/<key>-<ts>/curated` and `cp -r ~/.claude/projects/<proj>/memory
