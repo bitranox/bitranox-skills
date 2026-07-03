@@ -232,3 +232,28 @@ def test_heal_strips_drifted_note_import_block(proj):
     txt = _local(proj).read_text(encoding="utf-8")
     assert "older note wording" not in txt                 # drifted NOTE taken with the span
     assert txt.count(E.IMPORT_BEGIN) == 1 and E._IMPORT_BLOCK in txt and "preamble" in txt
+
+
+def test_heal_scaffolds_claude_md_at_every_level(tmp_path):
+    # CLAUDE.md exists only at the top; heal must create a marker CLAUDE.md + wiring + store at every
+    # gap level up to it, and NOT overwrite the top's existing CLAUDE.md.
+    (tmp_path / "top" / "mid" / "proj").mkdir(parents=True)
+    (tmp_path / "top" / "CLAUDE.md").write_text("real top instructions", encoding="utf-8")
+    E.heal(str(tmp_path / "top" / "mid" / "proj"))
+    for level in ("top", "top/mid", "top/mid/proj"):
+        d = tmp_path / level
+        assert (d / "CLAUDE.md").is_file()
+        assert (d / "CLAUDE.local.md").is_file()
+        assert (d / ".claude-bx-selflearning" / "index.md").is_file()
+    assert "bitranox memory altitude" in (tmp_path / "top" / "mid" / "CLAUDE.md").read_text(encoding="utf-8")
+    assert (tmp_path / "top" / "CLAUDE.md").read_text(encoding="utf-8").strip() == "real top instructions"
+
+
+def test_set_scope_upserts_and_overwrites(proj, capsys):
+    rc = E.main(["set-scope", "--proj", proj, "--scope", "what this level is about"])
+    assert rc == 0
+    assert sig.read_scope_block(sig.curated_index(proj).read_text(encoding="utf-8")) == "what this level is about"
+    E.main(["set-scope", "--proj", proj, "--scope", "revised classification"])   # overwrite
+    assert sig.read_scope_block(sig.curated_index(proj).read_text(encoding="utf-8")) == "revised classification"
+    # the index heading + grammar survive the scope replacement
+    assert "# Memory index" in sig.curated_index(proj).read_text(encoding="utf-8")

@@ -62,6 +62,29 @@ to dedup/promote/reconcile only AFTER capturing.
 
 Create one todo per step.
 
+0. **Scaffold the altitude tree, then fill its scope descriptors (deterministic FIRST, subagents next).**
+   Run these two, in order, BEFORE the numbered consolidation steps - always, no matter what:
+   - **0a - Deterministic altitude scaffold (a script, no model).** Run
+     `memory_engine.py heal --proj "<cwd>"` (through the plugin's `hooks/run-python.sh` launcher). It
+     creates every missing `CLAUDE.md` (a minimal altitude marker) + `CLAUDE.local.md` (the `@import`) +
+     `.claude-bx-selflearning/` store + `index.md` from the project UP TO the anchor (the topmost
+     ancestor with a `CLAUDE.md`), and normalizes any malformed IMPORT/SCOPE marker. Pure code, totally
+     deterministic; it never needs the model, so it cannot be skipped or half-done.
+   - **0b - Parallel scope-descriptor synthesis (one `sonnet` subagent per level).** For each level in
+     `self_improve_signals.altitude_chain(cwd)`, dispatch a `sonnet` subagent IN PARALLEL (the levels are
+     independent):
+     - an UPPER level's subagent reads the `README.md` / `CLAUDE.md` / other `*.md` docs of the
+       directories DIRECTLY BELOW that level and returns a concise (2-4 sentence, ASCII) classification of
+       what that directory is about (its domain / what its children share);
+     - the CURRENT project level's subagent instead reads the project's OWN docs at the SAME level (its
+       `README.md`/`CLAUDE.md`/`docs/`), not below.
+     Write each returned descriptor into that level's `index.md` scope block with
+     `memory_engine.py set-scope --proj "<level>" --scope "<text>"` (the engine upserts it; never
+     hand-edit `index.md`). These per-level descriptors are the ROUTING KEY the promotion step (5) uses to
+     place a learning at the right altitude. The scaffold marker and the engine-managed store/`index.md`
+     are written directly; editing a version-controlled parent `CLAUDE.md` beyond the marker stays
+     propose-first.
+
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings and
    capture them via `bitranox:meta-self-improve` so the dream consolidates a COMPLETE store, not a
    half-captured one. Do NOT gate this on the gate/audit having fired, on due-ness, or on a store /

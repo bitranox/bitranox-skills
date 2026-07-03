@@ -47,6 +47,11 @@ IMPORT_LINE = "@%s/%s" % (sig.CURATED_DIRNAME, sig.CURATED_INDEX)   # @.claude-b
 IMPORT_END = "<!-- BITRANOX-MEMORY:END -->"
 _IMPORT_BLOCK = "%s\n%s\n%s\n%s" % (IMPORT_BEGIN, IMPORT_NOTE, IMPORT_LINE, IMPORT_END)
 _IMPORT_LINES = {IMPORT_BEGIN.strip(), IMPORT_NOTE.strip(), IMPORT_LINE.strip(), IMPORT_END.strip()}
+# Minimal marker written to a level's CLAUDE.md when the scaffold creates one (so every altitude up to
+# the anchor is a real CLAUDE.md-bearing rung). Scope + facts live in index.md/facts/, not here; no
+# `@`-token so it can never fire an import.
+_ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + facts live in .claude-bx-selflearning/ "
+                    "(index.md + facts/). -->\n")
 
 INLINE_MAX_BYTES = 280                       # bodies larger than this go to facts/ (kept lazy)
 _TYPE_PREFIXES = ("project", "feedback", "reference", "user")
@@ -354,6 +359,14 @@ def _heal_level(proj, report):
     ensure the store / index.md / CLAUDE.local.md + @import + scope exist, and re-render index.md to
     canonical (heals a malformed SCOPE block or drifted grammar). Idempotent + mtime-neutral."""
     with sig.memory_lock(sig.curated_index(proj)):
+        md_path = sig.claude_md_path(proj)
+        if not md_path.exists():                     # every altitude up to the anchor is a CLAUDE.md rung
+            try:
+                md_path.parent.mkdir(parents=True, exist_ok=True)
+                md_path.write_text(_ALTITUDE_MARKER, encoding="utf-8")
+                report["healed"].append(str(md_path))
+            except OSError:
+                pass
         for path in (sig.claude_md_path(proj), sig.claude_local_md_path(proj)):
             try:
                 txt = path.read_text(encoding="utf-8")
@@ -422,7 +435,18 @@ def main(argv=None):
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
     h = sub.add_parser("heal", help="self-heal missing/malformed stores/markers across proj's chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
+    s = sub.add_parser("set-scope", help="upsert (overwrite) a level's index.md scope descriptor")
+    s.add_argument("--proj", required=True, help="the altitude dir whose index.md scope to set")
+    s.add_argument("--scope", required=True, help="the scope-descriptor text (what this level is about)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "set-scope":
+        ensure_level(args.proj)                       # make sure the store + index.md exist first
+        mem = sig.curated_index(args.proj)
+        new = sig.upsert_scope_block(mem.read_text(encoding="utf-8"), args.scope.strip())
+        changed = _write_if_changed(mem, new)
+        print("scope %s: %s" % ("updated" if changed else "unchanged", mem))
+        return 0
 
     if args.cmd == "heal":
         rep = heal(args.proj)
