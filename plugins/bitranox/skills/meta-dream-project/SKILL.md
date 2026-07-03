@@ -156,8 +156,15 @@ dream, including a first-capture into an empty store - a just-seeded or just-cha
 new overlap with the CLAUDE.md chain appears. An EMPTY or unchanged memory store makes ONLY the
 counter-gated passes no-op; for a chain-gated pass you must actually enumerate the CLAUDE.md chain (walk
 from the project dir up to `/`, plus `~/.claude/CLAUDE.md`; note whether a project-local CLAUDE.md
-exists), check each just-written entry against that chain + the global store, and report "nothing to
-apply" ONLY as a VERIFIED result (chain walked, N files, overlap checked), NEVER assumed from emptiness:
+exists), then reconcile in BOTH directions and RULE-BY-RULE: (1) each just-written entry against the
+chain, AND (2) - the direction that is easy to skip - EACH rule/section of EVERY CLAUDE.md in the chain
+against the WHOLE store (the global curated store + same-scope memory + any enforcing hook or covering
+skill), which finds PRE-EXISTING CLAUDE.md<->store duplication independent of what this dream wrote. Do
+NOT approximate the pass by grepping only the newly-written entries' keywords: that checks direction (1)
+only and misses every overlap that predates the dream (the exact shortcut that has slipped this pass more
+than once). Report a PER-RULE verdict (covered -> declutter / belongs-higher / only-here / contradiction),
+never a blanket "nothing to apply"; "nothing" is valid ONLY as a VERIFIED result (chain walked, N files,
+EVERY rule cross-checked against the store), NEVER assumed from emptiness or from a new-entry-only grep:
 
 - **Demotion (re-file over-promoted entries).** If a global/high entry turns out to apply to only one
   project, move it back down - but NEVER if lower entries still point UP at it
@@ -328,3 +335,8 @@ cross-project scan and sibling-tree gather are meta-dream-global's job.
   the memory store is empty or unchanged. Only the counter-gated passes no-op on emptiness; the
   chain-gated passes run EVERY dream (trigger = the ancestor CLAUDE.md chain + the just-written entries).
   Report "nothing to apply" only after walking the chain and checking overlap, never as an assumption.
+- Running CLAUDE.md reconciliation as a keyword-grep of only the NEWLY-WRITTEN entries. That checks just
+  one direction (new-entry -> chain) and misses all PRE-EXISTING CLAUDE.md<->store duplication. The pass
+  is rule-by-rule over the ENTIRE chain, each rule cross-checked against the whole store (global +
+  same-scope memory + enforcing hooks + covering skills). Output a per-rule verdict, never a blanket "no
+  duplications".
