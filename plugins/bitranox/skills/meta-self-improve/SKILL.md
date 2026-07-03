@@ -220,18 +220,25 @@ the batch backstop; raise it here at capture time when it is obvious.)
 
 **Synthesize a scope descriptor at EVERY altitude (per-level scope-descriptor synthesis).** The
 altitude tree should carry a MEANINGFUL descriptor at every rung, because these per-level descriptors
-are the ROUTING KEY the dream uses to decide which level/store a learning belongs in. For EVERY
-altitude in `altitude_chain(proj)` - the CURRENT project dir, every gap level between it and the
-anchor, AND the anchor (the topmost ancestor with a `CLAUDE.md`) - CREATE or REVIEW that level's scope
-descriptor by dispatching a SUBAGENT (an appropriate, capable model, NOT haiku - this is semantic
-classification) that reads the `README.md` / `CLAUDE.md` / other `*.md` docs of the directories
-DIRECTLY beneath that level and returns a concise classification of what that directory is about.
-Write the result into that level's `index.md` scope block (the `<!-- bitranox:self-learning -->`
-block, engine-managed - never hand-edit it). This upgrades the older conservative gap-fill from an
-empty placeholder to a meaningful, child-derived descriptor. `altitude_chain(proj)` returns exactly
-this contiguous set of levels (gap levels included). Creating/editing a version-controlled `CLAUDE.md`
-is propose-first (auto in `auto` mode); the engine-managed store / `index.md` outside version control
-may be created directly. Keep the guard: **never create a `CLAUDE.md` ABOVE the highest existing one**
+are the ROUTING KEY the dream uses to decide which level/store a learning belongs in. This runs as a
+TWO-PHASE flow (see `bitranox:meta-dream-project` step 0): FIRST a deterministic scaffold, THEN parallel
+subagents.
+- **Scaffold first (deterministic, no model).** `memory_engine.py heal --proj "<cwd>"` creates every
+  missing `CLAUDE.md` (a minimal altitude marker) + `CLAUDE.local.md` + `.claude-bx-selflearning/` store
+  + `index.md` (empty scope block) for every level in `altitude_chain(proj)` - the CURRENT project dir,
+  every gap level, AND the anchor. Totally deterministic, so the structure is never half-built.
+- **Then classify in parallel (one `sonnet` subagent per level).** For EACH level, dispatch a subagent
+  (capable model, NOT haiku - semantic classification), in PARALLEL since levels are independent: an
+  UPPER level's subagent reads the `README.md` / `CLAUDE.md` / other `*.md` docs of the directories
+  DIRECTLY BELOW that level; the CURRENT project level's subagent reads the project's OWN docs at the
+  SAME level (not below). Each returns a concise classification of what that directory is about. Write
+  it into that level's `index.md` scope block with `memory_engine.py set-scope --proj "<level>"
+  --scope "<text>"` (the engine upserts the `<!-- bitranox:self-learning -->` block - never hand-edit
+  `index.md`).
+`altitude_chain(proj)` returns exactly this contiguous set of levels (gap levels included). The scaffold
+marker `CLAUDE.md` and the engine-managed store / `index.md` are written directly; any OTHER edit to a
+version-controlled `CLAUDE.md` is propose-first (auto in `auto` mode). Keep the guard: **never create a
+`CLAUDE.md` ABOVE the highest existing one**
 unless a truly-universal rule warrants a new headquarters - the sole exception is
 `bitranox:meta-dream-global-deep`'s org-chart audit, which (with the cross-tree view) may PROPOSE a
 brand-new top-level headquarters above the current highest rung when a truly-universal rule has no top
