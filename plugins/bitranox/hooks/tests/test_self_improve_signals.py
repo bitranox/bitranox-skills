@@ -3,7 +3,9 @@
 All content is ASCII.
 """
 
+import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -267,8 +269,40 @@ def test_topmost_claude_md_dir(tmp_path):
     proj.mkdir(parents=True)
     (top / "CLAUDE.md").write_text("x", encoding="utf-8")       # highest
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")      # nearer, but not the highest
-    assert S.topmost_claude_md_dir(str(proj)) == top            # HIGHEST wins over the nearer one
+    assert S.topmost_claude_md_dir(str(proj)) == top            # HIGHEST wins over the nearer one (bootstrap: no store)
     assert S.topmost_claude_md_dir(str(tmp_path / "none")) is None
+
+
+def test_topmost_claude_md_dir_store_colocation_beats_stray_higher_md(tmp_path):
+    # a STRAY higher CLAUDE.md (no store) must NOT hijack the anchor: the topmost dir with BOTH a
+    # CLAUDE.md AND a store wins (the probe-caught fragility).
+    stray = tmp_path / "stray"            # higher, CLAUDE.md ONLY -> the hijack risk
+    real = stray / "real"                 # the true anchor: CLAUDE.md + store
+    proj = real / "sub" / "proj"
+    proj.mkdir(parents=True)
+    (stray / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (real / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (real / S.CURATED_DIRNAME).mkdir()
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (proj / S.CURATED_DIRNAME).mkdir()
+    assert S.topmost_claude_md_dir(str(proj)) == real           # real (both) beats stray (md-only)
+
+
+def test_topmost_claude_md_dir_never_anchors_at_home_or_tmp(home, tmp_path):
+    # $HOME (and /tmp) are excluded as anchor candidates: a stray CLAUDE.md + store AT home must NOT be
+    # picked, even though home is the highest ancestor carrying both. The walk stops below it.
+    h = Path(os.environ["HOME"])                                 # monkeypatched by the `home` fixture
+    (h / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (h / S.CURATED_DIRNAME).mkdir()
+    sub = h / "projects" / "foo"                                 # a real altitude below home
+    sub.mkdir(parents=True)
+    (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (sub / S.CURATED_DIRNAME).mkdir()
+    proj = sub / "deep"
+    proj.mkdir()
+    got = S.topmost_claude_md_dir(str(proj))
+    assert got == sub                                            # sub, NOT the excluded home
+    assert got != h
 
 
 def test_global_rules_dir_is_topmost_claude_md_ancestor(tmp_path):

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 
@@ -411,23 +412,62 @@ def save_config(updates):
 
 # ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
 
+def _excluded_anchor_dirs():
+    """Dirs that must NEVER be a memory altitude anchor even if they carry a `CLAUDE.md` + store: the
+    user's HOME and the system temp dir (the filesystem root is handled separately via `d.anchor`).
+    Walking UP by `.parent` from a real project cwd never reaches these in practice - a project lives
+    under a mount like `/media/.../projects`, not directly at `~` or `/tmp` - so this is a safety net,
+    not the primary bound: it stops a stray `CLAUDE.md` left at `~` / `/tmp`, or a test/probe running
+    under the temp dir, from hijacking the anchor. Read fresh each call so a monkeypatched HOME/TMPDIR
+    is honored."""
+    out = set()
+    for env in ("HOME", "USERPROFILE"):
+        h = os.environ.get(env)
+        if h:
+            try:
+                out.add(Path(h))
+            except (OSError, ValueError):
+                pass
+    try:
+        out.add(Path(tempfile.gettempdir()))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def topmost_claude_md_dir(proj):
-    """The HIGHEST ancestor directory of `proj` (including `proj` itself) that holds a `CLAUDE.md`,
-    or `None` if no dir in the chain up to `/` has one. Uncapped walk - a `CLAUDE.md` above the
-    project is a real cascade altitude, and the topmost such dir is the broadest always-present home
-    that is share-visible (unlike `~/.claude`, which is invisible from a remote machine)."""
+    """The HIGHEST ancestor directory of `proj` (including `proj`) that is a real memory altitude, or
+    `None` if none is. The walk is the plain `.parent` chain from `proj` up toward `/`; because a real
+    project cwd lives under a mount (never at `~` or `/tmp`), that chain naturally never reaches those
+    roots. As a safety net it still SKIPS the filesystem root, `~`, and the temp dir as anchor
+    candidates (see `_excluded_anchor_dirs`) so a stray marker left at one of them - or a test running
+    under `/tmp` - cannot hijack the anchor. Robust discriminator otherwise: the topmost dir that
+    carries BOTH a `CLAUDE.md` AND a curated store (`.claude-bx-selflearning/`). Tying the anchor to the
+    store it must hold stops a STRAY `CLAUDE.md` higher up (nested workspaces routinely have `CLAUDE.md`
+    at many levels) from hijacking the global-store location - a real fragility a probe caught. Only at
+    BOOTSTRAP, when no dir in the chain has a store yet, fall back to the topmost `CLAUDE.md` (the first
+    scaffold then creates the store there, and thereafter the store co-location pins the anchor). Share-
+    visible either way (unlike `~/.claude`, invisible from a remote mount)."""
     try:
         ladder = [Path(proj), *Path(proj).parents]
     except (TypeError, ValueError):
         return None
-    highest = None
+    excluded = _excluded_anchor_dirs()
+    highest_both = None                              # topmost dir with a CLAUDE.md AND a store (robust)
+    highest_md = None                                # topmost dir with a CLAUDE.md (bootstrap fallback)
     for d in ladder:
         try:
-            if (d / "CLAUDE.md").is_file():
-                highest = d
+            if d == Path(d.anchor) or d in excluded:  # never anchor at /, ~, or the temp dir
+                continue
+            has_md = (d / "CLAUDE.md").is_file()
+            has_store = (d / CURATED_DIRNAME).is_dir()
         except OSError:
             continue
-    return highest
+        if has_md:
+            highest_md = d
+        if has_md and has_store:
+            highest_both = d
+    return highest_both or highest_md
 
 
 def global_rules_dir(proj=None):

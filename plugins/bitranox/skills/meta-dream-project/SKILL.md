@@ -24,8 +24,7 @@ separate `bitranox:meta-dream-global` skill; run that occasionally, not every ti
 
 Read the mode first (or run `dream_state.py mode`). The mode (and the other knobs: privacy, promotion
 eagerness, forgetting, nudges) live in one machine-local config `~/.claude/.bitranox-memory.json`
-(`self_improve_signals.load_config()`); until that file exists the legacy `.bitranox-dream-off` /
-`.bitranox-dream-auto` sentinels still apply (one-way migration). The values:
+(`self_improve_signals.load_config()`);
 
 - **`propose`** (default): apply the safe private-memory consolidation, but ASK before editing a
   version-controlled CLAUDE.md and route skill changes to a self-PR for review. End the run by
