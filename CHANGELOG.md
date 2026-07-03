@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.26.0] - 2026-07-04
+
+### Added
+- Central UUID body-store + per-altitude pointer indexes (`hooks/uuid_store.py`, additive; the legacy
+  `.claude-bx-selflearning/` layout is untouched and stays primary). Fact identity is a deterministic
+  `uuid5(altitude, slug)` (idempotent, collision-free across altitudes); a body lives once at
+  `<anchor>/.claude-memory/facts/<2-hex-shard>/<uuid>.md`; each altitude carries a mount-independent
+  `- [Title](uuid:<uuid>) - hook` pointer block in its `CLAUDE.local.md`. A cwd-derived resolver walks
+  up to the store-co-located anchor and reads bodies by shard, so the same tree resolves identically
+  across mount points (proven by two `.plan/` probes). Full sibling tests (`tests/test_uuid_store.py`).
+- `memory_engine.py add-uuid`: the additive write path into the central store (assigns the uuid, writes
+  the body once, upserts the pointer line). Tests in `tests/test_memory_engine.py`.
+- `hooks/migrate_to_uuid_store.py`: copies every legacy `.claude-bx-selflearning/` fact into the central
+  store (body + pointer), deleting nothing. Idempotent; dry-run by default (`--apply` to write). Tests
+  in `tests/test_migrate_to_uuid_store.py`.
+
+### Changed
+- Cross-project recall now reads BOTH layouts during the transition: `gather_scan._find_curated_stores`
+  also discovers `.claude-memory/facts/<shard>/<uuid>.md` bodies, and `recall-memory._label` names a
+  central-store body by its owning tree. Legacy `.claude-bx-selflearning/` discovery is unchanged.
+
 ## [5.21.1] - 2026-07-03
 
 ### Changed

@@ -168,3 +168,8 @@ def test_snippet_strips_scope_block(tmp_path):
                  "# Memory index\n\n- [X](#x) - a keyword fact\n", encoding="utf-8")
     snip = R._snippet(str(m), ["keyword"], 10000)
     assert "SCOPE DESCRIPTOR TEXT" not in snip and "keyword fact" in snip
+
+
+def test_label_central_uuid_store_body_named_by_owning_tree():
+    p = "/x/projZ/.claude-memory/facts/ab/abcd1234-0000-5000-8000-000000000000.md"
+    assert R._label(p) == "projZ/memory"

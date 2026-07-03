@@ -188,14 +188,20 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
     return [p for p in paths if p not in chain]
 
 
+_UUID_STORE_DIRNAME = ".claude-memory"            # the additive central UUID body-store (uuid_store.py)
+
+
 def _find_curated_stores(root):
-    """Every `.claude-bx-selflearning/{index.md, facts/*.md}` under `root`. Allow-lists that ONE
-    dot-dir past the hidden-dir prune (else the walk would never find it), excludes vendored/other-
-    hidden/backup dirs, and does not descend INTO a store (so `.archive`/backups are skipped)."""
+    """Every curated body under `root`, across BOTH layouts (coexisting during the transition):
+    the legacy `.claude-bx-selflearning/{index.md, facts/*.md}` AND the central UUID store
+    `.claude-memory/facts/<shard>/<uuid>.md`. Allow-lists those two dot-dirs past the hidden-dir prune
+    (else the walk would never find them), excludes vendored/other-hidden/backup dirs, and does not
+    descend INTO a store (so `.archive`/backups are skipped)."""
     out = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
-            if os.path.basename(dirpath) == sig.CURATED_DIRNAME:
+            base = os.path.basename(dirpath)
+            if base == sig.CURATED_DIRNAME:
                 d = Path(dirpath)
                 if (d / sig.CURATED_INDEX).is_file():
                     out.append(str(d / sig.CURATED_INDEX))
@@ -204,8 +210,14 @@ def _find_curated_stores(root):
                     out += [str(p) for p in sorted(fdir.glob("*.md"))]
                 dirnames[:] = []                      # do not descend into the store
                 continue
+            if base == _UUID_STORE_DIRNAME:
+                # central UUID store: bodies are sharded two levels down (facts/<shard>/<uuid>.md)
+                out += [str(p) for p in sorted((Path(dirpath) / "facts").glob("*/*.md"))]
+                dirnames[:] = []                      # do not descend into the store
+                continue
             dirnames[:] = [x for x in dirnames
-                           if (x == sig.CURATED_DIRNAME or (x not in _VENDOR and not x.startswith(".")))
+                           if (x in (sig.CURATED_DIRNAME, _UUID_STORE_DIRNAME)
+                               or (x not in _VENDOR and not x.startswith(".")))
                            and ".bak-" not in x and not x.endswith(".bak")]
     except OSError:
         pass

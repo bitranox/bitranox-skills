@@ -45,6 +45,14 @@ def _label(path):
         return "%s/CLAUDE.md" % p.parent.name
     if p.name == sig.CURATED_INDEX and p.parent.name == sig.CURATED_DIRNAME:
         return "%s/memory" % p.parent.parent.name
+    # central UUID store body: `<tree>/.claude-memory/facts/<shard>/<uuid>.md` - the bare uuid stem is
+    # meaningless, so name it by the owning tree (parts[-4] == the anchor dir that holds the store).
+    if p.suffix == ".md" and ".claude-memory" in p.parts and "facts" in p.parts:
+        parts = p.parts
+        try:
+            return "%s/memory" % parts[parts.index(".claude-memory") - 1]
+        except (ValueError, IndexError):
+            pass
     return p.stem
 
 

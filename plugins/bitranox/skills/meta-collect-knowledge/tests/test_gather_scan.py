@@ -205,3 +205,13 @@ def test_gather_cli_no_mcp_when_disabled(tmp_path, monkeypatch, capsys):
     G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
     out = capsys.readouterr().out
     assert "MCP-CANDIDATES" not in out
+
+
+def test_find_curated_stores_also_collects_central_uuid_store_bodies(tmp_path, monkeypatch):
+    # the new mount-independent layout: bodies under <anchor>/.claude-memory/facts/<shard>/<uuid>.md
+    ws, cur = _ws(tmp_path, monkeypatch)
+    facts = ws / "projB" / ".claude-memory" / "facts" / "ab"
+    facts.mkdir(parents=True)
+    (facts / "abcd1234-0000-5000-8000-000000000000.md").write_text("central uuid body text", encoding="utf-8")
+    got = G._find_curated_stores(str(ws))
+    assert any(p.endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
