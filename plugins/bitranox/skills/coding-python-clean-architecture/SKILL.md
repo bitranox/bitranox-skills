@@ -498,6 +498,34 @@ class OrderModel(DeclarativeBase):
 
 **Frameworks you must depend on** (stdlib, `typing`, `dataclasses`): that's fine -- but it should be a *decision*, not an accident.
 
+### Typed Facade for Untyped Third-Party Libraries
+
+An untyped or partially-typed dependency makes a strict type checker (pyright `strict`, mypy `--strict`) report errors at its call sites (`reportUnknownMemberType`, "type is partially unknown", `reportUnknownArgumentType`). Do NOT reach for the blunt fix of disabling the rule -- globally, via a per-directory `executionEnvironments` block, or scattered `# type: ignore` / `# pyright: ignore` at every call site. Disabling blinds the checker to real regressions in your OWN code too, and the suppression spreads.
+
+Instead wrap the untyped surface behind a small **typed facade / adapter module** at the boundary: re-export the handful of affected callables through thin wrappers with explicit, fully-known signatures, and confine the single unavoidable `# pyright: ignore` (or `# type: ignore`) to that one file. The rest of the codebase imports the typed wrappers and stays strict-clean; the checker still guards everything else. Same edge-quarantine habit as the rest of Framework Isolation, applied to the type layer.
+
+Keep the facade minimal: wrap only the members the checker flags (import cleanly-typed members directly), and give each wrapper a concrete, fully-known return type -- never an unbound generic that re-introduces "unknown" inference at call sites.
+
+```python
+# adapters/cli/typed_click.py -- the ONE file carrying the suppression
+import rich_click as click
+from collections.abc import Callable
+from typing import Any
+
+# Non-generic alias: works both as @option(...) and as a value in a
+# shared-options functools.reduce list.
+_Decorator = Callable[[Callable[..., Any]], Callable[..., Any]]
+
+def option(*param_decls: str, **attrs: Any) -> _Decorator:
+    return click.option(*param_decls, **attrs)  # pyright: ignore[reportUnknownMemberType]
+
+# Call sites import the typed wrapper and stay strict-clean:
+#     from .typed_click import option
+# Cleanly-typed members stay direct: click.command, click.echo, click.Context, ...
+```
+
+Disable the rule only as a genuine last resort -- when the untyped surface is too broad to wrap sensibly (an entire dynamic web framework emitting hundreds of unrelated findings, not a few decorators). Then scope the suppression as narrowly as possible (a single `executionEnvironments` root, never the whole project) and disable only that one rule, never the others.
+
 ## Composition Root
 
 The composition root is the outermost wiring point. Nothing depends on it -- it depends on everything.
