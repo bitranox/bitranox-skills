@@ -147,7 +147,17 @@ Create one todo per step.
 
 ## Behavioral passes (demotion, forgetting, override, CLAUDE.md reconciliation)
 
-Part of a full dream, all with **out-of-store counters** so a no-change dream stays a no-op (step 11):
+Part of a full dream. Each pass has its OWN trigger, and a no-op must be read off THAT trigger, never
+inferred from an unrelated signal. Two kinds: the **counter-gated** passes (filler queue, model-review,
+backup nudge, and the promotion/demotion dwell counters) carry **out-of-store counters** so a no-change
+dream stays a no-op (step 11); the **chain-gated** passes (CLAUDE.md reconciliation, dedup, promotion)
+are triggered by the ancestor CLAUDE.md CHAIN and the entries THIS dream just wrote, so they RUN EVERY
+dream, including a first-capture into an empty store - a just-seeded or just-changed store is exactly when
+new overlap with the CLAUDE.md chain appears. An EMPTY or unchanged memory store makes ONLY the
+counter-gated passes no-op; for a chain-gated pass you must actually enumerate the CLAUDE.md chain (walk
+from the project dir up to `/`, plus `~/.claude/CLAUDE.md`; note whether a project-local CLAUDE.md
+exists), check each just-written entry against that chain + the global store, and report "nothing to
+apply" ONLY as a VERIFIED result (chain walked, N files, overlap checked), NEVER assumed from emptiness:
 
 - **Demotion (re-file over-promoted entries).** If a global/high entry turns out to apply to only one
   project, move it back down - but NEVER if lower entries still point UP at it
@@ -314,3 +324,7 @@ cross-project scan and sibling-tree gather are meta-dream-global's job.
 - A DOWNWARD or cross-tree reference (a higher entry pointing at a lower one) - it dangles on deletion.
 - Over-broadening: watering a concrete-but-universal rule into a vague principle, or globalizing a
   narrowly-applicable one (it then loads in every session for nothing).
+- Reading a no-op off the WRONG signal: skipping CLAUDE.md reconciliation (or dedup/promotion) because
+  the memory store is empty or unchanged. Only the counter-gated passes no-op on emptiness; the
+  chain-gated passes run EVERY dream (trigger = the ancestor CLAUDE.md chain + the just-written entries).
+  Report "nothing to apply" only after walking the chain and checking overlap, never as an assumption.
