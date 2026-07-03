@@ -14,6 +14,15 @@
 # Approach adapted from Anthropic's claude-plugins-official sg-python.sh.
 set -e
 
+# Degrade path. HOOKS must never wedge a turn, so the default is fail-OPEN (exit 0 after a stderr
+# note). A DELIBERATE caller (e.g. the dream running memory_engine.py) sets BITRANOX_RUN_PYTHON_STRICT=1
+# to fail LOUD instead: the same conditions then exit non-zero (3) so the failure cannot pass silently.
+_degrade() {
+  echo "self-improve: $1" >&2
+  if [ -n "$BITRANOX_RUN_PYTHON_STRICT" ]; then exit 3; fi
+  exit 0
+}
+
 # This shim is designed for Git Bash (Git for Windows) on Windows, and the native
 # bash on macOS/Linux. WSL bash mounts Windows under /mnt/c and resolves a *Linux*
 # python, and Cygwin uses different path mounts - the native-path/cygpath design
@@ -21,11 +30,11 @@ set -e
 # stderr rather than misbehave (still exit 0; a Stop hook must never wedge a turn).
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*|Linux|Darwin) : ;;
-  *) echo "self-improve: unexpected shell '$(uname -s 2>/dev/null)'; gate skipped." >&2; exit 0 ;;
+  *) _degrade "unexpected shell '$(uname -s 2>/dev/null)'; gate skipped." ;;
 esac
 
 # Self-document a missing script arg instead of erroring obscurely.
-[ -n "$1" ] && [ -f "$1" ] || { echo "self-improve: gate script not found: ${1:-<none>}" >&2; exit 0; }
+[ -n "$1" ] && [ -f "$1" ] || _degrade "gate script not found: ${1:-<none>}"
 
 # Windows Python defaults to cp1252; force UTF-8 for all IO. PYTHONUTF8 (PEP 540,
 # 3.7+) covers modern interpreters; PYTHONIOENCODING is the classic companion that
@@ -57,6 +66,5 @@ for cmd in python3 python "py -3"; do
   fi
 done
 
-# No Python 3 found: degrade silently. A Stop hook must never wedge the turn.
-echo "self-improve: no Python 3 interpreter found (tried python3, python, py -3); gate skipped." >&2
-exit 0
+# No Python 3 found. Fail-open for hooks; fail-loud (exit 3) under BITRANOX_RUN_PYTHON_STRICT.
+_degrade "no Python 3 interpreter found (tried python3, python, py -3); gate skipped."

@@ -33,6 +33,8 @@ _HOOK_MODULES = {
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
     "warn-unpinned-subagent-model": "warn_unpinned_subagent_model",
+    "skill-edit-guard": "skill_edit_guard",
+    "store-edit-guard": "store_edit_guard",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():

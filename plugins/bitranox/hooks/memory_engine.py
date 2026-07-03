@@ -354,19 +354,28 @@ def _normalize_import_block(text):
     return _strip_import_block(text)
 
 
+def _ensure_claude_md(proj):
+    """Create a minimal marker CLAUDE.md at `proj` when absent (every altitude up to the anchor is a
+    CLAUDE.md rung). Returns the created path, or None. Never overwrites an existing CLAUDE.md."""
+    md = sig.claude_md_path(proj)
+    if md.exists():
+        return None
+    try:
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text(_ALTITUDE_MARKER, encoding="utf-8")
+        return str(md)
+    except OSError:
+        return None
+
+
 def _heal_level(proj, report):
     """Repair one altitude in place (locked): normalize a malformed IMPORT block in either wiring file,
     ensure the store / index.md / CLAUDE.local.md + @import + scope exist, and re-render index.md to
     canonical (heals a malformed SCOPE block or drifted grammar). Idempotent + mtime-neutral."""
     with sig.memory_lock(sig.curated_index(proj)):
-        md_path = sig.claude_md_path(proj)
-        if not md_path.exists():                     # every altitude up to the anchor is a CLAUDE.md rung
-            try:
-                md_path.parent.mkdir(parents=True, exist_ok=True)
-                md_path.write_text(_ALTITUDE_MARKER, encoding="utf-8")
-                report["healed"].append(str(md_path))
-            except OSError:
-                pass
+        made = _ensure_claude_md(proj)
+        if made:
+            report["healed"].append(made)
         for path in (sig.claude_md_path(proj), sig.claude_local_md_path(proj)):
             try:
                 txt = path.read_text(encoding="utf-8")
@@ -410,6 +419,33 @@ def heal(proj):
     return report
 
 
+def scaffold(proj):
+    """Create every MISSING CLAUDE.md (marker) + CLAUDE.local.md (@import) + `.claude-bx-selflearning/`
+    store + index.md from `proj` up to the anchor. Idempotent; returns the list of created paths. This
+    is the create-only half of `heal` (which additionally repairs malformed markers)."""
+    created = []
+    try:
+        chain = sig.altitude_chain(proj)
+    except (TypeError, ValueError):
+        return created
+    for store in chain:
+        level = str(store.parent)
+        try:
+            made = _ensure_claude_md(level)
+            if made:
+                created.append(made)
+            local_before = sig.claude_local_md_path(level).exists()
+            index_before = sig.curated_index(level).exists()
+            ensure_level(level)
+            if not local_before and sig.claude_local_md_path(level).exists():
+                created.append(str(sig.claude_local_md_path(level)))
+            if not index_before and sig.curated_index(level).exists():
+                created.append(str(sig.curated_index(level)))
+        except OSError:
+            continue
+    return created
+
+
 def _read_text(path):
     try:
         return Path(path).read_text(encoding="utf-8")
@@ -438,7 +474,17 @@ def main(argv=None):
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's index.md scope descriptor")
     s.add_argument("--proj", required=True, help="the altitude dir whose index.md scope to set")
     s.add_argument("--scope", required=True, help="the scope-descriptor text (what this level is about)")
+    m = sub.add_parser("ensure-memory-structure",
+                       help="create missing CLAUDE.md/CLAUDE.local.md/stores up the chain to the anchor")
+    m.add_argument("--proj", required=True, help="the current project dir; the chain is derived from it")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "ensure-memory-structure":
+        created = scaffold(args.proj)
+        print("ensure-memory-structure: created %d file(s) up the chain" % len(created))
+        for p in created:
+            print("    +", p)
+        return 0
 
     if args.cmd == "set-scope":
         ensure_level(args.proj)                       # make sure the store + index.md exist first
