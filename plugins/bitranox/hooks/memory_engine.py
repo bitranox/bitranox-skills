@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 
 import self_improve_signals as sig
+import uuid_store as us
 
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
 SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
@@ -233,6 +234,23 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
     return slug
+
+
+def add_uuid_entry(altitude, title, hook, body="", type_=None, source=None, pin=False,
+                   scope_default="", slug=None):
+    """Upsert a fact into the ADDITIVE central UUID store (the new mount-independent path, beside the
+    legacy `add_or_update_entry`). Assigns the deterministic uuid5 identity for `(altitude, slug)`,
+    writes the body once to the anchor's central sharded store, and upserts a `uuid:` pointer line into
+    the altitude's `CLAUDE.local.md` (merging provenance + pin on re-run). The anchor is derived from
+    `altitude` by walking up to the store-co-located `CLAUDE.md`; with no `CLAUDE.md` in the chain
+    (nothing to anchor to) the altitude itself is the anchor. Returns the uuid."""
+    slug = slug or slugify(title, type_)
+    uid = us.fact_uuid(altitude, slug)
+    anchor = us.resolve_anchor(altitude) or Path(altitude)
+    us.put_body(str(anchor), uid, body)
+    us.add_pointer(altitude, uuid=uid, title=title, hook=hook, source=source, pin=pin,
+                   scope_default=scope_default)
+    return uid
 
 
 def _import_target(proj):
@@ -469,6 +487,17 @@ def main(argv=None):
     a.add_argument("--source", default="", help="comma-separated provenance keys")
     a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded index")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
+    au = sub.add_parser("add-uuid", help="upsert one fact into the central UUID store (new layout)")
+    au.add_argument("--proj", required=True, help="the altitude (home level) to capture the fact at")
+    au.add_argument("--title", required=True)
+    au.add_argument("--hook", required=True, help="one-line hook (what makes the fact present)")
+    au.add_argument("--type", dest="type_", default=None,
+                    choices=[None, "feedback", "project", "reference", "user"])
+    au.add_argument("--body", default="", help="the fact body (written to the central sharded store)")
+    au.add_argument("--body-file", default=None, help="read the body from a file (multi-line safe)")
+    au.add_argument("--source", default="", help="comma-separated provenance keys")
+    au.add_argument("--pin", action="store_true", help="force-keep in the always-loaded pointer index")
+    au.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
     h = sub.add_parser("heal", help="self-heal missing/malformed stores/markers across proj's chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's index.md scope descriptor")
@@ -501,6 +530,17 @@ def main(argv=None):
             print("    ~ repaired: %s" % p)
         for store, slug in rep["orphans"]:
             print("    ! missing facts body (not fabricated): %s/facts/%s.md" % (store, slug))
+        return 0
+
+    if args.cmd == "add-uuid":
+        body = args.body
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        uid = add_uuid_entry(
+            args.proj, title=args.title, hook=args.hook, body=body, type_=args.type_,
+            source=[s.strip() for s in args.source.split(",") if s.strip()],
+            pin=args.pin, scope_default=args.scope)
+        print(uid)
         return 0
 
     if args.cmd == "add":

@@ -257,3 +257,55 @@ def test_set_scope_upserts_and_overwrites(proj, capsys):
     assert sig.read_scope_block(sig.curated_index(proj).read_text(encoding="utf-8")) == "revised classification"
     # the index heading + grammar survive the scope replacement
     assert "# Memory index" in sig.curated_index(proj).read_text(encoding="utf-8")
+
+
+# ---- UUID-store wiring (additive; the legacy path above is untouched) ---------------------------
+
+import uuid_store as us  # noqa: E402
+
+
+def _anchored_tree(tmp_path):
+    """anchor (CLAUDE.md + .claude-memory store) -> proj altitude below it. Returns (anchor, proj)."""
+    anchor = tmp_path / "tree"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (proj / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / us.STORE_DIRNAME).mkdir()
+    return str(anchor), str(proj)
+
+
+def test_add_uuid_entry_writes_body_to_central_store_and_pointer_to_altitude(tmp_path):
+    anchor, proj = _anchored_tree(tmp_path)
+    u = E.add_uuid_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
+                         type_="feedback", source=["s"], scope_default="proj scope")
+    assert u == us.fact_uuid(proj, "feedback-no-em-dashes")
+    # body landed in the anchor's central sharded store
+    assert us.body_path(anchor, u).read_text(encoding="utf-8") == "Always ASCII.\n"
+    # pointer landed in the altitude's CLAUDE.local.md, with scope + provenance
+    scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert scope == "proj scope"
+    assert ptrs[0].uuid == u and ptrs[0].source == {"s"} and ptrs[0].hook == "use ASCII"
+
+
+def test_add_uuid_entry_is_idempotent_and_merges_source(tmp_path):
+    anchor, proj = _anchored_tree(tmp_path)
+    E.add_uuid_entry(proj, "Fact", "h", body="B", source=["a"])
+    E.add_uuid_entry(proj, "Fact", "h", body="B", source=["b"])       # re-run: no dupe, merge source
+    _scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert len(ptrs) == 1 and ptrs[0].source == {"a", "b"}
+
+
+def test_add_uuid_entry_roundtrips_through_the_resolver(tmp_path):
+    anchor, proj = _anchored_tree(tmp_path)
+    E.add_uuid_entry(proj, "Fact", "h", body="the body")
+    got = us.resolve(proj)
+    assert [(r.title, r.body) for r in got] == [("Fact", "the body")]
+
+
+def test_add_uuid_cli_prints_uuid(tmp_path, capsys):
+    anchor, proj = _anchored_tree(tmp_path)
+    rc = E.main(["add-uuid", "--proj", proj, "--title", "T", "--hook", "h", "--body", "B"])
+    assert rc == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed == us.fact_uuid(proj, "t")
