@@ -135,14 +135,19 @@ def _mem(proj, name, text):
     return d
 
 
-def test_discover_excludes_self_includes_others_and_global(home):
-    _mem("/p/self", "s.md", "self only")
+def test_discover_excludes_self_includes_others_and_global(home, tmp_path):
+    top = tmp_path / "top"                                  # topmost CLAUDE.md -> the global tier
+    self_proj = top / "self"
+    self_proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")
+    _mem(str(self_proj), "s.md", "self only")
     _mem("/p/other", "o.md", "other tree")
-    g = sig.global_rules_dir()
+    g = sig.global_rules_dir(str(self_proj))               # = top/.claude-bx-selflearning (not ~/.claude)
     g.mkdir(parents=True, exist_ok=True)
     (g / "r.md").write_text("a global rule", encoding="utf-8")
-    files = [str(f) for f in G.discover_files("/p/self")]
-    assert not any("/-p-self/" in f for f in files)        # current project excluded
+    files = [str(f) for f in G.discover_files(str(self_proj))]
+    self_native = str(sig.memory_dir(str(self_proj)).resolve())
+    assert not any(self_native in f for f in files)        # current project's own memory excluded
     assert any("/-p-other/" in f for f in files)           # other trees included
     assert any(str(g) in f for f in files)                 # global rules included
 

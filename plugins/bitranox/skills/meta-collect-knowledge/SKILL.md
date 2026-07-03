@@ -8,7 +8,7 @@ description: Use to pull in knowledge from your OTHER projects that is relevant 
 Native memory cascades DOWN one ancestor chain plus the global layer, so knowledge filed in a SIBLING
 or unrelated tree never reaches the current project on its own. This skill is the **inbound cross-tree
 gather**: find knowledge elsewhere that is relevant here, and bring it in safely. It extends
-`bitranox:meta-self-improve` (altitudes, the `~/.claude/.claude-bx-selflearning/` global layer, normalization)
+`bitranox:meta-self-improve` (altitudes, the global curated layer at the topmost-`CLAUDE.md` ancestor, normalization)
 - follow that for the primitives.
 
 ## When to run
@@ -43,7 +43,7 @@ package metadata, the parent tree's descriptor, the first request); if scope is 
    `bitranox:process-agents-subagent-driven-development`.)
 3. **Bring it in by ONE of two SAFE moves - never a cross-tree reference** (it is not loaded here and
    would dangle if that tree is deleted):
-   - **Lift to the lowest common ancestor** (often the global `~/.claude/.claude-bx-selflearning/` layer) when
+   - **Lift to the lowest common ancestor** (often the global curated layer at the topmost-`CLAUDE.md` ancestor) when
      the knowledge is broadly useful -> native cascade then delivers it here AND to the other tree.
      This is a promotion: honor the quality/dwell gate and keep it concrete (see meta-self-improve 3b).
    - **Self-contained local copy** into this project's memory when it is only relevant here. Copy the

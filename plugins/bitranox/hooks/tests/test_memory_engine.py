@@ -167,3 +167,68 @@ def test_cli_add_body_file(proj, tmp_path):
     assert rc == 0
     _, _, _ = E.read_store(proj)
     assert "line one" in (E.sig.curated_index(proj).read_text(encoding="utf-8"))
+
+
+# ---- self-heal ---------------------------------------------------------------------------------
+
+def _local(proj):
+    return sig.claude_local_md_path(proj)
+
+
+def test_heal_creates_missing_store_and_import(proj):
+    rep = E.heal(proj)
+    assert sig.curated_index(proj).is_file()                       # index.md created
+    assert E.IMPORT_LINE in _local(proj).read_text(encoding="utf-8")   # @import wired in CLAUDE.local.md
+    assert rep["levels"] >= 1
+
+
+def test_heal_normalizes_malformed_import_block(proj):
+    # a stray bare import line + a duplicate BEGIN, no clean block -> healed to exactly one canonical block
+    _local(proj).write_text("intro\n%s\nleftover\n%s\n%s\n" % (E.IMPORT_LINE, E.IMPORT_BEGIN, E.IMPORT_LINE),
+                            encoding="utf-8")
+    E.heal(proj)
+    txt = _local(proj).read_text(encoding="utf-8")
+    assert txt.count(E.IMPORT_BEGIN) == 1 and txt.count(E.IMPORT_END) == 1
+    assert sum(1 for ln in txt.split("\n") if ln.strip() == E.IMPORT_LINE) == 1
+    assert E._IMPORT_BLOCK in txt and "intro" in txt
+
+
+def test_heal_normalizes_malformed_scope_and_grammar(proj):
+    E.ensure_level(proj, scope_default="what this level is for")
+    mem = sig.curated_index(proj)
+    # corrupt: a SCOPE_BEGIN with no END, plus a stray non-canonical line
+    mem.write_text("%s\nwhat this level is for\n\n# Memory index\n\ngarbage line\n" % E.SCOPE_BEGIN,
+                   encoding="utf-8")
+    E.heal(proj)
+    healed = mem.read_text(encoding="utf-8")
+    assert E.SCOPE_BEGIN in healed and E.SCOPE_END in healed          # scope markers restored (round-trip)
+    assert healed == E.render(*E.parse(healed))                       # now canonical / round-trips
+
+
+def test_heal_reports_missing_facts_body_not_fabricated(proj):
+    slug = E.add_or_update_entry(proj, title="Heavy one", hook="h", body="x" * 400, scope_default="lvl")
+    facts = sig.claude_memory_dir(proj) / "facts" / (slug + ".md")
+    assert facts.is_file()
+    facts.unlink()                                                   # delete the body -> unreconstructable
+    rep = E.heal(proj)
+    store = str(sig.claude_memory_dir(proj))
+    assert (store, slug) in rep["orphans"]                           # reported...
+    assert not facts.is_file()                                       # ...NOT fabricated
+
+
+def test_heal_idempotent(proj):
+    E.heal(proj)
+    rep2 = E.heal(proj)
+    assert rep2["healed"] == []                                      # second pass changes nothing
+
+
+def test_heal_strips_drifted_note_import_block(proj):
+    # an OLD-format managed block (NOTE text differs from the current constant) must be fully removed,
+    # not leave the drifted NOTE line orphaned, then re-added canonical.
+    old = ("preamble\n%s\n     Target is gitignored/local; older note wording. -->\n%s\n%s\n"
+           % (E.IMPORT_BEGIN, E.IMPORT_LINE, E.IMPORT_END))
+    _local(proj).write_text(old, encoding="utf-8")
+    E.heal(proj)
+    txt = _local(proj).read_text(encoding="utf-8")
+    assert "older note wording" not in txt                 # drifted NOTE taken with the span
+    assert txt.count(E.IMPORT_BEGIN) == 1 and E._IMPORT_BLOCK in txt and "preamble" in txt

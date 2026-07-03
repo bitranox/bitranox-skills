@@ -1,6 +1,6 @@
 ---
 name: meta-dream-project
-description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes this project's curated .claude-bx-selflearning store (de-doubling it against the native raw tier) and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global curated store at ~/.claude (.claude-bx-selflearning/) or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. For the cross-project / global scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
+description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve): dedups/merges/generalizes/re-wires/prunes this project's curated .claude-bx-selflearning store (de-doubling it against the native raw tier) and the session, promotes broadly-useful rules (kept concrete) to the right-altitude home - the global curated store at the topmost-CLAUDE.md ancestor (.claude-bx-selflearning/) or, for a must-hold intermediate rule, CLAUDE.md - and batches skill-worthy generalizations into one self-PR. For the cross-project / global scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-project
@@ -99,11 +99,13 @@ Create one todo per step.
    Dedup runs TWICE: here on the as-loaded store, and AGAIN in step 8 - because promoting in step 5
    CREATES new overlap (a lifted general now duplicates what it came from, and may overlap siblings).
 5. **Promote by SCOPE; NORMALIZE, don't duplicate.** Lift each learning to the narrowest always-present
-   home whose scope it covers: per-project memory; broadly-useful -> the global curated store at
-   `~/.claude` (`.claude-bx-selflearning/`, @imported by `~/.claude/CLAUDE.md`) KEPT CONCRETE (never
-   water down a concrete-but-universal rule like fleet SSH access); a must-hold intermediate-subtree
-   rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY, not abstractness; abstract only when the
-   specifics fit nowhere else.
+   home whose scope it covers: per-project memory; broadly-useful -> the global curated store at the
+   TOPMOST ANCESTOR directory that has a `CLAUDE.md` (`.claude-bx-selflearning/`, `global_rules_dir()`;
+   never `~/.claude`) KEPT CONCRETE (never water down a concrete-but-universal rule like fleet SSH
+   access); a must-hold intermediate-subtree rule -> that level's `CLAUDE.md`. Promote by APPLICABILITY,
+   not abstractness; abstract only when the specifics fit nowhere else. (Delivery of that global store
+   into a nested project is by the per-prompt recall hook, not `@import`; see the global/cross-project
+   bullet in `bitranox:meta-self-improve` step 3b.)
    - **Tier of the promotion decision.** Promoting to the global layer is high-blast (it loads in every
      session) and runs INLINE on the main agent (it needs the whole loaded store), so it is the deep-
      reasoning judgment that warrants the **`opus`** tier. The main agent cannot self-switch its model,
@@ -113,10 +115,11 @@ Create one todo per step.
      and have the lower entry `references [[general]]` + only its delta - they compose at load, never
      duplicated. **References point UPWARD only** (deleting a project must never dangle a higher entry).
      This holds ACROSS ALL CURATED altitudes, INCLUDING global (each has its own `index.md`). The
-     global altitude is now a normal curated store: promotion into `~/.claude/.claude-bx-selflearning/`
-     goes through the write engine exactly like any other altitude (an `index.md` hook + a lazy
-     `facts/` body, de-doubled from the lower tier), NOT a loose whole-loaded `.md`. Do NOT write into
-     or recreate the old `~/.claude/rules/bitranox/` loose layer - it was converted to this store.
+     global altitude is now a normal curated store: promotion into the topmost-`CLAUDE.md`-ancestor
+     store (`.claude-bx-selflearning/`) goes through the write engine exactly like any other altitude
+     (an `index.md` hook + a lazy `facts/` body, de-doubled from the lower tier), NOT a loose
+     whole-loaded `.md`. Do NOT write into or recreate the old `~/.claude/rules/bitranox/` loose layer
+     - it was converted to this store.
    - **Point a rule at its skill OR HOOK; do not restate it.** During consolidation, check each rule
      fact for a bitranox SKILL or HOOK that already covers/ENFORCES its topic: skills -
      input sanitization -> `bitranox:coding-input-sanitization`, resilience/self-healing ->
@@ -140,8 +143,8 @@ Create one todo per step.
      phase many rules still live in `CLAUDE.md`, so promoting one already there would DUPLICATE it. If
      it is already in a `CLAUDE.md`, do NOT duplicate - FLAG it (a possible declutter) and never edit
      `CLAUDE.md` without user confirmation.
-   - The global rules layer is machine-local -> auto-apply; editing a version-controlled `CLAUDE.md` is
-     propose-first (auto in `auto` mode), and only through the sanctioned bounded paths (step-3b /
+   - The global curated store is private memory -> auto-apply; editing a version-controlled `CLAUDE.md`
+     is propose-first (auto in `auto` mode), and only through the sanctioned bounded paths (step-3b /
      CLAUDE.md policy in `bitranox:meta-self-improve`).
 6. **Re-categorize / re-wire.** Move entries to the right layer/altitude; add cross-links; drop stale
    or superseded ones.
@@ -154,7 +157,7 @@ Create one todo per step.
    ran before the promotions existed. (Net per-note bytes may be a wash; the win is one source of truth,
    not restating the general in every note.) THEN run `reconcile_memory_index.py <proj>/.claude-bx-selflearning`
    to backfill any `facts/` orphan, and `reconcile_memory_index.py --check <altitude-chain>` (the chain
-   from `self_improve_signals.altitude_chain(proj)`, which is the curated dirs + global) to verify
+   from `self_improve_signals.altitude_chain(proj)`, which is the curated dirs up to the topmost-CLAUDE.md-ancestor store) to verify
    reference integrity and index size. Fix the integrity FAILURES: re-point a DOWNWARD ref upward,
    resolve an orphan. An index-size WARNING is advisory, not a failure: prefer lift/dedup/promote-upward,
    then move any remaining inline fact bodies OUT to `facts/` (shrinking the always-loaded index) - NEVER
@@ -187,8 +190,9 @@ are triggered by the ancestor CLAUDE.md CHAIN and the entries THIS dream just wr
 dream, including a first-capture into an empty store - a just-seeded or just-changed store is exactly when
 new overlap with the CLAUDE.md chain appears. An EMPTY or unchanged memory store makes ONLY the
 counter-gated passes no-op; for a chain-gated pass you must actually enumerate the CLAUDE.md chain (walk
-from the project dir up to `/`, plus `~/.claude/CLAUDE.md`; note whether a project-local CLAUDE.md
-exists), then reconcile in BOTH directions and RULE-BY-RULE: (1) each just-written entry against the
+from the project dir up to the TOPMOST ANCESTOR with a `CLAUDE.md` - the global curated store lives at
+that same top rung, NOT `~/.claude`; note whether a project-local CLAUDE.md exists), then reconcile in
+BOTH directions and RULE-BY-RULE: (1) each just-written entry against the
 chain, AND (2) - the direction that is easy to skip - EACH rule/section of EVERY CLAUDE.md in the chain
 against the WHOLE store (the global curated store + same-scope memory + any enforcing hook or covering
 skill), which finds PRE-EXISTING CLAUDE.md<->store duplication independent of what this dream wrote. Do
@@ -303,16 +307,20 @@ EVERY rule cross-checked against the store), NEVER assumed from emptiness or fro
 - **Durability: keep each memory store LOCALLY git-tracked (auto, safe machine-local move).** A loose
   untracked store is lost to an accidental `rm`/reset with no recovery. So every dream, ensure each
   `.claude-bx-selflearning/` store it wrote is version-controlled by a LOCAL git repo, then commit the
-  dream's changes. LOCAL-ONLY, never a remote. Pick the smallest repo that covers the store WITHOUT
+  dream's changes. LOCAL-ONLY, never a remote. (Missing or malformed wiring self-heals first:
+  `memory_engine.heal` runs at session start and in the dream to recreate a missing store, `index.md`,
+  `CLAUDE.local.md`, or `@import` block and normalize a malformed IMPORT/SCOPE block; a deleted
+  `facts/` body is reported, never fabricated.) Pick the smallest repo that covers the store WITHOUT
   leaking private memory into a shared push:
-  - **Global (`~/.claude`):** a repo AT `~/.claude` with an AIRTIGHT WHITELIST `.gitignore` that tracks
-    ONLY `CLAUDE.md` + `.claude-bx-selflearning/` and ignores everything else (`/*` then `!/CLAUDE.md`
-    `!/.claude-bx-selflearning/`, plus `.claude-bx-selflearning/state/` and `*.lock`). This captures the
-    one-line `@import` `CLAUDE.md` AND the global store in one repo. NEVER blanket-`git add` `~/.claude`
-    (it holds session transcripts, `plugins/` clones with their own `.git`, `security/`, caches). VERIFY
-    the whitelist with `git add -A -n` before the first commit: nothing outside the two paths may appear.
+  - **Global (the topmost-`CLAUDE.md`-ancestor store):** the store is its OWN isolated local git repo
+    (store-own-repo: `git init` inside the `.claude-bx-selflearning/` dir), NOT the old `~/.claude`
+    whitelist repo, and this is NOT branched on whether the anchor dir is itself git tracked or
+    untracked. Ephemeral `state/` and `*.lock` stay gitignored. (Any `@import` wiring in the anchor's
+    `CLAUDE.local.md`/`CLAUDE.md` is version-controlled by whatever repo already owns the anchor dir, if
+    any; the store's own repo just protects the store.)
   - **Private project (`track_private` on):** commit the store IN the project's own repo (the `track_private`
-    knob un-gitignores `.claude-bx-selflearning/`).
+    knob un-gitignores `.claude-bx-selflearning/`). `track_private` is KEPT as a separate privacy
+    feature - it is independent of, and not superseded by, the global store's new home.
   - **Public project / non-git / isolation wanted:** the store as its OWN isolated local repo
     (`git init` inside the store dir); the parent keeps gitignoring it, so private memory never enters a
     public push. Ephemeral `state/` and `*.lock` stay gitignored.
@@ -337,12 +345,12 @@ This skill is scoped to ONE project. The cross-tree passes - inbound gather, out
 cross-pollination, and the global-dream scan that reads across ALL project stores - are the expensive,
 occasional work and live in the separate `bitranox:meta-dream-global` skill. Do not do them here. If
 this project's dream surfaces a learning that is clearly useful BEYOND this project, you may still
-promote it UP to the global curated store at `~/.claude` in step 5 (gated); the broader
+promote it UP to the global curated store at the topmost-`CLAUDE.md` ancestor in step 5 (gated); the broader
 cross-project scan and sibling-tree gather are meta-dream-global's job.
 
 ## Boundaries
 
-- **Private memory + the global `~/.claude/.claude-bx-selflearning/` store (machine-local):** back up, then
+- **Private memory + the global curated store at the topmost-`CLAUDE.md` ancestor:** back up, then
   apply (the whole point of a dream). Reversible via the backup.
 - **CLAUDE.md (version-controlled):** propose-first in `propose`; apply in `auto` - only through the
   sanctioned bounded paths. Create it if the right-altitude file is missing.

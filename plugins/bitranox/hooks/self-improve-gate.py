@@ -41,8 +41,8 @@ _REASON = (
     '"now I understand the real ..."). Before you '
     'stop: invoke the self-improve skill (Skill tool, name "meta-self-improve") to capture this '
     "session's learnings per its procedure. A discovered fact goes at the right altitude BY SCOPE, "
-    "kept concrete: useful across projects -> the machine-wide curated store at ~/.claude "
-    "(.claude-bx-selflearning/, the global rules altitude); "
+    "kept concrete: useful across projects -> the highest-altitude curated store (.claude-bx-selflearning/ "
+    "at the TOPMOST ancestor directory that has a CLAUDE.md - share-visible, not ~/.claude); "
     "one project -> its memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; "
     "unsure -> ask the user where it belongs. If a project-specific "
     "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "

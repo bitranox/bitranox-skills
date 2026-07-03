@@ -66,7 +66,8 @@ def test_memory_system_end_to_end(sandbox):
     for i in range(8):
         _mem(proj_b, "w%d.md" % i, "widget gadget item number %d here" % i)
     _mem(proj_b, "frob.md", "widget gadget frobnitz special and rare term")
-    g = sig.global_rules_dir(); g.mkdir(parents=True, exist_ok=True)
+    (sandbox / "CLAUDE.md").write_text("x", encoding="utf-8")   # topmost CLAUDE.md -> the global tier
+    g = sig.global_rules_dir(proj_a); g.mkdir(parents=True, exist_ok=True)
     (g / "_scope.md").write_text("global bitranox rules layer", encoding="utf-8")
 
     # S1 - settings CLI: view / set / persist / reset
