@@ -68,6 +68,17 @@ Create one todo per step.
    via the engine (`memory_engine.py add ...`, merging its slug into `--source`); (c) if it is
    native-only but only some-value, LEAVE it in native (a legitimate raw tier). This keeps the union
    in context with no doubling. All curated writes go through the engine, never a hand-edit.
+   - **There is NO "native-only backend" mode - do not invent one.** No such knob exists (check
+     `meta-memory-settings`: no backend key); the native tier is ALWAYS just the raw tier. So the
+     ABSENCE of a `.claude-bx-selflearning/` store is NOT a reason to skip promotion - it is the
+     trigger to CREATE one (the engine's first `add` bootstraps it) and promote the worthwhile native
+     facts (case b). Reading "no curated store exists" as "this project uses the native backend" and
+     leaving worthwhile facts native is CIRCULAR (the absence you cite is the very thing you should be
+     fixing) - the exact rationalization that has skipped this step. The ONLY reasons to keep a
+     WORTHWHILE fact native are case (c) some-value, or a SECRET carve-out: a fact holding live
+     credentials/secrets stays native because the Durability pass git-tracks curated stores while the
+     native tier is untracked and machine-local (promoting secrets would stage them into a local repo).
+     Name the actual reason (some-value, or secrets); never "the project is native-backend".
 4. **Dedup / merge.** Fold near-duplicate or overlapping entries into one sharpened entry; update the
    index line; cross-link related entries with `[[name]]`. Edit-over-append (the core anti-bloat rule).
    Dedup runs TWICE: here on the as-loaded store, and AGAIN in step 8 - because promoting in step 5
