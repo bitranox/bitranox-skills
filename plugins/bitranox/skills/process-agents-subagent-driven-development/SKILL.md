@@ -156,6 +156,30 @@ that implementer. Single-file mechanical fixes also take the cheapest tier.
 - Touches multiple files with integration concerns → standard model
 - Requires design judgment or broad codebase understanding → most capable model
 
+### The session model is fixed: delegate, or offer a choice for inline work
+
+The MAIN (session) agent's model is FIXED for the turn and CANNOT be self-switched. There is no
+read-your-model or set-your-model primitive exposed to the model, no `$CLAUDE_MODEL` env var, and
+hooks cannot help (only a `SessionStart` hook may see a `model` field, not guaranteed, and hooks
+cannot call the model). So the ONLY way to run a sub-task on a different tier is to dispatch a
+subagent, which carries its own pinned `model`; inline work necessarily runs on the session model.
+"Save the model, switch, switch back" is NOT implementable - never write a skill step that assumes it.
+
+A model-sensitive step therefore has TWO branches - decide delegability FIRST, and only then the model:
+
+1. **Delegable (can/should run in a subagent) -> dispatch a subagent pinned to the warranted tier.**
+   No user prompt; the model travels with the subagent. If a step can be a subagent, do that and pin
+   its model - never route it back through the inline branch.
+2. **Genuinely-inline (needs the full live main context, so NOT delegable) -> the only model lever is
+   the session model.** If the session is AT the warranted tier, proceed silently. Otherwise (the
+   session model is below OR above it), ask the user, two options only: **switch the session model to
+   `<proposed>` via `/model` and re-run** (recommended, listed first), or **continue inline on
+   `<current>`**. The proposed tier may be higher (a correctness risk to fix) or lower (a cost saving
+   to capture); the switch-or-continue call is the user's. Never offer a subagent here - choosing
+   "inline" already means the step is not delegable, so a subagent option contradicts the premise. In
+   `auto` memory-mode do NOT ask: continue on the current model and log a one-line note that
+   `<proposed>` would fit better (auto cannot self-switch, and switching needs a human `/model` action).
+
 ## Handling Implementer Status
 
 Implementer subagents report one of four statuses. Handle each appropriately:

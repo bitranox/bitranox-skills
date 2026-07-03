@@ -62,8 +62,10 @@ Create one todo per step.
    always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-global-deep`.
    - **Deep scan (on confirmation): FAN OUT** one **`sonnet`** subagent per project store (or per thematic
      batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries;
-     reserve **`opus`** (the main agent) for the promotion gate and altitude / normalization decisions.
-     (Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+     keep the promotion gate and altitude / normalization decisions INLINE on the main agent at the
+     **`opus`** tier - and if the session is not on `opus`, offer switch-model-or-continue per "The
+     session model is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent
+     cannot self-switch its model). (Tiers: "Concrete tiers" in the same skill.)
 4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to the global layer loads
    into EVERY session, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
    generalization promotes once seen in **>= 2 distinct projects** (vs the same-project >= 2-dreams dwell

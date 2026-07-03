@@ -67,8 +67,10 @@ Record tool output (pass/fail, coverage %, lint warnings). Use this objective da
 
 For a large project, FAN OUT: dispatch one **`sonnet`** subagent per rubric dimension (each returns its
 0-10 score + concrete evidence) in parallel, then one **`opus`** pass to synthesize the weighted total
-and adversarially sanity-check the score. Small project: score inline. (Tiers: see "Concrete tiers" in
-`bitranox:process-agents-subagent-driven-development`; fan-out pattern: `bitranox:process-agents-dispatching-parallel`.)
+and adversarially sanity-check the score. Small project: score inline. If that synthesis runs inline on
+the main agent and the session is not on `opus`, offer switch-model-or-continue per "The session model
+is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch its
+model). (Tiers: see "Concrete tiers" in the same skill; fan-out pattern: `bitranox:process-agents-dispatching-parallel`.)
 
 Use this rubric to score the project. Each dimension is 0-10, final score is the weighted average.
 

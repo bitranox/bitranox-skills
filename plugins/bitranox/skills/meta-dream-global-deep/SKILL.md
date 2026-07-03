@@ -22,9 +22,11 @@ the scan in step 3 is run; do not duplicate the rest.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`sonnet`**
    subagent per project store, OR (for many stores) one per thematic batch, in parallel. Each reads its
    stores and returns ONLY cross-project-generalizable candidates (general dev/tooling/test/security/
-   workflow practice), pre-filtered against the existing global rules and shipped skills. Reserve
-   **`opus`** (the main agent) for the promotion gate and altitude/normalization decisions. (Tiers:
-   "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+   workflow practice), pre-filtered against the existing global rules and shipped skills. Keep the
+   promotion gate and altitude/normalization decisions INLINE on the main agent at the **`opus`** tier
+   - and if the session is not on `opus`, offer switch-model-or-continue per "The session model is
+   fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch
+   its model). (Tiers: "Concrete tiers" in the same skill.)
 3. **Promotion gate + CLAUDE.md reconciliation.** Before promoting any candidate to the global layer,
    dedup it against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree
    (project roots + ancestors + the workspace), not just the memory stores. During the conversion phase
