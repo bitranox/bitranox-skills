@@ -90,15 +90,6 @@ def ensure_gitignored(proj, *patterns):
         return
     if not top:
         return
-    # The global ~/.claude durability repo INTENTIONALLY tracks the curated store + CLAUDE.local.md
-    # via an airtight whitelist .gitignore. Appending blanket ignores here fights that whitelist and
-    # silently untracks global memory, so leave the global repo's .gitignore alone (projects still get
-    # gitignored as normal).
-    try:
-        if Path(top).resolve() == (Path.home() / ".claude").resolve():
-            return
-    except OSError:
-        return
     try:
         gi = Path(top) / ".gitignore"
         cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
@@ -420,12 +411,34 @@ def save_config(updates):
 
 # ---- altitude homes (always-present tiers, narrowest -> broadest) --------------------
 
-def global_rules_dir():
-    """The machine-wide global rule altitude: the curated `.claude-bx-selflearning/` store at the
-    `~/.claude` user-scope level (its `index.md` is @imported by `~/.claude/CLAUDE.md`, so it loads in
-    every project). This is a normal curated store - promotion into it goes through the write engine
-    like any other altitude, not a loose whole-load."""
-    return claude_memory_dir(Path.home() / ".claude")
+def topmost_claude_md_dir(proj):
+    """The HIGHEST ancestor directory of `proj` (including `proj` itself) that holds a `CLAUDE.md`,
+    or `None` if no dir in the chain up to `/` has one. Uncapped walk - a `CLAUDE.md` above the
+    project is a real cascade altitude, and the topmost such dir is the broadest always-present home
+    that is share-visible (unlike `~/.claude`, which is invisible from a remote machine)."""
+    try:
+        ladder = [Path(proj), *Path(proj).parents]
+    except (TypeError, ValueError):
+        return None
+    highest = None
+    for d in ladder:
+        try:
+            if (d / "CLAUDE.md").is_file():
+                highest = d
+        except OSError:
+            continue
+    return highest
+
+
+def global_rules_dir(proj=None):
+    """The highest-altitude curated `.claude-bx-selflearning/` store: the one at the TOPMOST ancestor
+    directory of `proj` that has a `CLAUDE.md` (share-visible, so it reaches every machine that mounts
+    the tree). NEVER `~/.claude` (machine-local, invisible from a remote mount). If no ancestor - nor
+    `proj` itself - has a `CLAUDE.md`, `proj` IS the top level and accumulates everything. `proj`
+    defaults to the current working directory. A normal curated store - promotion goes through the
+    write engine like any altitude, not a loose whole-load."""
+    base = proj if proj is not None else os.getcwd()
+    return claude_memory_dir(topmost_claude_md_dir(base) or Path(base))
 
 
 def discovery_roots():
@@ -453,32 +466,26 @@ def _is_dir(p):
 
 
 def altitude_chain(proj):
-    """Ordered always-present homes for `proj`, narrowest -> broadest: the project's Auto-memory
-    dir, then each ancestor directory THAT ACTUALLY HOLDS A `CLAUDE.md` (a real cascade altitude),
-    then the global rules layer (always LAST). Only CLAUDE.md-bearing ancestors are altitudes - we
-    never return every dir up to `/`, so a consumer never has to scan unrelated trees. Reference-
-    integrity uses this: a `[[ref]]` must resolve to a target at the SAME or a LATER (higher)
-    position - upward only; the last position (global) is the recursive layer."""
-    chain = []
+    """Ordered always-present homes for `proj`, narrowest -> broadest: the project's curated store,
+    then each ancestor directory up to and INCLUDING the TOPMOST that holds a `CLAUDE.md` (gap levels
+    between are included so they can be filled). The LAST (broadest) position is the GLOBAL tier - the
+    topmost-CLAUDE.md ancestor's curated store, NEVER `~/.claude`. If no ancestor - nor `proj` - has a
+    `CLAUDE.md`, the chain is just the project's own store (it is the top; everything accumulates
+    there). Only CLAUDE.md-bearing altitudes and the gap levels below them are returned - never every
+    dir up to `/`. Reference-integrity uses this: a `[[ref]]` must resolve to a target at the SAME or a
+    LATER (higher) position - upward only; the last position is the recursive layer."""
     try:
         here = Path(proj)
         ladder = [here, *here.parents]            # project dir up toward /
-        highest = None                            # index of the HIGHEST ancestor that HAS a CLAUDE.md
-        for i, d in enumerate(ladder):
-            try:
-                if (d / "CLAUDE.md").is_file():
-                    highest = i
-            except OSError:
-                continue
-        # contiguous tree from the project up to the highest existing CLAUDE.md (gap levels included);
-        # each altitude is that level's CURATED store (`.claude-bx-selflearning`). Never above the
-        # highest existing CLAUDE.md. The project level (ladder[0]) is always an altitude.
-        upto = ladder[:(highest + 1) if highest is not None else 1]
-        chain.extend(d / CURATED_DIRNAME for d in upto)
+        top = topmost_claude_md_dir(proj)         # the HIGHEST dir with a CLAUDE.md, or None
+        if top is None:                           # project is the top; single-tier chain
+            return [claude_memory_dir(here)]
+        # contiguous tree from the project up to and including the topmost CLAUDE.md (gaps included);
+        # each altitude is that level's CURATED store (`.claude-bx-selflearning`).
+        highest = ladder.index(top)
+        return [d / CURATED_DIRNAME for d in ladder[:highest + 1]]
     except (TypeError, ValueError):
-        chain.append(claude_memory_dir(proj))
-    chain.append(global_rules_dir())              # global = the curated ~/.claude store (last/broadest)
-    return chain
+        return [claude_memory_dir(proj)]
 
 
 # ---- new-project seeding (one-time /collect-knowledge bootstrap nudge) ---------------
@@ -798,7 +805,7 @@ def knowledge_store_empty(proj=None):
     no native project memory holds a topic file, AND (if `proj` is given) the current project's curated
     store holds no facts. Used to suppress the new-project bootstrap nudge on a fresh machine."""
     try:
-        if any(global_rules_dir().rglob("*.md")):
+        if any(global_rules_dir(proj).rglob("*.md")):
             return False
     except OSError:
         pass

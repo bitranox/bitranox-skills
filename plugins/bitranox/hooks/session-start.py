@@ -185,9 +185,20 @@ def _nudges_on():
         return True
 
 
+def _self_heal(proj):
+    """Best-effort repair of the project's memory chain every session (missing/malformed stores,
+    markers, index files). Fail-open: any error is swallowed so a broken store never wedges a start."""
+    try:
+        import memory_engine
+        memory_engine.heal(proj)
+    except Exception:  # noqa: BLE001 - a hook must never block a session
+        pass
+
+
 def main():
     event = _read_event()
     proj = _proj(event)
+    _self_heal(proj)
     parts = [build_context(), audit_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]

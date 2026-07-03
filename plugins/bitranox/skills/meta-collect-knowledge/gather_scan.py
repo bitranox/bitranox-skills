@@ -100,7 +100,7 @@ def discover_files(exclude_proj=None):
             files += sorted(memdir.glob("*.md"))
     except OSError:
         pass
-    g = sig.global_rules_dir()
+    g = sig.global_rules_dir(exclude_proj)   # global tier = topmost-CLAUDE.md ancestor of this project
     try:
         if g.exists():
             files += sorted(g.rglob("*.md"))

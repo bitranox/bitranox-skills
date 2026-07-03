@@ -45,6 +45,8 @@ IMPORT_BEGIN = "<!-- BITRANOX-MEMORY:BEGIN managed by bitranox self-improve; do 
 IMPORT_NOTE = "     Target is gitignored/local (this block lives in CLAUDE.local.md unless track_private); a fresh clone has none and the import resolves to nothing. -->"
 IMPORT_LINE = "@%s/%s" % (sig.CURATED_DIRNAME, sig.CURATED_INDEX)   # @.claude-bx-selflearning/index.md
 IMPORT_END = "<!-- BITRANOX-MEMORY:END -->"
+_IMPORT_BLOCK = "%s\n%s\n%s\n%s" % (IMPORT_BEGIN, IMPORT_NOTE, IMPORT_LINE, IMPORT_END)
+_IMPORT_LINES = {IMPORT_BEGIN.strip(), IMPORT_NOTE.strip(), IMPORT_LINE.strip(), IMPORT_END.strip()}
 
 INLINE_MAX_BYTES = 280                       # bodies larger than this go to facts/ (kept lazy)
 _TYPE_PREFIXES = ("project", "feedback", "reference", "user")
@@ -313,6 +315,95 @@ def _strip_scope_block(text):
     return (head or tail) + ("\n" if (head or tail) else "")
 
 
+# ---- self-heal: repair missing/malformed markers, stores, and files across the chain -----------
+
+def _strip_import_block(text):
+    """Drop every managed `@import` remnant regardless of how the block is malformed - a duplicate, a
+    BEGIN with no END, a stray line, or a block whose inner NOTE/line text DRIFTED across versions.
+    First remove each whole `BEGIN..END` span (so an old-format NOTE inside is taken with it), then any
+    surviving bare `IMPORT_LINE`. Byte-safe otherwise; leaves at most a couple of blank lines that the
+    re-add step in `ensure_level` normalizes."""
+    while IMPORT_BEGIN in text:
+        b = text.find(IMPORT_BEGIN)
+        e = text.find(IMPORT_END, b)
+        e = len(text) if e < 0 else e + len(IMPORT_END)     # no END -> malformed, cut to end
+        text = text[:b] + text[e:]
+    kept = [ln for ln in text.split("\n") if ln.strip() != IMPORT_LINE.strip()]
+    return "\n".join(kept)
+
+
+def _normalize_import_block(text):
+    """If `text` carries a MALFORMED managed `@import` block (a stray `IMPORT_LINE`, a BEGIN without
+    its END, a duplicate, or drifted inner lines), return `text` with every managed remnant stripped
+    so `ensure_level` can re-add ONE canonical block. Return None when the block is already canonical
+    or entirely absent (no change needed)."""
+    has_begin = IMPORT_BEGIN in text
+    has_line = any(ln.strip() == IMPORT_LINE for ln in text.split("\n"))
+    if not has_begin and not has_line:
+        return None                                  # nothing managed here
+    canonical = (text.count(IMPORT_BEGIN) == 1 and text.count(IMPORT_END) == 1
+                 and _IMPORT_BLOCK in text
+                 and sum(1 for ln in text.split("\n") if ln.strip() == IMPORT_LINE) == 1)
+    if canonical:
+        return None
+    return _strip_import_block(text)
+
+
+def _heal_level(proj, report):
+    """Repair one altitude in place (locked): normalize a malformed IMPORT block in either wiring file,
+    ensure the store / index.md / CLAUDE.local.md + @import + scope exist, and re-render index.md to
+    canonical (heals a malformed SCOPE block or drifted grammar). Idempotent + mtime-neutral."""
+    with sig.memory_lock(sig.curated_index(proj)):
+        for path in (sig.claude_md_path(proj), sig.claude_local_md_path(proj)):
+            try:
+                txt = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fixed = _normalize_import_block(txt)
+            if fixed is not None and _write_if_changed(path, fixed):
+                report["healed"].append(str(path))
+        ensure_level(proj, _locked=True)             # (re)create missing store/index/@import/scope
+        mem = sig.curated_index(proj)
+        try:
+            txt = mem.read_text(encoding="utf-8")
+        except OSError:
+            txt = ""
+        canonical = render(*parse(txt))              # round-trip -> canonical grammar + scope markers
+        if canonical != txt and _write_if_changed(mem, canonical):
+            report["healed"].append(str(mem))
+
+
+def heal(proj):
+    """Self-heal the WHOLE altitude chain for `proj`: (re)create any missing `.claude-bx-selflearning/`
+    store, `index.md`, `CLAUDE.local.md`, or `@import` block, NORMALIZE a malformed IMPORT or SCOPE
+    block to canonical, and re-render a non-round-trippable `index.md`. Content that cannot be
+    reconstructed (a deleted `facts/<slug>.md` body referenced by an index line) is left untouched and
+    reported, never fabricated. Idempotent, mtime-neutral, FAIL-OPEN (never raises). Returns
+    {'healed': [changed paths], 'orphans': [(store, slug)], 'levels': n}."""
+    report = {"healed": [], "orphans": [], "levels": 0}
+    try:
+        chain = sig.altitude_chain(proj)
+    except Exception:                                # noqa: BLE001 - self-heal must never raise
+        return report
+    for store in chain:
+        report["levels"] += 1
+        try:
+            _heal_level(str(store.parent), report)
+            for e in parse(_read_text(sig.curated_index(str(store.parent))))[1]:
+                if e.heavy and not (store / "facts" / (e.slug + ".md")).is_file():
+                    report["orphans"].append((str(store), e.slug))
+        except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
+            continue
+    return report
+
+
+def _read_text(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 # ---- CLI: the capture procedure invokes this (never hand-writes memory files) ------------------
 
 def main(argv=None):
@@ -329,7 +420,18 @@ def main(argv=None):
     a.add_argument("--source", default="", help="comma-separated provenance keys")
     a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded index")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
+    h = sub.add_parser("heal", help="self-heal missing/malformed stores/markers across proj's chain")
+    h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "heal":
+        rep = heal(args.proj)
+        print("healed %d file(s) across %d level(s)" % (len(rep["healed"]), rep["levels"]))
+        for p in rep["healed"]:
+            print("    ~ repaired: %s" % p)
+        for store, slug in rep["orphans"]:
+            print("    ! missing facts body (not fabricated): %s/facts/%s.md" % (store, slug))
+        return 0
 
     if args.cmd == "add":
         body = args.body

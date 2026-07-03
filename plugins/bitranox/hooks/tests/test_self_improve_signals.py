@@ -260,35 +260,55 @@ def test_load_config_corrupt_file_returns_defaults(home):
 # --------------------------------------------------------------------------
 
 
-def test_global_rules_dir(home):
-    g = S.global_rules_dir()
-    # global is now the curated store at the ~/.claude user-scope altitude (not a loose rules/ dir)
-    assert g.name == S.CURATED_DIRNAME and g.parent.name == ".claude"
-    assert g == S.claude_memory_dir(S.Path.home() / ".claude")
+def test_topmost_claude_md_dir(tmp_path):
+    top = tmp_path / "top"
+    mid = top / "mid"
+    proj = mid / "proj"
+    proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")       # highest
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")      # nearer, but not the highest
+    assert S.topmost_claude_md_dir(str(proj)) == top            # HIGHEST wins over the nearer one
+    assert S.topmost_claude_md_dir(str(tmp_path / "none")) is None
 
 
-def test_altitude_chain_only_claude_md_ancestors(home, tmp_path):
+def test_global_rules_dir_is_topmost_claude_md_ancestor(tmp_path):
+    top = tmp_path / "top"
+    proj = top / "a" / "b"
+    proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")
+    # global = the topmost-CLAUDE.md ancestor's curated store; NEVER ~/.claude
+    assert S.global_rules_dir(str(proj)) == S.claude_memory_dir(top)
+
+
+def test_global_rules_dir_falls_back_to_proj_when_no_claude_md(tmp_path):
+    proj = tmp_path / "loner"
+    proj.mkdir()
+    assert S.global_rules_dir(str(proj)) == S.claude_memory_dir(proj)   # proj itself is the top
+
+
+def test_altitude_chain_up_to_topmost_no_home_duplicate(tmp_path):
     proj = tmp_path / "repo"
     sub = proj / "pkg"
     sub.mkdir(parents=True)
-    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")     # ancestor WITH CLAUDE.md -> altitude
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")      # ancestor WITH CLAUDE.md -> altitude
     (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
     cm = S.claude_memory_dir
     chain = S.altitude_chain(str(sub))
-    assert chain[0] == cm(str(sub))                    # narrowest: the project's curated store
-    assert chain[-1] == S.global_rules_dir()           # broadest: global rules (always last)
-    assert cm(str(sub)) in chain and cm(str(proj)) in chain     # CLAUDE.md-bearing ancestors included
-    assert cm(str(tmp_path)) not in chain              # an ancestor WITHOUT CLAUDE.md is excluded
-    assert chain.index(cm(str(sub))) < chain.index(cm(str(proj))) < chain.index(S.global_rules_dir())
+    assert chain[0] == cm(sub)                          # narrowest: the project's curated store
+    assert chain[-1] == cm(proj) == S.global_rules_dir(str(sub))   # broadest == topmost, not ~/.claude
+    assert cm(tmp_path) not in chain                    # an ancestor WITHOUT CLAUDE.md is excluded
+    assert len(chain) == len({str(c) for c in chain})   # no duplicated top tier
 
 
-def test_altitude_chain_no_claude_md_is_just_curated_and_global(home):
-    chain = S.altitude_chain("/no/such/path")          # nonexistent -> no CLAUDE.md ancestors
-    assert chain == [S.claude_memory_dir("/no/such/path"), S.global_rules_dir()]
+def test_altitude_chain_single_tier_when_no_claude_md(tmp_path):
+    proj = tmp_path / "loner"
+    proj.mkdir()
+    chain = S.altitude_chain(str(proj))
+    assert chain == [S.claude_memory_dir(proj)]         # project is the top; nothing appended
 
 
-def test_altitude_chain_fills_gaps_up_to_highest(home, tmp_path):
-    top = tmp_path / "top"            # highest existing CLAUDE.md
+def test_altitude_chain_fills_gaps_up_to_highest(tmp_path):
+    top = tmp_path / "top"            # highest existing CLAUDE.md == global tier
     mid = top / "mid"                 # GAP: no CLAUDE.md here
     proj = mid / "proj"              # project, has CLAUDE.md
     proj.mkdir(parents=True)
@@ -296,11 +316,11 @@ def test_altitude_chain_fills_gaps_up_to_highest(home, tmp_path):
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
     cm = S.claude_memory_dir
     chain = S.altitude_chain(str(proj))
-    assert cm(str(proj)) in chain and cm(str(top)) in chain
-    assert cm(str(mid)) in chain       # the GAP level is INCLUDED (to be filled), not skipped
-    assert cm(str(tmp_path)) not in chain   # above the highest existing CLAUDE.md -> excluded
-    assert (chain.index(cm(str(proj))) < chain.index(cm(str(mid)))
-            < chain.index(cm(str(top))) < chain.index(S.global_rules_dir()))
+    assert cm(proj) in chain and cm(top) in chain
+    assert cm(mid) in chain            # the GAP level is INCLUDED (to be filled), not skipped
+    assert cm(tmp_path) not in chain   # above the highest existing CLAUDE.md -> excluded
+    assert (chain.index(cm(proj)) < chain.index(cm(mid)) < chain.index(cm(top)))
+    assert chain[-1] == cm(top)        # topmost is the broadest (global), not ~/.claude
 
 
 # --------------------------------------------------------------------------
@@ -490,19 +510,6 @@ def test_ensure_gitignored(home, tmp_path):
     plain = tmp_path / "plain"; plain.mkdir()
     S.ensure_gitignored(str(plain), "CLAUDE.local.md")
     assert not (plain / ".gitignore").exists()
-
-
-def test_ensure_gitignored_skips_global_home(home, tmp_path):
-    # The global ~/.claude durability repo tracks the curated store + CLAUDE.local.md via its own
-    # whitelist; ensure_gitignored must NOT append blanket ignores there (that would silently untrack
-    # global memory). Projects still get gitignored (covered by test_ensure_gitignored above).
-    import subprocess
-    from pathlib import Path
-    gdir = Path.home() / ".claude"
-    gdir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", str(gdir)], check=False)
-    S.ensure_gitignored(str(gdir), S.CURATED_DIRNAME + "/", "CLAUDE.local.md")
-    assert not (gdir / ".gitignore").exists()
 
 
 def test_claude_code_version_detection():
