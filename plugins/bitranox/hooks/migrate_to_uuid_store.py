@@ -71,11 +71,64 @@ def migrate(root, dry_run):
     return report
 
 
+def _current_legacy_uuids(altitude):
+    """The uuid set the altitude's CURRENT legacy facts SHOULD have (one per live slug)."""
+    _scope, entries, _bodies = E.read_store(altitude)
+    return {us.fact_uuid(altitude, e.slug) for e in entries}
+
+
+def sync(root, prune):
+    """Make the UUID store mirror the current legacy stores: (re)write every live fact (idempotent
+    migrate), and when `prune`, drop pointers whose legacy fact is gone and delete central body files
+    no pointer references any more. This keeps the projection faithful after a dream deletes/merges
+    facts. Returns {'facts', 'written', 'pruned', 'bodies_deleted'}."""
+    mig = migrate(root, dry_run=False)
+    report = {"facts": mig["facts"], "written": mig["written"], "pruned": 0, "bodies_deleted": 0}
+    altitudes = sorted(find_legacy_stores(root))
+    referenced = set()                                # uuids still referenced by ANY altitude pointer
+    for altitude in altitudes:
+        keep = _current_legacy_uuids(altitude)
+        local = sig.claude_local_md_path(altitude)
+        with sig.memory_lock(local):
+            try:
+                text = local.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            scope, pointers = us.parse_pointer_index(text)
+            kept = [p for p in pointers if p.uuid in keep]
+            if prune and len(kept) != len(pointers):
+                report["pruned"] += len(pointers) - len(kept)
+                us.write_if_changed(local, us.upsert_pointer_block(text, scope, kept))
+                pointers = kept
+            referenced |= {p.uuid for p in pointers}
+    if prune:                                         # delete central bodies nothing references
+        for altitude in altitudes:
+            anchor = us.resolve_anchor(altitude) or Path(altitude)
+            facts_dir = us.central_facts_dir(anchor)
+            if not facts_dir.is_dir():
+                continue
+            for body in facts_dir.glob("*/*.md"):
+                if body.stem not in referenced:
+                    try:
+                        body.unlink()
+                        report["bodies_deleted"] += 1
+                    except OSError:
+                        pass
+    return report
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Copy legacy curated facts into the central UUID store (additive).")
+    ap = argparse.ArgumentParser(description="Copy/sync legacy curated facts into the central UUID store (additive).")
     ap.add_argument("--root", required=True, help="tree to scan for legacy .claude-bx-selflearning stores")
     ap.add_argument("--apply", action="store_true", help="actually write (default: DRY-RUN, writes nothing)")
+    ap.add_argument("--sync", action="store_true",
+                    help="mirror the UUID store to the current legacy stores AND prune orphans (implies --apply)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.sync:
+        rep = sync(args.root, prune=True)
+        print("SYNCED: %d fact(s) written, %d orphan pointer(s) pruned, %d orphan body(ies) deleted"
+              % (rep["written"], rep["pruned"], rep["bodies_deleted"]))
+        return 0
     dry_run = not args.apply
     rep = migrate(args.root, dry_run=dry_run)
     tag = "DRY-RUN" if dry_run else "APPLIED"

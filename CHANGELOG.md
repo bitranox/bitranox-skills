@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.27.0] - 2026-07-04
+
+### Added
+- `migrate_to_uuid_store.py --sync`: make the UUID store mirror the current legacy stores - (re)write
+  every live fact (idempotent) and prune pointers whose legacy fact is gone plus central body files no
+  pointer references. Keeps the projection faithful after a dream deletes or merges facts. Tests added.
+
+### Changed
+- Capture now mirrors into the UUID store: `memory_engine.add_or_update_entry` (the legacy primary
+  write) also upserts the fact into the central UUID store, best-effort and OUTSIDE the legacy lock, so
+  a fact captured after the one-time migration still resolves through the mount-independent path. A
+  mirror failure never breaks or rolls back the canonical legacy write (the legacy store stays the
+  source of truth during coexistence). Tests cover the mirror and its fail-safe.
+
 ## [5.26.0] - 2026-07-04
 
 ### Added
