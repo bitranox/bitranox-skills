@@ -155,11 +155,12 @@ Create one todo per step.
    not restating the general in every note.) THEN run `reconcile_memory_index.py <proj>/.claude-bx-selflearning`
    to backfill any `facts/` orphan, and `reconcile_memory_index.py --check <altitude-chain>` (the chain
    from `self_improve_signals.altitude_chain(proj)`, which is the curated dirs + global) to verify
-   reference integrity and caps. Fix anything flagged: re-point a DOWNWARD ref upward, resolve an orphan,
-   and route an over-cap `index.md`'s overflow by moving inline fact bodies OUT to `facts/` (shrinking
-   the always-loaded index) - NEVER into the `@import` file (`CLAUDE.local.md`/`CLAUDE.md`, which holds
-   only the one `@import` line), and a
-   PINNED-budget overflow fails loud (re-examine what is pinned).
+   reference integrity and index size. Fix the integrity FAILURES: re-point a DOWNWARD ref upward,
+   resolve an orphan. An index-size WARNING is advisory, not a failure: prefer lift/dedup/promote-upward,
+   then move any remaining inline fact bodies OUT to `facts/` (shrinking the always-loaded index) - NEVER
+   into the `@import` file (`CLAUDE.local.md`/`CLAUDE.md`, which holds only the one `@import` line). An
+   index that cannot be reduced legitimately stays (it loads only for this project); a large pinned
+   budget is worth re-examining (advisory).
 9. **Skill-fit -> batched change.** Collect generalizations that match or warrant a skill. Deliver
    them through `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream":
    adjust an existing skill when it fits, propose a new one (via `bitranox:skill-writer`) when it does
