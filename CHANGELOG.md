@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.36.0] - 2026-07-05
+
+### Added
+- `cross_tree_search` config knob (default `true`): may the per-prompt recall hook scan OTHER
+  knowledge trees? `false` walls recall into the current tree (its projects + tree top; the
+  machine-local native tier counts as outside) - cross-tree knowledge then moves only via the
+  explicit paths (meta-collect-knowledge import, dream-global). Born from a measured finding:
+  the machine-global scan injected another tree's CLAUDE.md excerpts into an unrelated tree's
+  session (~8-20KB/prompt). Settings CLI + knob table updated; probe report:
+  `.plan/probe-voice-and-authenticity-20260705.md`.
+
 ## [5.35.0] - 2026-07-05
 
 ### Changed

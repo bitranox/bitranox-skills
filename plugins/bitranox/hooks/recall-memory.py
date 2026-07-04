@@ -100,6 +100,17 @@ def main():
         # tree (lots of cross-project rules still live in CLAUDE.md). The current project's own memory
         # and its ancestor-chain CLAUDE.md are excluded - they are already loaded in this session.
         files = gs.discover_files(cwd) + gs.discover_claude_md(cwd) + gs.discover_curated(cwd, cwd)
+        # cross_tree_search=False walls recall into the CURRENT knowledge tree: only sources under
+        # this tree's anchor are scanned (independent trees - a marketing company and a bakery -
+        # share nothing). The native tier (under ~/.claude) has no reliable tree attribution by
+        # path, so it counts as outside and is excluded too. Cross-tree knowledge then moves only
+        # via the explicit paths (meta-collect-knowledge import, dream-global).
+        if not sig.load_config().get("cross_tree_search", True):
+            anchor = sig.resolve_anchor(cwd)
+            if anchor is None:
+                return 0
+            pre = str(anchor) + os.sep
+            files = [f for f in files if str(f).startswith(pre)]
         hits = gs.scan(keywords, files)
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0

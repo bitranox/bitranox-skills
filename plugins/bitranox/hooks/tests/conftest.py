@@ -56,7 +56,7 @@ def two_trees(tmp_path, monkeypatch):
     tmp_path/home): work/marketing and work/bakery, each with its own top CLAUDE.md +
     .claude-memory store + a nested project dir carrying its own CLAUDE.md."""
     home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
+    (home / ".claude").mkdir(parents=True, exist_ok=True)   # tolerate a module-level home fixture
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     work = tmp_path / "work"
