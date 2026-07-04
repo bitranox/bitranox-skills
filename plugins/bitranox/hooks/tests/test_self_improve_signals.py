@@ -286,9 +286,9 @@ def test_topmost_claude_md_dir_store_colocation_beats_stray_higher_md(tmp_path):
     proj.mkdir(parents=True)
     (stray / "CLAUDE.md").write_text("x", encoding="utf-8")
     (real / "CLAUDE.md").write_text("x", encoding="utf-8")
-    (real / S.CURATED_DIRNAME).mkdir()
+    (real / S.MEMORY_DIRNAME).mkdir()
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
-    (proj / S.CURATED_DIRNAME).mkdir()
+    (proj / S.MEMORY_DIRNAME).mkdir()
     assert S.topmost_claude_md_dir(str(proj)) == real           # real (both) beats stray (md-only)
 
 
@@ -297,11 +297,11 @@ def test_topmost_claude_md_dir_never_anchors_at_home_or_tmp(home, tmp_path):
     # picked, even though home is the highest ancestor carrying both. The walk stops below it.
     h = Path(os.environ["HOME"])                                 # monkeypatched by the `home` fixture
     (h / "CLAUDE.md").write_text("x", encoding="utf-8")
-    (h / S.CURATED_DIRNAME).mkdir()
+    (h / S.MEMORY_DIRNAME).mkdir()
     sub = h / "projects" / "foo"                                 # a real altitude below home
     sub.mkdir(parents=True)
     (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
-    (sub / S.CURATED_DIRNAME).mkdir()
+    (sub / S.MEMORY_DIRNAME).mkdir()
     proj = sub / "deep"
     proj.mkdir()
     got = S.topmost_claude_md_dir(str(proj))
@@ -314,14 +314,14 @@ def test_global_rules_dir_is_topmost_claude_md_ancestor(tmp_path):
     proj = top / "a" / "b"
     proj.mkdir(parents=True)
     (top / "CLAUDE.md").write_text("x", encoding="utf-8")
-    # global = the topmost-CLAUDE.md ancestor's curated store; NEVER ~/.claude
-    assert S.global_rules_dir(str(proj)) == S.claude_memory_dir(top)
+    # global = the topmost-CLAUDE.md ancestor's LIVE central store; NEVER ~/.claude
+    assert S.global_rules_dir(str(proj)) == top / S.MEMORY_DIRNAME
 
 
 def test_global_rules_dir_falls_back_to_proj_when_no_claude_md(tmp_path):
     proj = tmp_path / "loner"
     proj.mkdir()
-    assert S.global_rules_dir(str(proj)) == S.claude_memory_dir(proj)   # proj itself is the top
+    assert S.global_rules_dir(str(proj)) == proj / S.MEMORY_DIRNAME   # proj itself is the top
 
 
 def test_altitude_chain_up_to_topmost_no_home_duplicate(tmp_path):
@@ -330,11 +330,11 @@ def test_altitude_chain_up_to_topmost_no_home_duplicate(tmp_path):
     sub.mkdir(parents=True)
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")      # ancestor WITH CLAUDE.md -> altitude
     (sub / "CLAUDE.md").write_text("x", encoding="utf-8")
-    cm = S.claude_memory_dir
     chain = S.altitude_chain(str(sub))
-    assert chain[0] == cm(sub)                          # narrowest: the project's curated store
-    assert chain[-1] == cm(proj) == S.global_rules_dir(str(sub))   # broadest == topmost, not ~/.claude
-    assert cm(tmp_path) not in chain                    # an ancestor WITHOUT CLAUDE.md is excluded
+    assert chain[0] == sub                              # narrowest: the project LEVEL dir
+    assert chain[-1] == proj                            # broadest == topmost level, not ~/.claude
+    assert S.global_rules_dir(str(sub)) == proj / S.MEMORY_DIRNAME
+    assert tmp_path not in chain                        # an ancestor WITHOUT CLAUDE.md is excluded
     assert len(chain) == len({str(c) for c in chain})   # no duplicated top tier
 
 
@@ -342,7 +342,7 @@ def test_altitude_chain_single_tier_when_no_claude_md(tmp_path):
     proj = tmp_path / "loner"
     proj.mkdir()
     chain = S.altitude_chain(str(proj))
-    assert chain == [S.claude_memory_dir(proj)]         # project is the top; nothing appended
+    assert chain == [proj]                              # project is the top; nothing appended
 
 
 def test_altitude_chain_fills_gaps_up_to_highest(tmp_path):
@@ -352,13 +352,12 @@ def test_altitude_chain_fills_gaps_up_to_highest(tmp_path):
     proj.mkdir(parents=True)
     (top / "CLAUDE.md").write_text("x", encoding="utf-8")
     (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
-    cm = S.claude_memory_dir
     chain = S.altitude_chain(str(proj))
-    assert cm(proj) in chain and cm(top) in chain
-    assert cm(mid) in chain            # the GAP level is INCLUDED (to be filled), not skipped
-    assert cm(tmp_path) not in chain   # above the highest existing CLAUDE.md -> excluded
-    assert (chain.index(cm(proj)) < chain.index(cm(mid)) < chain.index(cm(top)))
-    assert chain[-1] == cm(top)        # topmost is the broadest (global), not ~/.claude
+    assert proj in chain and top in chain
+    assert mid in chain                # the GAP level is INCLUDED (to be filled), not skipped
+    assert tmp_path not in chain       # above the highest existing CLAUDE.md -> excluded
+    assert (chain.index(proj) < chain.index(mid) < chain.index(top))
+    assert chain[-1] == top            # topmost is the broadest (global) LEVEL, not ~/.claude
 
 
 # --------------------------------------------------------------------------
@@ -605,3 +604,28 @@ def test_memory_lock_reclaims_stale(tmp_path):
     with S.memory_lock(target, timeout=0.05):         # reclaims it instead of timing out
         assert stale.exists()
     assert not stale.exists()
+
+
+# --------------------------------------------------------------------------
+# unified anchor resolver (single source in sig; uuid_store delegates)
+# --------------------------------------------------------------------------
+
+
+def test_resolve_anchor_in_sig_matches_uuid_store(tmp_path):
+    import uuid_store as US
+    top = tmp_path / "top"
+    proj = top / "a" / "proj"
+    proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (top / S.MEMORY_DIRNAME).mkdir()
+    assert S.resolve_anchor(str(proj)) == US.resolve_anchor(str(proj)) == top
+    assert S.topmost_claude_md_dir(str(proj)) == top    # the alias is the same resolver
+
+
+def test_two_trees_anchor_isolation(two_trees):
+    tt = two_trees
+    assert S.resolve_anchor(str(tt.proj_a)) == tt.top_a
+    assert S.resolve_anchor(str(tt.proj_b)) == tt.top_b
+    assert S.resolve_anchor(str(tt.proj_a)) != S.resolve_anchor(str(tt.proj_b))
+    chain_a = S.altitude_chain(str(tt.proj_a))
+    assert tt.top_b not in chain_a and tt.proj_b not in chain_a

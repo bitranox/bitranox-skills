@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.30.0] - 2026-07-05
+
+### Added
+- `BITRANOX_HOOKS_OFF=1` master kill-switch in `run-python.sh` (dev-only): set at session launch it
+  silences every plugin hook in one place; a deliberate CLI call strips it per-command
+  (`env -u BITRANOX_HOOKS_OFF ...`). Tests added.
+- `session-banner.py`: the big skills-first banner now ships as its OWN SessionStart hook command.
+  The harness persists an oversized additionalContext to a file with only a ~2KB inline preview, so
+  everything appended after the ~10KB banner (the memory-retrieval rule, the dream/new-project
+  nudges, the miss-audit) never reached context. `session-start.py` now emits ONLY those small
+  essentials (kept under the persist cap, size-tested); the banner pays the preview cost alone.
+
+### Changed
+- ONE anchor resolver for the whole engine: `self_improve_signals.resolve_anchor` (keyed on the live
+  `.claude-memory` store colocation; `topmost_claude_md_dir` is the same function; `uuid_store`
+  delegates). `global_rules_dir` returns the tree-top `.claude-memory` store (was a retired legacy
+  path); `altitude_chain` returns level dirs. Multiple independent knowledge trees on one machine
+  each resolve to their own anchor; a `two_trees` test fixture covers the isolation.
+- Single-sourced helpers: `slugify`/`TYPE_PREFIXES` live in `uuid_store` (engine aliases them);
+  one mtime-neutral writer; `VENDOR_DIRNAMES` in `self_improve_signals` (gather_scan aliases it).
+  gather_scan's tree-top tier scans `facts/` bodies (flat or sharded), never `.archive/`.
+
 ## [5.29.0] - 2026-07-04
 
 ### Added

@@ -42,3 +42,24 @@ def test_script_error_passes_through_even_without_strict(tmp_path):
     s = tmp_path / "bad.py"
     s.write_text("raise SystemExit(7)\n", encoding="utf-8")
     assert _run([str(s)]).returncode == 7           # python's own non-zero exit is loud already
+
+
+def test_hooks_off_kill_switch_skips_execution(tmp_path):
+    # BITRANOX_HOOKS_OFF=1 silences every hook launched through run-python.sh: exit 0, script NOT run.
+    marker = tmp_path / "ran.txt"
+    script = tmp_path / "s.py"
+    script.write_text("open(%r, 'w').write('x')\n" % str(marker), encoding="utf-8")
+    env = dict(os.environ, BITRANOX_HOOKS_OFF="1")
+    p = subprocess.run(["bash", str(SHIM), str(script)], capture_output=True, text=True, env=env)
+    assert p.returncode == 0
+    assert not marker.exists()                       # the hook body never executed
+    assert "BITRANOX_HOOKS_OFF" in (p.stderr or "")  # one loud notice line
+
+
+def test_hooks_off_unset_runs_normally(tmp_path):
+    marker = tmp_path / "ran.txt"
+    script = tmp_path / "s.py"
+    script.write_text("open(%r, 'w').write('x')\n" % str(marker), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "BITRANOX_HOOKS_OFF"}
+    p = subprocess.run(["bash", str(SHIM), str(script)], capture_output=True, text=True, env=env)
+    assert p.returncode == 0 and marker.exists()

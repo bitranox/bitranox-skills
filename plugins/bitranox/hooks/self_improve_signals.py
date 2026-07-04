@@ -52,6 +52,19 @@ def memory_dir(proj):
 # `CLAUDE.local.md` by default (symmetric with the gitignored store), or the TRACKED `CLAUDE.md` when
 # `track_private` is on. The native `memory_dir()` above stays as the raw second tier.
 
+MEMORY_DIRNAME = ".claude-memory"             # the LIVE central body-store dir, co-located at a tree's
+                                              # anchor; the store-colocation key for anchor resolution
+
+# Dirs never worth walking for stores/CLAUDE.md (vendored / build / VCS / cache). Single source;
+# gather_scan and the multi-tree walks alias this.
+VENDOR_DIRNAMES = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages", ".mypy_cache",
+    ".pytest_cache", ".tox", ".idea", ".ruff_cache", "dist", "build", ".eggs",
+}
+
+# LEGACY dirnames: the retired pre-UUID store layout. Kept ONLY for the one-shot migration tools
+# (migrate_to_uuid_store, migrate_memory receipts) and gather_scan's transitional dual-read on
+# downstream installs. Nothing else may key on these.
 CURATED_DIRNAME = ".claude-bx-selflearning"
 CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md`) so it is never
                                               # confused with Claude Code's native `MEMORY.md` tier
@@ -428,19 +441,17 @@ def _excluded_anchor_dirs():
     return out
 
 
-def topmost_claude_md_dir(proj):
-    """The HIGHEST ancestor directory of `proj` (including `proj`) that is a real memory altitude, or
-    `None` if none is. The walk is the plain `.parent` chain from `proj` up toward `/`; because a real
-    project cwd lives under a mount (never at `~` or `/tmp`), that chain naturally never reaches those
-    roots. As a safety net it still SKIPS the filesystem root, `~`, and the temp dir as anchor
-    candidates (see `_excluded_anchor_dirs`) so a stray marker left at one of them - or a test running
-    under `/tmp` - cannot hijack the anchor. Robust discriminator otherwise: the topmost dir that
-    carries BOTH a `CLAUDE.md` AND a curated store (`.claude-bx-selflearning/`). Tying the anchor to the
-    store it must hold stops a STRAY `CLAUDE.md` higher up (nested workspaces routinely have `CLAUDE.md`
-    at many levels) from hijacking the global-store location - a real fragility a probe caught. Only at
-    BOOTSTRAP, when no dir in the chain has a store yet, fall back to the topmost `CLAUDE.md` (the first
-    scaffold then creates the store there, and thereafter the store co-location pins the anchor). Share-
-    visible either way (unlike `~/.claude`, invisible from a remote mount)."""
+def resolve_anchor(proj):
+    """THE canonical anchor resolver (single source; `uuid_store.resolve_anchor` delegates here).
+
+    The anchor of `proj`'s knowledge TREE: the TOPMOST ancestor (including `proj`) that carries a
+    `CLAUDE.md` AND the co-located central store (`.claude-memory/`). Tying the anchor to the store it
+    must hold stops a STRAY `CLAUDE.md` higher up (nested workspaces routinely have `CLAUDE.md` at many
+    levels) from hijacking the tree top - a real fragility a probe caught. Only at BOOTSTRAP, when no
+    dir in the chain has a store yet, fall back to the topmost `CLAUDE.md` (the first write creates the
+    store there and thereafter the colocation pins it). Never anchors at `/`, `~`, or the temp dir
+    (see `_excluded_anchor_dirs`). Returns a Path, or None when no ancestor has a `CLAUDE.md` at all.
+    With MULTIPLE independent trees on one machine, each cwd resolves to its OWN tree's anchor."""
     try:
         ladder = [Path(proj), *Path(proj).parents]
     except (TypeError, ValueError):
@@ -453,7 +464,7 @@ def topmost_claude_md_dir(proj):
             if d == Path(d.anchor) or d in excluded:  # never anchor at /, ~, or the temp dir
                 continue
             has_md = (d / "CLAUDE.md").is_file()
-            has_store = (d / CURATED_DIRNAME).is_dir()
+            has_store = (d / MEMORY_DIRNAME).is_dir()
         except OSError:
             continue
         if has_md:
@@ -463,15 +474,17 @@ def topmost_claude_md_dir(proj):
     return highest_both or highest_md
 
 
+# The historical name; same resolver (kept so call sites and prose stay readable).
+topmost_claude_md_dir = resolve_anchor
+
+
 def global_rules_dir(proj=None):
-    """The highest-altitude curated `.claude-bx-selflearning/` store: the one at the TOPMOST ancestor
-    directory of `proj` that has a `CLAUDE.md` (share-visible, so it reaches every machine that mounts
-    the tree). NEVER `~/.claude` (machine-local, invisible from a remote mount). If no ancestor - nor
-    `proj` itself - has a `CLAUDE.md`, `proj` IS the top level and accumulates everything. `proj`
-    defaults to the current working directory. A normal curated store - promotion goes through the
-    write engine like any altitude, not a loose whole-load."""
+    """The tree-top central store: `<anchor>/.claude-memory` for `proj`'s OWN tree (share-visible, so
+    it reaches every machine that mounts the tree). NEVER `~/.claude` (machine-local, invisible from a
+    remote mount). If no ancestor - nor `proj` itself - has a `CLAUDE.md`, `proj` IS the top level and
+    accumulates everything. `proj` defaults to the current working directory."""
     base = proj if proj is not None else os.getcwd()
-    return claude_memory_dir(topmost_claude_md_dir(base) or Path(base))
+    return (resolve_anchor(base) or Path(base)) / MEMORY_DIRNAME
 
 
 def discovery_roots():
@@ -499,26 +512,23 @@ def _is_dir(p):
 
 
 def altitude_chain(proj):
-    """Ordered always-present homes for `proj`, narrowest -> broadest: the project's curated store,
-    then each ancestor directory up to and INCLUDING the TOPMOST that holds a `CLAUDE.md` (gap levels
-    between are included so they can be filled). The LAST (broadest) position is the GLOBAL tier - the
-    topmost-CLAUDE.md ancestor's curated store, NEVER `~/.claude`. If no ancestor - nor `proj` - has a
-    `CLAUDE.md`, the chain is just the project's own store (it is the top; everything accumulates
-    there). Only CLAUDE.md-bearing altitudes and the gap levels below them are returned - never every
-    dir up to `/`. Reference-integrity uses this: a `[[ref]]` must resolve to a target at the SAME or a
-    LATER (higher) position - upward only; the last position is the recursive layer."""
+    """Ordered altitude LEVEL DIRS for `proj`, narrowest -> broadest: the project dir itself, then
+    each ancestor directory up to and INCLUDING the tree's anchor (gap levels between are included so
+    they can be filled). The LAST (broadest) position is the tree top - NEVER `~/.claude`. If no
+    ancestor - nor `proj` - has a `CLAUDE.md`, the chain is just `[proj]` (it is the top; everything
+    accumulates there). Each level's pointer block lives in `<level>/CLAUDE.local.md`; the bodies all
+    live centrally at the anchor's `.claude-memory/`. Reference-integrity uses this: a `[[ref]]` must
+    resolve to a target at the SAME or a LATER (higher) position - upward only."""
     try:
         here = Path(proj)
         ladder = [here, *here.parents]            # project dir up toward /
-        top = topmost_claude_md_dir(proj)         # the HIGHEST dir with a CLAUDE.md, or None
+        top = resolve_anchor(proj)                # the tree's anchor, or None
         if top is None:                           # project is the top; single-tier chain
-            return [claude_memory_dir(here)]
-        # contiguous tree from the project up to and including the topmost CLAUDE.md (gaps included);
-        # each altitude is that level's CURATED store (`.claude-bx-selflearning`).
+            return [here]
         highest = ladder.index(top)
-        return [d / CURATED_DIRNAME for d in ladder[:highest + 1]]
+        return ladder[:highest + 1]
     except (TypeError, ValueError):
-        return [claude_memory_dir(proj)]
+        return [Path(proj)]
 
 
 # ---- new-project seeding (one-time /collect-knowledge bootstrap nudge) ---------------

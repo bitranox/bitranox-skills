@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""SessionStart hook: inject the meta-using-bitranox-skills skill as session context.
+"""SessionStart hook: inject the SMALL session essentials - the memory-retrieval standing rule,
+a pending miss-audit, and the self-silencing nudges.
 
-Bitranox's counterpart to what the superpowers plugin does for using-superpowers:
-on session startup, /clear, and after compaction, load
-skills/meta-using-bitranox-skills/SKILL.md and return it as additionalContext, so the
-skills-first discipline is active from the first turn and survives compaction -
-without the user having to invoke the skill manually. This is what lets the
-superpowers marketplace be dropped while keeping its bootstrap behaviour.
+The big skills-first banner is emitted by its OWN hook command (session-banner.py). The split is
+load-bearing: the harness persists an oversized additionalContext to a file and injects only a
+~2KB preview, so anything appended AFTER a ~10KB banner (this hook's essentials, before the split)
+never reached context. Emitted separately and kept SMALL (see the size test), the essentials always
+land inline.
 
 Emits the Claude Code SessionStart contract on stdout:
   {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}
@@ -30,31 +30,6 @@ from self_improve_signals import (
     mark_seeded,
     project_unseeded,
 )
-
-BANNER = (
-    "<EXTREMELY-IMPORTANT>\n"
-    "Below is the full content of your 'bitranox:meta-using-bitranox-skills' skill - your standing "
-    "instruction for finding and using skills. It establishes that you MUST invoke a relevant "
-    "skill (via the Skill tool) before responding. Follow it for the whole session.\n\n"
-)
-
-
-def skill_path():
-    """Locate meta-using-bitranox-skills/SKILL.md from CLAUDE_PLUGIN_ROOT, else from this file."""
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    base = Path(root) if root else Path(__file__).resolve().parent.parent
-    return base / "skills" / "meta-using-bitranox-skills" / "SKILL.md"
-
-
-def build_context():
-    """Return the additionalContext string, or None if the skill cannot be read."""
-    try:
-        text = skill_path().read_text(encoding="utf-8")
-    except Exception:  # noqa: BLE001 - missing/unreadable skill: inject nothing, never wedge
-        return None
-    if not text.strip():
-        return None
-    return BANNER + text + "\n</EXTREMELY-IMPORTANT>"
 
 
 _RETRIEVAL_TMPL = (
@@ -229,7 +204,7 @@ def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [build_context(), retrieval_context(proj), audit_context(proj)]
+    parts = [retrieval_context(proj), audit_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]
     ctx = [p for p in parts if p]

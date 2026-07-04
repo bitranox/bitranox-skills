@@ -30,6 +30,7 @@ _HOOK_MODULES = {
     "git-commit-branch-guard": "git_commit_branch_guard",
     "block-sed-structured-files": "block_sed_structured_files",
     "session-start": "session_start",
+    "session-banner": "session_banner",
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
     "warn-unpinned-subagent-model": "warn_unpinned_subagent_model",
@@ -42,3 +43,34 @@ for _stem, _alias in _HOOK_MODULES.items():
     _module = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_module)
     sys.modules[_alias] = _module
+
+
+import types as _types
+
+import pytest as _pytest
+
+
+@_pytest.fixture
+def two_trees(tmp_path, monkeypatch):
+    """Two INDEPENDENT knowledge trees under tmp_path/work (OUTSIDE the isolated HOME at
+    tmp_path/home): work/marketing and work/bakery, each with its own top CLAUDE.md +
+    .claude-memory store + a nested project dir carrying its own CLAUDE.md."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    work = tmp_path / "work"
+    tops = {}
+    for name in ("marketing", "bakery"):
+        top = work / name
+        proj = top / "campaigns" / "proj1" if name == "marketing" else top / "recipes" / "proj1"
+        proj.mkdir(parents=True)
+        (top / "CLAUDE.md").write_text("%s tree top\n" % name, encoding="utf-8")
+        (top / ".claude-memory").mkdir()
+        (proj / "CLAUDE.md").write_text("%s proj\n" % name, encoding="utf-8")
+        tops[name] = (top, proj)
+    return _types.SimpleNamespace(
+        home=home, root=work,
+        top_a=tops["marketing"][0], proj_a=tops["marketing"][1],
+        top_b=tops["bakery"][0], proj_b=tops["bakery"][1],
+    )
