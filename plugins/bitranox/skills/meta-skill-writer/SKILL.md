@@ -602,18 +602,22 @@ for one repo's release machinery, it belongs in **that repo's** `CONTRIBUTING.md
 
 If the skill you author persists durable facts, learnings, preferences, or state across sessions,
 use the bitranox memory backend rather than inventing one - and never route learnings through a
-memory MCP as their home. The model is a project-local **curated store**
-`<project>/.claude-bx-selflearning/`: `index.md` (the index a one-line `@import` - in `CLAUDE.local.md`
-by default, `CLAUDE.md` if `track_private` - pulls into context, always loaded) + `facts/<slug>.md`
-(heavy bodies, pulled on demand). The push/pull split is
-built in: a one-line hook lands in the always-loaded index, the detail in `facts/`. Write through the
-engine (`bitranox:meta-self-improve` -> `memory_engine.py`), never by hand.
+memory MCP as their home. The model is a per-altitude POINTER BLOCK plus CENTRAL BODIES: each
+level's `CLAUDE.local.md` carries a managed fenced block of one-line pointers
+(`- [Title](mem:<slug>) - hook`, the hook TRIGGER-FIRST: "When <situation>, <directive>") that
+loads as always-in-context cascade text, and every fact body lives centrally at
+`<anchor>/.claude-memory/facts/<slug>.md` (the anchor = the knowledge tree's top directory),
+framed as a native memory entry (frontmatter, then **Why:** / **How to apply:**), read on demand
+via the retrieval recipe the block itself carries. Write ONLY through the engine -
+`hooks/memory_engine.py add ...` launched via `hooks/run-python.sh` (it upserts by slug, enforces
+tree-unique slugs, frames the body, locks, stays mtime-neutral); never hand-edit the block or a
+body (a PreToolUse guard denies it).
 
 A memory MCP (`basic-memory`) is NOT a backend/home - only an OPTIONAL, read-only full-text+graph
 SEARCH index OVER those local files, to sharpen cross-project recall; when absent, recall falls back
-to a keyword scan (never a hard dependency). Wire one only through the `update-config` skill. The full
-model, the version gate, and the MCP caveats live in `bitranox:meta-self-improve` - cross-reference it
-rather than restating it.
+to a keyword scan (never a hard dependency). Wire one only through the `update-config` skill. The
+full storage spec (tiers, altitudes, trees, capture flow) lives in `bitranox:meta-self-improve` -
+cross-reference it rather than restating it.
 
 ## The Iron Law (Same as TDD)
 
