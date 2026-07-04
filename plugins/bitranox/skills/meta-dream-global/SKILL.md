@@ -1,6 +1,6 @@
 ---
 name: meta-dream-global
-description: The CROSS-PROJECT dream - consolidate memory ACROSS all your projects, the expensive pass that reads every project store. Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", or occasionally after several per-project dreams. Scans all project memory stores for recurring / broadly-useful knowledge and factors it up to the global curated layer at the topmost-CLAUDE.md ancestor (.claude-bx-selflearning/), or the lowest common ancestor, pulls sibling-tree knowledge into projects (inbound gather), and cross-pollinates outward - all via lift-or-copy, never a cross-tree reference. For one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
+description: The CROSS-PROJECT dream - consolidate memory ACROSS all your projects, the expensive pass that reads every project store. Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", or occasionally after several per-project dreams. Scans all project memory stores for recurring / broadly-useful knowledge and factors it up to the global curated layer at the topmost-CLAUDE.md ancestor (the level's CLAUDE.local.md pointer block + note bodies in the anchor's .claude-memory/), or the lowest common ancestor, pulls sibling-tree knowledge into projects (inbound gather), and cross-pollinates outward - all via lift-or-copy, never a cross-tree reference. For one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-global
@@ -43,7 +43,8 @@ Same machine-local config as the project dream (`self_improve_signals.load_confi
 Create one todo per step.
 
 1. **Back up first.** Snapshot every store this run may touch - the global curated layer at the
-   topmost-`CLAUDE.md` ancestor and any project's curated `.claude-bx-selflearning/` (+ native `memory/`) you will write - to
+   topmost-`CLAUDE.md` ancestor and, for any level you will write, the anchor's central
+   `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
    timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
    never re-discovered as live memory) before any edit. Curated writes go through the engine, not a
    hand-edit. The one-time whole-store backup is the safety net; this is the per-run one.
@@ -55,7 +56,7 @@ Create one todo per step.
 3. **Cheap convergence pre-check, THEN ask before the deep scan.** The cross-project semantic read (the
    fan-out below) is the expensive part - dozens of subagents. Do NOT run it unconditionally. First the
    cheap, deterministic pass: which stores changed since the last global dream, `reconcile_memory_index.py
-   --check` over the altitude chains (orphans / downward; index size is an advisory warning),
+   --check` over the altitude chains (the LEVEL dirs; orphans / downward; index size is an advisory warning),
    `model_review_due()`, any pending
    filler queue. If nothing material changed since the last run, report convergence and STOP - a global
    dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
@@ -97,7 +98,7 @@ Create one todo per step.
    the general lives ONCE at its altitude, UPWARD-only. This is not optional and not covered by any
    earlier dedup: those ran before the promotions existed. (Per-note bytes may be a wash; the win is one
    source of truth instead of the general restated in every project.) Then run
-   `reconcile_memory_index.py --check <altitude-chain>` over the affected chains to verify reference
+   `reconcile_memory_index.py --check <altitude-chain>` (the LEVEL dirs) over the affected chains to verify reference
    integrity (no orphans, no DOWNWARD or cross-tree refs; index size is an advisory warning, not a
    failure).
 7. **Skill-fit -> batched change.** A generalization that warrants a skill goes through

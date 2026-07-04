@@ -17,6 +17,6 @@ Set strict. Capture output + rc. Require the success line. On any miss: STOP the
 | `reconcile_memory_index.py --check` | `TOTAL problems: 0`                   |
 
 - Call via `run-python.sh`, never raw `python3`.
-- Never swallow stderr. Never hand-edit `index.md`/`facts/`. Never skip a failed step.
+- Never swallow stderr. Never hand-edit the CLAUDE.local.md pointer block or a central body. Never skip a failed step.
 
 Checklist: [ ] strict set  [ ] output+rc captured  [ ] success line present  [ ] fail -> abort + show output

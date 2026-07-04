@@ -59,17 +59,18 @@ the scan in step 3 is run; do not duplicate the rest.
      folder's `CLAUDE.md` (a home for the lifted shared rule[s]) at the LOWEST common ancestor whose
      children share a domain - NEVER a generic bucket (`projects/`, `apps/`, `public/`); its child-derived
      scope descriptor is synthesized by the Step 3 per-level scope-descriptor subagent (see below) and
-     written into that rung's `index.md` scope block, not hand-typed into the `CLAUDE.md`. A
+     written into that rung's pointer-block scope (in `CLAUDE.local.md`), not hand-typed into the `CLAUDE.md`. A
      structural-only look-alike (siblings that merely seem related, no shared-rule evidence) is SURFACED
      as a question, not auto-proposed. The **workspace-root `CLAUDE.md`** is the file-tree HQ; because the
-     global curated store now lives at the TOPMOST ancestor with a `CLAUDE.md` (not `~/.claude`), the head
+     global curated store now lives at the TOPMOST ancestor with a `CLAUDE.md` (not `~/.claude`) - note
+     bodies central in that anchor's `.claude-memory/`, pointer blocks per-rung in `CLAUDE.local.md` - the head
      office IS that top-`CLAUDE.md` rung - and proposing a brand-new `CLAUDE.md` ABOVE the current highest
      existing one is the one case allowed to go above the highest rung (the reactive gap-fill in
      `bitranox:meta-self-improve` never does this on its own). Creating a rung is light - a new
      `CLAUDE.md`, NO slug migration - but it adds a tier to the ancestor chain of every project beneath
      it, so recheck their deltas. Reuse the per-level scope-descriptor synthesis mechanism
      (`meta-self-improve` "Synthesize a scope descriptor at EVERY altitude" + the
-     `<!-- bitranox:self-learning -->` block in `index.md`): a SUBAGENT (capable model, not haiku) reads
+     `<!-- bitranox:self-learning -->` scope block in the `CLAUDE.local.md` pointer block): a SUBAGENT (capable model, not haiku) reads
      the docs of the directories directly beneath the new rung and returns its descriptor. Propose-first,
      never created without confirmation.
    - **No shared/tracked home for the rung? Propose an umbrella repo.** If the folder that should hold the
@@ -85,7 +86,7 @@ the scan in step 3 is run; do not duplicate the rest.
      share the rung to other machines/people; local-only still gives version history + makes a trim
      safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
 5. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
-   `reconcile_memory_index.py --check`, skill-fit batched change, report counts).
+   `reconcile_memory_index.py --check` over the LEVEL dirs, skill-fit batched change, report counts).
 
 ## Boundaries (unchanged from meta-dream-global)
 

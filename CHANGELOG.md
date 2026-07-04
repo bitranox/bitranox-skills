@@ -25,7 +25,10 @@ installed copies and needs no bump.
   The legacy `.claude-bx-selflearning/index.md` + `facts/<slug>.md` + `@import` format is retired. Slug
   stays the logical identity (carried as a `bx:slug=` token on each pointer line); the uuid is only the
   body-file key, so the reference / provenance / dedup model is unchanged. Engine COMMANDS
-  (`memory_engine.py add|heal|set-scope`, `reconcile_memory_index.py [dir]|--check`) keep their contract.
+  (`memory_engine.py add|heal|set-scope`, `reconcile_memory_index.py [dir]|--check`) keep their contract;
+  `reconcile_memory_index.py` now takes the LEVEL dir (not a `.claude-bx-selflearning` dir) and reports
+  orphan pointers instead of backfilling. The seven memory meta-skills (self-improve, dream-project(+B2),
+  dream-global(+deep), memory-settings, collect-knowledge) describe the new format.
 
 ## [5.27.0] - 2026-07-04
 
