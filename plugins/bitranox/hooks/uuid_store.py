@@ -1,34 +1,29 @@
 #!/usr/bin/env python3
-"""Central UUID body-store + per-altitude pointer indexes (the mount-independent memory layout).
+"""The slug-keyed central fact store + per-altitude pointer indexes (mount-independent memory).
 
-This is the ADDITIVE storage model that sits beside the legacy `.claude-bx-selflearning/` store (which
-is untouched during the transition). Motivation and two proving probes live in `.plan/`:
-`memory-architektur.md` section 11, `probe-uuid-central-store-resolve.md`,
-`probe-ancestor-index-fact-retrieval.md`.
+(Historical filename: this module began as the uuid store; the 2026-07-05 retrieval experiment -
+.plan/probe-retrieval-and-platform-20260705.md - showed slug-named flat bodies get APPLIED 6/6 during
+reasoning while uuid-sharded bodies were read but ignored 0/6, so the store is slug-keyed.)
 
-The problem it solves: an inline index in an ancestor `CLAUDE.local.md` loads reliably and DRIVES the
-model to fetch bodies on demand, but only if the fact links are resolvable from a deep launch cwd. A
-store-relative or ancestor-relative link resolves against the launch cwd (not the index file) and 404s;
-an absolute link is mount-dependent and goes stale the moment the tree moves or is seen from another
-mount point. The fix is to make IDENTITY a UUID, not a path:
+Layout:
+  * ONE central body-store per tree anchor: `<anchor>/.claude-memory/facts/<slug>.md` - flat,
+    human-readable, greppable. The SLUG is the fact's identity, unique per TREE.
+  * A POINTER index per altitude, INLINE in that level's `CLAUDE.local.md` (plain cascade text, never
+    `@import`): `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` inside a managed fenced
+    block whose header carries the RETRIEVAL RECIPE (how to walk up and Read a body mid-reasoning -
+    the recipe is the experimentally proven retrieval channel, and it reaches Task subagents, which
+    never see the SessionStart inject).
+  * The resolver derives everything from cwd (nothing absolute is baked): walk up to the anchor,
+    read `facts/<slug>.md` there. Proven byte-identical across different mount prefixes.
 
-  * ONE central body-store per anchor: `<anchor>/.claude-memory/facts/<2-hex-shard>/<uuid>.md`. A fact's
-    body lives there exactly once (dedup by the UUID identity), referenced from any number of altitudes.
-    The shard is the first two hex digits of the UUID (256 buckets; disk is cheap, shard generously).
-  * A POINTER index per altitude, INLINE in that level's `CLAUDE.local.md` (plain text, not `@import` -
-    an import above the workspace root does not inline, but cascade text always loads). Each line carries
-    a mount-independent `uuid:<uuid>` reference, never a path.
-  * The resolver derives EVERYTHING from cwd (nothing absolute is baked): walk up to the anchor, the
-    central store is `<anchor>/.claude-memory/facts`, collect the `uuid:` refs from cwd up to the anchor,
-    read each body by shard. The probe proved this resolves byte-identically across two mount prefixes.
+TRANSITION: pointer lines written before the pivot use `(uuid:<uuid>)` links + a `bx:slug=` token and
+their bodies live at the old sharded path `facts/<2-hex>/<uuid>.md`. The parser accepts them (flagged
+`legacy`), the renderer re-emits them UNCHANGED (so heal never flips a line whose body has not moved),
+and `resolve` reads their bodies from the old path - until `migrate_to_slug_store.py` moves body +
+line together.
 
-Identity: `fact_uuid(altitude_dir, slug)` is a deterministic uuid5 keyed on the fact's HOME altitude dir
-(not the anchor) + slug. Deterministic so a migration re-run never duplicates; keyed on the home altitude
-so two altitudes under one anchor that both hold a fact with the same slug get DISTINCT uuids (their
-bodies never collide in the single central store).
-
-Pure standard library; cross-platform (pathlib, UTF-8). Writers are mtime-neutral (a no-op write writes
-nothing) so the PostToolUse hooks do not churn the files.
+Pure standard library; cross-platform (pathlib, UTF-8). Writers are mtime-neutral (a no-op write
+writes nothing) so the PostToolUse hooks do not churn the files.
 """
 import os
 import re
@@ -59,16 +54,40 @@ def slugify(title, type_=None):
         base = "%s-%s" % (type_, base)
     return base
 
-INDEX_BEGIN = "<!-- BITRANOX-UUID-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
-INDEX_END = "<!-- BITRANOX-UUID-INDEX:END -->"
+INDEX_BEGIN = "<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
+INDEX_END = "<!-- BITRANOX-MEMORY-INDEX:END -->"
+# Pre-pivot fence names: still parsed (and replaced on upsert) until every live block is migrated.
+LEGACY_INDEX_BEGIN = "<!-- BITRANOX-UUID-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
+LEGACY_INDEX_END = "<!-- BITRANOX-UUID-INDEX:END -->"
 INDEX_HEADING = "# Memory index"
+IRON_HEADING = "## Iron rules"
+MEMORY_HEADING = "## Memory index"
+
+# The retrieval recipe rendered into every pointer-block header. EXPERIMENT-PROVEN wording
+# (6/6 applied mid-reasoning compliance incl. Task subagents; 0/3 without it) - change only with a
+# re-run of the retrieval probes.
+RECIPE_LINE = ("(fact bodies are NOT preloaded - to read a fact's full body: walk UP from the "
+               "current directory to the first ancestor that contains a `.claude-memory/` "
+               "directory, then Read `<that ancestor>/.claude-memory/facts/<slug>.md`; the slug is "
+               "the `mem:<slug>` link target on the fact's line)")
+
+HOOK_SOFT_MAX = 350   # soft cap, chars, advisory only: 1-3 directive second-person sentences
+
+
+def hook_over_budget(hook):
+    """True when a hook exceeds the soft cap (advisory - callers warn, never fail)."""
+    return len(hook or "") > HOOK_SOFT_MAX
 
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope markers (same grammar the
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 
-# `- [Title](uuid:<uuid>) - hook <!-- bx:src=a,b bx:pin -->` ; meta comment optional.
-_PTR_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\(uuid:(?P<uuid>[0-9a-fA-F-]+)\) - (?P<hook>.*?)"
-                     r"(?:\s*<!--\s*(?P<meta>bx:[^>]*?)\s*-->)?\s*$")
+# `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` (new) or the pre-pivot
+# `- [Title](uuid:<uuid>) - hook <!-- ... bx:slug=s -->` (legacy). The hook stops at the FIRST `<`
+# (hooks are engine-written one-line prose and never contain `<`); anything after the first meta
+# comment is trailing garbage, dropped on canonical re-render (heal repairs hand-edit damage).
+_PTR_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\((?P<scheme>mem|uuid):(?P<target>[^)]+)\) - "
+                     r"(?P<hook>[^<]*)"
+                     r"(?:\s*<!--\s*(?P<meta>bx:[^>]*?)\s*-->)?(?P<trail>.*)$")
 
 
 # ---- identity + sharded central paths -----------------------------------------------------------
@@ -92,8 +111,14 @@ def central_facts_dir(anchor_dir):
     return Path(anchor_dir) / STORE_DIRNAME / "facts"
 
 
-def body_path(anchor_dir, fact_uuid_str):
-    """Absolute path of a fact body in the central store: `.../facts/<shard>/<uuid>.md`."""
+def body_path(anchor_dir, slug):
+    """Absolute path of a fact body in the central store: `.../facts/<slug>.md` (flat, slug-keyed)."""
+    return central_facts_dir(anchor_dir) / (str(slug) + ".md")
+
+
+def legacy_body_path(anchor_dir, fact_uuid_str):
+    """Pre-pivot body location (`.../facts/<2-hex>/<uuid>.md`) - read-only during the transition;
+    `migrate_to_slug_store.py` moves these to the slug-named path."""
     return central_facts_dir(anchor_dir) / shard(fact_uuid_str) / (str(fact_uuid_str) + ".md")
 
 
@@ -106,19 +131,21 @@ resolve_anchor = sig.resolve_anchor
 # ---- pointer-index model + render/parse ---------------------------------------------------------
 
 class Pointer:
-    """One pointer line: a mount-independent `uuid:` reference to a body in the central store, plus the
-    always-loaded title + hook and the provenance `source` set / `pin` flag (same meta grammar as the
-    legacy engine so de-double and reconcile read both uniformly)."""
+    """One pointer line. `slug` is the fact's identity and the body-file key. A LEGACY pointer
+    (pre-pivot) carries the old `uuid` and renders/reads via the old sharded path until the
+    migration moves its body - the renderer re-emits legacy lines unchanged so a heal round-trip
+    can never break an unmigrated store."""
 
-    __slots__ = ("uuid", "title", "hook", "source", "pin", "slug")
+    __slots__ = ("slug", "title", "hook", "source", "pin", "uuid", "legacy")
 
-    def __init__(self, uuid, title, hook="", source=None, pin=False, slug=""):
-        self.uuid = str(uuid)
+    def __init__(self, slug="", title="", hook="", source=None, pin=False, uuid="", legacy=False):
+        self.slug = slug or ""
         self.title = title or ""
         self.hook = hook or ""
         self.source = set(source or ())
         self.pin = bool(pin)
-        self.slug = slug or ""
+        self.uuid = str(uuid or "")
+        self.legacy = bool(legacy)
 
     def meta_comment(self):
         parts = []
@@ -126,12 +153,14 @@ class Pointer:
             parts.append("bx:src=%s" % ",".join(sorted(self.source)))
         if self.pin:
             parts.append("bx:pin")
-        if self.slug:                                # the logical identity (uuid is only the body key)
+        if self.legacy and self.slug:                # legacy lines keep their bx:slug token
             parts.append("bx:slug=%s" % self.slug)
         return (" <!-- %s -->" % " ".join(parts)) if parts else ""
 
     def index_line(self):
-        return "- [%s](uuid:%s) - %s%s" % (self.title, self.uuid, self.hook, self.meta_comment())
+        if self.legacy:
+            return "- [%s](uuid:%s) - %s%s" % (self.title, self.uuid, self.hook, self.meta_comment())
+        return "- [%s](mem:%s) - %s%s" % (self.title, self.slug, self.hook, self.meta_comment())
 
 
 def _slug_from_title(title):
@@ -153,27 +182,43 @@ def _parse_meta(meta):
 
 
 def render_pointer_index(scope, pointers):
-    """Render (scope descriptor, [Pointer]) to the canonical pointer-index text (scope block + heading +
-    `uuid:` lines). Deterministic; ASCII separators only (the tell-sweep convention)."""
-    out = ["%s\n%s\n%s" % (SCOPE_BEGIN, (scope or "").strip(), SCOPE_END), "", INDEX_HEADING, ""]
-    for p in pointers:
-        out.append(p.index_line())
+    """Render (scope descriptor, [Pointer]) to the canonical pointer-index text: scope block, the
+    RETRIEVAL RECIPE line, then pinned lines under `## Iron rules` and the rest under
+    `## Memory index`. Deterministic; ASCII separators only (the tell-sweep convention)."""
+    out = ["%s\n%s\n%s" % (SCOPE_BEGIN, (scope or "").strip(), SCOPE_END), "",
+           INDEX_HEADING, RECIPE_LINE, ""]
+    pinned = [p for p in pointers if p.pin]
+    rest = [p for p in pointers if not p.pin]
+    if pinned:
+        out.append(IRON_HEADING)
+        out.extend(p.index_line() for p in pinned)
+        out.append("")
+    out.append(MEMORY_HEADING)
+    out.extend(p.index_line() for p in rest)
     return "\n".join(out).rstrip("\n") + "\n"
 
 
 def parse_pointer_index(text):
     """Parse pointer-index text (a whole `CLAUDE.local.md`, or just the block) -> (scope, [Pointer]).
-    Only `- [..](uuid:..) - ..` lines become pointers; everything else is ignored."""
+    Accepts BOTH the current `mem:<slug>` lines and pre-pivot `uuid:<uuid>` lines (returned with
+    `legacy=True`); trailing garbage after the first meta comment is ignored (dropped on the next
+    canonical re-render). Headings and prose are ignored."""
     scope = sig.read_scope_block(text or "") or ""
     pointers = []
     for raw in (text or "").splitlines():
         m = _PTR_RX.match(raw)
         if not m:
             continue
-        source, pin, slug = _parse_meta(m.group("meta"))
+        source, pin, slug_tok = _parse_meta(m.group("meta"))
         title = m.group("title")
-        pointers.append(Pointer(uuid=m.group("uuid"), title=title, hook=m.group("hook"),
-                                source=source, pin=pin, slug=slug or _slug_from_title(title)))
+        hook = m.group("hook").strip()
+        if m.group("scheme") == "mem":
+            pointers.append(Pointer(slug=m.group("target"), title=title, hook=hook,
+                                    source=source, pin=pin))
+        else:
+            pointers.append(Pointer(slug=slug_tok or _slug_from_title(title), title=title,
+                                    hook=hook, source=source, pin=pin,
+                                    uuid=m.group("target"), legacy=True))
     return scope, pointers
 
 
@@ -183,16 +228,18 @@ def _index_block(scope, pointers):
 
 def upsert_pointer_block(text, scope, pointers):
     """Splice ONE canonical managed pointer block into `text` (a `CLAUDE.local.md`), replacing any
-    existing managed block and preserving all surrounding text. Byte-safe outside the fences."""
+    existing managed block (either fence generation) and preserving all surrounding text. Byte-safe
+    outside the fences."""
     block = _index_block(scope, pointers)
-    b = text.find(INDEX_BEGIN)
-    if b >= 0:
-        e = text.find(INDEX_END, b)
-        e = len(text) if e < 0 else e + len(INDEX_END)   # malformed (no END) -> cut to end
-        head = text[:b].rstrip("\n")
-        tail = text[e:].lstrip("\n")
-        parts = [p for p in (head, block, tail) if p]
-        return "\n\n".join(parts).rstrip("\n") + "\n"
+    for begin, endm in ((INDEX_BEGIN, INDEX_END), (LEGACY_INDEX_BEGIN, LEGACY_INDEX_END)):
+        b = text.find(begin)
+        if b >= 0:
+            e = text.find(endm, b)
+            e = len(text) if e < 0 else e + len(endm)    # malformed (no END) -> cut to end
+            head = text[:b].rstrip("\n")
+            tail = text[e:].lstrip("\n")
+            parts = [p for p in (head, block, tail) if p]
+            return "\n\n".join(parts).rstrip("\n") + "\n"
     sep = "" if not text.strip() else (text.rstrip("\n") + "\n\n")
     return sep + block + "\n"
 
@@ -212,20 +259,18 @@ def write_if_changed(path, text):
     return True
 
 
-def put_body(anchor_dir, fact_uuid_str, body):
-    """Write a fact body to the central sharded store `<anchor>/.claude-memory/facts/<shard>/<uuid>.md`,
-    mtime-neutral. Returns True if written."""
-    return write_if_changed(body_path(anchor_dir, fact_uuid_str), (body or "").rstrip("\n") + "\n")
+def put_body(anchor_dir, slug, body):
+    """Write a fact body to `<anchor>/.claude-memory/facts/<slug>.md`, mtime-neutral. True if written."""
+    return write_if_changed(body_path(anchor_dir, slug), (body or "").rstrip("\n") + "\n")
 
 
-def add_pointer(altitude_dir, uuid, title, hook, source=None, pin=False, scope_default="", slug=""):
-    """Upsert one pointer line into `<altitude_dir>/CLAUDE.local.md`'s managed block (merging the
-    provenance set + pin on update), under a lock, mtime-neutral. Sets the scope descriptor if absent.
-    `slug` is the logical identity carried on the line (the uuid is only the body-file key); it defaults
-    to a title-derived slug. Does NOT write the body - the caller writes that via `put_body`. Returns the
-    uuid."""
-    uuid = str(uuid)
-    slug = slug or _slug_from_title(title)
+def add_pointer(altitude_dir, slug, title, hook, source=None, pin=False, scope_default=""):
+    """Upsert one pointer line (keyed by SLUG) into `<altitude_dir>/CLAUDE.local.md`'s managed block
+    (merging the provenance set + pin on update), under a lock, mtime-neutral. Sets the scope
+    descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
+    responsible for having written the slug-named body). Does NOT write the body - the caller does,
+    via `put_body`. Returns the slug."""
+    slug = str(slug)
     local = sig.claude_local_md_path(altitude_dir)
     with sig.memory_lock(local):
         try:
@@ -233,41 +278,40 @@ def add_pointer(altitude_dir, uuid, title, hook, source=None, pin=False, scope_d
         except OSError:
             text = ""
         scope, pointers = parse_pointer_index(text)
-        by_uuid = {p.uuid: p for p in pointers}
-        if uuid in by_uuid:
-            p = by_uuid[uuid]
+        by_slug = {p.slug: p for p in pointers}
+        if slug in by_slug:
+            p = by_slug[slug]
             p.title, p.hook = title, (hook or p.hook)
             p.source |= set(source or ())
             p.pin = p.pin or pin
-            p.slug = slug or p.slug
+            p.legacy, p.uuid = False, ""             # updated fact now lives at the slug path
         else:
-            pointers.append(Pointer(uuid=uuid, title=title, hook=hook, source=source, pin=pin, slug=slug))
+            pointers.append(Pointer(slug=slug, title=title, hook=hook, source=source, pin=pin))
         write_if_changed(local, upsert_pointer_block(text, scope or scope_default, pointers))
-    return uuid
+    return slug
 
 
 # ---- the resolver: cwd -> resolved bodies -------------------------------------------------------
 
 class Resolved:
-    """A fully resolved fact: its uuid, always-loaded title/hook, the body read from the central store,
-    and the altitude (the dir whose pointer index referenced it)."""
+    """A fully resolved fact: its slug (the identity), always-loaded title/hook, the body read from
+    the central store, and the altitude (the dir whose pointer index referenced it)."""
 
-    __slots__ = ("uuid", "title", "hook", "body", "altitude", "slug")
+    __slots__ = ("slug", "title", "hook", "body", "altitude")
 
-    def __init__(self, uuid, title, hook, body, altitude, slug=""):
-        self.uuid = str(uuid)
+    def __init__(self, slug, title, hook, body, altitude):
+        self.slug = str(slug)
         self.title = title
         self.hook = hook
         self.body = body
         self.altitude = altitude
-        self.slug = slug or ""
 
 
 def resolve(cwd):
-    """From `cwd`, collect every `uuid:` pointer from cwd up to the anchor and read each body from the
-    anchor's central store. Deduped by uuid (a uuid referenced at several altitudes yields one body).
-    Narrowest (cwd) first. Returns [Resolved]; [] when there is no anchor. A missing body is skipped
-    (never fabricated). Never raises."""
+    """From `cwd`, collect every pointer from cwd up to the anchor and read each body from the
+    anchor's central store (slug-named path; a LEGACY pointer's body is read from the old sharded
+    path until migrated). Deduped by slug, narrowest (cwd) first. Returns [Resolved]; [] when there
+    is no anchor. A missing body is skipped (never fabricated). Never raises."""
     try:
         anchor = resolve_anchor(cwd)
         if anchor is None:
@@ -284,15 +328,16 @@ def resolve(cwd):
                 continue
             _scope, pointers = parse_pointer_index(text)
             for p in pointers:
-                if p.uuid in seen:
+                if p.slug in seen:
                     continue
+                path = legacy_body_path(anchor, p.uuid) if p.legacy else body_path(anchor, p.slug)
                 try:
-                    body = body_path(anchor, p.uuid).read_text(encoding="utf-8")
+                    body = path.read_text(encoding="utf-8")
                 except OSError:
                     continue                         # body missing -> skip, do not fabricate
-                seen.add(p.uuid)
-                out.append(Resolved(uuid=p.uuid, title=p.title, hook=p.hook,
-                                    body=body.rstrip("\n"), altitude=level, slug=p.slug))
+                seen.add(p.slug)
+                out.append(Resolved(slug=p.slug, title=p.title, hook=p.hook,
+                                    body=body.rstrip("\n"), altitude=level))
         return out
     except Exception:                                # noqa: BLE001 - a read path must never wedge a turn
         return []

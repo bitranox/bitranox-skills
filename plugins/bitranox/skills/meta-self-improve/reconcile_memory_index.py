@@ -2,8 +2,8 @@
 """Reference-check + reconcile a curated memory altitude (UUID-native).
 
 A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointer block
-(`- [Title](uuid:X) - hook <!-- bx:src=.. bx:pin bx:slug=s -->`); the fact bodies live centrally at
-`<anchor>/.claude-memory/facts/<shard>/<uuid>.md`. Slug is the logical identity. This tool:
+(`- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->`); the fact bodies live centrally at
+`<anchor>/.claude-memory/facts/<slug>.md`. Slug is the identity, unique per tree. This tool:
   * `--check`: verifies `[[wikilink]]` integrity across an ordered altitude chain (upward-only, no
     dangling), and emits an ADVISORY warning when a level's always-loaded pointer block grows large;
   * default (reconcile): reports orphan pointers whose central body is missing (a raw body carries no
@@ -127,7 +127,8 @@ def _ref_slug(token):
 def is_curated(d):
     """A dir is CURATED when its `CLAUDE.local.md` holds a managed pointer block."""
     try:
-        return us.INDEX_BEGIN in (Path(d) / "CLAUDE.local.md").read_text(encoding="utf-8")
+        text = (Path(d) / "CLAUDE.local.md").read_text(encoding="utf-8")
+        return us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text
     except OSError:
         return False
 
@@ -206,10 +207,14 @@ def over_cap(level_dir, max_bytes=_WARN_BYTES):
     except OSError:
         return True, 0, 0
     b = text.find(us.INDEX_BEGIN)
+    endm = us.INDEX_END
+    if b < 0:
+        b = text.find(us.LEGACY_INDEX_BEGIN)
+        endm = us.LEGACY_INDEX_END
     if b < 0:
         return True, 0, 0
-    e = text.find(us.INDEX_END, b)
-    block = text[b:(len(text) if e < 0 else e + len(us.INDEX_END))]
+    e = text.find(endm, b)
+    block = text[b:(len(text) if e < 0 else e + len(endm))]
     raw = block.encode("utf-8")
     lines = block.count("\n") + (1 if block and not block.endswith("\n") else 0)
     return len(raw) <= max_bytes, lines, len(raw)
@@ -224,9 +229,34 @@ def reconcile(level_dir, dry_run=False):
     d = Path(level_dir)
     _scope, entries, _bodies = ME.read_store(str(d))
     anchor = ME._anchor(str(d))
-    orphans = sorted(_canon(e.slug) for e in entries if not us.body_path(anchor, e.uuid).is_file())
+    orphans = sorted(
+        _canon(e.slug) for e in entries
+        if not (us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)).is_file())
     return {"dir": str(d), "facts": len(entries), "already_indexed": len(entries),
             "added": [], "orphans": orphans, "dry_run": dry_run}
+
+
+def _other_levels_pointing(anchor, level_dir, slug):
+    """True when any OTHER level between anchor and its subtree that we can see (the level's own
+    chain) still has a pointer for `slug`. Conservative: checks every CLAUDE.local.md under the
+    anchor one level deep plus the chain of `level_dir`."""
+    qcanon = _canon(slug)
+    seen = set()
+    try:
+        import self_improve_signals as sig_mod
+        chain = sig_mod.altitude_chain(str(level_dir))
+    except Exception:  # noqa: BLE001
+        chain = []
+    for lvl in chain:
+        if Path(lvl) == Path(level_dir):
+            continue
+        try:
+            _s, ptrs = us.parse_pointer_index((Path(lvl) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if any(_canon(x.slug) == qcanon for x in ptrs):
+            return True
+    return False
 
 
 def archive_entry(level_dir, slug, archive_subdir=".archive"):
@@ -241,12 +271,14 @@ def archive_entry(level_dir, slug, archive_subdir=".archive"):
     anchor = ME._anchor(str(d))
     for e in entries:
         if _canon(e.slug) == qcanon:
-            src = us.body_path(anchor, e.uuid)
-            if src.is_file():
+            src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+            # archive the body ONLY when no other level in the tree still points at this slug
+            others = _other_levels_pointing(anchor, d, e.slug)
+            if src.is_file() and not others:
                 archive = us.central_facts_dir(anchor).parent / archive_subdir
                 try:
                     archive.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(src), str(archive / (e.uuid + ".md")))
+                    shutil.move(str(src), str(archive / (src.name)))
                 except OSError:
                     pass
     ME._commit_store(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})

@@ -92,39 +92,48 @@ def find_legacy_stores(root):
 
 
 def migrate_store(altitude, dry_run):
-    """Migrate one altitude's legacy store into the central UUID store. Returns a list of
-    (uuid, slug, written_bool) for every fact. `dry_run` writes nothing."""
+    """Migrate one altitude's legacy store into the central SLUG store. Returns a list of
+    (slug, written_bool, collided_bool) for every fact; a cross-level slug collision gets a
+    suffixed slug (reported). `dry_run` writes nothing."""
     scope, facts = read_legacy_store(sig.claude_memory_dir(altitude))
     anchor = us.resolve_anchor(altitude) or Path(altitude)
     results = []
     for f in facts:
-        uid = us.fact_uuid(altitude, f["slug"])
+        slug, collided = f["slug"], False
+        target = us.body_path(str(anchor), slug)
+        if target.is_file() and target.read_text(encoding="utf-8").rstrip("\n") != f["body"].rstrip("\n"):
+            # a DIFFERENT fact in this tree already owns the slug (slugs are tree-unique now)
+            n = 2
+            while us.body_path(str(anchor), "%s-%d" % (slug, n)).is_file():
+                n += 1
+            slug, collided = "%s-%d" % (slug, n), True
         written = False
         if not dry_run:
-            us.put_body(str(anchor), uid, f["body"])
-            us.add_pointer(altitude, uuid=uid, title=f["title"], hook=f["hook"],
-                           source=f["source"], pin=f["pin"], scope_default=scope, slug=f["slug"])
+            us.put_body(str(anchor), slug, f["body"])
+            us.add_pointer(altitude, slug=slug, title=f["title"], hook=f["hook"],
+                           source=f["source"], pin=f["pin"], scope_default=scope)
             written = True
-        results.append((uid, f["slug"], written))
+        results.append((slug, written, collided))
     return results
 
 
 def migrate(root, dry_run):
     """Migrate every legacy store under `root`. Returns {'stores', 'facts', 'written', 'items':[...]}."""
-    report = {"stores": 0, "facts": 0, "written": 0, "items": []}
+    report = {"stores": 0, "facts": 0, "written": 0, "collisions": 0, "items": []}
     for altitude in sorted(find_legacy_stores(root)):
         report["stores"] += 1
-        for uid, slug, written in migrate_store(altitude, dry_run):
+        for slug, written, collided in migrate_store(altitude, dry_run):
             report["facts"] += 1
             report["written"] += 1 if written else 0
-            report["items"].append((altitude, slug, uid, written))
+            report["collisions"] += 1 if collided else 0
+            report["items"].append((altitude, slug, written))
     return report
 
 
-def _current_legacy_uuids(altitude):
-    """The uuid set the altitude's CURRENT legacy facts SHOULD have (one per live slug)."""
+def _current_legacy_slugs(altitude):
+    """The slug set the altitude's CURRENT legacy facts carry."""
     _scope, facts = read_legacy_store(sig.claude_memory_dir(altitude))
-    return {us.fact_uuid(altitude, f["slug"]) for f in facts}
+    return {f["slug"] for f in facts}
 
 
 def sync(root, prune):
@@ -134,9 +143,9 @@ def sync(root, prune):
     mig = migrate(root, dry_run=False)
     report = {"facts": mig["facts"], "written": mig["written"], "pruned": 0, "bodies_deleted": 0}
     altitudes = sorted(find_legacy_stores(root))
-    referenced = set()                                # uuids still referenced by ANY altitude pointer
+    referenced = set()                                # slugs still referenced by ANY altitude pointer
     for altitude in altitudes:
-        keep = _current_legacy_uuids(altitude)
+        keep = _current_legacy_slugs(altitude)
         local = sig.claude_local_md_path(altitude)
         with sig.memory_lock(local):
             try:
@@ -144,19 +153,19 @@ def sync(root, prune):
             except OSError:
                 continue
             scope, pointers = us.parse_pointer_index(text)
-            kept = [p for p in pointers if p.uuid in keep]
+            kept = [p for p in pointers if p.slug in keep or p.slug.rsplit("-", 1)[0] in keep]
             if prune and len(kept) != len(pointers):
                 report["pruned"] += len(pointers) - len(kept)
                 us.write_if_changed(local, us.upsert_pointer_block(text, scope, kept))
                 pointers = kept
-            referenced |= {p.uuid for p in pointers}
+            referenced |= {p.slug for p in pointers}
     if prune:                                         # delete central bodies nothing references
         for altitude in altitudes:
             anchor = us.resolve_anchor(altitude) or Path(altitude)
             facts_dir = us.central_facts_dir(anchor)
             if not facts_dir.is_dir():
                 continue
-            for body in facts_dir.glob("*/*.md"):
+            for body in list(facts_dir.glob("*.md")):
                 if body.stem not in referenced:
                     try:
                         body.unlink()
@@ -181,10 +190,10 @@ def main(argv=None):
     dry_run = not args.apply
     rep = migrate(args.root, dry_run=dry_run)
     tag = "DRY-RUN" if dry_run else "APPLIED"
-    print("%s: %d fact(s) across %d store(s); %d body+pointer written"
-          % (tag, rep["facts"], rep["stores"], rep["written"]))
-    for altitude, slug, uid, written in rep["items"]:
-        print("    %s %s -> %s  [%s]" % ("+" if written else ".", slug, uid, altitude))
+    print("%s: %d fact(s) across %d store(s); %d body+pointer written; %d slug collision(s)"
+          % (tag, rep["facts"], rep["stores"], rep["written"], rep["collisions"]))
+    for altitude, slug, written in rep["items"]:
+        print("    %s %s  [%s]" % ("+" if written else ".", slug, altitude))
     return 0
 
 

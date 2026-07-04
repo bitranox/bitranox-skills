@@ -95,7 +95,7 @@ def test_is_curated_detection(tmp_path):
 
 def test_reconcile_reports_orphan_pointer_when_body_missing(proj):
     slug = ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
-    us.body_path(proj, us.fact_uuid(proj, slug)).unlink()   # delete the central body
+    us.body_path(proj, slug).unlink()                       # delete the central body
     rep = R.reconcile(proj)
     assert "heavy" in rep["orphans"] and rep["added"] == []  # reported, never fabricated/backfilled
 
@@ -163,9 +163,8 @@ def test_oversize_pointer_block_is_advisory_warning_not_a_failure(proj, capsys):
 def test_archive_entry_drops_pointer_and_moves_central_body(proj):
     ME.add_or_update_entry(proj, "Tiny", "h", body="small", scope_default="lvl")
     heavy_slug = ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400)
-    heavy_uuid = us.fact_uuid(proj, heavy_slug)
     assert R.archive_entry(proj, "heavy") is True
-    assert (us.central_facts_dir(proj).parent / ".archive" / (heavy_uuid + ".md")).is_file()
+    assert (us.central_facts_dir(proj).parent / ".archive" / (heavy_slug + ".md")).is_file()
     assert R.archive_entry(proj, "tiny") is True
     _scope, entries, _bodies = ME.read_store(proj)
     assert entries == []

@@ -71,13 +71,12 @@ def test_find_legacy_stores_lists_both_altitudes(tmp_path):
 def test_migrate_writes_bodies_and_pointers_for_every_fact(tmp_path):
     anchor, proj = _tree(tmp_path)
     rep = M.migrate(str(tmp_path), dry_run=False)
-    assert rep["facts"] == 2 and rep["written"] == 2
-    u_g = us.fact_uuid(anchor, "global-rule")
-    assert us.body_path(anchor, u_g).read_text(encoding="utf-8") == "A" * 400 + "\n"
-    u_p = us.fact_uuid(proj, "tiny-fact")
-    assert us.body_path(anchor, u_p).read_text(encoding="utf-8") == "small body\n"
+    assert rep["facts"] == 2 and rep["written"] == 2 and rep["collisions"] == 0
+    assert us.body_path(anchor, "global-rule").read_text(encoding="utf-8") == "A" * 400 + "\n"
+    assert us.body_path(anchor, "tiny-fact").read_text(encoding="utf-8") == "small body\n"
     _s, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert ptrs[0].uuid == u_p and ptrs[0].pin is True and ptrs[0].source == {"p"} and ptrs[0].slug == "tiny-fact"
+    assert ptrs[0].slug == "tiny-fact" and ptrs[0].pin is True and ptrs[0].source == {"p"}
+    assert not ptrs[0].legacy                          # migrated straight into the current format
 
 
 def test_migrate_leaves_the_legacy_store_untouched(tmp_path):
@@ -123,23 +122,20 @@ def test_cli_dry_run_is_the_default(tmp_path, capsys):
 def test_sync_prunes_orphan_pointer_and_body_when_legacy_fact_is_gone(tmp_path):
     anchor, proj = _tree(tmp_path)
     M.migrate(str(tmp_path), dry_run=False)
-    u_kept = us.fact_uuid(proj, "tiny-fact")
-    u_gone = us.fact_uuid(anchor, "global-rule")
     _drop_legacy_fact(str(Path(anchor) / sig.CURATED_DIRNAME), "global-rule")
     rep = M.sync(str(tmp_path), prune=True)
     assert rep["pruned"] == 1
     _s, ptrs = us.parse_pointer_index((tmp_path / "tree" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert u_gone not in {p.uuid for p in ptrs}
-    got = {r.uuid for r in us.resolve(proj)}
-    assert u_kept in got and u_gone not in got
-    assert not us.body_path(anchor, u_gone).exists()
-    assert us.body_path(anchor, u_kept).exists()
+    assert "global-rule" not in {p.slug for p in ptrs}
+    got = {r.slug for r in us.resolve(proj)}
+    assert "tiny-fact" in got and "global-rule" not in got
+    assert not us.body_path(anchor, "global-rule").exists()
+    assert us.body_path(anchor, "tiny-fact").exists()
 
 
 def test_sync_without_prune_leaves_orphans(tmp_path):
     anchor, proj = _tree(tmp_path)
     M.migrate(str(tmp_path), dry_run=False)
-    u_gone = us.fact_uuid(anchor, "global-rule")
     _drop_legacy_fact(str(Path(anchor) / sig.CURATED_DIRNAME), "global-rule")
     M.sync(str(tmp_path), prune=False)
-    assert us.body_path(anchor, u_gone).exists()
+    assert us.body_path(anchor, "global-rule").exists()

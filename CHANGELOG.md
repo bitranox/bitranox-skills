@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.31.0] - 2026-07-05
+
+### Changed
+- SLUG-STORE PIVOT (experiment-backed; probe report `.plan/probe-retrieval-and-platform-20260705.md`):
+  fact bodies live at `<anchor>/.claude-memory/facts/<slug>.md` (flat, human-readable); the pointer
+  line is `- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->`; every pointer block's header now
+  carries the RETRIEVAL RECIPE (walk up to the ancestor containing `.claude-memory/`, Read
+  `facts/<slug>.md`) - measured 6/6 applied mid-reasoning compliance incl. Task subagents, vs 0/6
+  for uuid-sharded bodies and 0/3 without the recipe. Slugs are TREE-unique (the body file is the
+  registry; the engine refuses a colliding add with a suggested free slug). Pinned entries render
+  first under `## Iron rules`. `HOOK_SOFT_MAX = 350` with advisory warnings (engine add,
+  reconcile --check). The pointer grammar drops trailing garbage after the meta comment on
+  canonical re-render (heal repairs hand-edit damage). Pre-pivot `uuid:` lines still parse
+  (flagged legacy), re-render unchanged, and resolve from the old sharded path until migrated -
+  a heal can never break an unmigrated store. Fence renamed BITRANOX-MEMORY-INDEX (old accepted).
+  The SessionStart retrieval rule teaches the slug path. `add-uuid` CLI retired.
+
+### Added
+- `migrate_to_slug_store.py`: one-shot uuid->slug store migration (dry-run default; `--apply` backs
+  up every touched CLAUDE.local.md + the anchor's `.claude-memory/`, moves each body and flips its
+  pointer line atomically per fact, suffixes cross-level slug collisions, reports missing bodies
+  without flipping their lines). Idempotent. Full sibling tests.
+
 ## [5.30.0] - 2026-07-05
 
 ### Added
