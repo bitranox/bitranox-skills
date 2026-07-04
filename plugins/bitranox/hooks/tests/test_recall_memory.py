@@ -173,3 +173,46 @@ def test_snippet_strips_scope_block(tmp_path):
 def test_label_central_uuid_store_body_named_by_owning_tree():
     p = "/x/projZ/.claude-memory/facts/ab/abcd1234-0000-5000-8000-000000000000.md"
     assert R._label(p) == "projZ/memory"
+
+
+# ---- cross_tree_search knob: recall scope across independent knowledge trees --------------------
+
+def _cfg_write(home_dir, **kv):
+    import json as _json
+    p = home_dir / ".claude" / ".bitranox-memory.json"
+    p.write_text(_json.dumps(kv), encoding="utf-8")
+
+
+def _plant_curated(proj, title, hook, body):
+    import memory_engine as ME
+    ME.add_or_update_entry(str(proj), title, hook, body=body, scope_default="lvl")
+
+
+def test_cross_tree_search_off_blocks_other_tree(monkeypatch, capsys, home, two_trees):
+    _plant_curated(two_trees.proj_b, "Frobnicator level",
+                   "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
+    _cfg_write(home, cross_tree_search=False)
+    rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
+                  cwd=str(two_trees.proj_a))
+    assert rc == 0
+    assert not out.strip() or "frobnicator" not in out       # the other TREE stays invisible
+
+
+def test_cross_tree_search_off_keeps_same_tree(monkeypatch, capsys, home, two_trees):
+    sib = two_trees.top_a / "campaigns" / "proj2"
+    sib.mkdir(parents=True, exist_ok=True)
+    (sib / "CLAUDE.md").write_text("sib\n", encoding="utf-8")
+    _plant_curated(sib, "Frobnicator level",
+                   "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
+    _cfg_write(home, cross_tree_search=False)
+    rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
+                  cwd=str(two_trees.proj_a))
+    assert rc == 0 and "frobnicator" in out                  # same tree still recalled
+
+
+def test_cross_tree_search_default_on_keeps_todays_behavior(monkeypatch, capsys, home, two_trees):
+    _plant_curated(two_trees.proj_b, "Frobnicator level",
+                   "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
+    rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
+                  cwd=str(two_trees.proj_a))
+    assert rc == 0 and "frobnicator" in out                  # default: machine-global scan

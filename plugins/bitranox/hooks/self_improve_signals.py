@@ -369,6 +369,7 @@ DEFAULT_CONFIG = {
     "nudges": True,                # session-start nudges on/off
     "track_private": False,        # git-track .claude-bx-selflearning on a private repo? (public: never)
     "mcp_search": "auto",          # off | auto (use a full-text+graph MCP for cross-project recall if present)
+    "cross_tree_search": True,     # per-prompt recall may scan OTHER knowledge trees (False: current tree only)
     "discovery_roots": [],         # extra roots to walk for curated stores; [] -> derive at runtime (never
                                    # ship hardcoded maintainer absolute paths in this tracked default)
 }
