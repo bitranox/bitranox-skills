@@ -360,6 +360,22 @@ def _ensure_claude_md(proj):
         return None
 
 
+def _level_needs_heal(proj):
+    """READ-ONLY probe: does this level need the (locked) repair pass? True when the CLAUDE.md
+    marker or CLAUDE.local.md is missing, or the managed block is absent/non-canonical. The
+    every-session heal calls this first so a healthy chain costs no lock and no write."""
+    d = Path(proj)
+    if not sig.claude_md_path(proj).is_file():
+        return True
+    local = sig.claude_local_md_path(proj)
+    try:
+        text = local.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    scope, pointers = us.parse_pointer_index(text)
+    return us.upsert_pointer_block(text, scope, pointers) != text
+
+
 def _heal_level(proj, report):
     """Repair one altitude in place (locked): ensure the CLAUDE.md marker + the CLAUDE.local.md pointer
     block + scope exist, and re-render the pointer block to canonical (heals a malformed SCOPE block or
@@ -394,12 +410,19 @@ def heal(proj):
         report["levels"] += 1
         level = str(level)
         try:
-            _heal_level(level, report)
+            if _level_needs_heal(level):             # skip-fast: healthy level = no lock, no write
+                _heal_level(level, report)
             anchor = _anchor(level)
-            for e in read_store(level)[1]:
-                path = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+            # orphan check by pointer-parse + stat only - bodies are never opened here
+            try:
+                text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            for ptr in us.parse_pointer_index(text)[1]:
+                path = (us.legacy_body_path(anchor, ptr.uuid) if ptr.legacy
+                        else us.body_path(anchor, ptr.slug))
                 if not path.is_file():
-                    report["orphans"].append((level, e.slug))
+                    report["orphans"].append((level, ptr.slug))
         except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
             continue
     return report
