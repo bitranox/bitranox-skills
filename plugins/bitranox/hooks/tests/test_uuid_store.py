@@ -211,3 +211,51 @@ def test_resolve_returns_empty_when_no_anchor(tmp_path):
     d = tmp_path / "x"
     d.mkdir()
     assert us.resolve(str(d)) == []
+
+
+# ---- slug is the logical identity; uuid is only the body-file key (cutover) ---------------------
+
+def test_pointer_renders_bx_slug_token():
+    p = us.Pointer(uuid="aaaaaaaa-0000-5000-8000-000000000000", title="Root cause", hook="h",
+                   source={"x"}, pin=True, slug="root-cause")
+    line = p.index_line()
+    assert "bx:slug=root-cause" in line and "bx:src=x" in line and "bx:pin" in line
+
+
+def test_parse_reads_bx_slug_back():
+    block = us.render_pointer_index("", [us.Pointer(uuid="bbbbbbbb-0000-5000-8000-000000000000",
+                                                    title="T", hook="h", slug="my-slug")])
+    _s, ptrs = us.parse_pointer_index(block)
+    assert ptrs[0].slug == "my-slug"
+
+
+def test_slug_round_trips_with_source_and_pin():
+    ptrs = [us.Pointer(uuid="cccccccc-0000-5000-8000-000000000000", title="A", hook="h",
+                       source={"a", "b"}, pin=True, slug="feedback-a")]
+    _s, got = us.parse_pointer_index(us.render_pointer_index("s", ptrs))
+    assert (got[0].slug, sorted(got[0].source), got[0].pin) == ("feedback-a", ["a", "b"], True)
+
+
+def test_missing_bx_slug_derives_slug_from_title():
+    # a back-compat pointer line with no bx:slug token: slug derives from the title
+    line = "- [No Em Dashes](uuid:dddddddd-0000-5000-8000-000000000000) - h <!-- bx:src=x -->\n"
+    _s, ptrs = us.parse_pointer_index(line)
+    assert ptrs[0].slug == "no-em-dashes"
+
+
+def test_add_pointer_persists_slug(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    us.add_pointer(str(tmp_path), uuid="eeeeeeee-0000-5000-8000-000000000000",
+                   title="Fact", hook="h", source={"s"}, slug="the-slug")
+    _s, ptrs = us.parse_pointer_index((tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert ptrs[0].slug == "the-slug"
+
+
+def test_resolved_carries_slug(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (tmp_path / us.STORE_DIRNAME).mkdir()
+    u = us.fact_uuid(str(tmp_path), "a-slug")
+    us.put_body(str(tmp_path), u, "body")
+    us.add_pointer(str(tmp_path), uuid=u, title="A", hook="h", slug="a-slug")
+    got = us.resolve(str(tmp_path))
+    assert got[0].slug == "a-slug"

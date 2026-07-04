@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.28.0] - 2026-07-04
+
+### Changed
+- UUID-native cutover: the curated memory store's on-disk format is now the per-altitude pointer block
+  (inline in `CLAUDE.local.md`) + central bodies at `<anchor>/.claude-memory/facts/<shard>/<uuid>.md`.
+  The legacy `.claude-bx-selflearning/index.md` + `facts/<slug>.md` + `@import` format is retired. Slug
+  stays the logical identity (carried as a `bx:slug=` token on each pointer line); the uuid is only the
+  body-file key, so the reference / provenance / dedup model is unchanged. Engine COMMANDS
+  (`memory_engine.py add|heal|set-scope`, `reconcile_memory_index.py [dir]|--check`) keep their contract.
+
 ## [5.27.0] - 2026-07-04
 
 ### Added

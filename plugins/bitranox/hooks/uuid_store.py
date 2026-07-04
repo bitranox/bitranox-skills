@@ -119,14 +119,15 @@ class Pointer:
     always-loaded title + hook and the provenance `source` set / `pin` flag (same meta grammar as the
     legacy engine so de-double and reconcile read both uniformly)."""
 
-    __slots__ = ("uuid", "title", "hook", "source", "pin")
+    __slots__ = ("uuid", "title", "hook", "source", "pin", "slug")
 
-    def __init__(self, uuid, title, hook="", source=None, pin=False):
+    def __init__(self, uuid, title, hook="", source=None, pin=False, slug=""):
         self.uuid = str(uuid)
         self.title = title or ""
         self.hook = hook or ""
         self.source = set(source or ())
         self.pin = bool(pin)
+        self.slug = slug or ""
 
     def meta_comment(self):
         parts = []
@@ -134,20 +135,32 @@ class Pointer:
             parts.append("bx:src=%s" % ",".join(sorted(self.source)))
         if self.pin:
             parts.append("bx:pin")
+        if self.slug:                                # the logical identity (uuid is only the body key)
+            parts.append("bx:slug=%s" % self.slug)
         return (" <!-- %s -->" % " ".join(parts)) if parts else ""
 
     def index_line(self):
         return "- [%s](uuid:%s) - %s%s" % (self.title, self.uuid, self.hook, self.meta_comment())
 
 
+def _slug_from_title(title):
+    """A back-compat slug derived from a title (matches memory_engine.slugify's base, minus any type
+    prefix): used only when a pointer line carries no `bx:slug=` token. Kept local to avoid importing
+    memory_engine (which imports this module)."""
+    base = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
+    return base or "note"
+
+
 def _parse_meta(meta):
-    source, pin = set(), False
+    source, pin, slug = set(), False, ""
     for tok in (meta or "").split():
         if tok == "bx:pin":
             pin = True
         elif tok.startswith("bx:src="):
             source |= {s for s in tok[len("bx:src="):].split(",") if s}
-    return source, pin
+        elif tok.startswith("bx:slug="):
+            slug = tok[len("bx:slug="):]
+    return source, pin, slug
 
 
 def render_pointer_index(scope, pointers):
@@ -168,9 +181,10 @@ def parse_pointer_index(text):
         m = _PTR_RX.match(raw)
         if not m:
             continue
-        source, pin = _parse_meta(m.group("meta"))
-        pointers.append(Pointer(uuid=m.group("uuid"), title=m.group("title"),
-                                hook=m.group("hook"), source=source, pin=pin))
+        source, pin, slug = _parse_meta(m.group("meta"))
+        title = m.group("title")
+        pointers.append(Pointer(uuid=m.group("uuid"), title=title, hook=m.group("hook"),
+                                source=source, pin=pin, slug=slug or _slug_from_title(title)))
     return scope, pointers
 
 
@@ -215,12 +229,14 @@ def put_body(anchor_dir, fact_uuid_str, body):
     return write_if_changed(body_path(anchor_dir, fact_uuid_str), (body or "").rstrip("\n") + "\n")
 
 
-def add_pointer(altitude_dir, uuid, title, hook, source=None, pin=False, scope_default=""):
+def add_pointer(altitude_dir, uuid, title, hook, source=None, pin=False, scope_default="", slug=""):
     """Upsert one pointer line into `<altitude_dir>/CLAUDE.local.md`'s managed block (merging the
     provenance set + pin on update), under a lock, mtime-neutral. Sets the scope descriptor if absent.
-    Does NOT write the body - the caller writes that to the central store via `put_body`. Returns the
+    `slug` is the logical identity carried on the line (the uuid is only the body-file key); it defaults
+    to a title-derived slug. Does NOT write the body - the caller writes that via `put_body`. Returns the
     uuid."""
     uuid = str(uuid)
+    slug = slug or _slug_from_title(title)
     local = sig.claude_local_md_path(altitude_dir)
     with sig.memory_lock(local):
         try:
@@ -234,8 +250,9 @@ def add_pointer(altitude_dir, uuid, title, hook, source=None, pin=False, scope_d
             p.title, p.hook = title, (hook or p.hook)
             p.source |= set(source or ())
             p.pin = p.pin or pin
+            p.slug = slug or p.slug
         else:
-            pointers.append(Pointer(uuid=uuid, title=title, hook=hook, source=source, pin=pin))
+            pointers.append(Pointer(uuid=uuid, title=title, hook=hook, source=source, pin=pin, slug=slug))
         write_if_changed(local, upsert_pointer_block(text, scope or scope_default, pointers))
     return uuid
 
@@ -246,14 +263,15 @@ class Resolved:
     """A fully resolved fact: its uuid, always-loaded title/hook, the body read from the central store,
     and the altitude (the dir whose pointer index referenced it)."""
 
-    __slots__ = ("uuid", "title", "hook", "body", "altitude")
+    __slots__ = ("uuid", "title", "hook", "body", "altitude", "slug")
 
-    def __init__(self, uuid, title, hook, body, altitude):
+    def __init__(self, uuid, title, hook, body, altitude, slug=""):
         self.uuid = str(uuid)
         self.title = title
         self.hook = hook
         self.body = body
         self.altitude = altitude
+        self.slug = slug or ""
 
 
 def resolve(cwd):
@@ -285,7 +303,7 @@ def resolve(cwd):
                     continue                         # body missing -> skip, do not fabricate
                 seen.add(p.uuid)
                 out.append(Resolved(uuid=p.uuid, title=p.title, hook=p.hook,
-                                    body=body.rstrip("\n"), altitude=level))
+                                    body=body.rstrip("\n"), altitude=level, slug=p.slug))
         return out
     except Exception:                                # noqa: BLE001 - a read path must never wedge a turn
         return []

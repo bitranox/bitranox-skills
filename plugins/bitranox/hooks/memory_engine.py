@@ -259,7 +259,7 @@ def add_uuid_entry(altitude, title, hook, body="", type_=None, source=None, pin=
     anchor = us.resolve_anchor(altitude) or Path(altitude)
     us.put_body(str(anchor), uid, body)
     us.add_pointer(altitude, uuid=uid, title=title, hook=hook, source=source, pin=pin,
-                   scope_default=scope_default)
+                   scope_default=scope_default, slug=slug)
     return uid
 
 
