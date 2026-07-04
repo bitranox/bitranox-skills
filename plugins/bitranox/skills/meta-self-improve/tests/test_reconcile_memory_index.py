@@ -67,12 +67,13 @@ def test_derive_hook_falls_back_to_first_sentence():
 
 
 # --------------------------------------------------------------------------
-# curated store: reconcile + reference integrity (index.md + facts/)
+# curated altitude: reconcile + reference integrity (pointer block + central bodies)
 # --------------------------------------------------------------------------
 
 import pytest  # noqa: E402
 
 import memory_engine as ME  # noqa: E402  (reconcile put hooks/ on sys.path at import)
+import uuid_store as us  # noqa: E402
 
 
 @pytest.fixture
@@ -82,72 +83,39 @@ def proj(tmp_path):
     return str(p)
 
 
-def _curated(proj):
-    return ME.sig.claude_memory_dir(proj)
-
-
 def test_is_curated_detection(tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
     assert R.is_curated(plain) is False
-    cur = tmp_path / ".claude-bx-selflearning"
+    cur = tmp_path / "lvl"
     cur.mkdir()
-    (cur / "index.md").write_text("x", encoding="utf-8")
-    assert R.is_curated(cur) is True
+    ME.add_or_update_entry(str(cur), "A fact", "hook", body="b", scope_default="lvl")
+    assert R.is_curated(cur) is True                    # its CLAUDE.local.md holds a pointer block
 
 
-def test_reconcile_backfills_orphan_facts_file(proj):
+def test_reconcile_reports_orphan_pointer_when_body_missing(proj):
+    slug = ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
+    us.body_path(proj, us.fact_uuid(proj, slug)).unlink()   # delete the central body
+    rep = R.reconcile(proj)
+    assert "heavy" in rep["orphans"] and rep["added"] == []  # reported, never fabricated/backfilled
+
+
+def test_reconcile_no_orphans_when_bodies_present(proj):
     ME.add_or_update_entry(proj, "Tiny", "hook", body="small", scope_default="lvl")
-    d = _curated(proj)
-    (d / "facts").mkdir(exist_ok=True)
-    (d / "facts" / "extra-note.md").write_text(
-        "---\nname: extra-note\ndescription: an extra note\n---\nbody", encoding="utf-8")
-    rep = R.reconcile(d)
-    assert "extra-note.md" in rep["added"]
-    _, entries = ME.parse((d / "index.md").read_text(encoding="utf-8"))
-    assert "extra-note" in [e.slug for e in entries]
+    rep = R.reconcile(proj)
+    assert rep["orphans"] == [] and rep["facts"] == 1
 
 
-def test_reconcile_idempotent(proj):
-    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
-    d = _curated(proj)
-    R.reconcile(d)
-    rep2 = R.reconcile(d)
-    assert rep2["added"] == []
-
-
-def test_reconcile_dry_run_writes_nothing(proj):
-    ME.add_or_update_entry(proj, "Tiny", "hook", body="small", scope_default="lvl")
-    d = _curated(proj)
-    (d / "facts").mkdir(exist_ok=True)
-    (d / "facts" / "new.md").write_text("---\nname: new\ndescription: d\n---\nb", encoding="utf-8")
-    before = (d / "index.md").read_text(encoding="utf-8")
-    rep = R.reconcile(d, dry_run=True)
-    assert rep["added"] == ["new.md"] and (d / "index.md").read_text(encoding="utf-8") == before
-
-
-def test_reconcile_reports_orphan_heavy_entry(proj):
-    # a heavy entry whose facts/ file was deleted -> reported, not removed
-    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400, scope_default="lvl")
-    d = _curated(proj)
-    (d / "facts" / "heavy.md").unlink()
-    rep = R.reconcile(d)
-    assert "heavy" in rep["orphans"]
-
-
-def test_check_references_inline_target_is_not_a_false_orphan(proj):
-    # the KEY fix: a [[ref]] to an INLINED fact resolves (inline #slug is a valid target)
+def test_check_references_target_resolves_no_false_orphan(proj):
     ME.add_or_update_entry(proj, "General", "the general rule", body="short", scope_default="lvl")
     ME.add_or_update_entry(proj, "Specific", "see [[general]] for the base", body="short2")
-    d = _curated(proj)
-    refs = R.check_references([d, str(_curated(proj)) + "-glob"])
+    refs = R.check_references([proj])
     assert refs["orphans"] == [] and refs["checked"] >= 1
 
 
 def test_check_references_orphan_flagged(proj):
     ME.add_or_update_entry(proj, "Only", "refers [[nowhere]]", body="b", scope_default="lvl")
-    d = _curated(proj)
-    refs = R.check_references([d])
+    refs = R.check_references([proj])
     assert ("only", "nowhere") in refs["orphans"]
 
 
@@ -158,49 +126,47 @@ def test_check_references_downward_flagged(tmp_path):
     (tmp_path / "lower").mkdir(); (tmp_path / "upper").mkdir()
     ME.add_or_update_entry(lower, "Low fact", "narrow", body="b", scope_default="l")
     ME.add_or_update_entry(upper, "High fact", "points [[low-fact]] down", body="b", scope_default="u")
-    refs = R.check_references([_curated(lower), _curated(upper)])
+    refs = R.check_references([lower, upper])
     assert ("high-fact", "low-fact") in refs["downward"]
 
 
 def test_has_inbound_refs_detects_and_is_separator_insensitive(proj):
     ME.add_or_update_entry(proj, "Base rule", "b", body="x", scope_default="lvl")
     ME.add_or_update_entry(proj, "User", "cites [[base_rule]]", body="x")  # underscore form
-    d = _curated(proj)
-    assert R.has_inbound_refs([d], "base-rule") is True
-    assert R.has_inbound_refs([d], "base_rule") is True
-    assert R.has_inbound_refs([d], "nonexistent") is False
+    assert R.has_inbound_refs([proj], "base-rule") is True
+    assert R.has_inbound_refs([proj], "base_rule") is True
+    assert R.has_inbound_refs([proj], "nonexistent") is False
 
 
-def test_over_cap_within_advisory_budget_and_pin(proj):
-    ME.add_or_update_entry(proj, "R", "h", body="small", pin=True, scope_default="lvl")
-    within, lines, nbytes, pin_bytes = R.over_cap(_curated(proj) / "index.md")
-    assert within is True and pin_bytes > 0
-    within2, *_ = R.over_cap(_curated(proj) / "index.md", max_pin_bytes=1)  # pinned past tiny budget
+def test_over_cap_measures_the_pointer_block(proj):
+    ME.add_or_update_entry(proj, "R", "h", body="small", scope_default="lvl")
+    within, lines, nbytes = R.over_cap(proj)
+    assert within is True and nbytes > 0
+    within2, *_ = R.over_cap(proj, max_bytes=1)          # any real block exceeds a 1-byte budget
     assert within2 is False
 
 
-def test_oversize_index_is_advisory_warning_not_a_failure(proj, capsys):
-    # An index.md past the soft byte threshold WARNS but never fails --check (exit 0, not counted).
-    d = _curated(proj)
-    d.mkdir(parents=True, exist_ok=True)
-    big = "<!-- scope -->\n" + ("- [T](facts/n.md) - a hook line\n" * 2000)  # > _WARN_BYTES bytes
-    (d / "index.md").write_text(big, encoding="utf-8")
-    assert len(big.encode("utf-8")) > R._WARN_BYTES
-    rc = R.main(["--check", str(d)])
+def test_oversize_pointer_block_is_advisory_warning_not_a_failure(proj, capsys):
+    # A pointer block past the soft byte threshold WARNS but never fails --check (exit 0).
+    local = ME.sig.claude_local_md_path(proj)
+    lines = "\n".join("- [T%d](uuid:0000000%d-0000-5000-8000-000000000000) - a hook <!-- bx:slug=t%d -->"
+                      % (i, i % 10, i) for i in range(3000))
+    local.write_text("%s\n# Memory index\n\n%s\n%s\n" % (us.INDEX_BEGIN, lines, us.INDEX_END),
+                     encoding="utf-8")
+    assert len((local.read_text(encoding="utf-8")).encode("utf-8")) > R._WARN_BYTES
+    rc = R.main(["--check", proj])
     out = capsys.readouterr().out
     assert rc == 0                          # size never contributes to the exit code
-    assert "~ warning:" in out
-    assert "TOTAL warnings:" in out
-    assert "TOTAL problems: 0" in out
+    assert "~ warning:" in out and "TOTAL warnings:" in out and "TOTAL problems: 0" in out
 
 
-def test_archive_entry_inline_and_heavy(proj):
+def test_archive_entry_drops_pointer_and_moves_central_body(proj):
     ME.add_or_update_entry(proj, "Tiny", "h", body="small", scope_default="lvl")
-    ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400)
-    d = _curated(proj)
-    assert R.archive_entry(d, "heavy") is True
-    assert (d / ".archive" / "heavy.md").is_file()
-    assert R.archive_entry(d, "tiny") is True
-    _, entries = ME.parse((d / "index.md").read_text(encoding="utf-8"))
+    heavy_slug = ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 400)
+    heavy_uuid = us.fact_uuid(proj, heavy_slug)
+    assert R.archive_entry(proj, "heavy") is True
+    assert (us.central_facts_dir(proj).parent / ".archive" / (heavy_uuid + ".md")).is_file()
+    assert R.archive_entry(proj, "tiny") is True
+    _scope, entries, _bodies = ME.read_store(proj)
     assert entries == []
-    assert R.archive_entry(d, "nonexistent") is False
+    assert R.archive_entry(proj, "nonexistent") is False

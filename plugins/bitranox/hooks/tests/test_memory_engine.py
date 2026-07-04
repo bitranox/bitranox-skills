@@ -1,11 +1,15 @@
-"""Tests for memory_engine.py (the single write path + index.md grammar). All content ASCII."""
+"""Tests for memory_engine.py (the single write path, UUID-native). All content ASCII.
 
-import re
+Store format under test: a per-altitude pointer block inline in `CLAUDE.local.md`
+(`- [Title](uuid:X) - hook <!-- bx:src=.. bx:pin bx:slug=s -->`) + central bodies at
+`<anchor>/.claude-memory/facts/<shard>/<uuid>.md`. Slug is the logical identity; uuid is the body key.
+"""
 
 import pytest
 
 import self_improve_signals as sig
 import memory_engine as E
+import uuid_store as us
 
 
 @pytest.fixture
@@ -15,7 +19,7 @@ def proj(tmp_path):
     return str(p)
 
 
-# ---- slug + heavy/inline decision --------------------------------------------------------------
+# ---- slug + Entry ------------------------------------------------------------------------------
 
 def test_slugify():
     assert E.slugify("No em dashes") == "no-em-dashes"
@@ -24,90 +28,64 @@ def test_slugify():
     assert E.slugify("") == "note"
 
 
-def test_decide_heavy():
-    assert E.Entry("s", "t", "h", body="short and clean").heavy is False
-    assert E.Entry("s", "t", "h", body="x" * 400).heavy is True                  # too big -> heavy
-    assert E.Entry("s", "t", "h", body="see @docs/readme.md").heavy is True      # import-like @ -> heavy
-    assert E.Entry("s", "t", "h", body="ping @someone now").heavy is True        # inline @ -> heavy
-    assert E.Entry("s", "t", "h", body="mail a@b.com please").heavy is False     # email -> stays inline
-    assert E.Entry("s", "t", "h", body="").heavy is False
+def test_entry_carries_slug_and_uuid_no_heavy_flag():
+    e = E.Entry("s", "t", "h", body="b", source={"x"}, pin=True, uuid="u")
+    assert (e.slug, e.title, e.hook, e.body, e.pin, e.uuid) == ("s", "t", "h", "b", True, "u")
+    assert not hasattr(e, "heavy")                     # the inline-vs-heavy split is gone
 
 
-# ---- parse / render round-trip -----------------------------------------------------------------
+# ---- add_or_update_entry -> pointer block + central body ---------------------------------------
 
-def test_parse_render_roundtrip():
-    text = ("<!-- bitranox:self-learning -->\nwhat this level is for\n<!-- /bitranox:self-learning -->\n\n"
-            "# Memory index\n\n"
-            "- [Tiny](#a-slug) - a hook <!-- bx:src=x,y bx:pin -->\n  a small body\n  second line\n"
-            "- [Heavy](facts/b-slug.md) - b hook <!-- bx:src=z -->\n")
-    scope, entries = E.parse(text)
-    assert scope == "what this level is for"
-    assert [e.slug for e in entries] == ["a-slug", "b-slug"]
-    tiny = entries[0]
-    assert tiny.heavy is False and tiny.pin is True and tiny.source == {"x", "y"}
-    assert tiny.body == "a small body\nsecond line"
-    heavy = entries[1]
-    assert heavy.heavy is True and heavy.source == {"z"}
-    # render is stable (re-parsing yields the same entries)
-    scope2, entries2 = E.parse(E.render(scope, entries))
-    assert scope2 == scope and [e.slug for e in entries2] == ["a-slug", "b-slug"]
-    assert entries2[0].body == tiny.body and entries2[0].pin is True
-
-
-# ---- add_or_update_entry -----------------------------------------------------------------------
-
-def test_add_new_inline_and_heavy(proj):
+def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     E.add_or_update_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
-                          type_="feedback", source=["feedback-no-em-dashes"], scope_default="lvl")
-    E.add_or_update_entry(proj, "Big proc", "the long one", body="x" * 400, source=["ref-big"])
+                          type_="feedback", source=["s"], scope_default="lvl")
     scope, entries, bodies = E.read_store(proj)
     assert scope == "lvl"
-    by = {e.slug: e for e in entries}
-    assert by["feedback-no-em-dashes"].heavy is False
-    assert by["big-proc"].heavy is True
-    facts = sig.claude_memory_dir(proj) / "facts" / "big-proc.md"
-    assert facts.is_file() and "x" * 400 in facts.read_text(encoding="utf-8")
+    e = entries[0]
+    assert e.slug == "feedback-no-em-dashes" and e.source == {"s"}
+    assert bodies[e.slug] == "Always ASCII."
+    # body landed in the central sharded store (proj is its own anchor here)
+    assert us.body_path(proj, e.uuid).read_text(encoding="utf-8") == "Always ASCII.\n"
+    # pointer line carries the uuid + slug; NO @import, NO index.md, NO facts/ dir
+    local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+    assert ("uuid:%s" % e.uuid) in local and "bx:slug=feedback-no-em-dashes" in local
+    assert "@" not in local.replace("@import", "")     # no import token
+    assert not (sig.claude_memory_dir(proj)).exists()  # no legacy .claude-bx-selflearning store
 
 
-def test_update_merges_source_and_pin(proj):
+def test_update_merges_source_and_pin_and_body(proj):
     E.add_or_update_entry(proj, "Rule", "hook", body="b", source=["s1"], scope_default="lvl")
     E.add_or_update_entry(proj, "Rule", "hook2", body="b2", source=["s2"], pin=True)
     scope, entries, bodies = E.read_store(proj)
     e = entries[0]
     assert e.source == {"s1", "s2"} and e.pin is True and e.hook == "hook2"
-    assert bodies.get(e.slug, e.body) == "b2"
+    assert bodies[e.slug] == "b2"
 
 
-def test_no_import_like_at_is_inlined(proj):
-    E.add_or_update_entry(proj, "Handle", "h", body="ping @someone about @docs/x.md", scope_default="lvl")
-    mem = sig.curated_index(proj).read_text(encoding="utf-8")
-    inlined = [ln for ln in mem.splitlines() if ln.startswith("  ") and re.search(r"(?:^|\s)@[\w./~-]", ln)]
-    assert inlined == []                                   # never inline an import-like @token
+def test_empty_body_on_update_keeps_prior_body(proj):
+    E.add_or_update_entry(proj, "Rule", "h", body="keep me", scope_default="lvl")
+    E.add_or_update_entry(proj, "Rule", "h2")          # no body -> prior body retained
+    _s, entries, bodies = E.read_store(proj)
+    assert bodies[entries[0].slug] == "keep me"
 
 
 def test_mtime_neutral_noop(proj):
     E.add_or_update_entry(proj, "Rule", "h", body="b", source=["s"], scope_default="lvl")
-    mem = sig.curated_index(proj)
-    mt1 = mem.stat().st_mtime_ns
+    local = sig.claude_local_md_path(proj)
+    mt1 = local.stat().st_mtime_ns
     E.add_or_update_entry(proj, "Rule", "h", body="b", source=["s"])   # identical -> no write
-    assert mem.stat().st_mtime_ns == mt1
+    assert local.stat().st_mtime_ns == mt1
 
 
-# ---- ensure_level ------------------------------------------------------------------------------
+# ---- ensure_level: pointer block + scope, no @import -------------------------------------------
 
-def test_import_line_targets_index_md():
-    assert E.IMPORT_LINE.endswith("/index.md")          # never memory.md (confusable with native MEMORY.md)
-    assert E.IMPORT_LINE == "@.claude-bx-selflearning/index.md"
-
-
-def test_ensure_level_creates_import_in_claude_local_md(proj):
+def test_ensure_level_creates_pointer_block_and_scope_in_claude_local_md(proj):
     E.ensure_level(proj, scope_default="what this level is for")
-    # default (track_private off): the @import lives in the UNTRACKED CLAUDE.local.md, never CLAUDE.md
     local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
-    assert E.IMPORT_LINE in local and E.IMPORT_BEGIN in local and E.IMPORT_END in local
-    assert not sig.claude_md_path(proj).exists()          # tracked CLAUDE.md untouched (not even created)
-    mem = sig.curated_index(proj).read_text(encoding="utf-8")
-    assert sig.read_scope_block(mem) == "what this level is for"
+    assert us.INDEX_BEGIN in local and us.INDEX_END in local
+    assert sig.read_scope_block(local) == "what this level is for"
+    assert "@import" not in local and "@.claude" not in local        # no import wiring
+    assert not sig.claude_md_path(proj).exists()                     # tracked CLAUDE.md untouched
 
 
 def test_ensure_level_idempotent(proj):
@@ -121,19 +99,8 @@ def test_ensure_level_preserves_user_claude_md(proj):
     md_path = sig.claude_md_path(proj)
     md_path.write_text("# My project\n\nHand-written user instructions.\n", encoding="utf-8")
     E.ensure_level(proj, scope_default="x")
-    # tracked CLAUDE.md is left byte-identical; the import goes to CLAUDE.local.md
     assert md_path.read_text(encoding="utf-8") == "# My project\n\nHand-written user instructions.\n"
-    assert E.IMPORT_LINE in sig.claude_local_md_path(proj).read_text(encoding="utf-8")
-
-
-def test_ensure_level_track_private_uses_claude_md(proj, tmp_path, monkeypatch):
-    home = tmp_path / "home"; (home / ".claude").mkdir(parents=True)   # isolate config; don't pollute real
-    monkeypatch.setenv("HOME", str(home)); monkeypatch.setenv("USERPROFILE", str(home))
-    sig.save_config({"track_private": True})
-    E.ensure_level(proj, scope_default="x")
-    # track_private on: import goes in the TRACKED CLAUDE.md (so a clone loads it), not CLAUDE.local.md
-    assert E.IMPORT_LINE in sig.claude_md_path(proj).read_text(encoding="utf-8")
-    assert not sig.claude_local_md_path(proj).exists()
+    assert us.INDEX_BEGIN in sig.claude_local_md_path(proj).read_text(encoding="utf-8")
 
 
 def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
@@ -142,78 +109,64 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
                        % (sig.SCOPE_MARK_BEGIN, sig.SCOPE_MARK_END), encoding="utf-8")
     E.ensure_level(proj, scope_default="ignored-because-legacy-wins")
     md = md_path.read_text(encoding="utf-8")
-    assert sig.SCOPE_MARK_BEGIN not in md                 # legacy block removed from CLAUDE.md
+    assert sig.SCOPE_MARK_BEGIN not in md                            # legacy block removed from CLAUDE.md
     assert "more user text" in md and md.startswith("# Proj")
-    assert E.IMPORT_LINE in sig.claude_local_md_path(proj).read_text(encoding="utf-8")   # import in local
-    mem = sig.curated_index(proj).read_text(encoding="utf-8")
-    assert sig.read_scope_block(mem) == "legacy descriptor"   # relocated into index.md
+    local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+    assert sig.read_scope_block(local) == "legacy descriptor"        # relocated into the pointer block
 
 
-def test_cli_add(proj, capsys, tmp_path):
+# ---- CLI ---------------------------------------------------------------------------------------
+
+def test_cli_add_prints_slug(proj, capsys):
     rc = E.main(["add", "--proj", proj, "--type", "feedback", "--title", "No em dashes",
                  "--hook", "use ASCII", "--body", "Always ASCII.", "--source", "a,b", "--scope", "lvl"])
     assert rc == 0
     assert capsys.readouterr().out.strip() == "feedback-no-em-dashes"
-    scope, entries, bodies = E.read_store(proj)
-    e = entries[0]
-    assert e.slug == "feedback-no-em-dashes" and e.source == {"a", "b"} and scope == "lvl"
+    scope, entries, _b = E.read_store(proj)
+    assert entries[0].source == {"a", "b"} and scope == "lvl"
 
 
 def test_cli_add_body_file(proj, tmp_path):
     bf = tmp_path / "body.txt"
     bf.write_text("line one\nline two\n", encoding="utf-8")
-    rc = E.main(["add", "--proj", proj, "--title", "Multi", "--hook", "h", "--body-file", str(bf),
-                 "--scope", "lvl"])
+    rc = E.main(["add", "--proj", proj, "--title", "Multi", "--hook", "h", "--body-file", str(bf)])
     assert rc == 0
-    _, _, _ = E.read_store(proj)
-    assert "line one" in (E.sig.curated_index(proj).read_text(encoding="utf-8"))
+    _s, entries, bodies = E.read_store(proj)
+    assert bodies[entries[0].slug] == "line one\nline two"
 
 
 # ---- self-heal ---------------------------------------------------------------------------------
 
-def _local(proj):
-    return sig.claude_local_md_path(proj)
-
-
-def test_heal_creates_missing_store_and_import(proj):
+def test_heal_creates_missing_pointer_block(proj):
     rep = E.heal(proj)
-    assert sig.curated_index(proj).is_file()                       # index.md created
-    assert E.IMPORT_LINE in _local(proj).read_text(encoding="utf-8")   # @import wired in CLAUDE.local.md
+    local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+    assert us.INDEX_BEGIN in local                                   # pointer block wired in
+    assert "@import" not in local
     assert rep["levels"] >= 1
 
 
-def test_heal_normalizes_malformed_import_block(proj):
-    # a stray bare import line + a duplicate BEGIN, no clean block -> healed to exactly one canonical block
-    _local(proj).write_text("intro\n%s\nleftover\n%s\n%s\n" % (E.IMPORT_LINE, E.IMPORT_BEGIN, E.IMPORT_LINE),
-                            encoding="utf-8")
-    E.heal(proj)
-    txt = _local(proj).read_text(encoding="utf-8")
-    assert txt.count(E.IMPORT_BEGIN) == 1 and txt.count(E.IMPORT_END) == 1
-    assert sum(1 for ln in txt.split("\n") if ln.strip() == E.IMPORT_LINE) == 1
-    assert E._IMPORT_BLOCK in txt and "intro" in txt
-
-
-def test_heal_normalizes_malformed_scope_and_grammar(proj):
+def test_heal_normalizes_a_malformed_scope_block(proj):
     E.ensure_level(proj, scope_default="what this level is for")
-    mem = sig.curated_index(proj)
-    # corrupt: a SCOPE_BEGIN with no END, plus a stray non-canonical line
-    mem.write_text("%s\nwhat this level is for\n\n# Memory index\n\ngarbage line\n" % E.SCOPE_BEGIN,
-                   encoding="utf-8")
+    local = sig.claude_local_md_path(proj)
+    # corrupt: a SCOPE_BEGIN with no END inside the block
+    local.write_text("%s\n%s\nbroken scope\n\n# Memory index\n%s\n"
+                     % (us.INDEX_BEGIN, E.SCOPE_BEGIN, us.INDEX_END), encoding="utf-8")
     E.heal(proj)
-    healed = mem.read_text(encoding="utf-8")
-    assert E.SCOPE_BEGIN in healed and E.SCOPE_END in healed          # scope markers restored (round-trip)
-    assert healed == E.render(*E.parse(healed))                       # now canonical / round-trips
+    healed = local.read_text(encoding="utf-8")
+    assert E.SCOPE_BEGIN in healed and E.SCOPE_END in healed          # scope markers restored
+    _s, ptrs = us.parse_pointer_index(healed)
+    assert isinstance(ptrs, list)                                    # parses cleanly
 
 
-def test_heal_reports_missing_facts_body_not_fabricated(proj):
+def test_heal_reports_missing_central_body_not_fabricated(proj):
     slug = E.add_or_update_entry(proj, title="Heavy one", hook="h", body="x" * 400, scope_default="lvl")
-    facts = sig.claude_memory_dir(proj) / "facts" / (slug + ".md")
-    assert facts.is_file()
-    facts.unlink()                                                   # delete the body -> unreconstructable
+    u = us.fact_uuid(proj, slug)
+    body = us.body_path(proj, u)
+    assert body.is_file()
+    body.unlink()                                                    # delete the body -> unreconstructable
     rep = E.heal(proj)
-    store = str(sig.claude_memory_dir(proj))
-    assert (store, slug) in rep["orphans"]                           # reported...
-    assert not facts.is_file()                                       # ...NOT fabricated
+    assert (proj, slug) in rep["orphans"]                            # reported...
+    assert not body.is_file()                                       # ...NOT fabricated
 
 
 def test_heal_idempotent(proj):
@@ -222,47 +175,32 @@ def test_heal_idempotent(proj):
     assert rep2["healed"] == []                                      # second pass changes nothing
 
 
-def test_heal_strips_drifted_note_import_block(proj):
-    # an OLD-format managed block (NOTE text differs from the current constant) must be fully removed,
-    # not leave the drifted NOTE line orphaned, then re-added canonical.
-    old = ("preamble\n%s\n     Target is gitignored/local; older note wording. -->\n%s\n%s\n"
-           % (E.IMPORT_BEGIN, E.IMPORT_LINE, E.IMPORT_END))
-    _local(proj).write_text(old, encoding="utf-8")
-    E.heal(proj)
-    txt = _local(proj).read_text(encoding="utf-8")
-    assert "older note wording" not in txt                 # drifted NOTE taken with the span
-    assert txt.count(E.IMPORT_BEGIN) == 1 and E._IMPORT_BLOCK in txt and "preamble" in txt
-
-
-def test_heal_scaffolds_claude_md_at_every_level(tmp_path):
-    # CLAUDE.md exists only at the top; heal must create a marker CLAUDE.md + wiring + store at every
-    # gap level up to it, and NOT overwrite the top's existing CLAUDE.md.
+def test_heal_scaffolds_every_level_up_to_the_anchor(tmp_path):
+    # CLAUDE.md only at top; heal creates a marker CLAUDE.md + CLAUDE.local.md pointer block at every gap
+    # level up to it, and does NOT overwrite the top's existing CLAUDE.md. No legacy .claude-bx dir.
     (tmp_path / "top" / "mid" / "proj").mkdir(parents=True)
     (tmp_path / "top" / "CLAUDE.md").write_text("real top instructions", encoding="utf-8")
     E.heal(str(tmp_path / "top" / "mid" / "proj"))
     for level in ("top", "top/mid", "top/mid/proj"):
         d = tmp_path / level
         assert (d / "CLAUDE.md").is_file()
-        assert (d / "CLAUDE.local.md").is_file()
-        assert (d / ".claude-bx-selflearning" / "index.md").is_file()
+        assert us.INDEX_BEGIN in (d / "CLAUDE.local.md").read_text(encoding="utf-8")
+        assert not (d / ".claude-bx-selflearning").exists()
     assert "bitranox memory altitude" in (tmp_path / "top" / "mid" / "CLAUDE.md").read_text(encoding="utf-8")
     assert (tmp_path / "top" / "CLAUDE.md").read_text(encoding="utf-8").strip() == "real top instructions"
 
 
-def test_set_scope_upserts_and_overwrites(proj, capsys):
+def test_set_scope_upserts_and_overwrites(proj):
     rc = E.main(["set-scope", "--proj", proj, "--scope", "what this level is about"])
     assert rc == 0
-    assert sig.read_scope_block(sig.curated_index(proj).read_text(encoding="utf-8")) == "what this level is about"
+    local = sig.claude_local_md_path(proj)
+    assert sig.read_scope_block(local.read_text(encoding="utf-8")) == "what this level is about"
     E.main(["set-scope", "--proj", proj, "--scope", "revised classification"])   # overwrite
-    assert sig.read_scope_block(sig.curated_index(proj).read_text(encoding="utf-8")) == "revised classification"
-    # the index heading + grammar survive the scope replacement
-    assert "# Memory index" in sig.curated_index(proj).read_text(encoding="utf-8")
+    assert sig.read_scope_block(local.read_text(encoding="utf-8")) == "revised classification"
+    assert us.INDEX_HEADING in local.read_text(encoding="utf-8")
 
 
-# ---- UUID-store wiring (additive; the legacy path above is untouched) ---------------------------
-
-import uuid_store as us  # noqa: E402
-
+# ---- anchored tree: central body-store at the anchor, pointers per-altitude ---------------------
 
 def _anchored_tree(tmp_path):
     """anchor (CLAUDE.md + .claude-memory store) -> proj altitude below it. Returns (anchor, proj)."""
@@ -275,17 +213,15 @@ def _anchored_tree(tmp_path):
     return str(anchor), str(proj)
 
 
-def test_add_uuid_entry_writes_body_to_central_store_and_pointer_to_altitude(tmp_path):
+def test_add_uuid_entry_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
     u = E.add_uuid_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
                          type_="feedback", source=["s"], scope_default="proj scope")
     assert u == us.fact_uuid(proj, "feedback-no-em-dashes")
-    # body landed in the anchor's central sharded store
-    assert us.body_path(anchor, u).read_text(encoding="utf-8") == "Always ASCII.\n"
-    # pointer landed in the altitude's CLAUDE.local.md, with scope + provenance
+    assert us.body_path(anchor, u).read_text(encoding="utf-8") == "Always ASCII.\n"   # body at the anchor
     scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert scope == "proj scope"
-    assert ptrs[0].uuid == u and ptrs[0].source == {"s"} and ptrs[0].hook == "use ASCII"
+    assert ptrs[0].uuid == u and ptrs[0].source == {"s"} and ptrs[0].slug == "feedback-no-em-dashes"
 
 
 def test_add_uuid_entry_is_idempotent_and_merges_source(tmp_path):
@@ -296,38 +232,15 @@ def test_add_uuid_entry_is_idempotent_and_merges_source(tmp_path):
     assert len(ptrs) == 1 and ptrs[0].source == {"a", "b"}
 
 
-def test_add_uuid_entry_roundtrips_through_the_resolver(tmp_path):
+def test_add_roundtrips_through_the_resolver(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
-    E.add_uuid_entry(proj, "Fact", "h", body="the body")
+    E.add_or_update_entry(proj, "Fact", "h", body="the body")
     got = us.resolve(proj)
-    assert [(r.title, r.body) for r in got] == [("Fact", "the body")]
+    assert [(r.title, r.body, r.slug) for r in got] == [("Fact", "the body", "fact")]
 
 
 def test_add_uuid_cli_prints_uuid(tmp_path, capsys):
     anchor, proj = _anchored_tree(tmp_path)
     rc = E.main(["add-uuid", "--proj", proj, "--title", "T", "--hook", "h", "--body", "B"])
     assert rc == 0
-    printed = capsys.readouterr().out.strip()
-    assert printed == us.fact_uuid(proj, "t")
-
-
-# ---- coexistence: capture mirrors into the UUID store (best-effort) -----------------------------
-
-def test_add_or_update_entry_mirrors_into_the_uuid_store(tmp_path):
-    anchor, proj = _anchored_tree(tmp_path)
-    E.add_or_update_entry(proj, "Mirror me", "a hook", body="mirrored body", source=["s"])
-    # legacy store has it (unchanged behavior)
-    _sc, entries, _b = E.read_store(proj)
-    assert any(e.slug == "mirror-me" for e in entries)
-    # AND it now resolves through the UUID store
-    got = {r.title: r.body for r in us.resolve(proj)}
-    assert got.get("Mirror me") == "mirrored body"
-
-
-def test_mirror_failure_never_breaks_the_legacy_write(tmp_path, monkeypatch):
-    anchor, proj = _anchored_tree(tmp_path)
-    monkeypatch.setattr(E, "add_uuid_entry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    slug = E.add_or_update_entry(proj, "Still works", "h", body="b")   # must not raise
-    assert slug == "still-works"
-    _sc, entries, _b = E.read_store(proj)
-    assert any(e.slug == "still-works" for e in entries)               # legacy write succeeded
+    assert capsys.readouterr().out.strip() == us.fact_uuid(proj, "t")

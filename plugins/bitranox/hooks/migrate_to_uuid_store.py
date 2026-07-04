@@ -1,31 +1,82 @@
 #!/usr/bin/env python3
-"""Migrate the legacy `.claude-bx-selflearning/` curated stores into the central UUID store, ADDITIVELY.
+"""Migrate the legacy `.claude-bx-selflearning/` curated stores into the central UUID store.
 
-For every legacy store under a root, each fact is copied into the new mount-independent layout:
-  * its deterministic uuid5 identity is `uuid_store.fact_uuid(<altitude>, <slug>)` (idempotent, so a
-    re-run never duplicates),
-  * its body is written once to the anchor's central sharded store
-    (`<anchor>/.claude-memory/facts/<shard>/<uuid>.md`),
-  * a `uuid:` pointer line (title + hook + provenance + pin) is upserted into the altitude's
+The engine is now UUID-native, so this one-shot tool carries its OWN reader for the retired legacy
+format (`index.md` scope + `- [Title](facts/<slug>.md|#slug) - hook <!-- bx:src=.. bx:pin -->` lines,
+tiny bodies inlined, heavy bodies in `facts/<slug>.md`). For every legacy fact it writes:
+  * the deterministic uuid5 identity `uuid_store.fact_uuid(<altitude>, <slug>)` (idempotent),
+  * its body once to `<anchor>/.claude-memory/facts/<shard>/<uuid>.md`,
+  * a `uuid:` pointer line carrying the REAL legacy slug as `bx:slug=` into the altitude's
     `CLAUDE.local.md`.
 
-NOTHING in the legacy store is deleted or rewritten - the two layouts coexist until the new code is
-shipped, reloaded, and verified live (only THEN are the legacy stores removed, in a separate step). The
-default mode is a DRY-RUN; pass `--apply` to write. Pure standard library; mtime-neutral writers.
+NOTHING in the legacy store is deleted or rewritten - the two coexist until the cutover is verified live
+and the legacy stores are removed in a separate, gated step. `--sync` additionally prunes pointers whose
+legacy fact is gone + central bodies nothing references. Default is a DRY-RUN; `--apply` writes. Pure
+standard library; mtime-neutral writers.
 """
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
-import memory_engine as E
 import self_improve_signals as sig
 import uuid_store as us
+
+# legacy index.md entry line: `- [Title](facts/slug.md|#slug) - hook <!-- bx:src=a,b bx:pin -->`
+_LEGACY_ENTRY = re.compile(r"^- \[(?P<title>[^\]]*)\]\((?P<target>[^)]+)\) - (?P<hook>.*?)"
+                           r"(?:\s*<!--\s*(?P<meta>bx:[^>]*?)\s*-->)?\s*$")
+
+
+def _parse_legacy_meta(meta):
+    source, pin = set(), False
+    for tok in (meta or "").split():
+        if tok == "bx:pin":
+            pin = True
+        elif tok.startswith("bx:src="):
+            source |= {s for s in tok[len("bx:src="):].split(",") if s}
+    return source, pin
+
+
+def read_legacy_store(store_dir):
+    """Parse a legacy `.claude-bx-selflearning/` store dir -> (scope, [fact dict]). Each fact:
+    {slug, title, hook, body, source, pin}. Tiny bodies are inlined under an `(#slug)` entry; heavy
+    bodies live in `facts/<slug>.md`. Missing store -> ("", [])."""
+    store = Path(store_dir)
+    try:
+        text = (store / sig.CURATED_INDEX).read_text(encoding="utf-8")
+    except OSError:
+        return "", []
+    scope = sig.read_scope_block(text) or ""
+    facts, cur = [], None
+    for raw in text.splitlines():
+        m = _LEGACY_ENTRY.match(raw)
+        if m:
+            source, pin = _parse_legacy_meta(m.group("meta"))
+            target = m.group("target")
+            heavy = target.endswith(".md")
+            slug = target.rsplit("/", 1)[-1][:-3] if heavy else target.lstrip("#")
+            cur = {"slug": slug, "title": m.group("title"), "hook": m.group("hook"),
+                   "body": "", "source": source, "pin": pin, "heavy": heavy}
+            facts.append(cur)
+            continue
+        if cur is not None and not cur["heavy"] and (raw.startswith("  ") or not raw.strip()):
+            cur["body"] = (cur["body"] + "\n" + raw[2:]) if cur["body"] else raw[2:]
+        else:
+            cur = None
+    for f in facts:
+        f["body"] = f["body"].rstrip("\n")
+        if f["heavy"]:
+            try:
+                f["body"] = (store / "facts" / (f["slug"] + ".md")).read_text(encoding="utf-8").rstrip("\n")
+            except OSError:
+                f["body"] = ""
+    return scope, facts
 
 
 def find_legacy_stores(root):
     """Every dir under `root` that OWNS a legacy `.claude-bx-selflearning/index.md` store (returns the
-    owning altitude dirs - the store parents - not the store dirs). Skips backup dirs (`.bak`)."""
+    owning altitude dirs - the store parents). Skips backup dirs (`.bak`)."""
     out = []
     try:
         for dirpath, dirnames, _files in os.walk(root):
@@ -43,19 +94,18 @@ def find_legacy_stores(root):
 def migrate_store(altitude, dry_run):
     """Migrate one altitude's legacy store into the central UUID store. Returns a list of
     (uuid, slug, written_bool) for every fact. `dry_run` writes nothing."""
-    scope, entries, bodies = E.read_store(altitude)
+    scope, facts = read_legacy_store(sig.claude_memory_dir(altitude))
     anchor = us.resolve_anchor(altitude) or Path(altitude)
     results = []
-    for e in entries:
-        uid = us.fact_uuid(altitude, e.slug)
-        body = bodies.get(e.slug, "") if e.heavy else e.body
+    for f in facts:
+        uid = us.fact_uuid(altitude, f["slug"])
         written = False
         if not dry_run:
-            us.put_body(str(anchor), uid, body)
-            us.add_pointer(altitude, uuid=uid, title=e.title, hook=e.hook,
-                           source=e.source, pin=e.pin, scope_default=scope)
+            us.put_body(str(anchor), uid, f["body"])
+            us.add_pointer(altitude, uuid=uid, title=f["title"], hook=f["hook"],
+                           source=f["source"], pin=f["pin"], scope_default=scope, slug=f["slug"])
             written = True
-        results.append((uid, e.slug, written))
+        results.append((uid, f["slug"], written))
     return results
 
 
@@ -73,15 +123,14 @@ def migrate(root, dry_run):
 
 def _current_legacy_uuids(altitude):
     """The uuid set the altitude's CURRENT legacy facts SHOULD have (one per live slug)."""
-    _scope, entries, _bodies = E.read_store(altitude)
-    return {us.fact_uuid(altitude, e.slug) for e in entries}
+    _scope, facts = read_legacy_store(sig.claude_memory_dir(altitude))
+    return {us.fact_uuid(altitude, f["slug"]) for f in facts}
 
 
 def sync(root, prune):
     """Make the UUID store mirror the current legacy stores: (re)write every live fact (idempotent
-    migrate), and when `prune`, drop pointers whose legacy fact is gone and delete central body files
-    no pointer references any more. This keeps the projection faithful after a dream deletes/merges
-    facts. Returns {'facts', 'written', 'pruned', 'bodies_deleted'}."""
+    migrate), and when `prune`, drop pointers whose legacy fact is gone and delete central body files no
+    pointer references any more. Returns {'facts', 'written', 'pruned', 'bodies_deleted'}."""
     mig = migrate(root, dry_run=False)
     report = {"facts": mig["facts"], "written": mig["written"], "pruned": 0, "bodies_deleted": 0}
     altitudes = sorted(find_legacy_stores(root))
@@ -118,7 +167,7 @@ def sync(root, prune):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Copy/sync legacy curated facts into the central UUID store (additive).")
+    ap = argparse.ArgumentParser(description="Copy/sync legacy curated facts into the central UUID store.")
     ap.add_argument("--root", required=True, help="tree to scan for legacy .claude-bx-selflearning stores")
     ap.add_argument("--apply", action="store_true", help="actually write (default: DRY-RUN, writes nothing)")
     ap.add_argument("--sync", action="store_true",

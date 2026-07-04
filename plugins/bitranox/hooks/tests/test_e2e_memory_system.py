@@ -132,20 +132,21 @@ def test_memory_system_end_to_end(sandbox):
     _, out, _ = _cli(dream, "due", proj_b)
     assert out == "not-due"
 
-    # S8 - reconcile a CURATED .claude-bx-selflearning store (backfill from facts/ + reference --check)
+    # S8 - reconcile a CURATED altitude (UUID-native: pointer block + central bodies)
     import memory_engine as ME
+    import uuid_store as us
     ME.add_or_update_entry(proj_b, "Zorblax config", "set the zorblax flag before deploy",
                            body="Configure the zorblax frobnicator.", scope_default="projB notes")
-    cur_b = sig.claude_memory_dir(proj_b)
-    (cur_b / "facts").mkdir(parents=True, exist_ok=True)
-    (cur_b / "facts" / "extra.md").write_text(
-        "---\nname: extra\ndescription: an extra widget note\n---\nbody", encoding="utf-8")
     recon = SK / "meta-self-improve" / "reconcile_memory_index.py"
-    _cli(recon, str(cur_b))                                         # backfills the orphan facts file
-    mindex = cur_b / "index.md"
-    assert mindex.is_file() and "extra" in mindex.read_text(encoding="utf-8")
+    # a fact whose central body was deleted is reported as an orphan pointer, never fabricated
+    slug = ME.slugify("Zorblax config")
+    us.body_path(proj_b, us.fact_uuid(proj_b, slug)).unlink()
+    rc, out, err = _cli(recon, proj_b)
+    assert "orphan" in (out + err).lower() and slug in (out + err)
+    ME.add_or_update_entry(proj_b, "Zorblax config", "set the zorblax flag before deploy",
+                           body="Configure the zorblax frobnicator.")    # restore the body
     ME.add_or_update_entry(proj_b, "Bad ref", "see [[does-not-exist-anywhere]]", body="x")
-    rc, out, err = _cli(recon, "--check", str(cur_b))              # orphan [[ref]] is flagged
+    rc, out, err = _cli(recon, "--check", proj_b)                 # orphan [[ref]] is flagged
     assert rc != 0 or "does-not-exist-anywhere" in (out + err)
 
     # S9 - self-improve-gate (Stop-hook learning detection)
