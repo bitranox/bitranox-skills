@@ -227,20 +227,47 @@ def _index_block(scope, pointers):
     return "%s\n%s%s" % (INDEX_BEGIN, render_pointer_index(scope, pointers), INDEX_END)
 
 
-def upsert_pointer_block(text, scope, pointers):
-    """Splice ONE canonical managed pointer block into `text` (a `CLAUDE.local.md`), replacing any
-    existing managed block (either fence generation) and preserving all surrounding text. Byte-safe
-    outside the fences."""
-    block = _index_block(scope, pointers)
+def _managed_spans(text):
+    """Every managed-block region in `text`, both fence generations, merged if overlapping. More
+    than one span happens in the wild: an old-plugin session's heal can scaffold a second (legacy)
+    block next to the migrated one - the canonical writer must collapse them, not skip them."""
+    spans = []
     for begin, endm in ((INDEX_BEGIN, INDEX_END), (LEGACY_INDEX_BEGIN, LEGACY_INDEX_END)):
-        b = text.find(begin)
-        if b >= 0:
+        pos = 0
+        while True:
+            b = text.find(begin, pos)
+            if b < 0:
+                break
             e = text.find(endm, b)
             e = len(text) if e < 0 else e + len(endm)    # malformed (no END) -> cut to end
-            head = text[:b].rstrip("\n")
-            tail = text[e:].lstrip("\n")
-            parts = [p for p in (head, block, tail) if p]
-            return "\n\n".join(parts).rstrip("\n") + "\n"
+            spans.append((b, e))
+            pos = e
+    spans.sort()
+    merged = []
+    for b, e in spans:
+        if merged and b < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((b, e))
+    return merged
+
+
+def upsert_pointer_block(text, scope, pointers):
+    """Splice ONE canonical managed pointer block into `text` (a `CLAUDE.local.md`), replacing
+    EVERY existing managed block (either fence generation; a stray second block is collapsed) and
+    preserving all surrounding text. Byte-safe outside the fences."""
+    block = _index_block(scope, pointers)
+    spans = _managed_spans(text)
+    if spans:
+        pieces, prev = [], 0
+        for b, e in spans:
+            pieces.append(text[prev:b])
+            prev = e
+        pieces.append(text[prev:])
+        head = pieces[0].rstrip("\n")
+        tail = "\n\n".join(s for s in (piece.strip("\n") for piece in pieces[1:]) if s)
+        parts = [p for p in (head, block, tail) if p]
+        return "\n\n".join(parts).rstrip("\n") + "\n"
     sep = "" if not text.strip() else (text.rstrip("\n") + "\n\n")
     return sep + block + "\n"
 
