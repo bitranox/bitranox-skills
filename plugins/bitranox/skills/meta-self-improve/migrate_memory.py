@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate native Auto-memory stores into the curated `.claude-bx-selflearning/` model (Phase 2).
+"""Migrate native Auto-memory stores into the curated slug store (pointer blocks + central bodies).
 
 For each `~/.claude/projects/<slug>/memory/` store: resolve the slug back to its project directory,
 curate its `MEMORY.md` + topic files into that project's curated store via the write engine, back up
@@ -157,12 +157,22 @@ def read_native_entries(memdir):
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
 
 def _receipt_path(proj):
-    return sig.curated_state_dir(proj) / "migration-receipt.json"
+    import re as _re
+    stem = _re.sub(r"[^A-Za-z0-9]+", "-", str(proj)).strip("-")
+    return sig.curated_state_dir(proj) / "migration-receipts" / (stem + ".json")
+
+
+def _legacy_receipt_path(proj):
+    # pre-5.35 location, read-only fallback so old runs stay idempotent
+    return sig.claude_memory_dir(proj) / "state" / "migration-receipt.json"
 
 
 def _load_receipt(proj):
     try:
-        return json.loads(_receipt_path(proj).read_text(encoding="utf-8"))
+        try:
+            return json.loads(_receipt_path(proj).read_text(encoding="utf-8"))
+        except OSError:
+            return json.loads(_legacy_receipt_path(proj).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"placed": [], "sources": [], "slugs": []}
 
@@ -187,29 +197,30 @@ def _git(proj, *args):
 
 
 def ensure_gitignore(proj):
-    """Ensure `.claude-bx-selflearning/` AND `CLAUDE.local.md` (the untracked memory wiring) are
-    gitignored in the repo owning `proj`. Honors `track_private` (if set, the user WANTS it tracked ->
-    do nothing). R11 checks: non-git dir -> skip; already ignored -> no-op; the store already TRACKED
-    -> WARN (a possible existing leak) and do NOT append; else append the ignore lines to the repo-root
-    `.gitignore`. Returns a status string. Fail-open."""
+    """Ensure the memory wiring - the LIVE store (`.claude-memory/`), the legacy store dir, and
+    `CLAUDE.local.md` - is gitignored in the repo owning `proj`. Honors `track_private` (if set,
+    the user WANTS it tracked -> do nothing). Checks: non-git dir -> skip; already ignored ->
+    no-op; a store already TRACKED -> WARN (a possible existing leak) and do NOT append; else
+    append the ignore lines to the repo-root `.gitignore`. Returns a status string. Fail-open."""
     if sig.load_config().get("track_private"):
         return "track_private: left tracked"
     rc, top = _git(proj, "rev-parse", "--show-toplevel")
     if rc != 0 or not top:
         return "not a git repo: skipped"
     root = Path(top)
-    if _git(proj, "ls-files", "--error-unmatch", sig.CURATED_DIRNAME + "/")[0] == 0:
-        return "WARNING: .claude-bx-selflearning is TRACKED (possible existing leak) - not modifying .gitignore"
+    for store in (sig.MEMORY_DIRNAME, sig.CURATED_DIRNAME):
+        if _git(proj, "ls-files", "--error-unmatch", store + "/")[0] == 0:
+            return "WARNING: %s is TRACKED (possible existing leak) - not modifying .gitignore" % store
     gi = root / ".gitignore"
     try:
         cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
         have = set(cur.splitlines())
-        wanted = [sig.CURATED_DIRNAME + "/", "CLAUDE.local.md"]
+        wanted = [sig.MEMORY_DIRNAME + "/", sig.CURATED_DIRNAME + "/", "CLAUDE.local.md"]
         add = [w for w in wanted if w not in have and w.rstrip("/") not in have]
         if not add:
             return "already ignored"
         gi.write_text((cur.rstrip("\n") + "\n" if cur.strip() else "")
-                      + "# bitranox curated self-learning memory (local; CLAUDE.local.md @imports it)\n"
+                      + "# bitranox curated self-learning memory (local wiring; engine-written)\n"
                       + "\n".join(add) + "\n", encoding="utf-8")
         return "gitignored"
     except OSError:

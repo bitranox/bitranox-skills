@@ -191,7 +191,8 @@ _UUID_STORE_DIRNAME = ".claude-memory"            # the additive central UUID bo
 
 def _find_curated_stores(root):
     """Every curated body under `root`, across BOTH layouts (coexisting during the transition):
-    the legacy `.claude-bx-selflearning/{index.md, facts/*.md}` AND the central UUID store
+    the legacy `.claude-bx-selflearning/{index.md, facts/*.md}` AND the central slug store
+# LEGACY-RETIRE: drop the legacy dual-read together with the skills-half legacy retirement (C4)
     `.claude-memory/facts/<shard>/<uuid>.md`. Allow-lists those two dot-dirs past the hidden-dir prune
     (else the walk would never find them), excludes vendored/other-hidden/backup dirs, and does not
     descend INTO a store (so `.archive`/backups are skipped)."""

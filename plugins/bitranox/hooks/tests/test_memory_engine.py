@@ -455,3 +455,53 @@ def test_cli_ensure_all_trees_dry_run_default(two_trees, capsys):
     rc = E.main(["ensure-all-trees", "--roots", str(two_trees.root)])
     out = capsys.readouterr().out
     assert rc == 0 and "DRY-RUN" in out and "2 tree(s)" in out
+
+
+# ---- heal skip-fast: healthy chain = read-only probe, no lock churn ------------------------------
+
+def test_level_needs_heal_probe(proj):
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="lvl")
+    assert E._level_needs_heal(proj) is True                     # CLAUDE.md marker still missing
+    E.heal(proj)
+    assert E._level_needs_heal(proj) is False                    # settled = canonical
+    local = sig.claude_local_md_path(proj)
+    local.write_text(local.read_text(encoding="utf-8") + "\ntrailing junk\n", encoding="utf-8")
+    assert E._level_needs_heal(proj) is False                    # outside-block text is the user's
+    # corrupt the block itself -> needs heal
+    txt = local.read_text(encoding="utf-8").replace("(mem:f)", "(mem:f)  ")
+    local.write_text(txt, encoding="utf-8")
+    assert E._level_needs_heal(proj) is True
+
+
+def test_heal_healthy_chain_takes_no_lock(proj, monkeypatch):
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="lvl")
+    E.heal(proj)                                                 # settle to canonical
+    calls = []
+    real_lock = sig.memory_lock
+    monkeypatch.setattr(sig, "memory_lock", lambda p: calls.append(str(p)) or real_lock(p))
+    rep = E.heal(proj)
+    assert rep["healed"] == [] and calls == []                   # read-only pass, zero locks
+
+
+def test_heal_still_repairs_when_needed(proj, monkeypatch):
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="lvl")
+    local = sig.claude_local_md_path(proj)
+    local.write_text(local.read_text(encoding="utf-8").replace("# Memory index", "# memory index"),
+                     encoding="utf-8")
+    rep = E.heal(proj)
+    assert rep["healed"]                                         # repaired via the lock path
+    assert "# Memory index" in local.read_text(encoding="utf-8")
+
+
+def test_heal_orphan_check_does_not_read_body_contents(proj, monkeypatch):
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="lvl")
+    E.heal(proj)
+    reads = []
+    real_read = Path.read_text
+    def spy(self, *a, **k):
+        if str(self).endswith("f.md"):
+            reads.append(str(self))
+        return real_read(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", spy)
+    rep = E.heal(proj)
+    assert rep["orphans"] == [] and reads == []                  # stat-only, bodies never opened

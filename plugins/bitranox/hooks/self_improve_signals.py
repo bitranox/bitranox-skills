@@ -123,8 +123,9 @@ def curated_index(proj):
 
 
 def curated_state_dir(proj):
-    """Per-project machine-local state, relocated under the curated dir's `state/`."""
-    return claude_memory_dir(proj) / "state"
+    """Tree-shared state dir in the LIVE store: `<anchor>/.claude-memory/state`. Per-project files
+    inside it encode the project in their filename (see migrate_memory's receipts)."""
+    return global_rules_dir(proj) / "state"
 
 
 # ---- Claude Code version gate (the @import load-path depends on a new-enough Claude Code) ---------

@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.35.0] - 2026-07-05
+
+### Changed
+- Engine-half residue: the every-session heal is now SKIP-FAST (a read-only `_level_needs_heal`
+  probe first; a healthy chain takes no lock and writes nothing) and its orphan check is
+  pointer-parse + stat only (bodies are never opened). `migrate_memory` receipts move to the live
+  store (`<anchor>/.claude-memory/state/migration-receipts/<proj>.json`, legacy location still
+  read); its gitignore safety covers BOTH store dirs (`.claude-memory/` + the legacy one) and the
+  prose is de-legacied. `gather_scan`'s legacy dual-read carries a `# LEGACY-RETIRE:` marker tying
+  its removal to the skills-half legacy retirement.
+
 ## [5.34.0] - 2026-07-05
 
 ### Added
