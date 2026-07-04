@@ -368,3 +368,22 @@ def test_put_body_and_add_pointer_slug_native(tmp_path):
     us.add_pointer(str(tmp_path), slug="a-slug", title="A", hook="h", source={"s"})
     _s, ptrs = us.parse_pointer_index((tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert ptrs[0].slug == "a-slug" and not ptrs[0].legacy
+
+
+def test_hook_may_contain_angle_brackets_meta_still_parsed():
+    # REGRESSION (live-data bug 2026-07-05): a hook containing placeholders like <mkt>/<plugin>
+    # must NOT truncate at the first '<' - the hook runs to the FIRST '<!--' (the meta comment).
+    line = ("- [Prune plugin cache](uuid:bcfd5422-cfe5-503c-b795-4fd3594904f1) - prune "
+            "~/.claude/plugins/cache/<mkt>/<plugin>/ old version dirs, keeping the active one "
+            "<!-- bx:src=global-rules:prune bx:slug=prune-plugin-cache-after-publish -->\n")
+    _s, ptrs = us.parse_pointer_index(line)
+    p = ptrs[0]
+    assert p.slug == "prune-plugin-cache-after-publish"       # bx:slug honored, not title-derived
+    assert "<mkt>/<plugin>/" in p.hook                        # hook intact incl. angle brackets
+    assert p.source == {"global-rules:prune"}
+
+
+def test_mem_line_hook_with_angle_brackets():
+    line = "- [T](mem:t-fact) - use <placeholder> then <other> <!-- bx:pin -->\n"
+    _s, ptrs = us.parse_pointer_index(line)
+    assert ptrs[0].hook == "use <placeholder> then <other>" and ptrs[0].pin
