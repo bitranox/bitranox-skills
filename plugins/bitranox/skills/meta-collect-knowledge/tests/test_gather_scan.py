@@ -142,14 +142,20 @@ def test_discover_excludes_self_includes_others_and_global(home, tmp_path):
     (top / "CLAUDE.md").write_text("x", encoding="utf-8")
     _mem(str(self_proj), "s.md", "self only")
     _mem("/p/other", "o.md", "other tree")
-    g = sig.global_rules_dir(str(self_proj))               # = top/.claude-bx-selflearning (not ~/.claude)
-    g.mkdir(parents=True, exist_ok=True)
-    (g / "r.md").write_text("a global rule", encoding="utf-8")
+    g = sig.global_rules_dir(str(self_proj))               # = top/.claude-memory (not ~/.claude)
+    (g / "facts").mkdir(parents=True, exist_ok=True)
+    (g / "facts" / "r.md").write_text("a global rule", encoding="utf-8")     # flat body
+    (g / "facts" / "ab").mkdir()
+    (g / "facts" / "ab" / "ab12.md").write_text("a sharded body", encoding="utf-8")
+    (g / ".archive").mkdir()
+    (g / ".archive" / "old.md").write_text("archived - must NOT be scanned", encoding="utf-8")
     files = [str(f) for f in G.discover_files(str(self_proj))]
     self_native = str(sig.memory_dir(str(self_proj)).resolve())
     assert not any(self_native in f for f in files)        # current project's own memory excluded
     assert any("/-p-other/" in f for f in files)           # other trees included
-    assert any(str(g) in f for f in files)                 # global rules included
+    assert any(str(g / "facts" / "r.md") == f for f in files)          # flat body included
+    assert any(str(g / "facts" / "ab" / "ab12.md") == f for f in files)  # sharded body included
+    assert not any(".archive" in f for f in files)                      # archive excluded
 
 
 def test_main_reports_candidates_from_other_tree(home, capsys):

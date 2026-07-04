@@ -29,7 +29,7 @@ import memory_engine as ME  # noqa: E402
 import uuid_store as us  # noqa: E402
 
 _HOOK_MAX = 160
-_TYPE_PREFIXES = ("project", "feedback", "reference", "user")
+_TYPE_PREFIXES = us.TYPE_PREFIXES
 _WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
 _WARN_BYTES = 50_000             # SOFT: warn (never fail) when a level's pointer block grows past this
 _NON_ENTRY = {"claude.md", "claude.local.md"}

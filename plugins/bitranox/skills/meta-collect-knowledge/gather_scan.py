@@ -100,20 +100,18 @@ def discover_files(exclude_proj=None):
             files += sorted(memdir.glob("*.md"))
     except OSError:
         pass
-    g = sig.global_rules_dir(exclude_proj)   # global tier = topmost-CLAUDE.md ancestor of this project
+    g = sig.global_rules_dir(exclude_proj)   # tree-top central store: <anchor>/.claude-memory
     try:
-        if g.exists():
-            files += sorted(g.rglob("*.md"))
+        facts = g / "facts"
+        if facts.is_dir():                    # bodies only; .archive/ and state/ excluded by construction
+            files += sorted(facts.glob("*.md")) + sorted(facts.glob("*/*.md"))
     except OSError:
         pass
     return files
 
 
-# Dirs never worth walking for CLAUDE.md (vendored / build / VCS / cache).
-_VENDOR = {
-    ".git", "node_modules", ".venv", "venv", "__pycache__", "site-packages", ".mypy_cache",
-    ".pytest_cache", ".tox", ".idea", ".ruff_cache", "dist", "build", ".eggs",
-}
+# Dirs never worth walking for CLAUDE.md (single source: self_improve_signals.VENDOR_DIRNAMES).
+_VENDOR = sig.VENDOR_DIRNAMES
 
 
 def _workspace_root(cwd, max_up=8):

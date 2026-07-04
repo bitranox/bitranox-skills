@@ -14,6 +14,15 @@
 # Approach adapted from Anthropic's claude-plugins-official sg-python.sh.
 set -e
 
+# Master kill-switch (DEV ONLY). BITRANOX_HOOKS_OFF=1, set at SESSION LAUNCH, silences every plugin
+# hook in this one place (all hooks are launched through this shim). It disables the guards, sweeps,
+# recall, capture, and session inject - never set it permanently. A DELIBERATE engine/CLI call in such
+# a dev session strips it per-command: `env -u BITRANOX_HOOKS_OFF bash run-python.sh ...`.
+if [ -n "$BITRANOX_HOOKS_OFF" ]; then
+  echo "bitranox: BITRANOX_HOOKS_OFF is set - hook skipped (dev kill-switch)." >&2
+  exit 0
+fi
+
 # Degrade path. HOOKS must never wedge a turn, so the default is fail-OPEN (exit 0 after a stderr
 # note). A DELIBERATE caller (e.g. the dream running memory_engine.py) sets BITRANOX_RUN_PYTHON_STRICT=1
 # to fail LOUD instead: the same conditions then exit non-zero (3) so the failure cannot pass silently.

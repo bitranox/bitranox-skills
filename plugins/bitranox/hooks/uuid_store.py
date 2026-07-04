@@ -41,7 +41,23 @@ import self_improve_signals as sig
 # every fact's identity would shift and every stored pointer would dangle).
 NAMESPACE = _uuid.UUID("6f1b2c9e-8a4d-5f3b-9c7e-2d1a0b3c4d5e")
 
-STORE_DIRNAME = ".claude-memory"                 # the central body-store dir, co-located at the anchor
+STORE_DIRNAME = sig.MEMORY_DIRNAME               # the central body-store dir, co-located at the anchor
+                                                 # (single source: self_improve_signals.MEMORY_DIRNAME)
+
+# The type prefixes a slug may carry (single source; memory_engine aliases this).
+TYPE_PREFIXES = ("project", "feedback", "reference", "user")
+
+
+def slugify(title, type_=None):
+    """A stable, filesystem-safe slug from a title (+ optional type prefix), matching the native
+    topic-file convention (e.g. 'feedback-no-em-dashes'). Lowercase, hyphen-separated, deduped.
+    THE one slug algorithm (memory_engine aliases it; the pointer parser derives back-compat slugs
+    from titles with it)."""
+    base = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
+    base = base or "note"
+    if type_ and type_ in TYPE_PREFIXES and not base.startswith(type_ + "-"):
+        base = "%s-%s" % (type_, base)
+    return base
 
 INDEX_BEGIN = "<!-- BITRANOX-UUID-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
 INDEX_END = "<!-- BITRANOX-UUID-INDEX:END -->"
@@ -83,33 +99,8 @@ def body_path(anchor_dir, fact_uuid_str):
 
 # ---- anchor resolution from cwd -----------------------------------------------------------------
 
-def resolve_anchor(cwd):
-    """The anchor dir for `cwd`: the TOPMOST ancestor (including `cwd`) that carries a `CLAUDE.md` AND a
-    co-located central store (`.claude-memory/`). Tying the anchor to the store it must hold stops a
-    stray higher `CLAUDE.md` from hijacking it (the fragility a probe caught). Only at BOOTSTRAP, when no
-    dir in the chain has a store yet, fall back to the topmost `CLAUDE.md` (the first write then creates
-    the store there and pins the anchor thereafter). Never anchors at `/`, `~`, or the temp dir. Returns
-    a Path, or None when no ancestor has a `CLAUDE.md` at all."""
-    try:
-        ladder = [Path(cwd), *Path(cwd).parents]
-    except (TypeError, ValueError):
-        return None
-    excluded = sig._excluded_anchor_dirs()
-    highest_both = None                              # topmost dir with CLAUDE.md AND a store (robust)
-    highest_md = None                                # topmost dir with CLAUDE.md (bootstrap fallback)
-    for d in ladder:
-        try:
-            if d == Path(d.anchor) or d in excluded:
-                continue
-            has_md = (d / "CLAUDE.md").is_file()
-            has_store = (d / STORE_DIRNAME).is_dir()
-        except OSError:
-            continue
-        if has_md:
-            highest_md = d
-        if has_md and has_store:
-            highest_both = d
-    return highest_both or highest_md
+# THE anchor resolver lives in self_improve_signals (the base module); this is the same function.
+resolve_anchor = sig.resolve_anchor
 
 
 # ---- pointer-index model + render/parse ---------------------------------------------------------
@@ -144,11 +135,9 @@ class Pointer:
 
 
 def _slug_from_title(title):
-    """A back-compat slug derived from a title (matches memory_engine.slugify's base, minus any type
-    prefix): used only when a pointer line carries no `bx:slug=` token. Kept local to avoid importing
-    memory_engine (which imports this module)."""
-    base = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
-    return base or "note"
+    """A back-compat slug derived from a title: used only when a pointer line carries no `bx:slug=`
+    token."""
+    return slugify(title)
 
 
 def _parse_meta(meta):

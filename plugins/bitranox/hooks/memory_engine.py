@@ -32,22 +32,16 @@ import uuid_store as us
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN          # <!-- bitranox:self-learning -->
 SCOPE_END = sig.SCOPE_MARK_END              # <!-- /bitranox:self-learning -->
 
-_TYPE_PREFIXES = ("project", "feedback", "reference", "user")
+# The slug algorithm + type prefixes live in uuid_store (single source); aliased here because the
+# capture procedure and the migration tools call them via this module.
+slugify = us.slugify
+_TYPE_PREFIXES = us.TYPE_PREFIXES
+
 # Minimal marker written to a level's CLAUDE.md when the scaffold creates one (so every altitude up to
 # the anchor is a real CLAUDE.md-bearing rung). Scope + fact pointers live in CLAUDE.local.md, bodies in
 # the anchor's `.claude-memory/`; no `@`-token so it can never fire an import.
 _ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + fact pointers live in CLAUDE.local.md; "
                     "bodies in the anchor's .claude-memory/. -->\n")
-
-
-def slugify(title, type_=None):
-    """A stable, filesystem-safe slug from a title (+ optional type prefix), matching the native
-    topic-file convention (e.g. 'feedback-no-em-dashes'). Lowercase, hyphen-separated, deduped."""
-    base = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
-    base = base or "note"
-    if type_ and type_ in _TYPE_PREFIXES and not base.startswith(type_ + "-"):
-        base = "%s-%s" % (type_, base)
-    return base
 
 
 class Entry:
@@ -75,16 +69,8 @@ def _anchor(proj):
     return us.resolve_anchor(proj) or Path(proj)
 
 
-def _write_if_changed(path, text):
-    """Write only when content differs (mtime-neutral: a no-op write writes nothing). True if written."""
-    try:
-        if path.read_text(encoding="utf-8") == text:
-            return False
-    except OSError:
-        pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    return True
+# mtime-neutral writer: one implementation, in uuid_store.
+_write_if_changed = us.write_if_changed
 
 
 def read_store(proj):
@@ -263,7 +249,7 @@ def heal(proj):
     FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)], 'levels': n}."""
     report = {"healed": [], "orphans": [], "levels": 0}
     try:
-        levels = [store.parent for store in sig.altitude_chain(proj)]
+        levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except Exception:                                # noqa: BLE001 - self-heal must never raise
         return report
     for level in levels:
@@ -285,7 +271,7 @@ def scaffold(proj):
     anchor, and the anchor's `.claude-memory/` body-store. Idempotent; returns the created paths."""
     created = []
     try:
-        levels = [store.parent for store in sig.altitude_chain(proj)]
+        levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except (TypeError, ValueError):
         return created
     for level in levels:
