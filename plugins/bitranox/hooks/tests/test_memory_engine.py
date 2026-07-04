@@ -5,6 +5,8 @@ Store format under test: a per-altitude pointer block inline in `CLAUDE.local.md
 `<anchor>/.claude-memory/facts/<shard>/<uuid>.md`. Slug is the logical identity; uuid is the body key.
 """
 
+from pathlib import Path
+
 import pytest
 
 import self_improve_signals as sig
@@ -265,3 +267,120 @@ def test_cli_add_warns_over_hook_budget(tmp_path, capsys, proj):
     rc = E.main(["add", "--proj", proj, "--title", "Budget", "--hook", long_hook, "--body", "B"])
     out = capsys.readouterr().out
     assert rc == 0 and "~ warning: hook is" in out                  # advisory, exit stays 0
+
+
+# ---- move: the dream's re-leveling primitive (pointer-line ops only; the body never moves) -------
+
+def _three_levels(tmp_path):
+    """anchor -> mid -> proj, each a CLAUDE.md-bearing rung; central store at the anchor."""
+    anchor = tmp_path / "tree"
+    mid = anchor / "mid"
+    proj = mid / "proj"
+    proj.mkdir(parents=True)
+    for d in (anchor, mid, proj):
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / us.STORE_DIRNAME).mkdir()
+    return str(anchor), str(mid), str(proj)
+
+
+def test_move_up_relocates_pointer_only_body_untouched(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Shared rule", "applies to the whole dept", body="B",
+                          source=["cap"], pin=True, scope_default="proj")
+    body = us.body_path(anchor, "shared-rule")
+    before = body.read_text(encoding="utf-8")
+    rep = E.move_entry(proj, mid, "shared-rule")
+    assert rep["moved"] is True and rep["refused"] is None and rep["direction"] == "up"
+    assert body.read_text(encoding="utf-8") == before            # body file untouched
+    _s, ptrs_from = us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert "shared-rule" not in {p.slug for p in ptrs_from}      # gone at source
+    _s, ptrs_to = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    got = {p.slug: p for p in ptrs_to}
+    assert "shared-rule" in got and got["shared-rule"].pin and got["shared-rule"].source == {"cap"}
+    assert {r.slug for r in us.resolve(proj)} == {"shared-rule"}  # still visible from below
+
+
+def test_move_down_works_without_refs(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(anchor, "Proj detail", "belongs lower", body="B", scope_default="a")
+    rep = E.move_entry(anchor, proj, "proj-detail")
+    assert rep["moved"] is True and rep["direction"] == "down"
+    assert "proj-detail" in {p.slug for p in us.parse_pointer_index(
+        (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+
+
+def test_move_down_refused_when_a_ref_would_dangle_force_overrides(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(anchor, "Base rule", "the base", body="B", scope_default="a")
+    E.add_or_update_entry(mid, "Citing fact", "builds on [[base-rule]]", body="B2", scope_default="m")
+    rep = E.move_entry(anchor, proj, "base-rule")
+    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
+    rep2 = E.move_entry(anchor, proj, "base-rule", force=True)
+    assert rep2["moved"] is True and rep2["warnings"]            # forced through, with a warning
+
+
+def test_move_refusals_sibling_sametree_crosslevel(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    sib = Path(anchor) / "sibling"
+    sib.mkdir(); (sib / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
+    assert "sibling" in (E.move_entry(proj, str(sib), "f")["refused"] or "")
+    assert E.move_entry(proj, proj, "f")["refused"]              # same level
+    assert "not found" in (E.move_entry(mid, anchor, "nope")["refused"] or "")
+
+
+def test_move_refuses_cross_tree(two_trees):
+    E.add_or_update_entry(str(two_trees.proj_a), "F", "h", body="B", scope_default="p")
+    rep = E.move_entry(str(two_trees.proj_a), str(two_trees.top_b), "f")
+    assert rep["moved"] is False and "tree" in (rep["refused"] or "")
+
+
+def test_move_completes_after_crash_duplicate(tmp_path):
+    # add-then-remove crash residue: the pointer exists at BOTH levels; re-running the move
+    # merges at the target and drops the source line (never a lost fact).
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "F", "h", body="B", source=["s1"], scope_default="p")
+    us.add_pointer(mid, slug="f", title="F", hook="h", source={"s2"})   # simulated crash residue
+    rep = E.move_entry(proj, mid, "f")
+    assert rep["moved"] is True
+    _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    got = {p.slug: p for p in ptrs}
+    assert got["f"].source == {"s1", "s2"}                       # merged, single line
+    assert "f" not in {p.slug for p in us.parse_pointer_index(
+        (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+
+
+def test_move_refuses_unmigrated_legacy_entry(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    u = "11111111-0000-5000-8000-000000000000"
+    bp = us.legacy_body_path(anchor, u)
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text("OLD\n", encoding="utf-8")
+    (Path(proj) / "CLAUDE.local.md").write_text(
+        "%s\n# Memory index\n- [Old](uuid:%s) - h <!-- bx:slug=old-fact -->\n%s\n"
+        % (us.LEGACY_INDEX_BEGIN, u, us.LEGACY_INDEX_END), encoding="utf-8")
+    rep = E.move_entry(proj, mid, "old-fact")
+    assert rep["moved"] is False and "migrate" in (rep["refused"] or "").lower()
+
+
+def test_inbound_ref_sources_scans_hooks_and_bodies(tmp_path):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(anchor, "Base rule", "the base", body="B", scope_default="a")
+    E.add_or_update_entry(mid, "Hook citer", "see [[base-rule]]", body="plain", scope_default="m")
+    E.add_or_update_entry(proj, "Body citer", "h", body="details in [[base_rule]] apply",
+                          scope_default="p")
+    src = E.inbound_ref_sources([anchor, mid, proj], "base-rule")
+    assert {(Path(lvl).name, s) for lvl, s in src} == {("mid", "hook-citer"), ("proj", "body-citer")}
+    assert E.has_inbound_refs([anchor, mid, proj], "base-rule") is True
+    assert E.has_inbound_refs([anchor, mid, proj], "unreferenced") is False
+
+
+def test_cli_move_success_and_refusal(tmp_path, capsys):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
+    rc = E.main(["move", "--from-level", proj, "--to-level", mid, "--slug", "f"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "moved" in out
+    rc = E.main(["move", "--from-level", proj, "--to-level", mid, "--slug", "f"])   # gone now
+    out = capsys.readouterr().out
+    assert rc == 1 and "! refused:" in out

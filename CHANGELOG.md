@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.33.0] - 2026-07-05
+
+### Added
+- `memory_engine.py move --from-level X --to-level Y --slug s [--force]`: the dream's re-leveling
+  primitive. Pointer-line ops only (the slug-named body never moves). Guards: same-tree
+  (cross-tree refused - that is a lift/copy), altitude-chain only (siblings refused), and a
+  down-move inbound-[[ref]] dangle check (refused unless --force, which warns). ADD-THEN-REMOVE
+  ordering: a crash leaves a visible duplicate pointer (a re-run merges and completes), never a
+  lost fact. Unmigrated legacy pointers are refused (migrate first). Exit 1 + `! refused:` on
+  refusal.
+- `memory_engine.inbound_ref_sources(levels, slug)` / `has_inbound_refs`: THE inbound-reference
+  scan (hooks + central bodies); reconcile's `has_inbound_refs` now delegates to it.
+
 ## [5.32.0] - 2026-07-05
 
 ### Changed

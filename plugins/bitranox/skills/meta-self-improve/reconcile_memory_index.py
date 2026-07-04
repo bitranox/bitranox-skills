@@ -181,18 +181,9 @@ def check_references(dirs):
 
 
 def has_inbound_refs(dirs, slug):
-    """True if any OTHER entry across the chain references `[[slug]]` (or `[[x:slug]]`) - demotion
-    safety: never demote a target that lower entries still point UP at. Slug IS the identity now
-    (no frontmatter name aliases)."""
-    qcanon = _canon(slug)
-    for d in [Path(x) for x in dirs]:
-        for label, text in altitude_sources(d):
-            if _canon(label) == qcanon:               # the target's own body - skip
-                continue
-            for m in _WIKILINK_RX.finditer(text):
-                if _ref_slug(m.group(1)) == qcanon:
-                    return True
-    return False
+    """True if any OTHER entry across the chain references `[[slug]]` - move/demotion safety.
+    Delegates to the engine's scan (memory_engine.inbound_ref_sources is the single source)."""
+    return ME.has_inbound_refs([str(d) for d in dirs], slug)
 
 
 # ---- advisory size probe on the always-loaded pointer block ------------------------------------
