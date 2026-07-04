@@ -180,6 +180,115 @@ def _archive_legacy_body(anchor, entry):
         pass
 
 
+# ---- move: the dream's re-leveling primitive -----------------------------------------------------
+
+_WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def _canon_slug(s):
+    """Separator-insensitive canonical slug form (matches reconcile's semantics)."""
+    return re.sub(r"[\s_]+", "-", (s or "").strip().lower())
+
+
+def _ref_slug(raw):
+    """The slug inside a [[ref]]; tolerates a `type:` prefix and a `|label` suffix."""
+    core = raw.split("|", 1)[0].split(":", 1)[-1]
+    return _canon_slug(core)
+
+
+def inbound_ref_sources(levels, slug):
+    """[(level, source_slug)] of every OTHER curated entry across `levels` whose hook or body
+    contains a `[[slug]]` reference. THE inbound-ref scan (reconcile delegates here); the dream's
+    move safety check keys off it."""
+    qcanon = _canon_slug(slug)
+    out = []
+    for level in levels:
+        _scope, entries, bodies = read_store(str(level))
+        for e in entries:
+            if _canon_slug(e.slug) == qcanon:
+                continue                             # the target's own line/body does not count
+            text = "%s\n%s" % (e.hook, bodies.get(e.slug, ""))
+            if any(_ref_slug(m.group(1)) == qcanon for m in _WIKILINK_RX.finditer(text)):
+                out.append((str(level), e.slug))
+    return out
+
+
+def has_inbound_refs(levels, slug):
+    """True when any other entry across `levels` references `[[slug]]`."""
+    return bool(inbound_ref_sources(levels, slug))
+
+
+def _drop_pointer(level, slug):
+    """Remove one pointer line (by slug) from a level's block, under lock, mtime-neutral."""
+    local = sig.claude_local_md_path(level)
+    with sig.memory_lock(local):
+        try:
+            text = local.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        scope, pointers = us.parse_pointer_index(text)
+        kept = [p for p in pointers if p.slug != slug]
+        if len(kept) == len(pointers):
+            return False
+        us.write_if_changed(local, us.upsert_pointer_block(text, scope, kept))
+    return True
+
+
+def move_entry(from_level, to_level, slug, force=False):
+    """Relocate a fact's POINTER LINE between two levels of one tree (the body file never moves -
+    the slug is the identity and the body is anchored centrally). ADD-THEN-REMOVE: the pointer is
+    upserted at the target (merging provenance/pin - which also completes a crash-interrupted
+    move), then dropped at the source; a crash between the two leaves a visible duplicate pointer,
+    never a lost fact. Returns {"slug","from","to","direction","moved","refused","warnings"}."""
+    rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
+           "direction": None, "moved": False, "refused": None, "warnings": []}
+    src = Path(from_level).resolve()
+    dst = Path(to_level).resolve()
+    a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
+    if a_from is None or a_to is None or a_from != a_to:
+        rep["refused"] = "cross-tree move (or no anchor) - a move stays within one tree; use a lift/copy for cross-tree"
+        return rep
+    if src == dst:
+        rep["refused"] = "same level - nothing to move"
+        return rep
+    if dst in src.parents:
+        rep["direction"] = "up"
+    elif src in dst.parents:
+        rep["direction"] = "down"
+    else:
+        rep["refused"] = "sibling levels - a move follows the altitude chain (ancestor <-> descendant only)"
+        return rep
+
+    _scope, entries, _bodies = read_store(str(src))
+    entry = next((e for e in entries if e.slug == slug), None)
+    if entry is None:
+        rep["refused"] = "slug %r not found at the from-level" % slug
+        return rep
+    if entry.legacy:
+        rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
+        return rep
+
+    if rep["direction"] == "down":
+        # a citing entry must sit AT or BELOW the new home, or its [[ref]] leaves cascade reach
+        chain = {str(Path(x).resolve()) for x in
+                 (sig.altitude_chain(str(src)) + sig.altitude_chain(str(dst)))}
+        dangling = [(lvl, s) for lvl, s in inbound_ref_sources(sorted(chain), slug)
+                    if not (Path(lvl).resolve() == dst or dst in Path(lvl).resolve().parents)]
+        if dangling:
+            what = ", ".join("%s at %s" % (s, lvl) for lvl, s in dangling)
+            if not force:
+                rep["refused"] = "down-move would dangle inbound [[refs]]: %s (use --force to move anyway)" % what
+                return rep
+            rep["warnings"].append("moved despite dangling inbound [[refs]]: %s" % what)
+
+    us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
+                   source=entry.source, pin=entry.pin)
+    _drop_pointer(str(src), slug)
+    rep["moved"] = True
+    return rep
+
+
+
 def ensure_level(proj, scope_default="", _locked=False):
     """Ensure this level can carry curated memory: (1) its `CLAUDE.local.md` holds a managed pointer
     block with a scope descriptor (created if absent; an existing scope is kept, else a legacy scope
@@ -353,7 +462,23 @@ def main(argv=None):
     m = sub.add_parser("ensure-memory-structure",
                        help="create missing CLAUDE.md/CLAUDE.local.md/pointer blocks up to the anchor")
     m.add_argument("--proj", required=True, help="the current project dir; the chain is derived from it")
+    mv = sub.add_parser("move", help="re-level one fact: relocate its pointer line within the tree")
+    mv.add_argument("--from-level", required=True, dest="from_level")
+    mv.add_argument("--to-level", required=True, dest="to_level")
+    mv.add_argument("--slug", required=True)
+    mv.add_argument("--force", action="store_true",
+                    help="down-move even when inbound [[refs]] would dangle (warning instead)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "move":
+        rep = move_entry(args.from_level, args.to_level, args.slug, force=args.force)
+        if rep["refused"]:
+            print("! refused: %s" % rep["refused"])
+            return 1
+        for w in rep["warnings"]:
+            print("~ warning: %s" % w)
+        print("moved %s: %s -> %s (%s)" % (rep["slug"], rep["from"], rep["to"], rep["direction"]))
+        return 0
 
     if args.cmd == "ensure-memory-structure":
         created = scaffold(args.proj)
