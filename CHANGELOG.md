@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.28.1] - 2026-07-04
+
+### Fixed
+- `reconcile_memory_index.py`: a NON-curated level dir (a plain project dir with no pointer block) now
+  contributes no reference targets/sources instead of `rglob`-ing its whole subtree. The chain is level
+  dirs now, so the old loose-dir scan manufactured false orphan refs from docs/code (`[[section]]` TOML,
+  `[[ref]]` examples). `--check` over a real chain is clean again.
+
 ## [5.28.0] - 2026-07-04
 
 ### Changed

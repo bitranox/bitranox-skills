@@ -133,52 +133,24 @@ def is_curated(d):
 
 
 def altitude_targets(d):
-    """Every canonical slug an altitude offers as a `[[wikilink]]` target.
-    CURATED: each pointer's slug. LOOSE (foreign/legacy `*.md` dir): each stem + frontmatter name."""
+    """Every canonical slug a curated altitude offers as a `[[wikilink]]` target: each pointer's slug.
+    A NON-curated level contributes nothing (it is a plain project dir, not a memory store - never
+    rglob its subtree, which would scan docs/code and manufacture false refs)."""
     d = Path(d)
-    slugs = set()
-    if is_curated(d):
-        _scope, entries, _bodies = ME.read_store(str(d))
-        for e in entries:
-            slugs.add(_canon(e.slug))
-    else:
-        try:
-            for p in d.rglob("*.md"):
-                if p.name.lower() in _NON_ENTRY:
-                    continue
-                slugs.add(_canon(p.stem))
-                try:
-                    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-                    if meta.get("name"):
-                        slugs.add(_canon(meta["name"]))
-                except OSError:
-                    pass
-        except OSError:
-            pass
-    return slugs
+    if not is_curated(d):
+        return set()
+    _scope, entries, _bodies = ME.read_store(str(d))
+    return {_canon(e.slug) for e in entries}
 
 
 def altitude_sources(d):
-    """[(source_slug, text)] to scan for `[[wikilinks]]` at an altitude - one source PER ENTRY.
-    CURATED: each pointer -> its hook + central body. LOOSE: each `*.md` file's text -> stem."""
+    """[(source_slug, text)] to scan for `[[wikilinks]]` at a curated altitude - one source PER pointer
+    (its hook + central body). A NON-curated level contributes nothing."""
     d = Path(d)
-    out = []
-    if is_curated(d):
-        _scope, entries, bodies = ME.read_store(str(d))
-        for e in entries:
-            out.append((_canon(e.slug), e.hook + "\n" + bodies.get(e.slug, "")))
-    else:
-        try:
-            for p in d.rglob("*.md"):
-                if p.name.lower() in _NON_ENTRY:
-                    continue
-                try:
-                    out.append((_canon(p.stem), p.read_text(encoding="utf-8")))
-                except OSError:
-                    continue
-        except OSError:
-            pass
-    return out
+    if not is_curated(d):
+        return []
+    _scope, entries, bodies = ME.read_store(str(d))
+    return [(_canon(e.slug), e.hook + "\n" + bodies.get(e.slug, "")) for e in entries]
 
 
 def check_references(dirs):

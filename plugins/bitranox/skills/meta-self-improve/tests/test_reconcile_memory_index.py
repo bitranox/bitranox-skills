@@ -170,3 +170,17 @@ def test_archive_entry_drops_pointer_and_moves_central_body(proj):
     _scope, entries, _bodies = ME.read_store(proj)
     assert entries == []
     assert R.archive_entry(proj, "nonexistent") is False
+
+
+def test_noncurated_level_contributes_nothing_no_subtree_scan(tmp_path):
+    # a plain project dir (no pointer block) must NOT be rglob'd for *.md - else docs/code with
+    # `[[section]]` TOML or `[[ref]]` examples manufacture false orphan refs.
+    proj = tmp_path / "plainproj"
+    (proj / "docs").mkdir(parents=True)
+    (proj / "docs" / "guide.md").write_text("see [[tool.importlinter.contracts]] and [[nowhere]]\n",
+                                             encoding="utf-8")
+    assert R.is_curated(proj) is False
+    assert R.altitude_targets(proj) == set()
+    assert R.altitude_sources(proj) == []
+    refs = R.check_references([str(proj)])
+    assert refs["orphans"] == [] and refs["checked"] == 0   # nothing scanned from a plain dir
