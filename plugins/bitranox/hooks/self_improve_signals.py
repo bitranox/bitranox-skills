@@ -246,24 +246,17 @@ def _strip_scope(text):
 
 
 def _curated_fact_parts(proj):
-    """Signature parts for the curated tier: `index.md` index/inline-bodies (scope block removed) +
-    each `facts/<slug>.md` content. Empty when the store holds no real facts (a scope-only index.md
-    contributes nothing)."""
+    """Signature parts for the curated tier: the fact POINTER lines (`- [Title](uuid:..) - hook ...`)
+    from this level's `CLAUDE.local.md` pointer block (scope descriptor excluded). Empty when the level
+    holds no real facts (a scope-only block contributes nothing). A pointer line's title + hook + slug
+    change whenever a fact is added, edited, or removed, so this is a stable fact fingerprint without
+    reading every central body."""
     parts = []
     try:
-        text = _strip_scope(curated_index(proj).read_text(encoding="utf-8"))
-        region = "\n".join(ln for ln in text.splitlines()
-                           if ln.startswith("- [") or ln.startswith("  "))
+        text = claude_local_md_path(proj).read_text(encoding="utf-8")
+        region = "\n".join(ln for ln in text.splitlines() if ln.startswith("- ["))
         if region.strip():
             parts.append(region)
-    except OSError:
-        pass
-    try:
-        for p in sorted((claude_memory_dir(proj) / "facts").glob("*.md")):
-            try:
-                parts.append(p.read_text(encoding="utf-8"))
-            except OSError:
-                continue
     except OSError:
         pass
     return parts
@@ -845,7 +838,7 @@ def knowledge_store_empty(proj=None):
     no native project memory holds a topic file, AND (if `proj` is given) the current project's curated
     store holds no facts. Used to suppress the new-project bootstrap nudge on a fresh machine."""
     try:
-        if any(global_rules_dir(proj).rglob("*.md")):
+        if _curated_fact_parts(str(topmost_claude_md_dir(proj) or (proj or os.getcwd()))):
             return False
     except OSError:
         pass

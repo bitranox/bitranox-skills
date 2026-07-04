@@ -204,18 +204,22 @@ def test_mark_dream_done_writes_timestamp_and_signature(home):
 
 def test_dream_due_signature_based_not_mtime(home, tmp_path):
     # a real fact makes it due; after mark_dream_done (records the signature) it is quiet; a mere
-    # gap-fill scope-only index.md does NOT re-trigger (no fact changed).
+    # scope-only pointer block does NOT re-trigger (no fact changed). Facts are the pointer LINES in the
+    # level's CLAUDE.local.md.
     proj = str(tmp_path / "sigproj")
+    (tmp_path / "sigproj").mkdir(parents=True, exist_ok=True)
     later = 1000.0 + 10 * 86400
     S.mark_dream_done(proj, now=1000.0)                          # no facts -> quiet baseline
     assert S.dream_due(proj, now=later) is False                 # still no facts
-    d = S.claude_memory_dir(proj)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "index.md").write_text("%s\nscope only\n%s\n\n# Memory index\n"
-                                 % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
+    local = S.claude_local_md_path(proj)
+    local.write_text("<!-- BITRANOX-UUID-INDEX:BEGIN -->\n%s\nscope only\n%s\n\n# Memory index\n"
+                     "<!-- BITRANOX-UUID-INDEX:END -->\n"
+                     % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
     assert S.dream_due(proj, now=later) is False                 # scope-only -> no real fact
-    (d / "index.md").write_text("%s\nscope\n%s\n\n# Memory index\n\n- [X](#x) - a real fact\n  body\n"
-                                 % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
+    local.write_text("<!-- BITRANOX-UUID-INDEX:BEGIN -->\n%s\nscope\n%s\n\n# Memory index\n\n"
+                     "- [X](uuid:11111111-0000-5000-8000-000000000000) - a real fact <!-- bx:slug=x -->\n"
+                     "<!-- BITRANOX-UUID-INDEX:END -->\n"
+                     % (S.SCOPE_MARK_BEGIN, S.SCOPE_MARK_END), encoding="utf-8")
     assert S.dream_due(proj, now=later) is True                  # a real fact appeared -> due
 
 
