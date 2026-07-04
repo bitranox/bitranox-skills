@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.32.0] - 2026-07-05
+
+### Changed
+- store-edit-guard rewritten for the live layout: denies Edit/Write/MultiEdit on any path under
+  `.claude-memory/` (live) or `.claude-bx-selflearning/` (legacy, downstream installs), AND guards
+  the managed pointer block inside any `CLAUDE.local.md` (both fence generations): an Edit whose
+  old_string overlaps the fenced region, a Write that adds/alters/deletes the block region, or an
+  edit injecting fence markers is denied; everything outside the block stays freely editable.
+  MultiEdit checks each edit against the original. Deny message teaches the engine commands
+  (add/heal/move/set-scope). Same BITRANOX_MEMORY_ENGINE session-launch bypass; fail-open; applies
+  to Task subagents too (probe-verified PreToolUse coverage). 24 tests.
+
 ## [5.31.1] - 2026-07-05
 
 ### Fixed
