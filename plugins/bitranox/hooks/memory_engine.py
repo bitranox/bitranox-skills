@@ -125,6 +125,22 @@ def _commit_store(proj, scope, entries, bodies):
     return changed
 
 
+def _framed_body(slug, hook, type_, body):
+    """Wrap a bare body in the native memory-entry frame (frontmatter; the capturer adds **Why:**
+    and **How to apply:** in the prose). Probe-verified: bodies matching the genuine entry shape
+    get APPLIED mid-reasoning far more reliably than bare prose (the model discounts bodies that
+    do not look like real memory entries). A body that already starts with frontmatter passes
+    through unchanged."""
+    if (body or "").lstrip().startswith("---"):
+        return body
+    if not type_:
+        head = (slug or "").split("-", 1)[0]
+        type_ = head if head in us.TYPE_PREFIXES else "project"
+    desc = " ".join((hook or "").split())
+    return ("---\nname: %s\ndescription: %s\nmetadata:\n  type: %s\n---\n\n%s"
+            % (slug, desc, type_, body or ""))
+
+
 def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin=False,
                         scope_default="", slug=None):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
@@ -142,7 +158,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             e = by_slug[slug]
             e.title, e.hook = title, (hook or e.hook)
             if body:
-                e.body = body
+                e.body = _framed_body(slug, e.hook, type_, body)
             e.source |= src
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
@@ -153,7 +169,8 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             # has no pointer for it means another level owns the slug - refuse with a suggestion.
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
-            e = Entry(slug=slug, title=title, hook=hook, body=body, source=src, pin=pin)
+            e = Entry(slug=slug, title=title, hook=hook,
+                      body=_framed_body(slug, hook, type_, body), source=src, pin=pin)
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
@@ -523,6 +540,8 @@ def main(argv=None):
     a.add_argument("--source", default="", help="comma-separated provenance keys")
     a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded pointer index")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
+    a.add_argument("--slug", default=None,
+                   help="target an existing identity explicitly (title can then change freely)")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -611,7 +630,7 @@ def main(argv=None):
         try:
             slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
-                                       scope_default=args.scope)
+                                       scope_default=args.scope, slug=args.slug)
         except SlugCollision as c:
             print("! refused: %s" % c)
             return 1
@@ -619,6 +638,9 @@ def main(argv=None):
         if us.hook_over_budget(args.hook):
             print("~ warning: hook is %d chars (soft cap %d): rewrite as 1-3 directive sentences"
                   % (len(args.hook), us.HOOK_SOFT_MAX))
+        if us.hook_missing_trigger(args.hook):
+            print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
+                  "('When <situation>, <directive>'), or it will not fire during reasoning")
         return 0
     ap.print_help(sys.stderr)
     return 2

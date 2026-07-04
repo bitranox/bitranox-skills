@@ -181,7 +181,8 @@ def test_memory_system_end_to_end(sandbox):
     assert (work / "bakery" / "recipes" / "CLAUDE.local.md").is_file()
     # capture lands in the OWN tree's store only
     rc, out, err = _cli(engine, "add", "--proj", str(work / "marketing" / "campaigns" / "proj1"),
-                        "--title", "Brand voice", "--hook", "check the brand voice guide", "--body", "B")
+                        "--title", "Brand voice", "--hook",
+                        "When writing campaign copy, check the brand voice guide first.", "--body", "B")
     assert rc == 0 and out.strip() == "brand-voice"
     assert (work / "marketing" / ".claude-memory" / "facts" / "brand-voice.md").is_file()
     assert not (work / "bakery" / ".claude-memory" / "facts" / "brand-voice.md").exists()

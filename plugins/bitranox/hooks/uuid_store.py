@@ -78,6 +78,19 @@ def hook_over_budget(hook):
     """True when a hook exceeds the soft cap (advisory - callers warn, never fail)."""
     return len(hook or "") > HOOK_SOFT_MAX
 
+
+# Trigger-first hooks fire during reasoning; trigger-less ones don't (probe-verified: hooks leading
+# with the situation drove a body read in 100% of runs). Advisory, like the length cap.
+_TRIGGER_STARTERS = ("when", "whenever", "before", "after", "on ", "if ", "while", "use when",
+                     "during", "once ")
+
+
+def hook_missing_trigger(hook):
+    """True when a hook does NOT lead with a trigger phrase (When/Before/If/On/...). Advisory -
+    callers warn so the author states WHEN the rule applies, never fail."""
+    h = " ".join((hook or "").split()).lower()
+    return not any(h.startswith(s) for s in _TRIGGER_STARTERS)
+
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope markers (same grammar the
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 
