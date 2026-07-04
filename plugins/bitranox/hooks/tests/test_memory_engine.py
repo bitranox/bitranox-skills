@@ -42,13 +42,13 @@ def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     scope, entries, bodies = E.read_store(proj)
     assert scope == "lvl"
     e = entries[0]
-    assert e.slug == "feedback-no-em-dashes" and e.source == {"s"}
+    assert e.slug == "feedback-no-em-dashes" and e.source == {"s"} and not e.legacy
     assert bodies[e.slug] == "Always ASCII."
-    # body landed in the central sharded store (proj is its own anchor here)
-    assert us.body_path(proj, e.uuid).read_text(encoding="utf-8") == "Always ASCII.\n"
-    # pointer line carries the uuid + slug; NO @import, NO index.md, NO facts/ dir
+    # body landed at the slug-named central path (proj is its own anchor here)
+    assert us.body_path(proj, e.slug).read_text(encoding="utf-8") == "Always ASCII.\n"
+    # pointer line carries the mem: link + the block carries the retrieval recipe
     local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
-    assert ("uuid:%s" % e.uuid) in local and "bx:slug=feedback-no-em-dashes" in local
+    assert "(mem:feedback-no-em-dashes)" in local and "walk UP" in local
     assert "@" not in local.replace("@import", "")     # no import token
     assert not (sig.claude_memory_dir(proj)).exists()  # no legacy .claude-bx-selflearning store
 
@@ -160,8 +160,7 @@ def test_heal_normalizes_a_malformed_scope_block(proj):
 
 def test_heal_reports_missing_central_body_not_fabricated(proj):
     slug = E.add_or_update_entry(proj, title="Heavy one", hook="h", body="x" * 400, scope_default="lvl")
-    u = us.fact_uuid(proj, slug)
-    body = us.body_path(proj, u)
+    body = us.body_path(proj, slug)
     assert body.is_file()
     body.unlink()                                                    # delete the body -> unreconstructable
     rep = E.heal(proj)
@@ -213,23 +212,37 @@ def _anchored_tree(tmp_path):
     return str(anchor), str(proj)
 
 
-def test_add_uuid_entry_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
+def test_add_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
-    u = E.add_uuid_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
-                         type_="feedback", source=["s"], scope_default="proj scope")
-    assert u == us.fact_uuid(proj, "feedback-no-em-dashes")
-    assert us.body_path(anchor, u).read_text(encoding="utf-8") == "Always ASCII.\n"   # body at the anchor
+    slug = E.add_or_update_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
+                                 type_="feedback", source=["s"], scope_default="proj scope")
+    assert slug == "feedback-no-em-dashes"
+    assert us.body_path(anchor, slug).read_text(encoding="utf-8") == "Always ASCII.\n"  # body at the anchor
     scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert scope == "proj scope"
-    assert ptrs[0].uuid == u and ptrs[0].source == {"s"} and ptrs[0].slug == "feedback-no-em-dashes"
+    assert ptrs[0].slug == "feedback-no-em-dashes" and ptrs[0].source == {"s"}
 
 
-def test_add_uuid_entry_is_idempotent_and_merges_source(tmp_path):
+def test_add_is_idempotent_and_merges_source(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
-    E.add_uuid_entry(proj, "Fact", "h", body="B", source=["a"])
-    E.add_uuid_entry(proj, "Fact", "h", body="B", source=["b"])       # re-run: no dupe, merge source
+    E.add_or_update_entry(proj, "Fact", "h", body="B", source=["a"])
+    E.add_or_update_entry(proj, "Fact", "h", body="B", source=["b"])  # re-run: no dupe, merge source
     _scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert len(ptrs) == 1 and ptrs[0].source == {"a", "b"}
+
+
+def test_add_refuses_slug_collision_across_levels(tmp_path):
+    # slugs are TREE-unique: the same slug captured at a DIFFERENT level is refused with a suggestion
+    anchor, proj = _anchored_tree(tmp_path)
+    E.add_or_update_entry(str(tmp_path / "tree"), "Setup notes", "h", body="anchor-level fact")
+    import pytest as _pytest
+    with _pytest.raises(E.SlugCollision) as exc:
+        E.add_or_update_entry(proj, "Setup notes", "h", body="different fact, same slug")
+    assert exc.value.suggestion == "setup-notes-2"
+    # the suggested slug is accepted
+    got = E.add_or_update_entry(proj, "Setup notes", "h", body="different fact, same slug",
+                                slug="setup-notes-2")
+    assert got == "setup-notes-2"
 
 
 def test_add_roundtrips_through_the_resolver(tmp_path):
@@ -239,8 +252,16 @@ def test_add_roundtrips_through_the_resolver(tmp_path):
     assert [(r.title, r.body, r.slug) for r in got] == [("Fact", "the body", "fact")]
 
 
-def test_add_uuid_cli_prints_uuid(tmp_path, capsys):
+def test_cli_add_collision_refusal_exit_one(tmp_path, capsys):
     anchor, proj = _anchored_tree(tmp_path)
-    rc = E.main(["add-uuid", "--proj", proj, "--title", "T", "--hook", "h", "--body", "B"])
-    assert rc == 0
-    assert capsys.readouterr().out.strip() == us.fact_uuid(proj, "t")
+    E.add_or_update_entry(str(tmp_path / "tree"), "T", "h", body="B")
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", "h", "--body", "other"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "! refused:" in out and "t-2" in out
+
+
+def test_cli_add_warns_over_hook_budget(tmp_path, capsys, proj):
+    long_hook = "x" * (us.HOOK_SOFT_MAX + 1)
+    rc = E.main(["add", "--proj", proj, "--title", "Budget", "--hook", long_hook, "--body", "B"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "~ warning: hook is" in out                  # advisory, exit stays 0

@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""The single write path for the curated memory store (UUID-native).
+"""The single write path for the curated memory store (slug-keyed).
 
-A fact's identity is its SLUG; its body lives exactly once in the central UUID store at
-`<anchor>/.claude-memory/facts/<shard>/<uuid>.md` (uuid = `uuid_store.fact_uuid(altitude, slug)`, the
-mount-independent body-file key). The always-loaded per-altitude index is a POINTER BLOCK inline in
-`<altitude>/CLAUDE.local.md`: a scope descriptor + one `- [Title](uuid:X) - hook <!-- bx:src=.. bx:pin
-bx:slug=s -->` line per fact. The model reads that block as cascade text; `uuid_store.resolve` reads the
-bodies from cwd.
+A fact's identity is its SLUG, unique per knowledge TREE; its body lives exactly once at
+`<anchor>/.claude-memory/facts/<slug>.md`. The always-loaded per-altitude index is a POINTER BLOCK
+inline in `<altitude>/CLAUDE.local.md`: a scope descriptor, the retrieval RECIPE, and one
+`- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->` line per fact. The model reads the block as
+cascade text and fetches bodies per the recipe; `uuid_store.resolve` is the programmatic resolver.
 
-Every memory mutation (per-turn capture, migration, reconcile backfill) goes through here - NEVER
-hand-write the pointer block or a central body via the Write/Edit tools, or the PostToolUse hooks
-(tell-sweep, reformat-md-tables) fire and churn the mtime. This module writes files directly with
-`Path.write_text`, mtime-neutral (a no-op write writes nothing). See `uuid_store.py` for the on-disk
-format, sharding, anchor resolution, and the resolver.
+Every memory mutation (per-turn capture, migration, reconcile) goes through here - NEVER hand-write
+the pointer block or a central body via the Write/Edit tools (the store-edit-guard denies it; this
+module writes directly with `Path.write_text`, mtime-neutral). See `uuid_store.py` for the on-disk
+format, anchor resolution, the resolver, and the legacy-line transition rules.
 
-Provenance is a `<!-- bx:src=<comma-list> [bx:pin] bx:slug=<slug> -->` comment on the pointer line;
-`source` is a SET (merged on update) so migration idempotency + cross-tier de-double + two-slugs->same-
-identity merge all key off it. All output is ASCII (` - ` separators, never an em dash).
+Provenance is a `<!-- bx:src=<comma-list> [bx:pin] -->` comment on the pointer line; `source` is a
+SET (merged on update). All output is ASCII (` - ` separators, never an em dash).
 
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
@@ -45,13 +42,15 @@ _ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + fact pointers live i
 
 
 class Entry:
-    """One curated fact. Identity is `slug`; `uuid` is the central body-file key (derived from the home
-    altitude + slug via `uuid_store.fact_uuid`). `source` is the provenance set; `pin` protects it from
-    cap-eviction. The body always lives centrally (there is no inline-vs-heavy split any more)."""
+    """One curated fact. Identity is `slug` (unique per TREE); the body lives centrally at
+    `<anchor>/.claude-memory/facts/<slug>.md`. `source` is the provenance set; `pin` protects it
+    from eviction. A LEGACY entry (pre-pivot pointer) still reads its body from the old sharded
+    uuid path until the migration moves it; the engine flips an entry to the current format the
+    first time it is UPDATED (and archives the old body)."""
 
-    __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid")
+    __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid", "legacy")
 
-    def __init__(self, slug, title, hook, body="", source=None, pin=False, uuid=""):
+    def __init__(self, slug, title, hook, body="", source=None, pin=False, uuid="", legacy=False):
         self.slug = slug
         self.title = title
         self.hook = hook or ""
@@ -59,6 +58,16 @@ class Entry:
         self.source = set(source or ())
         self.pin = bool(pin)
         self.uuid = uuid or ""
+        self.legacy = bool(legacy)
+
+
+class SlugCollision(ValueError):
+    """Raised when a NEW fact wants a slug that already exists elsewhere in the tree (slugs are
+    tree-unique: the body file is the registry). Carries a suggested free slug."""
+
+    def __init__(self, slug, suggestion):
+        super().__init__("slug %r already exists in this tree; suggested: %r" % (slug, suggestion))
+        self.slug, self.suggestion = slug, suggestion
 
 
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
@@ -84,12 +93,13 @@ def read_store(proj):
     scope, pointers = us.parse_pointer_index(text)
     entries, bodies = [], {}
     for p in pointers:
+        path = us.legacy_body_path(anchor, p.uuid) if p.legacy else us.body_path(anchor, p.slug)
         try:
-            body = us.body_path(anchor, p.uuid).read_text(encoding="utf-8").rstrip("\n")
+            body = path.read_text(encoding="utf-8").rstrip("\n")
         except OSError:
             body = ""
         entries.append(Entry(slug=p.slug, title=p.title, hook=p.hook, body=body,
-                             source=p.source, pin=p.pin, uuid=p.uuid))
+                             source=p.source, pin=p.pin, uuid=p.uuid, legacy=p.legacy))
         bodies[p.slug] = body
     return scope, entries, bodies
 
@@ -101,11 +111,10 @@ def _commit_store(proj, scope, entries, bodies):
     changed = False
     pointers = []
     for e in entries:
-        uid = e.uuid or us.fact_uuid(proj, e.slug)
-        e.uuid = uid
-        changed |= us.put_body(str(anchor), uid, bodies.get(e.slug, e.body))
-        pointers.append(us.Pointer(uuid=uid, title=e.title, hook=e.hook,
-                                   source=e.source, pin=e.pin, slug=e.slug))
+        if not e.legacy:                             # a legacy body stays at its old path until the
+            changed |= us.put_body(str(anchor), e.slug, bodies.get(e.slug, e.body))  # migration moves it
+        pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
+                                   source=e.source, pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
     try:
         text = local.read_text(encoding="utf-8")
@@ -122,6 +131,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     writes under a lock, mtime-neutral. Returns the slug."""
     slug = slug or slugify(title, type_)
     src = set(source or ())
+    anchor = _anchor(proj)
     lock_target = sig.claude_local_md_path(proj)
     with sig.memory_lock(lock_target):
         ensure_level(proj, scope_default=scope_default, _locked=True)
@@ -134,7 +144,14 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 e.body = body
             e.source |= src
             e.pin = e.pin or pin
+            if e.legacy:                             # first update flips a legacy entry: the body
+                _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
+                e.legacy, e.uuid = False, ""
         else:
+            # Tree-unique slugs: the body file is the registry. A file that exists while THIS level
+            # has no pointer for it means another level owns the slug - refuse with a suggestion.
+            if us.body_path(anchor, slug).is_file():
+                raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook, body=body, source=src, pin=pin)
             entries.append(e)
         bodies[slug] = e.body
@@ -142,14 +159,25 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     return slug
 
 
-def add_uuid_entry(altitude, title, hook, body="", type_=None, source=None, pin=False,
-                   scope_default="", slug=None):
-    """Upsert a fact and return its UUID (thin wrapper over `add_or_update_entry`; the slug is the
-    logical identity, the uuid is the central body-file key). Kept as the `add-uuid` CLI entry point."""
-    slug = slug or slugify(title, type_)
-    add_or_update_entry(altitude, title=title, hook=hook, body=body, type_=type_,
-                        source=source, pin=pin, scope_default=scope_default, slug=slug)
-    return us.fact_uuid(altitude, slug)
+def _free_slug(anchor, slug):
+    """The first free `<slug>-N` variant in this tree (the collision suggestion)."""
+    n = 2
+    while us.body_path(anchor, "%s-%d" % (slug, n)).is_file():
+        n += 1
+    return "%s-%d" % (slug, n)
+
+
+def _archive_legacy_body(anchor, entry):
+    """Move a flipped legacy entry's old sharded body to `.claude-memory/.archive/` (best-effort;
+    the new slug-named body is written by the commit that follows)."""
+    try:
+        old = us.legacy_body_path(anchor, entry.uuid)
+        if old.is_file():
+            dest = us.central_facts_dir(anchor).parent / ".archive"
+            dest.mkdir(parents=True, exist_ok=True)
+            old.rename(dest / old.name)
+    except OSError:
+        pass
 
 
 def ensure_level(proj, scope_default="", _locked=False):
@@ -259,7 +287,8 @@ def heal(proj):
             _heal_level(level, report)
             anchor = _anchor(level)
             for e in read_store(level)[1]:
-                if not us.body_path(anchor, e.uuid).is_file():
+                path = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+                if not path.is_file():
                     report["orphans"].append((level, e.slug))
         except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
             continue
@@ -316,17 +345,6 @@ def main(argv=None):
     a.add_argument("--source", default="", help="comma-separated provenance keys")
     a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded pointer index")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
-    au = sub.add_parser("add-uuid", help="upsert one fact and print its uuid (alias of add)")
-    au.add_argument("--proj", required=True, help="the altitude (home level) to capture the fact at")
-    au.add_argument("--title", required=True)
-    au.add_argument("--hook", required=True, help="one-line hook (what makes the fact present)")
-    au.add_argument("--type", dest="type_", default=None,
-                    choices=[None, "feedback", "project", "reference", "user"])
-    au.add_argument("--body", default="", help="the fact body (written to the central sharded store)")
-    au.add_argument("--body-file", default=None, help="read the body from a file (multi-line safe)")
-    au.add_argument("--source", default="", help="comma-separated provenance keys")
-    au.add_argument("--pin", action="store_true", help="force-keep in the always-loaded pointer index")
-    au.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -362,18 +380,22 @@ def main(argv=None):
             print("    ! missing central body (not fabricated): %s [%s]" % (slug, level))
         return 0
 
-    if args.cmd in ("add", "add-uuid"):
+    if args.cmd == "add":
         body = args.body
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
         source = [x.strip() for x in args.source.split(",") if x.strip()]
-        if args.cmd == "add-uuid":
-            print(add_uuid_entry(args.proj, title=args.title, hook=args.hook, body=body,
-                                 type_=args.type_, source=source, pin=args.pin, scope_default=args.scope))
-        else:
-            print(add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
-                                      type_=args.type_, source=source, pin=args.pin,
-                                      scope_default=args.scope))
+        try:
+            slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
+                                       type_=args.type_, source=source, pin=args.pin,
+                                       scope_default=args.scope)
+        except SlugCollision as c:
+            print("! refused: %s" % c)
+            return 1
+        print(slug)
+        if us.hook_over_budget(args.hook):
+            print("~ warning: hook is %d chars (soft cap %d): rewrite as 1-3 directive sentences"
+                  % (len(args.hook), us.HOOK_SOFT_MAX))
         return 0
     ap.print_help(sys.stderr)
     return 2

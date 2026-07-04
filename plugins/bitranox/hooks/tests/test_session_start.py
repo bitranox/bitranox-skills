@@ -293,14 +293,14 @@ def _anchor_tree_with_fact(tmp_path):
     return anchor, proj, u
 
 
-def test_retrieval_context_emits_rule_with_anchor_and_shard(tmp_path):
+def test_retrieval_context_emits_rule_with_anchor_and_slug_path(tmp_path):
     anchor, proj, _u = _anchor_tree_with_fact(tmp_path)
     block = S.retrieval_context(str(proj))
     assert block is not None
     assert "BITRANOX-MEMORY-RETRIEVAL" in block
     assert "%s/.claude-memory/facts/" % anchor in block   # concrete absolute anchor path
-    assert "uuid:" in block                                # names the pointer scheme
-    assert "first 2 hex" in block.lower() or "first two hex" in block.lower()  # the shard rule
+    assert "mem:" in block                                 # names the pointer scheme
+    assert "<slug>.md" in block                            # the slug-named body rule
 
 
 def test_retrieval_context_none_without_store(tmp_path):

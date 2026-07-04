@@ -140,7 +140,7 @@ def test_memory_system_end_to_end(sandbox):
     recon = SK / "meta-self-improve" / "reconcile_memory_index.py"
     # a fact whose central body was deleted is reported as an orphan pointer, never fabricated
     slug = ME.slugify("Zorblax config")
-    us.body_path(proj_b, us.fact_uuid(proj_b, slug)).unlink()
+    us.body_path(proj_b, slug).unlink()
     rc, out, err = _cli(recon, proj_b)
     assert "orphan" in (out + err).lower() and slug in (out + err)
     ME.add_or_update_entry(proj_b, "Zorblax config", "set the zorblax flag before deploy",
