@@ -82,12 +82,13 @@ SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope mark
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 
 # `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` (new) or the pre-pivot
-# `- [Title](uuid:<uuid>) - hook <!-- ... bx:slug=s -->` (legacy). The hook stops at the FIRST `<`
-# (hooks are engine-written one-line prose and never contain `<`); anything after the first meta
-# comment is trailing garbage, dropped on canonical re-render (heal repairs hand-edit damage).
+# `- [Title](uuid:<uuid>) - hook <!-- ... bx:slug=s -->` (legacy). The hook runs to the FIRST
+# `<!--` (a hook may legitimately contain bare `<placeholders>`, so a tempered scan is used, never
+# a plain `[^<]` class - that truncated real hooks); anything after the first meta comment is
+# trailing garbage, dropped on canonical re-render (heal repairs hand-edit damage).
 _PTR_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\((?P<scheme>mem|uuid):(?P<target>[^)]+)\) - "
-                     r"(?P<hook>[^<]*)"
-                     r"(?:\s*<!--\s*(?P<meta>bx:[^>]*?)\s*-->)?(?P<trail>.*)$")
+                     r"(?P<hook>(?:(?!<!--).)*)"
+                     r"(?:<!--\s*(?P<meta>bx:[^>]*?)\s*-->)?(?P<trail>.*)$")
 
 
 # ---- identity + sharded central paths -----------------------------------------------------------

@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.31.1] - 2026-07-05
+
+### Fixed
+- Pointer grammar: a hook may legitimately contain bare `<placeholders>` (e.g. a path template
+  `cache/<mkt>/<plugin>/`); the 5.31.0 grammar truncated such hooks at the first `<`, dropping the
+  meta comment (provenance + the real slug) and title-deriving a wrong slug. The hook now runs to
+  the first `<!--` via a tempered scan. Caught by reconcile --check on live data right after the
+  first migration run; recovered by restoring the migration backup and re-running with the fix
+  (regression tests use the exact live line). `migrate_to_slug_store` backups now include a
+  manifest.txt mapping each copied file back to its original path.
+
 ## [5.31.0] - 2026-07-05
 
 ### Changed

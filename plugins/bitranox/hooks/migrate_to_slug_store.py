@@ -126,6 +126,8 @@ def migrate(roots, apply=False):
             bdir.mkdir(parents=True, exist_ok=True)
             rel = str(plan["local"]).replace("/", "_")
             shutil.copy2(plan["local"], bdir / rel)
+            with (bdir / "manifest.txt").open("a", encoding="utf-8") as mf:
+                mf.write("%s\t%s\n" % (rel, plan["local"]))     # reversible mapping
         except OSError:
             pass
 
