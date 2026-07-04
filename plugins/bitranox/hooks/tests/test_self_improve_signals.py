@@ -629,3 +629,41 @@ def test_two_trees_anchor_isolation(two_trees):
     assert S.resolve_anchor(str(tt.proj_a)) != S.resolve_anchor(str(tt.proj_b))
     chain_a = S.altitude_chain(str(tt.proj_a))
     assert tt.top_b not in chain_a and tt.proj_b not in chain_a
+
+
+# ---- multi-tree discovery (find_claude_md_dirs + tree_groups) -----------------------------------
+
+def test_find_claude_md_dirs_prunes_vendor_hidden_backup_and_store_dirs(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home)); monkeypatch.setenv("USERPROFILE", str(home))
+    work = tmp_path / "work"
+    for rel in ("a", "a/nested", "b"):
+        d = work / rel
+        d.mkdir(parents=True)
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    for rel in ("a/node_modules/dep", "a/.git/x", "b/old.bak", "b/.claude-memory/facts"):
+        d = work / rel
+        d.mkdir(parents=True)
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (home / ".claude" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    got = S.find_claude_md_dirs([str(work), str(home)])
+    assert {str(p.relative_to(work)) for p in got if work in p.parents or p == work} == {"a", "a/nested", "b"}
+    assert not any(".claude" in str(p) for p in got)
+
+
+def test_find_claude_md_dirs_does_not_follow_symlinks(tmp_path):
+    real = tmp_path / "real"; real.mkdir()
+    (real / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    scan = tmp_path / "scan"; scan.mkdir()
+    (scan / "link").symlink_to(real)
+    got = S.find_claude_md_dirs([str(scan)])
+    assert got == []                                   # a symlinked tree is never merged in
+
+
+def test_tree_groups_two_independent_trees(two_trees):
+    md = S.find_claude_md_dirs([str(two_trees.root)])
+    groups = S.tree_groups(md)
+    assert set(groups) == {two_trees.top_a, two_trees.top_b}
+    assert groups[two_trees.top_a][0] == two_trees.proj_a      # deepest first
+    assert groups[two_trees.top_a][-1] == two_trees.top_a
