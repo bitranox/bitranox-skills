@@ -57,6 +57,36 @@ def build_context():
     return BANNER + text + "\n</EXTREMELY-IMPORTANT>"
 
 
+_RETRIEVAL_TMPL = (
+    "<BITRANOX-MEMORY-RETRIEVAL>\n"
+    "Your loaded context includes a memory index: lines of the form\n"
+    "  - [Title](uuid:<id>) - hook <!-- ... bx:slug=<slug> -->\n"
+    "in the CLAUDE.local.md cascade. Those are always-loaded POINTERS - the Title + hook are present, "
+    "but the full fact BODY is NOT preloaded. When a hook is relevant to your CURRENT task and you need "
+    "the detail behind it, retrieve that body ON DEMAND by Reading:\n"
+    "  %(anchor)s/.claude-memory/facts/<first 2 hex chars of the uuid>/<uuid>.md\n"
+    "(example: uuid 1a2b3c4d-... -> %(anchor)s/.claude-memory/facts/1a/1a2b3c4d-....md)\n"
+    "Do this mid-task whenever a relevant hook needs its body; the per-prompt recall hook only surfaces "
+    "keyword matches at prompt time, so pull anything else yourself. Read a body ONLY when its hook is "
+    "genuinely relevant - never bulk-read the index.\n"
+    "</BITRANOX-MEMORY-RETRIEVAL>"
+)
+
+
+def retrieval_context(proj):
+    """A standing rule teaching the model to fetch a fact body ON DEMAND from the central UUID store,
+    with the concrete anchor path baked in. Returns None when there is no anchor or no store yet (so a
+    fresh project with no facts is not told to retrieve from an empty store). Fail-open."""
+    try:
+        import uuid_store as us
+        anchor = us.resolve_anchor(proj)
+        if anchor is None or not us.central_facts_dir(anchor).is_dir():
+            return None
+        return _RETRIEVAL_TMPL % {"anchor": str(anchor)}
+    except Exception:  # noqa: BLE001 - a hook must never wedge a session
+        return None
+
+
 def _read_event():
     try:
         return json.load(sys.stdin)
@@ -199,7 +229,7 @@ def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [build_context(), audit_context(proj)]
+    parts = [build_context(), retrieval_context(proj), audit_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]
     ctx = [p for p in parts if p]

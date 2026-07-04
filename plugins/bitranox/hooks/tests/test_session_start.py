@@ -281,3 +281,62 @@ def test_nudges_flag_off_suppresses_dream_and_newproject(tmp_path, monkeypatch, 
     assert "BITRANOX-DREAM-DUE" not in ctx        # nudges off -> suppressed
     rc2, out2 = run_with_stdin(monkeypatch, capsys, root, "/proj/fresh")
     assert "BITRANOX-NEW-PROJECT" not in json.loads(out2)["hookSpecificOutput"]["additionalContext"]
+
+
+# --------------------------------------------------------------------------
+# model-driven on-demand retrieval standing rule (BITRANOX-MEMORY-RETRIEVAL)
+# --------------------------------------------------------------------------
+
+import uuid_store as US  # noqa: E402
+
+
+def _anchor_tree_with_fact(tmp_path):
+    """An anchor (CLAUDE.md + central .claude-memory store with one body) -> a nested proj below it."""
+    anchor = tmp_path / "atree"
+    proj = anchor / "sub" / "proj"
+    proj.mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    u = US.fact_uuid(str(anchor), "some-fact")
+    US.put_body(str(anchor), u, "the fact body")          # creates anchor/.claude-memory/facts/<shard>/<u>.md
+    return anchor, proj, u
+
+
+def test_retrieval_context_emits_rule_with_anchor_and_shard(tmp_path):
+    anchor, proj, _u = _anchor_tree_with_fact(tmp_path)
+    block = S.retrieval_context(str(proj))
+    assert block is not None
+    assert "BITRANOX-MEMORY-RETRIEVAL" in block
+    assert "%s/.claude-memory/facts/" % anchor in block   # concrete absolute anchor path
+    assert "uuid:" in block                                # names the pointer scheme
+    assert "first 2 hex" in block.lower() or "first two hex" in block.lower()  # the shard rule
+
+
+def test_retrieval_context_none_without_store(tmp_path):
+    # a CLAUDE.md anchor but NO .claude-memory store yet -> nothing to retrieve
+    anchor = tmp_path / "bare"
+    proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    assert S.retrieval_context(str(proj)) is None
+
+
+def test_retrieval_context_none_without_anchor(tmp_path):
+    d = tmp_path / "no" / "claude" / "md"
+    d.mkdir(parents=True)
+    assert S.retrieval_context(str(d)) is None
+
+
+def test_main_includes_retrieval_block_when_store_exists(tmp_path, monkeypatch, capsys):
+    anchor, proj, _u = _anchor_tree_with_fact(tmp_path)
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert rc == 0
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-MEMORY-RETRIEVAL" in ctx and ("%s/.claude-memory/facts/" % anchor) in ctx
+
+
+def test_main_omits_retrieval_when_no_store(tmp_path, monkeypatch, capsys):
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/no-store")
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "BITRANOX-MEMORY-RETRIEVAL" not in ctx

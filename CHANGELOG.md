@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.29.0] - 2026-07-04
+
+### Added
+- Model-driven on-demand memory retrieval. `session-start.py` now injects a `<BITRANOX-MEMORY-RETRIEVAL>`
+  standing rule (with the concrete anchor path computed for the session) teaching the model to fetch a
+  fact body ITSELF, mid-task, when a relevant pointer's hook needs its detail: Read
+  `<anchor>/.claude-memory/facts/<first 2 hex of the uuid>/<uuid>.md`. The recall hook stays the
+  per-prompt keyword baseline; this adds a best-effort mid-reasoning pull for anything the hook did not
+  surface. Injected only when an anchor + `.claude-memory` store exist; fail-open. Sibling tests added.
+
 ## [5.28.1] - 2026-07-04
 
 ### Fixed
