@@ -5,6 +5,7 @@ Store format under test: a per-altitude pointer block inline in `CLAUDE.local.md
 `<anchor>/.claude-memory/facts/<shard>/<uuid>.md`. Slug is the logical identity; uuid is the body key.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -384,3 +385,73 @@ def test_cli_move_success_and_refusal(tmp_path, capsys):
     rc = E.main(["move", "--from-level", proj, "--to-level", mid, "--slug", "f"])   # gone now
     out = capsys.readouterr().out
     assert rc == 1 and "! refused:" in out
+
+
+# ---- multi-tree: tree-top + ensure-all-trees -----------------------------------------------------
+
+def test_tree_top_reports_top_store_and_bootstrap(two_trees):
+    info = E.tree_top(str(two_trees.proj_a))
+    assert info["top"] == str(two_trees.top_a)
+    assert info["store"] == str(two_trees.top_a / ".claude-memory")
+    assert info["bootstrap"] is False
+    fresh = two_trees.root / "fresh"; fresh.mkdir()
+    (fresh / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    assert E.tree_top(str(fresh))["bootstrap"] is True
+
+
+def test_ensure_all_trees_dry_run_reports_and_writes_nothing(two_trees):
+    rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=False)
+    assert {t["top"] for t in rep["trees"]} == {str(two_trees.top_a), str(two_trees.top_b)}
+    assert all(t["created"] == [] for t in rep["trees"])
+    # the gap level (campaigns/) got NO scaffold in dry-run
+    assert not (two_trees.top_a / "campaigns" / "CLAUDE.local.md").exists()
+
+
+def test_ensure_all_trees_apply_scaffolds_every_member_chain(two_trees):
+    rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=True)
+    for tr in rep["trees"]:
+        assert tr["status"] == "ok"
+    # both trees fully prefilled: every rung between deepest CLAUDE.md and top has both files
+    for lvl in (two_trees.proj_a, two_trees.top_a / "campaigns", two_trees.top_a,
+                two_trees.proj_b, two_trees.top_b / "recipes", two_trees.top_b):
+        assert (lvl / "CLAUDE.md").is_file(), lvl
+        assert (lvl / "CLAUDE.local.md").is_file(), lvl
+    # trees stay independent: no file written above the tops
+    assert not (two_trees.root / "CLAUDE.local.md").exists()
+
+
+def test_ensure_all_trees_refuses_stray_top_bootstrap(two_trees):
+    # a stray CLAUDE.md ABOVE both store-bearing trees must never merge them
+    (two_trees.root / "CLAUDE.md").write_text("stray\n", encoding="utf-8")
+    rep = E.ensure_all_trees(roots=[str(two_trees.root)], apply=True)
+    by_top = {t["top"]: t for t in rep["trees"]}
+    stray = by_top[str(two_trees.root)]
+    assert stray["status"] == "ambiguous" and "merge" in stray["why"]
+    assert stray["created"] == []
+    assert not (two_trees.root / "CLAUDE.local.md").exists()   # nothing scaffolded at the stray top
+    assert by_top[str(two_trees.top_a)]["status"] == "ok"      # real trees still scaffolded
+
+
+def test_ensure_all_trees_scaffolds_isolated_bootstrap_tree(tmp_path, monkeypatch):
+    home = tmp_path / "home"; (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home)); monkeypatch.setenv("USERPROFILE", str(home))
+    solo = tmp_path / "solo" / "proj"
+    solo.mkdir(parents=True)
+    (tmp_path / "solo" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (solo / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    rep = E.ensure_all_trees(roots=[str(tmp_path / "solo")], apply=True)
+    assert rep["trees"][0]["status"] == "ok"                   # bootstrap alone is legitimate
+    assert (solo / "CLAUDE.local.md").is_file()
+
+
+def test_cli_tree_top_json(two_trees, capsys):
+    rc = E.main(["tree-top", "--proj", str(two_trees.proj_b), "--json"])
+    assert rc == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["top"] == str(two_trees.top_b) and got["bootstrap"] is False
+
+
+def test_cli_ensure_all_trees_dry_run_default(two_trees, capsys):
+    rc = E.main(["ensure-all-trees", "--roots", str(two_trees.root)])
+    out = capsys.readouterr().out
+    assert rc == 0 and "DRY-RUN" in out and "2 tree(s)" in out

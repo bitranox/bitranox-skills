@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.34.0] - 2026-07-05
+
+### Added
+- Multi-tree support: a machine can carry several INDEPENDENT knowledge trees (own top CLAUDE.md +
+  own `.claude-memory` store each; they share nothing). `sig.find_claude_md_dirs(roots)` (prunes
+  vendor/hidden/backup/store dirs + ~/.claude; never follows symlinks) + `sig.tree_groups` (groups
+  by each dir's resolved anchor). Engine `ensure-all-trees [--roots ...] [--apply]` scaffolds every
+  member chain of every discovered tree (dry-run default) with a BOOTSTRAP TIE-BREAK: a storeless
+  top ABOVE store-bearing trees is reported `ambiguous` and never auto-merged. Engine
+  `tree-top --proj DIR [--json]` prints a dir's tree top / store / bootstrap flag (LLM-usable).
+  `discovery_roots` config finally has its consumer. `knowledge_store_empty` documents its per-tree
+  curated / machine-global native semantics. e2e S9: two trees discovered, scaffolded, isolated.
+
 ## [5.33.0] - 2026-07-05
 
 ### Added

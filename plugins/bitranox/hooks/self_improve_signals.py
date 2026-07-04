@@ -511,6 +511,50 @@ def _is_dir(p):
         return False
 
 
+def find_claude_md_dirs(roots):
+    """Every dir under `roots` that carries a `CLAUDE.md` - the raw material for tree discovery.
+    Prunes vendor/hidden/backup dirs, the store dirs themselves, `~/.claude`, and the excluded
+    anchor dirs; never follows symlinks (a link into another tree must not merge them)."""
+    out = set()
+    excluded = {str(d) for d in _excluded_anchor_dirs()}
+    home_claude = str(Path.home() / ".claude")
+    for root in roots:
+        try:
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                base = os.path.basename(dirpath)
+                if (base in VENDOR_DIRNAMES or base in (MEMORY_DIRNAME, CURATED_DIRNAME)
+                        or ".bak-" in base or base.endswith(".bak")
+                        or dirpath == home_claude):
+                    dirnames[:] = []
+                    continue
+                dirnames[:] = [d for d in dirnames
+                               if d not in VENDOR_DIRNAMES
+                               and d not in (MEMORY_DIRNAME, CURATED_DIRNAME)
+                               and not d.startswith(".")
+                               and ".bak-" not in d and not d.endswith(".bak")]
+                if "CLAUDE.md" in filenames and dirpath not in excluded:
+                    out.add(Path(dirpath))
+        except OSError:
+            continue
+    return sorted(out, key=str)
+
+
+def tree_groups(md_dirs):
+    """Group CLAUDE.md-bearing dirs into their knowledge TREES: {top_dir: [members]}, members
+    deepest-first (lexicographic ties). The top is each member's `resolve_anchor` - so independent
+    trees (a marketing company and a bakery share nothing) come out as separate groups, each with
+    its own top and store."""
+    groups = {}
+    for d in md_dirs:
+        top = resolve_anchor(str(d))
+        if top is None:
+            top = Path(d)
+        groups.setdefault(top, []).append(Path(d))
+    for top, members in groups.items():
+        members.sort(key=lambda m: (-len(m.parts), str(m)))
+    return groups
+
+
 def altitude_chain(proj):
     """Ordered altitude LEVEL DIRS for `proj`, narrowest -> broadest: the project dir itself, then
     each ancestor directory up to and INCLUDING the tree's anchor (gap levels between are included so
@@ -844,9 +888,10 @@ def clear_pending_keywords(proj):
 
 
 def knowledge_store_empty(proj=None):
-    """True if there is nothing anywhere to seed a new project FROM: the global rules layer is empty,
-    no native project memory holds a topic file, AND (if `proj` is given) the current project's curated
-    store holds no facts. Used to suppress the new-project bootstrap nudge on a fresh machine."""
+    """True if there is nothing to seed a new project FROM. PER-TREE for the curated tier: only
+    `proj`'s OWN tree top is consulted (an unrelated tree's facts are not this tree's seed corpus).
+    The NATIVE tier scan stays MACHINE-GLOBAL by design - native memories are per-machine raw notes
+    and a legitimate seed source across trees. Used to suppress the new-project bootstrap nudge."""
     try:
         if _curated_fact_parts(str(topmost_claude_md_dir(proj) or (proj or os.getcwd()))):
             return False

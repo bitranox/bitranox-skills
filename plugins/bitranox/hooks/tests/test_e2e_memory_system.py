@@ -162,3 +162,28 @@ def test_memory_system_end_to_end(sandbox):
         + json.dumps({"type": "assistant", "message": {"content": "Around noon."}}) + "\n", encoding="utf-8")
     _, out = _hook("self-improve-gate.py", {"transcript_path": str(clean), "cwd": proj_a})
     assert out == ""
+
+    # S9 - multi-tree end to end: two independent trees discovered, scaffolded, isolated
+    work = sandbox / "work"
+    for name, sub in (("marketing", "campaigns"), ("bakery", "recipes")):
+        top = work / name
+        proj = top / sub / "proj1"
+        proj.mkdir(parents=True)
+        (top / "CLAUDE.md").write_text(name + "\n", encoding="utf-8")
+        (proj / "CLAUDE.md").write_text("p\n", encoding="utf-8")
+    engine = HOOKS / "memory_engine.py"
+    rc, out, err = _cli(engine, "ensure-all-trees", "--roots", str(work))
+    assert rc == 0 and "DRY-RUN" in out and "2 tree(s)" in out
+    assert not (work / "marketing" / "campaigns" / "CLAUDE.local.md").exists()   # dry-run wrote nothing
+    rc, out, err = _cli(engine, "ensure-all-trees", "--roots", str(work), "--apply")
+    assert rc == 0 and "APPLIED" in out
+    assert (work / "marketing" / "campaigns" / "CLAUDE.local.md").is_file()      # gap rung filled
+    assert (work / "bakery" / "recipes" / "CLAUDE.local.md").is_file()
+    # capture lands in the OWN tree's store only
+    rc, out, err = _cli(engine, "add", "--proj", str(work / "marketing" / "campaigns" / "proj1"),
+                        "--title", "Brand voice", "--hook", "check the brand voice guide", "--body", "B")
+    assert rc == 0 and out.strip() == "brand-voice"
+    assert (work / "marketing" / ".claude-memory" / "facts" / "brand-voice.md").is_file()
+    assert not (work / "bakery" / ".claude-memory" / "facts" / "brand-voice.md").exists()
+    rc, out, err = _cli(engine, "tree-top", "--proj", str(work / "bakery" / "recipes" / "proj1"))
+    assert rc == 0 and str(work / "bakery") in out

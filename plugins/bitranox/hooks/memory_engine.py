@@ -19,6 +19,7 @@ Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_i
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -431,6 +432,51 @@ def scaffold(proj):
     return created
 
 
+# ---- multi-tree: whole-machine discovery + scaffolding -------------------------------------------
+
+def tree_top(proj):
+    """{'top', 'store', 'bootstrap'} for `proj`'s knowledge tree: the top dir, its central store
+    path, and whether the tree is still BOOTSTRAP (top has no store yet - the first engine write
+    creates it). For the model: `tree-top --proj <dir> [--json]`."""
+    top = us.resolve_anchor(str(proj))
+    if top is None:
+        top = Path(proj)
+    store = Path(top) / sig.MEMORY_DIRNAME
+    return {"top": str(top), "store": str(store), "bootstrap": not store.is_dir()}
+
+
+def ensure_all_trees(roots=None, apply=False):
+    """Discover EVERY knowledge tree under `roots` (default: the configured discovery_roots) and
+    scaffold each member's altitude chain (CLAUDE.md marker + CLAUDE.local.md pointer block on every
+    rung between the deepest CLAUDE.md and the tree top) - so even completely independent trees
+    (a marketing company and a bakery) each come out fully prefilled.
+
+    BOOTSTRAP TIE-BREAK (mis-anchoring protection): a group whose top has NO store yet is scaffolded
+    ONLY when no other group's top lies strictly beneath it; otherwise it is reported `ambiguous`
+    ("a stray top CLAUDE.md above store-bearing trees; scaffolding would merge them") and skipped -
+    never auto-merged. Default is a DRY-RUN report; `apply=True` writes."""
+    roots = [str(r) for r in (roots or sig.discovery_roots())]
+    groups = sig.tree_groups(sig.find_claude_md_dirs(roots))
+    tops = list(groups)
+    report = {"roots": roots, "trees": []}
+    for top, members in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        store = Path(top) / sig.MEMORY_DIRNAME
+        entry = {"top": str(top), "store_exists": store.is_dir(),
+                 "members": [str(m) for m in members], "status": "ok", "created": []}
+        if not store.is_dir():
+            beneath = [str(o) for o in tops if o != top and top in o.parents]
+            if beneath:
+                entry["status"] = "ambiguous"
+                entry["why"] = ("stray top CLAUDE.md above %d store-bearing tree(s) (%s); "
+                                "scaffolding would merge them" % (len(beneath), ", ".join(sorted(beneath))))
+        if entry["status"] == "ok" and apply:
+            for m in members:
+                entry["created"] += [str(c) for c in scaffold(str(m))]
+        report["trees"].append(entry)
+    return report
+
+
+
 def _read_text(path):
     try:
         return Path(path).read_text(encoding="utf-8")
@@ -462,6 +508,13 @@ def main(argv=None):
     m = sub.add_parser("ensure-memory-structure",
                        help="create missing CLAUDE.md/CLAUDE.local.md/pointer blocks up to the anchor")
     m.add_argument("--proj", required=True, help="the current project dir; the chain is derived from it")
+    tt = sub.add_parser("tree-top", help="print the tree top / store / bootstrap flag for a dir")
+    tt.add_argument("--proj", required=True)
+    tt.add_argument("--json", action="store_true", dest="as_json")
+    et = sub.add_parser("ensure-all-trees",
+                        help="discover every knowledge tree under the roots and scaffold each (dry-run by default)")
+    et.add_argument("--roots", nargs="*", default=None, help="override the configured discovery_roots")
+    et.add_argument("--apply", action="store_true", help="write (default: dry-run report)")
     mv = sub.add_parser("move", help="re-level one fact: relocate its pointer line within the tree")
     mv.add_argument("--from-level", required=True, dest="from_level")
     mv.add_argument("--to-level", required=True, dest="to_level")
@@ -469,6 +522,28 @@ def main(argv=None):
     mv.add_argument("--force", action="store_true",
                     help="down-move even when inbound [[refs]] would dangle (warning instead)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.cmd == "tree-top":
+        info = tree_top(args.proj)
+        if args.as_json:
+            print(json.dumps(info))
+        else:
+            print("top: %s" % info["top"])
+            print("store: %s%s" % (info["store"], "  (bootstrap: not created yet)" if info["bootstrap"] else ""))
+        return 0
+
+    if args.cmd == "ensure-all-trees":
+        rep = ensure_all_trees(roots=args.roots or None, apply=args.apply)
+        tag = "APPLIED" if args.apply else "DRY-RUN"
+        print("%s: %d tree(s) under %s" % (tag, len(rep["trees"]), ", ".join(rep["roots"])))
+        for tr in rep["trees"]:
+            flag = "" if tr["store_exists"] else " [bootstrap]"
+            print("  tree %s%s - %d member(s) - %s" % (tr["top"], flag, len(tr["members"]), tr["status"]))
+            if tr["status"] == "ambiguous":
+                print("    ! %s" % tr["why"])
+            for c in tr["created"]:
+                print("    + %s" % c)
+        return 0
 
     if args.cmd == "move":
         rep = move_entry(args.from_level, args.to_level, args.slug, force=args.force)
