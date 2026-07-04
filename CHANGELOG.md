@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.37.0] - 2026-07-05
+
+### Added
+- AUTHENTIC BODY SHAPE (probe-backed, ~5x mid-reasoning application lift): the engine now frames
+  every fact body as a native memory entry - frontmatter (name/description/metadata.type derived
+  from the pointer line) ahead of the prose; already-framed bodies pass through. New
+  `backfill_body_frontmatter.py` retrofits the frame onto existing bodies (dry-run default,
+  prose never touched, idempotent).
+- TRIGGER-FIRST hook lint (advisory): `add` warns when a hook does not lead with WHEN it applies
+  ('When <situation>, <directive>') - a trigger-less hook does not fire during reasoning
+  (probe-verified: trigger-first hooks drove a body read in 100% of runs).
+- `add --slug`: target an existing identity explicitly, so a title can be sharpened without
+  minting a new entry.
+
 ## [5.36.1] - 2026-07-05
 
 ### Fixed

@@ -46,9 +46,10 @@ def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     assert scope == "lvl"
     e = entries[0]
     assert e.slug == "feedback-no-em-dashes" and e.source == {"s"} and not e.legacy
-    assert bodies[e.slug] == "Always ASCII."
-    # body landed at the slug-named central path (proj is its own anchor here)
-    assert us.body_path(proj, e.slug).read_text(encoding="utf-8") == "Always ASCII.\n"
+    assert "Always ASCII." in bodies[e.slug]
+    # body landed at the slug-named central path, framed as a native memory entry
+    disk = us.body_path(proj, e.slug).read_text(encoding="utf-8")
+    assert disk.startswith("---\nname: feedback-no-em-dashes\n") and disk.endswith("Always ASCII.\n")
     # pointer line carries the mem: link + the block carries the retrieval recipe
     local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
     assert "(mem:feedback-no-em-dashes)" in local and "walk UP" in local
@@ -62,14 +63,14 @@ def test_update_merges_source_and_pin_and_body(proj):
     scope, entries, bodies = E.read_store(proj)
     e = entries[0]
     assert e.source == {"s1", "s2"} and e.pin is True and e.hook == "hook2"
-    assert bodies[e.slug] == "b2"
+    assert bodies[e.slug].endswith("b2") and "b\n" not in bodies[e.slug]
 
 
 def test_empty_body_on_update_keeps_prior_body(proj):
     E.add_or_update_entry(proj, "Rule", "h", body="keep me", scope_default="lvl")
     E.add_or_update_entry(proj, "Rule", "h2")          # no body -> prior body retained
     _s, entries, bodies = E.read_store(proj)
-    assert bodies[entries[0].slug] == "keep me"
+    assert bodies[entries[0].slug].endswith("keep me")
 
 
 def test_mtime_neutral_noop(proj):
@@ -124,7 +125,8 @@ def test_cli_add_prints_slug(proj, capsys):
     rc = E.main(["add", "--proj", proj, "--type", "feedback", "--title", "No em dashes",
                  "--hook", "use ASCII", "--body", "Always ASCII.", "--source", "a,b", "--scope", "lvl"])
     assert rc == 0
-    assert capsys.readouterr().out.strip() == "feedback-no-em-dashes"
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "feedback-no-em-dashes"    # warnings may follow the slug
     scope, entries, _b = E.read_store(proj)
     assert entries[0].source == {"a", "b"} and scope == "lvl"
 
@@ -135,7 +137,7 @@ def test_cli_add_body_file(proj, tmp_path):
     rc = E.main(["add", "--proj", proj, "--title", "Multi", "--hook", "h", "--body-file", str(bf)])
     assert rc == 0
     _s, entries, bodies = E.read_store(proj)
-    assert bodies[entries[0].slug] == "line one\nline two"
+    assert bodies[entries[0].slug].endswith("line one\nline two")
 
 
 # ---- self-heal ---------------------------------------------------------------------------------
@@ -220,7 +222,8 @@ def test_add_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
     slug = E.add_or_update_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
                                  type_="feedback", source=["s"], scope_default="proj scope")
     assert slug == "feedback-no-em-dashes"
-    assert us.body_path(anchor, slug).read_text(encoding="utf-8") == "Always ASCII.\n"  # body at the anchor
+    disk = us.body_path(anchor, slug).read_text(encoding="utf-8")   # body at the anchor, framed
+    assert disk.startswith("---\nname: feedback-no-em-dashes\n") and disk.endswith("Always ASCII.\n")
     scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert scope == "proj scope"
     assert ptrs[0].slug == "feedback-no-em-dashes" and ptrs[0].source == {"s"}
@@ -252,7 +255,8 @@ def test_add_roundtrips_through_the_resolver(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
     E.add_or_update_entry(proj, "Fact", "h", body="the body")
     got = us.resolve(proj)
-    assert [(r.title, r.body, r.slug) for r in got] == [("Fact", "the body", "fact")]
+    assert [(r.title, r.slug) for r in got] == [("Fact", "fact")]
+    assert got[0].body.startswith("---\nname: fact\n") and got[0].body.endswith("the body")
 
 
 def test_cli_add_collision_refusal_exit_one(tmp_path, capsys):
@@ -505,3 +509,60 @@ def test_heal_orphan_check_does_not_read_body_contents(proj, monkeypatch):
     monkeypatch.setattr(Path, "read_text", spy)
     rep = E.heal(proj)
     assert rep["orphans"] == [] and reads == []                  # stat-only, bodies never opened
+
+
+# ---- authentic body shape: capture wraps bodies in the native memory-entry frame ----------------
+
+def test_add_wraps_body_with_frontmatter(proj):
+    E.add_or_update_entry(proj, "Sunset log", "When renaming, add a sunset line.",
+                          body="Renames need a SUNSET.md line.", type_="feedback",
+                          scope_default="lvl")
+    body = us.body_path(proj, "feedback-sunset-log").read_text(encoding="utf-8")
+    assert body.startswith("---\nname: feedback-sunset-log\n")
+    assert "description: When renaming, add a sunset line." in body
+    assert "  type: feedback" in body
+    assert "Renames need a SUNSET.md line." in body
+
+
+def test_add_keeps_already_framed_body(proj):
+    framed = "---\nname: x\ndescription: d\nmetadata:\n  type: project\n---\n\nBody here."
+    E.add_or_update_entry(proj, "X", "When x-ing, do y.", body=framed, scope_default="lvl")
+    body = us.body_path(proj, "x").read_text(encoding="utf-8")
+    assert body.count("---\n") == 2 and "Body here." in body     # not double-framed
+
+
+def test_add_derives_type_from_slug_prefix_when_untyped(proj):
+    E.add_or_update_entry(proj, "Reference thing", "When looking up thing, read this.",
+                          body="B", type_="reference", scope_default="lvl")
+    E.add_or_update_entry(proj, "Reference thing", "When looking up thing, read this.",
+                          body="B2")                              # upsert without type_
+    body = us.body_path(proj, "reference-thing").read_text(encoding="utf-8")
+    assert "  type: reference" in body                            # type survives via slug prefix
+
+
+# ---- trigger-first hook lint (advisory, like the length cap) ------------------------------------
+
+def test_hook_missing_trigger_heuristic():
+    assert us.hook_missing_trigger("Fix the ROOT cause, never a workaround.") is True
+    assert us.hook_missing_trigger("When you hit an error, fix the ROOT cause.") is False
+    assert us.hook_missing_trigger("Before committing, run the full suite.") is False
+    assert us.hook_missing_trigger("If a hook needs a legend, rename it.") is False
+    assert us.hook_missing_trigger("Use when parsing gitignore files.") is False
+    assert us.hook_missing_trigger("On every release, prune the plugin cache.") is False
+
+
+def test_cli_add_warns_on_triggerless_hook(proj, capsys):
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook",
+                 "Do the thing properly.", "--body", "B"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "~ warning:" in out and "trigger" in out
+
+
+def test_cli_add_slug_targets_existing_identity(proj, capsys):
+    E.add_or_update_entry(proj, "Old title", "When testing, hook.", body="B",
+                          scope_default="lvl", slug="my-stable-slug")
+    rc = E.main(["add", "--proj", proj, "--slug", "my-stable-slug", "--title", "New title",
+                 "--hook", "When testing, sharper hook.", "--body", ""])
+    assert rc == 0
+    _s, entries, _b = E.read_store(proj)
+    assert [e.title for e in entries] == ["New title"]            # same identity, no second entry
