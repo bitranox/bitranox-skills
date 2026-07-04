@@ -20,8 +20,8 @@ gather**: find knowledge elsewhere that is relevant here, and bring it in safely
 
 ## Relevance needs a topic (descriptor-first)
 Gather only makes sense once you know what the project is about. The query is the project's **scope
-descriptor** (the `<!-- bitranox:self-learning -->` block at the top of its
-`.claude-bx-selflearning/index.md`), or the topic of the
+descriptor** (the `<!-- bitranox:self-learning -->` scope block at the top of its
+`CLAUDE.local.md` pointer block), or the topic of the
 learning that triggered this. At a brand-new project: first infer the descriptor (README, dir name,
 package metadata, the parent tree's descriptor, the first request); if scope is still unknown, defer.
 
@@ -29,7 +29,7 @@ package metadata, the parent tree's descriptor, the first request); if scope is 
 
 1. **Stage 1 - cheap grep (no model).** Run `python3 <this-skill-dir>/gather_scan.py --topic "<scope
    or learning topic>" --self "<cwd>"`. It derives keywords and greps OTHER projects' curated stores
-   (`.claude-bx-selflearning/`) + native memory + the global rules layer (the current project is
+   (their `CLAUDE.local.md` pointer blocks + the central `.claude-memory/` bodies) + native memory + the global rules layer (the current project is
    excluded), printing candidate files. Nothing matched -> stop; the whole gather cost one grep.
    - **Optional MCP boost:** when the `mcp_search` knob is `auto` and a `basic-memory` project's index
      COVERS this tree, the same command also prints `MCP-CANDIDATES` (semantic/full-text hits from
@@ -54,7 +54,7 @@ package metadata, the parent tree's descriptor, the first request); if scope is 
 5. **Debounce.** Record the `(project, topic)` as gathered (out-of-store) so the same topic is not
    re-grepped every trigger.
 6. **Reconcile + report.** Run `reconcile_memory_index.py` on the project memory, then
-   `--check <altitude-chain>` (no orphans / downward refs). Report what was lifted vs copied, one line
+   `--check <altitude-chain>` (the level dirs, not `.claude-bx-selflearning` dirs; no orphans / downward refs). Report what was lifted vs copied, one line
    each. Nothing relevant -> say so in one line.
 
 ## Boundaries

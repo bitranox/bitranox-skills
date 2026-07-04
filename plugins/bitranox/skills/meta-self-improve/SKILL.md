@@ -7,10 +7,10 @@ description: Use at the end of a turn that produced a learning, such as a correc
 
 Turn what this session taught into a durable improvement, so the same lesson is not re-learned next
 time. The unit of value is one small, reusable fact or rule recorded in the right place at the right
-altitude: a project **memory** entry (in the curated store `.claude-bx-selflearning/`: the `index.md`
-index plus `facts/` bodies), a **global cross-project rule** in the curated store at the broadest
-altitude (the `.claude-bx-selflearning/` store at the TOPMOST ANCESTOR directory that has a
-`CLAUDE.md`), or a **CLAUDE.md** guardrail (see step 3b).
+altitude: a project **memory** entry (a pointer line in that level's `CLAUDE.local.md` pointer block,
+with the body a central file at the anchor), a **global cross-project rule** at the broadest altitude
+(the anchor: the TOPMOST ANCESTOR directory that has a `CLAUDE.md`), or a **CLAUDE.md** guardrail
+(see step 3b).
 
 **Core constraint: memory is finite. Default to updating an existing entry and to short index lines,
 never to appending blindly.** A self-improver that bloats memory makes the harness worse, not better.
@@ -24,14 +24,19 @@ If a project ships its own extension of this skill (a more specific `*-self-impr
 exact memory paths, ledgers, or push gates), read it and honor its extra rules on top of this one.
 
 ## Memory backend
-Durable learnings live in the project-local **curated store** `<project>/.claude-bx-selflearning/`:
-- **`index.md`** - the index pulled into context with ONE `@import` line (a scope-descriptor block on
-  top + one markdown-link line per fact, with tiny bodies inlined). Because it is `@import`ed, every
-  line is always in context. The import line lives in the UNTRACKED **`CLAUDE.local.md`** by default
-  (symmetric with the gitignored store - nothing memory-related touches tracked git, a fresh clone has
-  neither the wiring nor the store), or the TRACKED **`CLAUDE.md`** when `track_private` is on (so a
-  teammate's clone loads it too).
-- **`facts/<slug>.md`** - heavy bodies, kept OUT of the always-loaded index and Read on demand.
+Durable learnings live in a per-altitude **pointer block** managed inline in that level's
+`<level>/CLAUDE.local.md`, with fact bodies in a central store at the anchor:
+- **The pointer block** - a managed region in `CLAUDE.local.md`, fenced by
+  `<!-- BITRANOX-UUID-INDEX:BEGIN -->` ... `<!-- BITRANOX-UUID-INDEX:END -->`, holding a
+  `<!-- bitranox:self-learning -->` scope-descriptor block, a `# Memory index` heading, then one line
+  per fact: `- [Title](uuid:<uuid>) - hook <!-- bx:src=<sources> bx:pin bx:slug=<slug> -->`. It loads
+  as cascade TEXT (no `@import`), so every line is always in context.
+- **Central fact bodies** - one file each at `<anchor>/.claude-memory/facts/<2-hex-shard>/<uuid>.md`,
+  a single shared, mount-independent store at the anchor (the topmost `CLAUDE.md`-bearing ancestor).
+  A pointer line at ANY altitude references its body by `uuid`. All bodies are central; there is no
+  per-altitude body copy.
+- **Slug is the logical identity** (carried as `bx:slug=` on the pointer line); the UUID is only the
+  body-file key. Reference, provenance, and dedup are all slug-based.
 
 **The write path is the engine, never a hand-write.** Capture ONE fact by invoking
 `hooks/memory_engine.py` (via the plugin's `hooks/run-python.sh` launcher, cross-platform):
@@ -39,16 +44,17 @@ Durable learnings live in the project-local **curated store** `<project>/.claude
     add --proj "<cwd>" --type feedback|project|reference|user --title "..." --hook "one line"
         --body-file <tmpfile> [--source <native-slug>] [--pin] [--scope "what this level is for"]
 
-The engine upserts by slug (merging provenance + pin), decides inline-vs-`facts/` by size and by
-whether the body contains an import-like `@token` (such a body goes to `facts/`, never inlined),
-ensures the `@import` block (in `CLAUDE.local.md` by default, `CLAUDE.md` if `track_private`) + the `index.md` scope block, takes a lock, and is
-mtime-neutral. **Do NOT Write/Edit `index.md`/`facts/` yourself** - the PostToolUse hooks would
-then churn the file every turn; the engine writes directly and bypasses them.
+The engine prints the slug. It upserts by slug (merging provenance + pin), writes the body as a
+central `<uuid>.md` file, ensures the `CLAUDE.local.md` pointer block and its scope-descriptor block,
+takes a lock, and is mtime-neutral. **Do NOT hand-edit the `CLAUDE.local.md` pointer block or a
+central body yourself** - the PostToolUse hooks would then churn the file every turn; the engine
+writes directly and bypasses them.
 
-**Self-heal.** Missing or malformed wiring repairs itself: `memory_engine.heal` runs EVERY session
-(via `session-start`) and again in the dream - it recreates a missing store, `index.md`,
-`CLAUDE.local.md`, or `@import` block, and normalizes a malformed IMPORT or SCOPE block. A deleted
-`facts/` body is REPORTED, never fabricated.
+**Self-heal.** Missing or malformed wiring repairs itself: `memory_engine.py heal --proj "<cwd>"`
+runs EVERY session (via `session-start`) and again in the dream - it prints
+"healed N file(s) across M level(s)", recreating a missing `CLAUDE.md`, `CLAUDE.local.md`, or pointer
+block, and normalizing a malformed SCOPE or pointer block. A pointer whose central body is missing is
+REPORTED, never fabricated.
 
 **Two tiers (native raw + curated).** Claude Code's native Auto memory (`~/.claude/projects/<proj>/
 memory/MEMORY.md`) stays ON as the raw/uncurated tier; it also loads at session start. Capture goes
@@ -60,9 +66,9 @@ keeping it on preserves the raw tier - do not disable it. The native raw tier st
 share-portable, because it now lives at a share-visible ancestor directory (see step 3b) rather than
 under `~/.claude`.
 
-**Version gate.** `@import` needs a new-enough Claude Code. If `self_improve_signals.import_supported()`
-is false, the store will not load; recommend the user upgrade rather than hand-writing bodies into
-CLAUDE.md (never do that).
+**Always in context.** The pointer block loads as plain ancestor-`CLAUDE.local.md` cascade TEXT, so
+it needs no `@import` and no version gate - every pointer line is reliably in context. Never
+hand-write fact bodies into CLAUDE.md (that is the engine's job).
 
 Keep the memory systems in their lanes:
 - **The curated store + native raw tier (this skill):** durable, curated, deduplicated learnings.
@@ -73,8 +79,8 @@ Keep the memory systems in their lanes:
 
 A memory MCP (`basic-memory`) is **not** the home and **not** a write path - routing learnings
 through it skips the index and they become unindexed + unsearched (a real regression). Its ONLY
-sanctioned role is an optional, full-text + knowledge-graph SEARCH index OVER the local
-`.claude-bx-selflearning/` files, to sharpen CROSS-project recall. When present it must be read-only
+sanctioned role is an optional, full-text + knowledge-graph SEARCH index OVER the local pointer
+blocks and central `.claude-memory/` bodies, to sharpen CROSS-project recall. When present it must be read-only
 over those files (`ensure_frontmatter_on_sync: false`, `disable_permalinks: true`,
 `format_on_save: false` so it never rewrites them); when absent, recall falls back to the built-in
 keyword scan (never a hard dependency - self-healing). Add or remove it through the `update-config`
@@ -83,12 +89,13 @@ skill; never wire one in or out silently.
 ### Scaling: keep it lean
 
 One fact per entry, a one-line hook (under ~200 chars), and EDIT an existing entry (re-run the engine
-with the same title -> it upserts) rather than appending a near-duplicate. `index.md` is NOT
-hard-capped (`reconcile_memory_index.over_cap`): `--check` emits an ADVISORY warning (never a failure)
-once it grows past ~50 KB, so growth is visible. When it grows, the dream lifts/dedups/promotes what it
-can; an index that legitimately stays large is fine - a project index loads only in that project's
-sessions. If the index ever drifts from `facts/`, `reconcile_memory_index.py <curated-dir>` backfills
-missing lines - additive, idempotent.
+with the same title -> it upserts) rather than appending a near-duplicate. The pointer block is NOT
+hard-capped: `reconcile_memory_index.py --check` emits an ADVISORY pointer-block-size warning (never a
+failure) once it grows large, so growth is visible. When it grows, the dream lifts/dedups/promotes
+what it can; a pointer block that legitimately stays large is fine - a project pointer block loads only
+in that project's sessions. If a pointer references a central body that is missing,
+`reconcile_memory_index.py <level-dir>` REPORTS the orphan (there is no backfill - a raw body carries
+no title/hook/slug to reconstruct a pointer line).
 
 ## When to run
 
@@ -145,49 +152,47 @@ List the concrete, reusable things this session surfaced, one plain sentence eac
 that is task state, already recorded in the repo or git history, or only mattered to this conversation.
 
 ### 2. Classify each candidate
-| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                                                                                 |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                                                                                   |
-| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                                                                                       |
-| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                                                                                |
-| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): useful across projects -> the curated global store at the topmost-`CLAUDE.md` ancestor (`.claude-bx-selflearning/`, kept concrete); one project's scope -> that project's memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; **unsure which -> ask the user** |
-| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                                                                                |
-| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                                                                              |
+| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                                                        |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                                                          |
+| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                                                              |
+| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                                                       |
+| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): useful across projects -> the global tier at the topmost-`CLAUDE.md` ancestor (the anchor, kept concrete); one project's scope -> that project's memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; **unsure which -> ask the user** |
+| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                                                       |
+| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                                                     |
 
 ### 3. Dedup BEFORE writing (mandatory)
-For each surviving candidate, search first (`grep -ril "<keyword>"` over `.claude-bx-selflearning/`
-(`index.md` + `facts/`), the native memory dir, and the CLAUDE.md files). If a related entry exists,
-**update it**: re-run the engine `add` with the SAME `--title` - it upserts (merges provenance, keeps
-the pin), so sharpening a fact is the same command, not a new entry. New entry only when nothing
-covers it. Keep the `--hook` to one line under ~200 chars; put the detail in `--body`/`--body-file`
-(the engine inlines a tiny body, sends a heavy one to `facts/`).
+For each surviving candidate, search first (`grep -ril "<keyword>"` over the `CLAUDE.local.md` pointer
+blocks and the anchor's central `.claude-memory/facts/` bodies, the native memory dir, and the
+CLAUDE.md files). If a related entry exists, **update it**: re-run the engine `add` with the SAME
+`--title` - it upserts (merges provenance, keeps the pin), so sharpening a fact is the same command,
+not a new entry. New entry only when nothing covers it. Keep the `--hook` to one line under ~200
+chars; put the detail in `--body`/`--body-file` (the engine writes it as a central body file).
 
 ### 3b. Choose the altitude(s) - by SCOPE, placed concretely
 Knowledge lives at always-present homes, narrowest to broadest:
-- **per-project** -> the project's curated store (`.claude-bx-selflearning/index.md` + `facts/`),
+- **per-project** -> the project level's `CLAUDE.local.md` pointer block (bodies central at the anchor),
   written with the engine. **Per-turn capture writes at the PROJECT level only** (`--proj "<cwd>"`);
   it does NOT reach up to edit an ancestor's CLAUDE.md. Raising a fact to a higher altitude is the
   DREAM's job (promotion), not per-turn capture - so a routine capture never touches a parent tree.
-- **global / cross-project** -> the curated store at the BROADEST altitude: `.claude-bx-selflearning/`
-  at the TOPMOST ANCESTOR directory that has a `CLAUDE.md` (walking up from the project).
-  `global_rules_dir(proj)` returns exactly this
+- **global / cross-project** -> the BROADEST altitude: the anchor, the TOPMOST ANCESTOR directory that
+  has a `CLAUDE.md` (walking up from the project). `global_rules_dir(proj)` returns exactly this
   (`claude_memory_dir(topmost_claude_md_dir(proj) or Path(proj))`) and is NEVER `~/.claude`. If no
   ancestor - and not the project itself - has a `CLAUDE.md`, the project IS the top and everything
   accumulates there. It is an ancestor dir and not `~/.claude` for a reason: on a network share
   `~/.claude` is invisible from a remote machine, but a share-resident ancestor `CLAUDE.md` dir is
-  visible everywhere, so the global store rides along with the tree. It is a normal curated store
-  (index hook + lazy `facts/` body), written with the engine like any altitude, kept in its OWN local
-  git repo for durability (store-own-repo, NOT the old `~/.claude` whitelist repo, and NOT branched on
-  git tracked-vs-untracked), and it is NOT `CLAUDE.md`, so it never disturbs the user's hand-written
-  rules. **Delivery into a NESTED project is by the per-prompt RECALL HOOK** (`recall-memory.py` reads
-  the store from disk), NOT by `@import`: an `@import` line in an ancestor file does NOT inline its
-  target when that target is ABOVE the workspace root (Claude Code skips out-of-workspace import
-  targets), so the anchor's `CLAUDE.local.md -> @.claude-bx-selflearning/index.md` line does NOT
-  auto-load the global index when Claude is launched in a nested project. Keep that `@import` line (it
-  DOES inline when Claude is launched AT or BELOW the anchor), and let the anchor's `CLAUDE.md` text
-  carry a short prose POINTER to the store path for the nested case. This is the home for a rule useful
-  across projects. (The old loose `~/.claude/rules/bitranox/` layer was converted into this store; do
-  not recreate it.)
+  visible everywhere, so the store rides along with the tree. Its pointer block lives in the anchor's
+  `CLAUDE.local.md` and its fact bodies in the anchor's central `.claude-memory/facts/`, written with
+  the engine like any altitude, kept in its OWN local git repo for durability (store-own-repo, NOT the
+  old `~/.claude` whitelist repo, and NOT branched on git tracked-vs-untracked), and it is NOT
+  `CLAUDE.md`, so it never disturbs the user's hand-written rules. **Delivery into a NESTED project is
+  by the per-prompt RECALL HOOK** (`recall-memory.py` reads the pointer blocks and central bodies from
+  disk): when Claude is launched in a nested project the anchor's `CLAUDE.local.md` is above the
+  workspace root and does not cascade into context on its own, so the recall hook carries the global
+  entries down, and the anchor's `CLAUDE.md` text carries a short prose POINTER to the store path.
+  When Claude is launched AT or BELOW the anchor, the anchor's `CLAUDE.local.md` pointer block cascades
+  as text directly. This is the home for a rule useful across projects. (The old loose
+  `~/.claude/rules/bitranox/` layer was converted into this store; do not recreate it.)
 - **intermediate / a parent subtree** -> only `CLAUDE.md` cascades there, so an intermediate must-hold
   rule goes in that level's `CLAUDE.md` (a bounded, propose-first touch; see CLAUDE.md policy in
   `bitranox:meta-dream-project`).
@@ -197,9 +202,9 @@ everywhere the lesson applies. Concrete, specific knowledge that is useful every
 the fleet with key X, accept host-key changes in our subnet") goes to the GLOBAL layer KEPT CONCRETE -
 abstracting it would destroy its usefulness. Generalize/abstract ONLY when the specifics are so
 project-bound they fit nowhere else; then lift the reusable principle up and keep the concrete instance
-local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` block in each level's
-`index.md` - the engine even MIGRATES a legacy one out of `CLAUDE.md` into `index.md`) say what each
-altitude is about; when the altitude is genuinely unclear, **ask the user**.
+local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` block at the top of each
+level's `CLAUDE.local.md` pointer block) say what each altitude is about; when the altitude is
+genuinely unclear, **ask the user**.
 
 **A universal rule can also belong in a SHIPPED skill (the shared brain) - do not stop silently at your
 private layer.** The curated global store is private to your tree: it teaches only YOU (and anyone sharing that tree), never other users of the skill. When a captured rule
@@ -224,20 +229,21 @@ are the ROUTING KEY the dream uses to decide which level/store a learning belong
 TWO-PHASE flow (see `bitranox:meta-dream-project` step 0): FIRST a deterministic scaffold, THEN parallel
 subagents.
 - **Scaffold first (deterministic, no model).** `memory_engine.py heal --proj "<cwd>"` creates every
-  missing `CLAUDE.md` (a minimal altitude marker) + `CLAUDE.local.md` + `.claude-bx-selflearning/` store
-  + `index.md` (empty scope block) for every level in `altitude_chain(proj)` - the CURRENT project dir,
-  every gap level, AND the anchor. Totally deterministic, so the structure is never half-built.
+  missing per-level `CLAUDE.md` (a minimal altitude marker) + `CLAUDE.local.md` (with an empty-scope
+  pointer block) plus the anchor's central `.claude-memory/` store, for every level in
+  `altitude_chain(proj)` - the CURRENT project dir, every gap level, AND the anchor. Totally
+  deterministic, so the structure is never half-built.
 - **Then classify in parallel (one `sonnet` subagent per level).** For EACH level, dispatch a subagent
   (capable model, NOT haiku - semantic classification), in PARALLEL since levels are independent: an
   UPPER level's subagent reads the `README.md` / `CLAUDE.md` / other `*.md` docs of the directories
   DIRECTLY BELOW that level; the CURRENT project level's subagent reads the project's OWN docs at the
   SAME level (not below). Each returns a concise classification of what that directory is about. Write
-  it into that level's `index.md` scope block with `memory_engine.py set-scope --proj "<level>"
+  it into that level's pointer-block scope with `memory_engine.py set-scope --proj "<level>"
   --scope "<text>"` (the engine upserts the `<!-- bitranox:self-learning -->` block - never hand-edit
-  `index.md`).
+  the pointer block).
 `altitude_chain(proj)` returns exactly this contiguous set of levels (gap levels included). The scaffold
-marker `CLAUDE.md` and the engine-managed store / `index.md` are written directly; any OTHER edit to a
-version-controlled `CLAUDE.md` is propose-first (auto in `auto` mode). Keep the guard: **never create a
+marker `CLAUDE.md` and the engine-managed pointer block / central store are written directly; any OTHER
+edit to a version-controlled `CLAUDE.md` is propose-first (auto in `auto` mode). Keep the guard: **never create a
 `CLAUDE.md` ABOVE the highest existing one**
 unless a truly-universal rule warrants a new headquarters - the sole exception is
 `bitranox:meta-dream-global-deep`'s org-chart audit, which (with the cross-tree view) may PROPOSE a
@@ -249,8 +255,9 @@ overlap, store the general ONCE at its altitude and have the lower entry `refere
 only its delta - they compose at load (the general is always-present above), never duplicated.
 **References point UPWARD only**: a project entry may reference a global rule; a higher entry must NEVER
 reference a lower one (deleting a project would dangle it). Verify with
-`reconcile_memory_index.py --check <altitude-chain>` (upward-only, no orphans; index size is an
-advisory warning, not a failure); the chain
+`reconcile_memory_index.py --check <altitude-chain of LEVEL dirs, narrow->broad>` (verifies
+`[[wikilink]]` integrity, upward-only, no orphans; pointer-block size is an advisory warning, not a
+failure - clean output ends "TOTAL problems: 0"); the chain
 comes from `self_improve_signals.altitude_chain(proj)`. The `CLAUDE.md` tiers in the ancestor chain are
 altitudes in this same model (each cascades into a project's context), so a rule duplicated across them
 normalizes the same way - general at the broadest covering tier, delta below; the dream skills carry the
@@ -457,7 +464,7 @@ good pathfinder:
   once the goal is met; keep only what is durable and worth reusing (and say what you kept).
 
 ## Common mistakes
-- Appending a new memory file when an existing one should have been edited (bloats the index).
+- Appending a new memory entry when an existing one should have been edited (bloats the pointer block).
 - Mixing the two lanes: a one-off task finding logged as a recurring-process rule, or vice versa.
 - Auto-applying a rewrite or delete. Additive is auto; destructive is propose-first.
 - Authoring a skill on the fly instead of suggesting it.
