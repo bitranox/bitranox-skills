@@ -387,3 +387,29 @@ def test_mem_line_hook_with_angle_brackets():
     line = "- [T](mem:t-fact) - use <placeholder> then <other> <!-- bx:pin -->\n"
     _s, ptrs = us.parse_pointer_index(line)
     assert ptrs[0].hook == "use <placeholder> then <other>" and ptrs[0].pin
+
+
+# ---- ghost-block collapse: a stray second managed block (old-plugin heal residue) ---------------
+
+def test_upsert_collapses_trailing_empty_legacy_block(tmp_path):
+    lvl = tmp_path / "lvl"; lvl.mkdir()
+    text = ("%s\n<!-- bitranox:self-learning -->\nscope\n<!-- /bitranox:self-learning -->\n\n"
+            "# Memory index\n\n- [F](mem:f) - hook\n%s\n\n"
+            "%s\n<!-- bitranox:self-learning -->\n\n<!-- /bitranox:self-learning -->\n\n"
+            "# Memory index\n%s\n") % (us.INDEX_BEGIN, us.INDEX_END,
+                                       us.LEGACY_INDEX_BEGIN, us.LEGACY_INDEX_END)
+    scope, ptrs = us.parse_pointer_index(text)
+    out = us.upsert_pointer_block(text, scope, ptrs)
+    assert out.count("INDEX:BEGIN") == 1 and us.LEGACY_INDEX_BEGIN not in out
+    assert "(mem:f)" in out                                     # pointers survive the collapse
+
+
+def test_upsert_unions_pointers_from_both_blocks(tmp_path):
+    text = ("%s\n# Memory index\n- [A](mem:a) - ha\n%s\n\n"
+            "%s\n# Memory index\n- [B](mem:b) - hb\n%s\n") % (
+                us.INDEX_BEGIN, us.INDEX_END, us.LEGACY_INDEX_BEGIN, us.LEGACY_INDEX_END)
+    scope, ptrs = us.parse_pointer_index(text)
+    assert {p.slug for p in ptrs} == {"a", "b"}                 # parse reads EVERY managed block
+    out = us.upsert_pointer_block(text, scope, ptrs)
+    assert out.count("INDEX:BEGIN") == 1
+    assert "(mem:a)" in out and "(mem:b)" in out

@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.36.1] - 2026-07-05
+
+### Fixed
+- `upsert_pointer_block` now collapses EVERY managed block (both fence generations) into the one
+  canonical block instead of replacing only the first: an old-plugin session's heal could scaffold
+  a second, empty legacy-fenced block next to the migrated one, and the writer skipped it forever
+  (skip-fast heal then judged the file canonical). Pointers from all blocks are unioned; found and
+  repaired live on two levels of the maintainer tree. Regression tests.
+
 ## [5.36.0] - 2026-07-05
 
 ### Added
