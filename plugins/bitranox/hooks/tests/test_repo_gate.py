@@ -245,11 +245,12 @@ def test_skills_index_in_sync(tmp_path):
     assert RG.check_skills_index(tmp_path) == []
 
 
-def test_skills_index_flags_unlisted_skill(tmp_path):
+def test_skills_index_unlisted_skill_is_fine(tmp_path):
+    # the roster is categories + exemplars; completeness comes from the available-skills list,
+    # so an unlisted skill is deliberately NOT a failure (only stale names are)
     make_skills(tmp_path, ["alpha", "beta", "gamma"])
     make_index(tmp_path, ["alpha", "beta"])  # gamma not listed
-    fails = RG.check_skills_index(tmp_path)
-    assert any("gamma" in f and "omits" in f for f in fails)
+    assert RG.check_skills_index(tmp_path) == []
 
 
 def test_skills_index_flags_stale_entry(tmp_path):

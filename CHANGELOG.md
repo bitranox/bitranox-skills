@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.0] - 2026-07-06
+
+### Changed
+- meta-using-bitranox-skills roster trimmed to category names + exemplars (skills-half C5): the
+  injected available-skills list is the stated source of truth, so the ~40-name enumeration (a
+  second list to keep in sync) is gone; repo-gate's check_skills_index relaxed to one direction
+  (listed names must exist; completeness no longer forced). Pre-trim equivalence baseline 3/3
+  (files-edit-yml, compuse-bash, write-humanize-en); the SAME probes re-run after the next
+  marketplace update gate a revert. meta-memory-settings: discovery_roots row names its
+  multi-tree consumers.
+
 ## [5.41.0] - 2026-07-06
 
 ### Changed
