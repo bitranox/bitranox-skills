@@ -25,8 +25,15 @@ plugins/bitranox/skills/python-libraries-to-use/
 PLANS/
 
 # Curated self-learning memory store (per-project; local, never committed on this public repo).
-# A CLAUDE.local.md @imports .claude-bx-selflearning/index.md; both stay local (untracked).
+# Pointer blocks live in CLAUDE.local.md; bodies in the anchor's .claude-memory/. Both stay local.
 notes.md
 .claude-bx-selflearning/
+.claude-memory/
 CLAUDE.local.md
 .plan/
+
+# Engine-scaffolded altitude MARKER files (one-line CLAUDE.md per memory level inside the repo);
+# the real, tracked CLAUDE.md at the repo root is unaffected.
+plugins/CLAUDE.md
+plugins/bitranox/CLAUDE.md
+plugins/bitranox/hooks/CLAUDE.md
