@@ -53,9 +53,12 @@ the success line, abort-and-show on a miss).
     Require `healed N file(s) across M level(s)`.
 
 0b. **Scope-descriptor synthesis (freshness-gated, parallel sonnet subagents).** The per-level
-    descriptors are the PLACEMENT ROUTING KEY, so every level needs a meaningful one - but only
-    synthesize levels whose descriptor is EMPTY, INCOMPLETE (missing template keys), or whose
-    CHILDREN list is stale vs the actual subdirectories. Dispatch one `sonnet` subagent per stale
+    descriptors are the PLACEMENT ROUTING KEY, so every level needs a meaningful one. LEVELS MEANS
+    THE WHOLE TREE: every pointer-block-bearing dir under the anchor - SIBLING projects and
+    departments included - not just the cwd's ancestor chain (walk the tree or list the
+    CLAUDE.local.md files under the anchor). Only synthesize levels whose descriptor is EMPTY,
+    INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
+    subdirectories. Dispatch one `sonnet` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
     parent can read fresh child descriptors). An upper level's subagent reads each child dir's
     README/CLAUDE.md/docs headings + child descriptors; the project level's subagent reads the
@@ -80,8 +83,10 @@ the success line, abort-and-show on a miss).
    changes without an explicit merge/prune decision. Commit the store's git repo (Durability pass)
    so the pre-dream state is one `git diff` away.
 
-3. **Load both tiers** (pointer blocks + central bodies; the native raw tier) and skim the session
-   for uncaptured items.
+3. **Load both tiers TREE-WIDE** - every level's pointer block under the anchor (the cwd's chain
+   AND every sibling project/department; the central bodies are one store) plus the native raw
+   tier - and skim the session for uncaptured items. A dream that only reads the cwd's chain
+   misses exactly where duplicates and misplaced facts live: the siblings.
 
 3b. **De-double the tiers.** A fact lives in exactly ONE tier. Per native entry: already curated
    (by `bx:src` provenance or title/hook match) -> drop the native duplicate; native-only and
@@ -91,9 +96,11 @@ the success line, abort-and-show on a miss).
    or the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage
    credentials into a repo).
 
-4. **Dedup / merge.** Fold near-duplicates into one sharpened entry (engine `add`, same slug);
-   cross-link related entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8,
-   because placement creates new overlap.
+4. **Dedup / merge ACROSS THE TREE.** Fold near-duplicates into one sharpened entry (engine
+   `add`, same slug) - comparing across ALL levels, especially SIBLING projects (the classic
+   duplicate is the same lesson captured independently in two sibling projects; it merges at
+   their common parent). Cross-link related entries with `[[slug]]`. Dedup runs TWICE - here,
+   and again in step 8, because placement creates new overlap.
 
 5. **PLACEMENT (re-level every unpinned entry; up AND down).** Route each unpinned fact through
    the routing prompt against the descriptor ladder (leaf -> anchor):
@@ -120,8 +127,9 @@ the success line, abort-and-show on a miss).
    rewrite (trigger-first, facts preserved, slug-stable via `add --slug`), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
 
-7. **Prune (content-based only).** Archive obsolete/superseded/task-state entries per the removal
-   policy in references/dream-passes.md (propose-first; the backup makes it safe). Never
+7. **Prune (content-based only, tree-wide).** Archive obsolete/superseded/task-state entries at
+   EVERY level of the tree (siblings included) per the removal policy in
+   references/dream-passes.md (propose-first; the backup makes it safe). Never
    usage/age/size-based.
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
@@ -203,6 +211,9 @@ An ended run missing any box is not done - finish it or say plainly what was ski
 
 - Growing the store (a dream must net-shrink noise).
 - Dreaming without capturing first.
+- Consolidating only the cwd's ancestor CHAIN. The dream covers the WHOLE tree - sibling
+  projects and departments are where the dups, misplacements, and stale task-state live (a
+  chain-only run leaves them untouched and scores as a half-dream).
 - Placement by wording instead of EVIDENCE, or moving a low-confidence fact.
 - Moving a pinned entry, or moving DOWN past inbound `[[refs]]` (the engine refuses; re-point
   first).
