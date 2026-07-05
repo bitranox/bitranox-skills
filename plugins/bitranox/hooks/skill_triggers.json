@@ -635,11 +635,18 @@
  "process-agents-subagent-driven-development": [
   "executing",
   "implementation",
-  "plans",
+  "plan",
+  "mostly",
   "independent",
   "tasks",
   "current",
-  "session"
+  "session",
+  "choosing",
+  "model",
+  "tier",
+  "dispatched",
+  "subagent",
+  "canonical"
  ],
  "process-debug-systematic": [
   "encountering",
@@ -816,35 +823,35 @@
   "phone"
  ],
  "write-humanize-de": [
-  "entfernt",
-  "anzeichen",
-  "ki-generiertem",
+  "editing",
+  "reviewing",
+  "german-language",
+  "prose",
+  "deutsche",
+  "texte",
+  "deutschsprachige",
+  "humanize",
+  "german",
   "text",
-  "deutschsprachigen",
-  "texten",
-  "verwende",
-  "diesen",
-  "skill",
-  "beim",
-  "bearbeiten",
-  "oder",
-  "berpr",
-  "rlicher"
- ],
- "write-humanize-en": [
   "remove",
   "signs",
   "ai-generated",
-  "writing",
-  "text",
+  "writing"
+ ],
+ "write-humanize-en": [
   "editing",
   "reviewing",
-  "make",
-  "sound",
-  "natural",
-  "human-written",
-  "based",
-  "wikipedia",
-  "comprehensive"
+  "humanizing",
+  "english",
+  "prose",
+  "blog",
+  "posts",
+  "emails",
+  "articles",
+  "essays",
+  "marketing",
+  "copy",
+  "readme",
+  "narratives"
  ]
 }

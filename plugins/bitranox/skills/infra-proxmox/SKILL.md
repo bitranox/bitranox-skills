@@ -1,10 +1,6 @@
 ---
 name: infra-proxmox
-description: >-
-  Use when configuring, managing, or troubleshooting Proxmox VE -
-  installation, host administration, clusters, VMs, containers,
-  storage, Ceph, SDN, firewall, user management, HA, backups,
-  notifications, and CLI tools. Covers Proxmox VE 9.1.2.
+description: Use when configuring, managing, or troubleshooting Proxmox VE - installation, host administration, clusters, VMs, containers, storage, Ceph, SDN, firewall, user management, HA, backups, notifications, and CLI tools (pvecm, qm, pct, pvesm, pveceph, ha-manager, pvesh, vzdump). Covers Proxmox VE 9.1.2.
 ---
 
 # Proxmox VE Operations Reference (Release 9.1.2)
@@ -1195,45 +1191,46 @@ relevant chapter file from the skill directory.
 
 ## Which File Do I Need?
 
-| I need to...                     | Read                                        |
-|----------------------------------|---------------------------------------------|
-| Understand PVE features          | `ch01-introduction.md`                      |
-| Install or upgrade Proxmox VE    | `ch02-installation.md`                      |
-| Use advanced installer options   | `ch02-installation-advanced.md`             |
-| Configure package repositories   | `ch03-host-admin/package-repositories.md`   |
-| Set up networking                | `ch03-host-admin/network-configuration.md`  |
-| Manage ZFS on the host           | `ch03-host-admin/zfs.md`                    |
-| Manage LVM on the host           | `ch03-host-admin/lvm.md`                    |
-| Manage BTRFS on the host         | `ch03-host-admin/btrfs.md`                  |
-| Configure certificates / ACME    | `ch03-host-admin/certificate-management.md` |
-| Configure the bootloader         | `ch03-host-admin/host-bootloader.md`        |
-| Monitor disk health              | `ch03-host-admin/disk-health.md`            |
-| Set up time sync / NTP           | `ch03-host-admin/time-synchronization.md`   |
-| Use the web GUI                  | `ch04-gui.md`                               |
-| Create or manage a cluster       | `ch05-cluster-manager/_index.md`            |
-| Understand pmxcfs                | `ch06-pmxcfs.md`                            |
-| Add or configure storage         | `ch07-storage/_index.md`                    |
-| Deploy Ceph                      | `ch08-ceph/_index.md`                       |
-| Set up storage replication       | `ch09-storage-replication.md`               |
-| Create or manage VMs             | `ch10-qemu/_index.md`                       |
-| Import a VM (OVF, disk images)   | `ch10-qemu/importing-vms.md`                |
-| Set up PCI passthrough           | `ch10-qemu/pci-passthrough.md`              |
-| Use Cloud-Init with VMs          | `ch10-qemu/cloud-init.md`                   |
-| Create or manage containers      | `ch11-containers/_index.md`                 |
-| Configure SDN                    | `ch12-sdn/_index.md`                        |
-| Configure the firewall           | `ch13-firewall/_index.md`                   |
-| Manage users and permissions     | `ch14-user-management/_index.md`            |
-| Set up High Availability         | `ch15-high-availability/_index.md`          |
-| Back up or restore VMs/CTs       | `ch16-backup-restore/_index.md`             |
-| Configure notifications          | `ch17-notifications.md`                     |
-| Manage PVE service daemons       | `ch18-service-daemons.md`                   |
-| Find answers to common questions | `ch20-faq.md`                               |
-| Look up a CLI command            | `appendix-a-cli/_index.md`                  |
-| Check firewall macros            | `appendix-f-firewall-macros.md`             |
-| Understand config file format    | `appendix-c-config-files.md`                |
-| Schedule jobs (calendar events)  | `appendix-d-calendar-events.md`             |
-| Look up QEMU vCPU types          | `appendix-e-vcpu-list.md`                   |
-| Daemon CLI (pve-firewall, etc.)  | `appendix-b-service-daemons.md`             |
+| I need to...                         | Read                                        |
+|--------------------------------------|---------------------------------------------|
+| Understand PVE features              | `ch01-introduction.md`                      |
+| Install or upgrade Proxmox VE        | `ch02-installation.md`                      |
+| Use advanced installer options       | `ch02-installation-advanced.md`             |
+| Configure package repositories       | `ch03-host-admin/package-repositories.md`   |
+| Set up networking                    | `ch03-host-admin/network-configuration.md`  |
+| Manage ZFS on the host               | `ch03-host-admin/zfs.md`                    |
+| Manage LVM on the host               | `ch03-host-admin/lvm.md`                    |
+| Manage BTRFS on the host             | `ch03-host-admin/btrfs.md`                  |
+| Configure certificates / ACME        | `ch03-host-admin/certificate-management.md` |
+| Configure the bootloader             | `ch03-host-admin/host-bootloader.md`        |
+| Monitor disk health                  | `ch03-host-admin/disk-health.md`            |
+| Set up time sync / NTP               | `ch03-host-admin/time-synchronization.md`   |
+| Use the web GUI                      | `ch04-gui.md`                               |
+| Create or manage a cluster           | `ch05-cluster-manager/_index.md`            |
+| Understand pmxcfs                    | `ch06-pmxcfs.md`                            |
+| Add or configure storage             | `ch07-storage/_index.md`                    |
+| Deploy Ceph                          | `ch08-ceph/_index.md`                       |
+| Set up storage replication           | `ch09-storage-replication.md`               |
+| Create or manage VMs                 | `ch10-qemu/_index.md`                       |
+| Import a VM (OVF, disk images)       | `ch10-qemu/importing-vms.md`                |
+| Set up PCI passthrough               | `ch10-qemu/pci-passthrough.md`              |
+| Use Cloud-Init with VMs              | `ch10-qemu/cloud-init.md`                   |
+| Create or manage containers          | `ch11-containers/_index.md`                 |
+| Configure SDN                        | `ch12-sdn/_index.md`                        |
+| Configure the firewall               | `ch13-firewall/_index.md`                   |
+| Manage users and permissions         | `ch14-user-management/_index.md`            |
+| Set up High Availability             | `ch15-high-availability/_index.md`          |
+| Back up or restore VMs/CTs           | `ch16-backup-restore/_index.md`             |
+| Configure notifications              | `ch17-notifications.md`                     |
+| Manage PVE service daemons           | `ch18-service-daemons.md`                   |
+| Find answers to common questions     | `ch20-faq.md`                               |
+| Look up a CLI command                | `appendix-a-cli/_index.md`                  |
+| Benchmark host / manage subscription | `ch19-cli-tools.md`                         |
+| Check firewall macros                | `appendix-f-firewall-macros.md`             |
+| Understand config file format        | `appendix-c-config-files.md`                |
+| Schedule jobs (calendar events)      | `appendix-d-calendar-events.md`             |
+| Look up QEMU vCPU types              | `appendix-e-vcpu-list.md`                   |
+| Daemon CLI (pve-firewall, etc.)      | `appendix-b-service-daemons.md`             |
 
 ---
 

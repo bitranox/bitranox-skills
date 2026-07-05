@@ -1,14 +1,6 @@
 ---
 name: write-humanize-en
-description: |
-  Remove signs of AI-generated writing from text. Use when editing or reviewing
-  text to make it sound more natural and human-written. Based on Wikipedia's
-  comprehensive "Signs of AI writing" guide (February 2026 revision). Detects
-  and fixes 35 patterns including: inflated symbolism, promotional language,
-  superficial -ing analyses, vague attributions, opinion overgeneralization,
-  em dash overuse, rule of three, AI vocabulary words, negative parallelisms,
-  section summaries, placeholder text, Markdown artifacts, table overuse,
-  subject lines, and ChatGPT-specific reference bugs.
+description: Use when editing, reviewing, or humanizing English prose (blog posts, emails, articles, essays, marketing copy, README narratives) to strip signs of AI-generated writing such as em dashes, curly quotes, AI vocabulary (delve, underscore, tapestry, vibrant), promotional language, rule of three, negative parallelisms, copula avoidance, section summaries, placeholder text, Markdown artifacts, table overuse, subject lines, and ChatGPT reference bugs. Based on Wikipedia's Signs of AI writing guide.
 ---
 
 # Humanizer: Remove AI Writing Patterns
@@ -261,7 +253,7 @@ Avoiding AI patterns is only half the job. Sterile, voiceless writing is just as
 
 **Problem:** LLMs use em dashes ("—") and EN Dashes ("–") more than humans, mimicking "punched up" sales-like writing by over-emphasizing clauses or 
 parallelisms. 
-Most useful when combined with other indicators. May be less common in newer AI text (late 2025 onwards). Remove those completely or if neccessary replace 
+Most useful when combined with other indicators. May be less common in newer AI text (late 2025 onwards). Remove those completely or if necessary replace 
 them with Hyphens "-"
 
 **Before:**

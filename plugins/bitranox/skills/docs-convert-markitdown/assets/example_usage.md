@@ -208,9 +208,9 @@ for file in files_to_convert:
         with open(output, "w") as f:
             f.write(result.text_content)
         
-        print(f"✓ {file} -> {output}")
+        print(f"[OK] {file} -> {output}")
     except Exception as e:
-        print(f"✗ Error converting {file}: {e}")
+        print(f"[FAIL] Error converting {file}: {e}")
 ```
 
 ### Parallel Processing

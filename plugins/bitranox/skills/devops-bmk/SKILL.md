@@ -1,12 +1,6 @@
 ---
 name: devops-bmk
-description: >-
-  Use when installing, configuring or running bmk - the bitranox cross-OS
-  build/test/release task runner - in a project: bootstrapping it with uv,
-  deploying its Makefile (bmk install), running make test / push / bump /
-  release / ship, fixing missing external tools (bmk ensure), reading its
-  JSON-by-default vs --human output, layered config with --profile / --set,
-  or defining custom staged pipelines. Works on Linux, macOS and Windows.
+description: Use when installing, configuring or running bmk - the bitranox cross-OS build/test/release task runner - in a project (bootstrapping it with uv, deploying its Makefile via bmk install, running make test / push / bump / release / ship, fixing missing external tools with bmk ensure, reading its JSON-by-default vs --human output, layered config with --profile / --set, or defining custom staged pipelines). Works on Linux, macOS and Windows.
 ---
 
 # devops-bmk

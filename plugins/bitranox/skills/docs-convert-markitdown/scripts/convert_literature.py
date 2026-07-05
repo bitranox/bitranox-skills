@@ -115,12 +115,12 @@ def convert_paper(
         # Write to file
         output_file.write_text(content, encoding='utf-8')
         
-        print(f"✓ Saved to: {output_file}")
+        print(f"[OK] Saved to: {output_file}")
         
         return True, metadata
         
     except Exception as e:
-        print(f"✗ Error converting {input_file.name}: {str(e)}")
+        print(f"[FAIL] Error converting {input_file.name}: {str(e)}")
         return False, {'source_file': input_file.name, 'error': str(e)}
 
 
@@ -168,13 +168,13 @@ def create_index(papers: List[Dict], output_dir: Path):
     # Write index
     index_file = output_dir / "INDEX.md"
     index_file.write_text(index_content, encoding='utf-8')
-    print(f"\n✓ Created index: {index_file}")
+    print(f"\n[OK] Created index: {index_file}")
     
     # Also create JSON catalog
     catalog_file = output_dir / "catalog.json"
     with open(catalog_file, 'w', encoding='utf-8') as f:
         json.dump(papers_sorted, f, indent=2, ensure_ascii=False)
-    print(f"✓ Created catalog: {catalog_file}")
+    print(f"[OK] Created catalog: {catalog_file}")
 
 
 def main():

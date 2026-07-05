@@ -3,7 +3,7 @@ name: compuse-vnc
 description: Use when you must drive a remote machine, VM, or GUI/TUI program over VNC/RFB - sending keystrokes and clicks and reading the screen with OCR - because the target has no network, SSH, agent, or API. Covers Proxmox/hypervisor VM consoles (first boot before networking, or a VM that will never have a network), legacy line-of-business GUIs and dated installers that are only a window, and old TUI apps driven by keypresses. Nothing is installed on the target except its VNC server (Proxmox ships noVNC out of the box). Driven with the `vnc-remote-control` CLI (PyPI).
 ---
 
-# computer-use-vnc
+# Driving a remote machine over VNC (compuse-vnc)
 
 Drive a target's screen over plain VNC/RFB with the `vnc-remote-control` CLI: type text, press
 named keys, click, screenshot, and OCR. It is a pure **client** - nothing runs on the target, no
@@ -65,7 +65,7 @@ coordinate. (Past "wrong pixel" failures came from reading coordinates off a sca
 1. **Capture and look.** `screenshot out.png` - view it at NATIVE size (do not let the viewer downscale).
 2. **Read coordinates directly** off `out.png` - there is no scale factor to undo.
 3. **Verify before committing:** `screenshot out.png --mark X,Y` and check the crosshair lands on target (`--grid 50` adds a ruler).
-4. **Prefer clicking by label** over guessing pixels: `ocr --grep "Sign in"` then `click <cx> <cy>`, or one-shot `click-text "Sign in"`.
+4. **Prefer clicking by label** over guessing pixels: `ocr --grep "Sign in"` then `click <cx> <cy>`, or one-shot `click-text "Sign in"`. `click-text` only sees text OCR can read - low-contrast or placeholder hints (a faint greyed-out search box), icons, and untitled controls are missed and it fails; fall back to reading the pixel off the screenshot and `click X Y`.
 5. **Focus, then type.** A freshly opened window/field often does NOT have keyboard focus. Click into the text field first, THEN `type`. Skipping the click is the #1 reason typed text seems to vanish.
 
 ## Gotchas

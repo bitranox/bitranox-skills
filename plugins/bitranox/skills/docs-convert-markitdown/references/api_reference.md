@@ -176,11 +176,11 @@ Plugins are Python packages that register converters with MarkItDown.
 **Plugin Structure**:
 ```
 my-markitdown-plugin/
-├── setup.py
-├── my_plugin/
-│   ├── __init__.py
-│   └── converter.py
-└── README.md
++-- setup.py
++-- my_plugin/
+|   +-- __init__.py
+|   +-- converter.py
++-- README.md
 ```
 
 **setup.py**:
@@ -353,32 +353,22 @@ with ThreadPoolExecutor(max_workers=4) as executor:
     results = executor.map(convert_file, file_list)
 ```
 
-## Breaking Changes (v0.0.1 to v0.1.0)
+## API notes
 
-1. **Dependencies**: Now organized into optional feature groups
+1. **Dependencies** are organized into optional feature groups:
    ```bash
-   # Old
-   pip install markitdown
-   
-   # New
    pip install 'markitdown[all]'
    ```
 
-2. **convert_stream()**: Now requires binary file-like object
+2. **convert_stream()** requires a BINARY file-like object, plus the extension hint:
    ```python
-   # Old (also accepted text)
-   with open("file.pdf", "r") as f:  # text mode
-       result = md.convert_stream(f)
-   
-   # New (binary only)
    with open("file.pdf", "rb") as f:  # binary mode
        result = md.convert_stream(f, file_extension=".pdf")
    ```
 
-3. **DocumentConverter Interface**: Changed to read from streams instead of file paths
+3. **DocumentConverter** reads from streams, not file paths:
    - No temporary files created
    - More memory efficient
-   - Plugins need updating
 
 ## Version Compatibility
 

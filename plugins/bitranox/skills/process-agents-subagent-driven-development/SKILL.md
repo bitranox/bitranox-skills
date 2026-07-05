@@ -1,6 +1,6 @@
 ---
 name: process-agents-subagent-driven-development
-description: Use when executing implementation plans with independent tasks in the current session
+description: Use when executing an implementation plan with mostly independent tasks in the current session, or when choosing the model tier for ANY dispatched subagent - this is the canonical model-tier reference (haiku / sonnet / opus / fable; the session model is fixed) that other skills cite. Keywords - subagent-driven development, dispatch per task, parallel agents, task brief, model tier.
 ---
 
 # Subagent-Driven Development
@@ -66,7 +66,7 @@ digraph process {
 
     "Read plan, note context and global constraints, create todos" [shape=box];
     "More tasks remain?" [shape=diamond];
-    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [shape=box];
+    "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" [shape=box];
     "Use bitranox:process-ship-finishing-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Read plan, note context and global constraints, create todos" -> "Dispatch implementer subagent (./implementer-prompt.md)";
@@ -81,8 +81,8 @@ digraph process {
     "Task reviewer reports spec ✅ and quality approved?" -> "Mark task complete in todo list and progress ledger" [label="yes"];
     "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
-    "More tasks remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
-    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Use bitranox:process-ship-finishing-development-branch";
+    "More tasks remain?" -> "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" [label="no"];
+    "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" -> "Use bitranox:process-ship-finishing-development-branch";
 }
 ```
 
@@ -194,7 +194,7 @@ A model-sensitive step therefore has TWO branches - decide delegability FIRST, a
 
 Implementer subagents report one of four statuses. Handle each appropriately:
 
-**DONE:** Generate the review package (`scripts/review-package BASE HEAD`, from this skill's directory  -  it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer  -  never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
+**DONE:** Generate the review package (`python3 scripts/review_package.py BASE HEAD`, from this skill's directory  -  it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer  -  never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
 
@@ -240,7 +240,7 @@ final whole-branch review. When you fill a reviewer template:
   test hygiene, review method)  -  the constraints block is for what THIS
   project's spec demands.
 - Hand the reviewer its diff as a file: run this skill's
-  `scripts/review-package BASE HEAD` and pass the reviewer the file path
+  `python3 scripts/review_package.py BASE HEAD` and pass the reviewer the file path
   it prints (or, without bash: `git log --oneline`, `git diff --stat`,
   and `git diff -U10` for the range, redirected to one uniquely named
   file). The output never enters your own context, and the reviewer sees
@@ -262,7 +262,7 @@ final whole-branch review. When you fill a reviewer template:
   Do not dismiss the finding because the plan mandates it, and do not
   dispatch a fix that contradicts the plan without asking.
 - The final whole-branch review gets a package too: run
-  `scripts/review-package MERGE_BASE HEAD` (MERGE_BASE = the commit the
+  `python3 scripts/review_package.py MERGE_BASE HEAD` (MERGE_BASE = the commit the
   branch started from, e.g. `git merge-base main HEAD`) and include the
   printed path in the final review dispatch, so the final reviewer reads
   one file instead of re-deriving the branch diff with git commands.
@@ -284,7 +284,7 @@ prints back  -  stays resident in your context for the rest of the session
 and is re-read on every later turn. Hand artifacts over as files:
 
 - **Task brief:** before dispatching an implementer, run this skill's
-  `scripts/task-brief PLAN_FILE N`  -  it extracts the task's full text to a
+  `python3 scripts/task_brief.py PLAN_FILE N`  -  it extracts the task's full text to a
   uniquely named file and prints the path. Compose the dispatch so the
   brief stays the single source of requirements. Your dispatch should
   contain: (1) one line on where this task fits in the project; (2) the
@@ -328,7 +328,7 @@ a ledger file, not only in todos.
 
 - [implementer-prompt.md](implementer-prompt.md) - Dispatch implementer subagent
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) - Dispatch task reviewer subagent (spec compliance + code quality)
-- Final whole-branch review: use bitranox:process-review-requesting-code-review's [code-reviewer.md](../requesting-code-review/code-reviewer.md)
+- Final whole-branch review: use bitranox:process-review-requesting-code-review's [code-reviewer.md](../process-review-requesting-code-review/code-reviewer.md)
 
 ## Example Workflow
 
@@ -340,7 +340,7 @@ You: I'm using Subagent-Driven Development to execute this plan.
 
 Task 1: Hook installation script
 
-[Run task-brief for Task 1; dispatch implementer with brief + report paths + context]
+[Run task_brief.py for Task 1; dispatch implementer with brief + report paths + context]
 
 Implementer: "Before I begin - should the hook be installed at user or system level?"
 
@@ -353,7 +353,7 @@ Implementer: "Got it. Implementing now..."
   - Self-review: Found I missed --force flag, added it
   - Committed
 
-[Run review-package, dispatch task reviewer with the printed path]
+[Run review_package.py, dispatch task reviewer with the printed path]
 Task reviewer: Spec ✅ - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
@@ -361,7 +361,7 @@ Task reviewer: Spec ✅ - all requirements met, nothing extra.
 
 Task 2: Recovery modes
 
-[Run task-brief for Task 2; dispatch implementer with brief + report paths + context]
+[Run task_brief.py for Task 2; dispatch implementer with brief + report paths + context]
 
 Implementer: [No questions, proceeds]
 Implementer:
@@ -370,7 +370,7 @@ Implementer:
   - Self-review: All good
   - Committed
 
-[Run review-package, dispatch task reviewer with the printed path]
+[Run review_package.py, dispatch task reviewer with the printed path]
 Task reviewer: Spec ❌:
   - Missing: Progress reporting (spec says "report every 100 items")
   - Extra: Added --json flag (not requested)
@@ -433,7 +433,7 @@ Done!
 - Proceed with unfixed issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
 - Make a subagent read the whole plan file (hand it its task brief  - 
-  `scripts/task-brief`  -  instead)
+  `python3 scripts/task_brief.py`  -  instead)
 - Skip scene-setting context (subagent needs to understand where task fits)
 - Ignore subagent questions (answer before letting them proceed)
 - Accept "close enough" on spec compliance (reviewer found spec issues = not done)
@@ -443,7 +443,7 @@ Done!
   dispatch prompt ("treat it as Minor at most")  -  the plan's example code is
   a starting point, not evidence that its weaknesses were chosen
 - Dispatch a task reviewer without a diff file  -  generate it first
-  (`scripts/review-package BASE HEAD`) and name the printed path in the
+  (`python3 scripts/review_package.py BASE HEAD`) and name the printed path in the
   prompt
 - Move to next task while the review has open Critical/Important issues
 - Re-dispatch a task the progress ledger already marks complete  -  check
