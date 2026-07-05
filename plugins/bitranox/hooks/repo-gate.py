@@ -172,13 +172,10 @@ def check_version_bumped(root):
 
 
 def check_skills_index(root):
-    """Keep the meta-using-bitranox-skills domains list in sync with the skill dirs.
-
-    Every shipped skill must be listed there (so the orientation list stays complete),
-    and every name listed must be a real skill dir (so a rename/removal cannot leave a
-    dangling entry). This is the deterministic guard for "update the index when you add
-    or rename a skill" - the rule prose alone kept silently breaking.
-    """
+    """Every skill NAME the meta-using-bitranox-skills orientation list mentions must be a real
+    skill dir (a rename/removal cannot leave a dangling entry). The reverse direction is
+    deliberately NOT enforced: the roster is category names + exemplars, and the injected
+    available-skills list is the source of truth for completeness."""
     skills_dir = root / "plugins" / "bitranox" / "skills"
     index = skills_dir / "meta-using-bitranox-skills" / "SKILL.md"
     if not skills_dir.is_dir() or not index.is_file():
@@ -198,14 +195,11 @@ def check_skills_index(root):
             listed.update(re.findall(r"`([a-z][a-z0-9-]+)`", line))
     dirs = {d.name for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
     dirs.discard("meta-using-bitranox-skills")
-    missing = sorted(dirs - listed)
     stale = sorted(listed - dirs)
-    msgs = []
-    if missing:
-        msgs.append("meta-using-bitranox-skills omits these skills (add to its domains list): " + ", ".join(missing))
     if stale:
-        msgs.append("meta-using-bitranox-skills lists non-existent skills (renamed/removed?): " + ", ".join(stale))
-    return msgs
+        return ["meta-using-bitranox-skills lists non-existent skills (renamed/removed?): "
+                + ", ".join(stale)]
+    return []
 
 
 _CREDIT_RX = re.compile(r"(?m)^>\s*Adapted from .+\(.+\)\.")
