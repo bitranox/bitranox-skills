@@ -35,6 +35,7 @@ _HOOK_MODULES = {
     "recall-memory": "recall_memory",
     "warn-unpinned-subagent-model": "warn_unpinned_subagent_model",
     "skill-edit-guard": "skill_edit_guard",
+    "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",
 }
 

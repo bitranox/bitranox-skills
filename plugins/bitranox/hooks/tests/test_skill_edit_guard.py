@@ -1,7 +1,20 @@
 """Tests for skill-edit-guard.py: deny a SKILL.md edit (exit 2), allow else, env opt-out, fail-open."""
 
 import json
+
+import pytest
+
 import skill_edit_guard as G
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path, monkeypatch):
+    # isolate HOME so a REAL session receipt on the dev machine cannot flip deny tests to allow
+    h = tmp_path / "home"
+    (h / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    return h
 
 
 def _ev(tool, path):

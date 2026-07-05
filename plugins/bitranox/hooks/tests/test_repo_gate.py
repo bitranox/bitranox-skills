@@ -420,3 +420,55 @@ def test_secrets_denylist_local_only(tmp_path):
     # An untracked local denylist file makes the gate catch it (file itself stays untracked).
     (tmp_path / ".security-denylist.local").write_text("acmeinternal-host\n", encoding="utf-8")
     assert any("denylisted" in f and "acmeinternal-host" in f for f in RG.check_secrets(tmp_path))
+
+
+# --------------------------------------------------------------------------
+# skill review artifact + CSO description lint (skill-usage enforcement)
+# --------------------------------------------------------------------------
+
+def _skill(root, name, desc, checklist=None, checked=True):
+    write(root / f"plugins/bitranox/skills/{name}/SKILL.md",
+          "---\nname: %s\ndescription: %s\n---\n\n# %s\n" % (name, desc, name))
+    if checklist:
+        box = "[x]" if checked else "[ ]"
+        write(root / f"plugins/bitranox/skills/{name}/.skillwriter/{checklist}",
+              "# checklist\n- %s RED baseline\n- %s pressure scenarios\n" % (box, box))
+
+
+def test_skill_review_requires_cochanged_checklist(tmp_path):
+    make_repo(tmp_path)
+    _skill(tmp_path, "alpha", "Use when testing alpha widgets fail")
+    changed = ["plugins/bitranox/skills/alpha/SKILL.md"]
+    fails = RG.skill_review_failures(tmp_path, changed)
+    assert fails and "checklist" in fails[0]
+    # co-changed artifact with all boxes checked -> clean
+    _skill(tmp_path, "alpha", "Use when testing alpha widgets fail",
+           checklist="checklist-20260706.md")
+    changed += ["plugins/bitranox/skills/alpha/.skillwriter/checklist-20260706.md"]
+    assert RG.skill_review_failures(tmp_path, changed) == []
+
+
+def test_skill_review_rejects_unchecked_boxes(tmp_path):
+    make_repo(tmp_path)
+    _skill(tmp_path, "beta", "Use when beta gadgets misbehave under load",
+           checklist="checklist-20260706.md", checked=False)
+    changed = ["plugins/bitranox/skills/beta/SKILL.md",
+               "plugins/bitranox/skills/beta/.skillwriter/checklist-20260706.md"]
+    fails = RG.skill_review_failures(tmp_path, changed)
+    assert fails and "unchecked" in fails[0]
+
+
+def test_cso_lint_requires_trigger_first_description(tmp_path):
+    make_repo(tmp_path)
+    _skill(tmp_path, "gamma", "Consolidates the store and prunes entries nightly")
+    fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/gamma/SKILL.md"])
+    assert fails and "Use when" in fails[0]
+    _skill(tmp_path, "delta", "Use when gadget builds fail with linker errors on windows runners")
+    assert RG.cso_failures(tmp_path, ["plugins/bitranox/skills/delta/SKILL.md"]) == []
+
+
+def test_cso_lint_requires_derivable_keywords(tmp_path):
+    make_repo(tmp_path)
+    _skill(tmp_path, "epsilon", "Use when it is good to do so")   # no distinctive keywords
+    fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/epsilon/SKILL.md"])
+    assert fails and "keyword" in fails[0]

@@ -186,3 +186,14 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
   run in the consumer Claude Desktop Chat or Cowork tabs (no plugins there); on the web app it runs
   in Anthropic's cloud sandbox. Every failure path in the gate exits 0, so a missing shell,
   interpreter, or unsupported surface never wedges a turn.
+
+## Skill changes need their review artifact (enforced by the repo-gate)
+
+Any commit that changes a `skills/<name>/SKILL.md` must co-change a review artifact
+`skills/<name>/.skillwriter/checklist-<date>.md` with ALL boxes checked - the committed receipt of
+the `bitranox:meta-skill-writer` procedure (RED baseline, pressure scenarios, CSO check, security
+scan). The local pre-commit gate blocks the commit otherwise. Additionally, a skill's frontmatter
+description must be trigger-first ("Use when <situations>...") and yield at least 3 distinctive
+keywords - the skill router derives its trigger map from descriptions
+(`hooks/build_skill_triggers.py`; rebuild it when a description changes, the test suite checks the
+map is in sync).

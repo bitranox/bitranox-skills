@@ -34,12 +34,18 @@ def decide(event, env):
     if not _SKILL_MD.search(path):
         return None
     if env.get(_BYPASS_ENV):
-        return None                                    # deliberately-declared skill-authoring session
+        return None                                    # emergency bypass (env at session launch)
+    try:
+        import skill_receipt
+        if skill_receipt.is_fresh("meta-skill-writer"):
+            return None                                # the skill-writer procedure was ENTERED
+    except Exception:  # noqa: BLE001 - a broken receipt store must not wedge; fall through to deny
+        pass
     return (
         "Editing a SKILL.md directly is blocked. Skills change ONLY through bitranox:meta-skill-writer "
-        "(RED-GREEN-REFACTOR: baseline test first, sibling tests for any script). Invoke that skill. For "
-        "a deliberate skill-authoring session, relaunch with %s=1 set in the environment (a shell "
-        "`export` in a Bash tool call does NOT reach this hook - it must be set at session start). "
+        "(RED-GREEN-REFACTOR + its checklist); invoke that skill via the Skill tool - its step 0 issues "
+        "the session receipt this guard checks. Emergency bypass: relaunch with %s=1 set in the "
+        "environment (a shell `export` in a Bash tool call does NOT reach this hook). "
         "File: %s" % (_BYPASS_ENV, path))
 
 
