@@ -1,8 +1,8 @@
-# How the self-learning memory works (the ideas behind it)
+# The ideas behind the self-learning memory
 
 This is the plain-language version: what the bitranox memory is trying to do and why it is built
-the way it is. No file paths or code here, just the principles. If you want the mechanics, the
-skills themselves spell those out.
+the way it is. No file paths or code here, just the principles. For the mechanics, see
+[architecture.md](architecture.md); for the daily commands, [usage.md](usage.md).
 
 The goal is simple to state and hard to do well: Claude should get better the more you work with
 it, and a lesson learned in one project should not be lost the moment you switch to another.
@@ -22,18 +22,20 @@ consolidates a day. It merges duplicates, sharpens wording, connects related not
 stale, and lifts the broadly useful up where everything can reach it. Capture is quick and additive;
 dreaming makes the store smaller and sharper, not bigger.
 
-There are two kinds of dream, for two depths of rest. The everyday one is a **short nap to sort your
-thoughts** - it tidies only the project you are working in: quick, cheap, run often (`dream-project`).
-The other is the **deep sleep you get when you need it** - it ranges across all your projects at once,
-carrying a lesson learned in one over to where it helps in another and lifting the broadly-useful up so
-everything can reach it (`dream-global`). You take the nap frequently; you get the deep sleep now and
-then.
+There are three depths of rest. The **nap** is the quick sort-your-thoughts pass: it tidies only
+where you are working right now - your project and the direct line of shelves above it - in minutes,
+so it is the one to take often, especially when notes have piled up mid-session (`dream-nap`). The
+**night's sleep** is the real consolidation of one whole world of work: every project and shared
+shelf in it, duplicates merged across neighbors, the broadly-useful lifted up where everything can
+reach it (`dream-tree`). And the **deep sleep** is the rare, expensive pass that ranges across ALL
+the separate worlds you keep, carrying a lesson learned in one over to another where it helps
+(`dream-crosstree`). Nap frequently, sleep regularly, deep-sleep now and then.
 
-One caution before you rely on either, and the deep one most of all: take your own backup of your
-memory and `CLAUDE.md` files before the first full dream, and keep doing it until you have watched it a
-few times and trust how it reshapes things. The dream always backs itself up first, so every run is
-reversible - but the global pass can lift rules into the layer that loads in every project, and it is
-worth seeing that behave on your own data before you let it run unwatched.
+One caution before you rely on any of them, and the deeper ones most of all: take your own backup of
+your memory and `CLAUDE.md` files before the first full dream, and keep doing it until you have
+watched it a few times and trust how it reshapes things. Every dream backs itself up first, so every
+run is reversible - but the fuller passes can lift rules up to a shelf that loads for everything
+below it, and it is worth seeing that behave on your own data before you let it run unwatched.
 
 A dream does not always finish in one night. Some tangles take several passes to settle: the system
 keeps dreaming the same store until a pass changes nothing, the way a mind returns to the same dream
@@ -112,11 +114,11 @@ Each such world is its own knowledge TREE: its own head office at its top, its o
 desks below, its own filing. The trees do not see each other. A note filed in the bakery never
 drifts into the agency's meetings, and the agency's habits never season the bread.
 
-The nightly tidy-up - the project dream, the "nap" - always happens inside ONE company: it files,
-merges, and re-shelves within the tree you are working in. Only the rare deep sleep that
-deliberately reviews ALL the companies you run may look across trees, and even then nothing is
-shared by pointing sideways - if a lesson truly helps both worlds, each gets its own written copy,
-noted as brought in from outside. When you WANT the walls even for the quick notebook glance, one
+The nap and the night's sleep always happen inside ONE company: the nap tidies your own desk and
+the line of managers directly above it, the full sleep files, merges, and re-shelves the whole
+company. Only the rare deep sleep that deliberately reviews ALL the companies you run may look
+across trees, and even then nothing is shared by pointing sideways - if a lesson truly helps both
+worlds, each gets its own written copy, noted as brought in from outside. When you WANT the walls even for the quick notebook glance, one
 setting closes the borders: each company then only ever reads its own files.
 
 ## 5. Always within reach, never "maybe"
