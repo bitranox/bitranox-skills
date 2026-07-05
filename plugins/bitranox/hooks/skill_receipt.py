@@ -9,6 +9,7 @@ about procedure, a receipt at least proves entry.
 
     skill_receipt.py start <skill-name>       write/refresh the receipt (prints its path)
     skill_receipt.py check <skill-name>       exit 0 fresh / 1 stale-or-missing (prints age)
+    skill_receipt.py end <skill-name>         remove the receipt (idempotent; disarms gates)
 
 Receipts live under ~/.claude/self-improve-audit/skill-receipts/, keyed by skill name only
 (machine-local; a receipt is a session-scale token, not a per-repo ledger). Pure standard library.
@@ -33,6 +34,15 @@ def start(skill):
     return p
 
 
+def end(skill):
+    """Remove the receipt (idempotent) - disarms any gate keyed on it."""
+    try:
+        receipt_path(skill).unlink()
+        return True
+    except OSError:
+        return False
+
+
 def is_fresh(skill, ttl=TTL_SECONDS):
     try:
         data = json.loads(receipt_path(skill).read_text(encoding="utf-8"))
@@ -43,12 +53,15 @@ def is_fresh(skill, ttl=TTL_SECONDS):
 
 def main(argv=None):
     args = argv if argv is not None else sys.argv[1:]
-    if len(args) != 2 or args[0] not in ("start", "check"):
-        print("usage: skill_receipt.py start|check <skill-name>")
+    if len(args) != 2 or args[0] not in ("start", "check", "end"):
+        print("usage: skill_receipt.py start|check|end <skill-name>")
         return 2
     cmd, skill = args
     if cmd == "start":
         print("receipt: %s" % start(skill))
+        return 0
+    if cmd == "end":
+        print("receipt %s: %s" % (skill, "removed" if end(skill) else "absent"))
         return 0
     fresh = is_fresh(skill)
     print("receipt %s: %s" % (skill, "fresh" if fresh else "stale-or-missing"))
