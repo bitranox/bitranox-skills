@@ -1,6 +1,6 @@
 ---
 name: coding-python-performance-review
-description: "Use when reviewing Python code for performance: identifying caching opportunities in pure functions, finding uncompiled regex patterns, profiling hot spots with real test suites, validating optimization claims from a diff, or comparing before/after timing across git history. Runs standalone or as a performance sub-agent inside a larger code-review workflow."
+description: Use when reviewing Python code for performance - identifying caching opportunities in pure functions, finding uncompiled regex patterns, profiling hot spots with real test suites, validating optimization claims from a diff, or comparing before/after timing across git history. Runs standalone or as a performance sub-agent inside a larger code-review workflow.
 ---
 
 # Python Performance Reviewer
@@ -74,7 +74,7 @@ Use the Read tool to load referenced files for full details.
 
 ```
 Step 1 (Read instructions) -> Step 2 (Setup) -> Step 3 (Profile) ->
-Step 4 (Analyze: candidates + regex + hotspots + prioritize + audit existing caches) ->
+Step 4 (Analyze: candidates + regex + hotspots + prioritize + audit existing caches + unbounded memory) ->
 Step 5 (Merge & sort) -> Step 6 (Present one-by-one) ->
   -- Implement fix / remove ineffective cache + run tests
   -- Save decline to instructions
@@ -347,17 +347,18 @@ fi
 
 ### Step 5: Merge, Classify, and Sort Findings
 
-Parse the five output files from Step 4. Output format reference:
+Parse the six output files from Step 4. Output format reference:
 
 - `cache_candidates.txt`: `file:line - function()` + `Reason: ...`
 - `uncompiled_regex.txt`: `file:line - re.func(pattern, ...)` + `Fix: ...`
 - `hotspots.txt`: `file:line - function()` + `Calls: N, Cumtime: Xs`
 - `priority_cache_candidates.txt`: `file:line - function()`
 - `existing_caches.txt`: `file:line - @decorator function_name()` + `Verdict: ...`
+- `memory_candidates.txt`: `file:line - <obj>.read()/.fetchall()/...` + `Risk: ...`
 
 Classify each finding by severity:
 
-- **SEVERE**: Uncompiled regex in a hot function (in both regex + hotspots) OR harmful existing cache
+- **SEVERE**: Unbounded memory / unsafe input (source confirmed able to grow unbounded) OR uncompiled regex in a hot function (in both regex + hotspots) OR harmful existing cache
 - **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in non-hot function OR ineffective existing cache
 - **MINOR**: Cache candidate NOT confirmed by profiling
 
@@ -370,7 +371,7 @@ Present each finding **ONE AT A TIME** using this format:
 ```
 ## Issue N: [Short Title]
 **Severity**: SEVERE | MEDIUM | MINOR
-**Type**: Uncompiled Regex | Cache Candidate | Ineffective Cache
+**Type**: Uncompiled Regex | Cache Candidate | Ineffective Cache | Unbounded Memory | Unsafe Input
 **File**: file:line
 **Function**: function_name
 **Call count**: N (from profiling, if available)

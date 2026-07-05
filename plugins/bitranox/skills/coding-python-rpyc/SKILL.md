@@ -1,10 +1,6 @@
 ---
 name: coding-python-rpyc
-description: >
-  Use when building transparent remote procedure calls, distributed computing,
-  or remote object proxying in Python with RPyC. Use when asked about rpyc.connect,
-  rpyc.Service, netref proxies, async_(), BgServingThread, SSLAuthenticator,
-  DeployedServer, or rpyc_classic.py.
+description: Use when building transparent remote procedure calls, distributed computing, or remote object proxying in Python with RPyC. Use when asked about rpyc.connect, rpyc.Service, netref proxies, async_(), BgServingThread, SSLAuthenticator, DeployedServer, or rpyc_classic.py.
 ---
 
 # RPyC -- Remote Python Call
@@ -60,6 +56,7 @@ Try distilled references (above) first. Use upstream docs below only when more d
 
 | Topic                 | Key API / search terms                                                                                                                                                                      | Read                           |
 |-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------|
+| About RPyC | related projects, contributors, logo, project history | `docs/about.md` |
 | Theory of operation   | boxing by-value/by-reference, netref proxying, address space unification, symmetry                                                                                                          | `docs/theory.md`               |
 | Classic mode          | `rpyc.classic.connect()`, `conn.modules`, `conn.execute()`, `conn.builtins`, `rpyc_classic.py`                                                                                              | `docs/classic.md`              |
 | Services              | `rpyc.Service`, `exposed_` prefix, `@rpyc.exposed`, `@rpyc.service`, `conn.root`, `on_connect()`, `on_disconnect()`, `ALIASES`, `VoidService`                                               | `docs/services.md`             |

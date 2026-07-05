@@ -1,11 +1,6 @@
 ---
 name: coding-python-uv
-description: >
-  Use when writing, configuring, debugging, or deploying Python projects that use
-  uv as the package manager, virtual environment manager, Python version manager,
-  or pip replacement. Covers project setup, dependency management, lockfiles,
-  scripts, tools, building, publishing, Docker, CI/CD, authentication, caching,
-  and migration from pip/pip-tools. This covers Version 0.10.2 of uv 2026-02-12
+description: Use when writing, configuring, debugging, or deploying Python projects that use uv as the package manager, virtual environment manager, Python version manager, or pip replacement. Covers project setup, dependency management, lockfiles, scripts, tools, building, publishing, Docker, CI/CD, authentication, caching, and migration from pip/pip-tools. This covers Version 0.10.2 of uv (2026-02-12).
 ---
 
 # uv - Python Package & Project Manager
@@ -120,7 +115,7 @@ All documentation files are flat, numbered markdown files. Use the Read tool to 
 | **"Manage index credentials (login/logout)"**                    | `11-authentication.md`                                                                            |
 | **"Export SBOM (CycloneDX)"**                                    | `04-dependencies.md` (Export section)                                                             |
 | **"Marimo notebooks with uv"**                                   | `15-integrations.md` (Marimo section)                                                             |
-| **"Hugging Face model index"**                                   | `11-authentication.md`, `15-integrations.md`                                                      |
+| **"Hugging Face model index"**                                   | `11-authentication.md`                                                      |
 | **"Build isolation issues (flash-attn, deepspeed)"**             | `03-project-config.md`, `17-troubleshooting.md`                                                   |
 
 ---

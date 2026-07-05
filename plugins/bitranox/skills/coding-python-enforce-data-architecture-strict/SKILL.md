@@ -20,20 +20,20 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 1. **Pydantic at Boundaries**: All external data (API requests, file reads, env vars, CLI args) must be parsed into Pydantic models immediately upon entry
 2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`
 3. **No Internal Dicts**: Inside the application, never use raw dicts for structured data - always typed models
-4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. Where possible, use `IntEnum` instead of `Enum` for better performance and avoid unnecessary conversions
+4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire.
 5. **Minimize Conversions**: Ideal flow is ONE parse at input, ONE dump at output - nothing in between
 6. **String-to-Enum at Edges Only**: Convert strings to Enums only at system boundaries (input parsing). All functions and methods must accept and use the Enum type directly - never convert str->Enum inside business logic. This mirrors the class/Pydantic rule: parse once at entry, use typed objects throughout
 7. **No Compatibility Shims**: Remove all compatibility shims - code must use dataclass fields and enums directly. No wrapper methods, aliases, or backward-compatibility layers that accept old formats
 
 ### What to Use When
 
-| Scenario                                   | Use                             |
-|--------------------------------------------|---------------------------------|
-| External input/output                      | Pydantic `BaseModel`            |
-| Internal business logic (no serialization) | `@dataclass` or Pydantic        |
-| Need validation                            | Pydantic `BaseModel`            |
-| Fixed string values                        | `IntEnum` (preferred) or `Enum` |
-| Simple value objects                       | `NamedTuple` or `@dataclass`    |
+| Scenario                                   | Use                          |
+|--------------------------------------------|------------------------------|
+| External input/output                      | Pydantic `BaseModel`         |
+| Internal business logic (no serialization) | `@dataclass` or Pydantic     |
+| Need validation                            | Pydantic `BaseModel`         |
+| Fixed string values (string on the wire)   | `StrEnum` / `str, Enum`      |
+| Simple value objects                       | `NamedTuple` or `@dataclass` |
 
 ### Anti-Patterns to Eliminate
 
@@ -109,7 +109,7 @@ output = OutputModel(**asdict(internal))
      * Unnecessary dataclass wrappers when Pydantic can be used directly
      * Any conversion that doesn't add value - minimize total conversions
      * **Count total conversions** in the data flow - goal is MINIMUM possible (ideally: 1 at input, 1 at output)
-     * **Enum/IntEnum usage**: Use `IntEnum` instead of `Enum` where possible for better performance. Avoid unnecessary `.value` access or conversions - use the enum member directly in comparisons and assignments. Remove compatibility shims for Enum/IntEnum (no wrapper methods, aliases, or backward-compatibility layers)
+     * **Enum usage**: Use `StrEnum`/`str, Enum` for string-valued fields and `IntEnum` only for integer-valued ones. Avoid unnecessary `.value` access or conversions - use the enum member directly in comparisons and assignments. Remove compatibility shims for enums (no wrapper methods, aliases, or backward-compatibility layers)
 
 3. **Refactor the Code** following these rules:
    - Import external data immediately into Pydantic models with validation
@@ -222,8 +222,10 @@ STEP C - RUN TESTS:
 
 STEP D - FINAL VERIFICATION:
   - Read `.data_arch_violations.json` and confirm total_violations == 0
-  - Run final grep for remaining violations: `dict[`, `-> dict`, `: dict`, `== "`, `!= "`
-  - If ANY violations found: GOTO STEP A
+  - Grep only to surface candidates: `-> dict`, `: dict` in signatures. A hit is a lead, not
+    proof - a bare `== "..."` matches legitimate string comparisons and the permitted small
+    local dicts. Judge each hit against the Exceptions rule; do NOT auto-loop on raw match count.
+  - If a real violation is found: GOTO STEP A
   - If clean:
     * Update state file: all files status = "clean"
     * Delete `.data_arch_violations.json`
@@ -289,16 +291,16 @@ def process_user(data: dict) -> dict:
 
 **After (compliant):**
 ```python
-from enum import IntEnum
+from enum import StrEnum
 from pydantic import BaseModel
 
-class UserStatus(IntEnum):
-    ACTIVE = 1
-    INACTIVE = 0
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
 
-class UserRole(IntEnum):
-    MEMBER = 1
-    ADMIN = 2
+class UserRole(StrEnum):
+    MEMBER = "member"
+    ADMIN = "admin"
 
 class UserInput(BaseModel):
     name: str

@@ -237,7 +237,7 @@ readonly _DOMAIN_SH_LOADED=1
 
 | Type            | Purpose                                                                      |
 |-----------------|------------------------------------------------------------------------------|
-| **Unit**        | Domain functions with direct calls (no mocking needed  -  they're pure)        |
+| **Unit**        | Domain functions with direct calls (no mocking needed  -  they're pure)      |
 | **Stub**        | Use cases with stub adapter functions (bash functions that return test data) |
 | **Integration** | Real adapters against real files/services                                    |
 | **E2E**         | Full script execution with known inputs/outputs                              |
@@ -314,7 +314,7 @@ test_load_settings() {
 | Random exit codes                                | Use structured exit code table; map in composition root                   |
 | `trap` cleanup in random functions               | Single `trap` in composition root; adapters provide cleanup functions     |
 | Sourcing everything at top level                 | Source only what each layer needs; domain sources nothing                 |
-| `eval` for dynamic dispatch                      | Use `"$fn_name" args` (indirect call)  -  safe, no eval needed              |
+| `eval` for dynamic dispatch                      | Use `"$fn_name" args` (indirect call)  -  safe, no eval needed            |
 
 ## Reference Files
 
@@ -324,6 +324,10 @@ test_load_settings() {
 | `canonical-example.md` | Complete Service Health Check example (domain through composition)       |
 | `review-checklists.md` | All review checklists for REVIEW mode output                             |
 
+Use the Read tool to load the reference file for the mode you are in (GENERATE ->
+`canonical-example.md`, REVIEW -> `review-checklists.md`, SCRIPT -> `script-mode.md`); do not
+answer from the tables above alone.
+
 ## Glossary
 
 | Term                   | Definition                                                                                  |
@@ -332,6 +336,6 @@ test_load_settings() {
 | **Application Layer**  | Use case functions orchestrating domain + port calls (no direct I/O)                        |
 | **Composition Root**   | `main()` function: parses args, wires adapters to use cases, sets traps                     |
 | **Domain**             | Pure bash functions: validation, computation, transformation (no I/O, no external commands) |
-| **Nameref**            | `declare -n ref="$1"`  -  Bash 4.3+ mechanism for passing structured data without globals     |
+| **Nameref**            | `declare -n ref="$1"`  -  Bash 4.3+ mechanism for passing structured data without globals   |
 | **Port**               | Documented function signature contract that adapters must implement                         |
 | **Function Reference** | Passing a function name as a string argument for indirect call: `"$fn_name" args`           |

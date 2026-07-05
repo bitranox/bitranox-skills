@@ -1,6 +1,6 @@
 ---
 name: coding-rust
-description: Use when writing or reviewing Rust - error handling, secret/credential handling, dependency choices, and type design. Covers not using std::io::Error for non-IO conditions (add a thiserror variant instead), constant-time comparison for secrets, --password-file over inline --password, choosing minimal purpose-specific crates over heavyweight ones (and feature-gating optional heavy deps), and making invalid states unrepresentable. Distilled from real Rust review learnings.
+description: Use when writing or reviewing Rust and deciding how to handle errors, secrets or credentials, dependency/crate choices, or type design - or when a review flags a synthetic std::io::Error used for a non-IO condition, a non-constant-time secret/token comparison, an inline --password, a heavyweight crate pulled in for one narrow job, or a struct whose invalid field combinations are constructible.
 ---
 
 # coding-rust
@@ -58,7 +58,7 @@ reviewing Rust; each rule states the failure it prevents.
   struct S { pair: Option<Pair> }                    // both or neither, enforced by the type
   ```
 
-## Build / review discipline (Rust specifics; general rules live in the process/compuse skills)
+## Build / review discipline (Rust specifics; general git/verify rules live in bitranox:compuse-git and bitranox:process-review-verification-before-completion)
 
 - Run `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings` before committing; fix every
   warning, not just what CI would block.
