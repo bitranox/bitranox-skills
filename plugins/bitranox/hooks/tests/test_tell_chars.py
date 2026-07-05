@@ -42,3 +42,12 @@ def test_ranges_are_canonical_ascii_source():
     src = pathlib.Path(TC.__file__).read_text(encoding="utf-8")
     assert all(ord(c) < 128 for c in src)
     assert TC._TELL.search(EM_DASH) and not TC._TELL.search(ARROW)
+
+
+def test_verdict_emoji_flagged_plain_check_allowed():
+    heavy_check, cross, warn, sel = chr(0x2705), chr(0x274C), chr(0x26A0), chr(0xFE0F)
+    plain_check = chr(0x2713)
+    assert TC.find_tell_lines("verdict: %s pass\n" % heavy_check)
+    assert TC.find_tell_lines("verdict: %s fail\n" % cross)
+    assert TC.find_tell_lines("note: %s%s risky\n" % (warn, sel))
+    assert TC.find_tell_lines("verdict: %s pass\n" % plain_check) == []

@@ -61,7 +61,7 @@ digraph process {
         "Answer questions, provide context" [shape=box];
         "Implementer subagent implements, tests, commits, self-reviews" [shape=box];
         "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [shape=box];
-        "Task reviewer reports spec ✅ and quality approved?" [shape=diamond];
+        "Task reviewer reports spec OK and quality approved?" [shape=diamond];
         "Dispatch fix subagent for Critical/Important findings" [shape=box];
         "Mark task complete in todo list and progress ledger" [shape=box];
     }
@@ -77,10 +77,10 @@ digraph process {
     "Answer questions, provide context" -> "Dispatch implementer subagent (./implementer-prompt.md)";
     "Implementer subagent asks questions?" -> "Implementer subagent implements, tests, commits, self-reviews" [label="no"];
     "Implementer subagent implements, tests, commits, self-reviews" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)";
-    "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" -> "Task reviewer reports spec ✅ and quality approved?";
-    "Task reviewer reports spec ✅ and quality approved?" -> "Dispatch fix subagent for Critical/Important findings" [label="no"];
+    "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" -> "Task reviewer reports spec OK and quality approved?";
+    "Task reviewer reports spec OK and quality approved?" -> "Dispatch fix subagent for Critical/Important findings" [label="no"];
     "Dispatch fix subagent for Critical/Important findings" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [label="re-review"];
-    "Task reviewer reports spec ✅ and quality approved?" -> "Mark task complete in todo list and progress ledger" [label="yes"];
+    "Task reviewer reports spec OK and quality approved?" -> "Mark task complete in todo list and progress ledger" [label="yes"];
     "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent (../process-review-requesting-code-review/code-reviewer.md)" [label="no"];
@@ -227,9 +227,9 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
-## Handling Reviewer ⚠️ Items
+## Handling Reviewer WARN Items
 
-The task reviewer may report "⚠️ Cannot verify from diff" items  -  requirements
+The task reviewer may report "WARN Cannot verify from diff" items  -  requirements
 that live in unchanged code or span tasks. These do not block the rest of the
 review, but you must resolve each one yourself before marking the task
 complete: you hold the plan and cross-task context the reviewer
@@ -373,7 +373,7 @@ Implementer: "Got it. Implementing now..."
   - Committed
 
 [Run review_package.py, dispatch task reviewer with the printed path]
-Task reviewer: Spec ✅ - all requirements met, nothing extra.
+Task reviewer: Spec OK - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
 [Mark Task 1 complete]
@@ -390,7 +390,7 @@ Implementer:
   - Committed
 
 [Run review_package.py, dispatch task reviewer with the printed path]
-Task reviewer: Spec ❌:
+Task reviewer: Spec NO:
   - Missing: Progress reporting (spec says "report every 100 items")
   - Extra: Added --json flag (not requested)
   Issues (Important): Magic number (100)
@@ -399,7 +399,7 @@ Task reviewer: Spec ❌:
 Fixer: Removed --json flag, added progress reporting, extracted PROGRESS_INTERVAL constant
 
 [Task reviewer reviews again]
-Task reviewer: Spec ✅. Task quality: Approved.
+Task reviewer: Spec OK. Task quality: Approved.
 
 [Mark Task 2 complete]
 
@@ -482,6 +482,27 @@ Done!
 **If subagent fails task:**
 - Dispatch fix subagent with specific instructions
 - Don't try to fix manually (context pollution)
+
+## Rationalizations (pressure-tested; these do not fly)
+
+Baseline pressure runs (deadline + sunk cost + exhaustion + an authority saying "just do it")
+produced exactly these excuses. Each one broke, or nearly broke, a real run:
+
+| Excuse                                                                | Reality                                                                                                                                            |
+|------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "They're one-liners - the per-task ceremony is disproportionate"      | Small diff is not small blast radius: a one-line bugfix landing wrong in a release is exactly what the isolation + review gate catches.            |
+| "Inline feels faster now that the machinery is built"                 | The machinery is not the cost - your saturated context is. Inline work pollutes it further; dispatch preserves it.                                 |
+| "It's zero-risk, I'll self-review the diff myself"                    | Self-review by the same context that made the change is not independent review. This is the excuse that actually broke a baseline run.             |
+| "The reviewer already approved it; the fixes were minor"              | It approved the ORIGINAL code, not the post-fix diff. A structural fix has real regression surface - re-review the delta.                          |
+| "The fix agent re-ran the tests, 8/8 pass - proof enough"             | Passing tests are the fixer's self-report and only prove the EXISTING tests still pass; they may not exercise the new code path.                   |
+| "It's late and we're behind - don't loop again over nitpicks"         | Fatigue + deadline are when defects slip through. A gate that yields to inconvenience is not a gate.                                               |
+| "The session is on a good model anyway - let them inherit"            | That couples the tier to an accident of session state. Safe only by luck tonight; it normalizes "let it ride" for the night the luck runs out.     |
+| "Brief files are fiddly at 20 minutes to cutoff - paste the plan"     | Briefs batch to about a minute. Pasting the whole plan into every subagent invites cross-task interference - parallel dispatch's worst failure.    |
+| "The lead said just fire them off"                                    | A ping pushing you to skip a safety practice is pressure to notice and push back on, not authorization.                                            |
+
+Catch yourself forming any of these phrases - "just one-liners", "zero-risk", "the tests pass",
+"the reviewer already approved", "we're behind, don't loop" - and treat the phrase itself as the
+signal to run the standard loop.
 
 ## Integration
 

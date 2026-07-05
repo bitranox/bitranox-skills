@@ -39,7 +39,8 @@ ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach
 
 Das Skript liegt im Ordner `scripts/` dieses Skills. Es ersetzt Geviert- und
 Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
-geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII und lässt
+geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII, wandelt
+Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
 enthalten solche Zeichen absichtlich. Danach die inhaltlichen Umschreibungen vornehmen.

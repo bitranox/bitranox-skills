@@ -23,8 +23,8 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **Example:**
 ```markdown
-✅ Write code before test? Delete it. Start over. No exceptions.
-❌ Consider writing tests first when feasible.
+OK Write code before test? Delete it. Start over. No exceptions.
+NO Consider writing tests first when feasible.
 ```
 
 ### 2. Commitment
@@ -42,8 +42,8 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **Example:**
 ```markdown
-✅ When you find a skill, you MUST announce: "I'm using [Skill Name]"
-❌ Consider letting your partner know which skill you're using.
+OK When you find a skill, you MUST announce: "I'm using [Skill Name]"
+NO Consider letting your partner know which skill you're using.
 ```
 
 ### 3. Scarcity
@@ -61,8 +61,8 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **Example:**
 ```markdown
-✅ After completing a task, IMMEDIATELY request code review before proceeding.
-❌ You can review code when convenient.
+OK After completing a task, IMMEDIATELY request code review before proceeding.
+NO You can review code when convenient.
 ```
 
 ### 4. Social Proof
@@ -80,8 +80,8 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **Example:**
 ```markdown
-✅ Checklists without TaskCreate tracking = steps get skipped. Every time.
-❌ Some people find TaskCreate helpful for checklists.
+OK Checklists without TaskCreate tracking = steps get skipped. Every time.
+NO Some people find TaskCreate helpful for checklists.
 ```
 
 ### 5. Unity
@@ -98,8 +98,8 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **Example:**
 ```markdown
-✅ We're colleagues working together. I need your honest technical judgment.
-❌ You should probably tell me if I'm wrong.
+OK We're colleagues working together. I need your honest technical judgment.
+NO You should probably tell me if I'm wrong.
 ```
 
 ### 6. Reciprocity

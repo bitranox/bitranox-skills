@@ -43,6 +43,7 @@ inverse of the tell-sweep check, so the text passes that gate afterward:
 The script is bundled in this skill's `scripts/` directory (run it with that path, or the
 skill's absolute path when installed as a plugin). It replaces em and en dashes, curly
 quotes and guillemets, ellipsis and dot leaders, non-breaking and zero-width spaces, BOM,
+heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
 mark, bullet) untouched. Do not run it on this skill file itself - the examples below
 contain those characters on purpose. After the pass, do the judgment-based rewrites.

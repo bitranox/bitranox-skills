@@ -255,3 +255,11 @@ def test_main_stdin_check_clean_returns_zero(monkeypatch):
 
     monkeypatch.setattr("sys.stdin", io.StringIO("clean"))
     assert mod._main(["prog", "--check"]) == 0
+
+
+def test_verdict_emoji_normalized_to_ascii_markers():
+    heavy_check, cross, warn, sel = chr(0x2705), chr(0x274C), chr(0x26A0), chr(0xFE0F)
+    src = "%s done %s broken %s%s risky" % (heavy_check, cross, warn, sel)
+    assert mod.normalize(src) == "OK done NO broken WARN risky"
+    plain_check = chr(0x2713)
+    assert mod.normalize("keep %s and ->" % plain_check) == "keep %s and ->" % plain_check

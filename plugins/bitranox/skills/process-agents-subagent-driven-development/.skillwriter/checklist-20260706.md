@@ -35,3 +35,11 @@ below opus-class, DOWN for cost on a fable session facing routine work - user-di
 - [x] Enforcement: subagent-model-gate.py (renamed from warn-unpinned-subagent-model.py per telling-naming) + skill_receipt end command; 14 gate/receipt unit tests green incl. deny JSON shape, disarm, fork exemption
 - [x] Ground truth verified via claude-code-guide: no per-dispatch effort field exists; PreToolUse deny works for Task
 - [x] Security scan: hook emits deny JSON only, no secrets/paths
+
+# skill-writer checklist - process-agents-subagent-driven-development (2026-07-06, emoji policy + rationalization tables)
+
+- [x] Change: rationalization table added from a REAL RED baseline (3 pressure scenarios; one subject broke via self-review substitution + zero-risk inline edits - those quotes became rows); red-flag phrases folded in; GREEN re-run of the broken scenario passed quoting the table. Emoji verdict markers swept to ASCII OK/NO/WARN (SKILL.md + task-reviewer-prompt.md).
+- [x] Receipt held (skill_receipt.py, this session)
+- [x] RED/GREEN evidence per the Iron Law where behavior changed (see Change line)
+- [x] Suites green: hooks 532, humanize 54+54, SDD 16
+- [x] Security scan: prose/table/marker edits, no secrets/paths/PII
