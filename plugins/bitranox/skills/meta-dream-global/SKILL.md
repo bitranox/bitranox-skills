@@ -1,15 +1,17 @@
 ---
 name: meta-dream-global
-description: The CROSS-PROJECT dream - consolidate memory ACROSS all your projects, the expensive pass that reads every project store. Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", or occasionally after several per-project dreams. Scans all project memory stores for recurring / broadly-useful knowledge and factors it up to the global curated layer at the topmost-CLAUDE.md ancestor (the level's CLAUDE.local.md pointer block + note bodies in the anchor's .claude-memory/), or the lowest common ancestor, pulls sibling-tree knowledge into projects (inbound gather), and cross-pollinates outward - all via lift-or-copy, never a cross-tree reference. For one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
+description: Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", occasionally after several per-project dreams, or when two projects or knowledge trees have learned related things that should be shared. This is the expensive cross-project/cross-tree pass reading every store; for one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-global
 
-The cross-project dream. `bitranox:meta-dream-project` tidies ONE project's store and is the frequent,
-cheap pass; **meta-dream-global is the occasional, EXPENSIVE pass that reads across ALL project stores**
-to move knowledge between trees that the native cascade cannot reach. Native cascade only flows down one
-ancestor chain + the global layer, so knowledge filed in a sibling tree is invisible elsewhere; this
-skill bridges that. It builds on `bitranox:meta-self-improve` (altitude logic, the upstream-PR loop,
+The cross-project dream. `bitranox:meta-dream-project` tidies ONE project's store, stays inside ONE
+knowledge tree, and is the frequent, cheap pass; **meta-dream-global is the occasional, EXPENSIVE
+pass that reads across ALL project stores - and it is the ONLY dream whose territory spans
+INDEPENDENT KNOWLEDGE TREES** (a machine can carry several tree tops; the project dream never
+crosses them). Cascade only flows down one ancestor chain, so knowledge filed in a sibling project
+or another tree is invisible elsewhere; this skill bridges that. Tree discovery runs over the
+configured `discovery_roots` (`tree-top` / `ensure-all-trees` locate the tops). It builds on `bitranox:meta-self-improve` (altitude logic, the upstream-PR loop,
 `reconcile_memory_index.py`) and delegates inbound gather to `bitranox:meta-collect-knowledge`; follow
 those for the primitives. Do not duplicate per-project consolidation here - run meta-dream-project for
 that first if a project's own store is messy.
@@ -22,8 +24,8 @@ cross-tree reference** (a sideways pointer dangles when the other tree is delete
 Same machine-local config as the project dream (`self_improve_signals.load_config()`; legacy
 `.bitranox-dream-off` / `.bitranox-dream-auto` sentinels still apply until it exists):
 
-- **`propose`** (default): apply the safe private-memory moves (the global curated layer at the
-  topmost-`CLAUDE.md` ancestor and private project memory), but ASK before editing a version-controlled
+- **`propose`** (default): apply the safe private-memory moves (each tree's TOP curated store and private
+  project memory), but ASK before editing a version-controlled
   `CLAUDE.md` and route any skill change to a self-PR.
 - **`auto`**: apply `CLAUDE.md` edits and ship skill changes without per-change prompts.
 - **`off`**: skip this skill entirely (no cross-project consolidation, no nudges).
@@ -34,7 +36,7 @@ Same machine-local config as the project dream (`self_improve_signals.load_confi
   per-session nudge for this (it is heavy); run it deliberately - a good cadence is after several
   per-project dreams, or when you know two projects have learned related things.
 - **Honor the `privacy` knob.** With `walled`, gather and promote ONLY within one privacy domain
-  (e.g. do not lift a note from a private/client subtree into the loads-everywhere global layer); the
+  (e.g. do not lift a note from a private/client subtree into a tree top that loads everywhere under it); the
   default (open) does a light secret/PII scrub and otherwise propagates concrete operational knowledge
   freely.
 
@@ -42,8 +44,7 @@ Same machine-local config as the project dream (`self_improve_signals.load_confi
 
 Create one todo per step.
 
-1. **Back up first.** Snapshot every store this run may touch - the global curated layer at the
-   topmost-`CLAUDE.md` ancestor and, for any level you will write, the anchor's central
+1. **Back up first.** Snapshot every store this run may touch - each affected tree's TOP store and, for any level you will write, the anchor's central
    `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
    timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
    never re-discovered as live memory) before any edit. Curated writes go through the engine, not a
@@ -68,8 +69,8 @@ Create one todo per step.
      **`opus`** tier - and if the session is not on `opus`, offer switch-model-or-continue per "The
      session model is fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent
      cannot self-switch its model). (Tiers: "Concrete tiers" in the same skill.)
-4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to the global layer loads
-   into EVERY session, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
+4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to a tree's TOP loads into every
+   session UNDER THAT TREE, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
    generalization promotes once seen in **>= 2 distinct projects** (vs the same-project >= 2-dreams dwell
    meta-dream-project uses); a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
    candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
@@ -87,7 +88,7 @@ Create one todo per step.
    `note_promotion_candidate` in `self_improve_signals.py`; counters live OUT of the dreamed store so a
    converged re-run is a no-op.
 5. **Outbound cross-pollination.** When a learning is useful BEYOND its project, do not write into other
-   projects - **promote it to the lowest common ancestor** (often the global layer) and let the native
+   projects - **promote it to the lowest common ancestor WITHIN ITS TREE** (often the tree's top) and let the native
    downward cascade deliver it; a project in a DIFFERENT subtree receives it via ITS inbound gather. A
    direct self-contained copy into one specific other project is the rare exception (marked so a later
    dream does not re-promote it; scrubbed; never a cross-tree ref).
@@ -116,8 +117,7 @@ re-moving the same item, stop and treat it as a bug (the circle-breaker), do not
 
 ## Boundaries
 
-- **The global curated layer at the topmost-`CLAUDE.md` ancestor + private project memory:** back up,
-  then apply.
+- **Tree-top curated stores + private project memory:** back up, then apply.
 - **CLAUDE.md (version-controlled):** propose-first in `propose`, apply in `auto`, only through the
   sanctioned bounded paths (CLAUDE.md policy in `bitranox:meta-self-improve`).
 - **Skills / hooks (shared, public):** never silently edit; route through the upstream-PR loop.
@@ -129,7 +129,7 @@ re-moving the same item, stop and treat it as a bug (the circle-breaker), do not
 - Running this every time instead of occasionally - it is the expensive pass; the routine tidy is
   `bitranox:meta-dream-project`.
 - A cross-tree or downward reference instead of lift-or-copy.
-- Promoting a model-inferred rule to global on first sight (it needs >= 2-project corroboration).
+- Promoting a model-inferred rule to a tree top on first sight (it needs >= 2-project corroboration).
 - Over-broadening: watering a concrete-but-universal rule into a vague principle, or globalizing a
   narrowly-applicable one (it then loads in every session for nothing).
-- Ignoring the `privacy` knob and lifting a domain-private note into the loads-everywhere global layer.
+- Ignoring the `privacy` knob and lifting a domain-private note into a tree top that loads everywhere under it.

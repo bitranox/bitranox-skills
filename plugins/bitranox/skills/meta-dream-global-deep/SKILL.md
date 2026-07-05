@@ -1,6 +1,6 @@
 ---
 name: meta-dream-global-deep
-description: The DEEP cross-project dream - always runs the full semantic fan-out scan across ALL project memory stores AND their CLAUDE.md, with no convergence shortcut and no asking. Use on "deep global dream", "/dream-global-deep", "deep cross-project scan", or when you want the exhaustive cross-project read regardless of whether anything obviously changed. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-global.
+description: Use on "deep global dream", "/dream-global-deep", "deep cross-project scan", or when you want the exhaustive cross-project/cross-tree read regardless of whether anything obviously changed - the full semantic fan-out over ALL project memory stores AND their CLAUDE.md files, no convergence shortcut, no asking. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-global.
 ---
 
 # meta-dream-global-deep
@@ -18,7 +18,7 @@ the scan in step 3 is run; do not duplicate the rest.
 
 ## What changes vs meta-dream-global
 
-1. **Back up first** (per-run snapshot of the global layer + any store you will write) - unchanged.
+1. **Back up first** (per-run snapshot of each affected tree's TOP store + any store you will write) - unchanged.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`sonnet`**
    subagent per project store, OR (for many stores) one per thematic batch, in parallel. Each reads its
    stores and returns ONLY cross-project-generalizable candidates (general dev/tooling/test/security/
@@ -27,8 +27,8 @@ the scan in step 3 is run; do not duplicate the rest.
    - and if the session is not on `opus`, offer switch-model-or-continue per "The session model is
    fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch
    its model). (Tiers: "Concrete tiers" in the same skill.)
-3. **Promotion gate + CLAUDE.md reconciliation.** Before promoting any candidate to the global layer,
-   dedup it against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree
+3. **Promotion gate + CLAUDE.md reconciliation.** Before promoting any candidate to a tree's top,
+   dedup it against that tree's existing top store, the shipped skills, AND every `CLAUDE.md` in the tree
    (project roots + ancestors + the workspace), not just the memory stores. During the conversion phase
    many rules still live in `CLAUDE.md`; promoting one already there would DUPLICATE it. Classify:
    already-global/skill -> skip; already in a `CLAUDE.md` -> ROUTE through the reconciliation model
@@ -90,7 +90,7 @@ the scan in step 3 is run; do not duplicate the rest.
 
 ## Boundaries (unchanged from meta-dream-global)
 
-- Global curated layer at the topmost-`CLAUDE.md` ancestor + private project memory: back up, then apply.
+- Tree-top curated stores + private project memory: back up, then apply.
 - **`CLAUDE.md` (version-controlled): never edit without user confirmation** - propose-first in `propose`,
   apply in `auto`, only through the sanctioned bounded paths. A reconciliation delete/lift or an org-chart
   move is always PROPOSED (with consequences), never an unconfirmed edit; the dream never relocates a
