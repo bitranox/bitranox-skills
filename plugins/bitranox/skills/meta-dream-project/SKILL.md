@@ -172,6 +172,33 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 - Pinned entries: exempt from archive/move/reword without explicit user approval.
 - Circle-breaker: consolidated twice and it keeps coming back -> escalate to a guard or the user.
 
+## Deliverables (a completed dream has ALL of these)
+
+- [ ] heal success line ("healed N file(s) across M level(s)").
+- [ ] Scope descriptors fresh: every chain level carries the template keys (or was verified fresh).
+- [ ] Capture ran BEFORE consolidation (or a verified "nothing durable" statement).
+- [ ] Backup taken + the (level, slug, title, pin) manifest recorded pre-dream.
+- [ ] Placement report: applied moves (with direction), kept UNSUREs, pinned entries untouched.
+- [ ] Voice/firing residue swept (or "0 offenders" verified via the lint).
+- [ ] Post-dream manifest diff clean (only `level` changed, plus explicitly-decided merges/prunes).
+- [ ] `reconcile ... --check` printed `TOTAL problems: 0`.
+- [ ] Each behavioral pass reported against ITS OWN trigger (ran / no-op with the verified reason).
+- [ ] `dream_state.py done` ran; report + `/clear` nudge delivered.
+
+An ended run missing any box is not done - finish it or say plainly what was skipped and why.
+
+## Rationalizations (pressure-tested; these do not fly)
+
+| Excuse                                                         | Reality                                                                                                                          |
+|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.          |
+| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point. |
+| "auto mode + 'stop asking' covers the pinned entry"            | The pinned exemption requires approval of THAT specific change; auto only silences CLAUDE.md/skill prompts.                      |
+| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                            |
+| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                        |
+| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.             |
+| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                |
+
 ## Common mistakes
 
 - Growing the store (a dream must net-shrink noise).
