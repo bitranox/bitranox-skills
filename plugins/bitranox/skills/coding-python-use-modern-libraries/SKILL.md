@@ -1,6 +1,6 @@
 ---
 name: coding-python-use-modern-libraries
-description: Use when choosing a Python library for a task, writing new Python code that needs a dependency, or reviewing imports for dated defaults. Gives modern, well-maintained third-party picks (HTTP, JSON, XML, TOML, YAML, data models, enums, dates, compression, database, testing, type-checking) and what to avoid. For building/editing JSON/XML/YAML files specifically, see bitranox:files-edit-json, bitranox:files-edit-xml, bitranox:files-edit-yml. Public, mainstream defaults; adjust per project.
+description: Use when choosing a Python library for a task (HTTP, JSON, XML, TOML, YAML, data models, enums, dates, compression, database, testing, type checking, CLI parsing, retry/backoff, text encoding), writing new Python code that needs a dependency, or reviewing imports for dated defaults. For building/editing JSON/XML/YAML files specifically, see bitranox:files-edit-json, bitranox:files-edit-xml, bitranox:files-edit-yml. Public, mainstream defaults; adjust per project.
 ---
 
 # Modern Python library choices

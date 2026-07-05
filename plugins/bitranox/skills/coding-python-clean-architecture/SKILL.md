@@ -677,13 +677,15 @@ Multi-context: add per-context layering + independence contracts. See `review-ch
 
 ## Reference Files
 
-| File                   | Content                                                             |
-|------------------------|---------------------------------------------------------------------|
-| `port-contracts.md`    | All standard Protocol definitions with full code                    |
-| `canonical-example.md` | Complete Money Transfer example (domain through composition)        |
-| `library-mode.md`      | Library/SDK development: public API, versioning, plugins, packaging |
-| `script-mode.md`       | Single-file scripts: PEP 723, exit codes, logical layout            |
-| `review-checklists.md` | All review checklists for REVIEW mode output                        |
+| File                   | Content                                                                                                           |
+|------------------------|-------------------------------------------------------------------------------------------------------------------|
+| `port-contracts.md`    | Standard Protocol definitions with full code: UnitOfWork, Outbox, IdempotencyStore, IdProvider, Clock, repository |
+| `canonical-example.md` | Complete Money Transfer example (domain through composition)                                                      |
+| `library-mode.md`      | Library/SDK development: public API, versioning, plugins, packaging                                               |
+| `script-mode.md`       | Single-file scripts: PEP 723, exit codes, logical layout                                                          |
+| `review-checklists.md` | REVIEW mode checklists: architecture, reliability, boundaries, observability, tests, error handling, imports      |
+
+Use the Read tool to load the relevant reference file for full detail.
 
 ## Glossary
 

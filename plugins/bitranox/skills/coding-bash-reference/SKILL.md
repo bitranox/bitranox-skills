@@ -31,7 +31,7 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 
 - Writing POSIX-portable `sh` scripts (this covers Bash-specific features beyond POSIX)
 - Zsh, Fish, or other shell syntax
-- Structuring multi-file Bash projects (use `bash_clean_architecture` instead)
+- Structuring multi-file Bash projects (use `bitranox:coding-bash-clean-architecture` instead)
 
 ## Before you reach for Bash (and before you ship)
 
@@ -86,7 +86,7 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 
 ### Parameter Expansion
 
-> Full details: `functions-parameters-expansions.md` (section 3.4)
+> Full details: `functions-parameters-expansions.md` (section 3.5.3)
 
 | Syntax                 | Result                           |
 |------------------------|----------------------------------|
@@ -336,7 +336,7 @@ trap - SIGNAL                # Reset to default
 
 All C-style operators: `+`, `-`, `*`, `/`, `%`, `**` (exponent), `<<`, `>>`, `&`, `|`, `^`, `~`, `!`, `&&`, `||`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `<<=`, `>>=`, `&=`, `|=`, `^=`, `++`, `--`, `expr?expr:expr` (ternary), `expr,expr` (comma)
 
-Bases: `0x` (hex), `0` (octal), `0b` (binary), `base#number` (arbitrary base 2-64)
+Bases: `0x` (hex), `0` (octal), `base#number` (arbitrary base 2-64, e.g. `2#101` for binary). Bash has no `0b` binary prefix.
 
 ### Prompt Escape Sequences
 
@@ -553,12 +553,15 @@ outer  # prints: 42 (inner sees outer's local!)
 # from a scope with a local variable sees that variable.
 ```
 
-### Here-strings always append a trailing newline
+### Here-strings (`<<<`) add a trailing newline to the stream
 
 ```bash
+cat <<< "hello" | od -An -tx1   # 68 65 6c 6c 6f 0a  <- <<< appended a newline
+wc -c <<< "hello"               # 6 bytes, not 5
+# read strips the delimiter, so $var does NOT keep that newline:
 read -r var <<< "hello"
-printf '%s' "$var" | xxd  # contains "hello\n"  -  trailing newline added
-# Use printf instead when exact bytes matter:
+printf '%s' "$var" | od -An -tx1  # 68 65 6c 6c 6f  (no trailing newline)
+# For exact bytes with no newline, feed read from printf:
 read -r var < <(printf '%s' "hello")
 ```
 

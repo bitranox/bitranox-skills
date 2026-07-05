@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.45.2] - 2026-07-06
+
+### Fixed
+- Skill-roster review, wave 2 (12 coding-* skills; opus-reviewed, fable-verified, discovery
+  5/5): 9 changed, 3 compliant as-is (input-sanitization, resilience, textual).
+  - Descriptions normalized to trigger-first single-line plain scalars: rpyc, uv,
+    performance-review, rust (triggers-only rewrite), use-modern-libraries (keyword fold).
+  - Factual corrections: `coding-bash-reference` (bash has no `0b` literal; here-string
+    newline example rewritten - `read` strips the delimiter; broken cross-ref repaired);
+    `coding-python-enforce-data-architecture-strict` (StrEnum for string-on-the-wire enums -
+    the old IntEnum doctrine broke its own boundary-parsing example; the STEP D grep loop
+    could never terminate).
+  - Pipeline completeness: `coding-python-performance-review` now carries its unbounded-memory
+    findings through merge, severity, and presentation.
+  - Hub hygiene: Read-tool instructions and routing-row coverage/accuracy fixes in
+    bash-clean-architecture, python-clean-architecture, rpyc (about.md row), uv (wrong HF row).
+
 ## [5.45.1] - 2026-07-06
 
 ### Fixed
