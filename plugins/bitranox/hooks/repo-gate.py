@@ -405,6 +405,103 @@ def check_pytest(root, paths):
     return []
 
 
+# ---- skill review artifact + CSO description lint (skill-usage enforcement) ---------------------
+
+_SKILL_MD_RX = re.compile(r"^plugins/bitranox/skills/([^/]+)/SKILL\.md$")
+_CSO_STOP = {
+    "use", "when", "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
+    "are", "was", "has", "have", "not", "but", "its", "any", "all", "one", "how", "what", "why",
+    "where", "which", "should", "must", "can", "will", "also", "such", "them", "then", "than",
+    "good", "need", "want", "like", "just",
+}
+
+
+def _changed_vs_origin(root):
+    """Worktree+index+untracked paths changed vs origin/master (the maintainer pre-commit view)."""
+    rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
+    if rc != 0:
+        return None
+    rc, changed, _ = _git(root, "diff", "--name-only", "origin/master")
+    rc2, untracked, _ = _git(root, "ls-files", "--others", "--exclude-standard")
+    return [p for p in (changed.splitlines() + untracked.splitlines()) if p.strip()]
+
+
+def skill_review_failures(root, changed):
+    """A changed SKILL.md needs a co-changed, fully-checked .skillwriter/checklist-*.md - the
+    skill-writer procedure's committed receipt. Prose discipline gets cherry-picked; a required
+    artifact does not."""
+    fails = []
+    names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
+    for name in names:
+        prefix = "plugins/bitranox/skills/%s/.skillwriter/" % name
+        arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
+        if not arts:
+            fails.append("skills/%s/SKILL.md changed without an updated .skillwriter/checklist-*.md "
+                         "in the same change - run bitranox:meta-skill-writer and commit its "
+                         "checklist artifact." % name)
+            continue
+        for a in arts:
+            try:
+                text = (root / a).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "[ ]" in text:
+                fails.append("%s has unchecked boxes - finish the skill-writer checklist before "
+                             "committing." % a)
+    return fails
+
+
+def check_skill_review(root):
+    changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    return skill_review_failures(root, changed)
+
+
+def _frontmatter_description(path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    fm = text.split("---", 2)[1]
+    m = re.search(r"^description:\s*(.+(?:\n(?![a-zA-Z_-]+:).*)*)", fm, re.M)
+    return " ".join(m.group(1).split()) if m else None
+
+
+def cso_failures(root, changed):
+    """A changed skill description must be trigger-first ('Use when ...') and yield distinctive
+    keywords - that is what makes it router-derivable and findable (the CSO rules)."""
+    fails = []
+    for p in changed:
+        m = _SKILL_MD_RX.match(p)
+        if not m:
+            continue
+        desc = _frontmatter_description(root / p)
+        if desc is None:
+            continue
+        if not desc.lower().startswith("use "):
+            fails.append("skills/%s: description must be trigger-first ('Use when <situations>...'), "
+                         "never a summary of what the skill does (CSO rule)." % m.group(1))
+            continue
+        kws = {t for t in re.findall(r"[a-z0-9][a-z0-9_-]{3,}", desc.lower())
+               if t not in _CSO_STOP}
+        if len(kws) < 3:
+            fails.append("skills/%s: description yields fewer than 3 distinctive keywords - the "
+                         "skill router cannot derive triggers from it; name concrete situations, "
+                         "tools, and symptoms." % m.group(1))
+    return fails
+
+
+def check_cso(root):
+    changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    return cso_failures(root, changed)
+
+
+
 def run_checks(root, ci):
     failures = []
     failures += check_tests_exist(root)
@@ -413,6 +510,7 @@ def run_checks(root, ci):
     failures += check_skills_index(root)
     failures += check_attribution(root)
     failures += check_skill_naming(root)
+    failures += check_cso(root)
     failures += check_secrets(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
@@ -421,6 +519,7 @@ def run_checks(root, ci):
     # push), never in CI on a contributor's PR.
     if not ci:
         failures += check_version_bumped(root)
+        failures += check_skill_review(root)
     pytest_paths = [root] if ci else [root / "plugins" / "bitranox" / "hooks" / "tests"]
     failures += check_pytest(root, pytest_paths)
     return failures

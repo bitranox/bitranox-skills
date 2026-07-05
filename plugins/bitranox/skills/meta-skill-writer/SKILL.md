@@ -780,6 +780,13 @@ description: use when implementing any feature or bugfix, before writing impleme
 
 ## Planning Before You Start
 
+**Step 0 - issue the session receipt (FIRST, before anything else):** run
+`bash <plugin>/hooks/run-python.sh <plugin>/hooks/skill_receipt.py start meta-skill-writer`.
+The skill-edit guard denies SKILL.md edits without a fresh receipt - holding one proves this
+procedure was ENTERED, not merely listed. A marketplace repo may additionally require a committed
+review artifact (a `.skillwriter/checklist-<date>.md` next to the SKILL.md, all boxes checked)
+co-changed with any SKILL.md change - its commit gate enforces that; see the repo's CONTRIBUTING.
+
 **Before writing any skill, plan the work.** Use your task/todo tooling (e.g. TodoWrite) to build a task list, then execute it step by step. This prevents skipping steps and makes progress visible.
 
 ### Survey prior art first

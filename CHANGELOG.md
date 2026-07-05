@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.40.0] - 2026-07-06
+
+### Added
+- SKILL-USAGE ENFORCEMENT (the "loaded but not executed" fix), three deterministic layers:
+  1. repo-gate: a changed `skills/*/SKILL.md` requires a co-changed, fully-checked
+     `.skillwriter/checklist-*.md` review artifact (local pre-commit), and every changed skill
+     description must be trigger-first with derivable keywords (CSO lint, also in CI).
+  2. skill-edit-guard v2: SKILL.md edits are allowed by a session RECEIPT that only
+     meta-skill-writer's step 0 issues (`skill_receipt.py`, 8h TTL) - entering the procedure is
+     provable; the launch-env bypass remains for emergencies.
+  3. skill-router (UserPromptSubmit): matches each prompt against `skill_triggers.json` - DERIVED
+     from all 55 skills' own trigger-first descriptions by `build_skill_triggers.py` (future
+     skills covered by construction; a sync test fails when descriptions change without a
+     rebuild) - and injects a pointed one-line nudge (>=2 keyword hits, max 2 skills, once per
+     session). Router nudges; guards enforce.
+- meta-skill-writer step 0: issue the session receipt; marketplace review-artifact requirement
+  documented (mechanics in CONTRIBUTING). Retroactive checklist artifacts committed for the C1-C3
+  reviews.
+
+### Fixed
+- Stale altitude scaffolding cleaned: 6 empty repo-internal CLAUDE.md/CLAUDE.local.md files below
+  the repo root (old BITRANOX-UUID-INDEX fences) plus one empty project block deleted; zero
+  old-fence residue tree-wide. Load-bearing chain markers kept.
+
 ## [5.39.2] - 2026-07-06
 
 ### Fixed
