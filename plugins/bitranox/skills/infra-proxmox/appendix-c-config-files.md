@@ -277,3 +277,66 @@ credentials.
 
 rp=<RELYING_PARTY>
 Relying party name. Any text identifier. Changing this may break existing credentials.
+
+## Important Configuration Files (path map)
+
+### Cluster & Datacenter
+
+| File                            | Purpose                                    |
+|---------------------------------|--------------------------------------------|
+| `/etc/pve/corosync.conf`        | Corosync membership and network            |
+| `/etc/pve/datacenter.cfg`       | Migration, console, HA, keyboard, language |
+| `/etc/pve/storage.cfg`          | Storage backend definitions                |
+| `/etc/pve/user.cfg`             | Users, groups, ACLs, tokens                |
+| `/etc/pve/jobs.cfg`             | Backup job schedules                       |
+| `/etc/pve/ceph.conf`            | Ceph configuration                         |
+| `/etc/pve/priv/authorized_keys` | Cluster-wide SSH authorized keys           |
+
+### Per-Node
+
+| File                                            | Purpose                          |
+|-------------------------------------------------|----------------------------------|
+| `/etc/pve/nodes/{node}/qemu-server/{vmid}.conf` | VM configuration                 |
+| `/etc/pve/nodes/{node}/lxc/{vmid}.conf`         | CT configuration                 |
+| `/etc/pve/nodes/{node}/host.fw`                 | Host firewall rules              |
+| `/etc/pve/local/pve-ssl.pem`                    | Node SSL certificate             |
+| `/etc/pve/local/pve-ssl.key`                    | Node SSL private key             |
+| `/etc/pve/local/pveproxy-ssl.pem`               | Custom proxy SSL certificate     |
+| `/etc/pve/local/pveproxy-ssl.key`               | Custom proxy SSL private key     |
+| `/etc/network/interfaces`                       | Network configuration            |
+| `/etc/network/interfaces.new`                   | Pending (staged) network changes |
+| `/etc/default/pveproxy`                         | Proxy daemon settings            |
+| `/etc/default/pvedaemon`                        | API daemon settings              |
+
+### Firewall
+
+| File                                   | Purpose                     |
+|----------------------------------------|-----------------------------|
+| `/etc/pve/firewall/cluster.fw`         | Cluster-wide firewall rules |
+| `/etc/pve/firewall/{vmid}.fw`          | VM/CT firewall rules        |
+| `/etc/pve/sdn/firewall/{vnet_name}.fw` | VNet firewall rules         |
+
+### SDN
+
+| File                           | Purpose                |
+|--------------------------------|------------------------|
+| `/etc/pve/sdn/zones.cfg`       | Zone definitions       |
+| `/etc/pve/sdn/vnets.cfg`       | VNet definitions       |
+| `/etc/pve/sdn/subnets.cfg`     | Subnet definitions     |
+| `/etc/pve/sdn/controllers.cfg` | Controller definitions |
+
+### HA
+
+| File                        | Purpose                 |
+|-----------------------------|-------------------------|
+| `/etc/pve/ha/resources.cfg` | HA resource definitions |
+| `/etc/pve/ha/groups.cfg`    | HA groups (deprecated)  |
+| `/etc/pve/ha/rules.cfg`     | HA rules                |
+
+### System
+
+| File                             | Purpose                                    |
+|----------------------------------|--------------------------------------------|
+| `/etc/apt/sources.list`          | APT package sources                        |
+| `/etc/apt/sources.list.d/`       | Additional APT sources                     |
+| `/var/lib/pve-cluster/config.db` | pmxcfs database (**DO NOT edit directly**) |

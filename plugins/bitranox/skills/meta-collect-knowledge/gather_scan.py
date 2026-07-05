@@ -116,16 +116,21 @@ _VENDOR = sig.VENDOR_DIRNAMES
 
 def _workspace_root(cwd, max_up=8):
     """The highest ancestor of `cwd` (within `max_up` levels, never above $HOME) that still holds a
-    CLAUDE.md - the root of the knowledge tree to search. None if no ancestor has one."""
+    CLAUDE.md - the root of the knowledge tree to search. None if no ancestor has one. The dirs that
+    must never be an altitude anchor (HOME itself, the system temp dir, the filesystem root - see
+    self_improve_signals._excluded_anchor_dirs) are skipped: a stray CLAUDE.md at /tmp would
+    otherwise turn ALL of the temp dir into one "workspace" and pollute recall with unrelated junk
+    (bitten twice on 2026-07-05)."""
     try:
         p = Path(cwd).resolve()
     except OSError:
         return None
     home = Path.home()
+    excluded = sig._excluded_anchor_dirs()
     root = None
     for _ in range(max_up):
         try:
-            if (p / "CLAUDE.md").is_file():
+            if p != Path(p.anchor) and p not in excluded and (p / "CLAUDE.md").is_file():
                 root = p
         except OSError:
             pass
