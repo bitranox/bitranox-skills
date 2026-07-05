@@ -133,8 +133,8 @@ def autoupdate_nudge(proj):
 _DREAM_NUDGE = (
     "<BITRANOX-DREAM-DUE>\n"
     "A memory consolidation is due. Run bitranox:meta-dream-tree to dedup / merge / generalize / prune "
-    "the memory store (it backs up first), or say 'skip'. Switch this off with "
-    "~/.claude/.bitranox-dream-off; stop the per-change asking with ~/.claude/.bitranox-dream-auto.\n"
+    "the memory store (it backs up first), or say 'skip'. Adjust via bitranox:meta-memory-settings: "
+    "dream_mode 'off' silences this, 'auto' stops the per-change asking.\n"
     "</BITRANOX-DREAM-DUE>"
 )
 

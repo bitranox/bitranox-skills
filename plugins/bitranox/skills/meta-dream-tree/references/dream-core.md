@@ -8,10 +8,10 @@ instead (the contract test fails duplicated family literals).
 
 ## The scope ladder (each skill states exactly one rung)
 
-| Skill                    | Scope                                                            |
-|--------------------------|------------------------------------------------------------------|
-| meta-dream-nap           | the cwd's ALTITUDE CHAIN only (project -> ancestors -> anchor)   |
-| meta-dream-tree       | ONE knowledge tree, TREE-WIDE (every level under the anchor)     |
+| Skill                       | Scope                                                            |
+|-----------------------------|------------------------------------------------------------------|
+| meta-dream-nap              | the cwd's ALTITUDE CHAIN only (project -> ancestors -> anchor)   |
+| meta-dream-tree             | ONE knowledge tree, TREE-WIDE (every level under the anchor)     |
 | meta-dream-crosstree(+deep) | ACROSS trees (discovery over discovery_roots; lift-or-copy only) |
 
 ## Mode (the user can switch off the asking)
@@ -19,8 +19,8 @@ instead (the contract test fails duplicated family literals).
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via
 `self_improve_signals.load_config()`):
 - **`propose`** (default): apply safe private-memory consolidation; ASK before editing a
-  version-controlled CLAUDE.md; route skill changes to a self-PR. Mention
-  `~/.claude/.bitranox-dream-auto` / `~/.claude/.bitranox-dream-off` at the end.
+  version-controlled CLAUDE.md; route skill changes to a self-PR. Mention the `dream_mode`
+  knob (`bitranox:meta-memory-settings`) at the end.
 - **`auto`**: no per-change prompts - apply CLAUDE.md edits and ship skill changes directly.
 - **`off`**: no nudges; a manual run consolidates PRIVATE memory only.
 

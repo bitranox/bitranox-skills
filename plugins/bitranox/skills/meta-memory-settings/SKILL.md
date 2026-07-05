@@ -34,5 +34,3 @@ then confirm. Do not edit the JSON by hand - the CLI validates keys and value ty
 
 ## Notes
 - A reset restores every knob to the recommended default above.
-- Legacy `~/.claude/.bitranox-dream-off` / `.bitranox-dream-auto` sentinels are honored only until this
-  config file exists; the first write migrates the mode into the config (one-way).

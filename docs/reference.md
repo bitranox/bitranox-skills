@@ -31,13 +31,12 @@ defaults.
 
 ## Sentinel files (all under `~/.claude/`)
 
-All three are absent by default; absent is the normal state.
+Both are absent by default; absent is the normal state.
 
-| File                            | Default | Effect when present                                                                                       | Who creates it, and when                                                                                                         |
-|---------------------------------|---------|-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `.bitranox-memory.json`         | absent  | The config above; once it exists it is authoritative                                                      | The settings CLI, on your first knob change (never created by hand - the CLI validates keys and values)                          |
-| `.bitranox-dream-off` / `-auto` | absent  | Pre-config dream-mode switches; honored only until the config file exists (the first write migrates them) | Nobody anymore - prefer setting the `dream_mode` knob, which supersedes them; they exist for setups that predate the config file |
-| `.bitranox-no-autoupdate-nudge` | absent  | Dismisses the session-start auto-update reminder without enabling auto-update                             | You, by hand (`touch ~/.claude/.bitranox-no-autoupdate-nudge`), when you want the reminder gone but do not want auto-update      |
+| File                            | Default | Effect when present                                                           | Who creates it, and when                                                                                                    |
+|---------------------------------|---------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `.bitranox-memory.json`         | absent  | The config above; once it exists it is authoritative                          | The settings CLI, on your first knob change (never created by hand - the CLI validates keys and values)                     |
+| `.bitranox-no-autoupdate-nudge` | absent  | Dismisses the session-start auto-update reminder without enabling auto-update | You, by hand (`touch ~/.claude/.bitranox-no-autoupdate-nudge`), when you want the reminder gone but do not want auto-update |
 
 ## Environment variables
 

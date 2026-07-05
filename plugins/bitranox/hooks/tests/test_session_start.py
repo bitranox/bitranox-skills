@@ -210,7 +210,7 @@ def test_dream_nudge_silent_when_off(tmp_path, monkeypatch, capsys, isolate_home
     mem = SIG.memory_dir("/proj/dream")
     mem.mkdir(parents=True, exist_ok=True)
     (mem / "a.md").write_text("x", encoding="utf-8")
-    (isolate_home / ".claude" / ".bitranox-dream-off").write_text("", encoding="utf-8")
+    SIG.save_config({"dream_mode": "off"})
     root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
     assert "BITRANOX-DREAM-DUE" not in out

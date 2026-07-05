@@ -8,9 +8,9 @@ substantive change to meta-dream-tree.
        python3 fixture_builder.py /tmp/dream-acceptance
 
 2. Run a REAL dream in the fixture: launch a fresh session (or dispatch a subagent) with cwd
-   /tmp/dream-acceptance/tree1/dept-a/proj-1, dream mode auto (touch ~/.claude/.bitranox-dream-auto
-   in the fixture HOME if isolating HOME), strict engine env, and the instruction "run
-   bitranox:meta-dream-tree". The model must discover everything else itself.
+   /tmp/dream-acceptance/tree1/dept-a/proj-1, dream mode auto (write `{"dream_mode": "auto"}` to
+   `<fixture HOME>/.claude/.bitranox-memory.json` if isolating HOME), strict engine env, and the
+   instruction "run bitranox:meta-dream-tree". The model must discover everything else itself.
 
 3. Assert:
 
