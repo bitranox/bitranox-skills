@@ -33,7 +33,7 @@ _HOOK_MODULES = {
     "session-banner": "session_banner",
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
-    "warn-unpinned-subagent-model": "warn_unpinned_subagent_model",
+    "subagent-model-gate": "subagent_model_gate",
     "skill-edit-guard": "skill_edit_guard",
     "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",

@@ -119,11 +119,28 @@ diff's size, complexity, and risk. A small mechanical diff does not need the
 most capable model; a subtle concurrency change does.
 
 **Always specify the model explicitly when dispatching a subagent.** An
-omitted model inherits your session's model  -  often the most capable and
-most expensive  -  which silently defeats this section. This is enforced, not
-just documented: the PreToolUse `warn-unpinned-subagent-model` hook prints a
-reminder whenever a `Task`/`Agent` dispatch omits `model` (it warns, never
-blocks  -  a `fork` legitimately inherits the parent model).
+omitted model inherits your session's model - often the most capable and
+most expensive - which silently defeats this section. This is ENFORCED, not
+just documented: **arm the model gate before dispatching Task 1** -
+
+    bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" start plan-execution
+
+While that `plan-execution` receipt is fresh, the PreToolUse
+`subagent-model-gate` hook DENIES any `Task`/`Agent` dispatch that omits
+`model` (a `fork` stays exempt - it legitimately inherits the parent model).
+When the plan is complete (after the final review), DISARM it -
+
+    bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
+
+Outside an armed plan execution the same hook only warns.
+
+**Effort is chosen through the tier, not the dispatch.** A dispatch has no
+per-call reasoning-effort field: effort rides the agent-type definition
+(`.claude/agents/*.md` frontmatter) or a Workflow `agent()` call
+(`opts.effort`). So picking the right tier - and, for a recurring role, an
+agent type or Workflow stage that pins `effort` (`low` for mechanical
+stages, higher only for the hardest verify/judge work) - IS the effort
+decision.
 
 ### Concrete tiers (canonical mapping - other skills reference this section)
 

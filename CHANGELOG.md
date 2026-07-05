@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.47.0] - 2026-07-06
+
+### Added
+- Plan executions now ENFORCE subagent model pinning: `subagent-model-gate.py` (renamed from
+  `warn-unpinned-subagent-model.py`) DENIES any `Task`/`Agent` dispatch without an explicit
+  `model` while a `plan-execution` receipt is armed (fork stays exempt); outside an armed plan
+  it keeps warning. The plan-execution skills (subagent-driven-development, plan-executor,
+  dispatching-parallel) arm the gate at their start and disarm on completion
+  (`skill_receipt.py` gains an `end` command).
+- Effort guidance: a dispatch has no per-call reasoning-effort field - effort rides the
+  agent-type definition or a Workflow `agent()` call, so choosing the tier (plus the right
+  agent type) is the effort decision; the skills and the gate message now say so.
+
 ## [5.46.0] - 2026-07-06
 
 ### Added

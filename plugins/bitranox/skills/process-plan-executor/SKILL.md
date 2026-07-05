@@ -21,7 +21,13 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 1. Read plan file
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+4. If no concerns: Create TodoWrite, arm the subagent model gate, and proceed:
+
+       bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" start plan-execution
+
+   While armed, any subagent dispatched during this plan (a review helper, a
+   verification agent) is DENIED unless it pins `model` explicitly - tiers per
+   "Concrete tiers" in bitranox:process-agents-subagent-driven-development.
 
 ### Step 2: Execute Batch
 **Default: First 3 tasks**
@@ -49,6 +55,10 @@ Based on feedback:
 When all batches are done:
 - Confirm every task in the plan is completed (check the TodoWrite list).
 - Run the full test suite and confirm it is green; output pristine (no errors or warnings).
+- Disarm the subagent model gate:
+
+      bash "$CLAUDE_PLUGIN_ROOT/hooks/run-python.sh" "$CLAUDE_PLUGIN_ROOT/hooks/skill_receipt.py" end plan-execution
+
 - Summarize what changed across the batches for the architect.
 - Per the user's wish, hand off to bitranox:process-ship-finishing-development-branch or open a PR.
 

@@ -27,3 +27,11 @@ below opus-class, DOWN for cost on a fable session facing routine work - user-di
 - [x] Review: read-only opus subagent audit, verified against the files by the applier
 - [x] Discovery test: fable subagent wave 6/6 (changed descriptions incl. two near-decoy discriminations)
 - [x] Security scan: prose/frontmatter edits + file removals, no secrets/paths/PII
+
+# skill-writer checklist - process-agents-subagent-driven-development (2026-07-06, plan-execution model-gate)
+
+- [x] Change: model-pin enforcement wired in: arm the subagent-model-gate (skill_receipt.py start plan-execution) before Task 1, disarm after the final review; while armed the PreToolUse hook DENIES any unpinned dispatch (fork exempt). New Effort paragraph: effort is not a per-dispatch field - it rides the agent-type definition or a Workflow agent() call, so tier + agent type IS the effort decision (verified against current Claude Code docs).
+- [x] Receipt held (skill_receipt.py, this session)
+- [x] Enforcement: subagent-model-gate.py (renamed from warn-unpinned-subagent-model.py per telling-naming) + skill_receipt end command; 14 gate/receipt unit tests green incl. deny JSON shape, disarm, fork exemption
+- [x] Ground truth verified via claude-code-guide: no per-dispatch effort field exists; PreToolUse deny works for Task
+- [x] Security scan: hook emits deny JSON only, no secrets/paths

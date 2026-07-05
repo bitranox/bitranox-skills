@@ -67,8 +67,11 @@ Each agent gets:
 - **An explicit model tier:** pin `model` per agent (do not inherit the session model - it is often
   `opus`, the most expensive). Default fan-out to `sonnet`; use `haiku` for mechanical domains and
   `opus` only for a domain needing deep design judgment. Full mapping: see "Concrete tiers" in
-  `bitranox:process-agents-subagent-driven-development`. Omitting `model` triggers the PreToolUse
-  `warn-unpinned-subagent-model` hook (a non-blocking reminder), so pin it up front.
+  `bitranox:process-agents-subagent-driven-development`. Omitting `model` trips the PreToolUse
+  `subagent-model-gate` hook: a warning normally, a DENY while a plan execution is armed (the
+  `plan-execution` receipt). Dispatching a batch as part of a plan? The plan skill already armed
+  the gate. Running a standalone batch you want gated the same way? Arm it yourself first
+  (`skill_receipt.py start plan-execution` via run-python.sh) and `end` it after the batch.
 
 ### 3. Dispatch in Parallel
 
