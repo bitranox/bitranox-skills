@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.3] - 2026-07-06
+
+### Changed
+- Contradiction rule corrected (user directive): memory-vs-CLAUDE.md contradictions resolve by
+  GROUND TRUTH, not channel authority - a CLAUDE.md can be outdated too. Verify against the actual
+  state (code/files/system/git history); correct whichever side the evidence shows is wrong
+  (CLAUDE.md fixes stay propose-first); unresolvable -> ask the user. Both sites in
+  meta-dream-project's dream-passes.md updated (the old rule blindly preferred CLAUDE.md).
+
+## [5.42.2] - 2026-07-06
+
+### Changed
+- meta-using-bitranox-skills roster trimmed to categories + exemplars (skills-half C5b; the C5a
+  gate relaxation is installed, so the trim can land): the injected available-skills list is the
+  stated source of truth. Pre-trim equivalence baseline 3/3; the post-trim probes gate a revert
+  after the next update.
+
 ## [5.42.1] - 2026-07-06
 
 ### Changed

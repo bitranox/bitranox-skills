@@ -21,10 +21,14 @@ the slug); (3) a manual "forget this". Never archive a still-valid but quiet not
 
 ## Contradiction / override
 
-A hand-written `CLAUDE.md` is AUTHORITATIVE: if memory contradicts it, correct OUR memory, never
-the rule. Memory-vs-memory: a narrower rule that CONTRADICTS a higher one becomes a self-contained
-OVERRIDE (more-specific wins at load), NOT a `[[reference]]`; flag a persistent contradiction for
-the user.
+When memory contradicts a hand-written `CLAUDE.md` rule, GROUND TRUTH decides - not the channel.
+A CLAUDE.md can be outdated just like a memory can be wrong. Verify against the actual state (the
+code, files, system, measurements, git history): if the evidence shows MEMORY is wrong, correct
+the memory (engine); if it shows the CLAUDE.md is OUTDATED, propose the CLAUDE.md fix
+(propose-first, as every CLAUDE.md edit); if ground truth cannot be established, ASK the user -
+never silently prefer either side. Memory-vs-memory: a narrower rule that CONTRADICTS a higher one
+becomes a self-contained OVERRIDE (more-specific wins at load), NOT a `[[reference]]`; flag a
+persistent contradiction for the user.
 
 ## CLAUDE.md reconciliation (tiers ARE altitudes; reconcile to save context)
 
@@ -60,8 +64,9 @@ from emptiness or a new-entry-only grep. For a rule found in the chain:
     before deleting.
 - **Belongs higher** (recurs across the subtree) -> lift the general to the broadest covering
   tier, leave only the DELTA below (`[[general]]` + delta), or remove it if there is no delta.
-- **Genuinely only-here** -> leave it (it IS the delta). **Contradiction** -> the hand-written
-  `CLAUDE.md` wins; correct our memory.
+- **Genuinely only-here** -> leave it (it IS the delta). **Contradiction** -> verify against
+  ground truth (see Contradiction / override above): evidence decides which side is outdated;
+  unresolvable -> ask the user.
 - Guards: never LIFT a narrow rule into a tier that loads where it is irrelevant (net context
   loss); never demote a must-always directive into a lazy body; never trim a TRACKED lower copy
   into a LESS durable broader home (propose an umbrella repo first if needed). Propose-first in
