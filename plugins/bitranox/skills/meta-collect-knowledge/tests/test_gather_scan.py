@@ -52,8 +52,8 @@ def _ws(tmp_path, monkeypatch):
     (h / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("USERPROFILE", str(h))
-    ws = tmp_path / "ws"
-    (ws).mkdir()
+    ws = h / "ws"                     # inside fake HOME: the ancestor walk stops at $HOME (hermetic)
+    ws.mkdir()
     (ws / "CLAUDE.md").write_text("root rules", encoding="utf-8")
     cur = ws / "projA"
     cur.mkdir()
@@ -91,7 +91,7 @@ def test_discover_claude_md_no_workspace_root(tmp_path, monkeypatch):
     (h / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("USERPROFILE", str(h))
-    lonely = tmp_path / "nowhere" / "proj"
+    lonely = h / "nowhere" / "proj"   # inside fake HOME (hermetic: the walk stops at $HOME)
     lonely.mkdir(parents=True)
     assert G.discover_claude_md(str(lonely)) == []   # no ancestor CLAUDE.md -> nothing
 
@@ -169,27 +169,23 @@ def test_main_reports_candidates_from_other_tree(home, capsys):
     assert "/-p-self/" not in out       # not the current project's own
 
 
-def test_discover_curated_finds_sibling_excludes_own_and_backups(tmp_path, monkeypatch):
+def test_discover_curated_finds_slug_stores_excludes_backups_and_archive(tmp_path, monkeypatch):
     ws, cur = _ws(tmp_path, monkeypatch)
-    scope = "<!-- bitranox:self-learning -->\ns\n<!-- /bitranox:self-learning -->\n\n# Memory index\n"
-    sib = ws / "projB" / ".claude-bx-selflearning"
-    (sib / "facts").mkdir(parents=True)
-    (sib / "index.md").write_text(scope + "\n- [X](#x) - projB fact\n", encoding="utf-8")
-    (sib / "facts" / "big.md").write_text("projB heavy body", encoding="utf-8")
-    own = cur / ".claude-bx-selflearning"
-    (own / "facts").mkdir(parents=True)
-    (own / "index.md").write_text(scope, encoding="utf-8")
-    (own / "facts" / "mine.md").write_text("own heavy", encoding="utf-8")
-    bak = ws / "projB" / ".claude-bx-selflearning.bak-123"
+    facts = ws / ".claude-memory" / "facts"
+    facts.mkdir(parents=True)
+    (facts / "fleet-ssh.md").write_text("fleet ssh keyfile body", encoding="utf-8")
+    (ws / ".claude-memory" / ".archive").mkdir()                       # the real archive location
+    (ws / ".claude-memory" / ".archive" / "dead.md").write_text("archived", encoding="utf-8")
+    (facts / ".archive").mkdir()                                       # defensive: even a stray one
+    (facts / ".archive" / "dead2.md").write_text("archived2", encoding="utf-8")
+    bak = ws / ".claude-memory.bak-123"
     bak.mkdir()
-    (bak / "index.md").write_text("stale", encoding="utf-8")
+    (bak / "stale.md").write_text("stale", encoding="utf-8")
 
     got = G.discover_curated(str(cur), str(cur))
-    assert any(p.endswith("projB/.claude-bx-selflearning/index.md") for p in got)   # sibling surfaced
-    assert any(p.endswith("/facts/big.md") for p in got)
-    assert str(own / "index.md") not in got                                          # own index.md excluded
-    assert any(p.endswith("/facts/mine.md") for p in got)                             # own facts KEPT
-    assert not any(".bak-" in p for p in got)                                         # backups ignored
+    assert any(p.endswith("/.claude-memory/facts/fleet-ssh.md") for p in got)   # slug body surfaced
+    assert not any(".archive" in p for p in got)                                # archive never scanned
+    assert not any(".bak-" in p for p in got)                                   # backups ignored
 
 
 def test_gather_cli_adds_mcp_candidates_when_enabled(tmp_path, monkeypatch, capsys):
@@ -221,3 +217,35 @@ def test_find_curated_stores_also_collects_central_uuid_store_bodies(tmp_path, m
     (facts / "abcd1234-0000-5000-8000-000000000000.md").write_text("central uuid body text", encoding="utf-8")
     got = G._find_curated_stores(str(ws))
     assert any(p.endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
+
+
+def test_cli_groups_candidates_by_tree(tmp_path, monkeypatch, capsys):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    facts = ws / ".claude-memory" / "facts"
+    facts.mkdir(parents=True)
+    (facts / "zorblax-config.md").write_text("zorblax frobnicator configuration", encoding="utf-8")
+    G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
+    out = capsys.readouterr().out
+    assert ("TREE: %s" % ws) in out                        # candidates carry their tree label
+    assert "zorblax-config.md" in out and "1 tree(s)" in out
+
+
+def test_cli_walled_scan_stays_in_tree_unless_cross_tree(tmp_path, monkeypatch, capsys):
+    import json as _json
+    ws, cur = _ws(tmp_path, monkeypatch)
+    (ws / ".claude-memory").mkdir()                        # anchor colocation for THIS tree
+    other = ws.parent / "othertree"
+    (other / ".claude-memory" / "facts").mkdir(parents=True)
+    (other / "CLAUDE.md").write_text("other top\n", encoding="utf-8")
+    (other / ".claude-memory" / "facts" / "zorblax-note.md").write_text(
+        "zorblax frobnicator elsewhere", encoding="utf-8")
+    (Path(str(tmp_path)) / "home" / ".claude" / ".bitranox-memory.json").write_text(
+        _json.dumps({"cross_tree_search": False}), encoding="utf-8")
+    # walled: the other tree's hit must NOT appear (scan sources filtered to this tree's anchor)
+    G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
+    out = capsys.readouterr().out
+    assert "othertree" not in out
+    # explicit --cross-tree: the deliberate act crosses the wall, labeled
+    G.main(["--topic", "zorblax frobnicator", "--self", str(cur), "--cross-tree"])
+    out = capsys.readouterr().out
+    assert "othertree" in out and "TREE:" in out
