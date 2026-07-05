@@ -87,7 +87,7 @@ Subagent (general-purpose):
       solved
 
     If a requirement cannot be verified from this diff alone (it lives in
-    unchanged code or spans tasks), report it as a ⚠️ item instead of
+    unchanged code or spans tasks), report it as a WARN item instead of
     broadening your search.
 
     ## Part 2: Code Quality
@@ -140,11 +140,11 @@ Subagent (general-purpose):
 
     ### Spec Compliance
 
-    - ✅ Spec compliant | ❌ Issues found: [what's missing/extra/misunderstood,
+    - OK Spec compliant | NO Issues found: [what's missing/extra/misunderstood,
       with file:line references]
-    - ⚠️ Cannot verify from diff: [requirements you could not verify from the
+    - WARN Cannot verify from diff: [requirements you could not verify from the
       diff alone, and what the controller should check  -  report alongside the
-      ✅/❌ verdict for everything you could verify]
+      OK/NO verdict for everything you could verify]
 
     ### Strengths
     [What's well done? Be specific.]
@@ -181,7 +181,7 @@ Subagent (general-purpose):
   package to (`python3 scripts/review_package.py BASE HEAD` prints the unique path it
   wrote; the package never enters the controller's context)
 
-**Reviewer returns:** Spec Compliance verdict (✅/❌/⚠️), Strengths, Issues
+**Reviewer returns:** Spec Compliance verdict (OK/NO/WARN), Strengths, Issues
 (Critical/Important/Minor), Task quality verdict
 
 A fix dispatch can address spec gaps and quality findings together;

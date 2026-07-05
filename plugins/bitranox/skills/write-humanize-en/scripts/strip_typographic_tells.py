@@ -2,8 +2,9 @@
 """Normalize typographic AI-writing tells to ASCII.
 
 Deterministic first pass for the humanize skills: replace em/en dashes, curly
-quotes, ellipsis, non-breaking and zero-width spaces, BOM, bidi controls, and
-related non-ASCII punctuation with plain ASCII, so public-facing text carries no
+quotes, ellipsis, non-breaking and zero-width spaces, BOM, bidi controls, heavy
+verdict emoji (check/cross/warning -> OK/NO/WARN), and related non-ASCII
+punctuation with plain ASCII, so public-facing text carries no
 typographic "AI tell". The judgment rewrites (promotional language, rule of
 three, and the rest) are described in SKILL.md and stay with the model.
 
@@ -55,6 +56,13 @@ def _build_table():
     table[0x2024] = "."
     table[0x2025] = ".."
     table[0x2026] = "..."
+    # Heavy verdict emoji -> ASCII markers (house style); drop the variation selector.
+    table[0x2705] = "OK"
+    table[0x2714] = "OK"
+    table[0x2717] = "NO"
+    table[0x274C] = "NO"
+    table[0x26A0] = "WARN"
+    table[0xFE0F] = ""
     return table
 
 

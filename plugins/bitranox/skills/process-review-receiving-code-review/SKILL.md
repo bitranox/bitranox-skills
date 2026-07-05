@@ -58,8 +58,8 @@ WHY: Items may be related. Partial understanding = wrong implementation.
 your human partner: "Fix 1-6"
 You understand 1,2,3,6. Unclear on 4,5.
 
-❌ WRONG: Implement 1,2,3,6 now, ask about 4,5 later
-✅ RIGHT: "I understand items 1,2,3,6. Need clarification on 4 and 5 before proceeding."
+NO WRONG: Implement 1,2,3,6 now, ask about 4,5 later
+OK RIGHT: "I understand items 1,2,3,6. Need clarification on 4 and 5 before proceeding."
 ```
 
 ## Source-Specific Handling
@@ -138,15 +138,15 @@ Push back when:
 
 When feedback IS correct:
 ```
-✅ "Fixed. [Brief description of what changed]"
-✅ "[specific issue] - fixed in [location]."
-✅ [Just fix it and show in the code]
+OK "Fixed. [Brief description of what changed]"
+OK "[specific issue] - fixed in [location]."
+OK [Just fix it and show in the code]
 
-❌ "You're absolutely right!"
-❌ "Great point!"
-❌ "Thanks for catching that!"
-❌ "Thanks for [anything]"
-❌ ANY gratitude expression
+NO "You're absolutely right!"
+NO "Great point!"
+NO "Thanks for catching that!"
+NO "Thanks for [anything]"
+NO ANY gratitude expression
 ```
 
 **Why no thanks:** Actions speak. Just fix it. The code itself shows you heard the feedback.
@@ -157,12 +157,12 @@ When feedback IS correct:
 
 If you pushed back and were wrong:
 ```
-✅ "You were right - I checked [X] and it does [Y]. Implementing now."
-✅ "Verified this and you're correct. My initial understanding was wrong because [reason]. Fixing."
+OK "You were right - I checked [X] and it does [Y]. Implementing now."
+OK "Verified this and you're correct. My initial understanding was wrong because [reason]. Fixing."
 
-❌ Long apology
-❌ Defending why you pushed back
-❌ Over-explaining
+NO Long apology
+NO Defending why you pushed back
+NO Over-explaining
 ```
 
 State the correction factually and move on.
@@ -184,26 +184,26 @@ State the correction factually and move on.
 **Performative Agreement (Bad):**
 ```
 Reviewer: "Remove legacy code"
-❌ "You're absolutely right! Let me remove that..."
+NO "You're absolutely right! Let me remove that..."
 ```
 
 **Technical Verification (Good):**
 ```
 Reviewer: "Remove legacy code"
-✅ "Checking... build target is 10.15+, this API needs 13+. Need legacy for backward compat. Current impl has wrong bundle ID - fix it or drop pre-13 support?"
+OK "Checking... build target is 10.15+, this API needs 13+. Need legacy for backward compat. Current impl has wrong bundle ID - fix it or drop pre-13 support?"
 ```
 
 **YAGNI (Good):**
 ```
 Reviewer: "Implement proper metrics tracking with database, date filters, CSV export"
-✅ "Grepped codebase - nothing calls this endpoint. Remove it (YAGNI)? Or is there usage I'm missing?"
+OK "Grepped codebase - nothing calls this endpoint. Remove it (YAGNI)? Or is there usage I'm missing?"
 ```
 
 **Unclear Item (Good):**
 ```
 your human partner: "Fix items 1-6"
 You understand 1,2,3,6. Unclear on 4,5.
-✅ "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
+OK "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
 ```
 
 ## GitHub Thread Replies

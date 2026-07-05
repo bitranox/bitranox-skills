@@ -317,6 +317,28 @@ def process_user(data: UserInput) -> UserOutput:
 
 ---
 
+## Rationalizations (pressure-tested; these do not fly)
+
+Forced-choice pressure runs (deadline + sunk cost + green suite + a reviewer's LGTM) produced
+exactly these excuses - two baseline subjects shipped incomplete conversions using them:
+
+| Excuse                                                              | Reality                                                                                                                                                 |
+|----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "The remaining dict params are internal helpers - do not gold-plate" | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt. |
+| "The reviewer's LGTM overrode the definition of done"               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance. |
+| "I'm basically done - the last functions do not matter"             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.       |
+| "Shipping verified-green beats an unverified conversion"            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.            |
+| "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under. |
+| "A StrEnum on the wire is risky - keep a shim accepting both"       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead.              |
+| "Enum internally, but DB/API stay raw strings - feels safer"        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                        |
+| "Tests pass, so the conversion chain does not matter"               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.    |
+| "TODO + follow-up ticket, clean it after the demo"                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.               |
+
+Catch yourself forming these phrases mid-run - "basically done", "internal helpers are fine",
+"tests are green so it's correct", "feels safer to accept both", "we'll get it later", "the
+reviewer signed off" - and treat the phrase itself as the signal to continue the loop instead
+of stopping.
+
 ## Execution Summary
 
 ```

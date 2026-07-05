@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.48.0] - 2026-07-06
+
+### Added
+- Pressure-tested rationalization tables, built from REAL baseline failures per the skill-writer
+  Iron Law:
+  - `process-agents-subagent-driven-development`: a baseline subject substituted self-review for
+    the reviewer dispatch and took "zero-risk" one-liners inline - its verbatim excuses became
+    the table; the GREEN re-run of the broken scenario passed.
+  - `coding-python-enforce-data-architecture-strict`: a corrected forced-choice baseline produced
+    genuine 2/2 capitulation ("an explicit, reviewed scope decision", "sequencing, not
+    skipping"); the table counters them, a REFACTOR round added the ask-the-human row for the
+    DoD-vs-deadline trade, and the retest chose surface-and-ask.
+- Emoji policy enforced (user decision): heavy verdict emoji (U+2705/U+274C/U+2714/U+2717/U+26A0
+  + the U+FE0F selector) are now in the canonical tell set; 7 skill files swept to ASCII
+  OK/NO/WARN markers; the humanize strip script maps the class to the same markers (inverse of
+  the detector); repo-wide scan clean outside the humanize skills' intentional examples.
+
 ## [5.47.0] - 2026-07-06
 
 ### Added
