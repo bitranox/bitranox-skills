@@ -57,7 +57,7 @@ Collect deliberately accepted items from **all** of these sources:
 **Before manual scoring**, run whatever quality tooling the project already has. Check for:
 
 - `Makefile` targets: `make test`, `make lint`, or similar
-- Project instructions file (CLAUDE.md / AGENTS.md) for test/lint commands. If not present, create it.
+- Project instructions file (CLAUDE.md / AGENTS.md) for test/lint commands.
 - Common tools: `ruff check`, `pyright`, `shellcheck`, `eslint`, `pytest`, etc.
 - CI config (`.github/workflows/`) for the project's own quality gates
 

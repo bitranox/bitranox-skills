@@ -5,13 +5,15 @@ description: Use when you have a written implementation plan to execute in a sep
 
 # Executing Plans
 
+> Adapted from the superpowers plugin (MIT).
+
 ## Overview
 
 Load plan, review critically, execute tasks in batches, report for review between batches.
 
 **Core principle:** Batch execution with checkpoints for architect review.
 
-**Announce at start:** "I'm using the plan-executor skill to implement this plan."
+**Announce at start:** "I'm using the process-plan-executor skill to implement this plan."
 
 ## The Process
 

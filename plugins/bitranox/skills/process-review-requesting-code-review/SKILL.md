@@ -1,9 +1,11 @@
 ---
 name: process-review-requesting-code-review
-description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements
+description: Use when completing a task, finishing a major feature, before merging to main, when stuck, or after fixing a complex bug, and you want a code review of the changes
 ---
 
 # Requesting Code Review
+
+> Adapted from the superpowers plugin (MIT).
 
 Dispatch a code reviewer subagent to catch issues before they cascade. The reviewer gets precisely crafted context for evaluation  -  never your session's history. This keeps the reviewer focused on the work product, not your thought process, and preserves your own context for continued work.
 
@@ -34,10 +36,10 @@ HEAD_SHA=$(git rev-parse HEAD)
 Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md](code-reviewer.md)
 
 **Placeholders:**
-- `{DESCRIPTION}` - Brief summary of what you built
-- `{PLAN_OR_REQUIREMENTS}` - What it should do
-- `{BASE_SHA}` - Starting commit
-- `{HEAD_SHA}` - Ending commit
+- `[DESCRIPTION]` - Brief summary of what you built
+- `[PLAN_OR_REQUIREMENTS]` - What it should do
+- `[BASE_SHA]` - Starting commit
+- `[HEAD_SHA]` - Ending commit
 
 **3. Act on feedback:**
 - Fix Critical issues immediately
