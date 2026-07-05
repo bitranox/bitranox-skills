@@ -100,12 +100,20 @@ def main():
         # tree (lots of cross-project rules still live in CLAUDE.md). The current project's own memory
         # and its ancestor-chain CLAUDE.md are excluded - they are already loaded in this session.
         files = gs.discover_files(cwd) + gs.discover_claude_md(cwd) + gs.discover_curated(cwd, cwd)
-        # cross_tree_search=False walls recall into the CURRENT knowledge tree: only sources under
-        # this tree's anchor are scanned (independent trees - a marketing company and a bakery -
-        # share nothing). The native tier (under ~/.claude) has no reliable tree attribution by
-        # path, so it counts as outside and is excluded too. Cross-tree knowledge then moves only
-        # via the explicit paths (meta-collect-knowledge import, dream-global).
-        if not sig.load_config().get("cross_tree_search", True):
+        # cross_tree_search=True (default): OTHER knowledge trees are invisible to the workspace
+        # walk above, so discover them via the configured discovery_roots (config list UNION
+        # $HOME) and scan their curated stores too - same mechanism as gather_scan's cross-tree
+        # gather. cross_tree_search=False walls recall into the CURRENT knowledge tree: only
+        # sources under this tree's anchor are scanned (independent trees - a marketing company
+        # and a bakery - share nothing). The native tier (under ~/.claude) has no reliable tree
+        # attribution by path, so it counts as outside and is excluded too. Cross-tree knowledge
+        # then moves only via the explicit paths (meta-collect-knowledge import, the crosstree
+        # dream).
+        if sig.load_config().get("cross_tree_search", True):
+            for r in sig.discovery_roots():
+                files += gs._find_curated_stores(str(r))
+            files = sorted({str(f) for f in files})
+        else:
             anchor = sig.resolve_anchor(cwd)
             if anchor is None:
                 return 0

@@ -189,9 +189,10 @@ def _plant_curated(proj, title, hook, body):
 
 
 def test_cross_tree_search_off_blocks_other_tree(monkeypatch, capsys, home, two_trees):
+    # discovery_roots COVERS tree B, so the wall (not invisibility) must do the blocking
     _plant_curated(two_trees.proj_b, "Frobnicator level",
                    "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
-    _cfg_write(home, cross_tree_search=False)
+    _cfg_write(home, cross_tree_search=False, discovery_roots=[str(two_trees.root)])
     rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
                   cwd=str(two_trees.proj_a))
     assert rc == 0
@@ -210,9 +211,27 @@ def test_cross_tree_search_off_keeps_same_tree(monkeypatch, capsys, home, two_tr
     assert rc == 0 and "frobnicator" in out                  # same tree still recalled
 
 
-def test_cross_tree_search_default_on_keeps_todays_behavior(monkeypatch, capsys, home, two_trees):
+def test_cross_tree_search_default_on_scans_discovery_roots(monkeypatch, capsys, home, two_trees):
+    # default ON + a discovery root covering the other tree -> its store is recalled.
+    # (Trees outside $HOME are reachable ONLY via discovery_roots; the derived default
+    # covers $HOME, and the fixture deliberately builds the trees outside it.)
     _plant_curated(two_trees.proj_b, "Frobnicator level",
+                   "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
+    _cfg_write(home, discovery_roots=[str(two_trees.root)])  # cross_tree_search stays default true
+    rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
+                  cwd=str(two_trees.proj_a))
+    assert rc == 0 and "frobnicator" in out                  # cross-tree hit via discovery_roots
+
+
+def test_cross_tree_default_on_home_tree_recalled_without_config(monkeypatch, capsys, home, two_trees):
+    # the DERIVED default root is $HOME: a tree under home is cross-recalled with NO config file
+    top = home / "hometree"
+    proj = top / "proj1"
+    proj.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("home tree\n", encoding="utf-8")
+    (proj / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    _plant_curated(proj, "Frobnicator level",
                    "set FROB_LEVEL=9 for the widget frobnicator", "widget frobnicator detail")
     rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
                   cwd=str(two_trees.proj_a))
-    assert rc == 0 and "frobnicator" in out                  # default: machine-global scan
+    assert rc == 0 and "frobnicator" in out                  # derived $HOME root, no config needed

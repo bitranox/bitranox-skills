@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.49.1] - 2026-07-06
+
+### Fixed
+- CI red since the `cross_tree_search` knob landed: per-prompt recall never scanned
+  `discovery_roots`, so a tree outside the workspace walk was unreachable even with the knob
+  on. The test covering it passed only on the dev machine, by accident - a stale
+  `/tmp/CLAUDE.md` from an old fixture widened the workspace walk to all of /tmp. Recall now
+  walks `discovery_roots` (config union $HOME) exactly like the cross-tree gather; the tests
+  now exercise the designed mechanism (configured root, derived $HOME root, and the walled-off
+  case with a covering root so the wall does the blocking).
+
 ## [5.49.0] - 2026-07-06
 
 ### Added
