@@ -6,6 +6,21 @@
 - [x] Tests: settings CLI reads knobs from DEFAULT_CONFIG (no code change)
 - [x] Security scan: prose-only diff, clean
 
+# skill-writer checklist - meta-memory-settings (2026-07-06, dream-sentinel removal)
+
+- [x] Receipt issued (skill_receipt.py, this session)
+- [x] Change: deleted the legacy-sentinel Notes bullet (user-directed removal of the
+      `.bitranox-dream-off`/`-auto` mechanism from code and docs; `dream_mode` is the single
+      mechanism). Code removed in the same change: `_legacy_dream_mode()` + its `load_config`
+      fallback, the dream-due nudge's sentinel wording, dream-core.md + README-acceptance
+      references; tests rewritten to set the config file instead of planting sentinels
+- [x] RED/GREEN: repo-wide grep is the test - before: 15 references across code/skills/docs;
+      after: zero outside the CHANGELOG history
+- [x] Tests: hooks suite 527 passed (legacy tests merged into a config test);
+      meta-dream-tree 12 passed (contract test confirms dream-core literals intact);
+      meta-memory-settings 8 passed
+- [x] Security scan: deletions plus one nudge-string rewrite, no secrets/paths/PII
+
 # skill-writer checklist - meta-memory-settings (2026-07-06, skill_placement knob row)
 
 - [x] Receipt issued (skill_receipt.py, this session)

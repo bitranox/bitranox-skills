@@ -44,7 +44,7 @@ def test_done_marks_and_silences(home, capsys):
 def test_mode_default_and_off(home, capsys):
     assert D.main(["mode", "/p/x"]) == 0
     assert capsys.readouterr().out.strip() == "propose"
-    (home / ".claude" / ".bitranox-dream-off").write_text("", encoding="utf-8")
+    D.sig.save_config({"dream_mode": "off"})
     D.main(["mode", "/p/x"])
     assert capsys.readouterr().out.strip() == "off"
 

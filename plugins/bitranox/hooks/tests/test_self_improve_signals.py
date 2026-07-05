@@ -158,12 +158,12 @@ def test_dream_mode_default(home):
 
 
 def test_dream_mode_off(home):
-    (home / ".claude" / ".bitranox-dream-off").write_text("", encoding="utf-8")
+    S.save_config({"dream_mode": "off"})
     assert S.dream_mode("/p/x") == "off"
 
 
 def test_dream_mode_auto(home):
-    (home / ".claude" / ".bitranox-dream-auto").write_text("", encoding="utf-8")
+    S.save_config({"dream_mode": "auto"})
     assert S.dream_mode("/p/x") == "auto"
 
 
@@ -192,7 +192,7 @@ def test_dream_due_old_and_changed(home):
 
 def test_dream_due_off_mode_never(home):
     _mem(home)
-    (home / ".claude" / ".bitranox-dream-off").write_text("", encoding="utf-8")
+    S.save_config({"dream_mode": "off"})
     assert S.dream_due("/p/x") is False
 
 
@@ -234,14 +234,7 @@ def test_load_config_defaults(home):
     assert cfg["dream_mode"] == "propose"
 
 
-def test_load_config_migrates_legacy_sentinel(home):
-    (home / ".claude" / ".bitranox-dream-auto").write_text("", encoding="utf-8")
-    assert S.load_config()["dream_mode"] == "auto"
-
-
-def test_config_file_authoritative_over_sentinel(home):
-    # legacy sentinel says auto, but the written config says off -> the file wins
-    (home / ".claude" / ".bitranox-dream-auto").write_text("", encoding="utf-8")
+def test_config_file_sets_dream_mode(home):
     S.save_config({"dream_mode": "off"})
     assert S.load_config()["dream_mode"] == "off"
     assert S.dream_mode("/p/x") == "off"

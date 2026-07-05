@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.45.0] - 2026-07-06
+
+### Removed
+- The `~/.claude/.bitranox-dream-off` / `.bitranox-dream-auto` sentinel files. The `dream_mode`
+  knob in `~/.claude/.bitranox-memory.json` (set via `/bitranox:meta-memory-settings`) is the
+  single mechanism; the sentinels are no longer read anywhere. If you relied on one without a
+  config file, set the knob once: `dream_mode off` (or `auto`).
+
 ## [5.44.1] - 2026-07-06
 
 ### Fixed

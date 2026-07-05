@@ -222,8 +222,7 @@ def dream_mode(proj=None):
       off     -> no dream nudges; a manual dream consolidates memory only, no CLAUDE.md/skill proposals
       auto    -> dream applies CLAUDE.md edits and ships skill changes WITHOUT per-change prompts
       propose -> (default) dream asks before CLAUDE.md edits and routes skill changes to a self-PR
-    Reads `~/.claude/.bitranox-memory.json`; until that exists, the legacy
-    `.bitranox-dream-off` / `.bitranox-dream-auto` sentinels still apply (one-way migration).
+    Reads `~/.claude/.bitranox-memory.json`; without it, the recommended default applies.
     """
     return load_config().get("dream_mode", "propose")
 
@@ -375,32 +374,16 @@ DEFAULT_CONFIG = {
 }
 
 
-def _legacy_dream_mode():
-    """Pre-config opt-out sentinels in ~/.claude (honored until a config file is written)."""
-    home = Path.home() / ".claude"
-    try:
-        if (home / ".bitranox-dream-off").exists():
-            return "off"
-        if (home / ".bitranox-dream-auto").exists():
-            return "auto"
-    except OSError:
-        pass
-    return "propose"
-
-
 def load_config():
-    """Config merged over DEFAULT_CONFIG. The JSON file is authoritative once it exists; until
-    then the legacy `.bitranox-dream-*` sentinels supply dream_mode (one-way migration). Robust:
-    a missing or corrupt file yields the recommended defaults."""
+    """Config merged over DEFAULT_CONFIG. Robust: a missing or corrupt file yields the
+    recommended defaults."""
     cfg = dict(DEFAULT_CONFIG)
     try:
         raw = json.loads(_config_path().read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             cfg.update({k: raw[k] for k in raw if k in DEFAULT_CONFIG})
-            return cfg
     except (OSError, ValueError):
         pass
-    cfg["dream_mode"] = _legacy_dream_mode()
     return cfg
 
 
