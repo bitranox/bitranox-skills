@@ -18,3 +18,6 @@
 - [x] Tier note updated (user-directed): inline deep judgment at opus-class or above;
       fable above opus (paid API credits only); /model switch keeps context - offer UP for
       capability, DOWN for cost on a fable session
+- [x] ACCEPTANCE BAR MET: runs 3+4 on 5.42.5 both scored 5/5 hard + 6/6 judgment (two
+      consecutive), after run 2's chain-vs-tree loophole was closed. Run history: 1: 6/6,
+      2: 3/6 (REFACTOR), 3: 6/6, 4: 6/6.

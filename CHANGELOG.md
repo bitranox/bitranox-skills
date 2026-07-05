@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.7] - 2026-07-06
+
+### Changed
+- Self-learning restructure COMPLETE: the dream acceptance bar is met (planted-fixture runs 3+4
+  on the tree-wide-fixed skill both scored all-hard + 6/6 judgment, two consecutive; run history
+  6/6, 3/6-REFACTOR, 6/6, 6/6) and the roster-trim equivalence closed 3/3 with no revert.
+  Review artifacts updated with the verdicts.
+
 ## [5.42.6] - 2026-07-06
 
 ### Changed
