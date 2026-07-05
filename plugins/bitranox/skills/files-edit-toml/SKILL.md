@@ -1,6 +1,6 @@
 ---
 name: files-edit-toml
-description: "Use when creating or editing a TOML file (pyproject.toml, config.toml, a tool's .toml config) - adding or changing a key, bumping a version/value, editing a table or array - instead of hand-editing it or using sed/regex, which corrupt structure or silently drop comments. Covers tomllib (read), tomlkit (round-trip edit that PRESERVES comments and formatting), and rtoml/tomli_w (write)."
+description: Use when creating or editing a TOML file (pyproject.toml, config.toml, a tool's .toml config) - adding or changing a key, bumping a version/value, editing a table or array - instead of hand-editing it or using sed/regex, which corrupt structure or silently drop comments. Covers tomllib (read), tomlkit (round-trip edit that PRESERVES comments and formatting), and rtoml/tomli_w (write).
 ---
 
 # Edit TOML with a Python library, never by hand

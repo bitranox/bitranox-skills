@@ -19,7 +19,8 @@ verifies it.
   DTD/XML-Schema/RelaxNG validation. `pip install lxml`. Preferred over stdlib
   `xml.etree.ElementTree` (weaker XPath, no schema validation) and over `minidom`/`xmltodict`.
 
-See **bitranox:coding-python-use-modern-libraries** for the wider list.
+See **bitranox:coding-python-use-modern-libraries** for the wider list. Reach for the structured editors
+for the other formats too: **bitranox:files-edit-json**, **bitranox:files-edit-toml**, **bitranox:files-edit-yml**.
 
 **Safety:** for XML from an untrusted source, disable entity expansion and network access to avoid
 XXE / billion-laughs: `etree.XMLParser(resolve_entities=False, no_network=True, dtd_validation=False)`.
@@ -35,9 +36,9 @@ root = tree.getroot()
 
 # edit via XPath: append a host override under <unbound>
 unbound = root.find("unbound")
-host = etree.SubElement(unbound, "hosts")
+hosts = etree.SubElement(unbound, "hosts")
 for tag, text in (("host", "media"), ("domain", "example.com"), ("ip", "192.0.2.10")):
-    etree.SubElement(host, tag).text = text
+    etree.SubElement(hosts, tag).text = text
 
 xml_bytes = etree.tostring(tree, pretty_print=True, xml_declaration=True, encoding="UTF-8")
 with open("config.xml", "wb") as f:

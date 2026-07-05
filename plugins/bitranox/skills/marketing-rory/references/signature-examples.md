@@ -1,6 +1,6 @@
 # Rory Sutherland - Signature Examples
 
-His recurring anecdotes, distilled from ~237 of his talks and podcast appearances.
+His recurring anecdotes, distilled from his public talks and podcast appearances.
 Use them as analogies when advising. Each is paraphrased; reach for the one closest to the
 user's problem to justify a cheap, perception-led, counter-intuitive move.
 

@@ -15,14 +15,15 @@ verifies it.
 ## Library
 
 - **`json`** (stdlib) - the default: `json.load` / `json.dump` (use `indent=2` for human-edited
-  config, `sort_keys=True` for stable diffs). Correct and always available.
+  config, `ensure_ascii=False` to keep literal UTF-8 instead of `\uXXXX`, `sort_keys=True` for stable diffs). Correct and always available.
 - **`orjson`** - when speed/throughput matters (fast, returns `bytes`, strict). `pip install orjson`.
 
 JSON has **no comments**. If a file has `//` or `/* */` (JSONC, e.g. tsconfig, VS Code settings)
 or trailing commas (JSON5), plain `json` will fail - use `pyjson5`/`json5` to load it, but write
 back as strict JSON unless the consumer requires the relaxed form.
 
-See **bitranox:coding-python-use-modern-libraries** for the wider list.
+See **bitranox:coding-python-use-modern-libraries** for the wider list. Reach for the structured editors
+for the other formats too: **bitranox:files-edit-toml**, **bitranox:files-edit-xml**, **bitranox:files-edit-yml**.
 
 ## Pattern: load -> edit the structure -> dump -> re-load to validate
 

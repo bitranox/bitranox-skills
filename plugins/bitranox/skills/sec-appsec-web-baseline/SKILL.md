@@ -1,6 +1,6 @@
 ---
 name: sec-appsec-web-baseline
-description: "Use when a public web page or site needs its HTTP security baseline hardened or audited - missing or weak security headers (Content-Security-Policy/CSP, Strict-Transport-Security/HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy), cookies without Secure/HttpOnly/SameSite, mixed content, no HTTP-to-HTTPS redirect, a leaked server version, or a low securityheaders/Mozilla-Observatory grade. NOT for deep pentest, auth flows, secret scanning, or GDPR/consent infra (sibling sec-* / privacy skills)."
+description: Use when a public web page or site needs its HTTP security baseline hardened or audited - missing or weak security headers (Content-Security-Policy/CSP, Strict-Transport-Security/HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy), cookies without Secure/HttpOnly/SameSite, mixed content, no HTTP-to-HTTPS redirect, a leaked server version, or a low securityheaders/Mozilla-Observatory grade. NOT for deep pentest, auth flows, secret scanning, or GDPR/consent infra (sibling sec-* / privacy skills).
 ---
 
 # Web Security Baseline Audit

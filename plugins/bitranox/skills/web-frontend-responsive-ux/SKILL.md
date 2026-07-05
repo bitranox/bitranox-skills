@@ -1,6 +1,6 @@
 ---
 name: web-frontend-responsive-ux
-description: "Use when a web page must work across mobile/tablet/desktop and the layout or usability is off - horizontal scrollbar on mobile, content not fitting vertically on phone portrait/landscape, cramped or tiny tap targets, swipe/carousel galleries, viewport/breakpoint issues, notch/safe-area overlap, sparse layouts on big screens, or RTL/long-translation layout breakage. Audits and fixes these, verified in a real browser via Playwright or a browser MCP across a device matrix. NOT for performance/SEO scoring (use a pagespeed/Lighthouse skill) or full localization infra."
+description: Use when a web page must work across mobile/tablet/desktop and the layout or usability is off - horizontal scrollbar on mobile, content not fitting vertically on phone portrait/landscape, cramped or tiny tap targets, swipe/carousel galleries, viewport/breakpoint issues, notch/safe-area overlap, sparse layouts on big screens, or RTL/long-translation layout breakage. Audits and fixes these, verified in a real browser via Playwright or a browser MCP across a device matrix. NOT for performance/SEO scoring (use a pagespeed/Lighthouse skill) or full localization infra.
 ---
 
 # Responsive & Mobile Usability Audit

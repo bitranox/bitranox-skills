@@ -1,6 +1,6 @@
 ---
 name: net-rotating-proxies
-description: Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting). Covers building and re-testing a free-proxy pool and running a worklist through it in parallel.
+description: Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting).
 ---
 
 # Rotating proxies for blocked / rate-limited fetches
@@ -105,6 +105,9 @@ Pick `--test-url` and `--success-glob` to match the host and tool you are unbloc
 
 ## Notes
 
+- Stay within lawful use. Only fetch content you are authorised to access, and respect the
+  target's terms of service and robots directives. Rotating egress IPs spreads a legitimate bulk
+  fetch past a per-IP rate limit; it is not for defeating a block meant to keep you out.
 - Confirm the block is per-IP before reaching for proxies; if a few requests still succeed from
   your own IP, slow down instead.
 - Free-proxy hit rate is low and decays within minutes; the background refresh and good/bad lists
