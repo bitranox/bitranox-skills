@@ -25,8 +25,9 @@ honor its extra rules on top of this one.
 | Storage spec - trees/anchors, pointer-block grammar, mem: lines, trigger-first hooks, body frame, tiers + capture flow, delivery paths, engine command table + fail-loud contract | references/memory-backend.md       |
 | Upstream PR loop - shared skill/hook changes to the source repo, scan, routing, version bump                                                                                      | references/upstream-propagation.md |
 
-Use the Read tool to load a referenced file when its detail is needed (the backend spec BEFORE the
-first engine call of a session).
+Use the Read tool to load a referenced file when its detail is needed. **REQUIRED BACKGROUND:**
+references/memory-backend.md is the storage spec - Read it BEFORE the first engine call of a
+session.
 
 ## When to run
 

@@ -1,6 +1,6 @@
 ---
 name: meta-dream-project
-description: Consolidate the CURRENT project's memory like sleep - periodically, when memory has grown, or before context compaction would lose detail - and on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory", or when the SessionStart nudge says a consolidation is due. Runs AFTER per-turn capture (bitranox:meta-self-improve). For the cross-project / cross-tree scan use bitranox:meta-dream-global. Honors an off/auto/propose mode.
+description: Use when the SessionStart nudge says a memory consolidation is due, when the store has grown or feels noisy/duplicated, before context compaction would lose detail, or on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory". Use AFTER per-turn capture (bitranox:meta-self-improve); for the cross-project / cross-tree scan use bitranox:meta-dream-global instead. Honors an off/auto/propose mode.
 ---
 
 # meta-dream-project
@@ -10,10 +10,10 @@ sleep. `bitranox:meta-self-improve` is the fast per-turn CAPTURE; this is the pe
 CONSOLIDATION: dedup, merge, re-level (PLACEMENT), normalize, prune - so memory gets smaller and
 sharper, not bigger. **If a pass would grow the store, it is wrong.**
 
-The storage spec (trees/anchors, store grammar, trigger-first hooks, framed bodies, engine
-commands + fail-loud contract) is `bitranox:meta-self-improve` -> `references/memory-backend.md` -
-read it before the first engine call. This skill stays WITHIN the current tree; cross-tree work is
-`bitranox:meta-dream-global`.
+**REQUIRED BACKGROUND:** the storage spec (trees/anchors, store grammar, trigger-first hooks,
+framed bodies, engine commands + fail-loud contract) is `bitranox:meta-self-improve` ->
+`references/memory-backend.md` - Read it BEFORE the first engine call. This skill stays WITHIN the
+current tree; cross-tree work is `bitranox:meta-dream-global`.
 
 ## Reference files
 
