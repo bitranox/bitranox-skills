@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.39.0] - 2026-07-06
+
+### Changed
+- meta-dream-project rewritten (skills-half C3, the centerpiece): PLACEMENT replaces "promote" -
+  every unpinned entry routes through a fixed routing prompt (LEVEL | CONFIDENCE | WHY) against
+  the per-level scope-descriptor ladder (fixed template: WHAT/STACK/CHILDREN/PLACE-HERE/
+  PLACE-ELSEWHERE, freshness-gated synthesis), applied up AND down via engine move under one
+  propose-diff; a voice + FIRING check pass (does the hook name the situations its body applies
+  to?); backup + order-independent manifest with a post-dream diff; pinned entries exempt without
+  explicit approval; multi-tree aware (another tree is never touched). Behavioral passes moved to
+  references/dream-passes.md (CLAUDE.md reconciliation kept near-verbatim; demotion pass subsumed
+  by placement). Dead meta-dream-projectB2.md fragment deleted.
+
+### Added
+- Dream acceptance harness: tests/fixture_builder.py plants a deterministic two-tree fixture
+  (DUP, MIS-HIGH, MIS-LOW, OBS, TASK, VOICE, PIN, SCOPE, XTREE control); tests/fixture_asserter.py
+  checks a real dream run (hard: XTREE/PIN/VOICE-ID/RECONCILE/NO-LOSS; judgment: 6 cases; bar =
+  all hard + >=5/6 on two consecutive runs); procedure in tests/README-acceptance.md; harness
+  unit-tested (9 tests). RED/GREEN verified via pinned-tier subagents.
+
 ## [5.38.0] - 2026-07-06
 
 ### Changed
