@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.38.0] - 2026-07-06
+
+### Changed
+- meta-self-improve rewritten as a capture-procedure hub + two reference files (skills-half C2).
+  `references/memory-backend.md` is now THE canonical storage spec: knowledge trees/anchors, the
+  slug-store grammar (mem: links, pinned-first render), the trigger-first hook spec, the framed
+  body shape (frontmatter + Why/How-to-apply), the two tiers + explicit capture flow (hooks never
+  write memory; capture at project level; re-leveling is the dream's move), the three delivery
+  paths (+ cross_tree_search, MCP=search-only), and the engine command table with the fail-loud
+  contract (BITRANOX_RUN_PYTHON_STRICT=1, required success lines).
+  `references/upstream-propagation.md` carries the shared-artifact PR loop. RED/GREEN verified:
+  the old skill taught the retired uuid-sharded model with no hook/body specs; against the new
+  files a pinned-tier subagent answered the format questions correctly and produced a compliant
+  capture end to end.
+
 ## [5.37.1] - 2026-07-06
 
 ### Fixed
