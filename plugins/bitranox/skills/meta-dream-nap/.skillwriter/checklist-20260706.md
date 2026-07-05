@@ -13,4 +13,6 @@
 - [x] CSO description: trigger-first (compaction, signals, "nap"); PostCompact nudge rewired here
 - [x] Deliverables checklist + rationalization table shipped in the skill
 - [x] Security scan: prose-only, clean
-- PENDING: live acceptance runs (2x, bar all-hard + 3/3) after the next marketplace update
+- [x] LIVE ACCEPTANCE MET: two consecutive runs on 5.43.0, both 6/6 hard (incl. SIBLINGS
+  byte-identity) + 3/3 judgment, at ~6-7 min vs the full dream's ~15 (2.3x faster on the
+  small fixture; the gap widens with tree size)
