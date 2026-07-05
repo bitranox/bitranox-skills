@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.44.0] - 2026-07-06
+
+### Added
+- `hooks/build_skill_docs.py`: generates `docs/skills.md` - the skill catalog grouped by taxonomy
+  category with each skill's trigger-first description - from the skills' own frontmatter.
+  `--check` sync mode is wired into the pytest suite, so the catalog cannot go stale.
+- Docs restructured into chapters: `docs/installation.md`, `docs/setup.md`, `docs/usage.md`,
+  `docs/architecture.md`, `docs/reference.md` (every knob, sentinel file, env var, CLI command,
+  and quirk), plus the generated `docs/skills.md`.
+- Sync tests assert the README's stated skill count and the reference chapter's knob table match
+  the shipped code.
+
+### Changed
+- `README.md`: rewritten as a short introduction plus the chapter table.
+- `docs/concepts.md` replaces `docs/self-learning-memory.md`: the plain-language ideas chapter,
+  covering the three-rung dream ladder (nap / tree / crosstree).
+- `ai-transparency.md`: rewritten in present tense against the current verification surface
+  (test suites, repository gate, sync tests, the dream acceptance harness).
+
 ## [5.43.1] - 2026-07-06
 
 ### Changed
