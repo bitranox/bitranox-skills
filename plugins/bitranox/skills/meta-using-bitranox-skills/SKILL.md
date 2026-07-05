@@ -106,19 +106,18 @@ When multiple skills could apply, use this order:
 
 bitranox ships far more than the workflow/process skills. Before concluding "no skill applies," scan these domains: there is very likely a relevant one. The authoritative, current list is your injected available-skills - invoke any by name with the Skill tool.
 
-- **Process and quality:** `process-plan-brainstorming`, `process-plan-writing-plans`, `process-plan-executor`, `process-agents-subagent-driven-development`, `process-agents-dispatching-parallel`, `process-test-driven-development`, `process-test-design`, `process-debug-systematic`, `process-review-verification-before-completion`, `process-review-requesting-code-review`, `process-review-receiving-code-review`, `process-ship-finishing-development-branch`, `git-worktrees`, `process-review-enhance-code-quality`, `meta-self-improve`, `meta-dream-project`, `meta-dream-global`, `meta-dream-global-deep`, `meta-collect-knowledge`, `meta-memory-settings`, `meta-skill-writer`, `meta-adopting-external-skills`
-- **Architecture:** `coding-python-clean-architecture`, `coding-bash-clean-architecture`, `coding-python-enforce-data-architecture-strict`, `coding-resilience`
-- **Language and tooling references:** `coding-bash-reference`, `coding-rust`, `coding-input-sanitization`, `coding-python-uv`, `coding-python-rpyc`, `coding-python-textual`, `coding-python-performance-review`, `coding-python-use-modern-libraries`, `coding-python-gitignore`
-- **Editing structured files and docs:** `files-edit-json`, `files-edit-toml`, `files-edit-xml`, `files-edit-yml`, `docs-md-table-formatting`, `docs-convert-markitdown`
-- **Shell / git / ssh / remote-control mechanics:** `compuse-bash`, `compuse-git`, `compuse-ssh`, `compuse-vnc`
-- **Writing:** `write-humanize-de`, `write-humanize-en`
-- **Infrastructure and ops:** `infra-proxmox`, `infra-proxmox-bindsnap`, `net-rotating-proxies`
-- **Build / test / release tooling:** `devops-bmk`
-- **Web / frontend:** `web-frontend-responsive-ux`
-- **Security:** `sec-appsec-web-baseline`
-- **Persuasion and business:** `marketing-rory`
+- **Process and quality** (`process-*`, `git-worktrees`): planning, TDD, debugging, reviews, shipping.
+- **Memory and meta** (`meta-*`): capture, dreams, gathering, skill authoring.
+- **Coding and architecture** (`coding-*`): language references, clean architecture, sanitization, resilience.
+- **Structured files and docs** (`files-edit-*`, `docs-*`): e.g. `files-edit-yml`, `docs-md-table-formatting`.
+- **Shell / git / ssh / VNC mechanics** (`compuse-*`): e.g. `compuse-bash` for pipelines and exit codes.
+- **Writing** (`write-humanize-en`/`-de`), **infrastructure** (`infra-*`, `net-*`, `devops-bmk`),
+  **web** (`web-*`), **security** (`sec-*`), **business** (`marketing-*`).
 
-This grouping is orientation, not the source of truth: skills get added and renamed. Trust the available-skills list for what currently exists, and never skip a domain skill just because the task looked like "only" a coding task (e.g. editing a YAML file -> `files-edit-yml`; writing a user-facing message -> `write-humanize-en`/`write-humanize-de`; touching a Proxmox host -> `infra-proxmox`).
+THE AUTHORITATIVE LIST IS YOUR INJECTED available-skills - these categories are orientation only
+(skills get added and renamed; the list is the source of truth). Never skip a domain skill because
+the task looked like "only" a coding task: editing a YAML file -> `files-edit-yml`; writing a
+user-facing message -> `write-humanize-en`/`-de`; touching a Proxmox host -> `infra-proxmox`.
 
 ## Work like a pathfinder
 
