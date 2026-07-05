@@ -54,14 +54,16 @@ engine is the only write path.
 
 ## The nudges, decoded
 
-- **"A memory consolidation is due"** (session start) - run `/dream-tree`, or say "skip". Silence
-  these with the `nudges` knob.
-- **A capture nudge after your turn** (Stop gate) - the turn contained a learning signal; let
-  `meta-self-improve` file it, or say there is nothing durable.
-- **After a context compaction** (PostCompact) - details from the compacted conversation are at
-  risk; a `/dream-nap` folds the salvaged learnings in while they are warm.
-- **A skill suggestion under your prompt** (router) - your prompt matched a skill's triggers;
-  Claude is reminded the skill exists. At most two skills, once per session.
+All nudges are ON by default and each has its own off-switch - none requires action, and ignoring
+one never blocks a turn.
+
+| Nudge                                           | What it means and what to do                                                                                                                     | Default / off-switch                                                                                            |
+|-------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| "A memory consolidation is due" (session start) | The store has accumulated enough change to be worth a tidy: run `/dream-tree`, or say "skip"                                                     | On; silence with the `nudges` knob ([reference.md](reference.md))                                               |
+| A capture nudge after your turn (Stop gate)     | The turn contained a learning signal (a correction, a "remember", a discovery); let `meta-self-improve` file it, or say there is nothing durable | On; no knob - capture is the core loop. It self-silences when no signal is present                              |
+| After a context compaction (PostCompact)        | Details from the compacted conversation are at risk; a `/dream-nap` folds the salvaged learnings in while they are warm                          | On; fires only when the PreCompact salvage found candidates                                                     |
+| A skill suggestion under your prompt (router)   | Your prompt matched a skill's triggers; Claude is reminded the skill exists                                                                      | On; at most two skills, once per session - repeat prompts stay quiet by design                                  |
+| An auto-update reminder (session start)         | The marketplace is installed without auto-update; one line suggests enabling it                                                                  | On; self-silences once auto-update is on, or dismiss via the sentinel file ([installation.md](installation.md)) |
 
 ## A worked example
 
