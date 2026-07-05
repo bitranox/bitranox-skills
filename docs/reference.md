@@ -37,15 +37,18 @@ hand-edit it; the CLI validates keys and values. Defaults in brackets.
 
 ## Environment variables
 
-Set these in the shell that LAUNCHES Claude Code - hooks inherit the session's environment, and a
-`/reload-plugins` keeps it.
+All four default to UNSET, which is the correct state for normal use - the plugin never sets them
+for you, and a regular user never needs any of them. The first three must be in the environment of
+the shell that LAUNCHES Claude Code (hook processes inherit the session's environment; exporting
+inside a session's Bash command does not reach the hooks, while a `/reload-plugins` keeps the
+launch environment).
 
-| Variable                       | Effect                                                                                                                                             |
-|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `BITRANOX_HOOKS_OFF=1`         | Dev kill-switch: silences every plugin hook (each prints a one-line skip notice to stderr). Strip per-command with `env -u BITRANOX_HOOKS_OFF ...` |
-| `BITRANOX_SKILL_WRITER=1`      | Declares a skill-authoring session: the skill-edit guard admits `SKILL.md` writes                                                                  |
-| `BITRANOX_MEMORY_ENGINE=1`     | Declares a store-maintenance session: the store-edit guard admits direct store writes                                                              |
-| `BITRANOX_RUN_PYTHON_STRICT=1` | The launcher shim fails loud (exit 3) instead of skipping silently when no Python is found - for deliberate callers, not hooks                     |
+| Variable                       | Default | Effect when set                                                                                                                                                                   | Who sets it, and when                                                                                                                                                                                            |
+|--------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `BITRANOX_HOOKS_OFF=1`         | unset   | Kill-switch: EVERY plugin hook exits immediately (one-line skip notice to stderr). No recall, no router, no capture gate, no nudges - and no guards, so the safety net is off too | Plugin developers only, at session launch, while debugging the hook stack itself. Never for normal use. A dev session re-enables one hook per command with `env -u BITRANOX_HOOKS_OFF bash run-python.sh ...`    |
+| `BITRANOX_SKILL_WRITER=1`      | unset   | The skill-edit guard admits `SKILL.md` writes for the whole session                                                                                                               | Skill authors, at session launch, for an extended authoring session. Usually unnecessary: running `bitranox:meta-skill-writer` issues a receipt (8-hour TTL) that admits the edits without the env var           |
+| `BITRANOX_MEMORY_ENGINE=1`     | unset   | The store-edit guard admits DIRECT writes to pointer blocks and `.claude-memory/` via file tools                                                                                  | Store maintainers, at session launch, only for deliberate store surgery (migration, manual repair). Normal memory writes go through `memory_engine.py`, which is never blocked - so routine use never needs this |
+| `BITRANOX_RUN_PYTHON_STRICT=1` | unset   | The launcher shim fails loud (exit 3) instead of skipping silently when it cannot find a Python interpreter                                                                       | Deliberate callers, per command (e.g. a consolidation invoking the engine), where a silent no-op would fake success. Hooks stay fail-open by design - a hook must never wedge a turn                             |
 
 ## Command-line surface
 
