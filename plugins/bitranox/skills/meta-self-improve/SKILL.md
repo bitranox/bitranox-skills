@@ -1,471 +1,192 @@
 ---
 name: meta-self-improve
-description: Use at the end of a turn that produced a learning, such as a correction from the user, a rule or preference stated ("remember this", "from now on", "always/never"), a process or tooling mistake (wrong command, a quirk of the shell/SSH/environment, a misread of stale output, over-waiting, a tool or file you missed and re-derived), a wasted build or test cycle, or any reusable discovery (a procedure, a timing, a gotcha, a flag combination, a path). Captures the learning into project memory and CLAUDE.md so the harness compounds. A gated Stop hook nudges this automatically; also run on "self-improve", "/self-improve", "improve the harness", or "capture what we learned".
+description: Use at the end of a turn that produced a learning, such as a correction from the user, a rule or preference stated ("remember this", "from now on", "always/never"), a process or tooling mistake (wrong command, a quirk of the shell/SSH/environment, a misread of stale output, over-waiting, a tool or file you missed and re-derived), a wasted build or test cycle, or any reusable discovery (a procedure, a timing, a gotcha, a flag combination, a path). A gated Stop hook nudges this automatically; also run on "self-improve", "/self-improve", "improve the harness", or "capture what we learned".
 ---
 
 # self-improve
 
 Turn what this session taught into a durable improvement, so the same lesson is not re-learned next
-time. The unit of value is one small, reusable fact or rule recorded in the right place at the right
-altitude: a project **memory** entry (a pointer line in that level's `CLAUDE.local.md` pointer block,
-with the body a central file at the anchor), a **global cross-project rule** at the broadest altitude
-(the anchor: the TOPMOST ANCESTOR directory that has a `CLAUDE.md`), or a **CLAUDE.md** guardrail
-(see step 3b).
+time. The unit of value is ONE small, reusable fact recorded via the memory engine at the project
+level of the current knowledge tree - or, when a rule must bind future sessions, a CLAUDE.md
+guardrail (step 3b).
 
-**Core constraint: memory is finite. Default to updating an existing entry and to short index lines,
-never to appending blindly.** A self-improver that bloats memory makes the harness worse, not better.
+**Core constraint: memory is finite. Default to updating an existing entry, never to appending
+blindly.** A self-improver that bloats memory makes the harness worse, not better.
 
-This skill is the per-turn CAPTURE. The periodic BATCH consolidation - dedup/merge/generalize/re-wire/
-prune the whole store, like sleep - is `bitranox:meta-dream-project` (this project; run it when memory
-has grown or a consolidation is nudged as due) and, for the occasional cross-project pass,
-`bitranox:meta-dream-global`. Capture here; consolidate there.
+This skill is the per-turn CAPTURE. The periodic BATCH consolidation - dedup / merge / re-level /
+prune, like sleep - is `bitranox:meta-dream-project` (and `bitranox:meta-dream-global` across
+trees). Capture here; consolidate there. If a project ships its own `*-self-improve` extension,
+honor its extra rules on top of this one.
 
-If a project ships its own extension of this skill (a more specific `*-self-improve` for its repo,
-exact memory paths, ledgers, or push gates), read it and honor its extra rules on top of this one.
+## Reference files
 
-## Memory backend
-Durable learnings live in a per-altitude **pointer block** managed inline in that level's
-`<level>/CLAUDE.local.md`, with fact bodies in a central store at the anchor:
-- **The pointer block** - a managed region in `CLAUDE.local.md`, fenced by
-  `<!-- BITRANOX-UUID-INDEX:BEGIN -->` ... `<!-- BITRANOX-UUID-INDEX:END -->`, holding a
-  `<!-- bitranox:self-learning -->` scope-descriptor block, a `# Memory index` heading, then one line
-  per fact: `- [Title](uuid:<uuid>) - hook <!-- bx:src=<sources> bx:pin bx:slug=<slug> -->`. It loads
-  as cascade TEXT (no `@import`), so every line is always in context.
-- **Central fact bodies** - one file each at `<anchor>/.claude-memory/facts/<2-hex-shard>/<uuid>.md`,
-  a single shared, mount-independent store at the anchor (the topmost `CLAUDE.md`-bearing ancestor).
-  A pointer line at ANY altitude references its body by `uuid`. All bodies are central; there is no
-  per-altitude body copy.
-- **Slug is the logical identity** (carried as `bx:slug=` on the pointer line); the UUID is only the
-  body-file key. Reference, provenance, and dedup are all slug-based.
+| Topic                                                                                                                                                                             | File                               |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
+| Storage spec - trees/anchors, pointer-block grammar, mem: lines, trigger-first hooks, body frame, tiers + capture flow, delivery paths, engine command table + fail-loud contract | references/memory-backend.md       |
+| Upstream PR loop - shared skill/hook changes to the source repo, scan, routing, version bump                                                                                      | references/upstream-propagation.md |
 
-**The write path is the engine, never a hand-write.** Capture ONE fact by invoking
-`hooks/memory_engine.py` (via the plugin's `hooks/run-python.sh` launcher, cross-platform):
-
-    add --proj "<cwd>" --type feedback|project|reference|user --title "..." --hook "one line"
-        --body-file <tmpfile> [--source <native-slug>] [--pin] [--scope "what this level is for"]
-
-The engine prints the slug. It upserts by slug (merging provenance + pin), writes the body as a
-central `<uuid>.md` file, ensures the `CLAUDE.local.md` pointer block and its scope-descriptor block,
-takes a lock, and is mtime-neutral. **Do NOT hand-edit the `CLAUDE.local.md` pointer block or a
-central body yourself** - the PostToolUse hooks would then churn the file every turn; the engine
-writes directly and bypasses them.
-
-**Self-heal.** Missing or malformed wiring repairs itself: `memory_engine.py heal --proj "<cwd>"`
-runs EVERY session (via `session-start`) and again in the dream - it prints
-"healed N file(s) across M level(s)", recreating a missing `CLAUDE.md`, `CLAUDE.local.md`, or pointer
-block, and normalizing a malformed SCOPE or pointer block. A pointer whose central body is missing is
-REPORTED, never fabricated.
-
-**Two tiers (native raw + curated).** Claude Code's native Auto memory (`~/.claude/projects/<proj>/
-memory/MEMORY.md`) stays ON as the raw/uncurated tier; it also loads at session start. Capture goes
-to the CURATED tier (the engine above). Both load; their union is your memory. The dream de-doubles
-(a fact lives in exactly one tier) and promotes worthwhile raw entries into the curated store; it
-leaves some-value raw entries in native. You do not need Auto memory on for capture to work, but
-keeping it on preserves the raw tier - do not disable it. The native raw tier stays PER-MACHINE
-(under `~/.claude`, invisible from a remote machine over a share); only the CURATED global store is
-share-portable, because it now lives at a share-visible ancestor directory (see step 3b) rather than
-under `~/.claude`.
-
-**Always in context.** The pointer block loads as plain ancestor-`CLAUDE.local.md` cascade TEXT, so
-it needs no `@import` and no version gate - every pointer line is reliably in context. Never
-hand-write fact bodies into CLAUDE.md (that is the engine's job).
-
-Keep the memory systems in their lanes:
-- **The curated store + native raw tier (this skill):** durable, curated, deduplicated learnings.
-- **The `remember` plugin / `.remember/`:** session task-continuity only (a time-decaying handoff
-  journal). Never put durable learnings there, and never copy handoff/task state into memory.
-
-### A memory MCP is an optional SEARCH index, never the store
-
-A memory MCP (`basic-memory`) is **not** the home and **not** a write path - routing learnings
-through it skips the index and they become unindexed + unsearched (a real regression). Its ONLY
-sanctioned role is an optional, full-text + knowledge-graph SEARCH index OVER the local pointer
-blocks and central `.claude-memory/` bodies, to sharpen CROSS-project recall. When present it must be read-only
-over those files (`ensure_frontmatter_on_sync: false`, `disable_permalinks: true`,
-`format_on_save: false` so it never rewrites them); when absent, recall falls back to the built-in
-keyword scan (never a hard dependency - self-healing). Add or remove it through the `update-config`
-skill; never wire one in or out silently.
-
-### Scaling: keep it lean
-
-One fact per entry, a one-line hook (under ~200 chars), and EDIT an existing entry (re-run the engine
-with the same title -> it upserts) rather than appending a near-duplicate. The pointer block is NOT
-hard-capped: `reconcile_memory_index.py --check` emits an ADVISORY pointer-block-size warning (never a
-failure) once it grows large, so growth is visible. When it grows, the dream lifts/dedups/promotes
-what it can; a pointer block that legitimately stays large is fine - a project pointer block loads only
-in that project's sessions. If a pointer references a central body that is missing,
-`reconcile_memory_index.py <level-dir>` REPORTS the orphan (there is no backfill - a raw body carries
-no title/hook/slug to reconstruct a pointer line).
+Use the Read tool to load a referenced file when its detail is needed (the backend spec BEFORE the
+first engine call of a session).
 
 ## When to run
 
-Any turn that contains a learning signal. Signals come in **families** - the gated Stop hook fires
-on all of them: a user **correction**, an explicit **"remember"**, an **endorsement of a good idea
-from either side** ("good idea", "good call") - when YOU judge the user's suggestion good, the user
-found the better path, so adopt and record it (kin to a self-admitted miss); when the user endorses
-your proposal, it is a confirmed approach - an assistant **self-admitted miss** ("you're right", "my
-mistake", "I should have ...", "I missed ...", "in hindsight ..."), an assistant **committing to a rule
-going forward** ("from now on I'll ...", "going forward I'll ...") - especially after being reminded of a
-rule you overlooked - or a **realization or discovery** - a turn where you finally work out how something
-really fits together OR locate the thing you were hunting ("now I understand the real topology...", "I
-figured out that X actually runs on Y", "now it's clear", "found it - the bug was ...", "found the root
-cause"). (A bare acknowledgement like "understood" is NOT itself the signal - the lesson is the rule or
-directive it acknowledges; trigger on that. Citing a rule you'd missed - "per the X rule" - is an audit
-candidate, reviewed next session, not a live nudge.)
-A realization about your own
-infrastructure or a project's architecture, topology, or data-flow is a durable discovery: capture
-the fact, do not let it evaporate when the turn ends. You can also invoke this skill manually. If you
-reflect and find nothing durable, say so in one line and stop. Do not manufacture a "learning".
+Any turn with a learning signal. Signal families (the gated Stop hook fires on all of them): a user
+**correction**; an explicit **"remember"**; an **endorsement of a good idea from either side**
+("good idea", "good call" - when YOU judge the user's suggestion good, adopt and record it; when
+the user endorses yours, it is a confirmed approach); an assistant **self-admitted miss** ("you're
+right", "my mistake", "I should have...", "in hindsight..."); an assistant **commitment going
+forward** ("from now on I'll..."); a **realization or discovery** ("now I understand the real
+topology...", "found it - the root cause was..."). A realization about infrastructure,
+architecture, or data-flow is a durable discovery - capture it before the turn ends. A bare
+acknowledgement ("understood") is not itself the signal - trigger on the rule it acknowledges.
 
-When you notice the gate missed a signal, fix the **whole family**, not just the one phrase you were
-handed - propose the related variants yourself rather than waiting to be fed each one.
+If you reflect and find nothing durable, say so in one line and stop. Never manufacture a
+"learning". When the gate missed a signal, fix the WHOLE family in `self_improve_signals.py`, not
+just the one phrase.
 
 ### End-of-session miss audit (self-tuning loop)
 
-Because the per-turn Stop gate is precision-tuned, it misses some signals. A two-stage loop catches
-those without making the live gate noisy:
-
-- **SessionEnd** (`self-improve-audit.py`) scans the whole transcript and, using the broader recall
-  patterns in `self_improve_signals.py`, records **candidate misses** (a broad match the strict gate
-  did not catch) to a per-project audit file. It cannot call the model, so it only records.
-- **SessionStart** (`session-start.py`) surfaces that audit once next session, so you **review the
-  candidates**: confirm the genuine misses, capture their learnings here, and for a real gap extend
-  the gate's family patterns in `self_improve_signals.py` (the meta-loop). Patterns live in that one
-  shared module so the gate and the audit never drift.
-- **Skill-coverage gaps are NOT this loop's job - they go to the dream.** When a defect slipped past a
-  skill you followed (as opposed to a gate miss), the "does this skill have a coverage gap?" judgment is
-  fuzzy and belongs in `bitranox:meta-dream-project`'s propose-first Skill-gap review pass, not this
-  deterministic audit. See the global rule `flag-a-skill-when-a-real-bug-slips-past-it`.
-- **Premature signals belong in the audit, NOT the live gate.** A mid-course pause ("let me stop and
-  inspect", "let me double-check", "wait, ...") only HINTS at a lesson - the lesson is not formed yet;
-  it resolves later into a discovery ("found it") or a self-admission ("I should have"), which the live
-  gate already catches. So those precursors are deliberately BROAD-audit-only (a next-session review
-  candidate, where a human decides if there was a lesson or an anti-pattern), never a per-turn nudge.
+The per-turn gate is precision-tuned, so a broader SessionEnd scan (`self-improve-audit.py`)
+records candidate misses to a per-project audit file; SessionStart surfaces it ONCE next session.
+Review the candidates: capture the genuine misses here, and for a real gap extend the gate's family
+patterns in `self_improve_signals.py` (gate and audit share that module, so they never drift).
+Premature signals ("wait...", "let me double-check") stay audit-only - the lesson is not formed
+yet. Skill-coverage gaps are NOT this loop's job: a defect that slipped past a skill you followed
+goes to the dream's skill-gap pass.
 
 ## Procedure
 
 Create one todo per step.
 
-### 1. Gather candidate learnings
-Reflect on the just-finished work (the transcript tail, and any session buffer the project keeps).
-List the concrete, reusable things this session surfaced, one plain sentence each. Discard anything
-that is task state, already recorded in the repo or git history, or only mattered to this conversation.
+### 1. Gather candidates
+
+Reflect on the just-finished work. List the concrete, reusable things it surfaced, one sentence
+each. Discard task state, anything the repo/git history already records, and anything that only
+mattered to this conversation.
 
 ### 2. Classify each candidate
-| Kind                                                                                                                                                          | Home                                                                                                                                                                                                                                                                                                        |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| A correction or working-style directive from the user ("from now on...", "always/never...", "don't do X")                                                     | a `feedback`-type memory **and**, if it should bind future sessions, a guardrail line in CLAUDE.md                                                                                                                                                                                                          |
-| A recurring process / tooling / environment mistake (wrong command pattern, a shell/SSH/OS quirk, reading stale output, over-waiting, a forgotten discipline) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it next time                                                                                                                                                              |
-| A discovery or a miss (a tool/path you re-derived, a measured timing, a gotcha, a flag combo, a working procedure)                                            | the most relevant existing `project`/`reference` memory, or a new one                                                                                                                                                                                                                                       |
-| A realization about your own infrastructure or a project's architecture / topology / data-flow ("now I understand the real ...", "X actually runs on Y")      | record the FACT at the right altitude (step 3b): useful across projects -> the global tier at the topmost-`CLAUDE.md` ancestor (the anchor, kept concrete); one project's scope -> that project's memory; a must-hold intermediate-subtree rule -> that level's CLAUDE.md; **unsure which -> ask the user** |
-| A skill was wrong, missing, or mis-triggered                                                                                                                  | **propose**; gated-scaffold a new one only with permission (see step 5); never rewrite an existing skill inline (the one self-edit exception is this skill itself, see the meta-loop)                                                                                                                       |
-| Nothing durable                                                                                                                                               | drop it                                                                                                                                                                                                                                                                                                     |
+
+| Kind                                                                                            | Home                                                                                                                                 |
+|-------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                 |
+| Recurring process/tooling/environment mistake (wrong command, shell/SSH/OS quirk, stale output) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it |
+| Discovery or miss (a re-derived tool/path, a measured timing, a gotcha, a working procedure)    | the most relevant existing `project`/`reference` memory, or a new one                                                                |
+| Architecture/topology/data-flow realization                                                     | the right altitude per step 3b; unsure -> ask the user                                                                               |
+| A skill was wrong, missing, or mis-triggered                                                    | PROPOSE (step 5); never rewrite an existing skill inline (sole exception: this skill, see the meta-loop)                             |
+| Nothing durable                                                                                 | drop it                                                                                                                              |
 
 ### 3. Dedup BEFORE writing (mandatory)
-For each surviving candidate, search first (`grep -ril "<keyword>"` over the `CLAUDE.local.md` pointer
-blocks and the anchor's central `.claude-memory/facts/` bodies, the native memory dir, and the
-CLAUDE.md files). If a related entry exists, **update it**: re-run the engine `add` with the SAME
-`--title` - it upserts (merges provenance, keeps the pin), so sharpening a fact is the same command,
-not a new entry. New entry only when nothing covers it. Keep the `--hook` to one line under ~200
-chars; put the detail in `--body`/`--body-file` (the engine writes it as a central body file).
 
-### 3b. Choose the altitude(s) - by SCOPE, placed concretely
-Knowledge lives at always-present homes, narrowest to broadest:
-- **per-project** -> the project level's `CLAUDE.local.md` pointer block (bodies central at the anchor),
-  written with the engine. **Per-turn capture writes at the PROJECT level only** (`--proj "<cwd>"`);
-  it does NOT reach up to edit an ancestor's CLAUDE.md. Raising a fact to a higher altitude is the
-  DREAM's job (promotion), not per-turn capture - so a routine capture never touches a parent tree.
-- **global / cross-project** -> the BROADEST altitude: the anchor, the TOPMOST ANCESTOR directory that
-  has a `CLAUDE.md` (walking up from the project). `global_rules_dir(proj)` returns exactly this
-  (`claude_memory_dir(topmost_claude_md_dir(proj) or Path(proj))`) and is NEVER `~/.claude`. If no
-  ancestor - and not the project itself - has a `CLAUDE.md`, the project IS the top and everything
-  accumulates there. It is an ancestor dir and not `~/.claude` for a reason: on a network share
-  `~/.claude` is invisible from a remote machine, but a share-resident ancestor `CLAUDE.md` dir is
-  visible everywhere, so the store rides along with the tree. Its pointer block lives in the anchor's
-  `CLAUDE.local.md` and its fact bodies in the anchor's central `.claude-memory/facts/`, written with
-  the engine like any altitude, kept in its OWN local git repo for durability (store-own-repo, NOT the
-  old `~/.claude` whitelist repo, and NOT branched on git tracked-vs-untracked), and it is NOT
-  `CLAUDE.md`, so it never disturbs the user's hand-written rules. **Delivery into a NESTED project is
-  by the per-prompt RECALL HOOK** (`recall-memory.py` reads the pointer blocks and central bodies from
-  disk): when Claude is launched in a nested project the anchor's `CLAUDE.local.md` is above the
-  workspace root and does not cascade into context on its own, so the recall hook carries the global
-  entries down, and the anchor's `CLAUDE.md` text carries a short prose POINTER to the store path.
-  When Claude is launched AT or BELOW the anchor, the anchor's `CLAUDE.local.md` pointer block cascades
-  as text directly. This is the home for a rule useful across projects. (The old loose
-  `~/.claude/rules/bitranox/` layer was converted into this store; do not recreate it.)
-- **intermediate / a parent subtree** -> only `CLAUDE.md` cascades there, so an intermediate must-hold
-  rule goes in that level's `CLAUDE.md` (a bounded, propose-first touch; see CLAUDE.md policy in
-  `bitranox:meta-dream-project`).
+Grep the pointer blocks (`CLAUDE.local.md`), the anchor's `facts/` bodies, the native memory dir,
+and the CLAUDE.md chain for each candidate's keywords. If a related entry exists, UPDATE it: rerun
+the engine `add` with the same slug/title - it upserts (merges provenance, keeps the pin). New
+entry only when nothing covers it.
 
-Decide by **scope of applicability, NOT abstractness.** Record at the narrowest home that still covers
-everywhere the lesson applies. Concrete, specific knowledge that is useful everywhere (e.g. "log into
-the fleet with key X, accept host-key changes in our subnet") goes to the GLOBAL layer KEPT CONCRETE -
-abstracting it would destroy its usefulness. Generalize/abstract ONLY when the specifics are so
-project-bound they fit nowhere else; then lift the reusable principle up and keep the concrete instance
-local. The per-level scope descriptors (the `<!-- bitranox:self-learning -->` block at the top of each
-level's `CLAUDE.local.md` pointer block) say what each altitude is about; when the altitude is
-genuinely unclear, **ask the user**.
+### 3b. Choose the altitude - by SCOPE, placed concretely
 
-**A universal rule can also belong in a SHIPPED skill (the shared brain) - do not stop silently at your
-private layer.** The curated global store is private to your tree: it teaches only YOU (and anyone sharing that tree), never other users of the skill. When a captured rule
-is clearly universal AND it EITHER matches a shipped skill's domain (a shell gotcha ->
-`bitranox:compuse-bash`, a git gotcha -> `bitranox:compuse-git`, etc.) OR is substantial enough to
-warrant a NEW skill domain of its own, ALSO surface it as a public-contribution candidate so other users
-get it: enrich the existing skill, or propose a NEW skill (built with `bitranox:meta-skill-writer`, named
-per the taxonomy in `skill-taxonomy.json` / `CONTRIBUTING.md`; creating a new skill is the gated path -
-propose first, scaffold only on explicit permission, see step 5). **Sensitivity is NOT a disqualifier - it is
-something to STRIP:** if the rule still teaches its lesson once the private specifics (paths, hosts,
-secrets, org/setup details) are removed or replaced with generic placeholders, scrub them and contribute
-the cleaned version; only a rule that is USELESS without those specifics stays private. Route it through
-the upstream self-PR loop (see **Propagating skill improvements upstream**) as a self-contained,
-provenance-free, scrubbed addition. This is OPT-IN and propose-first: publishing exposes content and is a deliberate
-act, so never auto-publish - but do not let a clearly-shippable universal rule reach ONLY your private
-layer without raising the option. (The dream's skill-fit pass, `bitranox:meta-dream-project` step 9, is
-the batch backstop; raise it here at capture time when it is obvious.)
+- **Per-turn capture writes at the PROJECT level of the CURRENT tree only** (`--proj "<cwd>"`).
+  Raising a fact to a higher altitude is the DREAM's job (engine `move`), never capture's - a
+  routine capture never touches a parent level or another tree.
+- Decide the eventual home by **scope of applicability, not abstractness**: the narrowest level
+  that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
+  the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
+  block) are the routing key; when genuinely unclear, ask the user.
+- An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md`
+  (propose-first; policy in `bitranox:meta-dream-project`).
+- **Normalization, not duplication:** store a general rule ONCE at its altitude; a lower entry
+  cites `[[general-slug]]` plus only its delta. References point UPWARD only.
+- **Promotion to the tree's top is gated**: user-stated rules promote eagerly; a model-inferred
+  generalization needs corroboration across >= 2 dreams (`promotion` config knob).
+- **A universal rule can also belong in a SHIPPED skill** (the shared brain; the private store
+  teaches only you). If it matches a shipped skill's domain (shell -> `bitranox:compuse-bash`, git
+  -> `bitranox:compuse-git`, ...) or warrants a new one, raise the public-contribution option -
+  propose-first, scrub private specifics, route via references/upstream-propagation.md. Never let a
+  clearly-shippable rule stop silently at the private layer.
 
-**Synthesize a scope descriptor at EVERY altitude (per-level scope-descriptor synthesis).** The
-altitude tree should carry a MEANINGFUL descriptor at every rung, because these per-level descriptors
-are the ROUTING KEY the dream uses to decide which level/store a learning belongs in. This runs as a
-TWO-PHASE flow (see `bitranox:meta-dream-project` step 0): FIRST a deterministic scaffold, THEN parallel
-subagents.
-- **Scaffold first (deterministic, no model).** `memory_engine.py heal --proj "<cwd>"` creates every
-  missing per-level `CLAUDE.md` (a minimal altitude marker) + `CLAUDE.local.md` (with an empty-scope
-  pointer block) plus the anchor's central `.claude-memory/` store, for every level in
-  `altitude_chain(proj)` - the CURRENT project dir, every gap level, AND the anchor. Totally
-  deterministic, so the structure is never half-built.
-- **Then classify in parallel (one `sonnet` subagent per level).** For EACH level, dispatch a subagent
-  (capable model, NOT haiku - semantic classification), in PARALLEL since levels are independent: an
-  UPPER level's subagent reads the `README.md` / `CLAUDE.md` / other `*.md` docs of the directories
-  DIRECTLY BELOW that level; the CURRENT project level's subagent reads the project's OWN docs at the
-  SAME level (not below). Each returns a concise classification of what that directory is about. Write
-  it into that level's pointer-block scope with `memory_engine.py set-scope --proj "<level>"
-  --scope "<text>"` (the engine upserts the `<!-- bitranox:self-learning -->` block - never hand-edit
-  the pointer block).
-`altitude_chain(proj)` returns exactly this contiguous set of levels (gap levels included). The scaffold
-marker `CLAUDE.md` and the engine-managed pointer block / central store are written directly; any OTHER
-edit to a version-controlled `CLAUDE.md` is propose-first (auto in `auto` mode). Keep the guard: **never create a
-`CLAUDE.md` ABOVE the highest existing one**
-unless a truly-universal rule warrants a new headquarters - the sole exception is
-`bitranox:meta-dream-global-deep`'s org-chart audit, which (with the cross-tree view) may PROPOSE a
-brand-new top-level headquarters above the current highest rung when a truly-universal rule has no top
-home - always user-gated, never automatic here.
+### 4. Write it (the engine, fail-loud)
 
-**Normalization (reference + delta), not duplication.** When a general rule and a specific case
-overlap, store the general ONCE at its altitude and have the lower entry `references [[general]]` plus
-only its delta - they compose at load (the general is always-present above), never duplicated.
-**References point UPWARD only**: a project entry may reference a global rule; a higher entry must NEVER
-reference a lower one (deleting a project would dangle it). Verify with
-`reconcile_memory_index.py --check <altitude-chain of LEVEL dirs, narrow->broad>` (verifies
-`[[wikilink]]` integrity, upward-only, no orphans; pointer-block size is an advisory warning, not a
-failure - clean output ends "TOTAL problems: 0"); the chain
-comes from `self_improve_signals.altitude_chain(proj)`. The `CLAUDE.md` tiers in the ancestor chain are
-altitudes in this same model (each cascades into a project's context), so a rule duplicated across them
-normalizes the same way - general at the broadest covering tier, delta below; the dream skills carry the
-full reconciliation cases (`bitranox:meta-dream-project` "CLAUDE.md reconciliation").
+Compose the entry per the specs in references/memory-backend.md:
+- **Hook: trigger-first.** `When <situation>, <directive>.` - second person, 1-3 sentences, <= 350
+  chars, self-sufficient (keep names/paths/flags/numbers in it). A trigger-less hook never fires
+  during reasoning; the engine warns on one.
+- **Body: framed prose with reasoning.** The fact, then `**Why:**` and `**How to apply:**` lines
+  (the engine adds the frontmatter frame).
 
-**Promotion to the global layer is gated** (it is the broadest layer, recalled into every session
-under that tree, so a wrong entry is high-blast).
-A USER-stated concrete rule promotes eagerly; a model-INFERRED generalization needs corroboration (seen
-across >= 2 dreams) first - `should_promote()` / `note_promotion_candidate()` in `self_improve_signals.py`,
-controlled by the `promotion` config knob. Per-turn capture usually writes PER-PROJECT and lets
-`bitranox:meta-dream-project` lift broadly-useful items up; do not eagerly globalize an inferred rule here.
+Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
-A `CLAUDE.md` under version control is a shared artifact: **propose** the edit with a diff (see step 4).
-Private memory and the curated global store at the topmost-`CLAUDE.md` ancestor stay auto-apply. Read user
-preferences (dream mode, promotion eagerness, nudges) via `self_improve_signals.load_config()` - one
-machine-local config, never re-asking a decision the user already made.
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/memory_engine.py add \
+      --proj "<cwd>" --type feedback|project|reference|user \
+      --title "..." --hook "When ..., ..." --body-file <tmpfile> [--source <key>] [--pin] [--slug s]
 
-### 4. Risk-classify and apply
-- **Auto-apply (low risk, additive):** capturing a curated fact via the engine `add` at the project
-  level (it upserts, so this covers both new and sharpened entries); appending a guardrail line to a
-  CLAUDE.md that is not under version control; bumping a recurring-error count and date. Do these
-  directly. The engine writes the private, gitignored curated store - additive and safe.
-- **Propose, then wait (higher risk):** rewriting or deleting an existing entry, restructuring a
-  CLAUDE.md section, editing a version-controlled CLAUDE.md at any layer, pruning the index, or any
-  change you are unsure how to classify. Show the diff
-  and the reason; apply only after the user agrees. When this needs a decision from the user, follow
-  **Asking for a decision** below.
-- **Never auto-edit shared or published artifacts:** anything in a public/shared repo, published
-  docs, or release text, and respect any project push/publish gate. This skill touches private
-  notes (memory, CLAUDE.md, session buffers) only.
+Risk ladder: engine `add` at the project level is additive - auto-apply. Rewriting/deleting an
+existing entry, restructuring or editing a version-controlled CLAUDE.md, pruning - propose-first
+with a diff. Shared/published artifacts - never auto-edit; respect push gates.
 
-### 5. New-skill gaps: propose first, scaffold only when gated
-If a missing (or broken) skill is the real fix, write a one-paragraph proposal: what it triggers on,
-what it does, and whether it is **shared** (belongs in a skills repo/plugin) or **project-specific**
-(lives in this repo's `.claude/skills/`).
+### 5. New-skill gaps: propose first
 
-- **Default: stop at the proposal.** Authoring a skill is a deliberate act; do not silently spin one
-  up inside an auto-improvement turn.
-- **Gated auto-scaffold (explicit permission only):** ask one short question - scaffold this skill
-  now? On a yes, build it with the `skill-writer` skill rather than hand-rolling the SKILL.md: create
-  the directory and frontmatter, then **baseline-test it with subagents before relying on it**. Place
-  it at the right scope - a **shared** skill in the source skills repo, then propagate via the upstream
-  PR loop (see **Propagating skill improvements upstream**); a **project-specific** skill in this
-  repo's `.claude/skills/`, which stays local with no PR. Scan the new content for secrets, PII, and
-  infrastructure references before any push.
-
-The single skill you may edit without this gate is this self-improve skill and its gate: see
-**Improving this skill (meta-loop)** below.
+If a missing or broken skill is the real fix, write a one-paragraph proposal (trigger, behavior,
+shared vs project-specific) and STOP at the proposal. On explicit permission, build it with
+`bitranox:meta-skill-writer` (never hand-rolled), place it by scope, and propagate a shared one per
+references/upstream-propagation.md.
 
 ### 6. Escalate repeats: count, then enforce
-A rule the model keeps missing is not a documentation gap. Soft rules (memory, CLAUDE.md prose) are
-advisory - the model can and will skip them - so track recurrences and climb a ladder; do not just
-write the note louder.
 
-- **Count the miss.** When a recurrence matches an existing rule, bump that rule's recurrence count
-  and date (a `recurrence: N (last YYYY-MM-DD)` line in its memory entry, or the project's
-  recurring-error ledger). This is how "repeatedly" gets measured instead of guessed.
-- **No rule yet (first miss):** write the rule - a `feedback` memory and/or a CLAUDE.md guardrail.
-- **Recurs once, a rule already exists:** strengthen it (move it earlier, mark it MUST, add the
-  failing example) and bump the count.
-- **Recurs again (count reaches 2):** STOP re-wording. Prose has failed twice and more prose will not
-  help. Escalate to a **deterministic guard** that blocks the bad action regardless of the model's
-  attention - the way the tell-sweep hook blocks em dashes on every write. Propose one of: a hook
-  (via the `update-config` skill), a script or CI check, or a real code/tooling fix. Put the decision
-  to the user; never auto-create hooks. When the guard is a hook or script, make it portable: write
-  the logic in Python (not bash or `jq`), invoke it through an interpreter-resolving launcher, pin
-  the launcher and scripts to LF in `.gitattributes` (`*.sh text eol=lf`, and `*.py`/`*.json`) so a
-  Windows clone with `core.autocrlf=true` cannot CRLF-break the shell shim (a committed
-  `.gitattributes` overrides each clone's `core.autocrlf`, so this needs no per-clone git config),
-  mark it executable in git with `git update-index --chmod=+x` (this writes the mode straight into
-  the tree, so it is correct regardless of `core.fileMode`; a working-tree `chmod` does not persist
-  when `core.fileMode` is false, leaving the installed copy non-executable), and exit 0 on every
-  failure path so a broken guard never wedges a turn. Hooks run only on local Claude Code surfaces
-  (the CLI and the Desktop Code tab), not the cloud or consumer-chat surfaces. Note in the rule that
-  it has graduated to a guard so it is not re-littered with notes.
-- **Place the guard by scope, and propagate a global one (do not leave it local-only).** Apply the
-  step-3b scope test to the guard itself. A guard for a GLOBALLY-USEFUL quirk - a general shell, OS,
-  or tooling mistake true in any repo, like the pgrep/pkill bracket self-match - belongs in the
-  SHARED marketplace plugin's `hooks/` (a Python script run through the interpreter-resolving
-  launcher, registered in the plugin's `hooks.json`) and MUST be propagated to the source repo via
-  **Propagating skill improvements upstream** below, exactly like a shared skill. Adding it only to
-  the local `~/.claude/hooks` + `settings.json` is a bug: a reinstall loses it and every other
-  install never gets it. A PROJECT-SPECIFIC guard (one that only makes sense in one repo) stays local
-  to that project and is never propagated. This propagate-on-global rule covers hooks and scripts,
-  not just skills.
-
-The point: memory and CLAUDE.md change what the model is *told*; a guard changes what the model can
-*do*. A rule that must always hold belongs in a guard, not only in prose.
+Soft rules are advisory - the model can and will skip them. Track recurrence and climb the ladder;
+do not just write the note louder:
+- First miss: write the rule (memory and/or CLAUDE.md guardrail).
+- Recurs once: strengthen it (mark MUST, add the failing example) and bump its
+  `recurrence: N (last YYYY-MM-DD)` line.
+- Count reaches 2: STOP re-wording - prose has failed. Escalate to a DETERMINISTIC guard (a
+  PreToolUse/Stop hook via the `update-config` skill, a CI check, or a real code fix; user-gated,
+  never auto-created). Guards follow the cross-platform script rules in
+  `bitranox:meta-skill-writer`; a globally-useful guard belongs in the shared plugin's `hooks/` and
+  MUST propagate upstream - local-only `~/.claude/hooks` is the classic loss.
+Memory changes what the model is TOLD; a guard changes what it can DO. A must-hold rule ends in a
+guard.
 
 ### 7. Report
-End with a short summary: what was auto-applied (file plus one line each) and what is proposed and
-awaiting your go. No filler.
+
+End with a short summary: what was auto-applied (file + one line each) and what awaits a go. No
+filler.
 
 ## Improving this skill (meta-loop)
-The one exception to "suggest, do not author" (step 5) is **this skill and its gate**
-(`self-improve-gate.py`): keeping the improver itself effective is the whole point, so you may edit
-them. Treat it as the highest-risk change: **propose-first always**, and after a substantive change to
-the procedure or the gate, re-verify with a baseline subagent test before relying on it. A change to
-this skill or any shared skill must reach the source repo, not just the installed copy a plugin update
-overwrites - see **Propagating skill improvements upstream** below.
 
-Enter the meta-loop when any of these show the improver itself is failing:
-- **Bad result:** the user rejects or corrects what a self-improve run produced (wrong entry, wrong
-  lane, memory bloat).
-- **Gate false positives / negatives:** it keeps firing on non-learnings, or it missed a real
-  correction.
-- **Going in circles:** the same learning is recorded again and again across sessions, or a recorded
-  rule keeps being violated.
-- **Insufficient:** a process error recurs even though it is already in the ledger and a rule already
-  exists and was already strengthened.
-
-Diagnose which stage failed, then fix that stage:
-| Symptom                                    | Stage                                                           | Fix                                                                                                                                                                                          |
-|--------------------------------------------|-----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Recorded the wrong thing / wrong lane      | classify, dedup (steps 2-3)                                     | sharpen the classification or dedup wording                                                                                                                                                  |
-| Memory bloat, duplicate entries            | dedup / autonomy (steps 3-4)                                    | tighten "edit existing over new", or downgrade an auto-apply to propose-first                                                                                                                |
-| Gate fires on noise, or misses corrections | the gate script                                                 | adjust its regex signal patterns                                                                                                                                                             |
-| Rule recorded but STILL violated           | the step-6 enforce ladder was skipped, or the guard is too weak | do not add more notes. Run step 6 to its end (count the misses, escalate to a deterministic guard or a real fix). If a guard already exists and still fails, harden the guard, not the prose |
-
-**Circle-breaker (mandatory):** if two self-improve passes on the same issue have not resolved it,
-stop recording more notes about it. Writing the same lesson a third time *is* the circle. Switch
-tactic (enforcement or a real fix) or hand the decision to the user. Do not keep adding memory.
-
-## Propagating skill (or hook) improvements upstream
-Most self-improve output is personal (memory and project CLAUDE.md) and stays local on the user's
-machine - it is not shared. A SHARED, DISTRIBUTED artifact is different: a skill OR a hook/guard
-installed from a plugin or marketplace (for example a skill or a `hooks/` script in the bitranox
-plugin), or this self-improve skill and its gate. When you change or ADD one, the edit lands in the
-installed copy, which a plugin update OVERWRITES on the next sync. The change is lost (and every
-other install never gets it) unless it reaches the artifact's SOURCE repo. The repo is the single
-source of truth; the installed copy is ephemeral. Creating a globally-useful hook only in the local
-`~/.claude/hooks` + `settings.json`, instead of in the marketplace plugin, is the exact mistake this
-section prevents.
-
-**Scope guard (decide first):** only propagate SHARED artifacts. A project-specific skill or hook
-(one that lives in a project's own `.claude/`, specific to that repo) is never propagated: it stays
-in that project. Never symlink it and never open a PR for it.
-
-When you add or change a shared skill or hook, run this loop:
-1. **Confirm scope.** The skill is shared/distributed, not project-specific. If unsure or
-   project-specific, stop and keep the change local.
-2. **Scan the diff.** Grep for secrets, credentials, private hostnames/IPs, internal paths, and
-   personal or project codenames. Never let any of these leave the machine (the same scan you run
-   before any push to a public or shared repo).
-3. **Route by who and how - the gate decides the path:**
-   - **Maintainer, interactive (a human is approving changes live):** the live approval IS the gate.
-     Commit directly to the repo's default branch and push - no PR ceremony.
-   - **Maintainer, unattended/async (a scheduled or background self-improve, no human approving
-     live):** do NOT commit straight to the default branch. Open a structured self-PR so an
-     auto-review agent (or the maintainer later) merges or rejects it.
-   - **Outside contributor (no write access):** fork, then open a structured PR.
-4. **Bump the distributed version (REQUIRED for version-gated installs).** Before committing, read
-   the repo's `CONTRIBUTING`/release docs so you follow its rule rather than guess. If the artifact
-   is distributed by version - a plugin or package whose installed copies only re-fetch when the
-   version changes (a Claude Code plugin's `plugin.json`, an npm/PyPI package, ...) - bump that
-   version per the repo's semver convention IN THE SAME COMMIT and note the bump in the subject.
-   Propagation is NOT done until the version is bumped: without it every install stays on the old
-   copy and the change ships to nobody. A docs-only change that does not touch the distributed
-   artifact may be exempt (check the repo's rule).
-5. **Confirm, then apply.** Ask one short permission prompt, then carry out the routed path:
-   - **Direct commit:** edit in the repo clone, commit (with the version bump from step 4), push to
-     the default branch.
-   - **PR (self-PR or fork):** edit on a new branch, push, `gh pr create` with a structured title and
-     body so a downstream agent can auto-merge or auto-reject without guessing:
-     - **Title:** `skill(<name>): <one-line change>` (or `hook(<name>):` / `gate:` / `docs:`); append
-       `; bump to X.Y.Z` if the repo's history does.
-     - **Body:** **Motivation** (the learning or failure that prompted it), **What changed** (file by
-       file), **Scope** (shared, not project-specific; applies beyond this one setup), **Safety**
-       (diff scanned, no secrets, PII, or infrastructure references).
-   Keep the diff minimal and focused on one skill or hook.
-
-**Maintainer local setup:** symlink the installed shared-skill directories into your repo clone so
-in-place edits land in git instead of the ephemeral install. Symlink ONLY shared skills, never
-project-specific ones. The pre-flight scan in step 2 is mandatory before any push or PR.
+The one exception to "propose, do not author" is this skill and its gate (`self-improve-gate.py`).
+Treat a change as highest-risk: propose-first, re-verify with a baseline subagent test after any
+substantive change, and land it in the SOURCE repo per references/upstream-propagation.md. Enter
+the meta-loop when the improver itself fails: the user rejects a capture, the gate fires on noise
+or misses corrections, the same learning recurs across sessions, or a ledgered rule keeps being
+violated. Diagnose the stage (classify/dedup -> sharpen wording; bloat -> tighten edit-over-new;
+gate noise -> adjust its patterns; rule still violated -> run step 6 to its END). **Circle-breaker
+(mandatory):** if two passes on the same issue have not resolved it, writing the same lesson a
+third time IS the circle - switch to enforcement or hand the decision to the user.
 
 ## Asking for a decision
-When you need the user to choose, **ask one question at a time, never a batch.** For each question:
-state plainly what is being decided, give the realistic implications and trade-offs of each option,
-and end with a recommendation and the one-line reason for it. Wait for the answer before asking the
-next question. A wall of simultaneous questions, or options with no recommendation, pushes the
-decision work back onto the user. One clear question with a steer is easier to answer.
+
+Ask ONE question at a time, never a batch. For each: state what is being decided, give the
+realistic upsides and downsides of every option, and ALWAYS end with a recommendation plus its
+reason. Wait for the answer before the next question.
 
 ## Writing style
-These notes are read by a future agent and may live in CLAUDE.md. Keep them plain and short: state
-the fact and the why, skip promotional adjectives, and avoid em-dashes and other typographic or
-invisible AI tells (en-dash and other dashes, curly quotes, guillemets, ellipsis, and invisible
-blanks like the zero-width space, non-breaking space, and BOM). Sweep generated files for these with
-a `grep -nP` over the tell code points before you call the work done.
+
+Notes are read by a future agent. Plain and short: the fact and the why, no promotional adjectives,
+ASCII only - no em-dashes or typographic/invisible tells (the tell-sweep hooks enforce this on
+files and commit messages; sweep anything else yourself).
 
 ## Pathfinder discipline (leave it better)
 
-Capturing learnings is one half of stewardship; the other is the code and files you pass through. Be a
-good pathfinder:
-
-- **Leave every file/area better than you found it.** Fix the adjacent rot you touch and can verify (a
-  stale doc line, a latent bug, an AI-writing tell), not just the line you came for.
-- **No technical debt.** When you spot a mistake, point it out CLEARLY; never pass it silently or wave
-  it off as "works anyway" - a deferred "harmless" issue is how debt accumulates and it masks the next
-  real failure.
-- **Out-of-scope fixes go in their own worktree.** A fix unrelated to the current change belongs in a
-  separate worktree (`bitranox:git-worktrees`), so the current change stays focused and reviewable.
-  Surface, do not silently rewrite, another session's deliberate logic.
-- **Clean up after yourself.** Remove temporary tooling, mounts, scratch files, and one-off scaffolding
-  once the goal is met; keep only what is durable and worth reusing (and say what you kept).
+Fix the adjacent rot you touch and can verify; surface mistakes clearly, never wave them off;
+out-of-scope fixes go in their own worktree (`bitranox:git-worktrees`); remove temporary
+scaffolding when the goal is met.
 
 ## Common mistakes
-- Appending a new memory entry when an existing one should have been edited (bloats the pointer block).
-- Mixing the two lanes: a one-off task finding logged as a recurring-process rule, or vice versa.
-- Auto-applying a rewrite or delete. Additive is auto; destructive is propose-first.
-- Authoring a skill on the fly instead of suggesting it.
-- Recording session state ("the build is running") as if it were a durable learning.
+
+- Appending a new entry when an existing one should have been updated (bloats the always-loaded
+  block).
+- A trigger-less hook ("Fix X properly" instead of "When you hit Y, fix X") - it never fires
+  mid-reasoning.
+- A bare-prose body without **Why:** / **How to apply:** - the model discounts it as inauthentic.
+- Hand-editing a pointer block or body (guard-denied; the engine is the only write path).
+- Capturing at an ancestor level or another tree - capture is project-level; the dream re-levels.
+- Recording session state ("the build is running") as a durable learning.
+- Auto-applying a rewrite or delete - additive is auto, destructive is propose-first.
