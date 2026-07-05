@@ -45,10 +45,10 @@ def convert_file(md: MarkItDown, file_path: Path, output_dir: Path, verbose: boo
         
         output_file.write_text(content, encoding='utf-8')
         
-        return True, str(file_path), f"✓ Converted to {output_file.name}"
+        return True, str(file_path), f"[OK] Converted to {output_file.name}"
         
     except Exception as e:
-        return False, str(file_path), f"✗ Error: {str(e)}"
+        return False, str(file_path), f"[FAIL] Error: {str(e)}"
 
 
 def batch_convert(

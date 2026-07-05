@@ -11,3 +11,11 @@ below opus-class, DOWN for cost on a fable session facing routine work - user-di
 - [x] Cross-refs intact (dream-project and dream-global point here for tiers)
 - [x] Security scan: prose-only diff, clean
 - [x] Mechanical rename sweep 2026-07-06: bitranox:meta-dream-project/global(-deep) references -> meta-dream-tree/crosstree(-deep); no semantic change
+
+# skill-writer checklist - process-agents-subagent-driven-development (2026-07-06, roster review wave 1)
+
+- [x] Change: fixed 4 broken ../requesting-code-review/ cross-refs; fixed the stale .gitattributes LF pin (pre-rename path, check-attr now reports eol=lf); enriched the thin 85-char description (model-tier reference role + keywords); ported the 3 bash helper scripts to tested Python (task_brief.py/review_package.py/sdd_workspace.py, 16 behavioral tests green, rev-parse existence check hardened with ^{commit}); updated all invocation references. Deferred: rationalization table (needs its own baseline test).
+- [x] Receipt held (skill_receipt.py, this session)
+- [x] Review: read-only opus subagent audit, verified against the files by the applier
+- [x] Discovery test: fable subagent, scenario picked this skill from a 12-candidate list (wave 6/6)
+- [x] Security scan: prose/frontmatter edits, no secrets/paths/PII

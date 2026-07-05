@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.45.1] - 2026-07-06
+
+### Fixed
+- Skill-roster review, wave 1 (9 skills; opus-reviewed, fable-verified, discovery-tested 6/6):
+  - Trigger-first single-line descriptions replace YAML block scalars / what-it-does summaries in
+    `devops-bmk`, `infra-proxmox`, `infra-proxmox-bindsnap`, `write-humanize-en`,
+    `write-humanize-de` (plus 6 umlaut spellings), and a keyword-enriched description for
+    `process-agents-subagent-driven-development`.
+  - `process-agents-subagent-driven-development`: 4 broken cross-references repaired; the
+    `.gitattributes` LF pin for its helper scripts pointed at a pre-rename path (dead on Windows
+    clones) - fixed; the bash helper scripts are now tested Python
+    (`task_brief.py`, `review_package.py`, `sdd_workspace.py`, 16 behavioral tests) with a
+    hardened commit-existence check.
+  - `docs-convert-markitdown`: unsupported frontmatter keys removed; verified upstream
+    attribution added (K-Dense-AI/claude-scientific-skills, MIT) to SKILL.md and
+    THIRD_PARTY_NOTICES.md; 44 non-ASCII glyphs swept from scripts/references; reference-files
+    routing table added; version-migration narrative rewritten as current-state API notes.
+  - `compuse-vnc`: click-text OCR-failure pixel fallback documented; stale H1 fixed.
+  - `infra-proxmox`: `ch19-cli-tools.md` routing row added; orphaned duplicate `onaction.md`
+    removed.
+  - `coding-python-gitignore`: reviewed compliant, no changes (mirror divergences are
+    intentional).
+
 ## [5.45.0] - 2026-07-06
 
 ### Removed

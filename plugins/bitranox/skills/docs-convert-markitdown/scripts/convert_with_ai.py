@@ -129,11 +129,11 @@ def convert_with_ai(
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(content, encoding='utf-8')
         
-        print(f"✓ Successfully converted to: {output_file}")
+        print(f"[OK] Successfully converted to: {output_file}")
         return True
         
     except Exception as e:
-        print(f"✗ Error: {str(e)}", file=sys.stderr)
+        print(f"[FAIL] Error: {str(e)}", file=sys.stderr)
         return False
 
 

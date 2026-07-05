@@ -8,6 +8,6 @@
 *.json text eol=lf
 # subagent-driven-development ships extensionless bash helper scripts (run as scripts/<name>);
 # pin them LF so Git Bash on Windows can execute them (the *.sh rule cannot match a name with no extension).
-plugins/bitranox/skills/subagent-driven-development/scripts/* text eol=lf
+plugins/bitranox/skills/process-agents-subagent-driven-development/scripts/* text eol=lf
 # Let git decide for everything else.
 * text=auto

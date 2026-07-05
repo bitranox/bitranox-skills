@@ -369,15 +369,15 @@ IMPORTANT - NO FIGURE NUMBERS:
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", str(error_msg))
                 self._last_error = f"API Error: {error_msg}"
-                print(f"✗ {self._last_error}")
+                print(f"[FAIL] {self._last_error}")
                 return None
             
             image_data = self._extract_image_from_response(response)
             if image_data:
-                self._log(f"✓ Generated image ({len(image_data)} bytes)")
+                self._log(f"[OK] Generated image ({len(image_data)} bytes)")
             else:
                 self._last_error = "No image data in API response - model may not support image generation"
-                self._log(f"✗ {self._last_error}")
+                self._log(f"[FAIL] {self._last_error}")
                 # Additional debug info when image extraction fails
                 if self.verbose and "choices" in response:
                     msg = response["choices"][0].get("message", {})
@@ -386,11 +386,11 @@ IMPORTANT - NO FIGURE NUMBERS:
             return image_data
         except RuntimeError as e:
             self._last_error = str(e)
-            self._log(f"✗ Generation failed: {self._last_error}")
+            self._log(f"[FAIL] Generation failed: {self._last_error}")
             return None
         except Exception as e:
             self._last_error = f"Unexpected error: {str(e)}"
-            self._log(f"✗ Generation failed: {self._last_error}")
+            self._log(f"[FAIL] Generation failed: {self._last_error}")
             import traceback
             if self.verbose:
                 traceback.print_exc()
@@ -539,7 +539,7 @@ If score < {threshold}, mark as NEEDS_IMPROVEMENT with specific suggestions."""
             elif score < threshold:
                 needs_improvement = True
             
-            self._log(f"✓ Review complete (Score: {score}/10, Threshold: {threshold}/10)")
+            self._log(f"[OK] Review complete (Score: {score}/10, Threshold: {threshold}/10)")
             self._log(f"  Verdict: {'Needs improvement' if needs_improvement else 'Acceptable'}")
             
             return (content if content else "Image generated successfully", 
@@ -642,7 +642,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             
             if not image_data:
                 error_msg = getattr(self, '_last_error', 'Image generation failed - no image data returned')
-                print(f"✗ Generation failed: {error_msg}")
+                print(f"[FAIL] Generation failed: {error_msg}")
                 results["iterations"].append({
                     "iteration": i,
                     "success": False,
@@ -654,14 +654,14 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             iter_path = output_dir / f"{base_name}_v{i}{extension}"
             with open(iter_path, "wb") as f:
                 f.write(image_data)
-            print(f"✓ Saved: {iter_path}")
+            print(f"[OK] Saved: {iter_path}")
             
             # Review image using Gemini 3.1 Pro Preview
             print(f"Reviewing image with Gemini 3.1 Pro Preview...")
             critique, score, needs_improvement = self.review_image(
                 str(iter_path), user_prompt, i, doc_type, iterations
             )
-            print(f"✓ Score: {score}/10 (threshold: {threshold}/10)")
+            print(f"[OK] Score: {score}/10 (threshold: {threshold}/10)")
             
             # Save iteration results
             iteration_result = {
@@ -677,7 +677,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             
             # Check if quality is acceptable - STOP EARLY if so
             if not needs_improvement:
-                print(f"\n✓ Quality meets {doc_type} threshold ({score} >= {threshold})")
+                print(f"\n[OK] Quality meets {doc_type} threshold ({score} >= {threshold})")
                 print(f"  No further iterations needed!")
                 results["final_image"] = str(iter_path)
                 results["final_score"] = score
@@ -688,14 +688,14 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             
             # If this is the last iteration, we're done regardless
             if i == iterations:
-                print(f"\n⚠ Maximum iterations reached")
+                print(f"\n[WARN] Maximum iterations reached")
                 results["final_image"] = str(iter_path)
                 results["final_score"] = score
                 results["success"] = True
                 break
             
             # Quality below threshold - improve prompt for next iteration
-            print(f"\n⚠ Quality below threshold ({score} < {threshold})")
+            print(f"\n[WARN] Quality below threshold ({score} < {threshold})")
             print(f"Improving prompt based on feedback...")
             current_prompt = self.improve_prompt(user_prompt, critique, i + 1)
         
@@ -705,13 +705,13 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             if final_iter_path != output_path:
                 import shutil
                 shutil.copy(final_iter_path, output_path)
-                print(f"\n✓ Final image: {output_path}")
+                print(f"\n[OK] Final image: {output_path}")
         
         # Save review log
         log_path = output_dir / f"{base_name}_review_log.json"
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        print(f"✓ Review log: {log_path}")
+        print(f"[OK] Review log: {log_path}")
         
         print(f"\n{'='*60}")
         print(f"Generation Complete!")
@@ -800,15 +800,15 @@ Environment:
         )
         
         if results["success"]:
-            print(f"\n✓ Success! Image saved to: {args.output}")
+            print(f"\n[OK] Success! Image saved to: {args.output}")
             if results.get("early_stop"):
                 print(f"  (Completed in {len([r for r in results['iterations'] if r.get('success')])} iteration(s) - quality threshold met)")
             sys.exit(0)
         else:
-            print(f"\n✗ Generation failed. Check review log for details.")
+            print(f"\n[FAIL] Generation failed. Check review log for details.")
             sys.exit(1)
     except Exception as e:
-        print(f"\n✗ Error: {str(e)}")
+        print(f"\n[FAIL] Error: {str(e)}")
         sys.exit(1)
 
 

@@ -1,15 +1,6 @@
 ---
 name: write-humanize-de
-description: |
-  Entfernt Anzeichen von KI-generiertem Text aus deutschsprachigen Texten.
-  Verwende diesen Skill beim Bearbeiten oder Überprüfen von Texten, um sie
-  natürlicher und menschlicher klingen zu lassen. Basiert auf der deutschen
-  Wikipedia-Seite "Anzeichen für KI-generierte Inhalte" und dem englischen
-  Pendant "Signs of AI writing". Erkennt und korrigiert 32 Muster wie:
-  aufgeblähte Symbolik, Werbesprache, oberflächliche Partizip-Analysen,
-  vage Autoritäten, Gedankenstrich-Übergebrauch, Trikolon, KI-typische
-  Konjunktionen, negative Parallelismen, Fazit-Abschnitte, formelhafte
-  Schlussfolgerungen und kollaborative Kommunikationsartefakte.
+description: Use when editing or reviewing German-language prose (deutsche Texte, deutschsprachige Texte, humanize German text) to remove signs of AI-generated writing and make it read naturally - blog posts, emails, articles, essays, marketing copy, README narratives. Triggers on removing KI-Schreibmuster, ChatGPT-Stil, Trikolon, Werbesprache, or Fazit-Abschnitte from German text. Not for source code, code comments, docstrings, API docs, commit messages, or config files.
 ---
 
 # Humanizer: KI-Schreibmuster in deutschen Texten entfernen
@@ -40,16 +31,16 @@ Wenn du Text zum Humanisieren bekommst:
 
 Vor dem inhaltlichen Umschreiben die mechanischen Typografie-Anzeichen mit dem
 mitgelieferten Skript entfernen. Das ist schneller und zuverlässiger als Handarbeit und
-ist das exakte Gegenstück zur tell-sweep-Pruefung, sodass der Text diese danach besteht:
+ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach besteht:
 
     python3 scripts/strip_typographic_tells.py DATEI          # Datei direkt ersetzen
     cat DATEI | python3 scripts/strip_typographic_tells.py -  # oder einen Stream normalisieren
-    python3 scripts/strip_typographic_tells.py --check DATEI  # nur pruefen, Exit 1 bei Resten
+    python3 scripts/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten
 
 Das Skript liegt im Ordner `scripts/` dieses Skills. Es ersetzt Geviert- und
-Halbgeviertstriche, typografische Anfuehrungszeichen und Guillemets, Auslassungspunkte,
-geschuetzte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII und laesst
-bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzaehlungspunkt) unangetastet.
+Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
+geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII und lässt
+bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
 enthalten solche Zeichen absichtlich. Danach die inhaltlichen Umschreibungen vornehmen.
 

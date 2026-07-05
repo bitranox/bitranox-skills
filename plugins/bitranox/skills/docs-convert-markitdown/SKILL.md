@@ -1,13 +1,11 @@
 ---
 name: docs-convert-markitdown
 description: Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images (OCR), audio (transcription), HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs.
-allowed-tools: Read Write Edit Bash
-license: MIT license
-required_environment_variables: [{"name": "OPENROUTER_API_KEY", "prompt": "OpenRouter API key for the skill's LLM-powered steps.", "required_for": "optional features"}]
-metadata: {"version": "1.1", "skill-author": "K-Dense Inc.", "openclaw": {"primaryEnv": "OPENROUTER_API_KEY", "envVars": [{"name": "OPENROUTER_API_KEY", "required": false, "description": "OpenRouter API key for the skill's LLM-powered steps."}]}}
 ---
 
 # MarkItDown - File to Markdown Conversion
+
+> Adapted from the MarkItDown skill in K-Dense-AI/claude-scientific-skills (MIT). See THIRD_PARTY_NOTICES.md.
 
 ## Overview
 
@@ -433,12 +431,16 @@ print(result.text_content)
 - **Audio transcription**: Requires additional compute resources
 - **AI image descriptions**: Requires API calls (costs may apply)
 
-## Next Steps
+## Reference Files
 
-- See `references/api_reference.md` for complete API documentation
-- Check `references/file_formats.md` for format-specific details
-- Review `scripts/batch_convert.py` for automation examples
-- Explore `scripts/convert_with_ai.py` for AI-enhanced conversions
+| Topic                                                                                                               | File                        |
+|---------------------------------------------------------------------------------------------------------------------|-----------------------------|
+| Core API - MarkItDown class, convert(), convert_stream(), plugins, Azure Document Intelligence, env vars, API notes | references/api_reference.md |
+| Format specifics - PDF, DOCX, PPTX, XLSX, images/OCR, audio, HTML, CSV/JSON/XML, ZIP, EPUB, YouTube                 | references/file_formats.md  |
+| Worked end-to-end examples - single file, batch, AI-enhanced conversion                                             | assets/example_usage.md     |
+| Automation examples - `scripts/batch_convert.py`, AI-enhanced conversion - `scripts/convert_with_ai.py`             | scripts/                    |
+
+Use the Read tool to load a referenced file when its detail is needed.
 
 > Bundled scripts: `scripts/generate_schematic.py` and `scripts/generate_schematic_ai.py` are optional, separate tools for generating diagrams. They are not part of converting files to Markdown and are never invoked by default.
 
