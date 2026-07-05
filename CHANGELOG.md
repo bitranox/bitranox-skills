@@ -17,6 +17,12 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.44.1] - 2026-07-06
+
+### Fixed
+- `meta-memory-settings`: the knob table now documents `skill_placement` (default `lowest`);
+  the config has 9 knobs and the skill listed 8. Retrieval-tested (RED/GREEN).
+
 ## [5.44.0] - 2026-07-06
 
 ### Added
