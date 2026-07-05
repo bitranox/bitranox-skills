@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 56 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 57 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -64,6 +64,7 @@ Security posture: appsec, auth, secrets, pentest, privacy/PII.
 Technical writing and doc generation, markdown authoring/conversion.
 
 - [`docs-convert-markitdown`](../plugins/bitranox/skills/docs-convert-markitdown/SKILL.md) - Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images (OCR), audio (transcription), HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs.
+- [`docs-generate-schematics`](../plugins/bitranox/skills/docs-generate-schematics/SKILL.md) - Use when a document, paper, poster, or README needs a scientific schematic, flowchart, block diagram, or architecture figure GENERATED as an image from a text description via an AI image model - CONSORT participant flows, neural-network architectures, pipeline diagrams - using OpenRouter (OPENROUTER_API_KEY) with an automated quality-review loop. Not for converting existing documents (bitranox:docs-convert-markitdown) or code-rendered graphs (graphviz/matplotlib).
 - [`docs-md-table-formatting`](../plugins/bitranox/skills/docs-md-table-formatting/SKILL.md) - Use when creating, editing, or reformatting markdown tables in any document, when table columns look misaligned, or when reviewing markdown files that contain tables
 
 ## files

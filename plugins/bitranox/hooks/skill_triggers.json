@@ -303,6 +303,22 @@
   "youtube",
   "urls"
  ],
+ "docs-generate-schematics": [
+  "document",
+  "paper",
+  "poster",
+  "readme",
+  "scientific",
+  "schematic",
+  "flowchart",
+  "block",
+  "diagram",
+  "architecture",
+  "figure",
+  "generated",
+  "image",
+  "text"
+ ],
  "docs-md-table-formatting": [
   "creating",
   "editing",
