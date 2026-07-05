@@ -8,6 +8,6 @@
 - [x] Pre-trim equivalence baseline: 3/3 probe tasks invoked the expected domain skill
       (files-edit-yml, compuse-bash, write-humanize-en) under installed 5.40.0
 - [x] Trim committed (C5b, 5.42.4) under the relaxed gate
-- PENDING: post-trim equivalence - the SAME 3 probes after the NEXT marketplace update must be
-  3/3, else REVERT (equivalence_probe.py post)
+- [x] Post-trim equivalence: 3/3 (files-edit-yml, compuse-bash, write-humanize-en) - matches
+  the pre-trim baseline; no revert needed. C5 closed.
 - [x] Security scan: prose-only diff, clean
