@@ -134,12 +134,16 @@ auto-resolves to the latest model in that tier, so a new version needs no edit.
 - **`sonnet`** (standard, fast, cheaper than opus - the DEFAULT fan-out tier) = bounded judgment and
   the workhorse for parallel fan-out: per-file/per-dimension/per-store reviewers and scanners,
   relevance filtering, extraction, summarize, integration, reference hunting, most implementers.
-- **`opus`** (most capable, slowest/priciest) = reserve for deep reasoning where being wrong is
-  costly: architecture/design, final SYNTHESIS, adversarial CORRECTNESS verification, root-cause
-  judgment, the final whole-branch review.
+- **`opus`** (deep reasoning, slow/pricey - the DEFAULT deep tier) = reserve for reasoning where
+  being wrong is costly: architecture/design, final SYNTHESIS, adversarial CORRECTNESS
+  verification, root-cause judgment, the final whole-branch review.
+- **`fable`** (Mythos-class, ABOVE opus; premium-priced and only available on paid API credits -
+  many plans cannot resolve it) = the exceptional top tier for the hardest single judgments where
+  even opus-level error is too costly. Use sparingly and only where the plan/credits allow;
+  `opus` stays the universally-available deep default.
 
-Reserve `opus` for genuine deep reasoning; do NOT use it for mechanical or pure fan-out work, and do
-NOT leave fan-out work on the session default (often opus). The lineup ages: the model hierarchy is
+Reserve `opus`/`fable` for genuine deep reasoning; do NOT use them for mechanical or pure fan-out
+work, and do NOT leave fan-out work on the session default (often opus- or fable-class). The lineup ages: the model hierarchy is
 re-evaluated periodically by `bitranox:meta-dream-project` (it asks the `claude-code-guide` agent for the
 current Claude model lineup and proposes a re-tier if the ordering shifts), so this mapping stays current.
 
@@ -164,6 +168,12 @@ hooks cannot help (only a `SessionStart` hook may see a `model` field, not guara
 cannot call the model). So the ONLY way to run a sub-task on a different tier is to dispatch a
 subagent, which carries its own pinned `model`; inline work necessarily runs on the session model.
 "Save the model, switch, switch back" is NOT implementable - never write a skill step that assumes it.
+A USER-driven `/model` switch mid-session, however, PRESERVES the conversation (context is not
+lost), so offering one is legitimate in BOTH directions: switch UP when the session tier is below
+what an inline deep judgment warrants (below opus-class before placement/synthesis), and switch
+DOWN for cost when a premium session (fable) faces a long routine stretch - fable is
+premium-priced on paid API credits, so parking it on mechanical work burns money for nothing.
+Either way it is the USER's call: offer switch-model-or-continue, never demand.
 
 A model-sensitive step therefore has TWO branches - decide delegability FIRST, and only then the model:
 
