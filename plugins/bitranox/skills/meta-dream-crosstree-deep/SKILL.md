@@ -1,22 +1,22 @@
 ---
-name: meta-dream-global-deep
-description: Use on "deep global dream", "/dream-global-deep", "deep cross-project scan", or when you want the exhaustive cross-project/cross-tree read regardless of whether anything obviously changed - the full semantic fan-out over ALL project memory stores AND their CLAUDE.md files, no convergence shortcut, no asking. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-global.
+name: meta-dream-crosstree-deep
+description: Use on "deep crosstree dream", "/dream-crosstree-deep", "deep cross-project scan", or when you want the exhaustive cross-project/cross-tree read regardless of whether anything obviously changed - the full semantic fan-out over ALL project memory stores AND their CLAUDE.md files, no convergence shortcut, no asking. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-crosstree.
 ---
 
-# meta-dream-global-deep
+# meta-dream-crosstree-deep
 
-The exhaustive variant of `bitranox:meta-dream-global`. Same goal, same safety model, same outputs -
+The exhaustive variant of `bitranox:meta-dream-crosstree`. Same goal, same safety model, same outputs -
 the ONE difference is that the **deep cross-project semantic scan is mandatory here, not opt-in**:
 this skill always reads every store (and every CLAUDE.md), even if the cheap convergence pre-check
-says nothing changed. Use it when you want the thorough read; use `bitranox:meta-dream-global` for the
+says nothing changed. Use it when you want the thorough read; use `bitranox:meta-dream-crosstree` for the
 routine, convergence-gated pass that asks before going deep.
 
-**REQUIRED BACKGROUND:** Follow `bitranox:meta-dream-global` for the full procedure (backup, inbound
+**REQUIRED BACKGROUND:** Follow `bitranox:meta-dream-crosstree` for the full procedure (backup, inbound
 gather, promotion gate, outbound cross-pollination, re-dedup + reconcile, skill-fit, report) and
 `bitranox:meta-self-improve` for the altitude/normalization primitives. This skill only overrides how
 the scan in step 3 is run; do not duplicate the rest.
 
-## What changes vs meta-dream-global
+## What changes vs meta-dream-crosstree
 
 1. **Back up first** (per-run snapshot of each affected tree's TOP store + any store you will write) - unchanged.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`sonnet`**
@@ -35,7 +35,7 @@ the scan in step 3 is run; do not duplicate the rest.
    (delete the lower copy if a broader tier covers it / lift it up + leave the delta / keep if local),
    and CONSOLIDATE a rule duplicated across many sibling `CLAUDE.md` UP to their common ancestor (the
    biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
-   nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-project`
+   nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-tree`
    "CLAUDE.md reconciliation"; every `CLAUDE.md` edit is propose-first, never without confirmation.)
 4. **Org-chart audit (deep dream only - propose, never apply).** With the cross-tree view, assess whether
    the directory structure still fits. Using each project's scope descriptor + what it has learned, look
@@ -85,10 +85,10 @@ the scan in step 3 is run; do not duplicate the rest.
      (default: private)**, and whether it stays local-only or gets a remote (a remote is needed only to
      share the rung to other machines/people; local-only still gives version history + makes a trim
      safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
-5. **Then steps 4-8 of meta-dream-global exactly** (outbound cross-pollination, re-dedup + reconcile via
+5. **Then steps 4-8 of meta-dream-crosstree exactly** (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check` over the LEVEL dirs, skill-fit batched change, report counts).
 
-## Boundaries (unchanged from meta-dream-global)
+## Boundaries (unchanged from meta-dream-crosstree)
 
 - Tree-top curated stores + private project memory: back up, then apply.
 - **`CLAUDE.md` (version-controlled): never edit without user confirmation** - propose-first in `propose`,
@@ -101,5 +101,5 @@ the scan in step 3 is run; do not duplicate the rest.
 ## Cost note
 
 This is the expensive pass by design (dozens of subagents, every store read). Run it deliberately. If
-you just want "is there anything new across projects?", run `bitranox:meta-dream-global` instead - it
+you just want "is there anything new across projects?", run `bitranox:meta-dream-crosstree` instead - it
 convergence-checks cheaply first and asks before going deep.

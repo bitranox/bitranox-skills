@@ -10,7 +10,7 @@ re-copying what an ancestor already provides.
 Usage:
   gather_scan.py --topic "<text>" [--self <cwd>]
 
-Imports the shared helpers from the plugin's hooks dir, like the meta-dream-project cadence CLI. Pure stdlib.
+Imports the shared helpers from the plugin's hooks dir, like the meta-dream-tree cadence CLI. Pure stdlib.
 """
 
 import argparse
@@ -38,7 +38,7 @@ _STOP = {
 # Opaque identifiers that are never a topical signal but slip past the token regex (they are valid
 # [a-z0-9_-] runs): tool-use IDs, session UUIDs, long hex hashes, pure numbers, path slugs. Dropping
 # them keeps the recall grep + the pending-keyword queue clean. Conservative on purpose - it must NOT
-# drop a real multi-word technical term like "meta-dream-global-deep" (3 hyphens) or "px-websrv-media".
+# drop a real multi-word technical term like "meta-dream-crosstree-deep" (3 hyphens) or "px-websrv-media".
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _HEX_RE = re.compile(r"^[0-9a-f]{16,}$")   # long hex run: hashes, commit/id fragments
 _DIGITS_RE = re.compile(r"^\d+$")

@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.43.0] - 2026-07-06
+
+### Added
+- NEW skill meta-dream-nap: the QUICK, chain-only consolidation (cwd -> ancestors -> anchor;
+  siblings and other trees untouched by design) for compaction moments and signal-heavy sessions -
+  minutes, not tens of minutes; ends with an explicit deferred-to-the-full-dream list. The
+  PostCompact nudge now points here (a due FULL consolidation stays the tree dream's job).
+- ANTI-DRIFT for the dream family (user-directed): references/dream-core.md single-sources the
+  shared semantics (scope ladder, mode knob, capture-first, backup+manifest, dedup, THE routing
+  prompt, verification contract, tier note) - the skills carry only scope deltas; a CONTRACT TEST
+  asserts the invariants (scope rungs stated, core referenced, family literals exactly once).
+  The acceptance harness became a PARITY MATRIX: --profile nap|dream|global assert the same basic
+  functions with scope-inverted reach (nap: sibling branches byte-untouched).
+
+### Changed
+- Dream skills RENAMED to their true scopes (user decision): meta-dream-project ->
+  meta-dream-tree, meta-dream-global -> meta-dream-crosstree, meta-dream-global-deep ->
+  meta-dream-crosstree-deep. Consistent with the tree vocabulary (cross_tree_search, tree-top,
+  TREE: labels); legacy names remain description triggers so old habits still route; every
+  cross-reference swept in the same change; trigger map rebuilt (56 skills).
+
 ## [5.42.7] - 2026-07-06
 
 ### Changed

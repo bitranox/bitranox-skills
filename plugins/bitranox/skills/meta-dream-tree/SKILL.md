@@ -1,9 +1,9 @@
 ---
-name: meta-dream-project
-description: Use when the SessionStart nudge says a memory consolidation is due, when the store has grown or feels noisy/duplicated, before context compaction would lose detail, or on "dream", "dream project", "/dream-project", "consolidate memory", "tidy memory". Use AFTER per-turn capture (bitranox:meta-self-improve); for the cross-project / cross-tree scan use bitranox:meta-dream-global instead. Honors an off/auto/propose mode.
+name: meta-dream-tree
+description: Use when the SessionStart nudge says a memory consolidation is due, when the store has grown or feels noisy/duplicated, before context compaction would lose detail, or on "dream", "dream tree", "/dream-tree", "consolidate memory", "tidy memory". Use AFTER per-turn capture (bitranox:meta-self-improve); for the cross-project / cross-tree scan use bitranox:meta-dream-crosstree instead. Honors an off/auto/propose mode. Formerly named meta-dream-project - answers to that name too.
 ---
 
-# meta-dream-project
+# meta-dream-tree
 
 Memory consolidation for the CURRENT project's knowledge tree, the way a brain reorganizes during
 sleep. `bitranox:meta-self-improve` is the fast per-turn CAPTURE; this is the periodic batch
@@ -13,31 +13,27 @@ sharper, not bigger. **If a pass would grow the store, it is wrong.**
 **REQUIRED BACKGROUND:** the storage spec (trees/anchors, store grammar, trigger-first hooks,
 framed bodies, engine commands + fail-loud contract) is `bitranox:meta-self-improve` ->
 `references/memory-backend.md` - Read it BEFORE the first engine call. This skill stays WITHIN the
-current tree; cross-tree work is `bitranox:meta-dream-global`.
+current tree; cross-tree work is `bitranox:meta-dream-crosstree`.
 
 ## Reference files
 
 | Topic                                                                                                                                                                                                         | File                       |
 |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------|
+| The SHARED DREAM CORE - scope ladder, mode knob, capture-first, backup+manifest, dedup semantics, THE routing prompt, verification contract, tier note (single source for nap/project/global)              | references/dream-core.md   |
 | The behavioral pass catalog - removal policy, contradiction/override, CLAUDE.md reconciliation, skill/hook pointing, filler words, model review, skill-gap, gate-coverage, durability/squash, backup reminder | references/dream-passes.md |
 | Acceptance harness - planted-fixture test that proves a dream run works                                                                                                                                       | tests/README-acceptance.md |
 
 Use the Read tool to load a referenced file when running its passes.
 
-## Mode (the user can switch off the asking)
+## Mode
 
-Read the mode first (`dream_state.py mode`; knobs live in `~/.claude/.bitranox-memory.json` via
-`self_improve_signals.load_config()`):
-- **`propose`** (default): apply the safe private-memory consolidation; ASK before editing a
-  version-controlled CLAUDE.md; route skill changes to a self-PR. End by mentioning
-  `~/.claude/.bitranox-dream-auto` (auto) / `~/.claude/.bitranox-dream-off` (off).
-- **`auto`**: no per-change prompts - apply CLAUDE.md edits and ship skill changes directly.
-- **`off`**: no nudges; a manual dream consolidates PRIVATE memory only.
+Read the mode first per references/dream-core.md (propose / auto / off - the knob semantics live
+ONLY there).
 
 ## When to run
 
 Nudged when due (SessionStart), around compaction (PreCompact salvages, you dream), or manual
-("dream", "/dream-project"). Check `dream_state.py due`. **A MANUAL dream ALWAYS captures -
+("dream", "/dream-tree"). Check `dream_state.py due`. **A MANUAL dream ALWAYS captures -
 `not-due` never suppresses capture.** An absent store is the trigger to CREATE one (the first
 engine `add` bootstraps it), never a reason to skip; routing a learning only into a CLAUDE.md is
 NOT capture. Verify "nothing durable" - never assume it.
@@ -103,21 +99,10 @@ the success line, abort-and-show on a miss).
    and again in step 8, because placement creates new overlap.
 
 5. **PLACEMENT (re-level every unpinned entry; up AND down).** Route each unpinned fact through
-   the routing prompt against the descriptor ladder (leaf -> anchor):
-
-   > Given this fact (title + hook + body) and the scope descriptors of every level on the chain:
-   > choose the NARROWEST level whose PLACE-HERE covers everywhere the fact applies; never a level
-   > where some children would find it noise (unless it is true for ALL); a fact naming one
-   > project's files belongs AT that project (move DOWN); EVIDENCE, not wording, decides reach;
-   > tie or unsure -> keep + UNSURE. Return: `LEVEL | CONFIDENCE high/low | WHY`.
-
-   TIER NOTE: this placement/promotion judgment runs INLINE on the session model (it needs the
-   whole loaded store). If the session is below opus-class, offer switch-model-or-continue per
-   "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`
-   (a /model switch keeps the conversation; opus is the universally-available deep tier, fable
-   sits above it but needs paid API credits - and a fable session may equally switch DOWN after
-   the judgment to save cost). In auto mode: continue and log the note.
-   Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each via engine
+   THE routing prompt in references/dream-core.md against the descriptor ladder (leaf -> anchor);
+   the tier note (inline judgment at opus-class or above; switch-model-or-continue) is in the
+   core too. Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each
+   via engine
    `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
    that move - a down-move with inbound refs needs the refs re-pointed first, or stays). Low/UNSURE
    never moves. Tree-top promotion additionally passes the corroboration gate (user-stated: eager;

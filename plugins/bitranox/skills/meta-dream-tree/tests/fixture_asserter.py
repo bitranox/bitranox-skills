@@ -54,7 +54,11 @@ def _find(m, slug):
     return [(lvl, es[slug]) for lvl in _levels(m) for es in [_entries_at(lvl)] if slug in es]
 
 
-def check(root):
+def check(root, profile="dream"):
+    """profile: 'dream' (tree-wide expectations), 'nap' (chain-only: sibling branches must be
+    byte-untouched; only chain-internal cases judged), 'global' (cross-tree invariants only).
+    The PARITY MATRIX: the basic functions (placement, archive, pin-respect, reconcile) are
+    asserted identically across profiles - only the expected REACH differs."""
     root = Path(root)
     m = json.loads((root / "fixture-manifest.json").read_text(encoding="utf-8"))
     s = m["slugs"]
@@ -103,22 +107,42 @@ def check(root):
         sig.claude_local_md_path(m["dept_b"]).read_text(encoding="utf-8"))[0]
     judgment["SCOPE"] = "WHAT:" in scope and "PLACE-HERE:" in scope
 
+    if profile == "nap":
+        # chain-only: sibling branches are OUT of scope and must be byte-untouched
+        hard["SIBLINGS"] = (_tree_hash(m["proj2"]) == m.get("proj2_hash")
+                            and _tree_hash(m["dept_b"]) == m.get("dept_b_hash"))
+        for out_of_scope in ("DUP", "TASK", "SCOPE"):
+            judgment.pop(out_of_scope, None)          # judged only by the tree-wide profiles
+    elif profile == "global":
+        # cross-tree invariants only: pins + reconcile (hard, shared) and no cross-tree refs
+        t1_slugs = {sl for lvl in _levels(m) for sl in _entries_at(lvl)}
+        t2_local = Path(m["tree2"]) / "control-proj" / "CLAUDE.local.md"
+        t2_text = t2_local.read_text(encoding="utf-8") if t2_local.exists() else ""
+        hard["NO-XREF"] = not any(("[[%s]]" % sl) in t2_text for sl in t1_slugs)
+        judgment = {}                                  # global's judgment cases are its own fixture's job
+
     return hard, judgment
 
 
 def main(argv=None):
     args = argv if argv is not None else sys.argv[1:]
+    profile = "dream"
+    if args and args[0].startswith("--profile"):
+        profile = args[0].split("=", 1)[1] if "=" in args[0] else args[1]
+        args = args[2:] if "=" not in args[0] else args[1:]
     if len(args) != 1:
-        print("usage: fixture_asserter.py <root-dir>")
+        print("usage: fixture_asserter.py [--profile dream|nap|global] <root-dir>")
         return 2
-    hard, judgment = check(args[0])
+    hard, judgment = check(args[0], profile=profile)
     for name, ok in hard.items():
         print("HARD  %-9s %s" % (name, "PASS" if ok else "FAIL"))
     for name, ok in judgment.items():
         print("JUDGE %-9s %s" % (name, "PASS" if ok else "FAIL"))
     jscore = sum(judgment.values())
-    print("hard: %d/%d  judgment: %d/%d (bar: all hard + >=5 judgment, two consecutive runs)"
-          % (sum(hard.values()), len(hard), jscore, len(judgment)))
+    bar = {"dream": ">=5/6", "nap": "3/3", "global": "invariants only"}.get(
+        "nap" if "SIBLINGS" in hard else ("global" if "NO-XREF" in hard else "dream"))
+    print("hard: %d/%d  judgment: %d/%d (bar: all hard + %s judgment, two consecutive runs)"
+          % (sum(hard.values()), len(hard), jscore, len(judgment), bar))
     return 0 if all(hard.values()) else 1
 
 

@@ -11,3 +11,4 @@
       environmental discover_claude_md failures (fixtures made hermetic: workspace inside fake HOME)
 - [x] Cross-suite: hooks 513 green (trigger map rebuilt - the sync test caught the stale map)
 - [x] Security scan: diff clean (prose + test fixtures only)
+- [x] Mechanical rename sweep 2026-07-06: bitranox:meta-dream-project/global(-deep) references -> meta-dream-tree/crosstree(-deep); no semantic change

@@ -1,4 +1,4 @@
-# skill-writer checklist - meta-dream-global (2026-07-06, C6 consistency patch)
+# skill-writer checklist - meta-dream-crosstree (2026-07-06, C6 consistency patch)
 
 - [x] Receipt issued (skill_receipt.py, this session)
 - [x] Change: "the global layer" -> "the tree's top" vocabulary; independent-knowledge-trees
@@ -9,3 +9,4 @@
 - [x] Tier note updated (user-directed): inline deep judgment at opus-class or above;
       fable above opus (paid API credits only); /model switch keeps context - offer UP for
       capability, DOWN for cost on a fable session
+- [x] RENAMED 2026-07-06 (user decision, telling-naming): scope-true name; legacy name kept as a description trigger; all cross-references swept in the same change

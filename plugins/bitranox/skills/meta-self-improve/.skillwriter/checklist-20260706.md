@@ -9,3 +9,4 @@
 - [x] Routing table coverage + accuracy: green (memory-backend.md, upstream-propagation.md)
 - [x] Scripts/tests: reconcile suite 31 green
 - [x] Security scan: diffs clean
+- [x] Mechanical rename sweep 2026-07-06: bitranox:meta-dream-project/global(-deep) references -> meta-dream-tree/crosstree(-deep); no semantic change

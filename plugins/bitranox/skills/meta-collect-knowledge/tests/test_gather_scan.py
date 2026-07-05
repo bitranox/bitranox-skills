@@ -33,8 +33,8 @@ def test_extract_keywords_drops_opaque_ids():
 
 def test_extract_keywords_keeps_real_hyphenated_terms():
     # the junk guard must NOT eat legitimate multi-word technical terms
-    kws = G.extract_keywords("run meta-dream-global-deep against px-websrv-media")
-    assert "meta-dream-global-deep" in kws and "px-websrv-media" in kws
+    kws = G.extract_keywords("run meta-dream-crosstree-deep against px-websrv-media")
+    assert "meta-dream-crosstree-deep" in kws and "px-websrv-media" in kws
 
 
 def test_scan_matches_and_skips(tmp_path):

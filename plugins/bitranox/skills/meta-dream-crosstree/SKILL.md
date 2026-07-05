@@ -1,19 +1,19 @@
 ---
-name: meta-dream-global
-description: Use on "dream global", "/dream-global", "consolidate across projects", "global consolidation", occasionally after several per-project dreams, or when two projects or knowledge trees have learned related things that should be shared. This is the expensive cross-project/cross-tree pass reading every store; for one project's routine tidy use bitranox:meta-dream-project. Honors an off/auto/propose mode.
+name: meta-dream-crosstree
+description: Use on "dream crosstree", "/dream-crosstree", "consolidate across projects", "global consolidation", occasionally after several per-project dreams, or when two projects or knowledge trees have learned related things that should be shared. This is the expensive cross-project/cross-tree pass reading every store; for one project's routine tidy use bitranox:meta-dream-tree. Honors an off/auto/propose mode. Formerly named meta-dream-global - answers to that name too.
 ---
 
-# meta-dream-global
+# meta-dream-crosstree
 
-The cross-project dream. `bitranox:meta-dream-project` tidies ONE project's store, stays inside ONE
-knowledge tree, and is the frequent, cheap pass; **meta-dream-global is the occasional, EXPENSIVE
+The cross-project dream. `bitranox:meta-dream-tree` tidies ONE project's store, stays inside ONE
+knowledge tree, and is the frequent, cheap pass; **meta-dream-crosstree is the occasional, EXPENSIVE
 pass that reads across ALL project stores - and it is the ONLY dream whose territory spans
 INDEPENDENT KNOWLEDGE TREES** (a machine can carry several tree tops; the project dream never
 crosses them). Cascade only flows down one ancestor chain, so knowledge filed in a sibling project
 or another tree is invisible elsewhere; this skill bridges that. Tree discovery runs over the
 configured `discovery_roots` (`tree-top` / `ensure-all-trees` locate the tops). It builds on `bitranox:meta-self-improve` (altitude logic, the upstream-PR loop,
 `reconcile_memory_index.py`) and delegates inbound gather to `bitranox:meta-collect-knowledge`; follow
-those for the primitives. Do not duplicate per-project consolidation here - run meta-dream-project for
+those for the primitives. Do not duplicate per-project consolidation here - run meta-dream-tree for
 that first if a project's own store is messy.
 
 **It must SHRINK noise, never add it**, and it moves knowledge ONLY by lift-or-copy - **NEVER a
@@ -21,18 +21,12 @@ cross-tree reference** (a sideways pointer dangles when the other tree is delete
 
 ## Mode
 
-Same machine-local config as the project dream (`self_improve_signals.load_config()`; legacy
-`.bitranox-dream-off` / `.bitranox-dream-auto` sentinels still apply until it exists):
-
-- **`propose`** (default): apply the safe private-memory moves (each tree's TOP curated store and private
-  project memory), but ASK before editing a version-controlled
-  `CLAUDE.md` and route any skill change to a self-PR.
-- **`auto`**: apply `CLAUDE.md` edits and ship skill changes without per-change prompts.
-- **`off`**: skip this skill entirely (no cross-project consolidation, no nudges).
+Read the mode per `bitranox:meta-dream-tree` -> references/dream-core.md (propose / auto /
+off - the knob semantics live ONLY there); `off` skips this skill entirely.
 
 ## When to run
 
-- **Manual / occasional.** "dream global", "/dream-global", "consolidate across projects". There is no
+- **Manual / occasional.** "dream crosstree", "/dream-crosstree", "consolidate across projects". There is no
   per-session nudge for this (it is heavy); run it deliberately - a good cadence is after several
   per-project dreams, or when you know two projects have learned related things.
 - **Honor the `privacy` knob.** With `walled`, gather and promote ONLY within one privacy domain
@@ -62,7 +56,7 @@ Create one todo per step.
    filler queue. If nothing material changed since the last run, report convergence and STOP - a global
    dream that writes nothing is the correct outcome. Only if there is genuinely new cross-project material
    (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
-   always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-global-deep`.
+   always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-crosstree-deep`.
    - **Deep scan (on confirmation): FAN OUT** one **`sonnet`** subagent per project store (or per thematic
      batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries;
      keep the promotion gate and altitude / normalization decisions INLINE on the main agent at
@@ -74,7 +68,7 @@ Create one todo per step.
 4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to a tree's TOP loads into every
    session UNDER THAT TREE, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
    generalization promotes once seen in **>= 2 distinct projects** (vs the same-project >= 2-dreams dwell
-   meta-dream-project uses); a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
+   meta-dream-tree uses); a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
    candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
    (project roots + ancestors + the workspace), not only the memory stores - during the conversion phase
    many rules still live in `CLAUDE.md`, and promoting one that is already there would DUPLICATE it.
@@ -83,7 +77,7 @@ Create one todo per step.
    broader tier covers it / lift it up and leave only the delta / keep it if it is genuinely local),
    and across trees CONSOLIDATE the same rule duplicated in many sibling `CLAUDE.md` UP to their common
    ancestor - the highest-leverage context saving; new + corroborated + nowhere-else -> promote. (The
-   case model + guards live in `bitranox:meta-dream-project` "CLAUDE.md reconciliation"; every
+   case model + guards live in `bitranox:meta-dream-tree` "CLAUDE.md reconciliation"; every
    `CLAUDE.md` edit stays propose-first and never happens without user confirmation.) Keep promoted
    rules CONCRETE (never water a
    concrete-but-universal rule down); abstract only when specifics fit nowhere else. `should_promote` /
@@ -129,7 +123,7 @@ re-moving the same item, stop and treat it as a bug (the circle-breaker), do not
 ## Common mistakes
 
 - Running this every time instead of occasionally - it is the expensive pass; the routine tidy is
-  `bitranox:meta-dream-project`.
+  `bitranox:meta-dream-tree`.
 - A cross-tree or downward reference instead of lift-or-copy.
 - Promoting a model-inferred rule to a tree top on first sight (it needs >= 2-project corroboration).
 - Over-broadening: watering a concrete-but-universal rule into a vague principle, or globalizing a

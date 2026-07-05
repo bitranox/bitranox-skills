@@ -478,27 +478,27 @@
   "learning",
   "reveals"
  ],
- "meta-dream-global": [
+ "meta-dream-crosstree": [
   "dream",
-  "global",
-  "dream-global",
+  "crosstree",
+  "dream-crosstree",
   "consolidate",
   "across",
   "projects",
+  "global",
   "consolidation",
   "occasionally",
   "several",
   "per-project",
   "dreams",
   "knowledge",
-  "trees",
-  "learned"
+  "trees"
  ],
- "meta-dream-global-deep": [
+ "meta-dream-crosstree-deep": [
   "deep",
-  "global",
+  "crosstree",
   "dream",
-  "dream-global-deep",
+  "dream-crosstree-deep",
   "cross-project",
   "scan",
   "want",
@@ -510,7 +510,23 @@
   "obviously",
   "changed"
  ],
- "meta-dream-project": [
+ "meta-dream-nap": [
+  "quick",
+  "cheap",
+  "memory",
+  "consolidation",
+  "current",
+  "directory",
+  "chain",
+  "right",
+  "context",
+  "compaction",
+  "postcompact",
+  "nudge",
+  "points",
+  "here"
+ ],
+ "meta-dream-tree": [
   "sessionstart",
   "nudge",
   "says",

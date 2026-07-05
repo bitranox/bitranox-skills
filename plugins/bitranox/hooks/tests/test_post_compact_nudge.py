@@ -29,7 +29,7 @@ def test_always_nudges_capture(monkeypatch, capsys):
     rc = run(monkeypatch)
     assert rc == 0
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert "meta-self-improve" in ctx
+    assert "meta-dream-nap" in ctx                 # the nap captures first, then chain-tidies
     assert json.loads(json.dumps({"x": ctx}))  # valid/escaped
 
 
@@ -49,11 +49,11 @@ def test_mentions_dream_when_due(monkeypatch, capsys, isolate_home):
     (mem / "a.md").write_text("x", encoding="utf-8")  # memory exists, no last-dream -> due
     run(monkeypatch, "/proj/x")
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert "meta-dream-project" in ctx
+    assert "meta-dream-tree" in ctx
 
 
-def test_no_dream_mention_when_not_due(monkeypatch, capsys):
+def test_no_full_dream_mention_when_not_due(monkeypatch, capsys):
     run(monkeypatch, "/proj/none")  # no memory dir -> not due
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    assert "meta-dream-project" not in ctx
-    assert "meta-self-improve" in ctx
+    assert "meta-dream-tree" not in ctx            # the FULL dream only when due
+    assert "meta-dream-nap" in ctx
