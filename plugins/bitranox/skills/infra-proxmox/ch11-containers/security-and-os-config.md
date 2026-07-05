@@ -188,3 +188,17 @@ Restoring container backups made with vzdump is possible using the pct restore c
 default, pct restore will attempt to restore as much of the backed up container configuration as possible.
 It is possible to override the backed up configuration by manually setting container options on the command
 line (see the pct manual page for details).
+
+## Running Docker on a Proxmox host / inside an LXC (host-ops)
+
+- **Docker inside an unprivileged LXC** needs `--features nesting=1,keyctl=1` on the CT, and inside the
+  container switch the iptables backend to legacy (`update-alternatives --set iptables /usr/sbin/iptables-legacy`):
+  nf_tables fails to create the nat chains in a container netns, so dockerd silently fails network setup
+  without it.
+- **Kernel-global sysctls set inside an (unprivileged) LXC are silently ignored.** Params like
+  `vm.overcommit_memory` (Redis) or `net.core.somaxconn` must be set on the **Proxmox host** (tracked in
+  the host repo under `root_volume/etc/sysctl.d/`), not in the guest.
+- **A systemd wrapper that itself restarts Docker** (e.g. a boot/update script doing `systemctl restart
+  docker`) must order with `Wants=docker.service` + `After=docker.service`, NOT `Requires=docker.service` -
+  `Requires=` makes systemd SIGTERM the wrapper the moment Docker stops momentarily during that restart.
+- Use the v2 plugin `docker compose`, never the v1 standalone `docker-compose` binary.

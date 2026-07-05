@@ -235,3 +235,19 @@ def test_cross_tree_default_on_home_tree_recalled_without_config(monkeypatch, ca
     rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
                   cwd=str(two_trees.proj_a))
     assert rc == 0 and "frobnicator" in out                  # derived $HOME root, no config needed
+
+
+def test_stray_claude_md_at_tempdir_does_not_hijack_workspace(monkeypatch, capsys, tmp_path, home):
+    # a stray CLAUDE.md at the system temp root must not widen the workspace walk to all of tempdir
+    import gather_scan as GS
+    import tempfile as TF
+    fake_tmp = tmp_path                       # treat the pytest tmp base as the "system temp dir"
+    (fake_tmp / "CLAUDE.md").write_text("stray junk altitude", encoding="utf-8")
+    monkeypatch.setenv("TMPDIR", str(fake_tmp))
+    monkeypatch.setattr(TF, "gettempdir", lambda: str(fake_tmp))
+    ws = tmp_path / "ws"
+    (ws / "cur").mkdir(parents=True)
+    (ws / "CLAUDE.md").write_text("workspace root rules", encoding="utf-8")
+    (ws / "cur" / "CLAUDE.md").write_text("cur", encoding="utf-8")
+    root = GS._workspace_root(str(ws / "cur"))
+    assert root == ws                          # NOT fake_tmp, despite its CLAUDE.md

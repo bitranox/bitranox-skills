@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.50.0] - 2026-07-06
+
+### Changed
+- `infra-proxmox` is now a lean hub (user decision): 6,474 -> 1,691 words inline. Kept: the
+  auto-detect, safety, and cluster-size gate tables, the action-review protocol, response
+  style, the troubleshooting triage, and the routing tables (now 5 rows richer: migration,
+  cold start, node evacuation, pvesh, Docker-in-LXC). The near-verbatim command dumps live
+  where they always also lived - the chapter files. Unique inline content was folded into its
+  chapters BEFORE deletion: the Docker-in-LXC host-ops block, the node-maintenance runbook,
+  and the config-file path map (the verify pass caught that appendix-c did not already carry
+  it). Fable routing test 6/6.
+
+### Fixed
+- `gather_scan._workspace_root` now skips the excluded anchor dirs (HOME, system temp, root)
+  like `resolve_anchor` does - a stray `CLAUDE.md` at `/tmp` no longer turns the whole temp
+  dir into one workspace and pollutes recall.
+
 ## [5.49.1] - 2026-07-06
 
 ### Fixed

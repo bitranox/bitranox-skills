@@ -203,3 +203,13 @@ The CA certificate and key are stored in the Proxmox Cluster File System (pmxcfs
 
 - [pvenode CLI Reference](../appendix-a-cli/pvenode.md)
 
+## Node Maintenance Workflow (runbook)
+
+1. **Pre-check:** `pvecm status` (quorum survives -1 node), `ha-manager status`
+2. **Enable maintenance:** `ha-manager crm-command node-maintenance enable {node}`
+3. **Migrate remaining:** `pvenode migrateall {target_node} --maxworkers 2`
+4. **Verify empty:** `qm list` + `pct list` (no running guests)
+5. **Perform maintenance:** updates, reboot, hardware changes
+6. **Verify after reboot:** `pvecm status`, `pveversion --verbose`, `pvesm status`
+7. **Disable maintenance:** `ha-manager crm-command node-maintenance disable {node}`
+8. **Migrate back:** `ha-manager migrate vm:{vmid} {node}` or let failback handle it
