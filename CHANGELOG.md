@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.46.0] - 2026-07-06
+
+### Added
+- Repo gate: the CSO lint now rejects block-scalar (`>-`/`|`) and quoted frontmatter
+  descriptions with a precise message - the defect class the full roster review found most
+  often (9 skills) cannot recur.
+
+### Changed
+- Roster review COMPLETE: all 56 skills opus-reviewed and fable-verified across 5 waves
+  (5.45.1-5.45.4 + this release); final scripted snapshot reports zero compliance flags.
+  The light pass confirmed the 9 recently rebuilt meta skills compliant without changes,
+  including an exact knob-table-vs-DEFAULT_CONFIG match.
+
 ## [5.45.4] - 2026-07-06
 
 ### Fixed
