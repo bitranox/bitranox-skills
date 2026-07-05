@@ -465,8 +465,10 @@ def _frontmatter_description(path):
 
 
 def cso_failures(root, changed):
-    """A changed skill description must be trigger-first ('Use when ...') and yield distinctive
-    keywords - that is what makes it router-derivable and findable (the CSO rules)."""
+    """A changed skill description must be a single-line plain YAML scalar, trigger-first
+    ('Use when ...'), and yield distinctive keywords - that is what makes it router-derivable
+    and findable (the CSO rules). Block scalars (`>-`/`|`) and quoted scalars leak their
+    style markers into the derived catalog and trigger map."""
     fails = []
     for p in changed:
         m = _SKILL_MD_RX.match(p)
@@ -474,6 +476,12 @@ def cso_failures(root, changed):
             continue
         desc = _frontmatter_description(root / p)
         if desc is None:
+            continue
+        if desc[:1] in (">", "|", '"', "'"):
+            fails.append("skills/%s: description must be a single-line plain YAML scalar - no "
+                         "'>-'/'|' block scalar and no wrapping quotes (the style marker leaks "
+                         "into the generated catalog and router; reword any ': ' instead)."
+                         % m.group(1))
             continue
         if not desc.lower().startswith("use "):
             fails.append("skills/%s: description must be trigger-first ('Use when <situations>...'), "

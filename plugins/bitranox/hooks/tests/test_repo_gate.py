@@ -473,3 +473,20 @@ def test_cso_lint_requires_derivable_keywords(tmp_path):
     _skill(tmp_path, "epsilon", "Use when it is good to do so")   # no distinctive keywords
     fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/epsilon/SKILL.md"])
     assert fails and "keyword" in fails[0]
+
+
+def test_cso_lint_rejects_block_scalar_and_quoted_descriptions(tmp_path):
+    # a `>-` block scalar and a quoted scalar both leak artifacts into the derived
+    # catalog/router - the lint must name the scalar style, not misdiagnose trigger-first
+    make_repo(tmp_path)
+    d = tmp_path / "plugins/bitranox/skills/zeta"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: zeta\ndescription: >-\n  Use when zeta widgets explode under pressure loads\n---\n\n# z\n",
+        encoding="utf-8")
+    fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/zeta/SKILL.md"])
+    assert fails and "plain" in fails[0] and "scalar" in fails[0]
+
+    _skill(tmp_path, "eta", '"Use when eta gadgets rust in coastal climates"')
+    fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/eta/SKILL.md"])
+    assert fails and "plain" in fails[0] and "scalar" in fails[0]
