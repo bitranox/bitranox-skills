@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.51.0] - 2026-07-06
+
+### Changed
+- `process-agents-subagent-driven-development`: the Effort paragraph now carries the
+  probe-verified, extremes-only effort policy with the tier-to-effort mapping (low for
+  mechanical fan-out, inherit for the sonnet default, high-if-set for opus, xhigh/max for
+  adversarial verify/synthesis), the working channels (Workflow opts.effort; agent-type
+  frontmatter with its first-agents-dir restart caveat; no per-dispatch field), and the
+  warning that broad low-pinning silently degrades occasional-depth tasks.
+
+### Fixed
+- Excluded dirs (home, the system temp dir, the filesystem root) can no longer become memory
+  altitudes: `altitude_chain` returns empty for them and `ensure_level` refuses them, so an
+  engine/heal call with a temp-dir cwd no longer scaffolds `/tmp/CLAUDE.md` and turns the whole
+  temp dir into a fake knowledge tree (the anchor resolver always excluded them, but the
+  chain fallback declared such a dir "its own tree top"). The workspace-hijack regression test
+  now pins the real temp dir excluded alongside the fixture's fake one.
+
 ## [5.50.0] - 2026-07-06
 
 ### Changed

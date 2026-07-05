@@ -566,3 +566,30 @@ def test_cli_add_slug_targets_existing_identity(proj, capsys):
     assert rc == 0
     _s, entries, _b = E.read_store(proj)
     assert [e.title for e in entries] == ["New title"]            # same identity, no second entry
+
+
+def test_excluded_dirs_are_never_an_altitude(tmp_path, monkeypatch):
+    # /tmp-class dirs (home, tempdir, fs root) must never be scaffolded as a tree top:
+    # the anchor resolver already excludes them, but the altitude_chain fallback used to
+    # declare the excluded dir "its own top" and scaffold it (bit twice on 2026-07-05).
+    import tempfile as TF
+    import self_improve_signals as sig
+    fake_tmp = tmp_path / "faketmp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(TF, "gettempdir", lambda: str(fake_tmp))
+    assert sig.altitude_chain(str(fake_tmp)) == []
+    created = E.scaffold(str(fake_tmp))
+    assert created == []
+    assert not (fake_tmp / "CLAUDE.md").exists()
+    assert not (fake_tmp / "CLAUDE.local.md").exists()
+
+
+def test_add_refuses_excluded_proj(tmp_path, monkeypatch):
+    import tempfile as TF
+    fake_tmp = tmp_path / "faketmp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(TF, "gettempdir", lambda: str(fake_tmp))
+    import pytest as _pt
+    with _pt.raises(Exception):
+        E.add_or_update_entry(str(fake_tmp), "T", "When x, do y", body="b", scope_default="lvl")
+    assert not (fake_tmp / "CLAUDE.local.md").exists()
