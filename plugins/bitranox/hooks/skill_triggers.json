@@ -466,6 +466,7 @@
   "pull",
   "knowledge",
   "projects",
+  "trees",
   "relevant",
   "current",
   "collect",
@@ -475,8 +476,7 @@
   "fresh",
   "project",
   "learning",
-  "reveals",
-  "topic"
+  "reveals"
  ],
  "meta-dream-global": [
   "cross-project",

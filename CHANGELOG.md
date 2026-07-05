@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.41.0] - 2026-07-06
+
+### Changed
+- meta-collect-knowledge rewritten (skills-half C4): per-tree candidate grouping (`TREE: <top>`
+  headers; native tier labeled machine-local), the cross_tree_search wall honored with an explicit
+  `--cross-tree` override, cross-tree import ALWAYS a labeled copy (`gathered-cross-tree:<top>`
+  provenance; never a reference), deliverables checklist + rationalization table. gather_scan.py
+  legacy dual-read stripped (slug store only; defensive dot-dir filter - pathlib glob matches
+  dotfiles), cross-tree discovery widened over discovery_roots. The two long-standing
+  environmental discover_claude_md test failures fixed at the root (fixtures hermetic: workspace
+  inside the fake HOME so the ancestor walk cannot leak into the real /tmp). Full skill-writer
+  discipline: RED (4 drift points), GREEN + pressure (blind-seed and cross-tree-reference
+  temptations resisted), receipt + committed checklist artifact. 19 tests green; hooks 513 green
+  (the map-sync test caught the description change - rebuilt).
+
 ## [5.40.0] - 2026-07-06
 
 ### Added

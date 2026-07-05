@@ -186,36 +186,27 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
     return [p for p in paths if p not in chain]
 
 
-_UUID_STORE_DIRNAME = ".claude-memory"            # the additive central UUID body-store (uuid_store.py)
+_STORE_DIRNAME = sig.MEMORY_DIRNAME               # the central slug body-store (.claude-memory)
 
 
 def _find_curated_stores(root):
-    """Every curated body under `root`, across BOTH layouts (coexisting during the transition):
-    the legacy `.claude-bx-selflearning/{index.md, facts/*.md}` AND the central slug store
-# LEGACY-RETIRE: drop the legacy dual-read together with the skills-half legacy retirement (C4)
-    `.claude-memory/facts/<shard>/<uuid>.md`. Allow-lists those two dot-dirs past the hidden-dir prune
-    (else the walk would never find them), excludes vendored/other-hidden/backup dirs, and does not
-    descend INTO a store (so `.archive`/backups are skipped)."""
+    """Every curated body under `root`: the central slug store's `facts/*.md` (flat, slug-named;
+    a transitional sharded remnant `facts/<shard>/<uuid>.md` is still read). Allow-lists the store
+    dot-dir past the hidden-dir prune (else the walk would never find it), excludes vendored /
+    other-hidden / backup dirs, and does not descend INTO a store (`.archive` starts with a dot,
+    so the globs never match it)."""
     out = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
             base = os.path.basename(dirpath)
-            if base == sig.CURATED_DIRNAME:
-                d = Path(dirpath)
-                if (d / sig.CURATED_INDEX).is_file():
-                    out.append(str(d / sig.CURATED_INDEX))
-                fdir = d / "facts"
-                if fdir.is_dir():
-                    out += [str(p) for p in sorted(fdir.glob("*.md"))]
-                dirnames[:] = []                      # do not descend into the store
-                continue
-            if base == _UUID_STORE_DIRNAME:
-                # central UUID store: bodies are sharded two levels down (facts/<shard>/<uuid>.md)
-                out += [str(p) for p in sorted((Path(dirpath) / "facts").glob("*/*.md"))]
+            if base == _STORE_DIRNAME:
+                fdir = Path(dirpath) / "facts"
+                out += [str(p) for p in sorted(fdir.glob("*.md")) + sorted(fdir.glob("*/*.md"))
+                        if not p.parent.name.startswith(".")]   # pathlib * matches dotfiles
                 dirnames[:] = []                      # do not descend into the store
                 continue
             dirnames[:] = [x for x in dirnames
-                           if (x in (sig.CURATED_DIRNAME, _UUID_STORE_DIRNAME)
+                           if (x == _STORE_DIRNAME
                                or (x not in _VENDOR and not x.startswith(".")))
                            and ".bak-" not in x and not x.endswith(".bak")]
     except OSError:
@@ -224,10 +215,10 @@ def _find_curated_stores(root):
 
 
 def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
-    """OTHER projects' curated `.claude-bx-selflearning/` stores across the workspace tree (index.md
-    + facts/), for cross-project recall. EXCLUDES the current project's own `index.md` (already
-    @imported into this session) but KEEPS its `facts/` (eligible for push-when-relevant). Cached per
-    workspace root (TTL); empty if no workspace root."""
+    """Curated slug-store bodies across the workspace tree, for cross-project recall/gather. The
+    bodies are CENTRAL per tree (one store at each tree top), so there is no per-project store to
+    exclude; the current project's pointer LINES are already in context, but a body is read on
+    demand either way. Cached per workspace root (TTL); empty if no workspace root."""
     root = _workspace_root(self_cwd)
     if root is None:
         return []
@@ -246,21 +237,7 @@ def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
             cache.write_text("\n".join(paths), encoding="utf-8")
         except OSError:
             pass
-    own_mem = None
-    if exclude_proj:
-        try:
-            own_mem = str(sig.curated_index(exclude_proj).resolve())
-        except OSError:
-            own_mem = None
-    kept = []
-    for p in paths:
-        try:
-            if own_mem and Path(p).name == sig.CURATED_INDEX and str(Path(p).resolve()) == own_mem:
-                continue                              # own index.md already loaded; keep its facts
-        except OSError:
-            pass
-        kept.append(p)
-    return kept
+    return paths
 
 
 def scan(keywords, files):
@@ -290,6 +267,9 @@ def main(argv=None):
     ap.add_argument("--topic", required=True, help="topic / scope-descriptor text to gather for")
     ap.add_argument("--self", dest="self_proj", default=None,
                     help="current project cwd to EXCLUDE (you gather from elsewhere)")
+    ap.add_argument("--cross-tree", action="store_true", dest="cross_tree",
+                    help="deliberately gather across OTHER knowledge trees even when "
+                         "cross_tree_search=false (import is always a labeled COPY)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     self_proj = args.self_proj or os.getcwd()
@@ -300,10 +280,35 @@ def main(argv=None):
     files = discover_files(self_proj)
     if self_proj:                                 # also other projects' curated stores across the tree
         files += discover_curated(self_proj, self_proj)
+    cross_allowed = args.cross_tree or sig.load_config().get("cross_tree_search", True)
+    if cross_allowed:
+        # OTHER knowledge trees are invisible to the workspace walk - discover them via the
+        # configured discovery_roots (the multi-tree knob) and scan their stores too.
+        for r in sig.discovery_roots():
+            files += _find_curated_stores(str(r))
+        files = sorted({str(f) for f in files})
+    if not cross_allowed:
+        # gather walled into the CURRENT tree: sources outside its anchor (incl. the
+        # path-unattributable native tier) are dropped; pass --cross-tree for a deliberate,
+        # labeled cross-tree gather.
+        anchor = sig.resolve_anchor(self_proj)
+        if anchor is None:
+            print("no tree anchor for %s and cross_tree_search=false" % self_proj, file=sys.stderr)
+            return 0
+        pre = str(anchor) + os.sep
+        files = [f for f in files if str(f).startswith(pre)]
     hits = scan(keywords, files)
-    for path in sorted(hits):
-        print("%s\t%s" % (path, ",".join(hits[path])))
-    print("CANDIDATES: %d (keywords: %s)" % (len(hits), ", ".join(keywords)))
+    by_tree = {}
+    for path in hits:
+        top = sig.resolve_anchor(str(Path(path).parent))
+        label = str(top) if top else "native-tier (machine-local)"
+        by_tree.setdefault(label, []).append(path)
+    for label in sorted(by_tree):
+        print("TREE: %s" % label)                 # cross-tree import is ALWAYS a labeled COPY
+        for path in sorted(by_tree[label]):
+            print("  %s\t%s" % (path, ",".join(hits[path])))
+    print("CANDIDATES: %d in %d tree(s) (keywords: %s)"
+          % (len(hits), len(by_tree), ", ".join(keywords)))
     # Optional: when a memory MCP (basic-memory) is enabled and its index covers this tree, add its
     # semantic/full-text hits as EXTRA candidates for the agent to read-note. Read-only; keyword scan
     # above is always the base, so this is a pure augmentation (absent/misconfigured MCP -> nothing).
