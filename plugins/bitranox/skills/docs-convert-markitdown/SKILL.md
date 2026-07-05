@@ -442,7 +442,6 @@ print(result.text_content)
 
 Use the Read tool to load a referenced file when its detail is needed.
 
-> Bundled scripts: `scripts/generate_schematic.py` and `scripts/generate_schematic_ai.py` are optional, separate tools for generating diagrams. They are not part of converting files to Markdown and are never invoked by default.
 
 ## Resources
 

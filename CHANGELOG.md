@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.49.0] - 2026-07-06
+
+### Added
+- `docs-generate-schematics` (57th skill; user decision: extract, not drop): the AI
+  schematic-generation scripts and their 28 behavioral tests now live in their own scope-true
+  skill (OpenRouter image model + quality-review loop), with the K-Dense attribution carried
+  over and a NOT-for clause routing conversion work back to markitdown. Discovery 3/3
+  including the markitdown discrimination.
+
+### Changed
+- `docs-convert-markitdown` is conversion-only: the out-of-scope diagram generators, their
+  tests, and fixtures moved out; README/catalog count now 57.
+
 ## [5.48.0] - 2026-07-06
 
 ### Added

@@ -35,19 +35,6 @@ def load_script(name: str) -> ModuleType:
 
 
 @pytest.fixture(scope="session")
-def gen_ai():
-    """The generate_schematic_ai module (import-safe: only needs httpx2)."""
-    pytest.importorskip("httpx2")
-    return load_script("generate_schematic_ai")
-
-
-@pytest.fixture(scope="session")
-def gen_wrapper():
-    """The generate_schematic.py wrapper module (stdlib only)."""
-    return load_script("generate_schematic")
-
-
-@pytest.fixture(scope="session")
 def literature():
     """convert_literature module; needs markitdown at import time."""
     pytest.importorskip("markitdown")
@@ -68,8 +55,3 @@ def batch():
     pytest.importorskip("markitdown")
     return load_script("batch_convert")
 
-
-@pytest.fixture
-def generator(gen_ai):
-    """A generator instance built with a fake key (no network is touched)."""
-    return gen_ai.ScientificSchematicGenerator(api_key="test-key-not-real")
