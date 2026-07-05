@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.1] - 2026-07-06
+
+### Changed
+- meta-dream-global (+deep) consistency patch (skills-half C6): "the global layer" -> "the tree's
+  top" vocabulary throughout; independent-knowledge-trees framing (the global dream is the ONLY
+  dream whose territory spans trees; discovery over discovery_roots via tree-top /
+  ensure-all-trees); both descriptions rewritten trigger-first (the new CSO lint enforced it).
+  Trigger map rebuilt.
+
 ## [5.42.0] - 2026-07-06
 
 ### Changed
