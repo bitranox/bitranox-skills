@@ -1,9 +1,11 @@
 ---
 name: process-agents-dispatching-parallel
-description: Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies
+description: Use when facing 2+ independent tasks (failing test files, broken subsystems, separate bugs, audit or worklist items) that can be worked without shared state or sequential dependencies and you want to run them concurrently instead of one at a time. Keywords - parallel subagents, dispatch agents, fan-out, worklist, batching, concurrent investigation, one agent per domain.
 ---
 
 # Dispatching Parallel Agents
+
+> Adapted from the superpowers plugin (MIT).
 
 ## Overview
 
@@ -119,17 +121,17 @@ Return: Summary of what you found and what you fixed.
 
 ## Common Mistakes
 
-**❌ Too broad:** "Fix all the tests" - agent gets lost
-**✅ Specific:** "Fix agent-tool-abort.test.ts" - focused scope
+**NO Too broad:** "Fix all the tests" - agent gets lost
+**OK Specific:** "Fix agent-tool-abort.test.ts" - focused scope
 
-**❌ No context:** "Fix the race condition" - agent doesn't know where
-**✅ Context:** Paste the error messages and test names
+**NO No context:** "Fix the race condition" - agent doesn't know where
+**OK Context:** Paste the error messages and test names
 
-**❌ No constraints:** Agent might refactor everything
-**✅ Constraints:** "Do NOT change production code" or "Fix tests only"
+**NO No constraints:** Agent might refactor everything
+**OK Constraints:** "Do NOT change production code" or "Fix tests only"
 
-**❌ Vague output:** "Fix it" - you don't know what changed
-**✅ Specific:** "Return summary of root cause and changes"
+**NO Vague output:** "Fix it" - you don't know what changed
+**OK Specific:** "Return summary of root cause and changes"
 
 ## When NOT to Use
 
@@ -138,7 +140,7 @@ Return: Summary of what you found and what you fixed.
 **Exploratory debugging:** You don't know what's broken yet
 **Shared state:** Agents would interfere (editing same files, using same resources)
 
-## Real Example from Session
+## Worked Example
 
 **Scenario:** 6 test failures across 3 files after major refactoring
 
@@ -151,9 +153,9 @@ Return: Summary of what you found and what you fixed.
 
 **Dispatch:**
 ```
-Agent 1 → Fix agent-tool-abort.test.ts
-Agent 2 → Fix batch-completion-behavior.test.ts
-Agent 3 → Fix tool-approval-race-conditions.test.ts
+Agent 1 -> Fix agent-tool-abort.test.ts
+Agent 2 -> Fix batch-completion-behavior.test.ts
+Agent 3 -> Fix tool-approval-race-conditions.test.ts
 ```
 
 **Results:**
@@ -162,8 +164,6 @@ Agent 3 → Fix tool-approval-race-conditions.test.ts
 - Agent 3: Added wait for async tool execution to complete
 
 **Integration:** All fixes independent, no conflicts, full suite green
-
-**Time saved:** 3 problems solved in parallel vs sequentially
 
 ## Key Benefits
 
@@ -180,11 +180,3 @@ After agents return:
 3. **Run full suite** - Verify all fixes work together
 4. **Spot check** - Agents can make systematic errors
 
-## Real-World Impact
-
-From debugging session (2025-10-03):
-- 6 failures across 3 files
-- 3 agents dispatched in parallel
-- All investigations completed concurrently
-- All fixes integrated successfully
-- Zero conflicts between agent changes

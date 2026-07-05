@@ -1,9 +1,11 @@
 ---
 name: process-review-verification-before-completion
-description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+description: Use when about to claim work is complete, fixed, or passing, before committing, opening a PR, or moving to the next task, or when about to express satisfaction with a result ("done", "looks correct", "should work now") or trust an agent's success report
 ---
 
 # Verification Before Completion
+
+> Adapted from the superpowers plugin (MIT).
 
 ## Overview
 
@@ -83,32 +85,32 @@ the main agent; tiers: "Concrete tiers" in `bitranox:process-agents-subagent-dri
 
 **Tests:**
 ```
-✅ [Run test command] [See: 34/34 pass] "All tests pass"
-❌ "Should pass now" / "Looks correct"
+OK [Run test command] [See: 34/34 pass] "All tests pass"
+NO "Should pass now" / "Looks correct"
 ```
 
 **Regression tests (TDD Red-Green):**
 ```
-✅ Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
-❌ "I've written a regression test" (without red-green verification)
+OK Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
+NO "I've written a regression test" (without red-green verification)
 ```
 
 **Build:**
 ```
-✅ [Run build] [See: exit 0] "Build passes"
-❌ "Linter passed" (linter doesn't check compilation)
+OK [Run build] [See: exit 0] "Build passes"
+NO "Linter passed" (linter doesn't check compilation)
 ```
 
 **Requirements:**
 ```
-✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
-❌ "Tests pass, phase complete"
+OK Re-read plan → Create checklist → Verify each → Report gaps or completion
+NO "Tests pass, phase complete"
 ```
 
 **Agent delegation:**
 ```
-✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
-❌ Trust agent report
+OK Agent reports success → Check VCS diff → Verify changes → Report actual state
+NO Trust agent report
 ```
 
 ## Why This Matters

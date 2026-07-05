@@ -35,6 +35,8 @@ If CLAUDE.md says "don't use TDD" and a skill says "always use TDD", follow the 
 
 # Using Skills
 
+> Adapted from the superpowers plugin (MIT).
+
 ## The Rule
 
 **Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.

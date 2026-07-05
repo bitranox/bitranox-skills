@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.45.3] - 2026-07-06
+
+### Fixed
+- Skill-roster review, wave 3 (12 process-* skills; opus-reviewed, fable-verified, discovery
+  6/6): 11 changed, 1 compliant as-is (test-design).
+  - Attribution: 12 skills derived from the Obra Superpowers plugin (MIT) now carry the credit
+    line and a THIRD_PARTY_NOTICES.md entry (previously only 2 of 14 did) - the MIT notice now
+    travels with every adapted copy.
+  - Descriptions rewritten triggers-only where the tail summarized the skill's own workflow
+    (verification-before-completion, ship-finishing-development-branch,
+    receiving-code-review, requesting-code-review) or lacked its core keywords
+    (dispatching-parallel had no parallel/dispatch/fan-out terms at all).
+  - `process-review-receiving-code-review` no longer promotes the banned "Good catch" opener
+    as a good example; `process-review-enhance-code-quality` no longer instructs silently
+    auto-creating a CLAUDE.md; `process-debug-systematic` sheds 4 leftover authoring
+    scaffolding files; placeholder syntax in requesting-code-review matches its template.
+  - Non-ASCII check/cross glyphs outside the allowed set swapped to ASCII OK/NO markers in the
+    flagged skills.
+
 ## [5.45.2] - 2026-07-06
 
 ### Fixed

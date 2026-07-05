@@ -1,9 +1,11 @@
 ---
 name: process-review-receiving-code-review
-description: Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation
+description: Use when receiving code review feedback or PR review comments, before implementing suggestions - especially when a suggestion seems unclear, technically questionable, or breaks existing behavior, or when you feel the urge to reply "You're absolutely right"
 ---
 
 # Code Review Reception
+
+> Adapted from the superpowers plugin (MIT).
 
 ## Overview
 
@@ -137,7 +139,7 @@ Push back when:
 When feedback IS correct:
 ```
 ✅ "Fixed. [Brief description of what changed]"
-✅ "Good catch - [specific issue]. Fixed in [location]."
+✅ "[specific issue] - fixed in [location]."
 ✅ [Just fix it and show in the code]
 
 ❌ "You're absolutely right!"

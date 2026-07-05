@@ -1,6 +1,6 @@
 ---
 name: process-ship-finishing-development-branch
-description: Use when implementation is complete, all tests pass, and you need to decide how to integrate the work - guides completion of development work by presenting structured options for merge, PR, or cleanup
+description: Use when implementation is complete and tests pass and you need to decide how to finish a feature or bugfix branch - merge it, open a pull request, keep it, or discard it, and clean up any worktree
 ---
 
 # Finishing a Development Branch

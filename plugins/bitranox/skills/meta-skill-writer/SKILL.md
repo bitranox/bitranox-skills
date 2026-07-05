@@ -5,6 +5,8 @@ description: Use when creating new skills, editing existing skills, structuring 
 
 # Writing Skills
 
+> Adapted from the superpowers plugin (MIT).
+
 ## Overview
 
 **Writing skills IS Test-Driven Development applied to process documentation.**

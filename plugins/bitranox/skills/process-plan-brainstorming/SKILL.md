@@ -1,9 +1,11 @@
 ---
 name: process-plan-brainstorming
-description: "Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled. Not for trivial, mechanical, or fully-specified changes."
+description: Use when starting non-trivial feature, component, or behaviour-change work whose design or requirements are not yet settled. Not for trivial, mechanical, or fully-specified changes.
 ---
 
 # Brainstorming Ideas Into Designs
+
+> Adapted from the superpowers plugin (MIT).
 
 ## Overview
 
@@ -43,8 +45,8 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Implementation (if continuing):**
 - Ask: "Ready to set up for implementation?"
-- Use bitranox:git-worktrees to create isolated workspace
-- Use bitranox:process-plan-writing-plans to create detailed implementation plan
+- **REQUIRED SUB-SKILL:** Use bitranox:git-worktrees to create an isolated workspace
+- **REQUIRED SUB-SKILL:** Use bitranox:process-plan-writing-plans to create a detailed implementation plan
 
 ## Key Principles
 
