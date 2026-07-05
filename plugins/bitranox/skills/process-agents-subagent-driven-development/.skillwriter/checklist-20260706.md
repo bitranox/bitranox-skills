@@ -43,3 +43,10 @@ below opus-class, DOWN for cost on a fable session facing routine work - user-di
 - [x] RED/GREEN evidence per the Iron Law where behavior changed (see Change line)
 - [x] Suites green: hooks 532, humanize 54+54, SDD 16
 - [x] Security scan: prose/table/marker edits, no secrets/paths/PII
+
+# skill-writer checklist - process-agents-subagent-driven-development (2026-07-06, effort heuristic)
+
+- [x] Change: the Effort paragraph now carries the extremes-only policy + the tier-to-effort mapping table (low for haiku-tier mechanical fan-out, inherit for sonnet default, high-if-set for opus, xhigh/max for adversarial verify/synthesis) and the agents-dir restart caveat. Raw probe numbers stay in the memory fact (no measured numbers in committed docs); the skill says probe-verified.
+- [x] Probe basis: Workflow opts.effort A/B-proven this session (wf_9a905b3d-680); Agent tool has no effort field; agent-type frontmatter restart-gated - all reflected accurately.
+- [x] GREEN: fable retrieval test 3/3 (Workflow low, sonnet inherit-do-not-set, verifier xhigh/max) incl. correct channel choice.
+- [x] Receipt held; description unchanged (generators stay in sync); tests 16 passed; security scan clean.

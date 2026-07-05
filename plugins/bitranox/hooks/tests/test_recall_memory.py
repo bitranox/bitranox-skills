@@ -243,8 +243,12 @@ def test_stray_claude_md_at_tempdir_does_not_hijack_workspace(monkeypatch, capsy
     import tempfile as TF
     fake_tmp = tmp_path                       # treat the pytest tmp base as the "system temp dir"
     (fake_tmp / "CLAUDE.md").write_text("stray junk altitude", encoding="utf-8")
-    monkeypatch.setenv("TMPDIR", str(fake_tmp))
+    import self_improve_signals as SIG
+    real_excluded = SIG._excluded_anchor_dirs()   # keep the REAL tempdir excluded too, or the
+    monkeypatch.setenv("TMPDIR", str(fake_tmp))   # walk escapes the fixture into the live /tmp
     monkeypatch.setattr(TF, "gettempdir", lambda: str(fake_tmp))
+    monkeypatch.setattr(SIG, "_excluded_anchor_dirs",
+                        lambda: real_excluded | {fake_tmp})
     ws = tmp_path / "ws"
     (ws / "cur").mkdir(parents=True)
     (ws / "CLAUDE.md").write_text("workspace root rules", encoding="utf-8")

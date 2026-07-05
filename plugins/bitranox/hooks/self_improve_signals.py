@@ -550,6 +550,8 @@ def altitude_chain(proj):
     resolve to a target at the SAME or a LATER (higher) position - upward only."""
     try:
         here = Path(proj)
+        if here == Path(here.anchor) or here in _excluded_anchor_dirs():
+            return []                             # /, ~, tempdir: never an altitude, never a top
         ladder = [here, *here.parents]            # project dir up toward /
         top = resolve_anchor(proj)                # the tree's anchor, or None
         if top is None:                           # project is the top; single-tier chain

@@ -313,7 +313,14 @@ def ensure_level(proj, scope_default="", _locked=False):
     harvested from `CLAUDE.md`, else `scope_default`), and (2) any LEGACY `<!-- bitranox:self-learning
     -->` scope block still sitting in `CLAUDE.md` is MOVED out into the pointer block (byte-safe outside
     the markers). Best-effort gitignore of `CLAUDE.local.md` + the anchor's `.claude-memory/` when not
-    `track_private`. Idempotent + mtime-neutral. No `@import`, no `index.md`."""
+    `track_private`. Idempotent + mtime-neutral. No `@import`, no `index.md`.
+
+    REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
+    never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
+    that pollutes recall (bitten twice on 2026-07-05)."""
+    _lvl = Path(proj)
+    if _lvl == Path(_lvl.anchor) or _lvl in sig._excluded_anchor_dirs():
+        raise ValueError("refused: %s is an excluded altitude (home/tempdir/root)" % proj)
     def _do():
         md_path = sig.claude_md_path(proj)
         try:
