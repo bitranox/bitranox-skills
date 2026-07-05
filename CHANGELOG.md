@@ -17,6 +17,14 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.43.1] - 2026-07-06
+
+### Changed
+- meta-dream-nap live acceptance MET: two consecutive runs, both all-hard (incl. the sibling
+  byte-identity assertion) + 3/3 chain-internal judgment, ~2.3x faster than the full dream on the
+  fixture. The dream family (nap/tree/crosstree) is fully acceptance-tested; the self-learning
+  restructure is complete.
+
 ## [5.43.0] - 2026-07-06
 
 ### Added
