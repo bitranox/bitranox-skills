@@ -9,3 +9,6 @@
 - [x] Routing table coverage + accuracy: green (dream-passes.md, README-acceptance.md)
 - [x] Scripts/tests: fixture harness 9 tests green; acceptance run pending post-reload (bar: all hard + >=5/6 twice)
 - [x] Security scan: diffs clean
+- [x] User correction folded in: contradiction rule changed from 'CLAUDE.md is authoritative'
+      to 'ground truth decides - verify, correct the outdated side (CLAUDE.md fixes stay
+      propose-first), or ask' (dream-passes.md, both sites)
