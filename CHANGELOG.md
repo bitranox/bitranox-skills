@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.39.2] - 2026-07-06
+
+### Fixed
+- Skill-writer checklist review over the C1-C3 rewrites (user-directed): meta-dream-project's
+  description rewritten to triggers-only ("Use when...", no workflow summary - the CSO rule);
+  REQUIRED BACKGROUND markers on the memory-backend.md cross-references in both rewritten skills;
+  frontmatter/link/budget checks green; retroactive security scan of the shipped diffs clean.
+  Discoverability probe queued for after the next marketplace update.
+
 ## [5.39.1] - 2026-07-06
 
 ### Changed
