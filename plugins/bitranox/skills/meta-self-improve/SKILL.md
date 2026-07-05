@@ -179,6 +179,29 @@ Fix the adjacent rot you touch and can verify; surface mistakes clearly, never w
 out-of-scope fixes go in their own worktree (`bitranox:git-worktrees`); remove temporary
 scaffolding when the goal is met.
 
+## Deliverables (a completed capture run has ALL of these)
+
+- [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
+- [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
+- [ ] Every hook trigger-first ("When <situation>, <directive>.") and <= 350 chars - no lint
+      warning in the add output.
+- [ ] Every body carries the fact plus **Why:** and **How to apply:**.
+- [ ] Everything written at the PROJECT level of the CURRENT tree (never an ancestor, never
+      another tree, never only CLAUDE.md).
+- [ ] The report: auto-applied items (file + one line each) vs proposals awaiting a go.
+
+An ended run missing any box is not done - finish it or say plainly what was skipped and why.
+
+## Rationalizations (pressure-tested; these do not fly)
+
+| Excuse                                                             | Reality                                                                                                                  |
+|--------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| "It's arguably a different fact" (my drafted entry feels distinct) | Sunk cost in a draft is not a scope argument. A covering entry exists -> same slug, fold the delta, discard the draft.   |
+| "It's obviously universal - capture at the tree top directly"      | Your certainty IS the inference the promotion gate exists to check. Project level now; the dream moves it, corroborated. |
+| "Writing it in both places is safer"                               | Duplication is the failure mode, not a safety net. One home; the lower cites `[[general]]` + delta.                      |
+| "The user is waiting - a bare one-liner is enough"                 | A trigger-less hook never fires and a bare body gets discounted; the trigger + Why/How cost seconds and are the value.   |
+| "CLAUDE.md already mentions it, so it's captured"                  | A CLAUDE.md line loads only in that repo; it is not the store. Capture properly, then flag the overlap for the dream.    |
+
 ## Common mistakes
 
 - Appending a new entry when an existing one should have been updated (bloats the always-loaded

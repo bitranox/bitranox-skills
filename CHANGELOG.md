@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.39.1] - 2026-07-06
+
+### Changed
+- meta-self-improve + meta-dream-project gain the anti-deviation scaffolding the rewrites lacked
+  (user-flagged): a DELIVERABLES checklist per run ("an ended run missing any box is not done")
+  and a pressure-tested RATIONALIZATIONS table each. Six combined-pressure subagent scenarios
+  (skip-capture under time cutoff, reconciliation grep-shortcut under exhaustion, pinned +
+  low-confidence moves under authority, append-vs-update under sunk cost, capture-altitude under
+  "obviously universal", bare-hook under time) ran against the rewritten skills: 6/6 complied,
+  each quoting the anti-rationalization prose; the scenarios' excuses are now the tables' rows.
+  Routing-table coverage/accuracy checks pass on both hubs.
+
 ## [5.39.0] - 2026-07-06
 
 ### Changed
