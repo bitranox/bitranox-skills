@@ -9,7 +9,7 @@ Run with `uv run proxy_pool.py ...` so uv fetches httpx2 into an isolated env.
 HTTP uses httpx2 (HTTP/2, sync + async, clean proxy support); everything else is
 stdlib, portable across Linux/macOS/Windows. The proxy pool is a persistent
 store that is RE-TESTED every run, because free proxies constantly die, recover,
-and appear. Three stores live under --store (default ./.proxies):
+and appear. These files live under --store (default ./.proxies):
 
   pool.txt    all discovered candidate IP:PORT (grow-only, deduped)
   live.txt    candidates that passed reachability validation this/last run

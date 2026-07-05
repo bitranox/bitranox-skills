@@ -9,7 +9,7 @@ description: Use when creating, editing, or reformatting markdown tables in any 
 
 Rules for consistently formatted, readable markdown tables. Misaligned tables are hard to scan in source view and may trigger linter warnings.
 
-**After editing or creating tables, reformat all `*.md` files under the current working directory** by running `reformat_tables.py -r` from this skill's directory.
+**A `reformat-md-tables` PostToolUse hook auto-realigns tables in every `*.md` file on each Write/Edit**, so tables Claude writes stay aligned with no manual step. To bulk-reformat a tree by hand or in CI, run this skill's `reformat_tables.py -r <dir>` (see Programmatic Reformatting below).
 
 ## Rules
 
@@ -88,10 +88,9 @@ Tables inside fenced code blocks tagged with `markdown` or `md` are reformatted 
 For files with many tables, use `reformat_tables.py` in this directory rather than manual edits:
 
 ```bash
-# Reformat all *.md files under current directory (recursive)
-python3 reformat_tables.py -r
-
-# Reformat all *.md files under a specific directory
+# Reformat all *.md files under a specific directory (recursive).
+# Pass the directory explicitly - a bare -r reformats the CURRENT directory,
+# which is this skill's own dir if you cd'd here to run the script.
 python3 reformat_tables.py -r docs/
 
 # Reformat specific files

@@ -51,7 +51,7 @@ Self-hosted/on-prem hardware, hypervisors, virtualization, storage.
 
 Networking: DNS, routing, proxies, firewall, VPN, reverse proxy.
 
-- [`net-rotating-proxies`](../plugins/bitranox/skills/net-rotating-proxies/SKILL.md) - Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting). Covers building and re-testing a free-proxy pool and running a worklist through it in parallel.
+- [`net-rotating-proxies`](../plugins/bitranox/skills/net-rotating-proxies/SKILL.md) - Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting).
 
 ## sec
 
@@ -79,7 +79,7 @@ Programmatic create/edit/validate of machine-readable file formats.
 
 Version-control workflows: branching, worktrees, gitignore, history.
 
-- [`git-worktrees`](../plugins/bitranox/skills/git-worktrees/SKILL.md) - Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback
+- [`git-worktrees`](../plugins/bitranox/skills/git-worktrees/SKILL.md) - Use when starting feature work that needs an isolated workspace or worktree separate from the current branch, or before executing an implementation plan that should not disturb the current checkout
 
 ## compuse
 
@@ -87,7 +87,7 @@ Computer-use mechanics: running shell/git/ssh commands, reading exit codes/outpu
 
 - [`compuse-bash`](../plugins/bitranox/skills/compuse-bash/SKILL.md) - Use when running bash/shell commands and interpreting their exit codes and output - pipelines, chaining a check after a mutating command, process checks with pgrep/pkill, backgrounding, waiting for an event, or when a command "failed" or its result looks ambiguous.
 - [`compuse-git`](../plugins/bitranox/skills/compuse-git/SKILL.md) - Use when running git - commit, push, tag, rev-parse, marking a hook or script executable, line endings, interactive flags, or when a git command fails confusingly or a committed file ends up non-executable or with CRLF.
-- [`compuse-ssh`](../plugins/bitranox/skills/compuse-ssh/SKILL.md) - Use when running commands over SSH or driving a remote host - checking or killing remote processes, quoting an inline remote command, backgrounding a remote command, or running remote Windows PowerShell.
+- [`compuse-ssh`](../plugins/bitranox/skills/compuse-ssh/SKILL.md) - Use when running commands over SSH or driving a remote host - checking or killing remote processes, quoting an inline remote command, backgrounding a remote command, running remote Windows PowerShell, an SSH login asking for a password, a changed or unknown host key ("host key verification failed", "remote host identification has changed"), or setting up SSH key-based auth.
 - [`compuse-vnc`](../plugins/bitranox/skills/compuse-vnc/SKILL.md) - Use when you must drive a remote machine, VM, or GUI/TUI program over VNC/RFB - sending keystrokes and clicks and reading the screen with OCR - because the target has no network, SSH, agent, or API. Covers Proxmox/hypervisor VM consoles (first boot before networking, or a VM that will never have a network), legacy line-of-business GUIs and dated installers that are only a window, and old TUI apps driven by keypresses. Nothing is installed on the target except its VNC server (Proxmox ships noVNC out of the box). Driven with the `vnc-remote-control` CLI (PyPI).
 
 ## process
@@ -125,7 +125,7 @@ Marketing/advertising/branding/positioning/pricing/persuasion/growth.
 
 Authoring the marketplace itself: writing/adopting skills, self-improvement, harness/hooks config.
 
-- [`meta-adopting-external-skills`](../plugins/bitranox/skills/meta-adopting-external-skills/SKILL.md) - Use when importing, adopting, forking, or integrating a useful third-party Claude Code skill into the bitranox marketplace - given a repo URL, an installed plugin path, or a pasted SKILL.md - or when asked to bring an external skill up to bitranox standards. Covers verifying the upstream license, normalizing naming and cross-references, enhancing the skill, and shipping it alongside (never replacing) the user's other installed plugins.
+- [`meta-adopting-external-skills`](../plugins/bitranox/skills/meta-adopting-external-skills/SKILL.md) - Use when importing, adopting, forking, or integrating a useful third-party Claude Code skill into the bitranox marketplace - given a repo URL, an installed plugin path, or a pasted SKILL.md - or when asked to bring an external skill up to bitranox standards. The adopted skill is added alongside the user's other installed plugins, never replacing them.
 - [`meta-collect-knowledge`](../plugins/bitranox/skills/meta-collect-knowledge/SKILL.md) - Use to pull in knowledge from your OTHER projects or trees that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Cascade only flows down one ancestor chain, so useful knowledge filed in a sibling project or another knowledge tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream-crosstree.
 - [`meta-dream-crosstree`](../plugins/bitranox/skills/meta-dream-crosstree/SKILL.md) - Use on "dream crosstree", "/dream-crosstree", "consolidate across projects", "global consolidation", occasionally after several per-project dreams, or when two projects or knowledge trees have learned related things that should be shared. This is the expensive cross-project/cross-tree pass reading every store; for one project's routine tidy use bitranox:meta-dream-tree. Honors an off/auto/propose mode. Formerly named meta-dream-global - answers to that name too.
 - [`meta-dream-crosstree-deep`](../plugins/bitranox/skills/meta-dream-crosstree-deep/SKILL.md) - Use on "deep crosstree dream", "/dream-crosstree-deep", "deep cross-project scan", or when you want the exhaustive cross-project/cross-tree read regardless of whether anything obviously changed - the full semantic fan-out over ALL project memory stores AND their CLAUDE.md files, no convergence shortcut, no asking. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-crosstree.

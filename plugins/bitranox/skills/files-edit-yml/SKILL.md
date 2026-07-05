@@ -21,7 +21,8 @@ verifies it.
   `yaml.safe_load` / `yaml.safe_dump`. Note: it drops comments and reorders, so do not use it to
   round-trip a hand-commented config.
 
-See **bitranox:coding-python-use-modern-libraries** for the wider list.
+See **bitranox:coding-python-use-modern-libraries** for the wider list. Reach for the structured editors
+for the other formats too: **bitranox:files-edit-json**, **bitranox:files-edit-toml**, **bitranox:files-edit-xml**.
 
 **Safety:** never load untrusted YAML with PyYAML `yaml.load()` or a custom `Loader` - the
 `!!python/object` tags execute arbitrary code. Use `yaml.safe_load`. `ruamel.yaml`'s default

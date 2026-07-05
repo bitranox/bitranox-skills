@@ -199,7 +199,7 @@ def test_append_notice_format_and_idempotent(tmp_path):
     text = notices.read_text(encoding="utf-8")
     assert "### foo" in text
     assert "Copyright (c) 2024 Test Author" in text
-    assert "MIT license text:" in text
+    assert "MIT License text:" in text
     # idempotent
     assert AS.append_notice(notices, "foo", "Foo upstream", "https://x/foo", "MIT",
                             "Copyright (c) 2024 Test Author", MIT, "") is False

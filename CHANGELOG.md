@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.45.4] - 2026-07-06
+
+### Fixed
+- Skill-roster review, wave 4 (14 skills: compuse-*, files-edit-*, git-worktrees, docs, singles;
+  opus-reviewed, fable-verified, discovery 4/4): 13 changed, 1 compliant as-is (compuse-bash).
+  - `marketing-rory`: the REQUIRED humanize step named skills that do not exist (bare
+    humanize-en/-de) - now resolves; stale routing anecdotes and a fabricated talk count
+    removed.
+  - `compuse-git`: the CI-token section's manual example mixed two incompatible secret
+    schemes (copy-paste would build a broken double-@ URL) - reconciled.
+  - `compuse-ssh`: auth/host-key triggers added to the description (40% of the body was
+    undiscoverable).
+  - files-edit family aligned: toml description de-quoted, sibling cross-refs added to
+    json/xml/yml, json documents ensure_ascii=False, xml example variable renamed.
+  - `git-worktrees` + `meta-adopting-external-skills`: workflow-summary description tails
+    dropped (CSO shortcut trap); the adoption helper now emits house-style attribution and is
+    invoked via python3 + full path.
+  - `net-rotating-proxies`: explicit lawful-use scope note added.
+  - `web-frontend-responsive-ux`: missing sibling test added; description de-quoted (also
+    sec-appsec-web-baseline).
+  - `docs-md-table-formatting`: overview now credits the auto-realign hook; bulk usage takes
+    an explicit directory (cwd trap removed).
+
 ## [5.45.3] - 2026-07-06
 
 ### Fixed

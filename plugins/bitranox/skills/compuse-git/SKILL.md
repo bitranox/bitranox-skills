@@ -76,7 +76,7 @@ model or a command line:
    ```yaml
    - run: git config --global url."https://${GIT_TOKEN}@github.com/<Org>/".insteadOf "https://github.com/<Org>/"
      env:
-       GIT_TOKEN: ${{ secrets.GIT_PRIVATE_TOKEN }}   # the read-only PAT, never the literal in YAML
+       GIT_TOKEN: ${{ secrets.GITHUB_READONLY_PAT_<Org> }}   # a SEPARATE secret holding the RAW PAT (not step 1's <Org>@<pat> value, which is only for the template auto-rewrite); never the literal in YAML
    ```
 
 A freshly created private repo with private git deps needs this BEFORE its first green CI / release.

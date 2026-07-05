@@ -1,6 +1,6 @@
 ---
 name: compuse-ssh
-description: Use when running commands over SSH or driving a remote host - checking or killing remote processes, quoting an inline remote command, backgrounding a remote command, or running remote Windows PowerShell.
+description: Use when running commands over SSH or driving a remote host - checking or killing remote processes, quoting an inline remote command, backgrounding a remote command, running remote Windows PowerShell, an SSH login asking for a password, a changed or unknown host key ("host key verification failed", "remote host identification has changed"), or setting up SSH key-based auth.
 ---
 
 # computer-use-ssh

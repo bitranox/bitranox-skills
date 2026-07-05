@@ -312,7 +312,7 @@ def append_notice(notices_path, name, source_desc, source_url, lic_id, copyright
     if lic_id == "Apache-2.0" and notice_text.strip():
         entry += ["Upstream NOTICE:", "", "```", notice_text.strip(), "```", ""]
     if license_text.strip():
-        entry += [f"{lic_id} license text:", "", "```", license_text.strip(), "```", ""]
+        entry += [f"{lic_id} License text:", "", "```", license_text.strip(), "```", ""]
     block = "\n".join(entry)
     existing = notices_path.read_text(encoding="utf-8") if notices_path.is_file() else "# Third-Party Notices\n"
     if f"### {name}\n" in existing or f"### {name}\n" in existing + "\n":

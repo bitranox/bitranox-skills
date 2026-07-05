@@ -1,6 +1,6 @@
 ---
 name: meta-adopting-external-skills
-description: Use when importing, adopting, forking, or integrating a useful third-party Claude Code skill into the bitranox marketplace - given a repo URL, an installed plugin path, or a pasted SKILL.md - or when asked to bring an external skill up to bitranox standards. Covers verifying the upstream license, normalizing naming and cross-references, enhancing the skill, and shipping it alongside (never replacing) the user's other installed plugins.
+description: Use when importing, adopting, forking, or integrating a useful third-party Claude Code skill into the bitranox marketplace - given a repo URL, an installed plugin path, or a pasted SKILL.md - or when asked to bring an external skill up to bitranox standards. The adopted skill is added alongside the user's other installed plugins, never replacing them.
 ---
 
 # Adopting External Skills
@@ -60,7 +60,7 @@ marketplace manifest, and a README license section.
 Run the helper:
 
 ```
-python adopt_skill.py <source> [--name <bitranox-name>] [--dest plugins/bitranox/skills]
+python3 plugins/bitranox/skills/meta-adopting-external-skills/adopt_skill.py <source> [--name <bitranox-name>] [--dest plugins/bitranox/skills]
 ```
 
 It fetches the source (a shallow clone for a URL, a copy for a local path), runs the license gate
@@ -84,7 +84,9 @@ Per `CONTRIBUTING.md`: add the new name to the domains list in
 (a new skill), add a `CHANGELOG.md` entry that describes what the skill does (no provenance
 narrative), ship passing tests, and run the gate (`python3 plugins/bitranox/hooks/repo-gate.py
 --ci`). Attribution lives in the structured credit line and the `THIRD_PARTY_NOTICES.md` entry,
-never as prose history.
+never as prose history. The helper fills both from a `<name> (upstream)` placeholder; reword the
+credit line and the notice `Source:` field to the curated house style (e.g. `the superpowers plugin`;
+`Obra Superpowers plugin (URL)`) so a new entry reads like the existing ones.
 
 ## Step 5 - Upstream-first and coexist
 
