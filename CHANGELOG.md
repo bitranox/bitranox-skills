@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.6] - 2026-07-06
+
+### Changed
+- Model tiers updated for the Claude 5 family (user-directed): Concrete tiers gains `fable`
+  (Mythos-class above opus; premium-priced, paid-API-credits only - opus remains the
+  universally-available deep default). "The session model is fixed" now documents that a
+  user-driven /model switch PRESERVES the conversation, so offering one is legitimate in BOTH
+  directions: UP for capability (below opus-class before a deep inline judgment) and DOWN for
+  cost (a fable session facing routine work). The inline tier note is restored explicitly in
+  meta-dream-project step 5 (it was carried only by cross-reference since the C3 rewrite) and
+  extended in meta-dream-global.
+
 ## [5.42.5] - 2026-07-06
 
 ### Fixed

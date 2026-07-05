@@ -111,6 +111,12 @@ the success line, abort-and-show on a miss).
    > project's files belongs AT that project (move DOWN); EVIDENCE, not wording, decides reach;
    > tie or unsure -> keep + UNSURE. Return: `LEVEL | CONFIDENCE high/low | WHY`.
 
+   TIER NOTE: this placement/promotion judgment runs INLINE on the session model (it needs the
+   whole loaded store). If the session is below opus-class, offer switch-model-or-continue per
+   "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`
+   (a /model switch keeps the conversation; opus is the universally-available deep tier, fable
+   sits above it but needs paid API credits - and a fable session may equally switch DOWN after
+   the judgment to save cost). In auto mode: continue and log the note.
    Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each via engine
    `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
    that move - a down-move with inbound refs needs the refs re-pointed first, or stays). Low/UNSURE

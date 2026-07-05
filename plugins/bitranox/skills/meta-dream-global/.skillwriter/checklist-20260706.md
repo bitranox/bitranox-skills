@@ -6,3 +6,6 @@
       description rewritten trigger-first (CSO lint)
 - [x] Cross-refs to dream-project/collect-knowledge retained (no duplicated pass text added)
 - [x] Security scan: prose-only diff, clean
+- [x] Tier note updated (user-directed): inline deep judgment at opus-class or above;
+      fable above opus (paid API credits only); /model switch keeps context - offer UP for
+      capability, DOWN for cost on a fable session

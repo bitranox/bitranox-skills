@@ -15,3 +15,6 @@
 - [x] REFACTOR from acceptance run 2 (hard 5/5, judgment 3/6): chain-vs-tree ambiguity closed -
       steps 0b/3/4/7 now say TREE-WIDE (siblings included) explicitly + a common-mistakes entry;
       runs 3+4 re-establish the two-consecutive bar
+- [x] Tier note updated (user-directed): inline deep judgment at opus-class or above;
+      fable above opus (paid API credits only); /model switch keeps context - offer UP for
+      capability, DOWN for cost on a fable session
