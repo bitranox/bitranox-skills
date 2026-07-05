@@ -90,8 +90,11 @@ put them under the same parent folder. A rough shape:
       infra/                   a department: fleet and host rules
         host-1/  host-2/
 
-Each department folder carries a one-line note about what it is for, so the system knows which shelf a
-lesson belongs on. Shaping the tree to match your real domains is the single biggest thing you can do to
+Each department folder carries a short note about itself: what this level is, what tools and
+languages live here, which sub-departments it contains, and - the important part - what kind of
+knowledge belongs on THIS shelf versus a shelf above or below. Those notes are what the dream reads
+when it decides where a lesson should settle, so the better they describe your real domains, the
+better every lesson lands. Shaping the tree to match your real domains is the single biggest thing you can do to
 make the layering save room instead of wasting it. And if the shape drifts - a project that has grown
 into a different domain - the deep dream will notice and suggest moving it; only ever a suggestion, you
 make the call.
@@ -101,11 +104,31 @@ that contains them has no shared shelf - no department - the deep dream sees the
 with nowhere to land, and offers to create that department (and, at the very top, a head office if there
 is none). It only suggests; you decide whether the department is real.
 
-## 4. Always within reach, never "maybe"
+## 4. Many head offices
+
+Nothing says your disk holds only one company. A consultant may keep a marketing agency's work and
+a bakery's accounts on the same machine - two worlds that share no customers, no tools, no rules.
+Each such world is its own knowledge TREE: its own head office at its top, its own departments and
+desks below, its own filing. The trees do not see each other. A note filed in the bakery never
+drifts into the agency's meetings, and the agency's habits never season the bread.
+
+The nightly tidy-up - the project dream, the "nap" - always happens inside ONE company: it files,
+merges, and re-shelves within the tree you are working in. Only the rare deep sleep that
+deliberately reviews ALL the companies you run may look across trees, and even then nothing is
+shared by pointing sideways - if a lesson truly helps both worlds, each gets its own written copy,
+noted as brought in from outside. When you WANT the walls even for the quick notebook glance, one
+setting closes the borders: each company then only ever reads its own files.
+
+## 5. Always within reach, never "maybe"
 
 A note that might be loaded when relevant is a note that will be missed when it matters. So the
 knowledge the system relies on is always present in context, not fetched on a hunch. We learned this
 the hard way: a memory you have to go looking for is a memory you forget to consult.
+
+The notes themselves are written to be CAUGHT, not just stored: each one addresses YOU directly
+and leads with the moment it applies to - "when you rename a function...", "before you commit...".
+A note that names its moment is the note that fires at that moment; a bare statement of fact,
+however true, scrolls past. The system checks this as notes are written.
 
 The flip side is discipline. Context is finite, so what is always present has to stay lean. That is
 a big part of what dreaming is for - keeping the always-on layer short and high-signal, with the
@@ -133,6 +156,9 @@ of a session, around a context compaction, or whenever you ask. Your working tur
 heavy lifting happens off the clock. Second, the search itself gets sharper over time: the dream
 learns which words are just conversational filler ("again", "previous", "normal") versus real topics,
 so the notebook check stops matching on noise and only surfaces things that actually relate.
+And the search mechanism itself is a replaceable part: today it is a plain relevance match, and a
+smarter semantic index can take its place later without changing anything else - the index only
+ever FINDS notes, it never becomes the place where notes live.
 
 That last filter is learned per project, not globally, and the reason matters. A word can be noise in
 one project and a real subject in another - "compression" is chatter in a documentation project but a
@@ -140,7 +166,7 @@ genuine topic in a codec one. So each project keeps its own learned filter, and 
 universally-generic words - the kind that are noise everywhere - are shared across all of them. One
 project's judgment never silences a word you actually search on in another.
 
-## 5. Connect, do not copy
+## 6. Connect, do not copy
 
 When a general rule and a specific case overlap, the system does not store both in full. It keeps
 the general rule once and lets the specific note point at it and add only what is different. You get
@@ -150,7 +176,7 @@ Connections only ever point "upward" - from the specific toward the general, fro
 toward the durable. That way deleting a project never leaves a dangling pointer behind: what was
 promoted up survives, and only the local details disappear with it, which is exactly right.
 
-## 6. Remove what is wrong, not what is quiet
+## 7. Remove what is wrong, not what is quiet
 
 It is tempting to let old or rarely-touched notes fade the way a brain drops unused links. We tried
 that and backed it out, because the signal it needs does not exist: a note sits in context and Claude
@@ -167,7 +193,7 @@ reversible. Must-follow rules are never dropped. The store stays lean not by for
 the always-on part is just tight one-line summaries - the detail lives a step away and costs nothing
 until it is read.
 
-## 7. Fast thinking and slow thinking
+## 8. Fast thinking and slow thinking
 
 Some work is genuinely novel and deserves real reasoning. Other work is the same handful of steps,
 again and again. When a routine gets repetitive, the system can turn it into a skill - often backed
@@ -183,7 +209,7 @@ steps go to the quickest, cheapest one. You get strong judgment where being wron
 and low cost where it is not - matched automatically, job by job. And because the line-up of models
 changes over time, the dream periodically re-checks which tool belongs to which job and adjusts.
 
-## 8. Your memory, your call
+## 9. Your memory, your call
 
 Where a sensible default depends on how you work, the system recommends what it thinks is best,
 explains the trade-off in plain terms, and then lets you decide. Your choice is remembered and
@@ -195,14 +221,14 @@ lesson across projects, where new skills should live, how much the dream should 
 ask first, and how cautious to be with anything sensitive. Before anything is reorganized, the whole
 store is backed up, so every change is reversible.
 
-## 9. What helps everyone, shared
+## 10. What helps everyone, shared
 
 Now and then a lesson turns out to be useful far beyond your setup. When that happens, the system can
 package it as a skill and offer it back to the shared marketplace, so other people benefit too. That
 is opt-in and proposed, never automatic - but it is how individual learning turns into something the
 whole community compounds on.
 
-## 10. A curated library you can still mark up
+## 11. A curated library you can still mark up
 
 Think of every skill out there as a library of books by different authors. They overlap, and now and
 then they flatly contradict each other. What you want is not the raw pile but a good compilation - an
