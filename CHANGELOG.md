@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.42.5] - 2026-07-06
+
+### Fixed
+- meta-dream-project: chain-vs-tree ambiguity closed (found by the planted-fixture acceptance -
+  run 1 scored 5/5+6/6, run 2 read the scope as the cwd's ancestor chain and left the SIBLING
+  project's duplicate, task-state, and the sibling department's empty descriptor untouched,
+  scoring 3/6). Steps 0b/3/4/7 now state TREE-WIDE explicitly (every pointer-block level under
+  the anchor, siblings included) plus a common-mistakes entry naming the chain-only shortcut.
+
 ## [5.42.4] - 2026-07-06
 
 ### Changed

@@ -12,3 +12,6 @@
 - [x] User correction folded in: contradiction rule changed from 'CLAUDE.md is authoritative'
       to 'ground truth decides - verify, correct the outdated side (CLAUDE.md fixes stay
       propose-first), or ask' (dream-passes.md, both sites)
+- [x] REFACTOR from acceptance run 2 (hard 5/5, judgment 3/6): chain-vs-tree ambiguity closed -
+      steps 0b/3/4/7 now say TREE-WIDE (siblings included) explicitly + a common-mistakes entry;
+      runs 3+4 re-establish the two-consecutive bar
