@@ -1,4 +1,4 @@
-# skill-writer checklist - meta-dream-project (2026-07-06, retroactive for 5.39.0-5.39.2)
+# skill-writer checklist - meta-dream-tree (2026-07-06, retroactive for 5.39.0-5.39.2)
 
 - [x] RED baseline: 6 gaps documented (no descriptor template, no move mechanism, no routing, no firing check, no multi-tree, no acceptance)
 - [x] GREEN: comprehension run correct (template, move + refusal, routing format, firing check, xtree, pin)
@@ -21,3 +21,4 @@
 - [x] ACCEPTANCE BAR MET: runs 3+4 on 5.42.5 both scored 5/5 hard + 6/6 judgment (two
       consecutive), after run 2's chain-vs-tree loophole was closed. Run history: 1: 6/6,
       2: 3/6 (REFACTOR), 3: 6/6, 4: 6/6.
+- [x] RENAMED 2026-07-06 (user decision, telling-naming): scope-true name; legacy name kept as a description trigger; all cross-references swept in the same change

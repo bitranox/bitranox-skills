@@ -1,6 +1,6 @@
 ---
 name: meta-collect-knowledge
-description: Use to pull in knowledge from your OTHER projects or trees that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Cascade only flows down one ancestor chain, so useful knowledge filed in a sibling project or another knowledge tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream-global.
+description: Use to pull in knowledge from your OTHER projects or trees that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Cascade only flows down one ancestor chain, so useful knowledge filed in a sibling project or another knowledge tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream-crosstree.
 ---
 
 # meta-collect-knowledge
@@ -18,7 +18,7 @@ is `bitranox:meta-self-improve` -> `references/memory-backend.md`.
 - Manual: "collect knowledge", `/collect-knowledge`.
 - New-project init: seed a fresh project from the existing tree so it starts informed.
 - Opportunistic: a captured learning reveals a topic this project now touches - gather that topic.
-- As `bitranox:meta-dream-global`'s inbound pass (the dream delegates here).
+- As `bitranox:meta-dream-crosstree`'s inbound pass (the dream delegates here).
 
 ## Relevance needs a topic (descriptor-first)
 

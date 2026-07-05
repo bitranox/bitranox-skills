@@ -144,7 +144,7 @@ auto-resolves to the latest model in that tier, so a new version needs no edit.
 
 Reserve `opus`/`fable` for genuine deep reasoning; do NOT use them for mechanical or pure fan-out
 work, and do NOT leave fan-out work on the session default (often opus- or fable-class). The lineup ages: the model hierarchy is
-re-evaluated periodically by `bitranox:meta-dream-project` (it asks the `claude-code-guide` agent for the
+re-evaluated periodically by `bitranox:meta-dream-tree` (it asks the `claude-code-guide` agent for the
 current Claude model lineup and proposes a re-tier if the ordering shifts), so this mapping stays current.
 
 **Turn count beats token price.** Wall-clock and context cost scale with how

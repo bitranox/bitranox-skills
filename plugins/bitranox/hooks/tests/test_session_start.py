@@ -186,7 +186,7 @@ def test_nudge_silent_when_optout_present(tmp_path, monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
-# meta-dream-project due nudge (additionalContext, self-silencing)
+# meta-dream-tree due nudge (additionalContext, self-silencing)
 # --------------------------------------------------------------------------
 
 
@@ -197,7 +197,7 @@ def test_dream_nudge_fires_when_due(tmp_path, monkeypatch, capsys, isolate_home)
     root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
     rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/dream")
     ctx = _ctx(out)
-    assert "BITRANOX-DREAM-DUE" in ctx and "meta-dream-project" in ctx
+    assert "BITRANOX-DREAM-DUE" in ctx and "meta-dream-tree" in ctx
 
 
 def test_dream_nudge_silent_when_not_due(tmp_path, monkeypatch, capsys):

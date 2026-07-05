@@ -68,3 +68,33 @@ def test_xtree_and_pin_violations_are_caught(fixture):
                                                                         encoding="utf-8")
     hard, _ = FA.check(root)
     assert hard["XTREE"] is False
+
+
+def test_nap_profile_parity_chain_effects_pass_siblings_guarded(fixture):
+    root, m = fixture
+    import memory_engine as E
+    import reconcile_memory_index as R
+    s = m["slugs"]
+    # simulate a CHAIN-ONLY nap from proj-1: chain-internal basics only
+    E.move_entry(m["tree1"], m["proj1"], s["mis_high"])
+    E.move_entry(m["proj1"], m["dept_a"], s["mis_low"])
+    R.archive_entry(m["proj1"], s["obs"])
+    hard, judgment = FA.check(root, profile="nap")
+    assert hard["SIBLINGS"] is True                  # proj-2 + dept-b byte-untouched
+    assert all(hard.values()), hard
+    assert judgment == {"MIS-HIGH": True, "MIS-LOW": True, "OBS": True}
+    # DUP/TASK/SCOPE are absent: out of a nap's scope by design (the tree-wide profiles judge them)
+
+
+def test_nap_profile_catches_sibling_touch(fixture):
+    root, m = fixture
+    import memory_engine as E
+    E._drop_pointer(m["proj2"], m["slugs"]["task"])   # a nap must NOT touch the sibling
+    hard, _ = FA.check(root, profile="nap")
+    assert hard["SIBLINGS"] is False
+
+
+def test_global_profile_invariants(fixture):
+    root, m = fixture
+    hard, judgment = FA.check(root, profile="global")
+    assert hard["NO-XREF"] is True and hard["PIN"] is True and judgment == {}

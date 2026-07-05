@@ -14,7 +14,7 @@ guardrail (step 3b).
 blindly.** A self-improver that bloats memory makes the harness worse, not better.
 
 This skill is the per-turn CAPTURE. The periodic BATCH consolidation - dedup / merge / re-level /
-prune, like sleep - is `bitranox:meta-dream-project` (and `bitranox:meta-dream-global` across
+prune, like sleep - is `bitranox:meta-dream-tree` (and `bitranox:meta-dream-crosstree` across
 trees). Capture here; consolidate there. If a project ships its own `*-self-improve` extension,
 honor its extra rules on top of this one.
 
@@ -93,7 +93,7 @@ entry only when nothing covers it.
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
   block) are the routing key; when genuinely unclear, ask the user.
 - An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md`
-  (propose-first; policy in `bitranox:meta-dream-project`).
+  (propose-first; policy in `bitranox:meta-dream-tree`).
 - **Normalization, not duplication:** store a general rule ONCE at its altitude; a lower entry
   cites `[[general-slug]]` plus only its delta. References point UPWARD only.
 - **Promotion to the tree's top is gated**: user-stated rules promote eagerly; a model-inferred

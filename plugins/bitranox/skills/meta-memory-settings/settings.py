@@ -3,7 +3,7 @@
 
 All knobs live in one machine-local config, `~/.claude/.bitranox-memory.json`. A decision recorded
 here is applied automatically thereafter - the hooks/skills never re-ask. Thin wrapper over
-self_improve_signals (the single source of truth), like the meta-dream-project cadence CLI.
+self_improve_signals (the single source of truth), like the meta-dream-tree cadence CLI.
 
 Usage:
   settings.py view                 print every knob and its current value

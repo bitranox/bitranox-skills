@@ -124,6 +124,11 @@ def build(root):
         "tree1": str(t1), "dept_a": str(dept_a), "proj1": str(p1), "proj2": str(p2),
         "dept_b": str(dept_b), "tree2": str(root / "tree2"), "slugs": slugs,
         "tree2_hash": _tree_hash(root / "tree2"),
+        # sibling-branch snapshots: a CHAIN-scoped nap run from proj-1 must leave these
+        # byte-identical (the parity matrix's inverse assertion); note the sibling POINTER
+        # snapshots exclude the central store (bodies are shared at the anchor)
+        "proj2_hash": _tree_hash(p2),
+        "dept_b_hash": _tree_hash(dept_b),
         "voice_hook_before": "Line width 100; fmt() must wrap.",
         "pin_hook_before": "When an org-wide incident occurs, page the duty phone listed here first.",
     }

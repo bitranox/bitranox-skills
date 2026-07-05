@@ -125,7 +125,7 @@ def test_memory_system_end_to_end(sandbox):
     assert "projA" not in out                                                            # current excluded
 
     # S7 - dream cadence CLI (mode / done / due)
-    dream = SK / "meta-dream-project" / "dream_state.py"
+    dream = SK / "meta-dream-tree" / "dream_state.py"
     _, out, _ = _cli(dream, "mode", proj_b)
     assert out == "propose"
     _cli(dream, "done", proj_b)

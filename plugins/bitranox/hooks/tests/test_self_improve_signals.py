@@ -133,7 +133,7 @@ def test_audit_file_path_is_deterministic():
 
 
 # --------------------------------------------------------------------------
-# meta-dream-project cadence markers + mode
+# meta-dream-tree cadence markers + mode
 # --------------------------------------------------------------------------
 
 

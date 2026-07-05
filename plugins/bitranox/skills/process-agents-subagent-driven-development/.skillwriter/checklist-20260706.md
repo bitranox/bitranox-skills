@@ -10,3 +10,4 @@ below opus-class, DOWN for cost on a fable session facing routine work - user-di
       /model context preservation verified against Claude Code behavior
 - [x] Cross-refs intact (dream-project and dream-global point here for tiers)
 - [x] Security scan: prose-only diff, clean
+- [x] Mechanical rename sweep 2026-07-06: bitranox:meta-dream-project/global(-deep) references -> meta-dream-tree/crosstree(-deep); no semantic change
