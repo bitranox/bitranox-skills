@@ -79,6 +79,14 @@ coordinate. (Past "wrong pixel" failures came from reading coordinates off a sca
 - **Sluggish guests drop fast input.** Slow it down: `--delay-scale 2` multiplies every delay, or set
   individual gaps via `--set vnc.key_up_gap=0.2` (keys: `key_down_hold`, `key_up_gap`, `click_move_gap`,
   `click_hold`, `click_release_gap`).
+- **Nothing happened, or an error? READ the screen before re-sending input - ROOT-CAUSE it.** When a
+  click/keystroke seems to have no effect or the flow stops, `screenshot` + `ocr` FIRST and act on what
+  the screen ACTUALLY says (an error dialog, a validation message, a progress indicator, a greyed-out or
+  relabeled button). Never blind-retry: if the first click DID land, the same coordinates may now hit a
+  DIFFERENT control (re-firing an installer, dismissing an unread error), and on a laggy guest an
+  "unchanged" screenshot is weak evidence. Only when two screenshots a few seconds apart show a genuinely
+  identical, idle screen is "dropped input" the diagnosis - then retry ONCE with increased delays and
+  re-read the screen.
 - **A VNC console is a flaky external resource** - it can freeze, drop, or lag mid-session. Verify the
   screen state before acting on it, retry under a timeout, and never assume a keystroke landed. For the
   self-healing patterns, see `bitranox:coding-resilience`.
