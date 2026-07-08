@@ -19,7 +19,7 @@ current tree; cross-tree work is `bitranox:meta-dream-crosstree`.
 
 | Topic                                                                                                                                                                                                         | File                       |
 |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------|
-| The SHARED DREAM CORE - scope ladder, mode knob, capture-first, backup+manifest, dedup semantics, THE routing prompt, verification contract, tier note (single source for nap/project/global)              | references/dream-core.md   |
+| The SHARED DREAM CORE - scope ladder, mode knob, capture-first, backup+manifest, dedup semantics, THE routing prompt, verification contract, tier note (single source for nap/project/global)                 | references/dream-core.md   |
 | The behavioral pass catalog - removal policy, contradiction/override, CLAUDE.md reconciliation, skill/hook pointing, filler words, model review, skill-gap, gate-coverage, durability/squash, backup reminder | references/dream-passes.md |
 | Acceptance harness - planted-fixture test that proves a dream run works                                                                                                                                       | tests/README-acceptance.md |
 
@@ -33,7 +33,8 @@ ONLY there).
 ## When to run
 
 Nudged when due (SessionStart), around compaction (PreCompact salvages, you dream), or manual
-("dream", "/dream-tree"). Check `dream_state.py due`. **A MANUAL dream ALWAYS captures -
+("dream", "/dream-tree"). Check `dream_state.py due` (the script lives in THIS skill's dir; launch
+recipe in references/dream-core.md "Script homes"). **A MANUAL dream ALWAYS captures -
 `not-due` never suppresses capture.** An absent store is the trigger to CREATE one (the first
 engine `add` bootstraps it), never a reason to skip; routing a learning only into a CLAUDE.md is
 NOT capture. Verify "nothing durable" - never assume it.
@@ -126,7 +127,8 @@ the success line, abort-and-show on a miss).
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
    its origin and siblings) and normalize. Then: re-derive the manifest and diff against step 2
    (only `level` may differ, plus explicitly-decided merges/prunes/rewords); run
-   `reconcile_memory_index.py --check <altitude chain, narrow->broad>` and require
+   `reconcile_memory_index.py --check <altitude chain, narrow->broad>` (home:
+   `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require
    `TOTAL problems: 0`; fix integrity failures via the engine (re-point a downward ref, resolve an
    orphan). Size warnings are advisory.
 

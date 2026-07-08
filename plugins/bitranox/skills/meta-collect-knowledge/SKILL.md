@@ -56,7 +56,9 @@ unknown, defer - a blind gather pulls noise.
    keep it.
 5. **Debounce.** Record the (project, topic) as gathered (out-of-store) so the same topic is not
    re-grepped on every trigger.
-6. **Verify + report.** `reconcile_memory_index.py --check <altitude chain>` must end
+6. **Verify + report.** `reconcile_memory_index.py --check <altitude chain>` (home:
+   `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`, launch via
+   `hooks/run-python.sh`) must end
    `TOTAL problems: 0`. Report lifted vs copied, one line each; nothing relevant -> one line.
 
 ## Deliverables (a completed gather has ALL of these)

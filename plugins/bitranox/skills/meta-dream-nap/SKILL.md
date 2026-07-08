@@ -48,8 +48,9 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
    reconcile `TOTAL problems: 0` over the chain), then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
    behavioral passes). A nap is PARTIAL BY DESIGN and says so - never silently incomplete.
-   Run `dream_state.py done` ONLY if the nudge that triggered you asked for a nap; a
-   consolidation-due nudge still needs the full dream.
+   Run `dream_state.py done` (home: `<plugin>/skills/meta-dream-tree/dream_state.py`, via
+   `hooks/run-python.sh` - see dream-core.md "Script homes") ONLY if the nudge that triggered
+   you asked for a nap; a consolidation-due nudge still needs the full dream.
 
 ## Deliverables (a completed nap has ALL of these)
 

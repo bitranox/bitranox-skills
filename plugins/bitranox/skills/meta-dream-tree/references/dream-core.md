@@ -14,6 +14,16 @@ instead (the contract test fails duplicated family literals).
 | meta-dream-tree             | ONE knowledge tree, TREE-WIDE (every level under the anchor)     |
 | meta-dream-crosstree(+deep) | ACROSS trees (discovery over discovery_roots; lift-or-copy only) |
 
+## Script homes (the helper scripts ship inside their owning skill, NOT hooks/)
+
+- `dream_state.py` (mode / due / done) -> `<plugin>/skills/meta-dream-tree/dream_state.py`
+- `reconcile_memory_index.py` (--check) -> `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`
+
+Launch either cross-platform through the same shim as the engine:
+`bash <plugin>/hooks/run-python.sh <script> ...`, where `<plugin>` is the installed plugin dir
+(`~/.claude/plugins/cache/bitranox-skills/bitranox/<version>`) or the source repo's
+`plugins/bitranox`. Bare script names below refer to these two homes.
+
 ## Mode (the user can switch off the asking)
 
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via

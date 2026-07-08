@@ -86,7 +86,8 @@ the scan in step 3 is run; do not duplicate the rest.
      share the rung to other machines/people; local-only still gives version history + makes a trim
      safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
 5. **Then steps 4-8 of meta-dream-crosstree exactly** (outbound cross-pollination, re-dedup + reconcile via
-   `reconcile_memory_index.py --check` over the LEVEL dirs, skill-fit batched change, report counts).
+   `reconcile_memory_index.py --check` over the LEVEL dirs - home:
+   `<plugin>/skills/meta-self-improve/` - skill-fit batched change, report counts).
 
 ## Boundaries (unchanged from meta-dream-crosstree)
 
