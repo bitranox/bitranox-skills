@@ -12,7 +12,8 @@ INDEPENDENT KNOWLEDGE TREES** (a machine can carry several tree tops; the projec
 crosses them). Cascade only flows down one ancestor chain, so knowledge filed in a sibling project
 or another tree is invisible elsewhere; this skill bridges that. Tree discovery runs over the
 configured `discovery_roots` (`tree-top` / `ensure-all-trees` locate the tops). It builds on `bitranox:meta-self-improve` (altitude logic, the upstream-PR loop,
-`reconcile_memory_index.py`) and delegates inbound gather to `bitranox:meta-collect-knowledge`; follow
+`reconcile_memory_index.py` - home: `<plugin>/skills/meta-self-improve/`, launch via
+`hooks/run-python.sh`) and delegates inbound gather to `bitranox:meta-collect-knowledge`; follow
 those for the primitives. Do not duplicate per-project consolidation here - run meta-dream-tree for
 that first if a project's own store is messy.
 
