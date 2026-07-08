@@ -406,6 +406,21 @@ Use skill name only, with explicit requirement markers:
 
 **Why no @ links:** `@` syntax force-loads files immediately, consuming 200k+ context before you need them.
 
+**Referencing a SCRIPT is the opposite of referencing a skill: state the home path.** A skill name
+resolves through the skill system; a script filename resolves through nothing. A bare
+`helper.py --check` in prose is unrunnable for a reader whose context lacks the owning skill's base
+directory, and it reads as NOT SHIPPED to anyone auditing the plugin (they search the path-qualified
+locations, e.g. `hooks/`, and conclude the file is missing).
+
+- OK Good: `` `reconcile_memory_index.py --check` (home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`) ``
+- NO Bad: `` run `reconcile_memory_index.py --check` `` (bare filename - where? how?)
+
+Rules: state the home (`skills/<owner>/<script>`) and the launch shim at the point of use; when a
+family of skills shares a core reference file, single-source the homes there (a "Script homes"
+section) and let the members cite it; a script referenced from OUTSIDE its owning skill is the case
+that always needs the path - within its own skill's SKILL.md the announced base directory resolves a
+bare name.
+
 ## Flowchart Usage
 
 ```dot
