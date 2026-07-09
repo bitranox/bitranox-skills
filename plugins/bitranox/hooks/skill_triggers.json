@@ -111,6 +111,22 @@
   "patterns",
   "profiling"
  ],
+ "coding-python-pwshpy": [
+  "issuing",
+  "running",
+  "powershell",
+  "pwsh",
+  "commands",
+  "writing",
+  "modifying",
+  "debugging",
+  "script",
+  "prefer",
+  "pwshpy",
+  "genuinely",
+  "pythonic",
+  "typed"
+ ],
  "coding-python-rpyc": [
   "building",
   "transparent",

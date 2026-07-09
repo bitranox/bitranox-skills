@@ -54,6 +54,14 @@ This is identical to TDD's "write failing test first" - you MUST see what agents
 - [ ] **Identify patterns** - which excuses appear repeatedly?
 - [ ] **Note effective pressures** - which scenarios trigger violations?
 
+**Watch for baseline contamination (tool/library-usage skills).** When the skill teaches how to USE
+a tool or library, a baseline subagent whose cwd is that tool's own repo will explore the files,
+discover the tool, and use it - so the "clean baseline" shows the skill's target behavior for the
+wrong reason, and RED falsely looks like GREEN. The baseline must reflect what an agent does WITHOUT
+knowing the tool: run it with neutral framing ("do not read or explore files or repos; answer from
+what you already know") or from a scratch dir outside the tool's repo. Confirm the baseline used the
+raw fallback (e.g. shelled out to `pwsh` / `Get-*`, hand-rolled the API) before trusting it.
+
 **Example:**
 
 ```markdown

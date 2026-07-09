@@ -82,7 +82,7 @@ def main(argv=None):
             pass
         print("docs/skills.md is STALE - run build_skill_docs.py", file=sys.stderr)
         return 1
-    out.write_text(text, encoding="utf-8")
+    out.write_text(text, encoding="utf-8", newline="\n")
     print("wrote %s" % out)
     return 0
 
