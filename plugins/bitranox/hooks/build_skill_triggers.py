@@ -85,7 +85,7 @@ def main(argv=None):
             pass
         print("skill_triggers.json is STALE - run build_skill_triggers.py", file=sys.stderr)
         return 1
-    out.write_text(text, encoding="utf-8")
+    out.write_text(text, encoding="utf-8", newline="\n")
     print("wrote %s (%d skills)" % (out, len(triggers)))
     return 0
 
