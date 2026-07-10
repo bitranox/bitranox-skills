@@ -58,6 +58,20 @@ def test_add_readopts_a_dangling_body_instead_of_refusing(proj):
     assert "Original body." in E.read_store(proj)[2][slug]      # empty body arg preserves the body
 
 
+def test_bracketed_title_round_trips_and_does_not_orphan(proj):
+    # a `[dev]` in the title used to make the pointer line unparseable (`_PTR_RX` title is `[^\]]*`),
+    # so it was silently DROPPED on the next block round-trip, orphaning the body. It must survive now.
+    slug = E.add_or_update_entry(proj, "bmk make test gets [dev] via bmk 3.1.7", "When x, do y.",
+                                 body="Body.", type_="reference")
+    assert any(e.slug == slug for e in E.read_store(proj)[1])          # parses back, does not vanish
+    # survives a re-serialization (a heal-like read -> commit -> read cycle):
+    E.add_or_update_entry(proj, "bmk make test gets [dev] via bmk 3.1.7", "When x, do y sharper.",
+                          body="", type_="reference")
+    assert any(e.slug == slug for e in E.read_store(proj)[1])
+    local = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
+    assert "(dev)" in local                                            # brackets sanitized in the line
+
+
 def test_add_refuses_when_an_ancestor_owns_the_slug(proj):
     # a CLAUDE.md makes `proj` the anchor, so `child` shares its store and altitude chain
     (Path(proj) / "CLAUDE.md").write_text("# proj\n", encoding="utf-8")

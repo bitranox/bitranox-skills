@@ -188,9 +188,25 @@ class Pointer:
         return (" <!-- %s -->" % " ".join(parts)) if parts else ""
 
     def index_line(self):
+        title, hook = _ptr_safe_title(self.title), _ptr_safe_hook(self.hook)
         if self.legacy:
-            return "- [%s](uuid:%s) - %s%s" % (self.title, self.uuid, self.hook, self.meta_comment())
-        return "- [%s](mem:%s) - %s%s" % (self.title, self.slug, self.hook, self.meta_comment())
+            return "- [%s](uuid:%s) - %s%s" % (title, self.uuid, hook, self.meta_comment())
+        return "- [%s](mem:%s) - %s%s" % (title, self.slug, hook, self.meta_comment())
+
+
+def _ptr_safe_title(s):
+    """Neutralize characters that break a pointer line's markdown link title `[Title](mem:slug)`:
+    a `]` (or `[`) in the title makes the whole line unparseable, so it is silently dropped on the
+    next block round-trip - orphaning the body. The body keeps the true title's information; the
+    always-loaded pointer just shows `(dev)` for `[dev]`."""
+    return (s or "").replace("[", "(").replace("]", ")")
+
+
+def _ptr_safe_hook(s):
+    """The hook runs to the FIRST `<!--` (the meta comment); a literal `<!--`/`-->` inside a hook would
+    truncate or corrupt the line, so neutralize it. Brackets in a hook are fine (the hook group is a
+    tempered scan, not a `[^\\]]` class)."""
+    return (s or "").replace("<!--", "< !--").replace("-->", "-- >")
 
 
 def _slug_from_title(title):
