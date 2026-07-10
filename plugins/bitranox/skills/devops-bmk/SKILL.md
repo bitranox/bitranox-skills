@@ -118,28 +118,40 @@ bmk --set email.from_address=me@example.com test   # one-off override (repeatabl
 project's `pyproject.toml` (or `bmk_makescripts/stages.toml`). Each stage is a declarative argv list.
 Run one with `bmk custom <name>` / `make custom <name>`. This is the only override mechanism.
 
-**Make `make test` match CI.** The `test` pipeline runs pytest with `-m "not <exclude-markers>"`,
-where `exclude-markers` comes from `[tool.scripts.test].exclude-markers` in `pyproject.toml` and
-**defaults to `"integration"`**. A project whose host-mutating or dev-only tests are marked
-`local_only` (and has no `integration` tests) then gets no filtering, so `make test` runs them --
-unlike a CI that calls `pytest -m "not local_only"` directly. Set `exclude-markers = "local_only"`
-to align them. bmk also runs pytest in its own tool venv (section 1): **bmk >= 3.1.7** provisions
-that venv with the project's `[dev]` extra (`uv tool install ... --with ".[dev]"`), so `[dev]`-only
-test-import deps are present -- older bmk installed only base deps, so such tests failed locally
-while CI (which installs `[dev]`) passed.
+**Test markers: what `make test` runs.** `make test` runs `pytest -m "not <exclude-markers>"`,
+where `exclude-markers` comes from `[tool.scripts.test].exclude-markers` and **defaults to
+`"integration"`**. So out of the box `make test` runs your unit tests AND `local_only` tests and
+skips `integration`; `make testintegration` runs `-m integration`; a CI job typically runs
+`pytest -m "not local_only"`. The local-vs-CI difference is intentional - `make test` is not meant
+to be identical to CI.
+
+| Marker                                                              | Meaning                                                                    | Where it runs                                                    |
+|---------------------------------------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------|
+| `local_only`                                                        | needs a local resource the CI runners lack (a service, device, OS feature) | `make test` LOCALLY (guard with `skipif`); excluded from CI      |
+| `integration`                                                       | long-running / external                                                    | `make testintegration` only; skipped by `make test`              |
+| `os_agnostic` / `os_windows` / `os_macos` / `os_posix` / `os_linux` | labels the target OS                                                       | a label only - pair each with its own `skipif(sys.platform ...)` |
+
+Raise `exclude-markers` only to skip MORE from `make test` - e.g. a project whose `local_only`
+tests MUTATE the host and are unsafe on a real dev machine can tag them `mutating` and set
+`exclude-markers = "mutating"` (a common project-specific marker). Do NOT set it to "match CI" -
+that drops the fast local coverage `local_only` exists to provide.
+
+bmk runs pytest in its own tool venv (section 1): **bmk >= 3.1.7** provisions it with the project's
+`[dev]` extra (`uv tool install ... --with ".[dev]"`), so `[dev]`-only test-import deps are present -
+older bmk installed only base deps, so such tests failed locally while CI (which installs `[dev]`) passed.
 
 ## Troubleshooting
 
-| Symptom                                      | Cause / fix                                                                                                                                                                           |
-|----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `make test` prints almost nothing            | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                         |
-| A stage fails: `<tool>` not found            | Install it with `make ensure` (section 5).                                                                                                                                            |
-| `make: command not found` (Windows)          | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                        |
-| `bmk: command not found` after install       | Ensure `~/.local/bin` is on PATH; re-run `uv tool install bmk --with .`.                                                                                                              |
-| Tools resolve the wrong deps / import errors | Re-sync the tool venv: `uv tool install --reinstall bmk --with .`.                                                                                                                    |
-| `make test` runs different tests than CI     | The `test` stage filters by `[tool.scripts.test].exclude-markers` (default `integration`); if your host/dev tests use `local_only`, set it to `"local_only"` to match CI (section 6). |
-| `make test` fails on a `[dev]`-only import   | bmk runs pytest in its own tool venv; upgrade to **bmk >= 3.1.7**, which installs the project `[dev]` extra there (section 6).                                                        |
-| Private GitHub deps fail to resolve          | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                           |
+| Symptom                                                                             | Cause / fix                                                                                                                                                                                   |
+|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                 |
+| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                    |
+| `make: command not found` (Windows)                                                 | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                                |
+| `bmk: command not found` after install                                              | Ensure `~/.local/bin` is on PATH; re-run `uv tool install bmk --with .`.                                                                                                                      |
+| Tools resolve the wrong deps / import errors                                        | Re-sync the tool venv: `uv tool install --reinstall bmk --with .`.                                                                                                                            |
+| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI". |
+| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in its own tool venv; upgrade to **bmk >= 3.1.7**, which installs the project `[dev]` extra there (section 6).                                                                |
+| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                   |
 
 ## Further reading
 
