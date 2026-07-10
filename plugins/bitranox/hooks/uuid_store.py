@@ -79,6 +79,22 @@ def hook_over_budget(hook):
     return len(hook or "") > HOOK_SOFT_MAX
 
 
+HOOK_HARD_MAX = 500   # hard cap, chars: a longer pointer line risks being wrapped by a markdown
+                      # formatter and then DROPPED on the next block round-trip (orphaning its body).
+                      # The body keeps the full detail, so truncating the always-loaded hook is safe.
+
+
+def cap_hook(hook):
+    """Hard-cap a hook to one round-trip-safe pointer line, truncating at a word boundary.
+    Returns the hook unchanged when within `HOOK_HARD_MAX`."""
+    h = (hook or "").strip()
+    if len(h) <= HOOK_HARD_MAX:
+        return h
+    cut = h[:HOOK_HARD_MAX]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp >= HOOK_HARD_MAX - 80 else cut).rstrip()
+
+
 # Trigger-first hooks fire during reasoning; trigger-less ones don't (probe-verified: hooks leading
 # with the situation drove a body read in 100% of runs). Advisory, like the length cap.
 _TRIGGER_STARTERS = ("when", "whenever", "before", "after", "on ", "if ", "while", "use when",
