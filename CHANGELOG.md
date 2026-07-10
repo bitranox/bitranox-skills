@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.56.1] - 2026-07-10
+
+### Fixed
+- Memory engine: the ACTUAL trigger for the orphaned-entry bug (5.56.0 addressed the recovery side)
+  was a `[` or `]` in a pointer's TITLE. The pointer line is a markdown link `[Title](mem:slug)`, and
+  the parser's title group is `[^\]]*`, so a title like `... gets [dev] via ...` makes the whole line
+  unparseable - `read_store` skips it and the next block round-trip drops it, orphaning the body. The
+  pointer renderer now neutralizes `[`/`]` in the title (shown as `(dev)`; the body keeps the full
+  detail) and any literal `<!--`/`-->` in the hook, so a bracketed title round-trips instead of
+  vanishing. The 500-char hard cap from 5.56.0 stays as secondary protection.
+
 ## [5.56.0] - 2026-07-10
 
 ### Fixed
