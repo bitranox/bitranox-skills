@@ -27,6 +27,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
 import uuid_store as us  # noqa: E402
+import os  # noqa: E402
+import self_improve_signals as sig  # noqa: E402
 
 _HOOK_MAX = 160
 _TYPE_PREFIXES = us.TYPE_PREFIXES
@@ -278,6 +280,53 @@ def archive_entry(level_dir, slug, archive_subdir=".archive"):
 
 # ---- CLI ---------------------------------------------------------------------------------------
 
+def _all_curated_levels(anchor):
+    """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block),
+    pruning vendored/build/cache dirs. A bounded walk of the anchor's subtree - the whole tree, so a
+    body pointed at by ANY project (siblings included) is not mistaken for a dangler."""
+    out = []
+    for root, dirs, files in os.walk(str(anchor)):
+        dirs[:] = [x for x in dirs if x not in sig.VENDOR_DIRNAMES]
+        if "CLAUDE.local.md" in files and is_curated(root):
+            out.append(root)
+    return out
+
+
+def find_dangling_bodies(anchor):
+    """Central bodies (`.../facts/<slug>.md`) that NO curated level in the tree points at - the invisible
+    orphans: loaded by nothing, yet the slug is 'taken' so a plain `add` used to refuse re-creating it.
+    Returns a sorted list of slugs."""
+    facts = us.central_facts_dir(Path(anchor))
+    try:
+        body_slugs = {p.stem for p in facts.glob("*.md")}
+    except OSError:
+        return []
+    pointed = set()
+    for lvl in _all_curated_levels(anchor):
+        pointed |= {e.slug for e in ME.read_store(str(lvl))[1]}
+    return sorted(body_slugs - pointed)
+
+
+def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
+    """Re-attach a pointer for each dangling body at `to_level` (default: the anchor top) so it becomes
+    visible + loadable again; a later dream re-levels it. The hook is read from the body frontmatter; the
+    title is derived from the slug (a body stores no title). Returns the rehomed slugs."""
+    anchor = Path(anchor)
+    to_level = str(to_level or anchor)
+    done = []
+    for slug in find_dangling_bodies(anchor):
+        try:
+            text = us.body_path(anchor, slug).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not dry_run:
+            # add with no body keeps the existing central body; Fix A re-adopts the dangling slug.
+            ME.add_or_update_entry(to_level, title=slug.replace("-", " "),
+                                   hook=ME._body_description(text), slug=slug)
+        done.append(slug)
+    return done
+
+
 def _print_report(rep):
     print("curated dir: %s" % rep["dir"])
     print("  facts: %d | orphan pointers (no central body): %d" % (rep["facts"], len(rep["orphans"])))
@@ -291,9 +340,20 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
     ap.add_argument("--check", action="store_true",
                     help="treat dirs as an ordered altitude chain (narrow->broad) and verify reference "
-                         "integrity (upward-only, no orphans) + emit advisory pointer-block size "
-                         "warnings; exit 1 only on reference-integrity issues")
+                         "integrity (upward-only, no orphans) + report dangling bodies + emit advisory "
+                         "pointer-block size warnings; exit 1 only on reference-integrity issues")
+    ap.add_argument("--rehome", action="store_true",
+                    help="re-attach every dangling body (a central body no level points at) at the tree "
+                         "top so it is visible + loadable again; a later dream re-levels it")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.rehome:
+        anchor = ME._anchor(args.dirs[0])
+        done = rehome_dangling_bodies(anchor, dry_run=args.dry_run)
+        for slug in done:
+            print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
+        print("TOTAL re-homed: %d" % len(done))
+        return 0
 
     if args.check:
         refs = check_references(args.dirs)
@@ -314,9 +374,15 @@ def main(argv=None):
                           "index; let the dream lift/dedup/promote, else it loads only for this project"
                           % (d, nbytes, lines))
                     warnings += 1
+        danglers = find_dangling_bodies(ME._anchor(args.dirs[0]))
+        for slug in danglers:
+            print("    ~ dangling body (no pointer at any level): %s" % slug)
         print("TOTAL problems: %d" % problems)
         if warnings:
             print("TOTAL warnings: %d (advisory, not failures)" % warnings)
+        if danglers:
+            print("TOTAL dangling bodies: %d (advisory - run with --rehome to re-attach them)"
+                  % len(danglers))
         return 1 if problems else 0
 
     total_orphans = 0

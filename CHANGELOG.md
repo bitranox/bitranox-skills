@@ -17,7 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
-## [5.51.0] - 2026-07-06
+## [5.56.0] - 2026-07-10
+
+### Fixed
+- Memory engine: recover "stale" orphaned entries instead of getting stuck on them. Root cause was
+  a two-step trap: an over-long or formatter-mangled pointer line failed the block round-trip and was
+  silently dropped on the next `heal`, leaving a central body with no pointer (a "dangling body");
+  then `add` refused to re-create the slug (the body registers it) and `archive_entry` could not act
+  (no pointer to drop), so the fact was invisible yet un-recreatable.
+  - `add` now ADOPTS a dangling body (re-attaches a pointer) instead of raising `SlugCollision`, when
+    no other level in the chain owns the slug. Re-capturing the same fact recovers it.
+  - Hooks are now hard-capped at 500 chars (truncated at a word boundary; the body keeps the full
+    detail) so a pointer line stays single-line and round-trips - preventing the orphaning.
+
+### Added
+- `reconcile_memory_index`: `find_dangling_bodies()` + a `--rehome` mode, and `--check` now reports
+  dangling bodies (a central body no level points at) so they surface instead of silently piling up.
 
 ### Changed
 - `process-agents-subagent-driven-development`: the Effort paragraph now carries the

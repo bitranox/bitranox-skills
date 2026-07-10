@@ -147,6 +147,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     path). Merges the provenance `source` set on update, ensures the level's pointer block + scope, and
     writes under a lock, mtime-neutral. Returns the slug."""
     slug = slug or slugify(title, type_)
+    hook = us.cap_hook(hook)                          # hard-cap so the pointer line round-trips safely
     src = set(source or ())
     anchor = _anchor(proj)
     lock_target = sig.claude_local_md_path(proj)
@@ -154,6 +155,16 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         ensure_level(proj, scope_default=scope_default, _locked=True)
         scope, entries, bodies = read_store(proj)
         by_slug = {e.slug: e for e in entries}
+        if slug not in by_slug and us.body_path(anchor, slug).is_file() \
+                and not _slug_owned_elsewhere(anchor, proj, slug):
+            # A DANGLING body (its pointer was lost - e.g. a formatter wrapped the line and a heal
+            # round-trip then dropped it) is safe to ADOPT here rather than leave the fact stuck
+            # (invisible, yet un-recreatable because the body registers the slug). Reconstruct its
+            # Entry so the update path below re-attaches a pointer at this level.
+            adopted = _entry_from_body(anchor, slug)
+            if adopted is not None:
+                entries.append(adopted)
+                by_slug[slug] = adopted
         if slug in by_slug:
             e = by_slug[slug]
             e.title, e.hook = title, (hook or e.hook)
@@ -165,8 +176,8 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
                 e.legacy, e.uuid = False, ""
         else:
-            # Tree-unique slugs: the body file is the registry. A file that exists while THIS level
-            # has no pointer for it means another level owns the slug - refuse with a suggestion.
+            # Tree-unique slugs: the body file is the registry. A body that exists while ANOTHER level
+            # owns the slug (checked just above) is a real collision - refuse with a suggestion.
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
@@ -175,6 +186,44 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
     return slug
+
+
+def _slug_owned_elsewhere(anchor, proj, slug):
+    """True when a level OTHER than `proj` in proj's altitude chain still points at `slug` (the slug is
+    owned elsewhere, not a dangling body). Chain-scoped by design: a rare cross-sibling re-capture at
+    worst makes a duplicate the dream merges - never corruption - and this stays off the hot path."""
+    try:
+        chain = sig.altitude_chain(proj)
+    except Exception:                                # noqa: BLE001 - never block an add
+        return False
+    pnorm = Path(proj).resolve()
+    for lvl in chain:
+        try:
+            if Path(lvl).resolve() == pnorm:
+                continue
+            _s, ptrs = us.parse_pointer_index(sig.claude_local_md_path(lvl).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if any(p.slug == slug for p in ptrs):
+            return True
+    return False
+
+
+def _body_description(text):
+    """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent."""
+    m = re.search(r"(?m)^description:[ \t]*(.*)$", text or "")
+    return m.group(1).strip() if m else ""
+
+
+def _entry_from_body(anchor, slug):
+    """Reconstruct an Entry from a dangling central body so `add` can re-adopt it. The hook comes from
+    the body's `description:` frontmatter; title/level are not stored in a body, so the caller's update
+    supplies them. Returns None if the body is unreadable."""
+    try:
+        text = us.body_path(anchor, slug).read_text(encoding="utf-8").rstrip("\n")
+    except OSError:
+        return None
+    return Entry(slug=slug, title=slug, hook=_body_description(text), body=text, source=set())
 
 
 def _free_slug(anchor, slug):
@@ -642,7 +691,11 @@ def main(argv=None):
             print("! refused: %s" % c)
             return 1
         print(slug)
-        if us.hook_over_budget(args.hook):
+        if len(args.hook or "") > us.HOOK_HARD_MAX:
+            print("~ warning: hook was %d chars, TRUNCATED to the %d-char hard cap (full detail stays "
+                  "in the body): rewrite as 1-3 directive sentences"
+                  % (len(args.hook), us.HOOK_HARD_MAX))
+        elif us.hook_over_budget(args.hook):
             print("~ warning: hook is %d chars (soft cap %d): rewrite as 1-3 directive sentences"
                   % (len(args.hook), us.HOOK_SOFT_MAX))
         if us.hook_missing_trigger(args.hook):
