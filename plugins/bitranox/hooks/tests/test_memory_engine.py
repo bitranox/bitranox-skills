@@ -15,11 +15,31 @@ import memory_engine as E
 import uuid_store as us
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    # the stores-generation marker + recall caches live under ~/.claude; keep tests hermetic. Create
+    # only `home` (not `.claude`) so a test that builds its own `home/.claude` does not collide;
+    # bump/cache code mkdir their own subdirs on demand.
+    h = tmp_path / "home"
+    h.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    return h
+
+
 @pytest.fixture
 def proj(tmp_path):
     p = tmp_path / "proj"
     p.mkdir()
     return str(p)
+
+
+def test_new_store_creation_bumps_generation_once(proj):
+    assert sig.stores_generation() == 0
+    E.add_or_update_entry(proj, "Rule", "hook", body="b", scope_default="lvl")   # creates the store dir
+    assert sig.stores_generation() == 1                                          # new store -> bump
+    E.add_or_update_entry(proj, "Another", "hook2", body="b2")                   # same store -> no bump
+    assert sig.stores_generation() == 1
 
 
 # ---- slug + Entry ------------------------------------------------------------------------------

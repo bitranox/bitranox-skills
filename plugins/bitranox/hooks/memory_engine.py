@@ -150,6 +150,8 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     hook = us.cap_hook(hook)                          # hard-cap so the pointer line round-trips safely
     src = set(source or ())
     anchor = _anchor(proj)
+    store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
+    store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
     with sig.memory_lock(lock_target):
         ensure_level(proj, scope_default=scope_default, _locked=True)
@@ -185,6 +187,8 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
+    if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
+        sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     return slug
 
 
@@ -522,7 +526,11 @@ def scaffold(proj):
         except OSError:
             continue
     try:
-        us.central_facts_dir(_anchor(proj)).mkdir(parents=True, exist_ok=True)
+        facts_dir = us.central_facts_dir(_anchor(proj))
+        store_existed = facts_dir.parent.exists()     # the `.claude-memory` store dir
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        if not store_existed:                          # scaffolding created a brand-new store dir
+            sig.bump_stores_generation()               # bust the cross-tree dir-cache
     except OSError:
         pass
     return created

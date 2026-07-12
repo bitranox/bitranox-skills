@@ -219,6 +219,55 @@ def test_find_curated_stores_also_collects_central_uuid_store_bodies(tmp_path, m
     assert any(p.endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
 
 
+def _home_root(tmp_path, monkeypatch):
+    """Isolate HOME (where the dir-cache lives) and return a fresh roots dir to seed stores under."""
+    h = tmp_path / "home"
+    (h / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    root = tmp_path / "trees"
+    root.mkdir()
+    return root
+
+
+def _seed_store(root, name, *facts):
+    fdir = root / name / ".claude-memory" / "facts"
+    fdir.mkdir(parents=True, exist_ok=True)
+    for fn in facts:
+        (fdir / fn).write_text("body of " + fn, encoding="utf-8")
+    return fdir
+
+
+def test_find_curated_stores_reglobs_fresh_facts_after_dir_cache(tmp_path, monkeypatch):
+    # a fact dreamed AFTER the dir-walk is cached must still surface (facts are globbed fresh)
+    root = _home_root(tmp_path, monkeypatch)
+    _seed_store(root, "projA", "one.md")
+    assert any(p.endswith("/facts/one.md") for p in G._find_curated_stores(str(root)))
+    (root / "projA" / ".claude-memory" / "facts" / "two.md").write_text("second", encoding="utf-8")
+    assert any(p.endswith("/facts/two.md") for p in G._find_curated_stores(str(root)))
+
+
+def test_curated_store_dirs_caches_walk_within_ttl(tmp_path, monkeypatch):
+    root = _home_root(tmp_path, monkeypatch)
+    _seed_store(root, "projA", "one.md")
+    calls = {"n": 0}
+    real = G._walk_store_dirs
+    monkeypatch.setattr(G, "_walk_store_dirs", lambda r: (calls.__setitem__("n", calls["n"] + 1), real(r))[1])
+    G._curated_store_dirs(str(root))
+    G._curated_store_dirs(str(root))
+    assert calls["n"] == 1                                   # second call served from cache, no re-walk
+
+
+def test_new_store_dir_busts_cache_only_on_generation_bump(tmp_path, monkeypatch):
+    root = _home_root(tmp_path, monkeypatch)
+    _seed_store(root, "projA", "one.md")
+    assert len(G._curated_store_dirs(str(root))) == 1
+    _seed_store(root, "projB", "two.md")                     # a brand-new store dir appears
+    assert len(G._curated_store_dirs(str(root))) == 1        # still cached: new dir not yet seen
+    sig.bump_stores_generation()                             # engine calls this when it creates a store
+    assert len(G._curated_store_dirs(str(root))) == 2        # generation bump busts the cache -> re-walk
+
+
 def test_cli_groups_candidates_by_tree(tmp_path, monkeypatch, capsys):
     ws, cur = _ws(tmp_path, monkeypatch)
     facts = ws / ".claude-memory" / "facts"
