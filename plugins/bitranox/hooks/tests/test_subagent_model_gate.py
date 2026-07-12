@@ -65,8 +65,11 @@ def test_main_warns_exit0_when_not_armed(monkeypatch, capsys):
     rc = run_main(monkeypatch, {"tool_name": "Task", "tool_input": {"subagent_type": "x"}})
     assert rc == 0
     out = capsys.readouterr()
-    assert "SUBAGENT-MODEL GATE" in out.err
-    assert out.out == ""
+    hso = json.loads(out.out)["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert "model" in hso["additionalContext"]
+    assert "permissionDecision" not in hso   # a warn must not block the dispatch
+    assert out.err == ""
 
 
 def test_main_denies_with_json_when_armed(monkeypatch, capsys):
@@ -83,8 +86,8 @@ def test_main_disarmed_by_receipt_end(monkeypatch, capsys):
     assert skill_receipt.end("plan-execution") is True
     rc = run_main(monkeypatch, {"tool_name": "Task", "tool_input": {"subagent_type": "x"}})
     assert rc == 0
-    out = capsys.readouterr()
-    assert out.out == "" and "warning" in out.err
+    hso = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert "additionalContext" in hso and "permissionDecision" not in hso
 
 
 def test_main_pinned_is_silent(monkeypatch, capsys):

@@ -24,6 +24,10 @@ plugins/bitranox/skills/python-libraries-to-use/
 # Internal planning docs - design plans, not shipped
 PLANS/
 
+# Per-session decision log: autonomous decisions the agent made during a plan/auto task,
+# surfaced for the developer to review. Local only, never committed.
+EXECUTION-USER-REVIEW.md
+
 # Curated self-learning memory store (per-project; local, never committed on this public repo).
 # Pointer blocks live in CLAUDE.local.md; bodies in the anchor's .claude-memory/. Both stay local.
 notes.md

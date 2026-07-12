@@ -10,8 +10,10 @@ rides the agent-type definition or a Workflow agent() call - so picking the tier
 agent type) is also how effort is chosen.
 
 Two enforcement levels:
-- Normally: WARN (stderr, exit 0) - some dispatches legitimately inherit (a `fork` always
-  inherits by design, and sometimes the session model is genuinely right).
+- Normally: WARN (additionalContext on stdout, exit 0) - some dispatches legitimately inherit
+  (a `fork` always inherits by design, and sometimes the session model is genuinely right). The
+  warn rides `hookSpecificOutput.additionalContext` (no `permissionDecision`), which reaches the
+  model as a system-reminder without blocking the dispatch; exit-0 stderr would not reach it.
 - While a PLAN EXECUTION is armed (a fresh `plan-execution` receipt written by
   `skill_receipt.py start plan-execution` - the plan-execution skills arm it at their step 0 and
   disarm with `skill_receipt.py end plan-execution` when the plan completes): DENY the dispatch
@@ -90,7 +92,10 @@ def main():
             "permissionDecisionReason": message,
         }}) + "\n")
     elif action == "warn":
-        sys.stderr.write("SUBAGENT-MODEL GATE (warning): " + message + "\n")
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": "SUBAGENT-MODEL GATE: " + message,
+        }}) + "\n")
     return 0
 
 
