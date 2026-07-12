@@ -194,20 +194,18 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
 _STORE_DIRNAME = sig.MEMORY_DIRNAME               # the central slug body-store (.claude-memory)
 
 
-def _find_curated_stores(root):
-    """Every curated body under `root`: the central slug store's `facts/*.md` (flat, slug-named;
-    a transitional sharded remnant `facts/<shard>/<uuid>.md` is still read). Allow-lists the store
-    dot-dir past the hidden-dir prune (else the walk would never find it), excludes vendored /
-    other-hidden / backup dirs, and does not descend INTO a store (`.archive` starts with a dot,
-    so the globs never match it)."""
-    out = []
+def _walk_store_dirs(root):
+    """os.walk `root` for `.claude-memory` store DIRS - allow-listing the store dot-dir past the
+    hidden-dir prune, excluding vendored / other-hidden / backup dirs, not descending INTO a store.
+    This walk is the EXPENSIVE part (on a big tree it dominates recall); _curated_store_dirs caches
+    it. Facts are globbed FRESH by _find_curated_stores, so a newly added fact is never hidden by the
+    cache - only the appearance of a brand-new store dir needs a refresh (TTL or generation bump)."""
+    dirs = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
             base = os.path.basename(dirpath)
             if base == _STORE_DIRNAME:
-                fdir = Path(dirpath) / "facts"
-                out += [str(p) for p in sorted(fdir.glob("*.md")) + sorted(fdir.glob("*/*.md"))
-                        if not p.parent.name.startswith(".")]   # pathlib * matches dotfiles
+                dirs.append(dirpath)
                 dirnames[:] = []                      # do not descend into the store
                 continue
             dirnames[:] = [x for x in dirnames
@@ -216,6 +214,44 @@ def _find_curated_stores(root):
                            and ".bak-" not in x and not x.endswith(".bak")]
     except OSError:
         pass
+    return dirs
+
+
+def _curated_store_dirs(root, cache_ttl=3600):
+    """Store DIRS under `root`, from a per-root cache of the expensive walk. The cache is valid while
+    it is younger than `cache_ttl` AND stamped with the current stores-generation - so a newly created
+    store dir (which bumps the generation) invalidates it immediately, while unchanged roots skip the
+    walk entirely. Cache sits with the other recall caches; any IO error falls back to a live walk."""
+    key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8")).hexdigest()[:12]
+    cache = sig._audit_dir() / ("curated-dirs.%s.txt" % key)
+    stamp = "gen:%d" % sig.stores_generation()
+    try:
+        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
+            lines = cache.read_text(encoding="utf-8").splitlines()
+            if lines and lines[0] == stamp:
+                return [ln for ln in lines[1:] if ln]
+    except OSError:
+        pass
+    dirs = _walk_store_dirs(root)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(stamp + "\n" + "\n".join(dirs), encoding="utf-8")
+    except OSError:
+        pass
+    return dirs
+
+
+def _find_curated_stores(root, cache_ttl=3600):
+    """Every curated body under `root`: the central slug store's `facts/*.md` (flat, slug-named;
+    a transitional sharded remnant `facts/<shard>/<uuid>.md` is still read). The store-dir WALK is
+    cached (see _curated_store_dirs); the facts are re-globbed FRESH here, so a just-dreamed fact
+    surfaces immediately. Excludes the archive dot-dir (`.archive` starts with a dot, so the parent
+    filter drops it)."""
+    out = []
+    for sdir in _curated_store_dirs(root, cache_ttl=cache_ttl):
+        fdir = Path(sdir) / "facts"
+        out += [str(p) for p in sorted(fdir.glob("*.md")) + sorted(fdir.glob("*/*.md"))
+                if not p.parent.name.startswith(".")]   # pathlib * matches dotfiles
     return out
 
 
@@ -227,22 +263,9 @@ def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
     root = _workspace_root(self_cwd)
     if root is None:
         return []
-    h = hashlib.sha1(("cur:" + str(root)).encode("utf-8")).hexdigest()[:12]
-    cache = Path.home() / ".claude" / "self-improve-audit" / ("curated-paths.%s.txt" % h)
-    paths = None
-    try:
-        if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
-            paths = [ln for ln in cache.read_text(encoding="utf-8").splitlines() if ln]
-    except OSError:
-        paths = None
-    if paths is None:
-        paths = _find_curated_stores(root)
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text("\n".join(paths), encoding="utf-8")
-        except OSError:
-            pass
-    return paths
+    # The expensive store-dir WALK is cached (TTL + stores-generation) inside _find_curated_stores,
+    # which re-globs facts FRESH - so a newly dreamed fact is never stale (unlike a cached file list).
+    return _find_curated_stores(root, cache_ttl=cache_ttl)
 
 
 def scan(keywords, files):

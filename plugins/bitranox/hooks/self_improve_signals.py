@@ -473,20 +473,65 @@ def global_rules_dir(proj=None):
 
 
 def discovery_roots():
-    """Filesystem roots to WALK for other projects' curated `.claude-bx-selflearning/` stores (used by
-    cross-project recall + as the MCP's watched roots). The config `discovery_roots` list (a machine-
-    local override in ~/.claude/.bitranox-memory.json) UNION the DERIVED default `$HOME` - so the
-    tracked DEFAULT_CONFIG never ships hardcoded maintainer absolute paths (public-plugin safe). The
-    walk is additionally backstopped by reverse-resolving native slugs (see resolve_slug), so a
-    project outside these roots is still discoverable. Deduped, existing dirs only."""
+    """Filesystem roots to WALK for other projects' curated `.claude-memory` stores (used by
+    cross-project recall + as the MCP's watched roots). When the config `discovery_roots` list (a
+    machine-local override in ~/.claude/.bitranox-memory.json) is set, it is honored EXACTLY -
+    `$HOME` is the DERIVED default ONLY when no roots are configured, so the tracked DEFAULT_CONFIG
+    never ships hardcoded maintainer absolute paths (public-plugin safe). Force-adding `$HOME` on top
+    of an explicit list would drag a huge unrelated home tree (build caches, no stores) into every
+    walk; an explicit config is a precise statement of where the stores are. The walk is additionally
+    backstopped by reverse-resolving native slugs (see resolve_slug), so a project outside these
+    roots is still discoverable. Deduped, existing dirs only."""
     roots = set()
     for r in (load_config().get("discovery_roots") or []):
         try:
             roots.add(Path(str(r)).expanduser())
         except (OSError, ValueError):
             continue
-    roots.add(Path.home())
+    if not roots:                       # no explicit config -> the public-safe derived default
+        roots.add(Path.home())
     return sorted({p for p in roots if _is_dir(p)}, key=str)
+
+
+def _audit_dir():
+    """Machine-local scratch dir the recall/gather caches and the stores-generation marker share."""
+    return Path.home() / ".claude" / "self-improve-audit"
+
+
+def _stores_gen_file():
+    return _audit_dir() / "stores-generation.txt"
+
+
+def stores_generation():
+    """Monotonic counter bumped whenever a NEW curated store dir is created (see the engine). The
+    cross-tree dir-cache stamps itself with this value, so a brand-new store busts the cache at once
+    while a cached walk of unchanged roots stays valid. Absent/garbled marker -> 0 (cache still valid
+    via its TTL). Never raises."""
+    try:
+        return int(_stores_gen_file().read_text(encoding="utf-8").strip() or "0")
+    except (OSError, ValueError):
+        return 0
+
+
+def bump_stores_generation():
+    """Increment the stores-generation marker under a lock, busting the cross-tree dir-cache. Called
+    by the engine only when it actually creates a new `.claude-memory` store dir (rare), so it does
+    NOT run on the hot per-fact write path. Best-effort: a missed bump merely means a new store waits
+    out the cache TTL; never raises."""
+    f = _stores_gen_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    try:
+        with memory_lock(f):
+            try:
+                cur = int(f.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                cur = 0
+            f.write_text(str(cur + 1), encoding="utf-8")
+    except (OSError, TimeoutError):
+        pass
 
 
 def _is_dir(p):

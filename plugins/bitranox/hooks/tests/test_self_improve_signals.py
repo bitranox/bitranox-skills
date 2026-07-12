@@ -561,14 +561,35 @@ def test_default_config_new_knobs():
     assert S.DEFAULT_CONFIG["discovery_roots"] == []  # derived at runtime, never hardcoded paths
 
 
-def test_discovery_roots_derives_home_and_config(home):
-    roots = S.discovery_roots()
-    assert str(home) in [str(r) for r in roots]       # $HOME always included
+def test_discovery_roots_defaults_to_home_when_unconfigured(home):
+    roots = [str(r) for r in S.discovery_roots()]
+    assert str(home) in roots       # no explicit config -> the derived default is $HOME
+
+
+def test_discovery_roots_honors_explicit_config_without_home(home):
     extra = home / "elsewhere"
     extra.mkdir()
     S.save_config({"discovery_roots": [str(extra)]})
-    roots2 = [str(r) for r in S.discovery_roots()]
-    assert str(extra) in roots2 and str(home) in roots2
+    roots = [str(r) for r in S.discovery_roots()]
+    assert str(extra) in roots          # explicit root honored exactly
+    assert str(home) not in roots       # $HOME is NOT force-added on top of an explicit config
+
+
+def test_stores_generation_starts_zero_and_bumps(home):
+    assert S.stores_generation() == 0
+    S.bump_stores_generation()
+    assert S.stores_generation() == 1
+    S.bump_stores_generation()
+    assert S.stores_generation() == 2
+
+
+def test_stores_generation_survives_garbled_marker(home):
+    f = S._stores_gen_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("not-an-int", encoding="utf-8")
+    assert S.stores_generation() == 0   # garbled marker -> 0, never raises
+    S.bump_stores_generation()
+    assert S.stores_generation() == 1
 
 
 def test_memory_lock_acquire_release(tmp_path):
