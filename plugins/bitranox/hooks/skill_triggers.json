@@ -95,6 +95,22 @@
   "shutil.copytree",
   "filter"
  ],
+ "coding-python-layered-config": [
+  "building",
+  "designing",
+  "configuration",
+  "python",
+  "lib_layered_config",
+  "deciding",
+  "config",
+  "files",
+  "live",
+  "linux",
+  "macos",
+  "windows",
+  "choosing",
+  "environment-variable"
+ ],
  "coding-python-performance-review": [
   "reviewing",
   "python",
