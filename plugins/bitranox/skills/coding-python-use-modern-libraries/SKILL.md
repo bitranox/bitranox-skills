@@ -1,6 +1,6 @@
 ---
 name: coding-python-use-modern-libraries
-description: Use when choosing a Python library for a task (HTTP, JSON, XML, TOML, YAML, data models, enums, dates, compression, database, testing, type checking, CLI parsing, retry/backoff, text encoding, MCP servers), writing new Python code that needs a dependency, or reviewing imports for dated defaults. For building/editing JSON/XML/YAML files specifically, see bitranox:files-edit-json, bitranox:files-edit-xml, bitranox:files-edit-yml. Public, mainstream defaults; adjust per project.
+description: Use when choosing a Python library for a task (HTTP, JSON, XML, TOML, YAML, data models, enums, dates, compression, database, testing, type checking, CLI parsing, retry/backoff, text encoding, layered configuration, MCP servers), writing new Python code that needs a dependency, or reviewing imports for dated defaults. For building/editing JSON/XML/YAML files specifically, see bitranox:files-edit-json, bitranox:files-edit-xml, bitranox:files-edit-yml. Public, mainstream defaults; adjust per project.
 ---
 
 # Modern Python library choices
@@ -61,6 +61,7 @@ rows silently competing for the same job:
 | .gitignore parse / file filtering            | `igittigitt` (git-exact, include mode, memory-bounded; see bitranox:coding-python-gitignore)                                                                                                                                                                                                    | hand-rolled `fnmatch`/`glob`/`re`; `gitignore_parser`; `pathspec`                                                                 |
 | Text encoding / mojibake repair              | `ftfy` (repairs mixed / double-encoded mojibake, e.g. `Ã¼`->`ü`; leaves already-correct text untouched)                                                                                                                                                                                         | blanket `.encode('latin-1').decode('utf-8')` round-trips; manual char swaps                                                       |
 | MCP server / client (Model Context Protocol) | `fastmcp` (decorator API for tools/resources/prompts plus auth, server composition, proxying, OpenAPI generation, built-in testing)                                                                                                                                                             | hand-rolled JSON-RPC; the official `mcp` SDK's low-level server API and its bundled `mcp.server.fastmcp` (frozen 1.0 feature set) |
+| Layered / cross-platform app config          | `lib_layered_config` (merges defaults/app/host/user/.env/env into one immutable object with per-key provenance and profiles; resolves Linux/macOS/Windows paths; library + CLI; see bitranox:coding-python-layered-config)                                                                      | ad-hoc `os.environ` reads plus scattered file loads with hand-rolled precedence                                                   |
 
 ## Structured data: pydantic at the edges, dataclasses inside
 
@@ -94,5 +95,5 @@ swap it out.
   the same on every OS; external commands may be missing or take different flags on Windows.
 - Reach for stdlib when no third-party library is warranted (small glue, no hot path): the
   point is "best tool", not "most dependencies".
-- Logging, CLI framework, and layered configuration are deliberately left to each project's
-  own conventions rather than prescribed here.
+- Logging and CLI framework are deliberately left to each project's own conventions rather
+  than prescribed here.

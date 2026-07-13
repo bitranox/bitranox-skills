@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.59.0] - 2026-07-13
+
+### Added
+
+- `coding-python-layered-config`: install, use, and design layered application configuration
+  with lib_layered_config - the Python API and the CLI, per-key provenance (which layer and
+  file a setting came from), environment profiles, the environment-variable override rules,
+  and the config paths on Linux, macOS, and Windows.
+- `coding-python-use-modern-libraries`: added a row recommending `lib_layered_config` for
+  layered / cross-platform application configuration (previously left unprescribed).
+
 ## [5.56.1] - 2026-07-10
 
 ### Fixed
