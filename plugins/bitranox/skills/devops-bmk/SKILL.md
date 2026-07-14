@@ -67,6 +67,12 @@ Set `UV_PROJECT_ENVIRONMENT` when one checkout is used from more than one OS (a 
 both Linux and Windows): a single venv cannot serve both, so give each its own (e.g. `.venv-win`).
 If provisioning fails, bmk falls back to its own interpreter rather than failing the command.
 
+`clean` does not delete the venv (that would throw away what bmk just built and force a full
+re-resolve); remove it by hand when you want it gone. bmk also keeps the venv out of git: it adds
+the venv names to `.gitignore` when nothing already ignores them, and if git is *tracking* a venv
+it drops it from the index (`git rm --cached`) while leaving the files on disk, announcing that it
+did. A tracked venv would otherwise show thousands of modified files after every sync.
+
 ## 2. Bootstrap the Makefile
 
 ```bash
