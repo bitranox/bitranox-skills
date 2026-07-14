@@ -55,7 +55,27 @@ When a learning here applies beyond this repo (it usually does), it also belongs
 ## Every shipped Python script needs sibling tests
 
 Any `.py` this plugin ships - a `skills/<skill>/` script OR a `hooks/` script - must have tests in a
-sibling `tests/` dir: a `conftest.py` that puts the script dir on `sys.path`, and a `test_<script>.py`
-run with `python3 -m pytest -q`. Write/extend them in the same change that adds or edits the script;
-a script with no test is incomplete. For a hyphenated (non-importable) hook module, load it in
-`conftest.py` via `importlib.util.spec_from_file_location` and alias it in `sys.modules`.
+sibling `tests/` dir: a `conftest.py` that puts the script dir on `sys.path`, and a `test_<script>.py`.
+Write/extend them in the same change that adds or edits the script; a script with no test is
+incomplete. For a hyphenated (non-importable) hook module, load it in `conftest.py` via
+`importlib.util.spec_from_file_location` and alias it in `sys.modules` - for `hooks/`, that means
+adding the stem to the `_HOOK_MODULES` map in `hooks/tests/conftest.py`, or the test cannot import
+the module and collection fails.
+
+**Run them with CI's dependency set, never a bare `pytest`.** The list lives in
+`.github/workflows/ci.yml`: `pytest PyYAML lxml defusedxml ruamel.yaml httpx2`. Anything less
+produces failures that read exactly like real defects but are artifacts of the environment:
+
+- without `lxml`, `validate_xml()` returns `(None, None)` instead of `(True, None)`, failing 4 tests
+  in `test_validate_structured_files.py`;
+- without `httpx2`, `test_proxy_pool.py` fails at COLLECTION, which aborts the whole run;
+- `repo-gate.py --ci` shells out to pytest itself, so it needs the same set or it reports
+  `repo-gate: FAILED` for a repo that is fine.
+
+```bash
+env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
+  --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q
+```
+
+Before believing any failure here, check the dependency set first, then confirm it is pre-existing
+by stashing your change and re-running.

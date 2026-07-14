@@ -46,6 +46,10 @@ Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate
   reference in other skills, hooks, and the README (`grep -rn '<old-name>'`).
 - **Bump the version** per semver above (a rename is MAJOR; a new skill is MINOR).
 - **Ship tests** for any script the skill bundles (a `tests/` dir with passing pytest) - also gated.
+  Run them with CI's dependency set (`pytest PyYAML lxml defusedxml ruamel.yaml httpx2`, per
+  `.github/workflows/ci.yml`); a bare `pytest` reports failures that come from missing
+  dependencies, not from real defects. Detail: "Every shipped Python script needs sibling tests"
+  in `CLAUDE.md`.
 
 ## Skill naming: category-prefix scheme
 
