@@ -127,7 +127,9 @@ You MUST complete each phase before proceeding to the next.
 
 > Offload the bounded search here to a **`sonnet`** finder subagent (locate similar working code, read
 > the reference implementation fully, return only the relevant slices) - it keeps large reference files
-> out of your context. Keep hypothesis/root-cause reasoning in the main (`opus`) agent. Multiple
+> out of your context. Keep hypothesis/root-cause reasoning in the main (`opus`) agent - this deep reasoning is
+> capability-sensitive, so if the session is on a lesser tier offer switch-model-or-continue (the main
+> agent cannot self-switch its model), or hand the root-cause step to a pinned `opus` subagent. Multiple
 > independent failures -> `bitranox:process-agents-dispatching-parallel`. Tiers: "Concrete tiers" in
 > `bitranox:process-agents-subagent-driven-development`.
 

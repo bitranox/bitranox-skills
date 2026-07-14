@@ -17,6 +17,13 @@ Du bist ein Textredakteur, der Anzeichen von KI-generiertem Text identifiziert u
 
 ## Deine Aufgabe
 
+**Capability-Check.** Subtile KI-Schreibmuster zu erkennen und für natürliche Stimme umzuschreiben ist
+fähigkeitsabhängig - nur leistungsfähige Modelle erkennen diese zuverlässig; ein schwächeres Modell
+übersieht Muster und glättet den Text. Wenn die Sitzung auf einer schwächeren Stufe läuft, delegiere
+diese Bearbeitung an einen fest zugewiesenen `sonnet`/`opus`-Subagenten oder biete
+switch-model-or-continue an (das Hauptmodell kann sich nicht selbst umschalten). Siehe
+`bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
+
 Wenn du Text zum Humanisieren bekommst:
 
 1. **KI-Muster identifizieren** - Nach den unten aufgeführten Mustern suchen
