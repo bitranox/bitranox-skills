@@ -20,6 +20,7 @@ if str(HOOKS_DIR) not in sys.path:
 _HOOK_MODULES = {
     "validate-structured-files": "validate_structured_files",
     "block-pgrep-self-match": "block_pgrep_self_match",
+    "block-partial-typecheck": "block_partial_typecheck",
     "self-improve-gate": "self_improve_gate",
     "self-improve-audit": "self_improve_audit",
     "post-compact-nudge": "post_compact_nudge",
