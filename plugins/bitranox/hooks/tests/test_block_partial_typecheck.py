@@ -96,6 +96,36 @@ def test_unbalanced_quotes_passes(monkeypatch, project):
     assert run_main(monkeypatch, 'pyright "src', project) == 0
 
 
+def test_pyright_as_another_tools_flag_value_passes(monkeypatch, project):
+    """`find -name pyright` names a FILE to look for; it invokes nothing.
+
+    Observed false positive: the guard took the quoted "pyright" for the
+    executable and read the rest of find's own arguments as its paths, blocking
+    with the nonsense "paths given: 4 2>/dev/null".
+    """
+    assert run_main(monkeypatch, "find .venv -name 'pyright' -maxdepth 4 2>/dev/null", project) == 0
+    assert run_main(monkeypatch, "grep -rn -e pyright src", project) == 0
+
+
+def test_real_invocation_after_a_flag_value_still_blocks(monkeypatch, project):
+    """Skipping a flag-value match must not skip a real run later in the line.
+
+    Returning at the first token spelled "pyright" would let the genuine
+    narrowed invocation through unchecked.
+    """
+    assert run_main(monkeypatch, "find . -name pyright; python -m pyright src", project) == 2
+
+
+def test_redirect_ends_the_invocation(monkeypatch, project):
+    """`2>/dev/null` is a redirection, not a path handed to pyright.
+
+    shlex keeps the fd prefix in one token, so a plain `>` comparison misses it
+    and the redirect target gets counted as a positional.
+    """
+    assert run_main(monkeypatch, "pyright tests 2>/dev/null", project) == 0
+    assert B._pyright_positionals("pyright src 2>/dev/null") == ["src"]
+
+
 # --- blocked: narrowed away from the tests ---------------------------------
 
 
