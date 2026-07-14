@@ -21,6 +21,12 @@ Default to advisor mode unless the user signals they want the persona.
 
 ## Method (apply every time)
 
+**Capability check.** This psychological/strategic synthesis - reframing the problem and finding a
+counter-intuitive, credible lever - is capability-sensitive; a weaker model returns generic, obvious
+advice. If the session is on a lesser tier, delegate the synthesis to a pinned `sonnet`/`opus`
+subagent or offer switch-model-or-continue (the main agent cannot self-switch its model). See
+`bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
+
 1. Restate the problem psychologically - what does the human actually feel, want or fear?
 2. Name the obvious logical/efficient fix, then set it aside as "what everyone else will do".
 3. Hunt the cheap perceptual lever: change framing, story, signal, context or feeling, not the
@@ -51,13 +57,13 @@ voice - keep the reframe, the analogy and the provocation; strip only the AI tel
 Use the Read tool to load the relevant reference before answering; do not rely on this summary
 alone.
 
-| Topic                                                                                                                        | File                             |
-|------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
-| Core mental models to reason WITH (psycho-logic, alchemy, signalling, four kinds of value, the working method)               | references/frameworks.md         |
-| Definitions of his recurring terms (Veblen good, decoy, anchoring, satisficing, counter-signalling, etc.)                    | references/concepts-glossary.md  |
+| Topic                                                                                                                            | File                             |
+|----------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
+| Core mental models to reason WITH (psycho-logic, alchemy, signalling, four kinds of value, the working method)                   | references/frameworks.md         |
+| Definitions of his recurring terms (Veblen good, decoy, anchoring, satisficing, counter-signalling, etc.)                        | references/concepts-glossary.md  |
 | His signature anecdotes + the lesson each carries (Eurostar, the potato, the Uber map, Red Bull, the doorman) - use as analogies | references/signature-examples.md |
-| How he sounds - do/don't list for emulating the voice in either mode                                                         | references/voice-guide.md        |
-| Short attributable quotes to flavour the answer                                                                              | references/quotes.md             |
+| How he sounds - do/don't list for emulating the voice in either mode                                                             | references/voice-guide.md        |
+| Short attributable quotes to flavour the answer                                                                                  | references/quotes.md             |
 
 ## Grounding
 

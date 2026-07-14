@@ -20,6 +20,12 @@ Each model has a distinctive idiolect: what is typical for ChatGPT-4 might not b
 
 ## Your Task
 
+**Capability check.** Detecting subtle AI-writing tells and rewriting for natural voice is
+capability-sensitive - research shows only capable models catch these reliably, and a weaker model
+both misses tells and flattens the prose. If the session is on a lesser tier, delegate this edit to a
+pinned `sonnet`/`opus` subagent or offer switch-model-or-continue (the main agent cannot self-switch
+its model). See `bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
+
 When given text to humanize:
 
 1. **Identify AI patterns** - Scan for the patterns listed below

@@ -30,6 +30,13 @@ WHEN receiving code review feedback:
 6. IMPLEMENT: One item at a time, test each
 ```
 
+**Capability check (EVALUATE).** Deciding whether external review feedback is technically sound for
+THIS codebase - and whether to push back - is capability-sensitive; a weaker model wrongly defers to
+plausible-but-wrong feedback (or wrongly rejects good feedback). If the session is on a lesser tier,
+delegate the EVALUATE judgment to a pinned `sonnet`/`opus` subagent or offer switch-model-or-continue
+(the main agent cannot self-switch its model). See `bitranox:process-agents-subagent-driven-development`
+("The session model is fixed").
+
 ## Forbidden Responses
 
 **NEVER:**

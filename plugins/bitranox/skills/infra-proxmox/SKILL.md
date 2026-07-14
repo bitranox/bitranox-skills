@@ -48,6 +48,12 @@ patterns, see `bitranox:coding-resilience`.
 
 > **Exception:** Read-only operations - reading logs, querying status, gathering information without changing anything - are considered safe and can be performed immediately without this review.
 
+> **Run this gate on `opus`.** This steelman / red-team judgment gates a change to LIVE
+> infrastructure - a weaker model under-weights outage, data-loss, and quorum risk. Do the review on
+> `opus`: delegate it to a pinned `opus` subagent, or (if you keep it inline) offer
+> switch-model-or-continue BEFORE executing. Never run this gate on an unknown lesser tier. See
+> `bitranox:process-agents-subagent-driven-development` ("The session model is fixed" / "Concrete tiers").
+
 ### 3.1 Steelman Prompt
 
 Consider the planned action or configuration to be executed on the Proxmox server in its ideal, most successful form.

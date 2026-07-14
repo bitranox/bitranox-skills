@@ -29,6 +29,12 @@ Start by understanding the current project context, then ask questions one at a 
 - Present options conversationally with your recommendation and reasoning
 - Lead with your recommended option and explain why
 
+**Capability check.** Generating and weighing 2-3 genuinely different designs is capability-sensitive -
+a weaker model produces shallow, near-duplicate options. If the session is on a lesser tier, delegate
+the approach-generation/synthesis to a pinned `sonnet`/`opus` subagent or offer
+switch-model-or-continue (the main agent cannot self-switch its model). See
+`bitranox:process-agents-subagent-driven-development` ("The session model is fixed").
+
 **Presenting the design:**
 - Once you believe you understand what you're building, present the design
 - Break it into sections of 200-300 words
