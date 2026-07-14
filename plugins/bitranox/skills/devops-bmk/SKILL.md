@@ -43,8 +43,29 @@ bmk --version        # verify
 ```
 
 Alternatives: `pipx install bmk`, `pip install bmk`, or `pip install "git+https://github.com/bitranox/bmk"`.
-The persistent venv lives at `~/.local/share/uv/tools/bmk/` -- no project `.venv` is needed, which
-works on network shares that do not support symlinks.
+bmk itself lives in a persistent venv at `~/.local/share/uv/tools/bmk/`.
+
+### The project venv (bmk >= 3.2.0)
+
+Before any command that touches the Python environment (`test`, `push`, `deps`, `build`, ...), bmk
+creates the project's own venv if it is missing and syncs it to `pyproject.toml`. Every install and
+every gate targets **that** venv, never bmk's own and never whatever venv happens to be active in
+your shell -- so no project can quietly install its dependencies into a shared environment it does
+not own.
+
+The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
+re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
+packages the project does not actually resolve, while the real resolution stays hidden. The
+trade-off: **packages you installed into the venv by hand do not survive a sync.**
+
+| Env var                  | Effect                                                             |
+|--------------------------|--------------------------------------------------------------------|
+| `UV_PROJECT_ENVIRONMENT` | Venv path (absolute, or relative to the project). Default `.venv`. |
+| `BMK_NO_VENV_SYNC=1`     | Skip provisioning entirely; use the environment as-is.             |
+
+Set `UV_PROJECT_ENVIRONMENT` when one checkout is used from more than one OS (a share mounted on
+both Linux and Windows): a single venv cannot serve both, so give each its own (e.g. `.venv-win`).
+If provisioning fails, bmk falls back to its own interpreter rather than failing the command.
 
 ## 2. Bootstrap the Makefile
 
