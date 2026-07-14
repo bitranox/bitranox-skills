@@ -18,7 +18,7 @@ stages sharing the same order run in parallel.
 
 ## When to use
 
-- Setting up bmk in a new or existing project (`uv tool install bmk`, then `bmk install`).
+- Setting up bmk in a new or existing project (`uvx bmk install`).
 - Running the standard dev loop: `make test`, `make push`, `make bump-patch`, `make release`, `make ship`.
 - A tool the pipeline needs is missing (shellcheck, shfmt, pwsh, ...) -> `bmk ensure`.
 - Output is empty/terse and you want the full verbose run -> `--human` / `BMK_OUTPUT_FORMAT=text`.
@@ -29,18 +29,22 @@ skill is about *using* bmk as a task runner in any project.
 
 ## 1. Install
 
-You need bmk once to bootstrap a project's Makefile; after that the Makefile manages bmk itself.
+uv is the only prerequisite. You never install bmk yourself: run `bmk install` once, ephemerally,
+to drop the Makefile in - from then on the Makefile installs and manages bmk per project.
 
 ```bash
 # Install uv first if needed (https://astral.sh/uv)
 curl -LsSf https://astral.sh/uv/install.sh | sh          # macOS/Linux
 # Windows (PowerShell): powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-uv tool install bmk        # bootstrap; enough to run `bmk install`
-bmk --version              # verify
+cd your-project
+uvx bmk install            # writes the Makefile; installs nothing permanently
+make test                  # from here on, everything goes through make
 ```
 
-Alternatives: `pipx install bmk`, `pip install bmk`, or `pip install "git+https://github.com/bitranox/bmk"`.
+Prefer `uvx` over `uv tool install bmk`. A machine-wide bmk is not used by anything - `make` runs
+`./.venv-bmk/bin/bmk` - so it only sits on PATH going stale, and then `bmk --version` reports a
+version no project is actually using.
 
 ### bmk's own env is per project
 
@@ -185,7 +189,7 @@ helpers) are present and `make test` matches CI.
 | `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                 |
 | A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                    |
 | `make: command not found` (Windows)                                                 | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                                |
-| `bmk: command not found` after install                                              | Only the bootstrap bmk is on PATH: ensure `~/.local/bin` is on it and re-run `uv tool install bmk`. Inside a project, use `make <target>` - it runs `./.venv-bmk/bin/bmk` and needs no PATH.  |
+| `bmk: command not found`                                                            | Expected - bmk is not meant to be on PATH. Inside a project use `make <target>` (it runs `./.venv-bmk/bin/bmk`); to bootstrap a new one use `uvx bmk install`.                                |
 | Tools resolve the wrong deps / import errors                                        | Rebuild this project's bmk env: `rm -rf .venv-bmk && make test`.                                                                                                                              |
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI". |
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv-bmk`, installed with the `[dev]` extra. Rebuild it: `rm -rf .venv-bmk && make test`.                                                                 |
