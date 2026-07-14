@@ -53,6 +53,31 @@ _VALUE_FLAGS = frozenset(
 # Tokens that end the pyright invocation inside a larger shell line.
 _SHELL_BREAKS = frozenset({";", "&&", "||", "|", ">", ">>", "<", "&"})
 
+# A redirection ends the invocation too, but shlex keeps it as one token and it
+# may carry an fd prefix ("2>/dev/null", "2>&1", ">out.txt").
+_REDIRECT_RE = re.compile(r"^\d*(?:>>?|<)")
+
+# Flags of OTHER tools that take a name/pattern as their value. Without this, a
+# token that merely spells "pyright" - `find . -name pyright`, `grep -e pyright` -
+# is mistaken for the executable, and whatever follows is read as its paths.
+_NAME_VALUE_FLAGS = frozenset(
+    {
+        "-name",
+        "-iname",
+        "-path",
+        "-ipath",
+        "-wholename",
+        "-iwholename",
+        "-regex",
+        "-iregex",
+        "-e",
+        "--include",
+        "--exclude",
+        "--exclude-dir",
+        "--file",
+    }
+)
+
 # Options that mean "not a type-check run".
 _NON_CHECK = frozenset({"--version", "--help", "-h", "--stats", "--verifytypes"})
 
@@ -70,11 +95,16 @@ def _pyright_positionals(cmd: str) -> list[str] | None:
         # Match the executable itself, not a substring of some other word.
         if Path(token).name not in {"pyright", "pyright.exe"}:
             continue
+        # ...and not a token that merely spells it, as the value of another
+        # tool's flag. Keep scanning: a real invocation may follow in the same
+        # line (`find -name pyright | ...; python -m pyright src tests`).
+        if index and tokens[index - 1] in _NAME_VALUE_FLAGS:
+            continue
 
         positionals: list[str] = []
         skip_next = False
         for arg in tokens[index + 1 :]:
-            if arg in _SHELL_BREAKS:
+            if arg in _SHELL_BREAKS or _REDIRECT_RE.match(arg):
                 break
             if skip_next:
                 skip_next = False
