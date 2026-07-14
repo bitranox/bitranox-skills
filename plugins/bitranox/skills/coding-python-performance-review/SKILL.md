@@ -107,7 +107,7 @@ Collect all **previously reviewed items**  -  both fixes already implemented and
 
 Also scan codebase for inline comments containing "by design", "intentional", or "performance: accepted".
 
-All previously reviewed items are **OFF-LIMITS**  -  skip them silently during presentation in Step 6. Never re-suggest an already-implemented fix. Never re-raise a previously declined finding.
+Respect previously reviewed items by DEFAULT, but they are not frozen: RE-ASSESS a declined finding against current ground truth (an already-implemented fix stays done - never re-suggest it). Do not casually re-raise a declined finding; re-open one ONLY when concrete ground truth shows its premise no longer holds (the data it was sized against grew, the code moved onto a hot path, it now blows up memory/time). Then surface it as a propose-first "Reconsider" finding (Step 6) - never silently skip a declined item ground truth now contradicts, and never silently change one. This "does the premise still hold?" judgment is bounded work a weak/literal session model gets wrong: run it on a **`sonnet`** subagent (pin the tier per dispatch; the main agent cannot self-switch its model - see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`), or inline when already on a capable model.
 
 ### Step 2: Setup
 
@@ -362,7 +362,7 @@ Classify each finding by severity:
 - **MEDIUM**: Priority cache candidate (confirmed by profiling) OR uncompiled regex in non-hot function OR ineffective existing cache
 - **MINOR**: Cache candidate NOT confirmed by profiling
 
-Filter out all accepted items collected in Step 1. Sort findings SEVERE -> MEDIUM -> MINOR.
+Re-assess accepted items from Step 1 against ground truth (see Step 1): RESPECT them by default (do not present), but reclassify one as a propose-first "Reconsider" finding when concrete ground truth shows its premise no longer holds. Sort findings SEVERE -> MEDIUM -> MINOR.
 
 ### Step 6: Present and Implement Findings
 
@@ -378,6 +378,10 @@ Present each finding **ONE AT A TIME** using this format:
 **Description**: what the issue is (for Ineffective Cache: include the verdict reason  -  actual call count, cumtime, impurity details, or why the cache provides no benefit)
 **Suggested fix**: specific code change
 ```
+
+**A re-opened accepted item uses this variant** (propose-first): `## Reconsider accepted item N: [Title]` / Severity / File / **Originally accepted because** / **What changed (ground truth)** / **Proposal** (re-affirm as-is, or a specific change - the user's call).
+
+After presenting findings, emit a **Still-accepted summary**: the accepted items you RESPECTED this run, each with a one-line "still holds" note.
 
 Ask: "Implement this fix? Or skip? If skipping, what's the reason?"
 
@@ -470,18 +474,18 @@ After running the test suite, report:
 
 ## Common Mistakes
 
-| Mistake                                | Fix                                                   |
-|----------------------------------------|-------------------------------------------------------|
-| Dump all issues at once                | Present ONE at a time, wait for response              |
-| Suggest changes to accepted items      | Read project instructions first, filter out           |
-| Vague suggestions ("consider caching") | Show exact `@lru_cache` or `re.compile()` change      |
-| Skip saving declined items             | ALWAYS append to project instructions                 |
-| Not running tests after fixes          | Run tests after EVERY implementation                  |
-| Caching impure functions               | Never cache time/random/I/O/state-modifying           |
-| Caching with mutable args              | Convert list/dict to tuples; lru_cache needs hashable |
-| Re-raising declined items              | Check accepted list from Step 1                       |
-| MINOR before SEVERE                    | Sort: SEVERE -> MEDIUM -> MINOR                       |
-| Ignoring existing ineffective caches   | Audit existing `@lru_cache`/`@cache`, propose removal |
+| Mistake                                                 | Fix                                                      |
+|---------------------------------------------------------|----------------------------------------------------------|
+| Dump all issues at once                                 | Present ONE at a time, wait for response                 |
+| Re-raise an accepted item with no new evidence          | Respect silently; re-open only on a ground-truth trigger |
+| Vague suggestions ("consider caching")                  | Show exact `@lru_cache` or `re.compile()` change         |
+| Skip saving declined items                              | ALWAYS append to project instructions                    |
+| Not running tests after fixes                           | Run tests after EVERY implementation                     |
+| Caching impure functions                                | Never cache time/random/I/O/state-modifying              |
+| Caching with mutable args                               | Convert list/dict to tuples; lru_cache needs hashable    |
+| Silently skip an accepted item ground truth contradicts | Re-open as a propose-first "Reconsider" finding          |
+| MINOR before SEVERE                                     | Sort: SEVERE -> MEDIUM -> MINOR                          |
+| Ignoring existing ineffective caches                    | Audit existing `@lru_cache`/`@cache`, propose removal    |
 
 ## Key Behaviors
 
@@ -491,6 +495,6 @@ After running the test suite, report:
 - **NEVER cache non-deterministic or side-effect functions**
 - **ONE issue at a time**  -  never batch-present
 - **ALWAYS audit existing caches**  -  verify they're still effective, propose removal if not
-- **RESPECT prior decisions**  -  check project instructions before suggesting
+- **RESPECT prior decisions by default, but RE-ASSESS them**  -  re-open an accepted item (propose-first) only when ground truth shows its premise no longer holds; never silently skip one that ground truth now contradicts
 - **ALWAYS flag unbounded memory**  -  big files / huge DB results / huge logfiles must stream, not load whole
 - **ALWAYS flag unsafe input**  -  bound length, sanitize types/encoding (non-ASCII/emoji/CJK/binary), test it

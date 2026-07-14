@@ -13,7 +13,7 @@ Score a project 0-10, identify issues by severity, walk the user through fixes o
 > **Claude Code** → `CLAUDE.md` | **Codex** → `AGENTS.md` | **Kilo Code / Windsurf** → equivalent config file.
 > This skill uses "CLAUDE.md" as shorthand  -  substitute the correct filename for your environment.
 
-**Core principle:** Respect prior decisions. Check before suggesting. Ask before changing.
+**Core principle:** Respect prior decisions by default, but re-assess them against ground truth. A documented acceptance whose premise no longer holds is surfaced as a propose-first "reconsider" item - never silently skipped, never silently changed. Check before suggesting. Ask before changing.
 
 **Pathfinder:** leave each file better than you found it and accept no technical debt - fix adjacent rot
 you can verify, flag (do not silently pass) anything wrong, and route an out-of-scope fix to its own
@@ -25,7 +25,7 @@ worktree. See `bitranox:meta-self-improve` ("Pathfinder discipline").
 1. Read CLAUDE.md / AGENTS.md → collect accepted items
 2. Run project tools → collect objective data
 3. Score 0-10 with rubric
-4. Filter out accepted items
+4. Re-assess accepted items vs ground truth (respect, or reconsider propose-first)
 5. Present Issue N
    ├── yes → 6a. Implement fix ──┐
    └── no  → 6b. Save decline ──┤
@@ -50,7 +50,7 @@ Collect deliberately accepted items from **all** of these sources:
 
 **Read the entire file, not just one section.** Intentional decisions are often documented inline near the relevant architecture description, not only in the "Code Quality" section.
 
-**These items are OFF-LIMITS.** Do not suggest changes to deliberately accepted items. If you would have flagged something but it's documented as intentional, skip it silently.
+**Respect these by default - do not casually re-litigate a settled decision.** But they are NOT frozen forever: each is RE-ASSESSED against current ground truth in Step 4. Re-open one only when concrete evidence shows its premise no longer holds; absent that, respect it silently (do not re-raise). Never silently CHANGE a documented decision, and never silently SKIP one that ground truth now contradicts.
 
 ## Step 2: Run Project Quality Tools
 
@@ -120,11 +120,26 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
   deserialized object) is parsed into a typed model before use - never trusted to have the right
   keys, types, or shape. Exception: items the project instructions deliberately accept.
 
-## Step 4: Filter Deliberately Accepted Items
+## Step 4: Re-assess Deliberately Accepted Items (respect, or reconsider)
 
-Cross-reference your findings against **all** deliberately accepted items collected in Step 1 (from the "Code Quality" section AND from inline "by design" documentation throughout the project instructions file). Remove any issue that matches.
+Cross-reference your findings against **all** deliberately accepted items from Step 1 (the "Code Quality" section AND inline "by design" notes throughout the file). For each match, choose an outcome - do NOT just delete it:
 
-**If unsure whether something is deliberately accepted:** include it but note "This may be intentional per the project instructions  -  please confirm."
+**RESPECT (default).** Keep it accepted and do not present it. This is the outcome unless a re-open trigger fires. Respecting is silent - you do not re-litigate a settled decision.
+
+**RECONSIDER (only on a ground-truth trigger).** Re-open an item ONLY when concrete ground truth shows its stated premise no longer holds - any of:
+- the code or context the acceptance was based on has CHANGED (an "internal-only" input is now reachable from an untrusted boundary; a "handful of rows" table now holds millions);
+- ground truth now CONTRADICTS the stated reason (read/measure it - do not assume);
+- it now causes a REAL problem (security hole, data-loss, correctness bug, OOM) or rests on a rule since invalidated.
+
+Verify against ground truth (read the code / data / measurements). If you cannot establish whether the acceptance still holds, do NOT silently keep or drop it - include it and ASK the user (a hand-written instructions file can rot; never silently prefer either side - see `bitranox:meta-self-improve`).
+
+**Re-assess with a capable model, not whatever the session happens to run.** Judging "does this premise still hold?" is bounded judgment a weaker/literal model gets wrong - it honors a stale premise and silently misses a live issue. Dispatch a **`sonnet`** subagent (pin the tier per dispatch; **`opus`** for a high-stakes security / data-loss call) to evaluate each accepted item against ground truth and return a respect-or-reconsider verdict with evidence. The main agent cannot self-switch its model (see "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`); on a small project already on a known-capable session model, inline is fine.
+
+**Externally-enforced off-limits** (a `.github/` tree or vendored files "managed by an external template"): "propose a change" means FLAG it for the user to take up at the SOURCE (the template / owner) - do not edit the managed file directly.
+
+**Still-accepted summary.** After presenting findings, emit a compact read-only list of the accepted items you RESPECTED this run, each with a one-line "still holds" note (and, for any you re-opened, a pointer to its Reconsider finding). This makes what was set aside visible without re-litigating it.
+
+**If unsure whether something is deliberately accepted:** include it but note "This may be intentional per the project instructions - please confirm."
 
 ## Step 5: Format and Present One-by-One
 
@@ -136,6 +151,17 @@ Every finding MUST use this exact format:
 **Affected files**: [list of files]
 **Description**: [what's wrong]
 **Suggested fix**: [specific actionable fix instructions]
+```
+
+**A re-opened acceptance uses this variant** (propose-first - present it one at a time like any other issue and let the user decide):
+
+```markdown
+## Reconsider accepted item N: [Short Title]
+**Severity**: SEVERE | MEDIUM | MINOR
+**Affected files**: [list]
+**Originally accepted because**: [the documented rationale]
+**What changed (ground truth)**: [the concrete evidence the premise no longer holds]
+**Proposal**: [re-affirm as-is, or the specific change - your call]
 ```
 
 **Severity guidelines:**
@@ -169,19 +195,23 @@ Deliberately accepted items  -  do not flag in future reviews:
 
 If the section exists, append. Do not duplicate entries. If the section does not exist, create it at the end of the project instructions file. If no project instructions file exists, create one (CLAUDE.md / AGENTS.md) with the `# Code Quality` section.
 
+**When you re-opened an accepted item (a Reconsider finding):**
+- If the user RE-AFFIRMS it, refresh its acceptance note in place - rewrite the rationale to the current ground truth and date it - so the record reflects reality (replace the stale wording; do not append a "superseded" note).
+- If the user CHANGES it, implement the fix (Step 6a) and update or remove the acceptance note accordingly.
+
 ## Step 7: Re-score
 
 After all issues processed, re-run the rubric. Present before/after scorecard.
 
 ## Common Mistakes
 
-| Mistake                                            | Fix                                              |
-|----------------------------------------------------|--------------------------------------------------|
-| Dump all issues at once                            | Present ONE at a time, wait for response         |
-| Suggest changes to documented-as-intentional items | Read project instructions first, filter them out |
-| Vague suggested fixes ("improve this")             | Write specific, actionable instructions          |
-| Skip saving declined items                         | ALWAYS append to project instructions file       |
-| Subjective scoring without rubric                  | Use the weighted rubric table                    |
-| Flag items already in "Code Quality" section       | Check the section BEFORE analysis                |
-| Present MINOR issues before SEVERE                 | Sort by severity: SEVERE > MEDIUM > MINOR        |
-| Re-raise previously declined items                 | Check accepted items list first                  |
+| Mistake                                                                | Fix                                                         |
+|------------------------------------------------------------------------|-------------------------------------------------------------|
+| Dump all issues at once                                                | Present ONE at a time, wait for response                    |
+| Re-raise an accepted item with no new evidence (nagging)               | Respect it silently; re-open only on a ground-truth trigger |
+| Vague suggested fixes ("improve this")                                 | Write specific, actionable instructions                     |
+| Skip saving declined items                                             | ALWAYS append to project instructions file                  |
+| Subjective scoring without rubric                                      | Use the weighted rubric table                               |
+| Leaving the respect-or-reconsider call to a weak/literal session model | Delegate it to a pinned `sonnet` subagent                   |
+| Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                   |
+| Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding          |
