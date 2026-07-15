@@ -82,6 +82,32 @@ own and never whatever venv happens to be active in your shell -- so the environ
 type-check in and audit are one and the same, and no project can quietly install its dependencies
 into an environment it does not own.
 
+**Which Python it is built on: the newest your classifiers declare, at its latest patch.**
+
+```toml
+[project]
+requires-python = ">=3.10"                     # a FLOOR - says nothing about the newest
+classifiers = [
+  "Programming Language :: Python :: 3",       # ignored: no minor
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.14",    # <- .venv is built on 3.14, latest patch
+]
+```
+
+The classifiers are where a project states the versions it supports, and your CI workflow already
+builds its test matrix from the same entries - so your venv and your CI matrix cannot drift apart
+about what "newest supported" means. `requires-python` cannot serve: `>=3.10` never names the top.
+
+Before those commands bmk runs `uv python install <X.Y>` and `uv python upgrade <X.Y>`. Both
+matter: `install` fetches a version you just added to the classifiers, and `upgrade` is what moves
+an already-installed minor onto a newer patch (`install` alone keeps the version it has). Current
+and offline, this costs about 0.1s.
+
+A `.venv` on a different version is **rebuilt** - an interpreter cannot be upgraded in place. The
+path never changes, so nothing pointing at it breaks. If uv cannot say what it would provide, your
+venv is left alone; bmk never rebuilds on a guess. Declare no `:: Python :: X.Y` classifier and bmk
+picks no version at all - uv's default stands.
+
 The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
 re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
 packages the project does not actually resolve, while the real resolution stays hidden. The
