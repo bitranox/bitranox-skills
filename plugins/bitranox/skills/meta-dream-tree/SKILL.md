@@ -113,9 +113,11 @@ the success line, abort-and-show on a miss).
    change - report them separately.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep for
-   residue: any hook failing the trigger-first lint (`hook_missing_trigger`), over the 350 soft
-   cap, or whose trigger does not actually name the situations its body applies to (the FIRING
-   check - would this line catch your attention at the right moment?). Queue offenders to a sonnet
+   residue: any hook failing the trigger-first lint (`hook_missing_trigger`), over the 500-char HARD
+   cap (`cap_hook` would truncate it), or whose trigger does not actually name the situations its
+   body applies to (the FIRING check - would this line catch your attention at the right moment?). Do
+   NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
+   to the hard cap. Queue offenders to a sonnet
    rewrite (trigger-first, facts preserved, slug-stable via `add --slug`), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
 

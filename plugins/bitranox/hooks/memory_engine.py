@@ -704,8 +704,9 @@ def main(argv=None):
                   "in the body): rewrite as 1-3 directive sentences"
                   % (len(args.hook), us.HOOK_HARD_MAX))
         elif us.hook_over_budget(args.hook):
-            print("~ warning: hook is %d chars (soft cap %d): rewrite as 1-3 directive sentences"
-                  % (len(args.hook), us.HOOK_SOFT_MAX))
+            print("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char hard "
+                  "cap; keep it self-sufficient, do not trim load-bearing detail to silence this)"
+                  % (len(args.hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
         if us.hook_missing_trigger(args.hook):
             print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
                   "('When <situation>, <directive>'), or it will not fire during reasoning")
