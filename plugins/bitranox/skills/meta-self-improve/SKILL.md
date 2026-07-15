@@ -107,9 +107,11 @@ entry only when nothing covers it.
 ### 4. Write it (the engine, fail-loud)
 
 Compose the entry per the specs in references/memory-backend.md:
-- **Hook: trigger-first.** `When <situation>, <directive>.` - second person, 1-3 sentences, <= 350
-  chars, self-sufficient (keep names/paths/flags/numbers in it). A trigger-less hook never fires
-  during reasoning; the engine warns on one.
+- **Hook: trigger-first.** `When <situation>, <directive>.` - second person, 1-3 sentences,
+  self-sufficient (keep names/paths/flags/numbers in it). A trigger-less hook never fires during
+  reasoning; the engine warns on one. Aim under the 350-char SOFT cap, but a complete trigger-first
+  hook may run up to the 500-char HARD cap - never drop load-bearing detail just to silence the
+  advisory soft-cap warning.
 - **Body: framed prose with reasoning.** The fact, then `**Why:**` and `**How to apply:**` lines
   (the engine adds the frontmatter frame).
 
@@ -184,8 +186,9 @@ scaffolding when the goal is met.
 
 - [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
 - [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
-- [ ] Every hook trigger-first ("When <situation>, <directive>.") and <= 350 chars - no lint
-      warning in the add output.
+- [ ] Every hook trigger-first ("When <situation>, <directive>.") and self-sufficient. The 350-char
+      soft-cap warning is advisory - acceptable; only the 500-char HARD cap (truncation) must be
+      avoided. Never trim a complete hook just to silence the soft-cap warning.
 - [ ] Every body carries the fact plus **Why:** and **How to apply:**.
 - [ ] Everything written at the PROJECT level of the CURRENT tree (never an ancestor, never
       another tree, never only CLAUDE.md).

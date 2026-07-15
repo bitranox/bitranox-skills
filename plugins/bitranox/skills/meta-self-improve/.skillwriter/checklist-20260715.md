@@ -1,0 +1,8 @@
+# skill-writer checklist - meta-self-improve (2026-07-15, 350-char hook cap is a SOFT target, not a hard bar)
+
+- [x] Change: reframed the memory-hook length guidance so the 350-char SOFT cap is advisory, not a requirement. The Deliverables checklist no longer demands "<= 350 chars - no lint warning"; a complete, trigger-first, self-sufficient hook may run up to the 500-char HARD cap (`cap_hook` truncates only past 500). Touched: the Hook guidance line, the Deliverables checklist line, and `references/memory-backend.md`. Also softened the engine's soft-cap warning wording in `hooks/memory_engine.py` to "advisory - fine up to the 500-char hard cap; do not trim load-bearing detail to silence this". No cap CONSTANTS changed (`uuid_store.HOOK_SOFT_MAX=350` / `HOOK_HARD_MAX=500` untouched).
+- [x] Receipt held (skill_receipt.py start meta-skill-writer, this session)
+- [x] RED (live, haiku): under the current "<= 350 chars - no lint warning" checklist, haiku TRIMMED a complete 402-char trigger-first hook to ~314 chars "to avoid the warning" - a forced loss for a non-fatal soft-cap warning.
+- [x] GREEN (live, haiku): under the edited checklist, haiku KEPT the 402-char hook as-is ("exceeds the 350-char soft-cap advisory but well under the 500-char hard cap; trimming would orphan essential reasoning").
+- [x] Tests: `test_uuid_store` soft/hard-cap tests + `test_memory_engine::test_cli_add_warns_over_hook_budget` + `test_memory_engine_adopt_dangling` all pass with the reworded message (the "~ warning: hook is" prefix is preserved). Descriptions unchanged - no trigger/docs rebuild.
+- [x] Security scan: prose + one warning-string edit; no secrets, paths, or PII.
