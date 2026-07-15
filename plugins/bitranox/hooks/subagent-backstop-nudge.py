@@ -34,16 +34,44 @@ _REMINDER = (
     "mechanical) steps yourself. Poll ground truth, not the subagent's self-report."
 )
 
+_DELIVERY_WARNING = (
+    " ALSO: this dispatch is NAMED, so it runs in the background and its final text is NOT "
+    "returned to you - only an idle/completion notification arrives. Its prompt does not "
+    "mention SendMessage, so its report will sit unread in its own transcript and you will "
+    "have to ping every agent for it. Add to the prompt: 'deliver your result by calling "
+    "SendMessage to \"main\" - your plain text is not visible to me'. And treat a bare idle "
+    "notification as 'report NOT sent', never as 'done and reported'."
+)
+
+
+def _needs_delivery_warning(tool_input):
+    """Pure: True when a NAMED dispatch's prompt never mentions SendMessage.
+
+    `name` is the background tell: a named agent is addressable via the mailbox and its final
+    message is not returned as the tool result, whereas an unnamed dispatch blocks and does
+    return it - so warning on an unnamed one would be a false positive. If the prompt already
+    says SendMessage the instruction is present and repeating it is noise.
+    """
+    if not isinstance(tool_input, dict):
+        return False
+    if not (tool_input.get("name") or ""):
+        return False
+    prompt = str(tool_input.get("prompt") or "")
+    return "sendmessage" not in prompt.lower()
+
 
 def assess(tool_name, tool_input=None):
     """Pure: return the reminder string for a subagent dispatch, else None.
 
     Fires on EVERY Task/Agent dispatch (including a fork - a fork can hang in a wait-loop
-    too). tool_input is unused today but kept in the signature so a future background-only
-    heuristic can inspect it without a call-site change.
+    too). A NAMED dispatch whose prompt never mentions SendMessage also gets the delivery
+    warning appended: observed twice (2026-07 roster review, 9 of 9 silent; 2026-07-15 bmk
+    review, 8 of 9 silent) that such agents finish, go idle, and deliver nothing.
     """
     if tool_name not in SUBAGENT_TOOLS:
         return None
+    if _needs_delivery_warning(tool_input):
+        return _REMINDER + _DELIVERY_WARNING
     return _REMINDER
 
 

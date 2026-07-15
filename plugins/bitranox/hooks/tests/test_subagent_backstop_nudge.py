@@ -77,3 +77,53 @@ def test_main_non_dict_event_is_safe(monkeypatch):
 
 def test_reminder_is_ascii():
     W.assess("Task").encode("ascii")  # raises if any non-ASCII char slipped in
+
+
+# --- the SendMessage delivery warning (named == background == mailbox) -------------------
+#
+# A NAMED dispatch runs in the background: its final text is never returned as the tool
+# result, only an idle/completion notification arrives. Without an explicit "SendMessage"
+# instruction in its prompt, the report sits unread in the agent's transcript. Observed
+# twice (2026-07 roster review: 9 of 9 silent; 2026-07-15 bmk review: 8 of 9 silent), which
+# is why the prose rule was escalated to this guard.
+
+
+def test_named_dispatch_without_sendmessage_gets_the_delivery_warning():
+    msg = W.assess("Agent", {"name": "reviewer", "prompt": "Return ONLY: SCORE and EVIDENCE."})
+    assert "sendmessage" in msg.lower()
+
+
+def test_named_dispatch_that_already_says_sendmessage_is_not_warned():
+    # The instruction is already there - warning again would be noise on every good dispatch.
+    msg = W.assess("Agent", {"name": "reviewer", "prompt": "Report via SendMessage to main."})
+    assert "backstop" in msg.lower()
+    assert msg.lower().count("sendmessage") == 0 or "does not mention" not in msg.lower()
+
+
+def test_unnamed_dispatch_is_not_warned():
+    # An unnamed dispatch blocks and returns its final message as the tool result, so the
+    # delivery trap does not apply - warning would be a false positive.
+    msg = W.assess("Agent", {"prompt": "Return ONLY: SCORE."})
+    assert "does not mention" not in msg.lower()
+
+
+def test_delivery_warning_names_the_fix_and_the_idle_trap():
+    msg = W.assess("Agent", {"name": "r", "prompt": "do the thing"}).lower()
+    assert "main" in msg  # names the SendMessage target
+    assert "idle" in msg  # an idle notification is NOT a report
+
+
+def test_delivery_warning_still_carries_the_backstop_reminder():
+    # The two nudges must compose, not replace each other.
+    msg = W.assess("Agent", {"name": "r", "prompt": "do the thing"}).lower()
+    assert "backstop" in msg
+    assert "sendmessage" in msg
+
+
+def test_named_dispatch_with_missing_prompt_is_safe():
+    assert W.assess("Agent", {"name": "r"})
+    assert W.assess("Agent", {"name": None, "prompt": None})
+
+
+def test_delivery_warning_is_ascii():
+    W.assess("Agent", {"name": "r", "prompt": "x"}).encode("ascii")
