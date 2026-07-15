@@ -103,10 +103,16 @@ matter: `install` fetches a version you just added to the classifiers, and `upgr
 an already-installed minor onto a newer patch (`install` alone keeps the version it has). Current
 and offline, this costs about 0.1s.
 
-A `.venv` on a different version is **rebuilt** - an interpreter cannot be upgraded in place. The
-path never changes, so nothing pointing at it breaks. If uv cannot say what it would provide, your
-venv is left alone; bmk never rebuilds on a guess. Declare no `:: Python :: X.Y` classifier and bmk
-picks no version at all - uv's default stands.
+**A new patch costs you nothing.** uv builds a venv against the minor alias, so
+`uv python upgrade` moves your existing venv onto the new patch by itself; bmk checks the
+interpreter, sees it is current, and does nothing. (`pyvenv.cfg` still names the old patch after
+that - it is written once at creation. bmk asks the interpreter, not that text, so it does not
+rebuild a venv uv has already migrated.)
+
+A **minor** change is the one that cannot be done in place: move `3.14` to `3.15` in your
+classifiers and the venv is **rebuilt**. The path never changes, so nothing pointing at it breaks.
+If uv cannot say what it would provide, your venv is left alone; bmk never rebuilds on a guess.
+Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
 The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
 re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for

@@ -176,6 +176,72 @@ Virtual environments using the Python version will be automatically upgraded to 
 
 If a virtual environment was created with an explicitly requested patch version, e.g., `uv venv -p 3.10.8`, it will not be transparently upgraded to a new version.
 
+### Gotcha: `install` does not upgrade, and a venv can be stranded off the alias
+
+Three behaviours here bite together. All measured on uv 0.11.x; patch-upgrades are a *preview*
+feature, so re-check after a uv upgrade rather than trusting this.
+
+**1. `uv python install <minor>` does NOT move an installed minor to a newer patch.** With 3.14.0
+installed and 3.14.5 available, it reports `Installed Python 3.14.0` and keeps the old one. Only
+`uv python upgrade <minor>` fetches the newer patch. `upgrade` also installs a minor that is
+absent, so for "make sure X.Y is present AND current" run both - `install` covers a version you
+have just started supporting, `upgrade` covers the patch:
+
+```console
+$ uv python install 3.14    # present? (no-op if so - it will NOT upgrade)
+$ uv python upgrade 3.14    # current? (installs if absent, fetches the newer patch if behind)
+```
+
+Both cost about 0.1s when already current, and `upgrade` works offline
+(`Python 3.14 is already on the latest supported patch release`).
+
+**2. A bare `uv venv` can strand the venv off the upgrade path.** Transparent patch upgrades work
+only through the minor-version directory (`.../cpython-3.14-linux-.../bin`, see below). That
+directory is created by `uv python install`/`upgrade` **of the minor**. If a box only ever got a
+concrete patch install, the minor dir never exists, a bare `uv venv` binds straight to
+`cpython-3.14.0-linux-.../bin`, and **that venv will never be upgraded** - it sits on 3.14.0 while
+`uv python list` advertises 3.14.5. Seen on a whole fleet at once. Requesting the MINOR
+(`uv venv --python 3.14`) binds to the alias and keeps the venv on the upgrade path.
+
+**3. `pyvenv.cfg` goes stale, so never read it to decide "is this venv current".** The upgrade
+repoints the alias; `version_info` is written once, at creation:
+
+```console
+$ uv venv --python 3.12 .venv     # pyvenv.cfg 3.12.12, interpreter 3.12.12
+$ uv python upgrade 3.12          # installs 3.12.13, repoints the alias
+$ grep version_info .venv/pyvenv.cfg
+version_info = 3.12.12            # <- stale text
+$ .venv/bin/python -c 'import sys; print(sys.version_info[:3])'
+(3, 12, 13)                       # <- reality: uv already upgraded it
+```
+
+Ask the interpreter. Trusting the text makes a tool "fix" a venv that is already correct.
+
+### Gotcha: `uv python find` answers for your CONTEXT, not for uv's store
+
+`uv python find 3.14` looks like "which interpreter would uv use for 3.14". It is not: it resolves
+against the current context, so an active `VIRTUAL_ENV` or the cwd's own `.venv` wins.
+
+```console
+$ uv python find 3.14
+/home/you/venvs/some-ide-venv/bin/python3      # the ambient VIRTUAL_ENV
+$ env -u VIRTUAL_ENV uv python find 3.14
+/home/you/project/.venv/bin/python3            # now the cwd's venv
+```
+
+Neither answer tells you what uv would *provision*. To ask what uv actually has, parse the machine
+-readable list instead - it carries split version parts, so you can compare numerically rather than
+by string (`3.9` vs `3.14`):
+
+```console
+$ uv python list --only-installed --output-format json
+[{"key":"cpython-3.14.5-linux-x86_64-gnu","version":"3.14.5",
+  "version_parts":{"major":3,"minor":14,"patch":5}, "path":"..."}]
+```
+
+This is the same family as the ambient-`VIRTUAL_ENV` gotcha in `SKILL.md`: a command that silently
+answers for the environment you are standing in rather than the one you asked about.
+
 ### Minor version directories
 
 Automatic upgrades for virtual environments are implemented using a directory with the Python minor version, e.g.:
