@@ -11,10 +11,11 @@ a pure-Python stage runner (no shell/PowerShell scripts), so the same commands w
 Linux, macOS and Windows. Source and docs: https://github.com/bitranox/bmk
 
 **Mental model:** you install bmk once with `uv` to bootstrap, drop a bmk-managed `Makefile` into
-the project, and from then on drive everything through `make <target>`. The Makefile installs bmk
-into the project's own `.venv-bmk` and delegates to it. Each command
-runs a **pipeline** of stages grouped by an order number: stages run sequentially and fail-fast;
-stages sharing the same order run in parallel.
+the project, and from then on drive everything through `make <target>`. The Makefile keeps bmk
+itself installed (bmk alone, in uv's own tool dir, shared by every project) and delegates to it.
+Your project's dependencies live in your project's own `.venv`, which bmk provisions separately.
+Each command runs a **pipeline** of stages grouped by an order number: stages run sequentially and
+fail-fast; stages sharing the same order run in parallel.
 
 ## When to use
 
@@ -42,31 +43,44 @@ uvx bmk install            # writes the Makefile; installs nothing permanently
 make test                  # from here on, everything goes through make
 ```
 
-Prefer `uvx` over `uv tool install bmk`. A machine-wide bmk is not used by anything - `make` runs
-`./.venv-bmk/bin/bmk` - so it only sits on PATH going stale, and then `bmk --version` reports a
-version no project is actually using.
+You do not need `uv tool install bmk` yourself: once the Makefile is in place it keeps bmk
+installed for you (see below). `uvx bmk install` is only the bootstrap that writes the Makefile.
 
-### bmk's own env is per project
+### bmk's env holds bmk alone, and is shared
 
-Once a project has the Makefile (section 2), `make` installs bmk into **that project's**
-`.venv-bmk`, together with the project's dependencies, and runs `./.venv-bmk/bin/bmk` directly -
-never a bare `bmk` from PATH. This matters because the env carries the project's dependencies: one
-machine-wide env cannot serve two projects, so whichever ran `make` last would win and the other
-would silently get the wrong dependency tree.
+Once a project has the Makefile (section 2), every `make` first runs
 
-- The install runs on **every** `make`: `uv tool install --reinstall bmk` re-resolves the
-  unpinned spec against PyPI, so a new bmk release and any dependency change are picked up
-  automatically, before bmk starts. It costs a couple of seconds per invocation.
-- `.venv-bmk` is disposable: delete it and the next `make` rebuilds it. It is kept out of git
-  automatically.
+```bash
+uv tool install --reinstall --force --refresh-package bmk "bmk>=<minimum>"
+```
+
+which installs **bmk on its own** into uv's default tool dir and runs it from there
+(`$(uv tool dir --bin)/bmk`). Note what is *not* in that command: your project. The env holds
+bmk's toolchain and nothing of yours, which is exactly why one env can serve every repo on the
+machine - there is nothing project-specific in it to collide.
+
+Do **not** add `--with .` / `--with-editable ".[dev]"`, and do not redirect it per project with
+`UV_TOOL_DIR`. Resolving bmk *together with* a project is what caused, in order: one of your
+dependencies capping one of bmk's and silently pinning bmk to an ancient release; a yanked
+transitive making bmk itself uninstallable; and the tests running in that co-resolved env while
+pyright and pip-audit inspected your real `.venv`, so the suite and the audit described different
+environments.
+
+- The install runs on **every** `make`, deliberately. `--reinstall` re-resolves the spec, so a new
+  bmk release is picked up with nothing to remember; `--refresh-package bmk` refreshes uv's cached
+  index, without which a release published minutes ago stays invisible and you silently keep the
+  old bmk. It costs a second or two per invocation. Do not gate it behind a stamp file.
+- Right after a release there is a brief window where uv's index still reports only the previous
+  version; the next `make` picks the new one up.
 
 ### The project venv `.venv`
 
-Separate from `.venv-bmk` above: before any command that touches the Python environment (`test`,
-`push`, `deps`, `build`, ...), bmk creates the project's own `.venv` if it is missing and syncs it
-to `pyproject.toml`. Every install and every gate targets **that** venv, never bmk's own and never
-whatever venv happens to be active in your shell -- so no project can quietly install its
-dependencies into a shared environment it does not own.
+This is where **your** dependencies live. Before any command that touches the Python environment
+(`test`, `push`, `deps`, `build`, ...), bmk creates the project's own `.venv` if it is missing and
+syncs it to `pyproject.toml`. pytest, pyright and pip-audit all resolve **that** venv, never bmk's
+own and never whatever venv happens to be active in your shell -- so the environment you test in,
+type-check in and audit are one and the same, and no project can quietly install its dependencies
+into an environment it does not own.
 
 The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
 re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
@@ -95,8 +109,8 @@ bmk install        # writes / updates a bmk-managed Makefile in the current dire
 make test          # from now on, drive everything through make
 ```
 
-The Makefile keeps bmk + the project's deps in sync in the project's own `.venv-bmk`, rebuilding
-only when `pyproject.toml` changes, so once it is in place you rarely call `bmk` directly. On **Windows** you still need a `make` implementation
+The Makefile keeps bmk installed and your project's `.venv` synced to `pyproject.toml`, so once it
+is in place you rarely call `bmk` directly. On **Windows** you still need a `make` implementation
 (`choco install make`, or GnuWin32 Make) -- bmk itself needs no shell.
 
 ## 3. Everyday commands
@@ -178,22 +192,24 @@ tests MUTATE the host and are unsafe on a real dev machine can tag them `mutatin
 `exclude-markers = "mutating"` (a common project-specific marker). Do NOT set it to "match CI" -
 that drops the fast local coverage `local_only` exists to provide.
 
-bmk runs pytest in this project's own `.venv-bmk` (section 1), which is installed with the project's
+bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs with the project's
 `[dev]` extra, so `[dev]`-only test-import deps (fakes, test-support libraries, property-test
-helpers) are present and `make test` matches CI.
+helpers) are present. That is the same venv pyright and pip-audit resolve, so the suite, the type
+check and the audit all describe one environment.
 
 ## Troubleshooting
 
-| Symptom                                                                             | Cause / fix                                                                                                                                                                                   |
-|-------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                 |
-| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                    |
-| `make: command not found` (Windows)                                                 | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                                |
-| `bmk: command not found`                                                            | Expected - bmk is not meant to be on PATH. Inside a project use `make <target>` (it runs `./.venv-bmk/bin/bmk`); to bootstrap a new one use `uvx bmk install`.                                |
-| Tools resolve the wrong deps / import errors                                        | Rebuild this project's bmk env: `rm -rf .venv-bmk && make test`.                                                                                                                              |
-| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI". |
-| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv-bmk`, installed with the `[dev]` extra. Rebuild it: `rm -rf .venv-bmk && make test`.                                                                 |
-| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                   |
+| Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                    |
+|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                                                                  |
+| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                                                                     |
+| `make: command not found` (Windows)                                                 | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                                                                                 |
+| `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`. |
+| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                      |
+| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                  |
+| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                  |
+| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                             |
+| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                                                                    |
 
 ## Further reading
 
