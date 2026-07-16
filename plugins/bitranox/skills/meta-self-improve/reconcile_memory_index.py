@@ -385,8 +385,13 @@ def main(argv=None):
                          "integrity (upward-only, no orphans) + report dangling bodies + emit advisory "
                          "pointer-block size warnings; exit 1 only on reference-integrity issues")
     ap.add_argument("--rehome", action="store_true",
-                    help="re-attach every dangling body (a central body no level points at) at the tree "
-                         "top so it is visible + loadable again; a later dream re-levels it")
+                    help="re-attach every dangling body (a central body no level points at) so it is "
+                         "visible + loadable again; a later dream re-levels it. Default target is the "
+                         "tree top - use --rehome-to for a subtree so a subtree's danglers are not "
+                         "over-promoted to the whole tree")
+    ap.add_argument("--rehome-to", metavar="LEVEL", default=None, dest="rehome_to",
+                    help="with --rehome: re-attach the dangling bodies at LEVEL (a dir in the tree) "
+                         "instead of the tree top - so a subtree's orphaned bodies land in that subtree")
     ap.add_argument("--archive", metavar="SLUG", default=None,
                     help="forget a fact: drop its pointer line at the given level (the positional dir) "
                          "and move its central body to .archive/ (only when no other level still "
@@ -435,7 +440,7 @@ def main(argv=None):
 
     if args.rehome:
         anchor = ME._anchor(args.dirs[0])
-        done = rehome_dangling_bodies(anchor, dry_run=args.dry_run)
+        done = rehome_dangling_bodies(anchor, to_level=args.rehome_to, dry_run=args.dry_run)
         for slug in done:
             print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
         print("TOTAL re-homed: %d" % len(done))

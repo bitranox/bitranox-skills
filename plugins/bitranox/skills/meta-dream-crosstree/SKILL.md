@@ -59,8 +59,12 @@ Create one todo per step.
    (or the user wants a fresh deep read), **ASK the user before launching the fan-out**. For an
    always-run deep semantic scan with no asking, that is its own skill: `bitranox:meta-dream-crosstree-deep`.
    - **Deep scan (on confirmation): FAN OUT** one **`sonnet`** subagent per project store (or per thematic
-     batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries;
-     keep the promotion gate and altitude / normalization decisions INLINE on the main agent at
+     batch for many stores), in parallel, each returning recurring / broadly-useful candidate entries.
+     Instruct each subagent to flag a DUPLICATE/MERGE only from the BODIES (not a title/topic match),
+     and treat every such finding as a CANDIDATE the main agent VERIFIES before merging (see "Dedup
+     semantics" in references/dream-core.md: a summary+detail pair, a valid cross-link, or a
+     cited-across-a-subtree fact is not a duplicate). Keep the promotion gate and altitude /
+     normalization decisions INLINE on the main agent at
      opus-class OR ABOVE (opus is the universally-available deep tier; fable sits above it but
      needs paid API credits) - if the session is below opus-class, offer switch-model-or-continue
      per "The session model is fixed" in `bitranox:process-agents-subagent-driven-development`
