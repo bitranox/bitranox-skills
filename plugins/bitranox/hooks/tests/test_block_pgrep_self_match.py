@@ -45,9 +45,39 @@ def test_bracket_trick_defeated_by_echo_blocks(monkeypatch, capsys):
     assert "[n]ginx -> nginx" in err
 
 
-def test_plain_pgrep_without_bracket_passes(monkeypatch):
-    # No bracket-trick token at all -> nothing for this guard to flag.
-    assert run_main(monkeypatch, "pgrep -f nginx") == 0
+def test_plain_f_literal_blocks(monkeypatch, capsys):
+    # This case used to be ALLOWED, on the recorded belief that catching it would
+    # mean "blocking every pkill -f". That premise was wrong, and it is why the
+    # error kept recurring: a plain `-f` literal ALWAYS self-matches, because -f
+    # matches /proc/*/cmdline and this shell's own cmdline holds the literal.
+    assert run_main(monkeypatch, "pgrep -f nginx") == 2
+    assert "PLAIN" in capsys.readouterr().err
+
+
+def test_plain_f_literal_over_ssh_blocks(monkeypatch):
+    # The real hit that forced the hardening: killed the REMOTE shell (exit 255).
+    assert run_main(monkeypatch, "ssh host 'pkill -f \"iperf3 -s\" 2>/dev/null'") == 2
+
+
+def test_plain_f_literal_bundled_flags_blocks(monkeypatch):
+    assert run_main(monkeypatch, 'pkill -af "vnc.*py"') == 2
+
+
+def test_f_pattern_from_variable_passes(monkeypatch):
+    # argv holds the UNEXPANDED "$NAME", so the expanded value is never in this
+    # shell's own cmdline and cannot self-match.
+    assert run_main(monkeypatch, 'pkill -f "$NAME"') == 0
+
+
+def test_pkill_without_dash_f_passes(monkeypatch):
+    # Without -f, pkill/pgrep match comm (the program name), not the full cmdline,
+    # so a shell named bash/sh cannot match a program-name pattern.
+    assert run_main(monkeypatch, "pkill -x iperf3") == 0
+    assert run_main(monkeypatch, "pgrep iperf3") == 0
+
+
+def test_explicit_self_exclusion_passes(monkeypatch):
+    assert run_main(monkeypatch, 'pgrep -f "[n]ginx" | grep -vw "$$"') == 0
 
 
 def test_empty_command_passes(monkeypatch):
