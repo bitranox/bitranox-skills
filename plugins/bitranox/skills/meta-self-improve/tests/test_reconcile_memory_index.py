@@ -218,6 +218,30 @@ def test_check_tree_flags_orphan_ref_and_reports_dangling_body(tmp_path, capsys)
     assert "dangling body (no pointer at any level): ghost-fact" in out
 
 
+def test_check_tree_flags_downward_sideways_ref(tmp_path, capsys):
+    # a fact in subtree A cites a fact that lives in SIBLING subtree B -> it resolves "somewhere" in
+    # the tree (so it is NOT an orphan ref) but dangles for A's cascade -> must be flagged as
+    # sideways/downward. This is the gap the earlier --check-tree missed vs the per-chain --check.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(b, "Target", "the target", body="body", scope_default="b")   # slug 'target' at projB
+    ME.add_or_update_entry(a, "Citer", "see [[target]]", body="x", scope_default="a")   # projA cites it
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "sideways/downward ref" in out and "target" in out
+    assert "TOTAL tree problems: 1" in out
+
+
+def test_check_tree_upward_ref_not_flagged(tmp_path, capsys):
+    # a fact citing an ANCESTOR's fact is a valid upward ref -> not flagged.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(anchor, "Base", "base rule", body="body", scope_default="top")
+    ME.add_or_update_entry(a, "Citer", "builds on [[base]]", body="x", scope_default="a")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL tree problems: 0" in out
+
+
 def test_check_tree_function_returns_duplicate_map(tmp_path):
     anchor, a, b = _tree_two_projects(tmp_path)
     ME.add_or_update_entry(a, "Shared", "hookA", body="B", scope_default="a")

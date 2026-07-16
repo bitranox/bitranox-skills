@@ -79,7 +79,9 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   would dangle it). Citing a SIBLING project's slug is as invalid as citing a child: the cascade
   only flows DOWN one ancestor chain, so a sideways ref never loads where the citing entry does and
   dangles. `--check` catches a sideways ref only when its chain happens to include the citing level;
-  when in doubt, demote the link to plain prose.
+  `--check-tree` catches it TREE-WIDE (a ref whose target is not on the citing fact's ancestor-or-self
+  path, even though the target resolves somewhere in the tree). When in doubt, demote the link to plain
+  prose - or, if the target is genuinely shared, lift it to a common ancestor so the ref becomes upward.
 
 ## Two tiers and the capture flow
 
@@ -116,18 +118,18 @@ All writes go through `hooks/memory_engine.py`, launched cross-platform via `hoo
 Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass only via a
 `BITRANOX_MEMORY_ENGINE=1` session for deliberate hand-repair).
 
-| Command                                                                                                                                                                                | Success line to REQUIRE               |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `add --proj D --title T --hook H --body-file F [--type feedback\|project\|reference\|user] [--source S] [--pin] [--scope TEXT] [--slug S]`                                             | the printed slug                      |
-| `heal --proj D`                                                                                                                                                                        | `healed N file(s) across M level(s)`  |
-| `set-scope --proj D --scope TEXT`                                                                                                                                                      | `scope updated:` / `scope unchanged:` |
-| `move --from-level A --to-level B --slug S [--force]`                                                                                                                                  | `moved <slug>: A -> B (up\|down)`     |
-| `lint --tree D`                                                                                                                                                                        | `TOTAL over-cap hooks: N \| ...`      |
-| `tree-top --proj D [--json]`                                                                                                                                                           | the printed top/store lines           |
-| `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                             | the `DRY-RUN:`/`APPLIED:` report      |
-| `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch) | `TOTAL problems: 0`                   |
-| `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers/orphans/dangling that `--check` and `heal` miss)                      | `TOTAL tree problems: 0`              |
-| `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                               | `archived <slug> ...`                 |
+| Command                                                                                                                                                                                 | Success line to REQUIRE               |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
+| `add --proj D --title T --hook H --body-file F [--type feedback\|project\|reference\|user] [--source S] [--pin] [--scope TEXT] [--slug S]`                                              | the printed slug                      |
+| `heal --proj D`                                                                                                                                                                         | `healed N file(s) across M level(s)`  |
+| `set-scope --proj D --scope TEXT`                                                                                                                                                       | `scope updated:` / `scope unchanged:` |
+| `move --from-level A --to-level B --slug S [--force]`                                                                                                                                   | `moved <slug>: A -> B (up\|down)`     |
+| `lint --tree D`                                                                                                                                                                         | `TOTAL over-cap hooks: N \| ...`      |
+| `tree-top --proj D [--json]`                                                                                                                                                            | the printed top/store lines           |
+| `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                              | the `DRY-RUN:`/`APPLIED:` report      |
+| `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch)  | `TOTAL problems: 0`                   |
+| `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers, orphans, sideways/downward refs, dangling that `--check`/`heal` miss) | `TOTAL tree problems: 0`              |
+| `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                                | `archived <slug> ...`                 |
 
 **Fail-loud contract:** run engine calls with `BITRANOX_RUN_PYTHON_STRICT=1`, require the command's
 success line in the output, and ABORT-AND-SHOW on any miss (a refused move prints `! refused:` and
