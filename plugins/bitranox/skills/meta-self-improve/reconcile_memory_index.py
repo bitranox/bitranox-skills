@@ -27,8 +27,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
 import uuid_store as us  # noqa: E402
-import os  # noqa: E402
-import self_improve_signals as sig  # noqa: E402
 
 _HOOK_MAX = 160
 _TYPE_PREFIXES = us.TYPE_PREFIXES
@@ -234,7 +232,6 @@ def _other_levels_pointing(anchor, level_dir, slug):
     chain) still has a pointer for `slug`. Conservative: checks every CLAUDE.local.md under the
     anchor one level deep plus the chain of `level_dir`."""
     qcanon = _canon(slug)
-    seen = set()
     try:
         import self_improve_signals as sig_mod
         chain = sig_mod.altitude_chain(str(level_dir))
@@ -281,15 +278,10 @@ def archive_entry(level_dir, slug, archive_subdir=".archive"):
 # ---- CLI ---------------------------------------------------------------------------------------
 
 def _all_curated_levels(anchor):
-    """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block),
-    pruning vendored/build/cache dirs. A bounded walk of the anchor's subtree - the whole tree, so a
-    body pointed at by ANY project (siblings included) is not mistaken for a dangler."""
-    out = []
-    for root, dirs, files in os.walk(str(anchor)):
-        dirs[:] = [x for x in dirs if x not in sig.VENDOR_DIRNAMES]
-        if "CLAUDE.local.md" in files and is_curated(root):
-            out.append(root)
-    return out
+    """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block).
+    Delegates to the engine's `curated_levels_under` (the single tree-walk) so this tool and the
+    engine's `lint --tree` never enumerate the tree differently."""
+    return ME.curated_levels_under(anchor)
 
 
 def find_dangling_bodies(anchor):
@@ -305,6 +297,41 @@ def find_dangling_bodies(anchor):
     for lvl in _all_curated_levels(anchor):
         pointed |= {e.slug for e in ME.read_store(str(lvl))[1]}
     return sorted(body_slugs - pointed)
+
+
+def check_tree(anchor):
+    """Tree-wide integrity over EVERY curated level under `anchor` (SIBLINGS included) - the checks
+    the chain-scoped `--check` structurally cannot make: a slug pointed at from more than one level
+    (slugs are TREE-unique, so any duplicate is a violation heal never sees), a pointer whose central
+    body is missing, a `[[ref]]` that resolves NOWHERE in the tree, and central bodies no level points
+    at. Only levels anchored at THIS anchor count (a nested independent tree is separate). Returns a
+    report dict; `duplicates`/`orphan_pointers`/`orphan_refs` are the HARD problems."""
+    anchor = ME._anchor(str(anchor))
+    anchor_res = Path(anchor).resolve()
+    levels = [lvl for lvl in _all_curated_levels(anchor)
+              if Path(ME._anchor(lvl)).resolve() == anchor_res]
+    slug_levels = {}                            # canonical slug -> [level dirs pointing at it]
+    orphan_pointers = []                        # (level, slug) whose central body is missing
+    all_targets = set()                         # every slug offered anywhere in the tree
+    ref_sources = []                            # (level, source_slug, ref_slug)
+    for lvl in levels:
+        _scope, entries, bodies = ME.read_store(lvl)
+        for e in entries:
+            cslug = _canon(e.slug)
+            slug_levels.setdefault(cslug, []).append(lvl)
+            all_targets.add(cslug)
+            body_p = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
+            if not body_p.is_file():
+                orphan_pointers.append((lvl, e.slug))
+            for m in _WIKILINK_RX.finditer(e.hook + "\n" + bodies.get(e.slug, "")):
+                ref = _ref_slug(m.group(1))
+                if ref and ref != cslug:
+                    ref_sources.append((lvl, e.slug, ref))
+    duplicates = {s: sorted(lv) for s, lv in slug_levels.items() if len(lv) > 1}
+    orphan_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources if r not in all_targets))
+    return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
+            "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
+            "danglers": find_dangling_bodies(anchor)}
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -345,7 +372,47 @@ def main(argv=None):
     ap.add_argument("--rehome", action="store_true",
                     help="re-attach every dangling body (a central body no level points at) at the tree "
                          "top so it is visible + loadable again; a later dream re-levels it")
+    ap.add_argument("--archive", metavar="SLUG", default=None,
+                    help="forget a fact: drop its pointer line at the given level (the positional dir) "
+                         "and move its central body to .archive/ (only when no other level still "
+                         "points at it)")
+    ap.add_argument("--check-tree", action="store_true", dest="check_tree",
+                    help="TREE-WIDE integrity from any dir in the tree (resolved to its anchor): flags a "
+                         "slug pointed at from >1 level (tree-unique violation), orphan pointers, refs "
+                         "resolving nowhere, and dangling bodies - the cross-sibling problems --check "
+                         "(chain-only) cannot see; exit 1 on any hard problem")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.archive:
+        level = args.dirs[0]
+        if archive_entry(level, args.archive):
+            print("archived %s (pointer dropped at %s)" % (args.archive, level))
+            return 0
+        print("! no such entry: %s at %s (nothing archived)" % (args.archive, level))
+        return 1
+
+    if args.check_tree:
+        rep = check_tree(ME._anchor(args.dirs[0]))
+        problems = 0
+        print("tree integrity: %d curated level(s) under %s" % (rep["levels"], rep["anchor"]))
+        for slug, lvls in sorted(rep["duplicates"].items()):
+            print("    ! duplicate pointer: %s at %d levels -> %s"
+                  % (slug, len(lvls), ", ".join(lvls)))
+            problems += 1
+        for lvl, slug in rep["orphan_pointers"]:
+            print("    ! orphan pointer (no central body): %s [%s]" % (slug, lvl))
+            problems += 1
+        for lvl, src, ref in rep["orphan_refs"]:
+            print("    ! orphan ref: [[%s]] in %s (%s) -> no such entry anywhere in the tree"
+                  % (ref, src, lvl))
+            problems += 1
+        for slug in rep["danglers"]:
+            print("    ~ dangling body (no pointer at any level): %s" % slug)
+        print("TOTAL tree problems: %d" % problems)
+        if rep["danglers"]:
+            print("TOTAL dangling bodies: %d (advisory - run with --rehome to re-attach them)"
+                  % len(rep["danglers"]))
+        return 1 if problems else 0
 
     if args.rehome:
         anchor = ME._anchor(args.dirs[0])

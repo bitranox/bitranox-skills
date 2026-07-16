@@ -24,6 +24,31 @@ Launch either cross-platform through the same shim as the engine:
 (`~/.claude/plugins/cache/bitranox-skills/bitranox/<version>`) or the source repo's
 `plugins/bitranox`. Bare script names below refer to these two homes.
 
+## Level enumeration - `find`, never a bare `grep -r` (and cross-check the count)
+
+Enumerate the tree's levels with `find <anchor> -name CLAUDE.local.md` (or `grep --no-ignore-files`),
+NEVER a bare `grep -r`. In a Claude Code bash session `grep` forwards to the `claude` search backend,
+which honors `.gitignore` by default; `bmk` adds `CLAUDE.local.md` to a repo's `.gitignore`, so
+`grep -rl BITRANOX-MEMORY-INDEX` silently returns a fraction of the levels (measured: 17 of 43 - every
+project-level store missing) and the miss looks like success. A dream scoped by that grep scores
+itself tree-wide while it only saw one chain. (`.claude-memory/facts/` is git-TRACKED, so a grep over
+the bodies is sound - it is the CLAUDE.local.md pointer files that are gitignored.)
+
+**Cross-check every enumeration or parse against a second method before acting on it.** A silent
+under-count is the recurring failure of this whole procedure (one run hit three: a grep enumeration,
+a slug regex that omitted the dot, a freshness checker comparing the wrong lists - each under-reported
+and was acted on). Confirm a level list, a slug set, or a duplicate scan with an independent count
+(e.g. `find | wc -l` vs the tool's own number) before you trust it.
+
+**Verify every parallel WRITE fan-out from ground truth, not the agents' reports.** When you dispatch
+one subagent per level to write descriptors (`set-scope`) or to apply moves, `set-scope` overwrites
+UNCONDITIONALLY, so a subagent that writes the wrong `--proj` silently clobbers a sibling level and
+still reports success on the correct path (observed: one agent wrote `apps/`'s descriptor into
+`bitranox-systems/`, discarding what another agent had just written there). After ANY such fan-out,
+re-run the freshness/enumeration check over ALL levels and diff each level's on-disk descriptor
+against what its own agent RETURNED - keep each agent's returned text, because the pre-dream backup
+holds only the stale version you were replacing, so it is your only restore source for a clobber.
+
 ## Mode (the user can switch off the asking)
 
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via
@@ -62,21 +87,33 @@ creates new overlap).
 > Given this fact (title + hook + body) and the scope descriptors of every level on the chain:
 > choose the NARROWEST level whose PLACE-HERE covers everywhere the fact applies; never a level
 > where some children would find it noise (unless it is true for ALL); a fact naming one
-> project's files belongs AT that project (move DOWN); EVIDENCE, not wording, decides reach;
-> tie or unsure -> keep + UNSURE. Return: `LEVEL | CONFIDENCE high/low | WHY`.
+> project's files belongs AT that project (move DOWN); route by WHERE THE HOOK MUST FIRE, not by
+> what the fact is ABOUT - a fact about tool X whose trigger fires in every CONSUMER of X belongs
+> where the consumers are (the common parent), not at X's own repo, or the hook never loads where
+> the symptom appears; EVIDENCE, not wording, decides reach; tie or unsure -> keep + UNSURE.
+> Return: `LEVEL | CONFIDENCE high/low | WHY`.
 
 Low/UNSURE never moves. Pinned entries are EXEMPT from move/reword/archive without the user's
 approval of that specific change - report them separately. Tree-top promotion additionally passes
-the corroboration gate (user-stated: eager; model-inferred: >= 2 dreams via `should_promote`).
+the corroboration gate: a user-stated concrete rule promotes eagerly; a model-INFERRED generalization
+needs >= 2 dream sightings. The gate is backed by a real dwell counter (out of the dreamed store, so
+counting never bumps its mtime): record each sighting with `dream_state.py saw-promotable <slug>`,
+ask `dream_state.py should-promote <slug>` (prints `promote`/`hold`), and after an actual promotion
+run `dream_state.py promoted <slug>` to clear it. HOLD keeps the fact at the project level for the
+next dream.
 
 ## Verification contract (every run ends with this)
 
 Fail-loud engine calls throughout (strict env, require each command's success line, abort-and-show
 on a miss; the command table is in `bitranox:meta-self-improve` -> references/memory-backend.md).
 Post-run: re-derive the manifest and diff against the pre-run one;
-`reconcile_memory_index.py --check <chain narrow->broad>` must end `TOTAL problems: 0`; report
-counts (merges, placements with direction, prunes, pinned untouched) and, for nap/project, run
-`dream_state.py done` when the run covered what the nudge asked for.
+`reconcile_memory_index.py --check <chain narrow->broad>` must end `TOTAL problems: 0`. For a
+TREE-WIDE run (meta-dream-tree and the crosstree variants) ALSO run
+`reconcile_memory_index.py --check-tree <anchor>` and require `TOTAL tree problems: 0` - the
+chain-only `--check` structurally cannot see a slug DUPLICATED across sibling chains (slugs are
+tree-unique), which `heal` also misses. Report counts (merges, placements with direction, prunes,
+pinned untouched) and, for nap/project, run `dream_state.py done` when the run covered what the nudge
+asked for.
 
 ## Tier note (inline deep judgments)
 

@@ -41,7 +41,13 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
 - **The slug IS the identity** and the body-file key. Every body lives centrally at
   `<anchor>/.claude-memory/facts/<slug>.md` - flat, slug-named, human-readable, greppable. Slugs are
   TREE-unique: the body file is the registry, and the engine refuses a colliding `add` with a
-  suggested suffix.
+  suggested suffix. Tree-uniqueness is VERIFIED tree-wide by `reconcile_memory_index.py --check-tree`
+  (a slug pointed at from two levels is a violation `heal` and the chain-only `--check` both miss).
+  The slug CHARSET is `[a-z0-9._-]` - it may contain a dot (e.g.
+  `reference-pwshpy-tier-b-hosting-reuse-installed-ps7.6-assemblies`), so any tool parsing a
+  `mem:<slug>` link MUST accept the dot; the engine's one pointer regex (`uuid_store._PTR_RX`,
+  `mem:[^)]+`) already does - reuse it, never a hand-rolled `[a-z0-9-]+` that silently skips a
+  dotted slug and mistakes its body for an orphan.
 - **Pinned entries (`bx:pin`) are the iron rules**: rendered first under `## Iron rules`, exempt
   from archive/move/reword in the dream unless the user approves that specific change.
 - **The hook is TRIGGER-FIRST** (probe-verified: a hook that leads with its situation drove an
@@ -68,8 +74,12 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
 
       **How to apply:** <the concrete procedure or check>
 
-- Related facts link with `[[slug]]` references - UPWARD ONLY (a project entry may cite a tree-top
-  rule; a higher entry never cites a lower one, or deleting the project would dangle it).
+- Related facts link with `[[slug]]` references - UPWARD ONLY along ONE ancestor chain (a project
+  entry may cite a tree-top rule; a higher entry never cites a lower one, or deleting the project
+  would dangle it). Citing a SIBLING project's slug is as invalid as citing a child: the cascade
+  only flows DOWN one ancestor chain, so a sideways ref never loads where the citing entry does and
+  dangles. `--check` catches a sideways ref only when its chain happens to include the citing level;
+  when in doubt, demote the link to plain prose.
 
 ## Two tiers and the capture flow
 
@@ -112,9 +122,12 @@ Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass
 | `heal --proj D`                                                                                                                                                                        | `healed N file(s) across M level(s)`  |
 | `set-scope --proj D --scope TEXT`                                                                                                                                                      | `scope updated:` / `scope unchanged:` |
 | `move --from-level A --to-level B --slug S [--force]`                                                                                                                                  | `moved <slug>: A -> B (up\|down)`     |
+| `lint --tree D`                                                                                                                                                                        | `TOTAL over-cap hooks: N \| ...`      |
 | `tree-top --proj D [--json]`                                                                                                                                                           | the printed top/store lines           |
 | `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                             | the `DRY-RUN:`/`APPLIED:` report      |
 | `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch) | `TOTAL problems: 0`                   |
+| `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers/orphans/dangling that `--check` and `heal` miss)                      | `TOTAL tree problems: 0`              |
+| `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                               | `archived <slug> ...`                 |
 
 **Fail-loud contract:** run engine calls with `BITRANOX_RUN_PYTHON_STRICT=1`, require the command's
 success line in the output, and ABORT-AND-SHOW on any miss (a refused move prints `! refused:` and
@@ -123,8 +136,14 @@ malformed engine result.
 
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
 merges provenance (`bx:src`) and pin, keeps the existing body when `--body` is empty, frames a bare
-body, enforces tree-unique slugs. `heal` runs every session (skip-fast when healthy) and normalizes
-drifted grammar; a pointer whose body is missing is REPORTED, never fabricated.
+body, enforces tree-unique slugs. `move` relocates only a pointer LINE (the body never moves); if the
+target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -
+picking by direction would silently discard the richer hook), and `--force` dedups by keeping the
+LONGER hook and dropping the other. `heal` runs every session (skip-fast when healthy), is
+CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
+fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.
+`lint --tree` is the read-only voice/frame backlog sweep (over-hard-cap hooks, trigger-less hooks,
+unframed bodies).
 
 ## Keeping it lean
 

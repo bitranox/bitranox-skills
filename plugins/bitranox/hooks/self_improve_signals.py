@@ -677,6 +677,12 @@ def clear_promotion_candidate(proj, key):
             pass
 
 
+def promotion_dwell(proj, key):
+    """The current dwell count for `key` WITHOUT recording a new sighting (read-only) - so a
+    promote/hold decision can be re-queried without inflating the counter. 0 if never seen."""
+    return int(_read_counts(_promote_file(proj)).get(key, 0))
+
+
 def should_promote(source, dwell_count, mode=None, threshold=2):
     """Whether a generalization may be promoted to the always-everywhere global layer.
     source is "user" (user-stated concrete rule -> eager) or "inferred" (model generalization ->

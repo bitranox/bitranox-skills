@@ -51,3 +51,34 @@ def test_mode_default_and_off(home, capsys):
 
 def test_unknown_command_errors(home):
     assert D.main(["frobnicate", "/p/x"]) == 2
+
+
+# ---- corroboration gate (defect F): saw-promotable / should-promote / promoted --------------
+
+def test_should_promote_holds_then_promotes_across_two_dreams(home, capsys):
+    # A model-inferred fact routed to the tree top needs >= 2 dream sightings before it may promote.
+    assert D.main(["saw-promotable", "some-slug", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "1"                  # dwell after first sighting
+    assert D.main(["should-promote", "some-slug", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "hold"              # one sighting: not yet
+    assert D.main(["saw-promotable", "some-slug", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "2"
+    assert D.main(["should-promote", "some-slug", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"          # corroborated across 2 dreams
+
+
+def test_should_promote_is_read_only(home, capsys):
+    # querying should-promote must NOT count as a sighting (else one query would corroborate it)
+    D.main(["saw-promotable", "s", "/p/x"]); capsys.readouterr()
+    for _ in range(3):
+        D.main(["should-promote", "s", "/p/x"])
+        assert capsys.readouterr().out.strip() == "hold"          # still 1 sighting after repeated reads
+
+
+def test_promoted_clears_the_counter(home, capsys):
+    D.main(["saw-promotable", "s", "/p/x"])
+    D.main(["saw-promotable", "s", "/p/x"]); capsys.readouterr()
+    assert D.main(["promoted", "s", "/p/x"]) == 0
+    capsys.readouterr()
+    D.main(["should-promote", "s", "/p/x"])
+    assert capsys.readouterr().out.strip() == "hold"              # counter forgotten after promotion

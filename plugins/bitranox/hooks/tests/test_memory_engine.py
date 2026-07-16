@@ -375,6 +375,52 @@ def test_move_completes_after_crash_duplicate(tmp_path):
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 
 
+def test_move_refuses_divergent_duplicate_target_no_silent_overwrite(tmp_path):
+    # Defect A: when the target ALREADY points at the slug with a DIFFERENT hook, a plain move would
+    # overwrite the target's (richer) hook with the source's - silent, direction-dependent data loss.
+    # Without --force it must refuse and leave BOTH pointer lines untouched.
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Tell sweep", "thin source hook", body="B", scope_default="p")
+    us.add_pointer(mid, slug="tell-sweep", title="Tell sweep",
+                   hook="RICH target hook naming strip_typographic_tells.py and reformat_tables.py")
+    rep = E.move_entry(proj, mid, "tell-sweep")
+    assert rep["moved"] is False and "duplicate" in (rep["refused"] or "")
+    tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+    assert tgt["tell-sweep"].hook.startswith("RICH target hook")          # target hook intact
+    srcp = {p.slug: p for p in us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+    assert srcp["tell-sweep"].hook == "thin source hook"                  # source hook intact
+
+
+def test_move_force_dedup_keeps_longer_hook_when_source_is_richer(tmp_path):
+    # --force dedups a divergent duplicate by keeping the LONGER (information-richer) hook regardless
+    # of move direction, unioning provenance, and dropping the other pointer. Source is the rich one.
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Fact", "a much longer richer hook with the load-bearing detail",
+                          body="B", source=["s1"], scope_default="p")
+    us.add_pointer(mid, slug="fact", title="Fact", hook="thin", source={"s2"})
+    rep = E.move_entry(proj, mid, "fact", force=True)
+    assert rep["moved"] is True and rep["warnings"]
+    tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+    assert tgt["fact"].hook.startswith("a much longer richer hook")       # longer hook won
+    assert tgt["fact"].source == {"s1", "s2"}                             # provenance unioned
+    assert "fact" not in {p.slug for p in us.parse_pointer_index(
+        (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+
+
+def test_move_force_dedup_keeps_longer_hook_when_target_is_richer(tmp_path):
+    # The direction-independence guarantee: even when the RICHER hook lives at the target and the
+    # move flows the other way, --force must keep it (a plain move would have picked by direction).
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(mid, "Fact", "thin", body="B", scope_default="m")           # source: thin
+    us.add_pointer(proj, slug="fact", title="Fact", hook="the much longer richer target hook here")
+    rep = E.move_entry(mid, proj, "fact", force=True)                                 # down-move dedup
+    assert rep["moved"] is True
+    tgt = {p.slug: p for p in us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+    assert tgt["fact"].hook.startswith("the much longer richer target hook")
+    assert "fact" not in {p.slug for p in us.parse_pointer_index(
+        (Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
+
+
 def test_move_refuses_unmigrated_legacy_entry(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     u = "11111111-0000-5000-8000-000000000000"
@@ -409,6 +455,36 @@ def test_cli_move_success_and_refusal(tmp_path, capsys):
     rc = E.main(["move", "--from-level", proj, "--to-level", mid, "--slug", "f"])   # gone now
     out = capsys.readouterr().out
     assert rc == 1 and "! refused:" in out
+
+
+# ---- lint --tree: voice/frame sweep (defect J) ---------------------------------------------------
+
+def test_lint_tree_reports_over_cap_triggerless_and_unframed(tmp_path, capsys):
+    anchor, mid, proj = _three_levels(tmp_path)
+    # a within-cap, trigger-first, fully framed entry -> clean, not flagged
+    E.add_or_update_entry(proj, "Good", "When X happens, do Y.",
+                          body="Prose.\n\n**Why:** reason\n\n**How to apply:** steps", scope_default="p")
+    # trigger-less hook + unframed body (no **Why:**/**How to apply:**)
+    E.add_or_update_entry(mid, "Bad", "just a statement, no trigger", body="bare prose", scope_default="m")
+    # over-HARD-cap hook: add() hard-caps, so inject directly to simulate a legacy/hand-edited line
+    us.add_pointer(anchor, slug="huge", title="Huge", hook="When " + ("x" * 600) + " do z")
+    rc = E.main(["lint", "--tree", proj])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "hook over HARD cap" in out and "huge" in out
+    assert "hook missing trigger" in out and "bad" in out
+    assert "body missing" in out
+    # huge (no body) + bad (bare prose) are unframed; good is framed -> exactly 2
+    assert "TOTAL over-cap hooks: 1 | trigger-less hooks: 1 | unframed bodies: 2" in out
+
+
+def test_lint_tree_clean_store_reports_zeros(tmp_path, capsys):
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Fine", "When it applies, act.",
+                          body="P.\n\n**Why:** r\n\n**How to apply:** s", scope_default="p")
+    rc = E.main(["lint", "--tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL over-cap hooks: 0 | trigger-less hooks: 0 | unframed bodies: 0" in out
 
 
 # ---- multi-tree: tree-top + ensure-all-trees -----------------------------------------------------
