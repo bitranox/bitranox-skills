@@ -22,7 +22,10 @@ the scan in step 3 is run; do not duplicate the rest.
 2. **Always run the semantic fan-out - no convergence shortcut, no asking.** FAN OUT one **`sonnet`**
    subagent per project store, OR (for many stores) one per thematic batch, in parallel. Each reads its
    stores and returns ONLY cross-project-generalizable candidates (general dev/tooling/test/security/
-   workflow practice), pre-filtered against the existing global rules and shipped skills. Keep the
+   workflow practice), pre-filtered against the existing global rules and shipped skills. A subagent
+   flags a DUPLICATE/MERGE only from the BODIES (not a title/topic match), and every such finding is a
+   CANDIDATE the main agent VERIFIES before merging - a summary+detail pair, a valid cross-link, or a
+   cited-across-a-subtree fact is not a duplicate (see "Dedup semantics" in references/dream-core.md). Keep the
    promotion gate and altitude/normalization decisions INLINE on the main agent at the **`opus`** tier
    - and if the session is not on `opus`, offer switch-model-or-continue per "The session model is
    fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch

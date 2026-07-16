@@ -82,6 +82,15 @@ merges provenance; cross-link related entries with `[[slug]]` (UPWARD only). Ded
 across the WHOLE scope of the running skill, and runs AGAIN after any placement (placement
 creates new overlap).
 
+**A DUPLICATE/MERGE finding is a CANDIDATE, not a verdict - VERIFY against ground truth before
+merging.** A fan-out subagent (or a title/topic match) flags likely duplicates, but topic-match is
+NOT redundancy: READ both bodies and check the refs first. These are NOT duplicates - do not merge:
+a SUMMARY + DETAIL pair (one cites the other for the deep dive), two facts joined by a valid
+cross-link, or a fact CITED across a subtree (its inbound-ref reach is evidence it belongs UP at the
+common ancestor, not that it duplicates the citer). Only merge when both bodies teach the SAME lesson
+and one adds nothing the other lacks. (Measured: a deep fan-out's 3 merge suggestions were all
+complementary on inspection - evidence decides, not the agent's topic guess.)
+
 ## The placement routing prompt (verbatim - lives only here)
 
 > Given this fact (title + hook + body) and the scope descriptors of every level on the chain:

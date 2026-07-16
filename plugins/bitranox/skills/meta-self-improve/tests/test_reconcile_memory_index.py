@@ -250,6 +250,23 @@ def test_check_tree_function_returns_duplicate_map(tmp_path):
     assert "shared" in rep["duplicates"] and len(rep["duplicates"]["shared"]) == 2
 
 
+def test_rehome_to_targets_a_specific_level_not_the_anchor(tmp_path, capsys):
+    # --rehome without a target lands at the tree ANCHOR (over-promotes a subtree's danglers);
+    # --rehome-to <level> re-homes them at the given level instead.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    us.put_body(anchor, "ghost-fact", "---\nname: ghost-fact\ndescription: h\n---\n\nbody\n")
+    rc = R.main(["--rehome", "--rehome-to", a, anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "re-homed" in out
+    def slugs(d):
+        try:
+            text = open(d + "/CLAUDE.local.md", encoding="utf-8").read()
+        except OSError:
+            return set()   # a level with no pointer block never got a rehome -> correct
+        return {p.slug for p in us.parse_pointer_index(text)[1]}
+    assert "ghost-fact" in slugs(a) and "ghost-fact" not in slugs(anchor)
+
+
 def test_cli_archive_drops_pointer_and_moves_body(proj, capsys):
     # Defect E: archive_entry had no CLI path (was importable only). --archive <slug> <level> wires it.
     heavy_slug = ME.add_or_update_entry(proj, "Heavy one", "h", body="x" * 400, scope_default="lvl")
