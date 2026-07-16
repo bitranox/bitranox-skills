@@ -171,6 +171,75 @@ def test_archive_entry_drops_pointer_and_moves_central_body(proj):
     assert R.archive_entry(proj, "nonexistent") is False
 
 
+# ---- tree-wide integrity (--check-tree): duplicates/orphans/dangling across siblings -----------
+
+def _tree_two_projects(tmp_path):
+    """anchor (CLAUDE.md + store) with two SIBLING project levels projA/projB below it."""
+    anchor = tmp_path / "tree"
+    a, b = anchor / "projA", anchor / "projB"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    for d in (anchor, a, b):
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (anchor / us.STORE_DIRNAME).mkdir()
+    return str(anchor), str(a), str(b)
+
+
+def test_check_tree_flags_duplicate_pointer_across_siblings(tmp_path, capsys):
+    # The tree-uniqueness violation that chain-scoped --check cannot see: one slug pointed at from
+    # two SIBLING levels (different chains). heal reports clean; --check-tree must catch it and exit 1.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Shared", "hookA", body="B", scope_default="a")
+    us.add_pointer(b, slug="shared", title="Shared", hook="hookB")   # duplicate pointer at the sibling
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "duplicate pointer: shared" in out and "TOTAL tree problems: 1" in out
+
+
+def test_check_tree_clean_tree_is_zero_and_exits_0(tmp_path, capsys):
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    ME.add_or_update_entry(b, "Only B", "h", body="B", scope_default="b")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL tree problems: 0" in out
+
+
+def test_check_tree_flags_orphan_ref_and_reports_dangling_body(tmp_path, capsys):
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Citer", "builds on [[missing-base]]", body="B", scope_default="a")
+    # a dangling body: a central body file no level points at
+    us.put_body(anchor, "ghost-fact", "---\nname: ghost-fact\n---\n\norphaned body\n")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "orphan ref: [[missing-base]]" in out
+    assert "dangling body (no pointer at any level): ghost-fact" in out
+
+
+def test_check_tree_function_returns_duplicate_map(tmp_path):
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Shared", "hookA", body="B", scope_default="a")
+    us.add_pointer(b, slug="shared", title="Shared", hook="hookB")
+    rep = R.check_tree(anchor)
+    assert "shared" in rep["duplicates"] and len(rep["duplicates"]["shared"]) == 2
+
+
+def test_cli_archive_drops_pointer_and_moves_body(proj, capsys):
+    # Defect E: archive_entry had no CLI path (was importable only). --archive <slug> <level> wires it.
+    heavy_slug = ME.add_or_update_entry(proj, "Heavy one", "h", body="x" * 400, scope_default="lvl")
+    rc = R.main(["--archive", heavy_slug, proj])
+    out = capsys.readouterr().out
+    assert rc == 0 and "archived %s" % heavy_slug in out
+    assert (us.central_facts_dir(proj).parent / ".archive" / (heavy_slug + ".md")).is_file()
+    assert ME.read_store(proj)[1] == []                       # pointer gone
+    # archiving a slug that is not there reports so and exits 1 (a loud no-op, not silent success)
+    rc = R.main(["--archive", "nonexistent", proj])
+    out = capsys.readouterr().out
+    assert rc == 1 and "no such entry" in out
+
+
 def test_noncurated_level_contributes_nothing_no_subtree_scan(tmp_path):
     # a plain project dir (no pointer block) must NOT be rglob'd for *.md - else docs/code with
     # `[[section]]` TOML or `[[ref]]` examples manufacture false orphan refs.

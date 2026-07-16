@@ -44,16 +44,23 @@ NOT capture. Verify "nothing durable" - never assume it.
 Create one todo per step. Every engine call follows the fail-loud contract (strict env, require
 the success line, abort-and-show on a miss).
 
-0a. **Deterministic scaffold (a script, no model).** `memory_engine.py heal --proj "<cwd>"` (via
-    `run-python.sh`): creates every missing marker `CLAUDE.md` + `CLAUDE.local.md` pointer block
-    from the project up to the anchor, plus the central store; normalizes drifted grammar.
-    Require `healed N file(s) across M level(s)`.
+0a. **Deterministic scaffold + tree-wide integrity (scripts, no model).**
+    `memory_engine.py heal --proj "<cwd>"` (via `run-python.sh`): creates every missing marker
+    `CLAUDE.md` + `CLAUDE.local.md` pointer block from the project up to the anchor, plus the central
+    store; normalizes drifted grammar. Require `healed N file(s) across M level(s)`. `heal` is
+    CHAIN-scoped and only normalizes grammar, so FOLLOW it with
+    `reconcile_memory_index.py --check-tree "<cwd>"` (home: `<plugin>/skills/meta-self-improve/`) to
+    surface any cross-sibling DUPLICATE pointer / orphan / dangling body BEFORE consolidating - the
+    tree-uniqueness violations `heal` cannot see. Fix a duplicate deliberately (keep the better hook)
+    rather than with a blind `move`.
 
 0b. **Scope-descriptor synthesis (freshness-gated, parallel sonnet subagents).** The per-level
     descriptors are the PLACEMENT ROUTING KEY, so every level needs a meaningful one. LEVELS MEANS
     THE WHOLE TREE: every pointer-block-bearing dir under the anchor - SIBLING projects and
-    departments included - not just the cwd's ancestor chain (walk the tree or list the
-    CLAUDE.local.md files under the anchor). Only synthesize levels whose descriptor is EMPTY,
+    departments included - not just the cwd's ancestor chain. Enumerate them with
+    `find <anchor> -name CLAUDE.local.md`, NEVER a bare `grep -r` (see "Level enumeration" in
+    references/dream-core.md: the session `grep` honors `.gitignore` and silently misses every
+    gitignored store). Only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
     subdirectories. Dispatch one `sonnet` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the
@@ -68,6 +75,13 @@ the success line, abort-and-show on a miss).
         - <dir>/: <one clause>
         PLACE-HERE: <knowledge true for THIS WHOLE subtree but NOT above>
         PLACE-ELSEWHERE: <push child-specific down; push broader-than-subtree up>
+
+    After the fan-out, VERIFY from ground truth (see "Verify every parallel WRITE fan-out" in
+    references/dream-core.md): `set-scope` overwrites unconditionally, so a subagent that writes the
+    wrong `--proj` silently clobbers a sibling while reporting success on the right path. Re-run the
+    freshness check over ALL levels and diff each level's on-disk descriptor against what its own
+    agent RETURNED; keep each agent's returned text (the only restore source - the backup holds just
+    the stale version).
 
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
@@ -107,15 +121,21 @@ the success line, abort-and-show on a miss).
    `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
    that move - a down-move with inbound refs needs the refs re-pointed first, or stays). Low/UNSURE
    never moves. Tree-top promotion additionally passes the corroboration gate (user-stated: eager;
-   model-inferred: >= 2 dreams via `should_promote`). After moving, normalize reference+delta
+   model-inferred: >= 2 dream sightings): record each model-inferred tree-top candidate with
+   `dream_state.py saw-promotable <slug>`, gate the promotion on `dream_state.py should-promote <slug>`
+   (`promote`/`hold`), and after an applied promotion run `dream_state.py promoted <slug>` to clear
+   the counter. HOLD keeps the fact at the project level for the next dream. After moving, normalize
+   reference+delta
    UPWARD-ONLY: the general lives once at its altitude, lower entries cite `[[general]]` + delta.
    Pinned entries are EXEMPT from move/reword/archive unless the user approves that specific
    change - report them separately.
 
-6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep for
-   residue: any hook failing the trigger-first lint (`hook_missing_trigger`), over the 500-char HARD
-   cap (`cap_hook` would truncate it), or whose trigger does not actually name the situations its
-   body applies to (the FIRING check - would this line catch your attention at the right moment?). Do
+6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
+   whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
+   the 500-char HARD cap that `cap_hook` would truncate, trigger-less hooks, and bodies missing the
+   `**Why:**`/`**How to apply:**` frame - a tracked backlog number, advisory). Then apply judgment on
+   top: a hook whose trigger does not actually name the situations its body applies to (the FIRING
+   check - would this line catch your attention at the right moment?). Do
    NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
    to the hard cap. Queue offenders to a sonnet
    rewrite (trigger-first, facts preserved, slug-stable via `add --slug`), propose-diff, apply.
@@ -130,9 +150,10 @@ the success line, abort-and-show on a miss).
    its origin and siblings) and normalize. Then: re-derive the manifest and diff against step 2
    (only `level` may differ, plus explicitly-decided merges/prunes/rewords); run
    `reconcile_memory_index.py --check <altitude chain, narrow->broad>` (home:
-   `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require
-   `TOTAL problems: 0`; fix integrity failures via the engine (re-point a downward ref, resolve an
-   orphan). Size warnings are advisory.
+   `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require `TOTAL problems: 0`,
+   AND `reconcile_memory_index.py --check-tree "<cwd>"` for `TOTAL tree problems: 0` (the cross-sibling
+   duplicate/orphan check the chain-only `--check` cannot make); fix integrity failures via the engine
+   (re-point a downward ref, resolve an orphan, dedup a duplicate pointer). Size warnings are advisory.
 
 9. **Behavioral passes.** Run the catalog in references/dream-passes.md (each pass on its own
    trigger): CLAUDE.md reconciliation (chain-gated - runs EVERY dream, rule-by-rule, both

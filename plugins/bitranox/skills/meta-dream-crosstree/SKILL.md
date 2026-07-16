@@ -81,9 +81,11 @@ Create one todo per step.
    case model + guards live in `bitranox:meta-dream-tree` "CLAUDE.md reconciliation"; every
    `CLAUDE.md` edit stays propose-first and never happens without user confirmation.) Keep promoted
    rules CONCRETE (never water a
-   concrete-but-universal rule down); abstract only when specifics fit nowhere else. `should_promote` /
-   `note_promotion_candidate` in `self_improve_signals.py`; counters live OUT of the dreamed store so a
-   converged re-run is a no-op.
+   concrete-but-universal rule down); abstract only when specifics fit nowhere else. Gate the
+   corroboration the same way as the tree dream: `dream_state.py saw-promotable <slug>` to record a
+   sighting, `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
+   to clear after an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
+   `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a no-op).
 5. **Outbound cross-pollination.** When a learning is useful BEYOND its project, do not write into other
    projects - **promote it to the lowest common ancestor WITHIN ITS TREE** (often the tree's top) and let the native
    downward cascade deliver it; a project in a DIFFERENT subtree receives it via ITS inbound gather. A
@@ -98,7 +100,9 @@ Create one todo per step.
    source of truth instead of the general restated in every project.) Then run
    `reconcile_memory_index.py --check <altitude-chain>` (the LEVEL dirs) over the affected chains to verify reference
    integrity (no orphans, no DOWNWARD or cross-tree refs; index size is an advisory warning, not a
-   failure).
+   failure), AND `reconcile_memory_index.py --check-tree <anchor>` per affected tree for
+   `TOTAL tree problems: 0` - promotion to a common ancestor is exactly what can leave a slug pointed
+   at from two levels, which the chain-only `--check` cannot see.
 7. **Skill-fit -> batched change.** A generalization that warrants a skill goes through
    `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
    `propose`, commit-or-PR in `auto`, skipped in `off`).

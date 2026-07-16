@@ -400,6 +400,13 @@ def test_clear_promotion_candidate(home):
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
 
 
+def test_promotion_dwell_reads_without_incrementing(home):
+    assert S.promotion_dwell("/p/x", "k") == 0                # unseen -> 0
+    S.note_promotion_candidate("/p/x", "k")
+    assert S.promotion_dwell("/p/x", "k") == 1                # read-only: does not bump
+    assert S.promotion_dwell("/p/x", "k") == 1               # still 1 after a second read
+
+
 # --------------------------------------------------------------------------
 # scope-descriptor marked block + writer-race signature
 # --------------------------------------------------------------------------

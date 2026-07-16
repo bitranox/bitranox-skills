@@ -20,6 +20,7 @@ Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_i
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -352,6 +353,37 @@ def move_entry(from_level, to_level, slug, force=False):
                 return rep
             rep["warnings"].append("moved despite dangling inbound [[refs]]: %s" % what)
 
+    # Duplicate-pointer handling (defect A): the target may ALREADY point at this slug - either a
+    # crash-interrupted move (add succeeded, drop did not) or a real DIVERGENT duplicate from drift
+    # (dedup is exactly when two levels point at one slug). A plain add_pointer overwrites the
+    # target's title+hook with the source's, so a divergent duplicate is silent, direction-dependent
+    # data loss - the hook is the always-loaded part, and which one survives would depend on move
+    # DIRECTION, not on which hook is better. Detect it before the add-then-remove:
+    _s2, dst_entries, _b2 = read_store(str(dst))
+    dst_entry = next((e for e in dst_entries if e.slug == slug), None)
+    if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
+        if not force:
+            rep["refused"] = (
+                "target already points at %r with a DIFFERENT hook (duplicate pointer); picking by "
+                "move direction would discard one - dedup deliberately with `add --slug %s` at the "
+                "surviving level, or --force to keep the LONGER hook and drop the other" % (slug, slug))
+            return rep
+        # Forced dedup: keep the information-richer (LONGER) hook regardless of direction, union the
+        # provenance + pin, and drop the source pointer. Direction-independent by construction, so it
+        # can never discard the richer hook the way the old overwrite did.
+        keep = entry if len(entry.hook or "") >= len(dst_entry.hook or "") else dst_entry
+        us.add_pointer(str(dst), slug=slug, title=keep.title, hook=keep.hook,
+                       source=set(entry.source) | set(dst_entry.source), pin=entry.pin or dst_entry.pin)
+        _drop_pointer(str(src), slug)
+        rep["moved"] = True
+        rep["warnings"].append(
+            "duplicate at target: kept the longer hook (%d vs %d chars), unioned provenance, "
+            "dropped the shorter source line" % (len(keep.hook or ""),
+                                                 min(len(entry.hook or ""), len(dst_entry.hook or ""))))
+        return rep
+
+    # No duplicate, or an IDENTICAL one (crash residue): the normal add-then-remove. An identical
+    # duplicate merges provenance/pin and completes a crash-interrupted move - no data at risk.
     us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
                    source=entry.source, pin=entry.pin)
     _drop_pointer(str(src), slug)
@@ -441,7 +473,6 @@ def _level_needs_heal(proj):
     """READ-ONLY probe: does this level need the (locked) repair pass? True when the CLAUDE.md
     marker or CLAUDE.local.md is missing, or the managed block is absent/non-canonical. The
     every-session heal calls this first so a healthy chain costs no lock and no write."""
-    d = Path(proj)
     if not sig.claude_md_path(proj).is_file():
         return True
     local = sig.claude_local_md_path(proj)
@@ -536,6 +567,52 @@ def scaffold(proj):
     return created
 
 
+# ---- tree-wide sweeps (curated-level walk shared by the engine + reconcile) ----------------------
+
+def curated_levels_under(anchor):
+    """Every curated level dir under `anchor` (a `CLAUDE.local.md` carrying a managed pointer block),
+    pruning vendored/build/cache dirs - a bounded os.walk of the whole subtree, SIBLINGS included.
+    THE single tree-walk (reconcile's `_all_curated_levels` delegates here) so the two never drift."""
+    out = []
+    for root, dirs, files in os.walk(str(anchor)):
+        dirs[:] = [d for d in dirs if d not in sig.VENDOR_DIRNAMES]
+        if "CLAUDE.local.md" not in files:
+            continue
+        try:
+            text = sig.claude_local_md_path(root).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text:
+            out.append(root)
+    return out
+
+
+def _body_unframed(body):
+    """True when a fact body lacks the native-entry reasoning frame (either the `**Why:**` or the
+    `**How to apply:**` line) - the shape the model discounts (~5x lower application)."""
+    return "**Why:**" not in (body or "") or "**How to apply:**" not in (body or "")
+
+
+def lint_tree(anchor):
+    """READ-ONLY voice/frame sweep over every curated level under `anchor` (defect J - the store had
+    no sweep verb, so the debt was rediscovered every dream). Reports: hooks over the HARD cap
+    (`cap_hook` would truncate - a wrap-drop risk), hooks missing a trigger phrase (never fire during
+    reasoning), and bodies missing the `**Why:**`/`**How to apply:**` frame. Advisory: a tracked
+    backlog number, never a failure. Returns a report dict."""
+    anchor = _anchor(str(anchor))
+    over_cap, no_trigger, unframed = [], [], []
+    for lvl in curated_levels_under(anchor):
+        _scope, entries, bodies = read_store(lvl)
+        for e in entries:
+            if len(e.hook or "") > us.HOOK_HARD_MAX:
+                over_cap.append((lvl, e.slug, len(e.hook)))
+            if us.hook_missing_trigger(e.hook):
+                no_trigger.append((lvl, e.slug))
+            if _body_unframed(bodies.get(e.slug, "")):
+                unframed.append((lvl, e.slug))
+    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger, "unframed": unframed}
+
+
 # ---- multi-tree: whole-machine discovery + scaffolding -------------------------------------------
 
 def tree_top(proj):
@@ -621,12 +698,16 @@ def main(argv=None):
                         help="discover every knowledge tree under the roots and scaffold each (dry-run by default)")
     et.add_argument("--roots", nargs="*", default=None, help="override the configured discovery_roots")
     et.add_argument("--apply", action="store_true", help="write (default: dry-run report)")
+    ln = sub.add_parser("lint", help="tree-wide voice/frame sweep (advisory backlog, read-only)")
+    ln.add_argument("--tree", required=True, dest="tree",
+                    help="any dir in the tree (resolved to its anchor); sweeps every curated level")
     mv = sub.add_parser("move", help="re-level one fact: relocate its pointer line within the tree")
     mv.add_argument("--from-level", required=True, dest="from_level")
     mv.add_argument("--to-level", required=True, dest="to_level")
     mv.add_argument("--slug", required=True)
     mv.add_argument("--force", action="store_true",
-                    help="down-move even when inbound [[refs]] would dangle (warning instead)")
+                    help="down-move even when inbound [[refs]] would dangle, OR dedup a divergent "
+                         "duplicate-target pointer by keeping the longer hook (warning instead of refusal)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.cmd == "tree-top":
@@ -649,6 +730,19 @@ def main(argv=None):
                 print("    ! %s" % tr["why"])
             for c in tr["created"]:
                 print("    + %s" % c)
+        return 0
+
+    if args.cmd == "lint":
+        rep = lint_tree(args.tree)
+        print("voice/frame lint: %s" % rep["anchor"])
+        for lvl, slug, n in rep["over_cap"]:
+            print("    ! hook over HARD cap (%d chars, cap_hook would truncate): %s [%s]" % (n, slug, lvl))
+        for lvl, slug in rep["no_trigger"]:
+            print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
+        for lvl, slug in rep["unframed"]:
+            print("    ~ body missing **Why:**/**How to apply:** frame: %s [%s]" % (slug, lvl))
+        print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | unframed bodies: %d (advisory)"
+              % (len(rep["over_cap"]), len(rep["no_trigger"]), len(rep["unframed"])))
         return 0
 
     if args.cmd == "move":
