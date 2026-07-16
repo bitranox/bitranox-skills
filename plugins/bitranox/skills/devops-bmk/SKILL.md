@@ -114,6 +114,11 @@ classifiers and the venv is **rebuilt**. The path never changes, so nothing poin
 If uv cannot say what it would provide, your venv is left alone; bmk never rebuilds on a guess.
 Declare no `:: Python :: X.Y` classifier and bmk picks no version at all - uv's default stands.
 
+The same classifiers drive `make test-all`: it provisions one `.venv-<minor>` per declared version
+and runs pytest + pyright in each, in parallel, so you can reproduce CI's matrix locally before you
+push. Plain `make test` stays on the newest version only; with no `:: Python :: X.Y` classifier,
+`test-all` tests the default interpreter once and prints a WARNING naming the version it used.
+
 The sync is exact *and* upgrading: it removes packages the manifest no longer asks for and
 re-resolves the ones it does. A venv left to drift makes the gates lie -- pip-audit reports CVEs for
 packages the project does not actually resolve, while the real resolution stays hidden. The
@@ -129,10 +134,12 @@ both Linux and Windows): a single venv cannot serve both, so give each its own (
 If provisioning fails, bmk falls back to its own interpreter rather than failing the command.
 
 `clean` does not delete the venv (that would throw away what bmk just built and force a full
-re-resolve); remove it by hand when you want it gone. bmk also keeps the venv out of git: it adds
-the venv names to `.gitignore` when nothing already ignores them, and if git is *tracking* a venv
-it drops it from the index (`git rm --cached`) while leaving the files on disk, announcing that it
-did. A tracked venv would otherwise show thousands of modified files after every sync.
+re-resolve); `make clean-all` removes every `.venv*` alongside the build artifacts when you do
+want them gone. bmk also keeps venvs out of git: it adds a single `.venv*` glob to `.gitignore`
+when nothing already ignores them (one line covers `.venv` and every `.venv-<minor>` the matrix
+creates), and if git is *tracking* a venv it drops it from the index (`git rm --cached`) while
+leaving the files on disk, announcing that it did. A tracked venv would otherwise show thousands
+of modified files after every sync.
 
 ## 2. Bootstrap the Makefile
 
@@ -154,6 +161,7 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 |-----------------------------------------|--------------------------------------------------------------------------------|
 | `make test` \| `t`                      | Full test pipeline: lint, format-check, type-check, security, tests + coverage |
 | `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                   |
+| `make test-all`                         | Run pytest + pyright on EVERY declared Python version in parallel (the matrix) |
 | `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                               |
 | `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog                      |
 | `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                          |
@@ -162,6 +170,7 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                |
 | `make build` \| `bld`                   | Build wheel + sdist                                                            |
 | `make clean` \| `cl`                    | Remove build artifacts and caches                                              |
+| `make clean-all`                        | Remove build artifacts, caches AND every virtualenv (`.venv*`)                 |
 | `make dependencies` \| `deps` `[-u]`    | Check (or `--update`) project dependencies                                     |
 | `make ensure`                           | Install missing external tools for this OS (see section 5)                     |
 | `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                        |
