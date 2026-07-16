@@ -329,9 +329,24 @@ def check_tree(anchor):
                     ref_sources.append((lvl, e.slug, ref))
     duplicates = {s: sorted(lv) for s, lv in slug_levels.items() if len(lv) > 1}
     orphan_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources if r not in all_targets))
+
+    # Downward/sideways refs: the target EXISTS in the tree but at NO level on the citing fact's
+    # ancestor-or-self path, so the ref resolves "somewhere" (not an orphan) yet dangles for the
+    # citing level's cascade - a fact citing a sibling subtree's slug, or a broad fact citing a
+    # slug that lives below it. `[[refs]]` are upward-only; the chain-only `--check` catches these
+    # per chain, but tree-wide `--check-tree` must too (it saw only the nowhere-resolving orphans).
+    def _reachable(ref_canon, citing_level):
+        cl = Path(citing_level).resolve()
+        for t in slug_levels.get(ref_canon, ()):
+            tr = Path(t).resolve()
+            if tr == cl or tr in cl.parents:            # target at-or-above the citer -> upward, OK
+                return True
+        return False
+    sideways_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources
+                               if r in all_targets and not _reachable(r, lvl)))
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
-            "danglers": find_dangling_bodies(anchor)}
+            "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor)}
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -405,6 +420,10 @@ def main(argv=None):
         for lvl, src, ref in rep["orphan_refs"]:
             print("    ! orphan ref: [[%s]] in %s (%s) -> no such entry anywhere in the tree"
                   % (ref, src, lvl))
+            problems += 1
+        for lvl, src, ref in rep["sideways_refs"]:
+            print("    ! sideways/downward ref: [[%s]] in %s (%s) -> target exists but not on this "
+                  "level's ancestor chain (dangles here; refs are upward-only)" % (ref, src, lvl))
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)
