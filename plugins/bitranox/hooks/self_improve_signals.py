@@ -705,7 +705,9 @@ def altitude_chain(proj):
         if top is None:                           # project is the top; single-tier chain
             return [here]
         highest = ladder.index(top)
-        return ladder[:highest + 1]
+        chain = ladder[:highest + 1]
+        kept = [d for d in chain if ".claude" not in d.parts]   # a `.claude` config dir (or its
+        return kept or chain                                    # worktrees/ scaffold) is never an altitude
     except (TypeError, ValueError):
         return [Path(proj)]
 
@@ -1267,12 +1269,20 @@ def add_topical_words(words, proj):
     _write_word_json(p, set(_read_word_json(p)) | new, key="topical")
 
 
+# Leaked identifiers - a tool-use ID (`toolu_...`) or a long hex agent/session ID - ride into prompt
+# text (e.g. inside a <task-notification>), so the recall tokenizer would queue them as "keywords".
+# They are junk that pollutes the dream's filler-classification pass; drop them at the queue chokepoint.
+_LEAKED_ID_RX = re.compile(r"^(?:toolu_[0-9a-z]+|[0-9a-f]{16,})$")
+
+
 def note_unknown_keywords(words, proj):
     """Per-prompt: queue this project's recall keywords that are NEITHER known filler NOR known-topical,
-    for the dream classifier to judge. Deterministic, append-only, deduped; never calls a model."""
+    for the dream classifier to judge. Deterministic, append-only, deduped; never calls a model.
+    Leaked tool-use / hex identifiers are dropped (they are not real recall terms)."""
     known = load_filler_words(proj) | load_topical_words(proj)
     cur = load_pending_keywords(proj)
-    add = {str(w).strip().lower() for w in words if str(w).strip()} - known - cur
+    lowered = {str(w).strip().lower() for w in words if str(w).strip()}
+    add = {w for w in lowered if not _LEAKED_ID_RX.match(w)} - known - cur
     if not add:
         return
     f = _recall_pending_path(proj)

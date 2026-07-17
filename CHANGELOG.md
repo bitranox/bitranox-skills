@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.85.1] - 2026-07-17
+
+### Fixed
+
+- `memory_engine.py`: a slug-stable hook rewrite (`add --slug X --hook NEW` with no `--body`) now
+  re-syncs the body's `description:` frontmatter to the new hook. Previously it updated only the
+  pointer line, leaving the body description stale and desynced from the pointer.
+- `self_improve_signals.py`: `altitude_chain` no longer treats a `.claude/` config dir (or its
+  `worktrees/` git-worktree scaffolding) as a memory altitude, so `heal`/`scaffold` stop creating
+  empty spurious pointer blocks inside them when run from a worktree path.
+- `self_improve_signals.py`: `note_unknown_keywords` drops leaked identifiers (tool-use IDs
+  `toolu_...` and long hex agent/session IDs) instead of queuing them as recall keywords.
+
 ## [5.59.0] - 2026-07-13
 
 ### Added
