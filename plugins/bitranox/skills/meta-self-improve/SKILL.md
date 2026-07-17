@@ -42,15 +42,16 @@ architecture, or data-flow is a durable discovery - capture it before the turn e
 acknowledgement ("understood") is not itself the signal - trigger on the rule it acknowledges.
 
 If you reflect and find nothing durable, say so in one line and stop. Never manufacture a
-"learning". When the gate missed a signal, fix the WHOLE family in `self_improve_signals.py`, not
-just the one phrase.
+"learning". When the gate missed a signal, fix the WHOLE family in `self_improve_signals.py`
+(home: `<plugin>/hooks/`, launch via `hooks/run-python.sh`), not just the one phrase.
 
 ### End-of-session miss audit (self-tuning loop)
 
-The per-turn gate is precision-tuned, so a broader SessionEnd scan (`self-improve-audit.py`)
-records candidate misses to a per-project audit file; SessionStart surfaces it ONCE next session.
-Review the candidates: capture the genuine misses here, and for a real gap extend the gate's family
-patterns in `self_improve_signals.py` (gate and audit share that module, so they never drift).
+The per-turn gate is precision-tuned, so a broader SessionEnd scan (`self-improve-audit.py`, home:
+`<plugin>/hooks/`) records candidate misses to a per-project audit file; SessionStart surfaces it
+ONCE next session. Review the candidates: capture the genuine misses here, and for a real gap
+extend the gate's family patterns in `self_improve_signals.py` (same `<plugin>/hooks/` home; gate
+and audit share that module, so they never drift).
 Premature signals ("wait...", "let me double-check") stay audit-only - the lesson is not formed
 yet. Skill-coverage gaps are NOT this loop's job: a defect that slipped past a skill you followed
 goes to the dream's skill-gap pass.

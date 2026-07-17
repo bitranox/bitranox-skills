@@ -426,7 +426,9 @@ Done!
 **vs. Manual execution:**
 - Subagents follow TDD naturally
 - Fresh context per task (no confusion)
-- Parallel-safe (subagents don't interfere)
+- Context-isolated (each task gets its own context; no cross-task confusion). Note this is
+  NOT a licence to run implementers concurrently - see "Never: dispatch multiple
+  implementation subagents in parallel" below; the isolation is per-task, not per-worktree.
 - Subagent can ask questions (before AND during work)
 
 **vs. Executing Plans:**

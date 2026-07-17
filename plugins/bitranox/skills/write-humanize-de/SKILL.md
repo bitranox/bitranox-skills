@@ -5,12 +5,12 @@ description: Use when editing or reviewing German-language prose (deutsche Texte
 
 # Humanizer: KI-Schreibmuster in deutschen Texten entfernen
 
-> **WICHTIG — Anwendungsbereich:** Dieser Skill ist **ausschließlich für Fließtext** gedacht —
+> **WICHTIG - Anwendungsbereich:** Dieser Skill ist **ausschließlich für Fließtext** gedacht -
 > Blogbeiträge, E-Mails, Artikel, Aufsätze, Marketingtexte, README-Fließtexte und ähnliche
 > Texte für menschliche Leser. **NICHT** anwenden auf: Quellcode, Code-Kommentare, Docstrings,
 > API-Dokumentation, CLI-Hilfetexte, Commit-Nachrichten, Changelogs, Typ-Annotationen,
 > Konfigurationsdateien oder andere technische/code-bezogene Artefakte. Wenn dieser Skill
-> ausgelöst wird, **immer zuerst den Benutzer fragen**: „Soll ich diesen Text humanisieren?"
+> ausgelöst wird, **immer zuerst den Benutzer fragen**: "Soll ich diesen Text humanisieren?"
 > bevor Änderungen vorgenommen werden.
 
 Du bist ein Textredakteur, der Anzeichen von KI-generiertem Text identifiziert und entfernt, um deutschsprachige Texte natürlicher und menschlicher klingen zu lassen. Dieser Leitfaden basiert auf der deutschen Wikipedia-Seite "Anzeichen für KI-generierte Inhalte" (gepflegt vom WikiProjekt KI und Wikipedia) sowie dem englischen Pendant "Signs of AI writing" (WikiProject AI Cleanup).
@@ -26,11 +26,13 @@ switch-model-or-continue an (das Hauptmodell kann sich nicht selbst umschalten).
 
 Wenn du Text zum Humanisieren bekommst:
 
-1. **KI-Muster identifizieren** - Nach den unten aufgeführten Mustern suchen
-2. **Problematische Stellen umschreiben** - KI-Typisches durch natürliche Alternativen ersetzen
-3. **Bedeutung bewahren** - Die Kernaussage intakt lassen
-4. **Stimme beibehalten** - Den gewünschten Ton treffen (formell, locker, fachlich usw.)
-5. **Seele einbringen** - Nicht nur schlechte Muster entfernen, sondern echte Persönlichkeit reinbringen
+1. **Deterministischen Typografie-Durchlauf ausführen** - `python3 scripts/strip_typographic_tells.py DATEI`
+   (siehe unten). Immer zuerst, vor jedem inhaltlichen Umschreiben.
+2. **KI-Muster identifizieren** - Nach den unten aufgeführten Mustern suchen
+3. **Problematische Stellen umschreiben** - KI-Typisches durch natürliche Alternativen ersetzen
+4. **Bedeutung bewahren** - Die Kernaussage intakt lassen
+5. **Stimme beibehalten** - Den gewünschten Ton treffen (formell, locker, fachlich usw.)
+6. **Seele einbringen** - Nicht nur schlechte Muster entfernen, sondern echte Persönlichkeit reinbringen
 
 ---
 
@@ -50,7 +52,10 @@ geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII, 
 Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
-enthalten solche Zeichen absichtlich. Danach die inhaltlichen Umschreibungen vornehmen.
+enthalten solche Zeichen absichtlich. Deshalb steht jedes solche Beispiel in einem
+Code-Span oder Codeblock: Der tell-sweep-Hook überspringt Code, sodass das exakte Zeichen
+sowohl den Hook als auch einen versehentlichen Durchlauf übersteht. Neue Beispiele
+ebenfalls in Backticks setzen. Danach die inhaltlichen Umschreibungen vornehmen.
 
 ---
 
@@ -293,7 +298,7 @@ KI-Muster zu vermeiden ist nur die halbe Arbeit. Steriler, stimmloser Text ist g
 
 **Problem:** Im Deutschen werden Gedankenstriche traditionell seltener verwendet als im Englischen. Deutsche Texte bevorzugen Kommas, Klammern oder Doppelpunkte. 
 LLM-generierte deutsche Texte verwenden häufig anglizistische Gedankenstrich-Konstruktionen. Für sich allein kein starker Indikator, aber in Kombination mit anderen Mustern auffällig.
-Entferne EM-Dashes ("—"), En Dashes ("–") komplett und ersetze diese wenn nötig mit Hyphens ("-")
+Entferne EM-Dashes (`—`), En Dashes (`–`) komplett und ersetze diese wenn nötig mit Hyphens (`-`)
 
 **Vorher:**
 > Der Begriff wird hauptsächlich von niederländischen Institutionen beworben - nicht von den Menschen selbst. Man sagt nicht "Niederlande, Europa" als Adresse - dennoch setzt sich diese Fehlbezeichnung fort - sogar in offiziellen Dokumenten.
@@ -336,7 +341,7 @@ Entferne EM-Dashes ("—"), En Dashes ("–") komplett und ersetze diese wenn n�
 **Vorher:**
 > 🚀 **Startphase:** Das Produkt erscheint in Q3
 > 💡 **Zentrale Erkenntnis:** Nutzer bevorzugen Einfachheit
-> ✅ **Nächste Schritte:** Folgetermin vereinbaren
+> `✅` **Nächste Schritte:** Folgetermin vereinbaren
 
 **Nachher:**
 > Das Produkt erscheint in Q3. Nutzertests zeigten eine Präferenz für Einfachheit. Nächster Schritt: Folgetermin vereinbaren.
@@ -362,11 +367,17 @@ Entferne EM-Dashes ("—"), En Dashes ("–") komplett und ersetze diese wenn n�
 
 **Problem:** ChatGPT verwendet typographische Anführungszeichen statt gerader Anführungszeichen. Im Deutschen sind typographische Anführungszeichen zwar korrekt, aber ChatGPT setzt sie inkonsistent ein und wechselt innerhalb desselben Textes zwischen verschiedenen Stilen.
 
-**Vorher:**
-> Er sagte, „das Projekt liegt im Zeitplan", aber andere widersprachen.
+**Vorher:** (als Codeblock, damit die typographischen Zeichen unverändert erhalten bleiben)
+
+```text
+Er sagte, „das Projekt liegt im Zeitplan", aber andere widersprachen.
+```
 
 **Nachher:**
-> Er sagte "das Projekt liegt im Zeitplan", aber andere widersprachen.
+
+```text
+Er sagte "das Projekt liegt im Zeitplan", aber andere widersprachen.
+```
 
 ---
 
@@ -541,17 +552,20 @@ Entferne EM-Dashes ("—"), En Dashes ("–") komplett und ersetze diese wenn n�
 
 ## Ablauf
 
-1. Den Eingabetext sorgfältig lesen
-2. Alle Instanzen der oben genannten Muster identifizieren
-3. Jede problematische Stelle umschreiben
-4. Sicherstellen, dass der überarbeitete Text:
+1. Den deterministischen Typografie-Durchlauf ausführen:
+   `python3 scripts/strip_typographic_tells.py DATEI` (verpflichtend, immer vor dem
+   inhaltlichen Umschreiben)
+2. Den Eingabetext sorgfältig lesen
+3. Alle Instanzen der oben genannten Muster identifizieren
+4. Jede problematische Stelle umschreiben
+5. Sicherstellen, dass der überarbeitete Text:
    - Sich natürlich anhört, wenn man ihn laut liest
    - Die Satzstruktur natürlich variiert
    - Konkrete Details statt vager Behauptungen verwendet
    - Den zum Kontext passenden Ton beibehält
    - Einfache Konstruktionen (ist/sind/hat) verwendet, wo angemessen
    - Keine gleichförmigen Satzlängen hat
-5. Die humanisierte Version präsentieren
+6. Die humanisierte Version präsentieren
 
 ## Ausgabeformat
 
@@ -574,7 +588,7 @@ Liefere:
 >
 > - 💡 **Geschwindigkeit:** Die Codegenerierung ist deutlich schneller, reduziert Reibung und ermächtigt Entwickler.
 > - 🚀 **Qualität:** Die Ausgabequalität wurde durch verbessertes Training gesteigert, was zu höheren Standards beiträgt.
-> - ✅ **Akzeptanz:** Die Nutzung wächst weiter, was breitere Branchentrends widerspiegelt.
+> - `✅` **Akzeptanz:** Die Nutzung wächst weiter, was breitere Branchentrends widerspiegelt.
 >
 > Obwohl konkrete Details basierend auf verfügbaren Informationen begrenzt sind, könnte man möglicherweise argumentieren, dass diese Werkzeuge einen gewissen positiven Effekt haben könnten. Trotz Herausforderungen, die typisch für aufkommende Technologien sind - einschließlich Halluzinationen, Bias und Verantwortlichkeit - floriert das Ökosystem weiter. Um dieses Potenzial voll auszuschöpfen, müssen Teams sich an Best Practices orientieren.
 >

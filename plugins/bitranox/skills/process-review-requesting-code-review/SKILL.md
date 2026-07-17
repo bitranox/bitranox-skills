@@ -99,6 +99,16 @@ You: [Fix progress indicators]
 - Proceed with unfixed Important issues
 - Argue with valid technical feedback
 
+These thoughts mean STOP - you are rationalizing:
+
+| Excuse                                   | Reality                                                          |
+|------------------------------------------|------------------------------------------------------------------|
+| "It's simple, it doesn't need review"    | Simple diffs ship the confident bugs. Size is not risk.          |
+| "I already tested it"                    | Tests check what you thought of; review catches what you didn't. |
+| "The reviewer will just nitpick"         | Then the nitpicks are cheap. Critical findings are not.          |
+| "I'll request review after one more fix" | The fix is exactly what needs reviewing.                         |
+| "I wrote it, I know it's right"          | Authorship is the reason you cannot see it.                      |
+
 **If reviewer wrong:**
 - Push back with technical reasoning
 - Show code/tests that prove it works

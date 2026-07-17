@@ -118,7 +118,11 @@ TMPDIR/TEMP/TMP - never a hardcoded `/tmp`) with `cache/ logs/ perf/` subdirs,
 validates the running interpreter is Python 3.13+, and writes `session.json` into
 that scratch dir holding every path later steps need.
 
-`SKILL_DIR` is the directory containing `setup_env.py` (the skill directory).
+`SKILL_DIR` is this skill's own directory - the one holding this `SKILL.md` and
+`setup_env.py` (`skills/coding-python-performance-review/` inside the plugin). You
+must set it YOURSELF before the bootstrap: `session.json` is written BY
+`setup_env.py`, so the `skill_dir` field read back in the next block does not exist
+yet and cannot be used to launch the script that creates it.
 `uv run` is preferred (it fetches an isolated 3.13+ interpreter); plain `python`
 works too. Run it once, capturing the printed session-file path. The script prints
 `Session file: <path>` on its first line, echoes the full JSON, and exits non-zero
@@ -128,6 +132,11 @@ too old. `session.json` replaces the old `/tmp/bx-perf-session` and
 `skill_dir`, `python`, and `status`.
 
 ```bash
+# Set SKILL_DIR to this skill's own directory (the one holding setup_env.py) - substitute
+# the real absolute path. Nothing else can supply it yet: session.json does not exist until
+# the next line runs.
+SKILL_DIR="/absolute/path/to/skills/coding-python-performance-review"
+
 # Run the bootstrap once; capture the path to session.json from its output.
 BX_PERF_OUT="$(uv run "$SKILL_DIR/setup_env.py" || python "$SKILL_DIR/setup_env.py")" || {
     echo "Setup failed - aborting performance analysis"; exit 1
@@ -340,7 +349,7 @@ else
 fi
 
 if [ -n "$python_files" ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" $python_files > "$BX_PERF_TMPDIR/memory_candidates.txt" 2>&1 || true
+    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" $python_files > "$BX_PERF_TMPDIR/cache/memory_candidates.txt" 2>&1 || true
     echo "Unbounded-memory candidates identified"
 fi
 ```
@@ -393,10 +402,18 @@ Wait for the user's response before proceeding to the next finding.
 3. Run tests, show diff
 
 **On accept  -  Cache Candidate:**
-1. Add `from functools import lru_cache` if missing
-2. Add `@lru_cache` decorator above function
-3. If mutable args (list/dict), convert to tuples or use wrapper
-4. Run tests, show diff
+1. **Measure first - this is what "never cache without evidence" means in practice.** Copy
+   `profile_with_cache_template.py` (this skill's own directory) to
+   `$BX_PERF_TMPDIR/cache/profile_cache_<function>.py`, set its `MODULE_NAME` and
+   `FUNCTION_NAME` to the candidate, and run it with `$PYTHON_CMD`. It times the suite with and
+   without the cache and prints the hit rate, the improvement, and a RECOMMEND/REJECT verdict
+   against the >20% hit-rate / >5% improvement thresholds.
+2. **On REJECT: do not add the cache.** Report the measured numbers and move on - a measured
+   rejection is a successful finding, not a failure.
+3. On RECOMMEND: add `from functools import lru_cache` if missing
+4. Add `@lru_cache` decorator above function
+5. If mutable args (list/dict), convert to tuples or use wrapper
+6. Run tests, show diff, and quote the measured hit rate and improvement as the evidence
 
 **On accept  -  Ineffective Cache (removal):**
 1. Remove `@lru_cache` / `@cache` decorator from the function
@@ -449,13 +466,15 @@ print(chosen)
 PY
 )"
 
-# Run full test suite
+# Run full test suite.
+# PIPESTATUS[0] is load-bearing: after a pipe, $? is tee's status (tee virtually always
+# succeeds), so reading $? here would report SUCCESS over a failing suite.
 if [ -f "Makefile" ] && grep -q '^test' Makefile; then
     make test 2>&1 | tee "$BX_PERF_TMPDIR/cache/final_test_run.txt"
-    TEST_EXIT=$?
+    TEST_EXIT=${PIPESTATUS[0]}
 else
     $PYTHON_CMD -m pytest ${TESTDIR:+"$TESTDIR"} -v 2>&1 | tee "$BX_PERF_TMPDIR/cache/final_test_run.txt"
-    TEST_EXIT=$?
+    TEST_EXIT=${PIPESTATUS[0]}
 fi
 
 if [ $TEST_EXIT -eq 0 ]; then

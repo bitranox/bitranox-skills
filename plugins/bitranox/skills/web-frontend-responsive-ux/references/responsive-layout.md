@@ -21,8 +21,9 @@ rounded corners cover it (worst in landscape):
 .nav-next { right: max(0.5rem, env(safe-area-inset-right)); }
 ```
 
-Shipping `viewport-fit=cover` with NO `env(safe-area-inset-*)` anywhere is a defect - the
-audit flags it.
+Shipping `viewport-fit=cover` with NO `env(safe-area-inset-*)` anywhere is a defect. The
+automated audit does NOT detect this - check it by hand (grep the CSS for
+`safe-area-inset` when the meta tag sets `viewport-fit=cover`).
 
 ## Dynamic viewport units: svh / lvh / dvh
 

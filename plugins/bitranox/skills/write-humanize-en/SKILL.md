@@ -5,7 +5,7 @@ description: Use when editing, reviewing, or humanizing English prose (blog post
 
 # Humanizer: Remove AI Writing Patterns
 
-> **IMPORTANT — Scope guard:** This skill is for **prose content only** — blog posts, emails,
+> **IMPORTANT - Scope guard:** This skill is for **prose content only** - blog posts, emails,
 > articles, essays, marketing copy, README narratives, and similar human-facing text.
 > Do **NOT** apply humanizing to: source code, code comments, docstrings, API documentation,
 > CLI help text, commit messages, changelogs, type annotations, configuration files, or any
@@ -28,11 +28,13 @@ its model). See `bitranox:process-agents-subagent-driven-development` ("The sess
 
 When given text to humanize:
 
-1. **Identify AI patterns** - Scan for the patterns listed below
-2. **Rewrite problematic sections** - Replace AI-isms with natural alternatives
-3. **Preserve meaning** - Keep the core message intact
-4. **Maintain voice** - Match the intended tone (formal, casual, technical, etc.)
-5. **Add soul** - Don't just remove bad patterns; inject actual personality
+1. **Run the deterministic typographic pass** - `python3 scripts/strip_typographic_tells.py FILE`
+   (see "Deterministic typographic pass" below). Always first, before any judgment rewriting.
+2. **Identify AI patterns** - Scan for the patterns listed below
+3. **Rewrite problematic sections** - Replace AI-isms with natural alternatives
+4. **Preserve meaning** - Keep the core message intact
+5. **Maintain voice** - Match the intended tone (formal, casual, technical, etc.)
+6. **Add soul** - Don't just remove bad patterns; inject actual personality
 
 ---
 
@@ -52,7 +54,11 @@ quotes and guillemets, ellipsis and dot leaders, non-breaking and zero-width spa
 heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
 mark, bullet) untouched. Do not run it on this skill file itself - the examples below
-contain those characters on purpose. After the pass, do the judgment-based rewrites.
+contain those characters on purpose. That is also why every such example is kept inside a
+code span or fenced block: the tell-sweep hook skips code, so the exact character survives
+both the hook and an accidental strip. A prose warning alone did not protect them (a
+past pass flattened the curly-quote example into two identical halves). Put any new
+example of a tell in backticks. After the pass, do the judgment-based rewrites.
 
 ---
 
@@ -258,7 +264,7 @@ Avoiding AI patterns is only half the job. Sterile, voiceless writing is just as
 
 ### 13. Em Dash Overuse
 
-**Problem:** LLMs use em dashes ("—") and EN Dashes ("–") more than humans, mimicking "punched up" sales-like writing by over-emphasizing clauses or 
+**Problem:** LLMs use em dashes (`—`) and EN Dashes (`–`) more than humans, mimicking "punched up" sales-like writing by over-emphasizing clauses or 
 parallelisms. 
 Most useful when combined with other indicators. May be less common in newer AI text (late 2025 onwards). Remove those completely or if necessary replace 
 them with Hyphens "-"
@@ -316,7 +322,7 @@ them with Hyphens "-"
 **Before:**
 > 🚀 **Launch Phase:** The product launches in Q3
 > 💡 **Key Insight:** Users prefer simplicity
-> ✅ **Next Steps:** Schedule follow-up meeting
+> `✅` **Next Steps:** Schedule follow-up meeting
 
 **After:**
 > The product launches in Q3. User research showed a preference for simplicity. Next step: schedule a follow-up meeting.
@@ -325,13 +331,19 @@ them with Hyphens "-"
 
 ### 18. Curly Quotation Marks and Apostrophes
 
-**Problem:** ChatGPT and DeepSeek typically use curly quotes ("...") instead of straight quotes ("..."). They may do this inconsistently within the same response. They also use curly apostrophes (') instead of straight apostrophes ('). Note: Gemini and Claude typically do not use curly quotes. Microsoft Word and macOS/iOS "smart quotes" also produce curly quotes, so this alone doesn't prove AI use.
+**Problem:** ChatGPT and DeepSeek typically use curly quotes (`“ ”`) instead of straight quotes (`"`). They may do this inconsistently within the same response. They also use curly apostrophes (`’`) instead of straight apostrophes (`'`). Note: Gemini and Claude typically do not use curly quotes. Microsoft Word and macOS/iOS "smart quotes" also produce curly quotes, so this alone doesn't prove AI use.
 
-**Before:**
-> He said “the project is on track” but others disagreed. They felt the timeline wasn’t realistic.
+**Before:** (shown in a code block so the curly characters survive verbatim)
+
+```text
+He said “the project is on track” but others disagreed. They felt the timeline wasn’t realistic.
+```
 
 **After:**
-> He said "the project is on track" but others disagreed. They felt the timeline wasn't realistic.
+
+```text
+He said "the project is on track" but others disagreed. They felt the timeline wasn't realistic.
+```
 
 ---
 
@@ -571,17 +583,19 @@ Also watch for: `contentReference[oaicite:0]{index=0}`, `oai_citation`, `+1` art
 
 ## Process
 
-1. Read the input text carefully
-2. Identify all instances of the patterns above
-3. Rewrite each problematic section
-4. Ensure the revised text:
+1. Run the deterministic typographic pass: `python3 scripts/strip_typographic_tells.py FILE`
+   (mandatory, and always before any judgment rewriting)
+2. Read the input text carefully
+3. Identify all instances of the patterns above
+4. Rewrite each problematic section
+5. Ensure the revised text:
    - Sounds natural when read aloud
    - Varies sentence structure naturally
    - Uses specific details over vague claims
    - Maintains appropriate tone for context
    - Uses simple constructions (is/are/has) where appropriate
    - Has no uniform sentence length
-5. Present the humanized version
+6. Present the humanized version
 
 ## Output Format
 
@@ -604,7 +618,7 @@ Provide:
 >
 > - 💡 **Speed:** Code generation is significantly faster, reducing friction and empowering developers.
 > - 🚀 **Quality:** Output quality has been enhanced through improved training, contributing to higher standards.
-> - ✅ **Adoption:** Usage continues to grow, reflecting broader industry trends.
+> - `✅` **Adoption:** Usage continues to grow, reflecting broader industry trends.
 >
 > While specific details are limited based on available information, it could potentially be argued that these tools might have some positive effect. Despite challenges typical of emerging technologies--including hallucinations, bias, and accountability--the ecosystem continues to thrive. In order to fully realize this potential, teams must align with best practices.
 >

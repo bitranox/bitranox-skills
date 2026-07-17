@@ -1,6 +1,6 @@
 ---
 name: coding-python-enforce-data-architecture-strict
-description: Use when refactoring or reviewing Python code to enforce a strict data architecture - Pydantic models at every external boundary, typed models (never raw dicts) inside the app, Enums/IntEnum for all fixed string values, and minimal input-to-output conversions. Use when asked to eliminate dict parameters, stringly-typed status/mode values, Model->dict->Model conversion chains, or compatibility shims, or to make a Python data flow type-safe end to end.
+description: Use when refactoring or reviewing Python code to enforce a strict data architecture - Pydantic models at every external boundary, typed models (never raw dicts) inside the app, Enums for all fixed categorical values, and minimal input-to-output conversions. Use when asked to eliminate dict parameters, stringly-typed status/mode values, Model->dict->Model conversion chains, or compatibility shims, or to make a Python data flow type-safe end to end.
 ---
 
 # Data Architecture Enforcement
@@ -117,7 +117,7 @@ output = OutputModel(**asdict(internal))
    - **Prefer Pydantic over dataclass** - only use `@dataclass` when there's a clear benefit and no Pydantic conversion needed
    - If you see Pydantic -> dataclass -> Pydantic, eliminate the dataclass and use Pydantic throughout
    - Never create or handle internal dict structures
-   - Convert dict inputs to dataclasses as early as possible
+   - Convert dict inputs to Pydantic models as early as possible
    - All functions must operate on dataclasses or Pydantic fields
    - **Minimize total conversions** - count them, ideal is ONE at input boundary, ONE at output boundary
    - Replace fixed string sets with `Enum` classes
@@ -134,7 +134,8 @@ output = OutputModel(**asdict(internal))
 INITIALIZATION:
   1. Read all target files
   2. Read pyproject.toml (if exists) to identify configured tools
-  3. Use TodoWrite to create checklist with one item per file
+  3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions
+     step 1 (one list, extended - not a second, competing list)
   4. Create state file `.data_arch_violations.json`:
      {
        "pass": 0,
@@ -180,7 +181,8 @@ INITIALIZATION:
        * Instruction to UPDATE the state file after fixing:
          - Set file status to "in_progress"
          - Clear the violations array for that file
-         - Decrement total_violations by number of fixed violations
+         - Recalculate total_violations as the sum of all violations arrays (never
+           decrement: parallel subagents sharing one counter race and lose updates)
        * Instruction to return: {"file": "path", "fixed": ["violation1", ...], "remaining": [...]}
      - After all subagents complete: Read state file and verify updates
 
@@ -322,17 +324,17 @@ def process_user(data: UserInput) -> UserOutput:
 Forced-choice pressure runs (deadline + sunk cost + green suite + a reviewer's LGTM) produced
 exactly these excuses - two baseline subjects shipped incomplete conversions using them:
 
-| Excuse                                                              | Reality                                                                                                                                                 |
-|----------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "The remaining dict params are internal helpers - do not gold-plate" | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt. |
-| "The reviewer's LGTM overrode the definition of done"               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance. |
-| "I'm basically done - the last functions do not matter"             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.       |
-| "Shipping verified-green beats an unverified conversion"            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.            |
+| Excuse                                                                              | Reality                                                                                                                                                                                                                                                             |
+|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "The remaining dict params are internal helpers - do not gold-plate"                | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt.                                                |
+| "The reviewer's LGTM overrode the definition of done"                               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance.                                                                  |
+| "I'm basically done - the last functions do not matter"                             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.                                                                          |
+| "Shipping verified-green beats an unverified conversion"                            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.                                                                                                                        |
 | "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under. |
-| "A StrEnum on the wire is risky - keep a shim accepting both"       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead.              |
-| "Enum internally, but DB/API stay raw strings - feels safer"        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                        |
-| "Tests pass, so the conversion chain does not matter"               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.    |
-| "TODO + follow-up ticket, clean it after the demo"                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.               |
+| "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead.                                                                                 |
+| "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                    |
+| "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                |
+| "TODO + follow-up ticket, clean it after the demo"                                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.                                                                                  |
 
 Catch yourself forming these phrases mid-run - "basically done", "internal helpers are fine",
 "tests are green so it's correct", "feels safer to accept both", "we'll get it later", "the
@@ -352,9 +354,12 @@ of stopping.
 **DO NOT STOP** until:
 - `.data_arch_violations.json` shows total_violations == 0
 - All tests/linters pass
-- Final verification grep finds nothing
+- Final verification finds no remaining REAL violation - judge each grep hit as STEP D
+  requires ("a hit is a lead, not proof"); a raw match count is not the gate
 
-**Start now:**
+**Start now** (this is INITIALIZATION - do all four):
 1. Read the target files
-2. Create `.data_arch_violations.json` with initial state
-3. Launch parallel analysis subagents for STEP A
+2. Read `pyproject.toml` (if it exists) to identify configured tools
+3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions step 1
+4. Create `.data_arch_violations.json` with initial state
+5. Launch parallel analysis subagents for STEP A

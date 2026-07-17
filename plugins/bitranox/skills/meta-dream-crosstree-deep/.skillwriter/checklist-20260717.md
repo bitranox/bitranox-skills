@@ -1,15 +1,12 @@
-# skill-writer checklist - meta-dream-crosstree-deep (2026-07-17, capture-first named in REQUIRED BACKGROUND)
+# skill-writer checklist - meta-dream-crosstree-deep (2026-07-17, org-chart proposals have a slot in the report)
 
-Change: the REQUIRED BACKGROUND enumerated crosstree's procedure (backup, inbound gather, promotion
-gate, ...) but OMITTED capture-first, so the exhaustive dream had no explicit wiring to the step that
-reads the session from disk. Now it names "capture-first reading the session from DISK via
-`dream_state.py session-review`" (fix-shared-bug-in-all-siblings with meta-dream-crosstree).
+Change: Step 5 reuses crosstree's report enumeration verbatim, which has no slot for step 4's org-chart audit
+(moves/rungs/splits/umbrella-repo) - a deep run could generate proposals and never surface them.
 
 - [x] Receipt held (skill_receipt.py start meta-skill-writer, this session)
-- [x] RED: same verified gap as crosstree - grep showed -deep cites dream-core only for dedup
-      semantics; an enumerated background list that omits a step is how that step gets skipped
-- [x] GREEN: capture-first + session-review named in the enumeration it actually follows
-- [x] Single-sourced: the rule lives in dream-core; -deep inherits via crosstree - contract test green
+- [x] RED: read step 5's report list against step 4's outputs - no line covers org-chart proposals
+- [x] GREEN: added the org-chart line to the report enumeration
+- [x] Verified against ground truth before editing (not taken from the review agent's report on faith)
 - [x] CSO description: unchanged (body edit only)
-- [x] Security scan: prose only
-- [x] Docs describe current state: no legacy narrative
+- [x] Security scan: prose/doc change only, no secrets, hostnames, or private paths
+- [x] Docs describe current state: no legacy/migration narrative introduced

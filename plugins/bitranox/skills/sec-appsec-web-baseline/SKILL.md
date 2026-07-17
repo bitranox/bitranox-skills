@@ -17,7 +17,9 @@ The skill owns these dimensions and nothing else:
 1. **Security response headers** - CSP, HSTS, X-Content-Type-Options, X-Frame-Options/`frame-ancestors`,
    Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy, X-XSS-Protection (must be `0`).
 2. **Cookie flags** - `Secure` / `HttpOnly` / `SameSite` on every `Set-Cookie`.
-3. **Transport** - HTTP->HTTPS 301/308 redirect, TLS 1.2/1.3 only, no mixed content.
+3. **Transport** - HTTP->HTTPS 301/308 redirect, no mixed content. (TLS *version* is NOT graded by
+   `audit_headers.py`; a clean scan says nothing about TLS 1.2/1.3-only. Check it by hand with
+   `testssl.sh` or `openssl s_client -tls1_1` if it matters.)
 4. **Information leakage** - server/framework version tokens.
 
 Use the Read tool to load the reference below before proposing fixes.

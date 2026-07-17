@@ -111,6 +111,7 @@ session's uncommitted files. Before any commit, verify state (cheap, determinist
 ```bash
 git branch --show-current                            # the branch you expect? (not a sibling's, not detached)
 git rev-list --left-right --count HEAD...@{upstream}  # "<ahead> <behind>"; behind/diverged = origin advanced
+git status --short                                    # any A/M you did not stage? the branch-guard misses those
 git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (pathspec); -m BEFORE --
 ```
 

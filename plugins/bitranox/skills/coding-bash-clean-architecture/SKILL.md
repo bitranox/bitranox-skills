@@ -36,12 +36,12 @@ model is fixed" / "Concrete tiers").
 
 **Inner layers never call outer layer functions directly.** Dependencies point inward only.
 
-| Layer                | Contains                                                            | Rules                                                                  |
-|----------------------|---------------------------------------------------------------------|------------------------------------------------------------------------|
-| **Domain**           | Pure functions: validation, computation, transformation             | No I/O, no external commands, no `echo` to terminal, no env mutation   |
-| **Application**      | Use case functions, port contracts (documented function signatures) | Orchestrates domain + ports; receives port function names as arguments |
-| **Adapters**         | I/O functions: file, network, system, CLI parsing                   | Implements port contracts; maps external data to/from domain format    |
-| **Composition Root** | `main()` wiring                                                     | Binds adapters to ports; entry point                                   |
+| Layer                | Contains                                                            | Rules                                                                                                             |
+|----------------------|---------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| **Domain**           | Pure functions: validation, computation, transformation             | Stdout only for return values, stderr only for an error line; no other I/O, no external commands, no env mutation |
+| **Application**      | Use case functions, port contracts (documented function signatures) | Orchestrates domain + ports; receives port function names as arguments                                            |
+| **Adapters**         | I/O functions: file, network, system, CLI parsing                   | Implements port contracts; maps external data to/from domain format                                               |
+| **Composition Root** | `main()` wiring                                                     | Binds adapters to ports; entry point                                                                              |
 
 ## SOLID Adapted to Bash
 
@@ -271,13 +271,15 @@ test_load_settings() {
 
 - **Structured logging** to stderr: `log_info "msg" >&2` (never to stdout  -  that's for data)
 - Thread `TRACE_ID` via environment variable or global (set once in composition root)
-- Log at adapter boundaries only; domain stays silent
+- Log at adapter boundaries only; the domain emits no LOG lines. This is about logging, not
+  error reporting: a domain function may still write one `error: ...` line to stderr before
+  `return 1` (see Error Handling), which is its error channel, not a log.
 - Use `PS4='+ ${BASH_SOURCE}:${LINENO}: '` with `set -x` for debug tracing
 
 ## Non-Negotiables Checklist
 
 - [ ] Dependencies point inward only (domain calls nothing external)
-- [ ] Domain pure: no I/O, no external commands, no `echo` to terminal (only stdout for return values)
+- [ ] Domain pure: stdout only for return values, stderr only for an `error: ...` line before `return 1`; no other I/O, no external commands, no env mutation
 - [ ] Use cases receive port function names as parameters (DIP)
 - [ ] `set -euo pipefail` at script top
 - [ ] Structured exit codes (not random numbers)
@@ -307,6 +309,22 @@ test_load_settings() {
 7. Add `set -euo pipefail` and structured exit codes
 8. Write domain unit tests (pure function tests, no mocking)
 9. Write stub adapter tests for use cases
+10. Register `trap` cleanup once in the composition root
+11. Run `shellcheck -x script.sh` and fix every warning - this is the only runnable gate in
+    the skill, so the path is not finished until it passes clean
+
+## Red Flags
+
+The "When NOT to use" exemptions above are real, but they are also the easiest thing to talk
+yourself into. These thoughts mean STOP - you are rationalizing:
+
+| Excuse                                     | Reality                                                                     |
+|--------------------------------------------|-----------------------------------------------------------------------------|
+| "It's only ~30 lines, layers are overkill" | Count it. Scripts grow; the exemption is for scripts that STAY trivial.     |
+| "It's just a wrapper around `rsync`"       | If it validates, branches, or transforms, it has a domain. Wrappers do not. |
+| "One `grep` in the domain is harmless"     | That is the first external command. Wrap it in an adapter now, not later.   |
+| "I'll add the layers once it grows"        | Nobody refactors a working script. The layers are cheapest at line 1.       |
+| "The whole thing IS I/O orchestration"     | Then it has no business logic - verify that, do not assume it.              |
 
 ## Common Mistakes
 

@@ -15,10 +15,12 @@ a project's own conventions win.
 
 Before adding a library here, vet it: trustworthy (reputable maintainer or community, not a
 typo-squat), common (widely adopted), and modern (actively maintained, current releases). Each
-row must carry all three of: a short **description** of what it is for (in the `Use` cell), the
-older library/libraries it **replaces** (in the `Avoid` cell), and **why** it is better (the
-parenthetical note in the `Use` cell). Keep rows one line; do not add anyone's private or
-in-house packages here.
+new row must carry: a short **description** of what it is for (in the `Use` cell), the older
+library/libraries it **replaces** (in the `Avoid` cell), and - **whenever the pick is not
+self-evident** - **why** it is better (the parenthetical note in the `Use` cell). A swap that
+explains itself (`pathlib.Path` over `os.path`, `pytest` over `unittest`) needs no parenthetical;
+a contested or trade-off pick (`isal` vs `deflate`, one MySQL driver over another) always does.
+Keep rows one line; do not add anyone's private or in-house packages here.
 
 If the new library overlaps in function with an existing entry, resolve it - never leave two
 rows silently competing for the same job:

@@ -24,8 +24,11 @@ Framework-agnostic, typed Python architecture optimized for **change**, **testab
 - Refactoring framework-centric code to layered architecture
 
 **When NOT to use:**
-- Single-file scripts or throwaway prototypes (use SCRIPT mode -- see `script-mode.md`)
 - Projects already using a different established architecture
+
+**Single-file scripts and throwaway prototypes stay in this skill** - they route to SCRIPT mode
+(see `script-mode.md` and the mode-selection table below), one of this skill's four operating
+modes. Do not drop the skill for them.
 
 **Capability check (REVIEW / judgment).** Spotting architecture/layer violations and the
 true-vs-accidental-duplication call is capability-sensitive - a weaker model misjudges it. Run REVIEW
@@ -155,7 +158,7 @@ Brief, practical guidelines for structuring modules in Python layered architectu
 
 **No concrete paths, URLs, or hostnames in the domain.** Filesystem paths, endpoint URLs, hostnames, and external-service strings live ONLY in config passed (as a Pydantic model) from the composition root into adapters. The domain/application layers never read an env var or hardcode a path. This is testable: a unit test that instantiates an adapter with explicit values and reads NO env var proves the layer is pure -- if a test needs an env var or a real path constant, a config value leaked into the wrong layer.
 
-**Prefer immutability in the domain.** Use `@dataclass(frozen=True, slots=True)` for entities and value objects. Push mutable state to adapters where it belongs, protected by the Unit of Work pattern.
+**Keep the domain immutable.** Use `@dataclass(frozen=True, slots=True)` for entities and value objects. Push mutable state to adapters where it belongs, protected by the Unit of Work pattern. This is not a preference: "no mutable state in the domain" is a non-negotiable below.
 
 **Use `Protocol` to invert dependencies.** When the natural direction of a function call opposes the desired dependency direction, introduce a `Protocol` in the inner layer and implement it in the outer layer. This is what makes the dependency rule possible.
 
@@ -593,6 +596,7 @@ Architecture is defined by boundaries and dependencies, not by process boundarie
 
 - [ ] Dependencies point inward only (enforced via `import-linter`)
 - [ ] Domain pure (no I/O, logs, frameworks, mutable state)
+- [ ] No concrete paths, URLs, hostnames, or env-var reads in domain/application (config passed in from the composition root)
 - [ ] Use cases free of framework/driver types
 - [ ] Request/response DTOs independent of entities and framework types
 - [ ] UoW binds transaction-scoped repos
@@ -662,25 +666,27 @@ Multi-context: add per-context layering + independence contracts. See `review-ch
 6. Write contract tests for ports/adapters
 7. Route handlers to use cases
 8. Remove direct framework/ORM calls from core
+9. Add the `import-linter` contracts and run them clean - this is what enforces the
+   inward-only dependency rule the checklist calls non-negotiable
 
 ## Common Mistakes
 
-| Mistake                                  | Fix                                                                                         |
-|------------------------------------------|---------------------------------------------------------------------------------------------|
-| Importing ORM models in domain           | Domain uses plain dataclasses; adapters map to/from ORM                                     |
-| Pydantic models in domain layer          | Pydantic at boundaries only; domain uses `@dataclass(frozen=True, slots=True)`              |
-| Use case returns framework response      | Use case returns DTO; adapter maps to HTTP/CLI response                                     |
-| Passing `dict[str, Any]` between layers  | Define typed dataclasses or Pydantic models at each boundary                                |
-| Raw DB connections in use cases          | Use UoW pattern; use case receives transaction-bound repos                                  |
-| Logging in domain entities               | Domain stays pure; observability hooks at adapter boundaries                                |
-| Reading `os.environ` in core             | Centralize config parsing; inject via composition root                                      |
-| Framework types leaking into ports       | Ports use stdlib types only (`Protocol`, `dataclass`, `TypedDict`)                          |
-| Unifying accidentally similar DTOs       | Each use case gets its own request/response -- they serve different actors and will diverge |
-| Passing entities across boundaries       | Use separate DTOs; entities and view models change for different reasons                    |
-| Folder structure reveals framework       | Organize by bounded context, not by framework convention                                    |
-| Starting with microservices              | Start monolith with clean boundaries; extract services when proven need exists              |
-| Tests structurally coupled to production | Test through a Testing API that hides internal structure                                    |
-| Premature boundary elimination           | Verify duplication is real before unifying; similar code often serves different actors      |
+| Mistake                                  | Fix                                                                                                                                                        |
+|------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Importing ORM models in domain           | Domain uses plain dataclasses; adapters map to/from ORM                                                                                                    |
+| Pydantic models in domain layer          | Pydantic at boundaries only; domain uses `@dataclass(frozen=True, slots=True)`                                                                             |
+| Use case returns framework response      | Use case returns DTO; adapter maps to HTTP/CLI response                                                                                                    |
+| Passing `dict[str, Any]` between layers  | Define typed dataclasses or Pydantic models at each boundary                                                                                               |
+| Raw DB connections in use cases          | Use UoW pattern; use case receives transaction-bound repos                                                                                                 |
+| Logging in domain entities               | Domain stays pure; observability hooks at adapter boundaries                                                                                               |
+| Reading `os.environ` in core             | Centralize config parsing; inject via composition root                                                                                                     |
+| Framework types leaking into ports       | No framework/driver types in ports. Stdlib (`Protocol`, `dataclass`, `TypedDict`) plus your own domain types and DTOs (`Money`, `RequestContext`) are fine |
+| Unifying accidentally similar DTOs       | Each use case gets its own request/response -- they serve different actors and will diverge                                                                |
+| Passing entities across boundaries       | Use separate DTOs; entities and view models change for different reasons                                                                                   |
+| Folder structure reveals framework       | Organize by bounded context, not by framework convention                                                                                                   |
+| Starting with microservices              | Start monolith with clean boundaries; extract services when proven need exists                                                                             |
+| Tests structurally coupled to production | Test through a Testing API that hides internal structure                                                                                                   |
+| Premature boundary elimination           | Verify duplication is real before unifying; similar code often serves different actors                                                                     |
 
 ## Reference Files
 
