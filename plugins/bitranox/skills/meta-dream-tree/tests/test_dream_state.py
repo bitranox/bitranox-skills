@@ -1,7 +1,4 @@
 """Tests for dream_state.py (meta-dream cadence-marker CLI). ASCII only."""
-import sys
-from pathlib import Path
-
 import pytest
 
 import dream_state as D
@@ -53,6 +50,66 @@ def test_unknown_command_errors(home):
     assert D.main(["frobnicate", "/p/x"]) == 2
 
 
+# ---- session-review: the dream reads the session from DISK, incrementally --------------------
+
+def _session(home, proj, tmp_path, text):
+    tp = tmp_path / "sess.jsonl"
+    tp.write_text(text, encoding="utf-8")
+    D.sig.record_session_meta(proj, "sid1", str(tp))
+    return tp
+
+
+def test_session_review_prints_unreviewed_transcript_then_reviewed_advances(home, tmp_path, capsys):
+    # This is the compaction fix: the dream reads the FILE (which survives compaction), not its
+    # context - and never re-reads what it already consumed.
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the flag is --check-tree"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "--check-tree" in out                      # the on-disk content came back
+
+    assert D.main(["session-reviewed", proj]) == 0    # advance the mark
+    capsys.readouterr()
+    D.main(["session-review", proj])
+    out2 = capsys.readouterr().out
+    assert "--check-tree" not in out2                 # already consumed -> not re-fed to the model
+
+
+def test_session_review_surfaces_buffered_subagent_learnings_and_touched_paths(home, tmp_path, capsys):
+    # routing evidence is about LEVELS, so the touched path must live under a real CLAUDE.md-bearing
+    # dir (a path under no level is not routable and is correctly not surfaced)
+    tree = tmp_path / "tree"
+    (tree / ".claude-memory").mkdir(parents=True)
+    (tree / "CLAUDE.md").write_text("top\n", encoding="utf-8")
+    for p in ("cwdproj", "otherproj"):
+        (tree / p).mkdir()
+        (tree / p / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    proj = str(tree / "cwdproj")
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"hi"}}\n')
+    D.sig.record_session_meta(proj, "sidZ", str(tmp_path / "sess.jsonl"))
+    D.sig.buffer_subagent_learning("sidZ", {"agent_type": "Explore", "snippet": "rehome over-promotes"})
+    D.sig.record_touched_path("sidZ", str(tree / "otherproj" / "x.py"))
+    D.main(["session-review", proj])
+    out = capsys.readouterr().out
+    assert "rehome over-promotes" in out              # subagent findings are a dream input
+    assert str(tree / "otherproj") in out             # so is the routing evidence
+
+
+def test_session_review_is_quiet_when_nothing_new(home, tmp_path, capsys):
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"x"}}\n')
+    D.main(["session-review", proj])
+    capsys.readouterr()
+    D.main(["session-reviewed", proj])
+    capsys.readouterr()
+    assert D.main(["session-review", proj]) == 0
+    assert "NOTHING NEW" in capsys.readouterr().out.upper()
+
+
+def test_session_review_without_a_known_transcript_does_not_crash(home, capsys):
+    assert D.main(["session-review", "/unknown/proj"]) == 0
+
+
 # ---- corroboration gate (defect F): saw-promotable / should-promote / promoted --------------
 
 def test_should_promote_holds_then_promotes_across_two_dreams(home, capsys):
@@ -69,7 +126,8 @@ def test_should_promote_holds_then_promotes_across_two_dreams(home, capsys):
 
 def test_should_promote_is_read_only(home, capsys):
     # querying should-promote must NOT count as a sighting (else one query would corroborate it)
-    D.main(["saw-promotable", "s", "/p/x"]); capsys.readouterr()
+    D.main(["saw-promotable", "s", "/p/x"])
+    capsys.readouterr()
     for _ in range(3):
         D.main(["should-promote", "s", "/p/x"])
         assert capsys.readouterr().out.strip() == "hold"          # still 1 sighting after repeated reads
@@ -77,7 +135,8 @@ def test_should_promote_is_read_only(home, capsys):
 
 def test_promoted_clears_the_counter(home, capsys):
     D.main(["saw-promotable", "s", "/p/x"])
-    D.main(["saw-promotable", "s", "/p/x"]); capsys.readouterr()
+    D.main(["saw-promotable", "s", "/p/x"])
+    capsys.readouterr()
     assert D.main(["promoted", "s", "/p/x"]) == 0
     capsys.readouterr()
     D.main(["should-promote", "s", "/p/x"])

@@ -16,7 +16,8 @@ instead (the contract test fails duplicated family literals).
 
 ## Script homes (the helper scripts ship inside their owning skill, NOT hooks/)
 
-- `dream_state.py` (mode / due / done) -> `<plugin>/skills/meta-dream-tree/dream_state.py`
+- `dream_state.py` (mode / due / done / session-review / session-reviewed / saw-promotable /
+  should-promote / promoted) -> `<plugin>/skills/meta-dream-tree/dream_state.py`
 - `reconcile_memory_index.py` (--check) -> `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`
 
 Launch either cross-platform through the same shim as the engine:
@@ -64,6 +65,18 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
 Enumerate this session's durable learnings and capture via `bitranox:meta-self-improve` BEFORE
 consolidating. `not-due` never suppresses capture; an absent store is the trigger to CREATE one;
 routing a learning only into a CLAUDE.md is NOT capture. Verify "nothing durable" - never assume.
+
+**Read the session from DISK, not from what you remember.** Run
+`dream_state.py session-review "<cwd>"` first. Your context is not the session: a compaction clears
+the CONTEXT while the transcript FILE survives intact, so anything you "skim from memory" after a
+compaction is the summary, and the detail is silently lost. `session-review` returns the material
+from disk: the not-yet-reviewed transcript stretch, the SUBAGENT learnings buffered this session
+(they are NOT in your transcript at all and die uncaptured), and the touched-path ROUTING EVIDENCE
+(which repos this session edited that are not the cwd - route `--proj` by SUBJECT). It is
+INCREMENTAL: a per-reviewer watermark means an already-consumed prefix is never re-read, so a second
+dream in one session costs nothing and re-analyzes nothing. When the pass is done, run
+`dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop
+gate will not let the session stop until this nap has run.
 
 ## Backup + manifest (before any edit)
 

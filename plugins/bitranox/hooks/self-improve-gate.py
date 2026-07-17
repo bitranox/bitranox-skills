@@ -77,6 +77,26 @@ def _routing_hint(event, proj):
         return ""
 
 
+def _nap_owed_hint(proj):
+    """Prose demanding the post-compaction consolidation, or '' when none is owed.
+
+    A compaction clears the model's CONTEXT but NOT the transcript file, so the pre-compaction
+    stretch is still recoverable - by a pass that reads from DISK. Hooks have no model and cannot run
+    that pass, so PostCompact records the obligation and this turns it into a Stop-block."""
+    try:
+        if not _sig.is_nap_owed(proj):
+            return ""
+        return ("A CONTEXT COMPACTION happened and the consolidation has not run since. Compaction "
+                "cleared your context but NOT the session transcript on disk, so this session's "
+                "earlier learnings are still recoverable - but ONLY from the file. Before you stop: "
+                'run the nap (Skill tool, name "meta-dream-nap"). Read the session from DISK '
+                "(dream_state.py session-review), not from what you still remember - what you "
+                "remember is the compacted summary. It is incremental: only the part no reviewer has "
+                "consumed yet comes back. ")
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        return ""
+
+
 def _subagent_hint(session):
     """Prose naming learnings a SUBAGENT found this session, or '' when none are buffered.
 
@@ -157,6 +177,13 @@ def main():
     proj_key = hashlib.sha1(proj.encode("utf-8", "replace")).hexdigest()[:16]
     state = Path(tempfile.gettempdir()) / ("claude-self-improve-%s.state" % proj_key)
 
+    # The dream is a model pass and never receives `transcript_path`; this hook gets it every turn,
+    # so record it (with the session id) for the dream to look up by cwd and read from DISK.
+    try:
+        _sig.record_session_meta(proj, event.get("session_id") or "", transcript)
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        pass
+
     last_user, last_asst = _last_messages(transcript)
     if not (last_user.strip() or last_asst.strip()):
         return 0
@@ -173,7 +200,11 @@ def main():
     # in this transcript, so no main-turn pattern can ever fire for it.
     sub_hint = _subagent_hint(event.get("session_id") or "")
 
-    if (sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
+    # A compaction cleared the CONTEXT (the transcript file survives). A hook cannot run the
+    # consolidation pass, so PostCompact records an obligation and we refuse to stop while it stands.
+    nap_hint = _nap_owed_hint(proj)
+
+    if (nap_hint or sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
             or _REALIZATION_PATTERN.search(last_asst)
             or _ENDORSE_PATTERN.search(last_user) or _ENDORSE_PATTERN.search(last_asst)):
         try:
@@ -182,7 +213,9 @@ def main():
         except OSError:
             pass
         sys.stdout.write(json.dumps({"decision": "block",
-                                     "reason": _REASON + _routing_hint(event, proj) + sub_hint}))
+                                     "reason": (nap_hint + _REASON + _routing_hint(event, proj)
+                                                + sub_hint) if nap_hint else
+                                               (_REASON + _routing_hint(event, proj) + sub_hint)}))
         if sub_hint:
             # Consumed once, like the SessionStart audit: a non-empty hint ALWAYS blocks, so the
             # model has now seen the findings verbatim and owns the judgement. Leaving them queued

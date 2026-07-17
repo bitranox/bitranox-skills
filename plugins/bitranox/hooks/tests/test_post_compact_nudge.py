@@ -2,7 +2,6 @@
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -31,6 +30,23 @@ def test_always_nudges_capture(monkeypatch, capsys):
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "meta-dream-nap" in ctx                 # the nap captures first, then chain-tidies
     assert json.loads(json.dumps({"x": ctx}))  # valid/escaped
+
+
+def test_records_that_a_nap_is_owed(monkeypatch, isolate_home):
+    # A hook cannot RUN the nap (no model in a hook). It records the obligation; the Stop gate
+    # enforces it. Without this the nudge is skippable and the compaction stretch is lost.
+    assert SIG.is_nap_owed("/proj/x") is False
+    run(monkeypatch, "/proj/x")
+    assert SIG.is_nap_owed("/proj/x") is True
+
+
+def test_says_the_transcript_survives_on_disk(monkeypatch, capsys):
+    # Compaction clears the CONTEXT, not the transcript FILE. Telling the model the detail is "gone"
+    # is what made the post-compaction nap work off a summary and lose the learnings.
+    run(monkeypatch)
+    ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "disk" in ctx.lower()
+    assert "detail is now gone" not in ctx.lower()
 
 
 def test_surfaces_and_consumes_salvaged_audit(monkeypatch, capsys, isolate_home):
