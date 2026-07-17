@@ -149,8 +149,10 @@ make test          # from now on, drive everything through make
 ```
 
 The Makefile keeps bmk installed and your project's `.venv` synced to `pyproject.toml`, so once it
-is in place you rarely call `bmk` directly. On **Windows** you still need a `make` implementation
-(`choco install make`, or GnuWin32 Make) -- bmk itself needs no shell.
+is in place you rarely call `bmk` directly. On **Windows** you still need a `make` implementation. On a
+non-admin box install it user-scope with `winget install --id ezwinports.make -e --scope user` (run
+`make` from Git Bash so the Makefile's `SHELL := /bin/bash` resolves); `choco install make` needs an
+elevated shell. bmk itself needs no shell.
 
 ## 3. Everyday commands
 
@@ -240,17 +242,18 @@ check and the audit all describe one environment.
 
 ## Troubleshooting
 
-| Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                    |
-|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                                                                  |
-| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                                                                     |
-| `make: command not found` (Windows)                                                 | Install a `make` (`choco install make` / GnuWin32). bmk itself needs no shell.                                                                                                                                                                 |
-| `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`. |
-| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                      |
-| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                  |
-| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                  |
-| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                             |
-| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                                                                    |
+| Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                        |
+|-------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                                                                      |
+| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                                                                         |
+| `make: command not found` (Windows)                                                 | Install a `make`: non-admin box -> `winget install --id ezwinports.make -e --scope user` (run make from Git Bash so `SHELL := /bin/bash` resolves); `choco install make` needs an elevated shell. bmk itself needs no shell.                       |
+| `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create vX.Y.Z` after. |
+| `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.     |
+| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                          |
+| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                      |
+| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                      |
+| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                                 |
+| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                                                                        |
 
 ## Further reading
 
