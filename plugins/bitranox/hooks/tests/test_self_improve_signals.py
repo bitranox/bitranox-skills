@@ -400,6 +400,75 @@ def test_clear_promotion_candidate(home):
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
 
 
+# ---- nap-owed marker: make the post-compaction nap non-optional -------------------------------
+
+def test_nap_owed_marker_lifecycle(home):
+    assert S.is_nap_owed("/p/x") is False
+    S.mark_nap_owed("/p/x")
+    assert S.is_nap_owed("/p/x") is True
+    assert S.is_nap_owed("/p/other") is False        # per-project
+    S.clear_nap_owed("/p/x")
+    assert S.is_nap_owed("/p/x") is False
+
+
+def test_mark_dream_done_clears_a_owed_nap(home):
+    # running the nap is what discharges the obligation - the marker must not outlive it
+    _mem(home, "/p/x")
+    S.mark_nap_owed("/p/x")
+    S.mark_dream_done("/p/x")
+    assert S.is_nap_owed("/p/x") is False
+
+
+# ---- session meta + transcript watermark (the dream reads from DISK, incrementally) -----------
+
+def test_session_meta_roundtrip_lets_the_dream_find_the_transcript(home, tmp_path):
+    # The dream is a MODEL pass - it never receives transcript_path. A hook (which does) records it,
+    # keyed by project, so the dream can look it up from the cwd it knows.
+    tp = tmp_path / "sess.jsonl"
+    tp.write_text("{}\n", encoding="utf-8")
+    S.record_session_meta("/p/x", "sid-1", str(tp))
+    meta = S.read_session_meta("/p/x")
+    assert meta["session_id"] == "sid-1" and meta["transcript_path"] == str(tp)
+    assert S.read_session_meta("/other") == {}
+
+
+def test_watermark_returns_only_new_content_and_advances(home, tmp_path):
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("line-a\nline-b\n", encoding="utf-8")
+    # first read: everything is new
+    text, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    assert "line-a" in text and "line-b" in text and off > 0
+    S.set_watermark("/p/x", str(tp), "llm", off)
+    # nothing new -> empty (this is what stops re-analyzing an already-reviewed session)
+    text2, off2 = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    assert text2 == "" and off2 == off
+    # append -> only the NEW part comes back
+    with tp.open("a", encoding="utf-8") as f:
+        f.write("line-c\n")
+    text3, off3 = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    assert "line-c" in text3 and "line-a" not in text3 and off3 > off
+
+
+def test_watermark_is_per_reviewer(home, tmp_path):
+    # the regex audit and the LLM review sit at DIFFERENT marks over the same transcript
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("x\n", encoding="utf-8")
+    _t, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    S.set_watermark("/p/x", str(tp), "llm", off)
+    assert S.unreviewed_transcript_text("/p/x", "llm", str(tp))[0] == ""
+    assert S.unreviewed_transcript_text("/p/x", "audit", str(tp))[0] != ""   # other reviewer unaffected
+
+
+def test_watermark_resets_when_the_transcript_shrinks_or_rotates(home, tmp_path):
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("aaaa\nbbbb\ncccc\n", encoding="utf-8")
+    _t, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    S.set_watermark("/p/x", str(tp), "llm", off)
+    tp.write_text("new\n", encoding="utf-8")            # rotated/replaced -> smaller than the mark
+    text, _o = S.unreviewed_transcript_text("/p/x", "llm", str(tp))
+    assert "new" in text                                 # must not silently skip a fresh transcript
+
+
 # ---- subagent-learnings buffer (a subagent cannot write memory; main drains this) --------------
 
 def test_subagent_learning_buffer_roundtrips_and_drains(home):

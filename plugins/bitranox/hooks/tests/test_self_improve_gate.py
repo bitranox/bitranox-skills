@@ -179,6 +179,45 @@ def test_no_subagent_buffer_no_extra_noise(tmp_path, monkeypatch, capsys):
     assert "SUBAGENT" not in _reason_of(capsys).upper()
 
 
+def test_owed_post_compaction_nap_blocks_even_with_a_quiet_turn(tmp_path, monkeypatch, capsys):
+    # A hook cannot RUN the nap (no model in a hook), so PostCompact records an obligation and the
+    # Stop gate refuses to stop while it is owed - that is what makes the nap non-optional.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    S.mark_nap_owed(str(tmp_path))
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")      # no signal at all
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "s"})
+    assert decision_of(capsys) == "block"
+
+
+def test_owed_nap_reason_directs_to_the_nap_and_says_read_from_disk(tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    S.mark_nap_owed(str(tmp_path))
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "s"})
+    reason = _reason_of(capsys)
+    assert "meta-dream-nap" in reason
+    assert "compact" in reason.lower()
+
+
+def test_no_owed_nap_no_block_on_a_quiet_turn(tmp_path, monkeypatch, capsys):
+    _iso_home(tmp_path, monkeypatch)
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "s"})
+    assert decision_of(capsys) is None
+
+
+def test_gate_records_session_meta_so_the_dream_can_find_the_transcript(tmp_path, monkeypatch, capsys):
+    # The dream is a model pass and never gets transcript_path; the gate has it every turn.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    tp = make_transcript(tmp_path, user="hello")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "sid9"})
+    meta = S.read_session_meta(str(tmp_path))
+    assert meta.get("transcript_path") == tp and meta.get("session_id") == "sid9"
+
+
 def test_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="ok thanks, looks good", asst="Great, nice. Done.")
     rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})

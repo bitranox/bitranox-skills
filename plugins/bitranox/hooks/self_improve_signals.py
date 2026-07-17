@@ -341,15 +341,55 @@ def dream_due(proj, threshold_s=_DREAM_THRESHOLD_S, now=None):
 
 def mark_dream_done(proj, now=None):
     """Record that a dream just completed: store the current timestamp AND fact signature, so the
-    nudge stays silent until a real fact changes (not merely a file mtime)."""
+    nudge stays silent until a real fact changes (not merely a file mtime). Also discharges an owed
+    post-compaction nap - running the dream IS what the marker was demanding."""
     f = last_dream_file(proj)
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps({"ts": time.time() if now is None else now,
                                  "sig": store_signature(proj)}), encoding="utf-8")
+        clear_nap_owed(proj)
         return True
     except OSError:
         return False
+
+
+# ---- nap-owed: make the post-compaction consolidation non-optional ----------------------------
+# Compaction clears the model's CONTEXT (the transcript file survives), so the learnings of the
+# pre-compaction stretch are only recoverable by a pass that reads from DISK. A hook cannot RUN that
+# pass (hooks have no model), so PostCompact records an OBLIGATION here and the Stop gate refuses to
+# stop while it is owed - the same proven block mechanism the capture nudge uses. Running the dream
+# (mark_dream_done) discharges it.
+
+def nap_owed_file(proj):
+    """Marker: a compaction happened and the consolidation pass has not run since."""
+    return _audit_dir() / (proj_key(proj) + ".nap-owed")
+
+
+def mark_nap_owed(proj):
+    """Record that a post-compaction nap is owed for `proj`. Best-effort."""
+    try:
+        f = nap_owed_file(proj)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def is_nap_owed(proj):
+    """True while a post-compaction nap is owed for `proj`."""
+    try:
+        return nap_owed_file(proj).is_file()
+    except OSError:
+        return False
+
+
+def clear_nap_owed(proj):
+    """Discharge the owed nap (best-effort)."""
+    try:
+        nap_owed_file(proj).unlink()
+    except OSError:
+        pass
 
 
 # ---- machine-local config: one JSON for all informed-consent knobs (recommended defaults) ----
@@ -605,6 +645,107 @@ def altitude_chain(proj):
         return ladder[:highest + 1]
     except (TypeError, ValueError):
         return [Path(proj)]
+
+
+# ---- session meta + transcript watermark: let the DREAM read the session from DISK -------------
+# The dream "skims the session" from the model's IN-CONTEXT memory, so anything compaction cleared
+# (or that scrolled out) is invisible to capture-first - the transcript FILE survives compaction, the
+# context does not. But a dream is a model pass and never receives `transcript_path`; a hook does, so
+# a hook records it here and the dream looks it up by cwd. The watermark then keeps that read
+# INCREMENTAL: each reviewer (the regex audit, the LLM review) has its own mark, so an
+# already-reviewed prefix is never re-read (re-feeding it to the model is the expensive waste).
+
+def session_meta_file(proj):
+    """Where the current session's id + transcript path are recorded for `proj` (a dream input)."""
+    return _audit_dir() / (proj_key(proj) + ".session.json")
+
+
+def record_session_meta(proj, session, transcript_path):
+    """Record the live session id + transcript path for `proj`. Best-effort; called from a hook."""
+    if not (proj and transcript_path):
+        return
+    try:
+        f = session_meta_file(proj)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"session_id": str(session or ""),
+                                 "transcript_path": str(transcript_path),
+                                 "ts": time.time()}, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_session_meta(proj):
+    """{'session_id','transcript_path','ts'} for `proj`, or {} when unknown."""
+    try:
+        d = json.loads(session_meta_file(proj).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def watermark_file(proj):
+    """Per-(transcript, reviewer) high-water marks: how far each reviewer has consumed."""
+    return _audit_dir() / (proj_key(proj) + ".watermark.json")
+
+
+def _watermarks(proj):
+    try:
+        d = json.loads(watermark_file(proj).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def get_watermark(proj, transcript, reviewer):
+    """Byte offset `reviewer` has already consumed of `transcript`. 0 when unmarked."""
+    try:
+        return int(_watermarks(proj).get(str(reviewer), {}).get(str(transcript), 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_watermark(proj, transcript, reviewer, offset):
+    """Record that `reviewer` has consumed `transcript` up to `offset`. Best-effort."""
+    try:
+        marks = _watermarks(proj)
+        marks.setdefault(str(reviewer), {})[str(transcript)] = int(offset)
+        f = watermark_file(proj)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(marks, sort_keys=True), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
+    """(new_text, new_offset) - the part of the transcript `reviewer` has NOT consumed yet.
+
+    Returns ("", mark) when nothing is new: that is what stops a second dream in one session from
+    re-analyzing (and re-paying for) the whole transcript. A transcript SHORTER than the mark means a
+    rotated/replaced file, so the mark is ignored and the whole file is returned rather than silently
+    skipping a fresh session. Reads at most `max_bytes` (the newest part) so a huge transcript can
+    never blow up the caller."""
+    transcript = transcript or (read_session_meta(proj) or {}).get("transcript_path") or ""
+    if not transcript:
+        return "", 0
+    try:
+        size = os.path.getsize(transcript)
+    except OSError:
+        return "", 0
+    mark = get_watermark(proj, transcript, reviewer)
+    if mark > size:
+        mark = 0                                   # rotated/replaced: never skip a fresh transcript
+    if mark >= size:
+        return "", mark
+    start = max(mark, size - max_bytes)
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(start)
+            if start > mark:
+                fh.readline()                      # drop the partial line after a capped seek
+            data = fh.read()
+    except OSError:
+        return "", mark
+    return data.decode("utf-8", "replace"), size
 
 
 # ---- subagent learnings: buffered by the SubagentStop hook, drained by the main capture --------
