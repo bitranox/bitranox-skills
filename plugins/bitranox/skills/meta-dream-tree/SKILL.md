@@ -211,6 +211,8 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 - [ ] Voice/firing residue swept (or "0 offenders" verified via the lint).
 - [ ] Post-dream manifest diff clean (only `level` changed, plus explicitly-decided merges/prunes).
 - [ ] `reconcile ... --check` printed `TOTAL problems: 0`.
+- [ ] `reconcile ... --check-tree "<cwd>"` printed `TOTAL tree problems: 0` (the cross-sibling
+      duplicate/orphan check the chain-only `--check` structurally cannot make).
 - [ ] Each behavioral pass reported against ITS OWN trigger (ran / no-op with the verified reason).
 - [ ] `dream_state.py done` ran; report + `/clear` nudge delivered.
 

@@ -79,8 +79,11 @@ follow it.
 
 ## Step 4 - Integrate and pass the gate
 
-Per `CONTRIBUTING.md`: add the new name to the domains list in
-`bitranox:meta-using-bitranox-skills`, bump `plugins/bitranox/.claude-plugin/plugin.json` one MINOR
+Per `CONTRIBUTING.md`: the domains list in `bitranox:meta-using-bitranox-skills` is CATEGORIES plus
+exemplars, not a per-skill roster (the injected available-skills list is the source of truth for
+completeness, and `repo-gate.py` deliberately does not enforce the reverse direction) - so touch it
+ONLY if the new skill's prefix is not already covered by a category. Then bump
+`plugins/bitranox/.claude-plugin/plugin.json` one MINOR
 (a new skill), add a `CHANGELOG.md` entry that describes what the skill does (no provenance
 narrative), ship passing tests, and run the gate (`python3 plugins/bitranox/hooks/repo-gate.py
 --ci`). Attribution lives in the structured credit line and the `THIRD_PARTY_NOTICES.md` entry,

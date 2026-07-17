@@ -7,7 +7,7 @@ Use these checklists when auditing bash scripts against clean architecture. Repo
 ## Architecture
 
 - [ ] Inward dependencies only; domain functions call no external commands
-- [ ] Domain functions contain no I/O (`echo` only to stdout for return values, never terminal)
+- [ ] Domain functions contain no I/O beyond their contract: stdout for return values, stderr for an `error: ...` line before `return 1`
 - [ ] Use cases receive I/O functions as parameters (DIP via function references)
 - [ ] Port contracts documented (args, stdout, return codes)
 - [ ] Functions prefixed by layer (`domain__`, `uc__`, `adapter__`)
@@ -34,7 +34,7 @@ Use these checklists when auditing bash scripts against clean architecture. Repo
 
 - [ ] Domain/application return meaningful codes (0=ok, 1=error, etc.)
 - [ ] Exit codes mapped to human meaning only in composition root
-- [ ] Structured exit code table (0, 2, 3, 4, 70, 124, 126, 127)
+- [ ] Structured exit code table (0, 1, 2, 3, 4, 70, 124, 126, 127)
 - [ ] `trap` cleanup registered once in composition root
 - [ ] Expected failures handled with `if` or `|| handler` (not relying on `set -e` alone)
 - [ ] No `exit` calls inside domain/application functions (only `return`)

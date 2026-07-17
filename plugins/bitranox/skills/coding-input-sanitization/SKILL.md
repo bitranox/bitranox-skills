@@ -63,11 +63,14 @@ once at the edge.
 
 - [ ] Every external input parsed into a typed model at the edge; raw dict/JSON never flows inward
 - [ ] Length / size / range bounded; large data streamed, not fully materialized
+- [ ] Allowed charset decided explicitly; arbitrary bytes/chars rejected, normalized (NFC), or escaped
 - [ ] SQL via bound parameters only; no string-built queries
 - [ ] HTML autoescape ON; only trusted rich-text opts out, never a global disable
 - [ ] Shell via argv, never `shell=True` on untrusted input
 - [ ] File paths confined to a base dir; `..` / absolute rejected
 - [ ] No `pickle` / `yaml.load` / `eval` on untrusted data
+- [ ] Outbound URLs allowlisted (host + scheme); internal/link-local ranges and redirects to them blocked
+- [ ] CR/LF + control chars stripped before writing user data to a log line or response header
 - [ ] Internal library calls NOT re-sanitized (type contract trusted)
 
 ## Common mistakes

@@ -74,7 +74,7 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 
 ### Quoting
 
-> Full details: `shell-syntax-and-commands.md` (section 1)
+> Full details: `shell-syntax-and-commands.md` (section 3.1.2, Quoting)
 
 | Syntax    | Behavior                                                         |
 |-----------|------------------------------------------------------------------|
@@ -123,7 +123,7 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 
 ### Special Parameters
 
-> Full details: `functions-parameters-expansions.md` (section 2)
+> Full details: `functions-parameters-expansions.md` (section 3.4.2, Special Parameters)
 
 | Param               | Meaning                                         |
 |---------------------|-------------------------------------------------|
@@ -142,7 +142,7 @@ Complete reference for GNU Bash 5.3 (May 2025). Covers all shell syntax, builtin
 
 ### Compound Commands
 
-> Full details: `shell-syntax-and-commands.md` (section 3)
+> Full details: `shell-syntax-and-commands.md` (section 3.2.5, Compound Commands)
 
 ```bash
 # If
@@ -177,7 +177,7 @@ select var in words; do ...; done
 
 ### Test Operators (`[[ ]]` and `test`/`[ ]`)
 
-> Full details: `bash-features.md` (section 4)
+> Full details: `bash-features.md` (section 6.4, Bash Conditional Expressions)
 
 | Operator              | Test                             |
 |-----------------------|----------------------------------|
@@ -218,7 +218,7 @@ select var in words; do ...; done
 
 ### Redirections
 
-> Full details: `redirections-and-execution.md` (section 1)
+> Full details: `redirections-and-execution.md` (section 3.6, Redirections)
 
 | Syntax                               | Operation                          |
 |--------------------------------------|------------------------------------|
@@ -243,7 +243,7 @@ Special filenames in redirections: `/dev/fd/N`, `/dev/stdin`, `/dev/stdout`, `/d
 
 ### Arrays
 
-> Full details: `bash-features.md` (section 6)
+> Full details: `bash-features.md` (section 6.7, Arrays)
 
 ```bash
 # Indexed arrays
@@ -284,7 +284,7 @@ Steps 2-6 happen left-to-right simultaneously. Full details with word-count impa
 
 ### Common `set` Options
 
-> Full details: `shell-builtins.md` (section 2, `set` builtin)
+> Full details: `shell-builtins.md` (section 4.3.1, the `set` builtin)
 
 | Option                 | Effect                                         |
 |------------------------|------------------------------------------------|
@@ -300,7 +300,7 @@ Steps 2-6 happen left-to-right simultaneously. Full details with word-count impa
 
 ### Essential `shopt` Options
 
-> Full details: `shell-builtins.md` (section 3, `shopt` options)
+> Full details: `shell-builtins.md` (section 4.3.2, the `shopt` builtin)
 
 | Option              | Effect                                                          |
 |---------------------|-----------------------------------------------------------------|
@@ -317,7 +317,7 @@ Steps 2-6 happen left-to-right simultaneously. Full details with word-count impa
 
 ### Trap Signals
 
-> Full details: `shell-builtins.md` (`trap` builtin) and `redirections-and-execution.md` (section 5, Signals)
+> Full details: `shell-builtins.md` (section 4.1, the `trap` builtin) and `redirections-and-execution.md` (section 3.7.6, Signals)
 
 ```bash
 trap 'cleanup' EXIT          # On shell exit
@@ -332,7 +332,7 @@ trap - SIGNAL                # Reset to default
 
 ### Arithmetic Operators (inside `(( ))` and `$(( ))`)
 
-> Full details: `bash-features.md` (section 5)
+> Full details: `bash-features.md` (section 6.5, Shell Arithmetic)
 
 All C-style operators: `+`, `-`, `*`, `/`, `%`, `**` (exponent), `<<`, `>>`, `&`, `|`, `^`, `~`, `!`, `&&`, `||`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `<<=`, `>>=`, `&=`, `|=`, `^=`, `++`, `--`, `expr?expr:expr` (ternary), `expr,expr` (comma)
 
@@ -340,7 +340,7 @@ Bases: `0x` (hex), `0` (octal), `base#number` (arbitrary base 2-64, e.g. `2#101`
 
 ### Prompt Escape Sequences
 
-> Full details: `bash-features.md` (section 8, Controlling the Prompt)
+> Full details: `bash-features.md` (section 6.9, Controlling the Prompt)
 
 | Escape    | Meaning                       |
 |-----------|-------------------------------|

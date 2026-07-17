@@ -94,6 +94,9 @@ the scan in step 3 is run; do not duplicate the rest.
    for `TOTAL tree problems: 0` - home: `<plugin>/skills/meta-self-improve/` - skill-fit batched change,
    report counts). The tree-wide check matters MORE here: promoting to common ancestors across many trees
    is exactly what can leave a slug pointed at from two levels, which the chain-only `--check` cannot see.
+   **Add one line crosstree's report list has no slot for: the org-chart proposals from step 4**
+   (moves / new rungs / splits / umbrella-repo suggestions, applied or proposed). Without it a deep
+   run can generate them and never surface them.
 
 ## Boundaries (unchanged from meta-dream-crosstree)
 

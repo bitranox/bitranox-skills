@@ -66,6 +66,7 @@ unknown, defer - a blind gather pulls noise.
 - [ ] A topic/descriptor stated BEFORE scanning (no blind gather).
 - [ ] Stage-1 candidate list with per-tree `TREE:` labels (or a one-line "nothing matched").
 - [ ] Every import via the engine, marked `gathered:`/`gathered-cross-tree:` in its provenance.
+- [ ] Privacy scrub applied to everything copied across a boundary (no credential carried across).
 - [ ] Zero cross-tree or downward `[[references]]` introduced (reconcile 0 problems).
 - [ ] The lifted-vs-copied report.
 

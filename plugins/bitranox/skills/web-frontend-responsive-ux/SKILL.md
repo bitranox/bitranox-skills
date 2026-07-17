@@ -1,6 +1,6 @@
 ---
 name: web-frontend-responsive-ux
-description: Use when a web page must work across mobile/tablet/desktop and the layout or usability is off - horizontal scrollbar on mobile, content not fitting vertically on phone portrait/landscape, cramped or tiny tap targets, swipe/carousel galleries, viewport/breakpoint issues, notch/safe-area overlap, sparse layouts on big screens, or RTL/long-translation layout breakage. Audits and fixes these, verified in a real browser via Playwright or a browser MCP across a device matrix. NOT for performance/SEO scoring (use a pagespeed/Lighthouse skill) or full localization infra.
+description: Use when a web page must work across mobile/tablet/desktop and the layout or usability is off - horizontal scrollbar on mobile, content not fitting vertically on phone portrait/landscape, cramped or tiny tap targets, swipe/carousel galleries, viewport/breakpoint issues, notch/safe-area overlap, sparse layouts on big screens, or RTL/long-translation layout breakage. NOT for performance/SEO scoring (use a pagespeed/Lighthouse skill) or full localization infra.
 ---
 
 # Responsive & Mobile Usability Audit
@@ -122,6 +122,13 @@ reviewable.
 Re-run the audit on the same matrix. The dimension is done only when the totals show
 **0 SEVERE and 0 MEDIUM** across every profile (`passed: true`, exit 0). State the result with
 the numbers; do not claim "responsive now" without the re-run.
+
+**The numeric totals do not cover every dimension.** Only touch-target, overflow, vertical-fit,
+text-expansion and axe findings are aggregated into those totals. Dimensions 4 (swipe/gestures),
+5 (viewport/notch safe-area) and 6 (responsive images/CLS) have NO severity computation, so a
+clean 0/0 says nothing about them - they count as done only after their manual probes (see
+`verification-engines.md` for the CLS/contrast probing, and grep the CSS for `safe-area-inset`
+when the viewport meta sets `viewport-fit=cover`).
 
 ## Preferred patterns (opinionated defaults)
 
