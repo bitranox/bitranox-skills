@@ -160,10 +160,15 @@ the success line, abort-and-show on a miss).
    directions), contradiction/override, skill/hook pointing, filler words, model review,
    skill-gap review, gate-coverage audit, durability/git + squash, backup reminder.
 
-10. **Skill-fit -> batched change.** Collect generalizations that match or warrant a shipped
-    skill; deliver via the upstream loop (`bitranox:meta-self-improve` ->
-    references/upstream-propagation.md) as ONE structured change. `propose` -> self-PR; `auto` ->
-    commit or self-PR; `off` -> skip.
+10. **Skill-fit -> batched change.** FIRST drain what is already pending: `contrib_queue.py list`
+    (home: `<plugin>/skills/meta-self-improve/`) shows the skill/hook contributions earlier sessions
+    judged shippable but never shipped - they are part of THIS batch. Then collect this dream's
+    generalizations that match or warrant a shipped skill, and QUEUE each one
+    (`contrib_queue.py add --what ... --target skill:<name> --why ...`) as you find it, so an
+    unshipped one survives this session. Deliver via the upstream loop (`bitranox:meta-self-improve`
+    -> references/upstream-propagation.md) as ONE structured change. `propose` -> self-PR; `auto` ->
+    commit or self-PR; `off` -> skip. `contrib_queue.py drain` ONLY for the ones that actually
+    shipped - anything still pending stays queued and is surfaced next session.
 
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, CLAUDE.md

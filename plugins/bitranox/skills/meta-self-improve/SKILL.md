@@ -119,6 +119,11 @@ entry only when nothing covers it.
   -> `bitranox:compuse-git`, ...) or warrants a new one, raise the public-contribution option -
   propose-first, scrub private specifics, route via references/upstream-propagation.md. Never let a
   clearly-shippable rule stop silently at the private layer.
+  **QUEUE IT THE MOMENT YOU JUDGE IT SHIPPABLE**, before doing the work - the intent is what gets
+  lost, not the fact: `contrib_queue.py add --what ... --target skill:<name> --why ... "<cwd>"`
+  (home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). The queue is
+  durable and SessionStart surfaces it every session WITHOUT consuming it, so the intent survives a
+  session end. Drain only after it actually ships.
 
 ### 4. Write it (the engine, fail-loud)
 

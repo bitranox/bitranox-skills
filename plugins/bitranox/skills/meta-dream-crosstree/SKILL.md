@@ -39,6 +39,14 @@ off - the knob semantics live ONLY there); `off` skips this skill entirely.
 
 Create one todo per step.
 
+0. **Capture first, reading the session from DISK** - the shared rule in
+   `bitranox:meta-dream-tree` -> references/dream-core.md "Capture-first" applies here too (it is
+   the shared core for EVERY consolidation skill, not just nap/tree). Run
+   `dream_state.py session-review "<cwd>"` before consolidating: your context is not the session (a
+   compaction clears the context, never the transcript file), and it also surfaces the SUBAGENT
+   learnings and the touched-path routing evidence you would otherwise never see. Finish with
+   `dream_state.py session-reviewed "<cwd>"`. It is incremental and the watermark is shared with the
+   other dream modes, so if a nap already reviewed this session this costs nothing.
 1. **Back up first.** Snapshot every store this run may touch - each affected tree's TOP store and, for any level you will write, the anchor's central
    `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
    timestamped copies OUT of the project trees (`~/.claude/self-improve-audit/backups/`, so a backup is
@@ -107,11 +115,16 @@ Create one todo per step.
    failure), AND `reconcile_memory_index.py --check-tree <anchor>` per affected tree for
    `TOTAL tree problems: 0` - promotion to a common ancestor is exactly what can leave a slug pointed
    at from two levels, which the chain-only `--check` cannot see.
-7. **Skill-fit -> batched change.** A generalization that warrants a skill goes through
+7. **Skill-fit -> batched change.** FIRST `contrib_queue.py list` (home:
+   `<plugin>/skills/meta-self-improve/`) - contributions earlier sessions judged shippable but never
+   shipped are part of THIS batch. QUEUE each new one as you find it (`contrib_queue.py add --what ...
+   --target skill:<name> --why ...`) so it survives this session, then deliver via
    `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
-   `propose`, commit-or-PR in `auto`, skipped in `off`).
+   `propose`, commit-or-PR in `auto`, skipped in `off`). `contrib_queue.py drain` ONLY for what
+   actually shipped.
 8. **Report.** Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
-   cross-pollinations, normalizations, any CLAUDE.md edits (applied or proposed), and any skill change.
+   cross-pollinations, normalizations, any CLAUDE.md edits (applied or proposed), any skill change,
+   and the pending-contribution count still queued.
 
 ## Convergence
 

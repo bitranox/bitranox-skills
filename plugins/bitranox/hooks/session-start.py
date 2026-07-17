@@ -29,6 +29,7 @@ from self_improve_signals import (
     load_config,
     mark_seeded,
     project_unseeded,
+    read_contributions,
 )
 
 
@@ -89,6 +90,30 @@ def audit_context(proj):
     except Exception:  # noqa: BLE001 - unreadable/undeletable: skip, never wedge
         return None
     return text or None
+
+
+def contrib_context(proj):
+    """Surface PENDING upstream contributions - and, unlike the audit, do NOT consume them.
+
+    A learning that warrants a skill/hook change used to reach the marketplace only if the model
+    authored the self-PR before the session ended: nothing recorded the INTENT, so it died with the
+    context while the private fact survived. The queue is that missing state, so it must SURVIVE
+    being read - it stands until it actually ships and is drained.
+    """
+    try:
+        recs = read_contributions(proj)
+        if not recs:
+            return None
+        lines = ["- %s%s%s" % (r.get("what") or "",
+                               " -> %s" % r["target"] if r.get("target") else "",
+                               " (%s)" % r["why"] if r.get("why") else "")
+                 for r in recs]
+        return ("%d PENDING UPSTREAM CONTRIBUTION(S) - learnings already judged skill/hook-worthy "
+                "that have NOT shipped yet. They persist until shipped, so pick them up when the "
+                "work suits (route via bitranox:meta-self-improve -> references/upstream-propagation.md; "
+                "a dream drains the queue once they land):\n%s" % (len(recs), "\n".join(lines)))
+    except Exception:  # noqa: BLE001 - never wedge a session start
+        return None
 
 
 _NUDGE = (
@@ -204,7 +229,7 @@ def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [retrieval_context(proj), audit_context(proj)]
+    parts = [retrieval_context(proj), audit_context(proj), contrib_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]
     ctx = [p for p in parts if p]
