@@ -102,6 +102,12 @@ entry only when nothing covers it.
   that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
   block) are the routing key; when genuinely unclear, ask the user.
+- **SUBAGENT learnings are yours to capture.** A subagent's discovery lives only in ITS transcript -
+  it is not in yours, and a named/background agent's report is not returned to you at all. The
+  `SubagentStop` hook detects those signals and the Stop-gate nudge surfaces them to you verbatim
+  (labelled SUBAGENT LEARNINGS); you are the only one who can route + write them. Judge each: capture
+  the durable ones (routing `--proj` by SUBJECT, same rule), drop the task-local noise. They are
+  surfaced ONCE - if you skip them they are gone.
 - An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md`
   (propose-first; policy in `bitranox:meta-dream-tree`).
 - **Normalization, not duplication:** store a general rule ONCE at its altitude; a lower entry

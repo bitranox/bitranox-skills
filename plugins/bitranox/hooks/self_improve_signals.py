@@ -607,6 +607,63 @@ def altitude_chain(proj):
         return [Path(proj)]
 
 
+# ---- subagent learnings: buffered by the SubagentStop hook, drained by the main capture --------
+# A subagent's learning is otherwise LOST: the capture nudge is a main-session Stop hook, nothing
+# scans a subagent transcript, and a named/background agent's report never reaches the main
+# transcript unless it SendMessages it. A subagent also cannot cleanly write curated memory itself
+# (its cwd/subject may differ and it is scoped to one task), so the hook BUFFERS the signal here and
+# the main session's capture routes + writes it. Session-keyed, out of the dreamed store.
+
+def subagent_learnings_file(session):
+    """Queue of learning signals detected in this session's SUBAGENT transcripts."""
+    return _audit_dir() / (str(session) + ".subagent-learnings")
+
+
+def read_subagent_learnings(session):
+    """The buffered subagent learning records for `session`, oldest first. [] when none."""
+    if not session:
+        return []
+    out = []
+    try:
+        for ln in subagent_learnings_file(session).read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def buffer_subagent_learning(session, record, max_items=60):
+    """Append one subagent learning record (newest-capped). Best-effort: never raises."""
+    if not session or not isinstance(record, dict):
+        return
+    try:
+        cur = read_subagent_learnings(session)
+        cur.append(record)
+        if len(cur) > max_items:
+            cur = cur[-max_items:]
+        f = subagent_learnings_file(session)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def drain_subagent_learnings(session):
+    """Consume the queue (the main capture has surfaced it). Best-effort."""
+    try:
+        subagent_learnings_file(session).unlink()
+    except OSError:
+        pass
+
+
 # ---- touched-paths: the per-session evidence of WHICH repos a turn actually edited -------------
 # Written by the PostToolUse `touched-paths` hook, read by the Stop gate / capture. Session-keyed
 # (the probe proved `session_id` is stable across PostToolUse/Stop/SubagentStop), OUT of the dreamed

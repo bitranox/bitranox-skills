@@ -138,6 +138,47 @@ def test_block_reason_has_no_routing_hint_when_only_cwd_touched(tmp_path, monkey
     assert "This turn also edited" not in reason           # no noise when the subject IS cwd
 
 
+def _iso_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def test_buffered_subagent_learning_blocks_even_when_main_turn_is_quiet(tmp_path, monkeypatch, capsys):
+    # The P1 case: the SUBAGENT found the learning; the main turn says nothing signal-worthy.
+    # Without this the learning dies in the subagent's transcript.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    S.buffer_subagent_learning("sub1", {"agent_type": "Explore", "agent_id": "a1",
+                                        "matched": ["realization"],
+                                        "snippet": "it turns out check-tree misses sideways refs"})
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")   # no main-turn signal
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "sub1"})
+    assert decision_of(capsys) == "block"
+
+
+def test_buffered_subagent_learning_is_named_in_the_reason(tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    S.buffer_subagent_learning("sub2", {"agent_type": "Explore", "agent_id": "a9",
+                                        "matched": ["realization"],
+                                        "snippet": "the rehome verb over-promotes to the anchor"})
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "sub2"})
+    reason = _reason_of(capsys)
+    assert "SUBAGENT" in reason.upper()
+    assert "rehome verb over-promotes" in reason           # the actual finding is surfaced
+    assert "Explore" in reason                             # which agent found it
+
+
+def test_no_subagent_buffer_no_extra_noise(tmp_path, monkeypatch, capsys):
+    _iso_home(tmp_path, monkeypatch)
+    tp = make_transcript(tmp_path, user="No, that's wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "none"})
+    assert "SUBAGENT" not in _reason_of(capsys).upper()
+
+
 def test_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="ok thanks, looks good", asst="Great, nice. Done.")
     rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})

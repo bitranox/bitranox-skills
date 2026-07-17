@@ -400,6 +400,32 @@ def test_clear_promotion_candidate(home):
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
 
 
+# ---- subagent-learnings buffer (a subagent cannot write memory; main drains this) --------------
+
+def test_subagent_learning_buffer_roundtrips_and_drains(home):
+    S.buffer_subagent_learning("s1", {"agent_type": "general-purpose", "agent_id": "a1",
+                                      "matched": ["realization"], "snippet": "found the root cause"})
+    S.buffer_subagent_learning("s1", {"agent_type": "Explore", "agent_id": "a2",
+                                      "matched": ["user"], "snippet": "no, that is wrong"})
+    got = S.read_subagent_learnings("s1")
+    assert len(got) == 2 and got[0]["agent_id"] == "a1" and got[1]["snippet"] == "no, that is wrong"
+    assert S.read_subagent_learnings("nope") == []          # per-session isolation
+    S.drain_subagent_learnings("s1")                        # consumed once by the main capture
+    assert S.read_subagent_learnings("s1") == []
+
+
+def test_subagent_learning_buffer_is_capped_keeping_newest(home):
+    for i in range(40):
+        S.buffer_subagent_learning("s2", {"agent_id": "a%d" % i, "snippet": "x%d" % i}, max_items=10)
+    got = S.read_subagent_learnings("s2")
+    assert len(got) == 10 and got[-1]["agent_id"] == "a39"
+
+
+def test_subagent_learning_buffer_tolerates_garbage(home):
+    S.buffer_subagent_learning("", {"snippet": "no session -> ignored"})
+    assert S.read_subagent_learnings("") == []
+
+
 # ---- touched-paths scratch state (the capture-routing evidence) --------------------------------
 
 def test_record_touched_path_roundtrips_dedups_and_caps(home):
