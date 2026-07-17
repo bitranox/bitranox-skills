@@ -671,7 +671,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Curated memory write engine (the single write path).")
     sub = ap.add_subparsers(dest="cmd")
     a = sub.add_parser("add", help="upsert one curated fact (pointer + central body)")
-    a.add_argument("--proj", required=True, help="project cwd (the level to capture at)")
+    a.add_argument("--proj", required=True,
+                   help="the level to capture at - the fact's SUBJECT repo, usually the cwd but NOT "
+                        "when the learning is about another repo you edited (the Stop gate surfaces "
+                        "the routing evidence; a cross-tree misfile can never be re-homed)")
     a.add_argument("--title", required=True)
     a.add_argument("--hook", required=True, help="one-line hook (what makes the fact present)")
     a.add_argument("--type", dest="type_", default=None,

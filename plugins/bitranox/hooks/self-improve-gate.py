@@ -27,6 +27,7 @@ from pathlib import Path
 # module and its tests use. Signals cluster in FAMILIES (user correction / "remember";
 # endorsement either side; assistant self-admission / realization); extend the family in
 # self_improve_signals, not here.
+import self_improve_signals as _sig
 from self_improve_signals import (
     USER_PATTERN as _USER_PATTERN,
     ASST_PATTERN as _ASST_PATTERN,
@@ -48,6 +49,32 @@ _REASON = (
     "extension skill exists (a repo-local *-self-improve), follow its bindings too. If on "
     "reflection there is genuinely nothing worth recording, say so in one line and then stop."
 )
+
+
+def _routing_hint(event, proj):
+    """Prose naming the OTHER repos/levels this turn actually edited, or '' when the subject IS cwd.
+
+    Capture is cwd-keyed, so a learning about a repo you edited from somewhere else is misplaced from
+    birth (and cross-tree the dream can never re-home it). The `touched-paths` PostToolUse recorder
+    logs what the turn wrote; this turns it into EVIDENCE for the capture step's `--proj` choice. It
+    never decides - the model still judges whether the learning is about that repo or about the cwd
+    workflow itself."""
+    try:
+        session = event.get("session_id") or ""
+        if not session:
+            return ""
+        levels = _sig.subject_levels(_sig.read_touched_paths(session), proj)
+        if not levels:
+            return ""
+        bits = ["%s%s" % (lv["level"], " (a DIFFERENT tree - the dream can NEVER re-home a fact "
+                                       "misfiled across trees)" if lv["cross_tree"] else
+                          " (a sibling project in this tree)") for lv in levels]
+        return (" ROUTING EVIDENCE - this turn also edited files under: " + "; ".join(bits) +
+                ". Capture defaults to the cwd, which is WRONG when the learning is ABOUT one of "
+                "those repos: in that case pass `--proj <that level>` to `memory_engine.py add`, not "
+                "the cwd. If the learning is really about the cwd's own workflow, keep the cwd.")
+    except Exception:                                     # noqa: BLE001 - a hint must never wedge a turn
+        return ""
 
 
 def _text(content):
@@ -130,7 +157,8 @@ def main():
                 fh.write(sig)
         except OSError:
             pass
-        sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
+        sys.stdout.write(json.dumps({"decision": "block",
+                                     "reason": _REASON + _routing_hint(event, proj)}))
     return 0
 
 

@@ -85,9 +85,19 @@ entry only when nothing covers it.
 
 ### 3b. Choose the altitude - by SCOPE, placed concretely
 
-- **Per-turn capture writes at the PROJECT level of the CURRENT tree only** (`--proj "<cwd>"`).
-  Raising a fact to a higher altitude is the DREAM's job (engine `move`), never capture's - a
-  routine capture never touches a parent level or another tree.
+- **Per-turn capture writes at ONE PROJECT level - the level of the fact's SUBJECT, which is
+  USUALLY but not always the cwd.** Raising a fact to a higher ALTITUDE is the DREAM's job (engine
+  `move`), never capture's - a routine capture never touches a parent level.
+- **Route `--proj` by SUBJECT, not blindly by cwd.** You often work FROM one repo while fixing
+  another (a sibling project, or a repo in a different tree). The learning belongs to the repo it is
+  ABOUT. The Stop-gate nudge carries ROUTING EVIDENCE - the other levels this turn actually edited
+  (from the `touched-paths` recorder) - so use it:
+  - the learning is about a repo you EDITED -> `--proj "<that level>"`;
+  - the learning is about the cwd's own workflow/tooling (even though you edited elsewhere) -> cwd;
+  - genuinely both or unclear -> ask the user.
+  This matters most CROSS-TREE: a fact misfiled into another tree can NEVER be re-homed by a dream
+  (`move` refuses to cross trees) - it is wrong until a human finds it. Same-tree misfiling is
+  recoverable (the tree dream re-levels), but still capture it right.
 - Decide the eventual home by **scope of applicability, not abstractness**: the narrowest level
   that still covers everywhere the lesson applies. Concrete knowledge useful tree-wide belongs at
   the tree's top KEPT CONCRETE. The per-level scope descriptors (the `bitranox:self-learning`
@@ -190,8 +200,9 @@ scaffolding when the goal is met.
       soft-cap warning is advisory - acceptable; only the 500-char HARD cap (truncation) must be
       avoided. Never trim a complete hook just to silence the soft-cap warning.
 - [ ] Every body carries the fact plus **Why:** and **How to apply:**.
-- [ ] Everything written at the PROJECT level of the CURRENT tree (never an ancestor, never
-      another tree, never only CLAUDE.md).
+- [ ] Everything written at ONE PROJECT level - the level of the fact's SUBJECT (the cwd unless the
+      routing evidence says the learning is about a repo you edited elsewhere); never an ancestor,
+      never only CLAUDE.md.
 - [ ] The report: auto-applied items (file + one line each) vs proposals awaiting a go.
 
 An ended run missing any box is not done - finish it or say plainly what was skipped and why.
@@ -214,6 +225,9 @@ An ended run missing any box is not done - finish it or say plainly what was ski
   mid-reasoning.
 - A bare-prose body without **Why:** / **How to apply:** - the model discounts it as inauthentic.
 - Hand-editing a pointer block or body (guard-denied; the engine is the only write path).
-- Capturing at an ancestor level or another tree - capture is project-level; the dream re-levels.
+- Capturing at an ANCESTOR level - capture is project-level; the dream re-levels the altitude.
+- Blindly capturing at the cwd when the turn's routing evidence shows the learning is ABOUT a repo
+  you edited elsewhere - route `--proj` by SUBJECT (step 3b). Cross-tree that misfile is permanent:
+  no dream can move a fact between trees.
 - Recording session state ("the build is running") as a durable learning.
 - Auto-applying a rewrite or delete - additive is auto, destructive is propose-first.

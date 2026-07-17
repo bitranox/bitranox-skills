@@ -86,6 +86,58 @@ def test_endorsement_nice_catch_blocks(tmp_path, monkeypatch, capsys):
     assert decision_of(capsys) == "block"
 
 
+def _reason_of(capsys):
+    out = capsys.readouterr().out.strip()
+    return json.loads(out)["reason"] if out else ""
+
+
+def _two_trees(tmp_path):
+    """cwd's tree (treeA/projA1) + a sibling project and a SECOND tree."""
+    for tree in ("treeA", "treeB"):
+        (tmp_path / tree / ".claude-memory").mkdir(parents=True)
+        (tmp_path / tree / "CLAUDE.md").write_text("top\n", encoding="utf-8")
+    for lvl in ("treeA/projA1", "treeA/projA2", "treeB/projB1"):
+        (tmp_path / lvl).mkdir(parents=True)
+        (tmp_path / lvl / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_block_reason_names_other_repos_the_turn_edited(tmp_path, monkeypatch, capsys):
+    # The wrong-dir bug: cwd=projA1 but the turn edited a SIBLING project and ANOTHER tree.
+    # The nudge must surface those levels so capture can route --proj by SUBJECT, not cwd.
+    import self_improve_signals as S
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    root = _two_trees(tmp_path)
+    cwd = str(root / "treeA" / "projA1")
+    S.record_touched_path("sX", str(root / "treeA" / "projA2" / "sib.py"))
+    S.record_touched_path("sX", str(root / "treeB" / "projB1" / "other.py"))
+    tp = make_transcript(tmp_path, user="No, that's wrong, the flag is --tree")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": cwd, "session_id": "sX"})
+    reason = _reason_of(capsys)
+    assert str(root / "treeA" / "projA2") in reason        # sibling project surfaced
+    assert str(root / "treeB" / "projB1") in reason        # other tree surfaced
+    assert "different tree" in reason.lower()              # the unrecoverable case is called out
+    assert "--proj" in reason                              # tells it HOW to route
+
+
+def test_block_reason_has_no_routing_hint_when_only_cwd_touched(tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    root = _two_trees(tmp_path)
+    cwd = str(root / "treeA" / "projA1")
+    S.record_touched_path("sY", str(root / "treeA" / "projA1" / "own.py"))
+    tp = make_transcript(tmp_path, user="No, that's wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": cwd, "session_id": "sY"})
+    reason = _reason_of(capsys)
+    assert "This turn also edited" not in reason           # no noise when the subject IS cwd
+
+
 def test_bare_ok_does_not_block(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="ok thanks, looks good", asst="Great, nice. Done.")
     rc = run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
