@@ -37,6 +37,7 @@ _HOOK_MODULES = {
     "recall-memory": "recall_memory",
     "subagent-model-gate": "subagent_model_gate",
     "subagent-backstop-nudge": "subagent_backstop_nudge",
+    "touched-paths": "touched_paths",
     "skill-edit-guard": "skill_edit_guard",
     "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",

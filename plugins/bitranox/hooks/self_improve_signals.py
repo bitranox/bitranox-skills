@@ -607,6 +607,97 @@ def altitude_chain(proj):
         return [Path(proj)]
 
 
+# ---- touched-paths: the per-session evidence of WHICH repos a turn actually edited -------------
+# Written by the PostToolUse `touched-paths` hook, read by the Stop gate / capture. Session-keyed
+# (the probe proved `session_id` is stable across PostToolUse/Stop/SubagentStop), OUT of the dreamed
+# store so it never bumps a store mtime or affects convergence.
+
+def touched_file(session):
+    """Scratch file holding the paths this session's turns wrote/edited (capture-routing evidence)."""
+    return _audit_dir() / (str(session) + ".touched")
+
+
+def read_touched_paths(session):
+    """The distinct paths recorded for `session`, oldest first. [] when none/unreadable."""
+    try:
+        lines = touched_file(session).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [ln for ln in (x.strip() for x in lines) if ln]
+
+
+def record_touched_path(session, path, max_lines=400):
+    """Append `path` for `session` (deduped, newest-capped). Best-effort: never raises."""
+    path = str(path or "").strip()
+    if not path or not session:
+        return
+    try:
+        cur = read_touched_paths(session)
+        if path in cur:
+            return                                  # dedup: the same file edited twice is one subject
+        cur.append(path)
+        if len(cur) > max_lines:
+            cur = cur[-max_lines:]                  # keep the NEWEST (the turn's current subject)
+        f = touched_file(session)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join(cur) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_touched_paths(session):
+    """Drop the session's touched-path evidence (best-effort)."""
+    try:
+        touched_file(session).unlink()
+    except OSError:
+        pass
+
+
+def nearest_level(path):
+    """The memory LEVEL a filesystem path belongs to: the NEAREST ancestor (including `path` itself
+    when it is a dir) that carries a `CLAUDE.md` - i.e. the project a fact about that file would be
+    filed at. `resolve_anchor` gives the TOPMOST rung; this gives the narrowest one. Returns a str
+    path, or None when the path sits under no CLAUDE.md-bearing dir (or is an excluded altitude)."""
+    try:
+        here = Path(path)
+        here = here if here.is_dir() else here.parent
+        excluded = _excluded_anchor_dirs()
+        for d in [here, *here.parents]:
+            if d == Path(d.anchor) or d in excluded:
+                break                              # /, ~, tempdir: never a level
+            if claude_md_path(str(d)).is_file():
+                return str(d)
+    except (OSError, TypeError, ValueError):
+        pass
+    return None
+
+
+def subject_levels(touched, cwd):
+    """The OTHER memory levels this turn actually touched - the routing evidence for capture.
+
+    Capture is cwd-keyed, so a learning ABOUT a repo you edited from somewhere else lands in the
+    wrong store (and cross-tree it can never be re-homed). Given the file paths a turn wrote/edited
+    and the session cwd, return the DISTINCT levels those paths belong to that are NOT cwd's own
+    level - each as {"level", "anchor", "cross_tree"}. `cross_tree` marks a level in a DIFFERENT
+    knowledge tree than cwd (the unrecoverable case); False means a sibling project in the SAME tree
+    (the common case, which the tree dream can still re-level). Ancestors/descendants of cwd's own
+    level are NOT flagged - they are the same project. Sorted by level for stable output.
+
+    This is EVIDENCE, not a verdict: the capture step still judges whether the learning is about one
+    of these repos or about the cwd workflow itself."""
+    own = nearest_level(cwd)
+    own_anchor = resolve_anchor(cwd) if own else None
+    out = {}
+    for p in touched or ():
+        lvl = nearest_level(p)
+        if not lvl or lvl == own:
+            continue
+        anchor = resolve_anchor(lvl)
+        out[lvl] = {"level": lvl, "anchor": str(anchor) if anchor else "",
+                    "cross_tree": bool(anchor and own_anchor and Path(anchor) != Path(own_anchor))}
+    return [out[k] for k in sorted(out)]
+
+
 # ---- new-project seeding (one-time /collect-knowledge bootstrap nudge) ---------------
 
 def seeded_file(proj):

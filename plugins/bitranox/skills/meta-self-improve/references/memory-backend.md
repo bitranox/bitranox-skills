@@ -87,9 +87,12 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
 
 - **Curated tier** (this store): deduplicated, engine-written learnings. **Hooks never write
   memory.** The flow is: the gated Stop hook NUDGES -> the MODEL runs `bitranox:meta-self-improve`
-  -> engine `add` -> the fact lands directly in the store at the PROJECT level of the current tree.
-  There is no MEMORY.md intermediate, and capture never reaches up to an ancestor - placement to the
-  right altitude is the DREAM's job (engine `move`), never capture's.
+  -> engine `add` -> the fact lands directly in the store at the PROJECT level of its SUBJECT - the
+  cwd unless the turn's routing evidence (the `touched-paths` recorder, surfaced by the Stop gate)
+  shows the learning is about another repo you edited; route `--proj` there instead. There is no
+  MEMORY.md intermediate, and capture never reaches up to an ancestor - the ALTITUDE is the DREAM's
+  job (engine `move`), never capture's. Getting the SUBJECT right matters most cross-tree: `move`
+  refuses to cross trees, so a fact misfiled into another tree can never be re-homed by a dream.
 - **Native raw tier**: Claude Code's own Auto memory (`~/.claude/projects/<proj>/memory/`),
   per-machine, uncurated. Keep it ON; the dream de-doubles the tiers and lifts worthwhile raw
   entries into the curated store (dream step 3b).

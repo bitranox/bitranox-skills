@@ -400,6 +400,66 @@ def test_clear_promotion_candidate(home):
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
 
 
+# ---- touched-paths scratch state (the capture-routing evidence) --------------------------------
+
+def test_record_touched_path_roundtrips_dedups_and_caps(home):
+    S.record_touched_path("sess1", "/a/b/x.py")
+    S.record_touched_path("sess1", "/a/b/x.py")          # dedup: same path twice -> one entry
+    S.record_touched_path("sess1", "/c/d/y.py")
+    assert S.read_touched_paths("sess1") == ["/a/b/x.py", "/c/d/y.py"]
+    assert S.read_touched_paths("other-session") == []    # per-session isolation
+    for i in range(30):
+        S.record_touched_path("sess2", "/p/f%d.py" % i, max_lines=10)
+    got = S.read_touched_paths("sess2")
+    assert len(got) <= 10 and got[-1] == "/p/f29.py"      # capped, newest kept
+
+
+def test_clear_touched_paths(home):
+    S.record_touched_path("sess3", "/a/x.py")
+    S.clear_touched_paths("sess3")
+    assert S.read_touched_paths("sess3") == []
+
+
+# ---- subject_levels: which OTHER repos/levels did this turn touch? (capture routing) ----------
+
+def _two_trees(tmp_path):
+    """treeA (projA1, projA2) + treeB (projB1) - two independent anchors, each a CLAUDE.md+store."""
+    for tree in ("treeA", "treeB"):
+        top = tmp_path / tree
+        (top / ".claude-memory").mkdir(parents=True)
+        (top / "CLAUDE.md").write_text("top\n", encoding="utf-8")
+    for lvl in ("treeA/projA1", "treeA/projA2", "treeB/projB1"):
+        d = tmp_path / lvl
+        d.mkdir(parents=True)
+        (d / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_subject_levels_flags_sibling_project_and_other_tree_but_not_cwd(home, tmp_path):
+    root = _two_trees(tmp_path)
+    cwd = str(root / "treeA" / "projA1")
+    touched = [
+        str(root / "treeA" / "projA1" / "own.py"),      # cwd's OWN level -> excluded
+        str(root / "treeA" / "projA2" / "sib.py"),      # SAME tree, different project -> flagged
+        str(root / "treeB" / "projB1" / "other.py"),    # DIFFERENT tree -> flagged, cross_tree
+    ]
+    got = S.subject_levels(touched, cwd)
+    levels = {g["level"] for g in got}
+    assert str(root / "treeA" / "projA2") in levels     # the common wrong-dir case (same tree)
+    assert str(root / "treeB" / "projB1") in levels
+    assert str(root / "treeA" / "projA1") not in levels  # never flag cwd's own level
+    by = {g["level"]: g for g in got}
+    assert by[str(root / "treeA" / "projA2")]["cross_tree"] is False
+    assert by[str(root / "treeB" / "projB1")]["cross_tree"] is True
+
+
+def test_subject_levels_empty_when_only_cwd_touched(home, tmp_path):
+    root = _two_trees(tmp_path)
+    cwd = str(root / "treeA" / "projA1")
+    assert S.subject_levels([str(root / "treeA" / "projA1" / "a.py")], cwd) == []
+    assert S.subject_levels([], cwd) == []
+
+
 def test_promotion_dwell_reads_without_incrementing(home):
     assert S.promotion_dwell("/p/x", "k") == 0                # unseen -> 0
     S.note_promotion_candidate("/p/x", "k")
