@@ -129,6 +129,33 @@ def test_ordinary_tool_output_is_not_a_candidate(tmp_path):
     assert A.find_candidates(str(t)) == []
 
 
+def test_pytest_fixture_output_is_not_a_candidate(tmp_path):
+    """Regression: when the session's own work is signal-detection code, reading test_*.py or a RED
+    pytest tail injects TOOL_SIGNAL_PATTERN phrases as literal DATA. Those must NOT become misses."""
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read",
+             "input": {"file_path": "plugins/bitranox/hooks/tests/test_self_improve_signals.py"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result",
+             "content": "--- RED --- E error: unrecognized arguments: --rehome-to\n"
+                        "test_self_improve_signals.py::test_x FAILED\n1 failed, 41 passed"}]}},
+    ])
+    assert A.find_candidates(str(t)) == []
+
+
+def test_a_real_tool_gap_still_surfaces_outside_a_test_run(tmp_path):
+    """The suppression must be narrow: a genuine gap in ordinary tool output still surfaces."""
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "pct list"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "bash: pct: command not found"}]}},
+    ])
+    cands = A.find_candidates(str(t))
+    assert any(c["role"] == "tool" for c in cands), cands
+
+
 def test_text_blocks_still_scanned_alongside_tool_blocks(tmp_path):
     """Adding tool scanning must not regress the prose path."""
     t = write_raw(tmp_path, [

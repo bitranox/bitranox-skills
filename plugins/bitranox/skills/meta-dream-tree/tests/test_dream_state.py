@@ -106,8 +106,43 @@ def test_session_review_is_quiet_when_nothing_new(home, tmp_path, capsys):
     assert "NOTHING NEW" in capsys.readouterr().out.upper()
 
 
-def test_session_review_without_a_known_transcript_does_not_crash(home, capsys):
+def test_session_review_without_a_known_transcript_reports_discovery_failure(home, capsys):
+    # "couldn't find a transcript" must be DISTINCT from "nothing new" - collapsing them silently
+    # reviews zero bytes on a keying/timing miss while reporting success.
     assert D.main(["session-review", "/unknown/proj"]) == 0
+    out = capsys.readouterr().out
+    assert "NO TRANSCRIPT DISCOVERED" in out
+    assert "NOTHING NEW" not in out.upper()
+
+
+def _place_native_transcript(proj, text):
+    """Write a *.jsonl under the project's native dir WITHOUT recording session meta (the
+    post-/clear manual-run case: no Stop hook has recorded the transcript path yet)."""
+    d = D.sig.memory_dir(proj).parent
+    d.mkdir(parents=True, exist_ok=True)
+    tp = d / "sessABC.jsonl"
+    tp.write_text(text, encoding="utf-8")
+    return tp
+
+
+def test_session_review_self_locates_transcript_when_meta_absent(home, tmp_path, capsys):
+    proj = "/p/x"
+    _place_native_transcript(proj, '{"type":"user","message":{"content":"the flag is --check-tree"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "--check-tree" in out                       # self-located and reviewed, not a silent miss
+    assert "NOTHING NEW" not in out.upper()
+
+
+def test_session_reviewed_advances_watermark_for_a_self_located_transcript(home, tmp_path, capsys):
+    proj = "/p/x"
+    _place_native_transcript(proj, '{"type":"user","message":{"content":"--check-tree lives here"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 0     # must resolve the self-located path too
+    capsys.readouterr()
+    D.main(["session-review", proj])
+    assert "--check-tree" not in capsys.readouterr().out   # already consumed -> not re-fed
 
 
 # ---- corroboration gate (defect F): saw-promotable / should-promote / promoted --------------

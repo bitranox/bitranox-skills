@@ -811,6 +811,31 @@ def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_
     return data.decode("utf-8", "replace"), size
 
 
+def resolve_transcript(proj):
+    """The transcript path for `proj`: the hook-recorded one, else the newest *.jsonl under the
+    project's native dir, else "".
+
+    A manual session-review runs with NO Stop hook having recorded meta (right after /clear, or on a
+    cwd-key mismatch). Without a fallback it reviews NOTHING while reporting "nothing new" - a silent
+    miss of capture-first. The glob self-locates the live transcript so the review self-heals; newest
+    by MTIME, never by name (a session-id prefix is not time-ordered)."""
+    recorded = (read_session_meta(proj) or {}).get("transcript_path") or ""
+    if recorded and os.path.exists(recorded):
+        return recorded
+    try:
+        cands = list(memory_dir(proj).parent.glob("*.jsonl"))
+    except OSError:
+        return ""
+
+    def _mtime(p):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return -1.0
+
+    return str(max(cands, key=_mtime)) if cands else ""
+
+
 # ---- subagent learnings: buffered by the SubagentStop hook, drained by the main capture --------
 # A subagent's learning is otherwise LOST: the capture nudge is a main-session Stop hook, nothing
 # scans a subagent transcript, and a named/background agent's report never reaches the main
@@ -1441,6 +1466,28 @@ TOOL_SIGNAL_PATTERN = re.compile(
 def tool_matches(text):
     """Lower-cased, de-duplicated TOOL-signal matches for tool output/commands; [] if none."""
     return sorted({m.group(0).strip().lower() for m in TOOL_SIGNAL_PATTERN.finditer(text or "")})
+
+
+# The tool branch of the audit has NO strict gate - every TOOL_SIGNAL_PATTERN hit is a miss. That
+# floods the audit when the SESSION'S OWN WORK is signal-detection code: reading a test_*.py or a
+# RED pytest tail puts those very phrases into tool text as literal DATA, not a live failure. Key on
+# STRONG pytest/test-file fingerprints only, so a genuine gap in ordinary tool output still surfaces
+# (a real "command not found" outside a test run is not fixture-shaped and is kept).
+_TEST_FIXTURE_PATTERN = re.compile(
+    r"\b\d+ (?:passed|failed|xfailed|xpassed|deselected|errors?)\b"   # a pytest run summary line
+    r"|\bno tests ran\b|\bshort test summary\b"
+    r"|=+ (?:FAILURES|ERRORS|test session starts) =+"
+    r"|\bcollected \d+ item"
+    r"|::test_\w+"                                                    # a pytest node id
+    r"|\btest_\w*\.py\b"                                              # a test-file path token (a Read/grep/write of one)
+    r"|-{2,} (?:RED|GREEN) -{2,}",                                    # the repo's own TDD-cycle markers
+    re.IGNORECASE,
+)
+
+
+def is_test_fixture_noise(text):
+    """True when tool text is pytest output or test-file CONTENT, not a live tooling failure."""
+    return bool(_TEST_FIXTURE_PATTERN.search(text or ""))
 
 
 def skills_invoked(transcript_text):

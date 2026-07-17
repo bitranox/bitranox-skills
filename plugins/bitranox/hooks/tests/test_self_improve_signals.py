@@ -942,6 +942,68 @@ def test_tool_matches_ignores_ordinary_tool_output():
         assert not S.tool_matches(text), text
 
 
+def test_is_test_fixture_noise_flags_pytest_and_test_file_content():
+    """When a session's work is signal-detection code, reading test_*.py or RED pytest output puts
+    TOOL_SIGNAL_PATTERN phrases into tool text as literal DATA - not a live tooling gap. The audit
+    tool branch has no strict gate, so without this every such occurrence became a phantom miss."""
+    for text in [
+        "--- RED --- E FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x'",
+        "test_self_improve_signals.py::test_tool_matches_flags_a_real_tooling_gap FAILED",
+        "cat >> test_self_improve_audit.py <<'PYEOF' error: unrecognized arguments",
+        "collected 42 items ... 1 failed, 41 passed",
+        "no tests ran in 0.00s",
+        "===== FAILURES =====",
+    ]:
+        assert S.is_test_fixture_noise(text), text
+
+
+def test_is_test_fixture_noise_passes_a_real_gap_through():
+    """A genuine tooling failure in ordinary (non-pytest, non-test-file) tool output is NOT noise
+    and must still surface - suppressing only fixture-shaped text keeps the real signal."""
+    for text in [
+        "error: unrecognized arguments: --rehome-to",
+        "bash: pct: command not found",
+        "fatal: not a git repository (or any of the parent directories)",
+        "uv: error: Requested extra not found: dev",
+        "1170 files reformatted",
+        "",
+    ]:
+        assert not S.is_test_fixture_noise(text), text
+
+
+def _isolate_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+
+def test_resolve_transcript_prefers_recorded_meta(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    proj = "/p/x"
+    tp = tmp_path / "meta.jsonl"
+    tp.write_text("x", encoding="utf-8")
+    S.record_session_meta(proj, "sid", str(tp))
+    assert S.resolve_transcript(proj) == str(tp)
+
+
+def test_resolve_transcript_globs_newest_jsonl_when_meta_absent(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    proj = "/p/x"
+    d = S.memory_dir(proj).parent
+    d.mkdir(parents=True, exist_ok=True)
+    old = d / "old.jsonl"
+    old.write_text("o", encoding="utf-8")
+    new = d / "new.jsonl"
+    new.write_text("n", encoding="utf-8")
+    os.utime(old, (1000, 1000))
+    os.utime(new, (2000, 2000))          # newest by MTIME, never by name (session-id prefix is not time-ordered)
+    assert S.resolve_transcript(proj) == str(new)
+
+
+def test_resolve_transcript_empty_when_no_meta_and_no_jsonl(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    assert S.resolve_transcript("/p/nope") == ""
+
+
 def test_skills_invoked_tallies_skill_tool_calls():
     """The skill-gap correlation (flag-a-skill-when-a-real-bug-slips-past-it) needs REAL data
     about which skills ran, not the model's fuzzy recall."""

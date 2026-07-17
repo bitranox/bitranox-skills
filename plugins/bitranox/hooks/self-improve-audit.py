@@ -21,8 +21,8 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import (audit_file, broad_matches, skills_invoked, strict_asst_hit,
-                                  strict_user_hit, tool_matches)
+from self_improve_signals import (audit_file, broad_matches, is_test_fixture_noise, skills_invoked,
+                                  strict_asst_hit, strict_user_hit, tool_matches)
 
 # Bound how much transcript we read (sessions can be many MB); the tail covers a long
 # session while keeping memory bounded.
@@ -112,8 +112,10 @@ def find_candidates(transcript_path):
             continue
         if role == "tool":
             # No strict counterpart: the gate never looks at tool blocks at all, so every tool
-            # signal is by definition a miss.
-            matched = tool_matches(text)
+            # signal is by definition a miss - EXCEPT pytest/test-fixture output, where those
+            # phrases appear as literal test DATA (reading test_*.py, RED pytest tails) and would
+            # flood the audit with phantom misses when the session's own work is this very code.
+            matched = [] if is_test_fixture_noise(text) else tool_matches(text)
         else:
             strict = strict_user_hit(text) if role == "user" else strict_asst_hit(text)
             if strict:
