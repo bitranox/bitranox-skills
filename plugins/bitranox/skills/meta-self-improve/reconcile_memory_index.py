@@ -353,6 +353,30 @@ def _existing_ancestor_anchor(path):
     return None
 
 
+def find_decoy_anchors(anchor):
+    """Every `.claude-memory` store dir STRICTLY BELOW the tree top - a DECOY anchor. resolve_anchor
+    always returns the TOPMOST ancestor carrying CLAUDE.md + a store, so any store dir deeper in the
+    tree is dead to the engine, yet the `CLAUDE.local.md` walk-up retrieval text resolves a
+    below-level slug to that NEARER store FIRST and reads a stale or empty-stub body. A migration
+    that centralizes bodies to the top must delete the drained sub-stores; this flags one it left
+    behind. Backup dirs (`<store>-*`, e.g. `-migration-backup-...`) and any store nested inside them
+    are NOT decoys - they are in no level's ancestor chain - so descent prunes them. Returns sorted
+    absolute paths; empty is the healthy answer (exactly one store per tree, at the top)."""
+    import os
+    import self_improve_signals as sig
+    anchor = Path(anchor).resolve()
+    found = []
+    for root, dirs, _files in os.walk(str(anchor)):
+        rootp = Path(root)
+        for d in dirs:
+            if d == us.STORE_DIRNAME and rootp.resolve() != anchor:
+                found.append(str(rootp / d))
+        # never descend into a store, a backup/variant dir (`<store>-*`), or a vendored dir
+        dirs[:] = [d for d in dirs
+                   if not d.startswith(us.STORE_DIRNAME) and d not in sig.VENDOR_DIRNAMES]
+    return sorted(found)
+
+
 def check_tree(anchor):
     """Tree-wide integrity over EVERY curated level under `anchor` (SIBLINGS included) - the checks
     the chain-scoped `--check` structurally cannot make: a slug pointed at from more than one level
@@ -400,7 +424,8 @@ def check_tree(anchor):
                                if r in all_targets and not _reachable(r, lvl)))
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
-            "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor)}
+            "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor),
+            "decoy_anchors": find_decoy_anchors(anchor)}
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -505,6 +530,10 @@ def main(argv=None):
         for lvl, src, ref in rep["sideways_refs"]:
             print("    ! sideways/downward ref: [[%s]] in %s (%s) -> target exists but not on this "
                   "level's ancestor chain (dangles here; refs are upward-only)" % (ref, src, lvl))
+            problems += 1
+        for store in rep["decoy_anchors"]:
+            print("    ! decoy anchor (orphan .claude-memory below the tree top; shadows the "
+                  "walk-up retrieval path with stale/stub bodies): %s" % store)
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)

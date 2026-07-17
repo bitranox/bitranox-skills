@@ -3,6 +3,8 @@
 Builds synthetic memory dirs in tmp_path. All content ASCII.
 """
 
+from pathlib import Path
+
 import reconcile_memory_index as R
 
 
@@ -248,6 +250,49 @@ def test_check_tree_function_returns_duplicate_map(tmp_path):
     us.add_pointer(b, slug="shared", title="Shared", hook="hookB")
     rep = R.check_tree(anchor)
     assert "shared" in rep["duplicates"] and len(rep["duplicates"]["shared"]) == 2
+
+
+def test_check_tree_function_flags_decoy_mid_chain_store(tmp_path):
+    # A leftover .claude-memory STRICTLY BELOW the tree top is a DECOY anchor: resolve_anchor picks
+    # the top so the engine never reads it, but the CLAUDE.local.md walk-up retrieval text hits it
+    # FIRST and reads stale/stub bodies. check_tree must report it (it previously returned 0 problems
+    # while a dead orphan store shadowed retrieval - the projects/.claude-memory decoy).
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    decoy = Path(a) / us.STORE_DIRNAME
+    decoy.mkdir()
+    rep = R.check_tree(anchor)
+    assert str(decoy) in rep["decoy_anchors"]
+
+
+def test_check_tree_cli_flags_decoy_anchor_and_exits_1(tmp_path, capsys):
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    (Path(a) / us.STORE_DIRNAME).mkdir()
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "decoy anchor" in out and "TOTAL tree problems: 1" in out
+
+
+def test_check_tree_top_store_is_not_a_decoy(tmp_path, capsys):
+    # the tree's own top .claude-memory (at the anchor) must NEVER be flagged.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    rep = R.check_tree(anchor)
+    assert rep["decoy_anchors"] == []
+
+
+def test_check_tree_ignores_migration_backup_store(tmp_path, capsys):
+    # a .claude-memory-migration-backup-* dir (and any store nested inside it) is a BACKUP, not a
+    # decoy - it is in no level's ancestor chain, so it must not be flagged.
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    bk = Path(anchor) / (us.STORE_DIRNAME + "-migration-backup-20260101")
+    (bk / us.STORE_DIRNAME).mkdir(parents=True)
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL tree problems: 0" in out
 
 
 def test_rehome_to_targets_a_specific_level_not_the_anchor(tmp_path, capsys):
