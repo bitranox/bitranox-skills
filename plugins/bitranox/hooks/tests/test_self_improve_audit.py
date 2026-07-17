@@ -93,3 +93,61 @@ def test_candidates_are_capped(tmp_path, monkeypatch):
     listed = body.count("- [assistant]")
     assert listed <= A._MAX_CANDIDATES
     assert "30 message(s)" in body  # the total count is still reported honestly
+
+
+# ---- P2: tool-block scanning + skill tally ---------------------------------------------
+
+def write_raw(tmp_path, objs):
+    p = tmp_path / "raw.jsonl"
+    p.write_text("\n".join(json.dumps(o) for o in objs) + "\n", encoding="utf-8")
+    return p
+
+
+def test_finds_a_learning_expressed_only_in_a_tool_call(tmp_path):
+    """The whole point of P2: the discovery never reaches prose. Here the model runs a flag that
+    does not exist and the tool_result says so - nothing in any text block hints at it."""
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "reconcile_memory_index.py --rehome-to root"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result",
+             "content": "error: unrecognized arguments: --rehome-to"}]}},
+    ])
+    cands = A.find_candidates(str(t))
+    assert any(c["role"] == "tool" for c in cands), cands
+    assert any("unrecognized arguments" in m for c in cands for m in c["matched"]), cands
+
+
+def test_ordinary_tool_output_is_not_a_candidate(tmp_path):
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "1170 passed, 7 skipped in 14.18s"}]}},
+    ])
+    assert A.find_candidates(str(t)) == []
+
+
+def test_text_blocks_still_scanned_alongside_tool_blocks(tmp_path):
+    """Adding tool scanning must not regress the prose path."""
+    t = write_raw(tmp_path, [
+        {"type": "user", "message": {"content": [
+            {"type": "text", "text": "that is not working, it fails again"}]}},
+    ])
+    assert any(c["role"] == "user" for c in A.find_candidates(str(t)))
+
+
+def test_report_names_the_skills_that_ran(tmp_path, monkeypatch):
+    """flag-a-skill-when-a-real-bug-slips-past-it needs the roster of what actually ran."""
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "compuse-git"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "fatal: not a git repository"}]}},
+    ])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+        {"transcript_path": str(t), "cwd": str(tmp_path)})))
+    assert A.main() == 0
+    report = S.audit_file(str(tmp_path)).read_text(encoding="utf-8")
+    assert "compuse-git" in report, report

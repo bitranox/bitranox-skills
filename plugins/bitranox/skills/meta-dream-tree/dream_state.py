@@ -53,6 +53,7 @@ def _session_review(proj):
     session = meta.get("session_id") or ""
     subs = sig.read_subagent_learnings(session) if session else []
     touched = sig.subject_levels(sig.read_touched_paths(session), proj) if session else []
+    skills = sig.skills_invoked(text)
 
     if not (text or subs or touched):
         print("NOTHING NEW since the last review (transcript: %s)"
@@ -69,6 +70,13 @@ def _session_review(proj):
         for lv in touched:
             print("  %s%s" % (lv["level"], "  [DIFFERENT TREE - a misfile here is unrecoverable]"
                               if lv["cross_tree"] else "  [sibling project in this tree]"))
+        print()
+    if skills:
+        print("== SKILLS INVOKED (real data for the skill-gap check, not your recall) ==")
+        for name, n in sorted(skills.items()):
+            print("  %s x%d" % (name, n))
+        print("  If a bug/miss below shipped DESPITE one of these, that is the SKILL's coverage")
+        print("  gap: flag it and fix the skill, per flag-a-skill-when-a-real-bug-slips-past-it.")
         print()
     if text:
         print("== UNREVIEWED TRANSCRIPT (from disk; %d bytes up to offset %d) ==" % (len(text), offset))
