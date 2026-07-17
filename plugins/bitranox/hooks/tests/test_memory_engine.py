@@ -689,3 +689,87 @@ def test_add_refuses_excluded_proj(tmp_path, monkeypatch):
     with _pt.raises(Exception):
         E.add_or_update_entry(str(fake_tmp), "T", "When x, do y", body="b", scope_default="lvl")
     assert not (fake_tmp / "CLAUDE.local.md").exists()
+
+
+# ---- P0-back: relocate (the TRUE cross-tree move) ---------------------------------------
+# move_entry refuses cross-tree because the BODY is anchored per tree - moving only the pointer
+# would strand it. The only cross-tree path was a COPY, which leaves the stale original behind:
+# a learning captured in the wrong tree could never be fully re-homed. relocate closes that.
+
+def _body_text(anchor, slug):
+    return us.body_path(us.resolve_anchor(str(anchor)), slug).read_text(encoding="utf-8")
+
+
+def test_relocate_cross_tree_moves_body_and_leaves_no_duplicate(two_trees):
+    """The defining invariant: after a cross-tree relocate the fact exists ONCE, in the target
+    tree. A copy that leaves the original is what this verb exists to stop."""
+    E.add_or_update_entry(str(two_trees.proj_a), "Bakery Oven Rule", "When baking, preheat.",
+                          body="The oven needs 20 minutes.", scope_default="p")
+    rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "bakery-oven-rule")
+    assert rep["relocated"] is True and rep["cross_tree"] is True, rep
+
+    # present in the target tree: pointer + body
+    _s, ptrs = us.parse_pointer_index(
+        (Path(str(two_trees.proj_b)) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert "bakery-oven-rule" in {p.slug for p in ptrs}
+    assert "oven needs 20 minutes" in _body_text(two_trees.proj_b, "bakery-oven-rule")
+
+    # GONE from the source tree: no pointer, and the body is archived (not live)
+    _s2, ptrs2 = us.parse_pointer_index(
+        (Path(str(two_trees.proj_a)) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert "bakery-oven-rule" not in {p.slug for p in ptrs2}
+    assert not us.body_path(us.resolve_anchor(str(two_trees.proj_a)), "bakery-oven-rule").exists()
+
+
+def test_relocate_archives_the_source_body_rather_than_deleting_it(two_trees):
+    E.add_or_update_entry(str(two_trees.proj_a), "F", "h", body="recoverable", scope_default="p")
+    E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "f")
+    anchor_a = us.resolve_anchor(str(two_trees.proj_a))
+    archived = list((us.central_facts_dir(anchor_a).parent / ".archive").glob("*.md"))
+    assert archived and "recoverable" in archived[0].read_text(encoding="utf-8")
+
+
+def test_relocate_same_tree_delegates_to_move(tmp_path):
+    """One verb for callers: within a tree the body already sits at the right anchor, so this is
+    exactly a pointer move - do not copy/archive a body that never needed to move."""
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
+    rep = E.relocate_entry(proj, mid, "f")
+    assert rep["relocated"] is True and rep["cross_tree"] is False
+    assert us.body_path(us.resolve_anchor(proj), "f").is_file()   # body untouched, still live
+    _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert "f" in {p.slug for p in ptrs}
+
+
+def test_relocate_refuses_when_target_tree_has_a_divergent_slug(two_trees):
+    """Slugs are TREE-unique. Landing on an existing, different fact would silently destroy it."""
+    E.add_or_update_entry(str(two_trees.proj_a), "F", "hook one", body="B1", scope_default="p")
+    E.add_or_update_entry(str(two_trees.proj_b), "F", "hook two - different", body="B2",
+                          scope_default="p")
+    rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "f")
+    assert rep["relocated"] is False and "already" in (rep["refused"] or "").lower(), rep
+    # nothing destroyed on either side
+    assert "B1" in _body_text(two_trees.proj_a, "f")
+    assert "B2" in _body_text(two_trees.proj_b, "f")
+
+
+def test_relocate_refuses_when_it_would_dangle_an_inbound_ref(two_trees):
+    """A fact leaving the tree dangles every [[ref]] to it that stays behind."""
+    E.add_or_update_entry(str(two_trees.proj_a), "Target", "t", body="B", scope_default="p")
+    E.add_or_update_entry(str(two_trees.proj_a), "Citer", "c", body="see [[target]]",
+                          scope_default="p")
+    rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "target")
+    assert rep["relocated"] is False and "dangl" in (rep["refused"] or "").lower(), rep
+
+
+def test_relocate_force_overrides_the_dangling_refusal_with_a_warning(two_trees):
+    E.add_or_update_entry(str(two_trees.proj_a), "Target", "t", body="B", scope_default="p")
+    E.add_or_update_entry(str(two_trees.proj_a), "Citer", "c", body="see [[target]]",
+                          scope_default="p")
+    rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "target", force=True)
+    assert rep["relocated"] is True and any("dangl" in w.lower() for w in rep["warnings"]), rep
+
+
+def test_relocate_missing_slug_is_refused(two_trees):
+    rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "nope")
+    assert rep["relocated"] is False and "not found" in (rep["refused"] or "")

@@ -92,7 +92,9 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   shows the learning is about another repo you edited; route `--proj` there instead. There is no
   MEMORY.md intermediate, and capture never reaches up to an ancestor - the ALTITUDE is the DREAM's
   job (engine `move`), never capture's. Getting the SUBJECT right matters most cross-tree: `move`
-  refuses to cross trees, so a fact misfiled into another tree can never be re-homed by a dream.
+  refuses to cross trees (it relocates a pointer, and the body is anchored per tree), so a
+  cross-tree misfile needs the heavier `relocate` verb - which copies the body into the target
+  tree and archives the source. Cheaper to route right at capture than to re-home later.
 - **Native raw tier**: Claude Code's own Auto memory (`~/.claude/projects/<proj>/memory/`),
   per-machine, uncurated. Keep it ON; the dream de-doubles the tiers and lifts worthwhile raw
   entries into the curated store (dream step 3b).
@@ -127,6 +129,7 @@ Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass
 | `heal --proj D`                                                                                                                                                                         | `healed N file(s) across M level(s)`  |
 | `set-scope --proj D --scope TEXT`                                                                                                                                                       | `scope updated:` / `scope unchanged:` |
 | `move --from-level A --to-level B --slug S [--force]`                                                                                                                                   | `moved <slug>: A -> B (up\|down)`     |
+| `relocate --from-level A --to-level B --slug S [--force]`                                                                                                                               | `relocated <slug>: A -> B (...)`      |
 | `lint --tree D`                                                                                                                                                                         | `TOTAL over-cap hooks: N \| ...`      |
 | `tree-top --proj D [--json]`                                                                                                                                                            | the printed top/store lines           |
 | `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                              | the `DRY-RUN:`/`APPLIED:` report      |
@@ -144,7 +147,13 @@ merges provenance (`bx:src`) and pin, keeps the existing body when `--body` is e
 body, enforces tree-unique slugs. `move` relocates only a pointer LINE (the body never moves); if the
 target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -
 picking by direction would silently discard the richer hook), and `--force` dedups by keeping the
-LONGER hook and dropping the other. `heal` runs every session (skip-fast when healthy), is
+LONGER hook and dropping the other. `relocate` is the CROSS-TREE move `move` cannot do: it copies
+the central body into the TARGET tree's store, points at it there, drops the source pointer and
+ARCHIVES the source body - one live copy, old one recoverable. Same-tree it just delegates to
+`move` (the body already sits at the right anchor). It refuses a divergent slug in the target tree
+(slugs are tree-unique, so landing on one would destroy a different fact) and refuses when the
+fact leaving the tree would dangle any inbound `[[ref]]` left behind (`--force` warns instead).
+`heal` runs every session (skip-fast when healthy), is
 CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
 fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.
 `lint --tree` is the read-only voice/frame backlog sweep (over-hard-cap hooks, trigger-less hooks,
