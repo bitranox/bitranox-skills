@@ -49,15 +49,23 @@ _REVIEWER = "dream"          # the dream's own watermark; the regex audit marks 
 def _session_review(proj):
     """Print the session material to consolidate, read FROM DISK and only the unreviewed part."""
     meta = sig.read_session_meta(proj)
-    text, offset = sig.unreviewed_transcript_text(proj, _REVIEWER)
-    session = meta.get("session_id") or ""
+    path = sig.resolve_transcript(proj)
+    text, offset = sig.unreviewed_transcript_text(proj, _REVIEWER, transcript=path)
+    # The transcript basename IS the session id, so a SELF-LOCATED transcript (no meta recorded)
+    # still recovers the subagent-learning and touched-path inputs, which are keyed by session id.
+    session = meta.get("session_id") or (Path(path).stem if path else "")
     subs = sig.read_subagent_learnings(session) if session else []
     touched = sig.subject_levels(sig.read_touched_paths(session), proj) if session else []
     skills = sig.skills_invoked(text)
 
     if not (text or subs or touched):
-        print("NOTHING NEW since the last review (transcript: %s)"
-              % (meta.get("transcript_path") or "unknown"))
+        if not path:
+            # DISTINCT from "nothing new": discovery failed, so the empty result is untrustworthy
+            # (a keying/timing miss would otherwise report a confident zero-byte review as success).
+            print("NO TRANSCRIPT DISCOVERED for %s (no session meta recorded and no *.jsonl under "
+                  "~/.claude/projects/<cwd>; session-review is hook-driven - check the cwd key)" % proj)
+        else:
+            print("NOTHING NEW since the last review (transcript: %s)" % path)
         return 0
 
     if subs:
@@ -89,8 +97,7 @@ def _session_review(proj):
 
 def _session_reviewed(proj):
     """Advance the dream's watermark to the transcript's current end."""
-    meta = sig.read_session_meta(proj)
-    tp = meta.get("transcript_path") or ""
+    tp = sig.resolve_transcript(proj)   # same resolver as review, so a self-located transcript marks too
     if not tp:
         print("no known transcript for %s - nothing to mark" % proj)
         return 0
