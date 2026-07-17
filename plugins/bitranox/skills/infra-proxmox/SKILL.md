@@ -100,19 +100,22 @@ Conclude with a clear decision: either **"Execute action"** or **"Ask user for c
 
 ## 6. Troubleshooting Quick Reference
 
-| Problem                 | Diagnosis                                                                                                        |
-|-------------------------|------------------------------------------------------------------------------------------------------------------|
-| **Cluster not quorate** | `pvecm status` > "Quorate: No". Check connectivity, `systemctl status corosync`. Emergency: `pvecm expected 1`.  |
-| **Node won't join**     | Verify UDP 5405-5412, time sync, SSH (TCP 22). Try: `pvecm add {IP} --fingerprint {SHA256}`.                     |
-| **VM won't start**      | Check lock: `qm config {vmid} \| grep lock`. Storage: `pvesm status`. Log: `pvenode task list --vmid {vmid}`.    |
-| **CT won't start**      | Check lock: `pct config {vmid} \| grep lock`. Try: `pct fsck {vmid}`. Log: `journalctl -u pve-container@{vmid}`. |
-| **Storage offline**     | `pvesm status` (check active). NFS: `mount \| grep nfs`. Ceph: `ceph -s`. iSCSI: `iscsiadm -m session`.          |
-| **Migration fails**     | Target storage: `pvesm status --target {node}`. Locks: `qm unlock {vmid}`. Network: `ping {target}`.             |
-| **HA fencing**          | `journalctl -u pve-ha-crm -n 100`. Watchdog: `cat /dev/watchdog` (should error if active).                       |
-| **Slow GUI**            | `MAX_WORKERS=5` in `/etc/default/pveproxy`, then `systemctl restart pveproxy.service`.                           |
-| **Backup failures**     | Space: `pvesm status`. Logs: `/var/log/vzdump/{vmid}-*.log`. PBS: verify connectivity.                           |
-| **Ceph issues**         | `ceph health detail`, `ceph osd tree`, `ceph pg stat`. Maintenance: `ceph osd set noout`.                        |
-| **NIC names changed**   | `ip link show`. Pin: `pve-network-interface-pinning generate`. Check `/etc/network/interfaces`.                  |
+| Problem                      | Diagnosis                                                                                                                                                                                                                                    |
+|------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Cluster not quorate**      | `pvecm status` > "Quorate: No". Check connectivity, `systemctl status corosync`. Emergency: `pvecm expected 1`.                                                                                                                              |
+| **Node won't join**          | Verify UDP 5405-5412, time sync, SSH (TCP 22). Try: `pvecm add {IP} --fingerprint {SHA256}`.                                                                                                                                                 |
+| **VM won't start**           | Check lock: `qm config {vmid} \| grep lock`. Storage: `pvesm status`. Log: `pvenode task list --vmid {vmid}`.                                                                                                                                |
+| **CT won't start**           | Check lock: `pct config {vmid} \| grep lock`. Try: `pct fsck {vmid}`. Log: `journalctl -u pve-container@{vmid}`.                                                                                                                             |
+| **Storage offline**          | `pvesm status` (check active). NFS: `mount \| grep nfs`. Ceph: `ceph -s`. iSCSI: `iscsiadm -m session`.                                                                                                                                      |
+| **Migration fails**          | Target storage: `pvesm status --target {node}`. Locks: `qm unlock {vmid}`. Network: `ping {target}`.                                                                                                                                         |
+| **HA fencing**               | `journalctl -u pve-ha-crm -n 100`. Watchdog: `cat /dev/watchdog` (should error if active).                                                                                                                                                   |
+| **Slow GUI**                 | `MAX_WORKERS=5` in `/etc/default/pveproxy`, then `systemctl restart pveproxy.service`.                                                                                                                                                       |
+| **Backup failures**          | Space: `pvesm status`. Logs: `/var/log/vzdump/{vmid}-*.log`. PBS: verify connectivity.                                                                                                                                                       |
+| **Ceph issues**              | `ceph health detail`, `ceph osd tree`, `ceph pg stat`. Maintenance: `ceph osd set noout`.                                                                                                                                                    |
+| **NIC names changed**        | `ip link show`. Pin: `pve-network-interface-pinning generate`. Check `/etc/network/interfaces`.                                                                                                                                              |
+| **Windows VM ~25% slower**   | `cpu: host` exposes vmx, so Win11 auto-enables VBS (~25% CPU penalty). A no-vmx model (`IvyBridge`/`x86-64-v2-AES`) keeps VBS off; Docker must then use process isolation (hyperv-container isolation rides the same VBS hypervisor).        |
+| **Cloned VM missing a disk** | `qm clone` only brings the VM's CONFIGURED/managed disks. A base that keeps app data on a separate disk (e.g. Docker `data-root` on `D:`) loses it on clone (dockerd fails "Incorrect function"). Repoint the app or attach the disk.        |
+| **Snapshot/backup a guest**  | Use ONLY native PVE: `qm`/`pct snapshot`/`rollback` and `vzdump`/PBS. NEVER a manual `zfs snapshot` of the guest zvols or a hand-edited `[snapshot]` conf - qm keeps the snapshot's config in sync with the live guest; manual zfs does not. |
 
 ---
 

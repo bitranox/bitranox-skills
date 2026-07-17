@@ -168,6 +168,25 @@ point at `./.venv`) before trusting a "missing module" or phantom-type failure.
 platform binaries); ensure `.venv/` is gitignored and untrack it if it slipped in. Mechanics (and the
 full artifact list) live in `bitranox:compuse-git` "Don't track local build artifacts".
 
+### Gotcha: on Windows, spawning a uv-installed tool by bare name needs `shutil.which` first
+
+uv installs a tool (`ruff`, `pytest`, `pyright`) into its own venv `bin`/`Scripts` dir, NOT on the
+caller's PATH. When your Python spawns it via `subprocess` by bare name, Windows breaks where POSIX
+does not: `subprocess.Popen([...], env=E)` on POSIX resolves a bare-name `argv[0]` with `E["PATH"]`
+(execvpe), but on Windows `CreateProcess` resolves the executable against the CALLING process's
+`%PATH%` and IGNORES the `env` dict you pass to the child - so pointing the child's PATH at the tool
+dir does nothing and you get `FileNotFoundError [WinError 2]`.
+
+```python
+# resolve argv[0] to an absolute path FIRST (honours PATHEXT, so "ruff" -> "ruff.exe"):
+resolved = shutil.which(argv[0], path=env.get("PATH")) or argv[0]  # leave unresolvable name to still error clearly
+subprocess.run([resolved, *argv[1:]], env=env)
+# also prepend your own venv bin so grandchildren see the toolchain:
+env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+```
+
+No-op on POSIX (execvpe already honours the child PATH); the fix is safe to apply unconditionally.
+
 ---
 
 ## Key Configuration Snippets

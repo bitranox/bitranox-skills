@@ -51,11 +51,12 @@ fine. For a quick syntax check without editing:
 
 ## Common mistakes
 
-| Mistake                                           | Do instead                                                                   |
-|---------------------------------------------------|------------------------------------------------------------------------------|
-| `sed`/regex to bump a version or add a key        | `parse` -> edit the object -> `dumps`                                        |
-| Editing `pyproject.toml` with `rtoml`/`tomli_w`   | They DROP all comments; use `tomlkit` to preserve them                       |
-| Reaching for a writer in the stdlib               | `tomllib` is READ-only (3.11+); install `tomlkit`/`rtoml`/`tomli_w` to write |
-| `tomllib.load` on a text-mode file handle         | `tomllib` needs binary mode (`open(p, "rb")`) - or use `tomllib.loads(text)` |
-| Hand-editing and breaking a multiline array/table | Edit the parsed object; the serializer emits valid TOML                      |
-| Committing without re-loading                     | Re-`load` after dump and assert the expected value                           |
+| Mistake                                                                      | Do instead                                                                                                                                                         |
+|------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `sed`/regex to bump a version or add a key                                   | `parse` -> edit the object -> `dumps`                                                                                                                              |
+| Editing `pyproject.toml` with `rtoml`/`tomli_w`                              | They DROP all comments; use `tomlkit` to preserve them                                                                                                             |
+| Reaching for a writer in the stdlib                                          | `tomllib` is READ-only (3.11+); install `tomlkit`/`rtoml`/`tomli_w` to write                                                                                       |
+| `tomllib.load` on a text-mode file handle                                    | `tomllib` needs binary mode (`open(p, "rb")`) - or use `tomllib.loads(text)`                                                                                       |
+| Hand-editing and breaking a multiline array/table                            | Edit the parsed object; the serializer emits valid TOML                                                                                                            |
+| Committing without re-loading                                                | Re-`load` after dump and assert the expected value                                                                                                                 |
+| A duplicated key in a table (e.g. two `[project.scripts]` or a repeated key) | Invalid TOML - hard-fails EVERY parser (`tomllib`, `uv`, `ruff`); nothing builds/tests until deduped. Editing the parsed object (not `sed`) avoids introducing one |
