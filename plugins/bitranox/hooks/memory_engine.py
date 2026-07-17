@@ -569,6 +569,101 @@ def scaffold(proj):
 
 # ---- tree-wide sweeps (curated-level walk shared by the engine + reconcile) ----------------------
 
+def relocate_entry(from_level, to_level, slug, force=False):
+    """Relocate a fact to another level, INCLUDING across knowledge trees.
+
+    `move_entry` cannot cross trees: the body is anchored per tree, so moving only the pointer
+    would strand it. The only cross-tree path was a COPY, which leaves the stale original behind -
+    so a learning captured in the wrong tree could never be fully re-homed and the misplacement was
+    permanent. This verb makes the cross-tree move real: the body FILE is copied into the target
+    tree's central store, the pointer is created there, then the source pointer is dropped and the
+    source body ARCHIVED. Exactly one live copy afterwards, and the old one stays recoverable.
+
+    Same-tree calls delegate to `move_entry` (the body already sits at the right anchor, so it is a
+    pointer move and nothing should touch the body).
+    Returns {"slug","from","to","cross_tree","relocated","refused","warnings"}.
+    """
+    rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
+           "cross_tree": False, "relocated": False, "refused": None, "warnings": []}
+    src, dst = Path(from_level).resolve(), Path(to_level).resolve()
+    a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
+    if a_from is None or a_to is None:
+        rep["refused"] = "no anchor for the source or the target level"
+        return rep
+    if Path(a_from).resolve() == Path(a_to).resolve():
+        m = move_entry(from_level, to_level, slug, force=force)
+        rep.update(relocated=m["moved"], refused=m["refused"], warnings=m["warnings"])
+        return rep
+    rep["cross_tree"] = True
+
+    _scope, entries, _bodies = read_store(str(src))
+    entry = next((e for e in entries if e.slug == slug), None)
+    if entry is None:
+        rep["refused"] = "slug %r not found at the from-level" % slug
+        return rep
+    if entry.legacy:
+        rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
+        return rep
+
+    # Slugs are TREE-unique, so a divergent slug already in the target tree is a different fact.
+    # Landing on it would destroy it silently; never pick a winner here (dedup is a decision).
+    _s2, dst_entries, _b2 = read_store(str(dst))
+    dst_entry = next((e for e in dst_entries if e.slug == slug), None)
+    if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
+        rep["refused"] = ("target tree already has slug %r with a DIFFERENT hook - relocating would "
+                          "overwrite that fact; dedup deliberately or rename one first" % slug)
+        return rep
+
+    # The fact LEAVES this tree entirely, so EVERY inbound [[ref]] in the source tree dangles -
+    # including one at the source level itself. A cross-tree ref is never an allowed substitute.
+    dangling = inbound_ref_sources(curated_levels_under(a_from), slug)
+    if dangling:
+        what = ", ".join("%s at %s" % (s, lvl) for lvl, s in dangling)
+        if not force:
+            rep["refused"] = ("relocating out of this tree would dangle inbound [[refs]]: %s "
+                              "(fix the citers, or --force to relocate anyway)" % what)
+            return rep
+        rep["warnings"].append("relocated despite dangling inbound [[refs]]: %s" % what)
+
+    # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
+    # visible duplicate, never a lost fact. The body file is copied VERBATIM - it is already framed,
+    # and re-writing it through add_or_update_entry would double-wrap the frontmatter.
+    src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
+    try:
+        text = src_body.read_text(encoding="utf-8") if src_body.is_file() else ""
+        dst_body.parent.mkdir(parents=True, exist_ok=True)
+        dst_body.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        rep["refused"] = "could not write the body into the target tree: %s" % exc
+        return rep
+    us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
+                   source=set(entry.source) | {"relocated-cross-tree"}, pin=entry.pin)
+    _drop_pointer(str(src), slug)
+
+    # Archive the source body only once nothing in the source tree points at the slug any more.
+    if not _other_levels_pointing_in(a_from, slug):
+        try:
+            archive = us.central_facts_dir(a_from).parent / ".archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            if src_body.is_file():
+                src_body.replace(archive / (slug + ".md"))
+        except OSError as exc:
+            rep["warnings"].append("source body left in place (archive failed: %s)" % exc)
+    else:
+        rep["warnings"].append("source body kept: another level in the source tree still points at it")
+    rep["relocated"] = True
+    return rep
+
+
+def _other_levels_pointing_in(anchor, slug):
+    """True when any curated level under `anchor` still carries a pointer for `slug`."""
+    for lvl in curated_levels_under(anchor):
+        _s, entries, _b = read_store(lvl)
+        if any(e.slug == slug for e in entries):
+            return True
+    return False
+
+
 def curated_levels_under(anchor):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` carrying a managed pointer block),
     pruning vendored/build/cache dirs - a bounded os.walk of the whole subtree, SIBLINGS included.
@@ -711,6 +806,15 @@ def main(argv=None):
     mv.add_argument("--force", action="store_true",
                     help="down-move even when inbound [[refs]] would dangle, OR dedup a divergent "
                          "duplicate-target pointer by keeping the longer hook (warning instead of refusal)")
+
+    rl = sub.add_parser("relocate",
+                        help="re-home one fact to another level, INCLUDING across trees (moves the "
+                             "body too, then archives the source - no duplicate left behind)")
+    rl.add_argument("--from-level", required=True, dest="from_level")
+    rl.add_argument("--to-level", required=True, dest="to_level")
+    rl.add_argument("--slug", required=True)
+    rl.add_argument("--force", action="store_true",
+                    help="relocate even when inbound [[refs]] in the source tree would dangle")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.cmd == "tree-top":
@@ -756,6 +860,19 @@ def main(argv=None):
         for w in rep["warnings"]:
             print("~ warning: %s" % w)
         print("moved %s: %s -> %s (%s)" % (rep["slug"], rep["from"], rep["to"], rep["direction"]))
+        return 0
+
+    if args.cmd == "relocate":
+        rep = relocate_entry(args.from_level, args.to_level, args.slug, force=args.force)
+        if rep["refused"]:
+            print("! refused: %s" % rep["refused"])
+            return 1
+        for w in rep["warnings"]:
+            print("~ warning: %s" % w)
+        print("relocated %s: %s -> %s (%s)" % (
+            rep["slug"], rep["from"], rep["to"],
+            "CROSS-TREE: body moved + source archived" if rep["cross_tree"]
+            else "same tree: pointer move, body untouched"))
         return 0
 
     if args.cmd == "ensure-memory-structure":

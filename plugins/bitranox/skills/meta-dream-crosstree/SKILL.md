@@ -98,6 +98,16 @@ Create one todo per step.
    sighting, `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
    to clear after an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
    `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a no-op).
+4b. **Misplacement audit (wrong-TREE facts).** ONLY the cross-tree modes can see this: a fact
+   captured while cwd was another repo lands in the WRONG tree's store, and nothing in that tree's
+   own integrity checks knows it is foreign (`meta-dream-tree` sees one tree and structurally
+   cannot notice). Run `reconcile_memory_index.py --check-misplaced <anchor>` per tree (home:
+   `<plugin>/skills/meta-self-improve/`): it reports facts whose body cites ONLY another tree's
+   paths, plus the exact `relocate` command. A path mention is EVIDENCE, not proof - a fact may
+   legitimately cite a neighbour - so JUDGE each candidate against its body before acting; expect
+   to reject some. For a confirmed misfile use the engine's `relocate` verb (NOT a copy: a copy
+   leaves the stale original, which is the bug). Propose-first in `propose`; apply in `auto`.
+
 5. **Outbound cross-pollination.** When a learning is useful BEYOND its project, do not write into other
    projects - **promote it to the lowest common ancestor WITHIN ITS TREE** (often the tree's top) and let the native
    downward cascade deliver it; a project in a DIFFERENT subtree receives it via ITS inbound gather. A

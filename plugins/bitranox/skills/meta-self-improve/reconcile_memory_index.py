@@ -299,6 +299,60 @@ def find_dangling_bodies(anchor):
     return sorted(body_slugs - pointed)
 
 
+# An absolute POSIX path mentioned in a fact body. Deliberately conservative: a path is only
+# evidence of subject when it is absolute and long enough to resolve to a tree.
+_ABS_PATH_RX = re.compile(r"(/[\w.@+-]+(?:/[\w.@+-]+){2,})")
+
+
+def find_misplaced(anchor):
+    """Facts under `anchor` whose body is ABOUT a different tree - the wrong-dir capture, made visible.
+
+    Capture routes by cwd, so a learning discovered about repo B while working in repo A lands in
+    A's store. Cross-tree that used to be permanent (move refuses; only a duplicating copy existed),
+    and it is invisible in A: nothing in A's own integrity checks knows the fact is foreign. The
+    evidence is the body's own absolute paths - if they resolve into ANOTHER tree's anchor and none
+    resolve into this one, the fact is filed in the wrong tree.
+
+    Returns [{"level","slug","target_anchor","paths"}], the model's candidates to judge - a path
+    mention is EVIDENCE, not proof (a fact can legitimately cite a neighbour), so this reports and
+    never relocates on its own.
+    """
+    anchor_r = Path(anchor).resolve()
+    out = []
+    for lvl in ME.curated_levels_under(str(anchor_r)):
+        _scope, entries, bodies = ME.read_store(lvl)
+        for e in entries:
+            body = bodies.get(e.slug) or ""
+            foreign = {}
+            own = 0
+            for m in _ABS_PATH_RX.finditer(body):
+                p = m.group(1)
+                a = ME.us.resolve_anchor(p) or _existing_ancestor_anchor(p)
+                if a is None:
+                    continue
+                a = Path(a).resolve()
+                if a == anchor_r:
+                    own += 1
+                else:
+                    foreign.setdefault(str(a), []).append(p)
+            # only a fact pointing EXCLUSIVELY at one other tree is a candidate; a body citing both
+            # its own tree and a neighbour is normal cross-reference, not a misfile
+            if foreign and not own and len(foreign) == 1:
+                target, paths = next(iter(foreign.items()))
+                out.append({"level": lvl, "slug": e.slug, "target_anchor": target,
+                            "paths": sorted(set(paths))})
+    return out
+
+
+def _existing_ancestor_anchor(path):
+    """Anchor for the nearest EXISTING ancestor of `path` (a body cites files, not just dirs)."""
+    p = Path(path)
+    for cand in [p] + list(p.parents):
+        if cand.exists():
+            return ME.us.resolve_anchor(str(cand))
+    return None
+
+
 def check_tree(anchor):
     """Tree-wide integrity over EVERY curated level under `anchor` (SIBLINGS included) - the checks
     the chain-scoped `--check` structurally cannot make: a slug pointed at from more than one level
@@ -401,7 +455,29 @@ def main(argv=None):
                          "slug pointed at from >1 level (tree-unique violation), orphan pointers, refs "
                          "resolving nowhere, and dangling bodies - the cross-sibling problems --check "
                          "(chain-only) cannot see; exit 1 on any hard problem")
+    ap.add_argument("--check-misplaced", action="store_true", dest="check_misplaced",
+                    help="TREE-WIDE wrong-tree audit: facts whose body cites ONLY another tree's "
+                         "paths, i.e. captured in the wrong store (capture routes by cwd). Reports "
+                         "candidates + the relocate command; never moves anything. Exit 1 if any")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.check_misplaced:
+        anchor = ME._anchor(args.dirs[0])
+        rows = find_misplaced(anchor)
+        print("misplacement audit: %s" % anchor)
+        for r in rows:
+            print("    ? %s [%s]" % (r["slug"], r["level"]))
+            print("      body cites ONLY: %s" % r["target_anchor"])
+            print("      evidence: %s" % ", ".join(r["paths"][:3]))
+            print("      if it IS about that tree: bash <plugin>/hooks/run-python.sh "
+                  "<plugin>/hooks/memory_engine.py relocate \\")
+            print("        --from-level %s --to-level <level in that tree> --slug %s"
+                  % (r["level"], r["slug"]))
+        print("TOTAL misplaced: %d" % len(rows))
+        if rows:
+            print("A path mention is EVIDENCE, not proof - a fact may legitimately cite a "
+                  "neighbour. JUDGE each one before relocating.")
+        return 1 if rows else 0
 
     if args.archive:
         level = args.dirs[0]

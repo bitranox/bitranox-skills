@@ -41,6 +41,13 @@ the scan in step 3 is run; do not duplicate the rest.
    biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
    nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-tree`
    "CLAUDE.md reconciliation"; every `CLAUDE.md` edit is propose-first, never without confirmation.)
+3b. **Misplacement audit - EXHAUSTIVE here.** Run crosstree's step 4b
+   (`reconcile_memory_index.py --check-misplaced <anchor>`) over EVERY tree, not just the ones this
+   run touched: a wrong-tree fact is invisible from inside its own tree, so it survives every
+   routine dream until a full sweep finds it. Judge each candidate (a cited neighbour path is not a
+   misfile) and `relocate` only the confirmed ones. Report the candidates rejected as well as the
+   ones moved - a rejected candidate is a result, not a non-event.
+
 4. **Org-chart audit (deep dream only - propose, never apply).** With the cross-tree view, assess whether
    the directory structure still fits. Using each project's scope descriptor + what it has learned, look
    for: a project whose domain has drifted so it shares more rules with a DIFFERENT subtree (propose

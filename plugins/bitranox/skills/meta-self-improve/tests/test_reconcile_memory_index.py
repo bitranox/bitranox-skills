@@ -293,3 +293,62 @@ def test_noncurated_level_contributes_nothing_no_subtree_scan(tmp_path):
     assert R.altitude_sources(proj) == []
     refs = R.check_references([str(proj)])
     assert refs["orphans"] == [] and refs["checked"] == 0   # nothing scanned from a plain dir
+
+
+# ---- P0-back: misplacement audit (a fact living in the WRONG tree) ----------------------
+# The wrong-dir capture bug files a learning about repo B into repo A's store. Cross-tree, no
+# dream could re-home it (move refuses; only a duplicating copy existed). With the relocate verb
+# the fix is possible - this detector is what makes the dream NOTICE, instead of a fuzzy pass
+# that no-ops when the model does not spot it.
+
+def _two_trees(tmp_path):
+    """Two independent trees: work/alpha and work/beta, each anchored with its own store."""
+    work = tmp_path / "work"
+    out = []
+    for name in ("alpha", "beta"):
+        top = work / name
+        proj = top / "proj"
+        proj.mkdir(parents=True)
+        (top / "CLAUDE.md").write_text("%s top\n" % name, encoding="utf-8")
+        (proj / "CLAUDE.md").write_text("%s proj\n" % name, encoding="utf-8")
+        (top / us.STORE_DIRNAME).mkdir()
+        out += [str(top), str(proj)]
+    return out
+
+
+def test_check_misplaced_flags_a_fact_whose_body_points_at_another_tree(tmp_path, capsys):
+    top_a, proj_a, top_b, proj_b = _two_trees(tmp_path)
+    # captured while cwd=alpha, but every path in it is about the beta tree
+    ME.add_or_update_entry(proj_a, "Beta Deploy", "When deploying beta, drain first.",
+                           body="Edit %s/service.py then restart. See %s/conf." % (proj_b, top_b),
+                           scope_default="a")
+    rc = R.main(["--check-misplaced", top_a])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "beta-deploy" in out and str(top_b) in out, out
+
+
+def test_check_misplaced_ignores_a_fact_about_its_own_tree(tmp_path, capsys):
+    top_a, proj_a, top_b, proj_b = _two_trees(tmp_path)
+    ME.add_or_update_entry(proj_a, "Alpha Rule", "When building alpha, run make.",
+                           body="Edit %s/main.py and rebuild." % proj_a, scope_default="a")
+    rc = R.main(["--check-misplaced", top_a])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL misplaced: 0" in out, out
+
+
+def test_check_misplaced_ignores_a_body_with_no_paths(tmp_path, capsys):
+    top_a, proj_a, _tb, _pb = _two_trees(tmp_path)
+    ME.add_or_update_entry(proj_a, "Abstract", "When unsure, ask.", body="No paths here at all.",
+                           scope_default="a")
+    assert R.main(["--check-misplaced", top_a]) == 0
+
+
+def test_check_misplaced_names_the_relocate_command_to_run(tmp_path, capsys):
+    """A detector that does not tell you the fix gets ignored - name the exact verb."""
+    top_a, proj_a, top_b, proj_b = _two_trees(tmp_path)
+    ME.add_or_update_entry(proj_a, "Beta Deploy", "When deploying beta, drain.",
+                           body="Edit %s/service.py now." % proj_b, scope_default="a")
+    R.main(["--check-misplaced", top_a])
+    out = capsys.readouterr().out
+    assert "relocate" in out and "--slug beta-deploy" in out, out
