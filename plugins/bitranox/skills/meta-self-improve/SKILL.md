@@ -52,6 +52,18 @@ The per-turn gate is precision-tuned, so a broader SessionEnd scan (`self-improv
 ONCE next session. Review the candidates: capture the genuine misses here, and for a real gap
 extend the gate's family patterns in `self_improve_signals.py` (same `<plugin>/hooks/` home; gate
 and audit share that module, so they never drift).
+
+The audit scans THREE sources, because a learning does not always reach prose:
+
+- **Prose** (user + assistant text) via the broad patterns.
+- **Tool blocks** (`tool_use` commands, `tool_result` output) via the TOOL signal set. A tooling
+  gap often announces itself only here - `error: unrecognized arguments: --rehome-to` is the whole
+  discovery, with no sentence anywhere. The gate never reads tool blocks, so every tool signal is
+  by definition a miss.
+- **The skill tally** - which skills actually ran. If a candidate miss is a bug that shipped
+  DESPITE a skill that ran, that is that SKILL's coverage gap, not just a memory: flag it and fix
+  the skill (see `flag-a-skill-when-a-real-bug-slips-past-it`). This is real invocation data read
+  from the transcript, not recall - in a long session the early invocations have scrolled out.
 Premature signals ("wait...", "let me double-check") stay audit-only - the lesson is not formed
 yet. Skill-coverage gaps are NOT this loop's job: a defect that slipped past a skill you followed
 goes to the dream's skill-gap pass.

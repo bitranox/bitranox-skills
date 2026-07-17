@@ -141,3 +141,28 @@ def test_promoted_clears_the_counter(home, capsys):
     capsys.readouterr()
     D.main(["should-promote", "s", "/p/x"])
     assert capsys.readouterr().out.strip() == "hold"              # counter forgotten after promotion
+
+
+def test_session_review_reports_which_skills_actually_ran(home, tmp_path, capsys):
+    """P2: the skill-gap correlation (flag-a-skill-when-a-real-bug-slips-past-it) needs REAL
+    invocation data - in a long session the early Skill calls have scrolled out of context, so
+    the dream must read them from the transcript rather than recall them."""
+    proj = "/p/x"
+    _session(home, proj, tmp_path, "\n".join([
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill",'
+        '"input":{"skill":"compuse-git"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill",'
+        '"input":{"skill":"compuse-git"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash",'
+        '"input":{"command":"ls"}}]}}',
+    ]) + "\n")
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "compuse-git" in out and "x2" in out, out
+
+
+def test_session_review_omits_the_skill_line_when_none_ran(home, tmp_path, capsys):
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"plain text"}}\n')
+    assert D.main(["session-review", proj]) == 0
+    assert "SKILLS INVOKED" not in capsys.readouterr().out

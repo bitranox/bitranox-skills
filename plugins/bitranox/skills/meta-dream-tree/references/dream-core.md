@@ -71,8 +71,10 @@ routing a learning only into a CLAUDE.md is NOT capture. Verify "nothing durable
 the CONTEXT while the transcript FILE survives intact, so anything you "skim from memory" after a
 compaction is the summary, and the detail is silently lost. `session-review` returns the material
 from disk: the not-yet-reviewed transcript stretch, the SUBAGENT learnings buffered this session
-(they are NOT in your transcript at all and die uncaptured), and the touched-path ROUTING EVIDENCE
-(which repos this session edited that are not the cwd - route `--proj` by SUBJECT). It is
+(they are NOT in your transcript at all and die uncaptured), the touched-path ROUTING EVIDENCE
+(which repos this session edited that are not the cwd - route `--proj` by SUBJECT), and the SKILLS
+INVOKED tally (real data, not recall: if a miss shipped DESPITE a skill that ran, that is the
+skill's coverage gap - flag it per `flag-a-skill-when-a-real-bug-slips-past-it`). It is
 INCREMENTAL: a per-reviewer watermark means an already-consumed prefix is never re-read, so a second
 dream in one session costs nothing and re-analyzes nothing. When the pass is done, run
 `dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop

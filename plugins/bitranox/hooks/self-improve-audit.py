@@ -21,7 +21,8 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import audit_file, broad_matches, strict_asst_hit, strict_user_hit
+from self_improve_signals import (audit_file, broad_matches, skills_invoked, strict_asst_hit,
+                                  strict_user_hit, tool_matches)
 
 # Bound how much transcript we read (sessions can be many MB); the tail covers a long
 # session while keeping memory bounded.
@@ -38,8 +39,45 @@ def _text(content):
     return ""
 
 
+# Fields of a tool_use whose VALUE can carry the discovery (the command that was run, the path
+# that was edited). The rest of the input is payload, not signal.
+_TOOL_INPUT_FIELDS = ("command", "description", "file_path", "skill")
+
+
+def _tool_text(content):
+    """Text from tool_use inputs and tool_result outputs - the blocks _text() cannot see.
+
+    A tooling learning often exists ONLY here: the model runs a flag that does not exist and the
+    tool_result says so, with no prose anywhere. Scanning just `text` blocks structurally misses
+    that whole class.
+    """
+    if not isinstance(content, list):
+        return ""
+    out = []
+    for b in content:
+        if not isinstance(b, dict):
+            continue
+        kind = b.get("type")
+        if kind == "tool_use":
+            inp = b.get("input")
+            if isinstance(inp, dict):
+                out.extend(str(inp[f]) for f in _TOOL_INPUT_FIELDS if isinstance(inp.get(f), str))
+        elif kind == "tool_result":
+            c = b.get("content")
+            if isinstance(c, str):
+                out.append(c)
+            elif isinstance(c, list):
+                out.extend(x["text"] for x in c
+                           if isinstance(x, dict) and isinstance(x.get("text"), str))
+    return " ".join(out)
+
+
 def _iter_messages(transcript_path):
-    """Yield (role, text) for each user/assistant message in the transcript tail."""
+    """Yield (role, text) per message: the prose roles, plus a synthetic "tool" role.
+
+    "tool" carries tool_use/tool_result text and is matched against the TOOL signal set, not the
+    prose sets - a command line is not a sentence and the prose patterns do not apply to it.
+    """
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as fh:
@@ -59,26 +97,49 @@ def _iter_messages(transcript_path):
             continue
         kind = obj.get("type")
         if kind in ("user", "assistant"):
-            yield kind, _text(obj.get("message", {}).get("content"))
+            content = obj.get("message", {}).get("content")
+            yield kind, _text(content)
+            tool = _tool_text(content)
+            if tool:
+                yield "tool", tool
 
 
 def find_candidates(transcript_path):
-    """Return candidate-miss dicts: broad-recall match with no strict match."""
+    """Return candidate-miss dicts: a broad/tool match the strict gate did NOT catch."""
     candidates = []
     for role, text in _iter_messages(transcript_path):
         if not text.strip():
             continue
-        strict = strict_user_hit(text) if role == "user" else strict_asst_hit(text)
-        if strict:
-            continue
-        matched = broad_matches(role, text)
+        if role == "tool":
+            # No strict counterpart: the gate never looks at tool blocks at all, so every tool
+            # signal is by definition a miss.
+            matched = tool_matches(text)
+        else:
+            strict = strict_user_hit(text) if role == "user" else strict_asst_hit(text)
+            if strict:
+                continue
+            matched = broad_matches(role, text)
         if matched:
             snippet = " ".join(text.split())[:_SNIPPET]
             candidates.append({"role": role, "matched": matched, "snippet": snippet})
     return candidates
 
 
-def render_report(candidates):
+def _skill_tally(transcript_path):
+    """{skill: count} for the transcript tail; {} on any read problem (never fatal)."""
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as fh:
+            if size > _MAX_BYTES:
+                fh.seek(size - _MAX_BYTES)
+                fh.readline()
+            data = fh.read()
+    except OSError:
+        return {}
+    return skills_invoked(data.decode("utf-8", "replace"))
+
+
+def render_report(candidates, skills=None):
     recent = candidates[-_MAX_CANDIDATES:]
     freq = {}
     for c in candidates:
@@ -101,6 +162,15 @@ def render_report(candidates):
     ]
     for c in reversed(recent):
         lines.append('- [%s] matched %s :: "%s"' % (c["role"], "/".join(c["matched"]), c["snippet"]))
+    if skills:
+        lines += [
+            "",
+            "Skills invoked last session: "
+            + ", ".join("%s (x%d)" % (k, n) for k, n in sorted(skills.items())),
+            "If one of the candidates above is a bug that shipped DESPITE one of these skills, that "
+            "is the skill's coverage gap - flag it for review and fix the skill (pattern/test), per "
+            "flag-a-skill-when-a-real-bug-slips-past-it.",
+        ]
     lines.append("</SELF-IMPROVE-AUDIT>")
     return "\n".join(lines) + "\n"
 
@@ -117,6 +187,7 @@ def main():
     out = audit_file(proj)
 
     candidates = find_candidates(transcript)
+    skills = _skill_tally(transcript)
     if not candidates:
         try:  # nothing to review: clear any stale report so it is not resurfaced
             out.unlink()
@@ -125,7 +196,7 @@ def main():
         return 0
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render_report(candidates), encoding="utf-8")
+        out.write_text(render_report(candidates, skills), encoding="utf-8")
     except OSError:
         pass
     return 0

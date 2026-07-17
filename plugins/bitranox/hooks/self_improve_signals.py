@@ -1367,7 +1367,16 @@ BROAD_USER_PATTERN = re.compile(
     r"|\byou (always|keep|still|again|never)\b"
     r"|\bi (told|asked) you\b|\bas i (said|mentioned|asked)\b"
     r"|\bnot (quite|what i|right|correct)\b|\b(revert|undo|rollback)\b"
-    r"|\b(perfect|exactly right|spot on|love it|that.?s it|works now)\b",
+    r"|\b(perfect|exactly right|spot on|love it|that.?s it|works now)\b"
+    # NEUTRAL PREFERENCE: an imperative that sets a durable convention with no correction
+    # wording at all ("use httpx2 here", "put it in the application layer"). The strict set
+    # keys on correction/remember phrasing, so it never sees these - they are pure audit.
+    r"|\b(always|never) (use|name|put|keep|call|write|run|prefer)\b"
+    r"|\buse \w+[\w.-]* (here|instead|for|in|not)\b"
+    r"|\bput (it|them|that|those) in\b"
+    r"|\bwe (use|prefer|keep|call|always|never)\b"
+    r"|\bprefer\w*\b[^.\n]{0,40}\b(over|instead of|rather than)\b"
+    r"|\b(verwende|nutze|nimm)\b|\bimmer (nutzen|verwenden)\b",
     re.IGNORECASE,
 )
 
@@ -1382,7 +1391,11 @@ BROAD_ASST_PATTERN = re.compile(
     r"|\bfound (it|the|out)\b|\bthe culprit\b|\bgefunden\b"
     r"|\blet me (stop|inspect|double.?check|re.?check|look (again|closer)|take a closer look)\b"
     r"|\bper the .{1,80}? rule\b|\bthe \".{1,80}?\" rule\b|\bfollowing the .{1,60}? (rule|convention)\b"
-    r"|\b(ah|oh|oops|whoops)[, ]|\bwait[, ]",
+    r"|\b(ah|oh|oops|whoops)[, ]"
+    # Only a SELF-CORRECTING wait ("wait, that's the main transcript") is a signal. A bare
+    # `wait[, ]` also matched ordinary narration ("wait for the agent"), which made 6 of 13
+    # candidates noise in one real session - the audit is only read if it stays scannable.
+    r"|\bwait\b[\s,.!\-]*(?:that|this|no\b|why\b|i\b|hold on)",
     re.IGNORECASE,
 )
 
@@ -1405,3 +1418,57 @@ def broad_matches(role, text):
     """
     rx = BROAD_USER_PATTERN if role == "user" else BROAD_ASST_PATTERN
     return sorted({m.group(0).strip().lower() for m in rx.finditer(text or "")})
+
+
+# ---- TOOL signals (audit-only): a learning that never reached prose -------------------------
+# The prose scan structurally cannot see these: the whole discovery lives in a tool_use command
+# or a tool_result ("unrecognized arguments: --rehome-to" is how a real tooling gap announced
+# itself). Keyed on HARD tool-level failures - a wrong flag, a missing binary, a refused auth -
+# because those are the ones that change how the tool must be driven next time.
+
+TOOL_SIGNAL_PATTERN = re.compile(
+    r"\bcommand not found\b|\bunrecognized (?:arguments?|option)\b"
+    r"|\bunknown (?:option|flag|argument|command)\b|\binvalid (?:option|flag|choice)\b"
+    r"|\bno such (?:file or directory|option|command)\b"
+    r"|\bpermission denied\b|\bnot a git repository\b|\bextra not found\b"
+    # Lookaheads, not consuming matches: `error:\s*\S` would eat the first letter of the very
+    # phrase that names the gap, so "error: unrecognized arguments" reported only "error: u".
+    r"|\bfatal:(?=\s*\S)|\berror:(?=\s*\S)",
+    re.IGNORECASE,
+)
+
+
+def tool_matches(text):
+    """Lower-cased, de-duplicated TOOL-signal matches for tool output/commands; [] if none."""
+    return sorted({m.group(0).strip().lower() for m in TOOL_SIGNAL_PATTERN.finditer(text or "")})
+
+
+def skills_invoked(transcript_text):
+    """{skill_name: count} for every Skill tool call in a raw transcript.
+
+    The skill-gap correlation (a bug that shipped DESPITE a skill) needs to know which skills
+    actually ran. The model's in-context recall is not that data - by the time a dream asks, the
+    early invocations have scrolled out. Parsed from the transcript, so no extra hook and no
+    probe of tool-event shape is required.
+    """
+    tally = {}
+    for raw in (transcript_text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if obj.get("type") != "assistant":
+            continue
+        content = obj.get("message", {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict) or b.get("type") != "tool_use" or b.get("name") != "Skill":
+                continue
+            name = (b.get("input") or {}).get("skill")
+            if isinstance(name, str) and name:
+                tally[name] = tally.get(name, 0) + 1
+    return tally

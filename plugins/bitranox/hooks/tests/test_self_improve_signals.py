@@ -882,3 +882,82 @@ def test_tree_groups_two_independent_trees(two_trees):
     assert set(groups) == {two_trees.top_a, two_trees.top_b}
     assert groups[two_trees.top_a][0] == two_trees.proj_a      # deepest first
     assert groups[two_trees.top_a][-1] == two_trees.top_a
+
+
+# ---- P2: missed-signal coverage --------------------------------------------------------
+
+def test_broad_wait_does_not_fire_on_plain_waiting_narration():
+    """REGRESSION: `wait ` fired on ordinary narration ("waiting on agent 3"), which made 6 of
+    13 audit candidates in one real session pure noise. Only a self-CORRECTING wait is a signal."""
+    for noise in [
+        "I will wait for their SendMessage reports before compiling.",
+        "Two agents running. Let me dispatch the third, then wait for all three.",
+        "Still waiting on agent 3 (upstream propagation).",
+    ]:
+        assert S.broad_matches("assistant", noise) == [], noise
+
+
+def test_broad_wait_still_fires_on_self_correction():
+    """The signal-bearing wait is the one that INTERRUPTS a wrong course."""
+    for hit in [
+        "Wait, that's the main transcript, not the subagent's.",
+        "wait - I had this backwards, the anchor is the tree top.",
+        "Wait. That contradicts what the canonical example does.",
+    ]:
+        assert S.broad_matches("assistant", hit), hit
+
+
+def test_broad_user_flags_neutral_preference_convention():
+    """A user imperative setting a durable convention is a learning signal with no correction
+    wording at all - the strict set never sees it, so the audit must."""
+    for text in [
+        "use httpx2 here, not requests",
+        "put it in the application layer",
+        "always name the fixture after the port",
+        "we use uv for every repo",
+        "prefer a Python script over shell for this",
+    ]:
+        assert S.broad_matches("user", text), text
+
+
+def test_tool_matches_flags_a_real_tooling_gap():
+    """A tooling discovery expressed only in tool output - the class the prose-only scan missed."""
+    for text in [
+        "error: unrecognized arguments: --rehome-to",
+        "bash: pct: command not found",
+        "fatal: not a git repository (or any of the parent directories)",
+        "Permission denied (publickey).",
+        "uv: error: Requested extra not found: dev",
+    ]:
+        assert S.tool_matches(text), text
+
+
+def test_tool_matches_ignores_ordinary_tool_output():
+    for text in [
+        "1170 passed, 7 skipped in 14.18s",
+        "wrote /tmp/x/docs/skills.md",
+        "  M plugins/bitranox/skills/coding-rust/SKILL.md",
+        "",
+    ]:
+        assert not S.tool_matches(text), text
+
+
+def test_skills_invoked_tallies_skill_tool_calls():
+    """The skill-gap correlation (flag-a-skill-when-a-real-bug-slips-past-it) needs REAL data
+    about which skills ran, not the model's fuzzy recall."""
+    import json as _json
+    lines = [
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "meta-skill-writer"}}]}}),
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "compuse-git"}}]}}),
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "meta-skill-writer"}}]}}),
+        _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}}),
+    ]
+    assert S.skills_invoked("\n".join(lines)) == {"meta-skill-writer": 2, "compuse-git": 1}
+
+
+def test_skills_invoked_empty_when_no_skill_calls():
+    assert S.skills_invoked('{"type":"assistant","message":{"content":[]}}') == {}
