@@ -354,6 +354,69 @@ def mark_dream_done(proj, now=None):
         return False
 
 
+# ---- contribution queue: make the intent-to-ship outlive the session ---------------------------
+# A learning that warrants a SKILL or HOOK change reaches the marketplace only if the model happens
+# to author the self-PR before the session ends - nothing recorded the INTENT, so it died with the
+# context while the private fact survived. This is that missing state: a durable per-project TODO.
+# Unlike the audit (a review note, consumed once at SessionStart), a pending contribution is NOT
+# consumed by being surfaced - it stands until it actually ships and something drains it.
+
+def contrib_file(proj):
+    """Queue of pending upstream contributions (skill/hook changes a learning warrants)."""
+    return _audit_dir() / (proj_key(proj) + ".contrib.jsonl")
+
+
+def read_contributions(proj):
+    """The pending contributions for `proj`, oldest first. [] when none. Never consumes."""
+    out = []
+    try:
+        for ln in contrib_file(proj).read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("what"):
+                out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def add_contribution(proj, record, max_items=100):
+    """Queue one pending contribution: {'what' (required), 'target', 'why', 'source'}.
+
+    Deduped on (what, target) - re-noticing the same gap is not a second TODO. Stamped with `ts`.
+    Best-effort: never raises."""
+    if not isinstance(record, dict) or not record.get("what"):
+        return
+    try:
+        cur = read_contributions(proj)
+        key = (str(record.get("what")), str(record.get("target") or ""))
+        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
+            return
+        rec = dict(record)
+        rec.setdefault("ts", time.time())
+        cur.append(rec)
+        if len(cur) > max_items:
+            cur = cur[-max_items:]
+        f = contrib_file(proj)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def drain_contributions(proj):
+    """Clear the queue - ONLY after the contributions actually shipped. Best-effort."""
+    try:
+        contrib_file(proj).unlink()
+    except OSError:
+        pass
+
+
 # ---- nap-owed: make the post-compaction consolidation non-optional ----------------------------
 # Compaction clears the model's CONTEXT (the transcript file survives), so the learnings of the
 # pre-compaction stretch are only recoverable by a pass that reads from DISK. A hook cannot RUN that

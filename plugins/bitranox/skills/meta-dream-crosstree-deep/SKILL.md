@@ -11,8 +11,9 @@ this skill always reads every store (and every CLAUDE.md), even if the cheap con
 says nothing changed. Use it when you want the thorough read; use `bitranox:meta-dream-crosstree` for the
 routine, convergence-gated pass that asks before going deep.
 
-**REQUIRED BACKGROUND:** Follow `bitranox:meta-dream-crosstree` for the full procedure (backup, inbound
-gather, promotion gate, outbound cross-pollination, re-dedup + reconcile, skill-fit, report) and
+**REQUIRED BACKGROUND:** Follow `bitranox:meta-dream-crosstree` for the full procedure (capture-first
+reading the session from DISK via `dream_state.py session-review`, backup, inbound gather, promotion
+gate, outbound cross-pollination, re-dedup + reconcile, skill-fit, report) and
 `bitranox:meta-self-improve` for the altitude/normalization primitives. This skill only overrides how
 the scan in step 3 is run; do not duplicate the rest.
 

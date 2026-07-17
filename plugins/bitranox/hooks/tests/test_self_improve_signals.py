@@ -400,6 +400,45 @@ def test_clear_promotion_candidate(home):
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
 
 
+# ---- contribution queue: the intent-to-ship must outlive the session ---------------------------
+
+def test_contribution_queue_roundtrips_and_is_per_project(home):
+    S.add_contribution("/p/x", {"what": "check-tree misses sideways refs",
+                                "target": "skill:meta-self-improve", "why": "real gap"})
+    S.add_contribution("/p/x", {"what": "rehome over-promotes", "target": "hook:reconcile"})
+    got = S.read_contributions("/p/x")
+    assert len(got) == 2 and got[0]["target"] == "skill:meta-self-improve"
+    assert got[0]["ts"] > 0                                   # stamped for age/ordering
+    assert S.read_contributions("/p/other") == []
+
+
+def test_contribution_queue_survives_reading_unlike_the_audit(home):
+    # A pending contribution is a TODO, not a review note: surfacing it must NOT consume it, or the
+    # intent dies exactly the way it does today.
+    S.add_contribution("/p/x", {"what": "a skill gap", "target": "skill:foo"})
+    assert len(S.read_contributions("/p/x")) == 1
+    assert len(S.read_contributions("/p/x")) == 1             # still there after a second read
+
+
+def test_contribution_queue_drains_only_explicitly(home):
+    S.add_contribution("/p/x", {"what": "a", "target": "skill:foo"})
+    S.add_contribution("/p/x", {"what": "b", "target": "skill:bar"})
+    S.drain_contributions("/p/x")                             # only after it actually ships
+    assert S.read_contributions("/p/x") == []
+
+
+def test_contribution_queue_dedups_the_same_intent(home):
+    S.add_contribution("/p/x", {"what": "same thing", "target": "skill:foo"})
+    S.add_contribution("/p/x", {"what": "same thing", "target": "skill:foo"})
+    assert len(S.read_contributions("/p/x")) == 1             # re-noticing it is not a second TODO
+
+
+def test_contribution_queue_ignores_junk(home):
+    S.add_contribution("/p/x", {})                            # no 'what' -> not a contribution
+    S.add_contribution("/p/x", "not a dict")
+    assert S.read_contributions("/p/x") == []
+
+
 # ---- nap-owed marker: make the post-compaction nap non-optional -------------------------------
 
 def test_nap_owed_marker_lifecycle(home):

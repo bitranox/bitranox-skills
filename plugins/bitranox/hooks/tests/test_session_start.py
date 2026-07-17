@@ -123,6 +123,30 @@ def _write_audit(cwd, text):
     return af
 
 
+def test_pending_contributions_are_surfaced_and_NOT_consumed(tmp_path, monkeypatch, capsys):
+    # The intent-to-ship must outlive the session: surfacing a pending contribution must NOT clear
+    # it (that is the difference from the audit). It stands until it actually ships.
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    cwd = "/proj/contrib"
+    SIG.add_contribution(cwd, {"what": "check-tree misses sideways refs",
+                               "target": "skill:meta-self-improve", "why": "real gap"})
+    rc, out = run_with_stdin(monkeypatch, capsys, root, cwd)
+    assert rc == 0
+    ctx = _ctx(out)
+    assert "check-tree misses sideways refs" in ctx        # the pending TODO is visible
+    assert "skill:meta-self-improve" in ctx                # and where it goes
+    assert len(SIG.read_contributions(cwd)) == 1           # NOT consumed - unlike the audit
+
+    rc2, out2 = run_with_stdin(monkeypatch, capsys, root, cwd)
+    assert "check-tree misses sideways refs" in _ctx(out2)  # still surfaced next session
+
+
+def test_no_pending_contributions_no_noise(tmp_path, monkeypatch, capsys):
+    root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, "/proj/nocontrib")
+    assert "pending upstream contribution" not in _ctx(out).lower()
+
+
 def test_audit_is_surfaced_and_consumed(tmp_path, monkeypatch, capsys):
     root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nSKILLBODY\n")
     cwd = "/proj/audit"

@@ -10,6 +10,19 @@ source of truth; the installed copy is ephemeral. Creating a globally-useful hoo
 **Scope guard (decide first):** only propagate SHARED artifacts. A project-specific skill or hook
 (one living in a project's own `.claude/`) stays in that project - never symlinked, never PR'd.
 
+**QUEUE THE INTENT THE MOMENT YOU JUDGE IT SHIPPABLE - before you do the work.** The classic loss is
+not a bad PR, it is a good intent that never became one: the session ends, the private fact survives
+in the store, and "this should become a skill change" evaporates with the context. Nothing used to
+record it. So the instant a learning looks skill/hook-worthy:
+
+    bash <plugin>/hooks/run-python.sh <plugin>/skills/meta-self-improve/contrib_queue.py add \
+      --what "<the change>" --target "skill:<name>|hook:<name>" --why "<the evidence>" "<cwd>"
+
+That queue is DURABLE and per-project: SessionStart surfaces it every session and does NOT consume it
+(unlike the miss-audit), so the intent outlives the session and gets picked up when the work suits.
+Queue first, then do the steps below now or later. `contrib_queue.py list` shows what is pending;
+`contrib_queue.py drain` clears it - ONLY after the change actually shipped.
+
 When you add or change a shared skill or hook:
 
 1. **Confirm scope.** Shared/distributed, not project-specific. If unsure, stop and keep it local.
