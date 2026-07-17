@@ -77,6 +77,26 @@ def _routing_hint(event, proj):
         return ""
 
 
+def _subagent_hint(session):
+    """Prose naming learnings a SUBAGENT found this session, or '' when none are buffered.
+
+    A subagent's learning never reaches the main transcript unless the main agent restates it (and a
+    named/background agent's report is not returned at all), so the SubagentStop hook buffers the
+    signal and the main capture is the one that can route + write it. Surfacing it here is what makes
+    those learnings capturable at all."""
+    try:
+        recs = _sig.read_subagent_learnings(session)
+        if not recs:
+            return ""
+        bits = ["[%s] %s" % (r.get("agent_type") or "subagent", r.get("snippet") or "") for r in recs]
+        return (" SUBAGENT LEARNINGS (found by a subagent this session - they are NOT in your "
+                "transcript and die unless you capture them): " + " | ".join(bits) +
+                ". Judge each: capture the durable ones (routing `--proj` by SUBJECT as above), "
+                "ignore the task-local noise.")
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        return ""
+
+
 def _text(content):
     """Flatten a transcript message's content (string, or list of blocks) to text."""
     if isinstance(content, str):
@@ -149,7 +169,11 @@ def main():
     except OSError:
         pass
 
-    if (_USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
+    # A SUBAGENT's learning is reason enough to capture even when the MAIN turn is quiet - it is not
+    # in this transcript, so no main-turn pattern can ever fire for it.
+    sub_hint = _subagent_hint(event.get("session_id") or "")
+
+    if (sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
             or _REALIZATION_PATTERN.search(last_asst)
             or _ENDORSE_PATTERN.search(last_user) or _ENDORSE_PATTERN.search(last_asst)):
         try:
@@ -158,7 +182,15 @@ def main():
         except OSError:
             pass
         sys.stdout.write(json.dumps({"decision": "block",
-                                     "reason": _REASON + _routing_hint(event, proj)}))
+                                     "reason": _REASON + _routing_hint(event, proj) + sub_hint}))
+        if sub_hint:
+            # Consumed once, like the SessionStart audit: a non-empty hint ALWAYS blocks, so the
+            # model has now seen the findings verbatim and owns the judgement. Leaving them queued
+            # would re-nag every later turn of the session.
+            try:
+                _sig.drain_subagent_learnings(event.get("session_id") or "")
+            except Exception:                             # noqa: BLE001 - never wedge a turn
+                pass
     return 0
 
 
