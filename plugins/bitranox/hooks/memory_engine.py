@@ -170,9 +170,12 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 by_slug[slug] = adopted
         if slug in by_slug:
             e = by_slug[slug]
+            old_hook = e.hook
             e.title, e.hook = title, (hook or e.hook)
             if body:
                 e.body = _framed_body(slug, e.hook, type_, body)
+            elif e.hook != old_hook:
+                e.body = _reframe_description(e.body, e.hook)   # keep body description in sync with the pointer
             e.source |= src
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
@@ -218,6 +221,19 @@ def _body_description(text):
     """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent."""
     m = re.search(r"(?m)^description:[ \t]*(.*)$", text or "")
     return m.group(1).strip() if m else ""
+
+
+def _reframe_description(text, hook):
+    """Return `text` with its frontmatter `description:` reset to `hook` (whitespace collapsed), so a
+    hook-only pointer update keeps the body's description in sync (spec: the body description IS the
+    hook). An unframed body (no leading frontmatter) is returned unchanged. The replacement is a
+    lambda: a hook can carry backslashes (Windows paths) that re.sub would otherwise treat as
+    template escapes."""
+    if not (text or "").lstrip().startswith("---"):
+        return text
+    desc = " ".join((hook or "").split())
+    return re.sub(r"(?m)^(description:)[ \t]*.*$",
+                  lambda m: "%s %s" % (m.group(1), desc), text, count=1)
 
 
 def _entry_from_body(anchor, slug):

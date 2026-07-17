@@ -353,6 +353,23 @@ def test_altitude_chain_fills_gaps_up_to_highest(tmp_path):
     assert chain[-1] == top            # topmost is the broadest (global) LEVEL, not ~/.claude
 
 
+def test_altitude_chain_skips_dot_claude_config_and_worktree_dirs(tmp_path):
+    # A capture/heal whose cwd is inside a project's `.claude/worktrees/<wt>` must NOT turn
+    # `.claude`, `.claude/worktrees`, or the worktree dir into memory altitudes: `.claude/` is a
+    # Claude Code config dir and `worktrees/` under it is git-worktree scaffolding, never a level.
+    # (Root cause of the empty spurious altitudes heal scaffolded into semdex/.claude.)
+    top = tmp_path / "tree"
+    proj = top / "semdex"
+    wt = proj / ".claude" / "worktrees" / "wt-foo"
+    wt.mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
+    chain = S.altitude_chain(str(wt))
+    assert [c for c in chain if ".claude" in Path(c).parts] == []   # no .claude* level at all
+    assert proj in chain and top in chain                           # routes to the real project + anchor
+    assert chain[-1] == top
+
+
 # --------------------------------------------------------------------------
 # new-project seeding
 # --------------------------------------------------------------------------
@@ -709,6 +726,19 @@ def test_pending_keywords_queue_skips_known_and_drains(home):
     S.clear_pending_keywords(_PROJ)
     assert S.load_pending_keywords(_PROJ) == frozenset()
     assert S.load_pending_keywords("/p/other") == frozenset()                # queue is per-project
+
+
+def test_note_unknown_keywords_drops_leaked_identifiers(home):
+    # Tool-use IDs (toolu_...) and long hex agent/session IDs leak into prompt text (e.g. inside a
+    # <task-notification>), so the recall tokenizer queues them as "keywords". They are junk that
+    # pollutes the dream's filler-classification pass - drop them at the queue chokepoint.
+    S.note_unknown_keywords(
+        ["proxmox", "toolu_016mdvqkbubak5mwrv2xphp3", "aa225afa7c11c6feb", "bindsnap"], _PROJ)
+    pending = S.load_pending_keywords(_PROJ)
+    assert "proxmox" in pending and "bindsnap" in pending          # real terms still queue
+    assert "toolu_016mdvqkbubak5mwrv2xphp3" not in pending         # tool-use ID dropped
+    assert "aa225afa7c11c6feb" not in pending                      # 17-char hex agent ID dropped
+    S.clear_pending_keywords(_PROJ)
 
 
 # ---- curated-store relocation, version gate, and cross-platform lock (Phase 1) --------------------

@@ -93,6 +93,19 @@ def test_empty_body_on_update_keeps_prior_body(proj):
     assert bodies[entries[0].slug].endswith("keep me")
 
 
+def test_hook_only_update_resyncs_body_description(proj):
+    # A slug-stable hook rewrite (new --hook, no --body) must keep the body's `description:`
+    # frontmatter in sync with the pointer hook; otherwise the pointer shows the new hook while the
+    # body keeps the stale one (spec: the body description IS the hook).
+    slug = E.add_or_update_entry(proj, "Rule", "When A happens, do X.",
+                                 body="the prose", type_="reference", scope_default="lvl")
+    E.add_or_update_entry(proj, "Rule", "When B happens, do Y.", slug=slug)   # hook-only update
+    body = us.body_path(proj, slug).read_text(encoding="utf-8")
+    assert "description: When B happens, do Y." in body    # description tracks the new hook
+    assert "When A happens, do X." not in body             # stale description gone
+    assert "the prose" in body                             # prose preserved
+
+
 def test_mtime_neutral_noop(proj):
     E.add_or_update_entry(proj, "Rule", "h", body="b", source=["s"], scope_default="lvl")
     local = sig.claude_local_md_path(proj)
