@@ -55,6 +55,19 @@ def test_buffers_a_signal_found_in_the_subagent_transcript(tmp_path, monkeypatch
     assert got[0]["agent_type"] == "general-purpose" and "stale venv" in got[0]["snippet"]
 
 
+def test_ignores_signals_in_the_dispatch_prompt_user_message(tmp_path, monkeypatch):
+    # A subagent's USER messages are the PARENT's dispatch prompt (and tool results), not the
+    # subagent's own discovery. Instruction phrasing ("always use ...") matches the signal patterns,
+    # but it is the main agent's own text - already in its context - so it must NOT be buffered as a
+    # subagent learning. (Real defect: 5 dream-scanner dispatch prompts were buffered and re-nudged.)
+    ev = _event(tmp_path,
+                agent_msgs=[("user", "Always use the SUBJECT repo. Find and return candidates. Do not edit."),
+                            ("assistant", "Listed the candidates as requested.")],
+                final="Listed the candidates as requested.")
+    _run(monkeypatch, ev)
+    assert S.read_subagent_learnings("s1") == []
+
+
 def test_reads_the_AGENT_transcript_not_the_main_one(tmp_path, monkeypatch):
     # The probe-caught bug: transcript_path is the MAIN session's. A signal that exists ONLY in the
     # main transcript must NOT be attributed to the subagent (the main gate already covers it).
