@@ -1372,7 +1372,11 @@ REALIZATION_PATTERN = re.compile(
     r"|the (real|actual) (topolog|architect|structure|setup|layout|wiring|flow|picture|story|design)"
     r"|it turns out\b|turns out (that|the)\b"
     r"|(that|this) explains (the|why|how|what)\b"
-    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b|root cause is\b"
+    # Require a discovery predicate right after the noun phrase (colon-free window) so a genuine
+    # realization ("the real cause IS/WAS/turned out ...") fires, but a retrospective fix-REPORT
+    # LABEL ("The real cause: ...") does not trip the live Stop block. The colon-excluding window is
+    # what distinguishes an asserted realization from a heading/label of already-shipped work.
+    r"|the (key|real|actual) (insight|issue|problem|cause|reason)\b(?=[^.\n:]{0,15}\b(?:is|was|were|turned out|ended up|lies|stems)\b)|root cause is\b"
     r"|(actually|really) (runs|lives|sits|resides|is hosted|happens|is served) on\b"
     r"|clear(er)? picture|the (full|whole|complete|bigger) picture"
     r"|\b(now|it all|everything|it)('?s| is| are)? (clear|much clearer)\b"

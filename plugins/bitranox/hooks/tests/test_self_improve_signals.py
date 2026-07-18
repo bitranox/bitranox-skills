@@ -51,6 +51,22 @@ def test_strict_asst_hit_found_it_discovery():
     assert not S.strict_asst_hit("could not find it anywhere")
 
 
+def test_realization_noun_phrase_needs_a_predicate_not_a_report_label():
+    # A genuine mid-work realization asserts a predicate on the noun phrase -> fires.
+    assert S.strict_asst_hit("the real cause is the stale venv")
+    assert S.strict_asst_hit("the key insight was a race condition")
+    assert S.strict_asst_hit("the actual problem turned out to be the PATH")
+    # A fix REPORT label ("the real cause: ...") is retrospective - a report of an already-shipped
+    # fix, not a fresh uncaptured learning - so it must NOT trip the live Stop block. Reproduced
+    # false-positive: a shipped-fix report "The real cause: the SubagentStop capture ..." blocked stop.
+    assert not S.strict_asst_hit("The real cause: the SubagentStop capture scanned user messages.")
+    assert not S.strict_asst_hit("the real problem: an unbounded queue")
+    # the STRONG realization alternatives still fire regardless of the noun-phrase tightening
+    assert S.strict_asst_hit("now I understand the real topology")
+    assert S.strict_asst_hit("found it - the cause was a race")
+    assert S.strict_asst_hit("the culprit is the iptables backend")
+
+
 def test_broad_user_flags_near_miss_not_caught_by_strict():
     text = "why did you change that? it's not working again"
     assert S.broad_matches("user", text)          # broad flags it
