@@ -14,7 +14,8 @@ Usage (cwd defaults to the current directory):
   dream_state.py should-promote  S [cwd]  print "promote" or "hold" for a model-inferred candidate S
                                           (>= 2 dreams corroborates; read-only, does NOT count)
   dream_state.py promoted        S [cwd]  clear S's dwell count after it was promoted (no re-fire)
-  dream_state.py session-review  [cwd]    print the session material the dream must consolidate,
+  dream_state.py session-review  [cwd] [--structured-only]  print the session material the dream must consolidate,
+                                          (--structured-only keeps the subagent/routing/skills blocks but suppresses the raw transcript body)
                                           READ FROM DISK: the not-yet-reviewed transcript stretch +
                                           the buffered subagent learnings + the touched-path routing
                                           evidence. Incremental (a watermark per reviewer), so an
@@ -46,7 +47,37 @@ _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
 _REVIEWER = "dream"          # the dream's own watermark; the regex audit marks separately
 
 
-def _session_review(proj):
+def _render_review(subs, touched, skills, text, offset, proj, structured_only=False):
+    """Render the session-review output STRING (pure). With `structured_only`, the SUBAGENT/ROUTING/
+    SKILLS blocks are kept but the raw UNREVIEWED TRANSCRIPT body is suppressed (its byte-count header
+    stays) - the structured value is ~10 lines while the raw dump can be hundreds of KB."""
+    lines = []
+    if subs:
+        lines.append("== SUBAGENT LEARNINGS (not in your transcript - they die unless captured) ==")
+        lines += ["  [%s] %s" % (r.get("agent_type") or "subagent", r.get("snippet") or "") for r in subs]
+        lines.append("")
+    if touched:
+        lines.append("== ROUTING EVIDENCE (repos this session edited that are NOT the cwd) ==")
+        lines += ["  %s%s" % (lv["level"], "  [DIFFERENT TREE - a misfile here is unrecoverable]"
+                              if lv["cross_tree"] else "  [sibling project in this tree]") for lv in touched]
+        lines.append("")
+    if skills:
+        lines.append("== SKILLS INVOKED (real data for the skill-gap check, not your recall) ==")
+        lines += ["  %s x%d" % (name, n) for name, n in sorted(skills.items())]
+        lines.append("  If a bug/miss below shipped DESPITE one of these, that is the SKILL's coverage")
+        lines.append("  gap: flag it and fix the skill, per flag-a-skill-when-a-real-bug-slips-past-it.")
+        lines.append("")
+    if text:
+        lines.append("== UNREVIEWED TRANSCRIPT (from disk; %d bytes up to offset %d) ==" % (len(text), offset))
+        lines.append("  (raw transcript suppressed by --structured-only; read it from disk if needed)"
+                     if structured_only else text)
+    else:
+        lines.append("== UNREVIEWED TRANSCRIPT == (none - already consumed)")
+    lines.append("\n-- when done, run: dream_state.py session-reviewed %s --" % proj)
+    return "\n".join(lines)
+
+
+def _session_review(proj, structured_only=False):
     """Print the session material to consolidate, read FROM DISK and only the unreviewed part."""
     meta = sig.read_session_meta(proj)
     path = sig.resolve_transcript(proj)
@@ -68,30 +99,7 @@ def _session_review(proj):
             print("NOTHING NEW since the last review (transcript: %s)" % path)
         return 0
 
-    if subs:
-        print("== SUBAGENT LEARNINGS (not in your transcript - they die unless captured) ==")
-        for r in subs:
-            print("  [%s] %s" % (r.get("agent_type") or "subagent", r.get("snippet") or ""))
-        print()
-    if touched:
-        print("== ROUTING EVIDENCE (repos this session edited that are NOT the cwd) ==")
-        for lv in touched:
-            print("  %s%s" % (lv["level"], "  [DIFFERENT TREE - a misfile here is unrecoverable]"
-                              if lv["cross_tree"] else "  [sibling project in this tree]"))
-        print()
-    if skills:
-        print("== SKILLS INVOKED (real data for the skill-gap check, not your recall) ==")
-        for name, n in sorted(skills.items()):
-            print("  %s x%d" % (name, n))
-        print("  If a bug/miss below shipped DESPITE one of these, that is the SKILL's coverage")
-        print("  gap: flag it and fix the skill, per flag-a-skill-when-a-real-bug-slips-past-it.")
-        print()
-    if text:
-        print("== UNREVIEWED TRANSCRIPT (from disk; %d bytes up to offset %d) ==" % (len(text), offset))
-        print(text)
-    else:
-        print("== UNREVIEWED TRANSCRIPT == (none - already consumed)")
-    print("\n-- when done, run: dream_state.py session-reviewed %s --" % proj)
+    print(_render_review(subs, touched, skills, text, offset, proj, structured_only))
     return 0
 
 
@@ -113,6 +121,8 @@ def _session_reviewed(proj):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    structured_only = "--structured-only" in argv
+    argv = [a for a in argv if a != "--structured-only"]
     cmd = argv[0] if argv else "due"
     if cmd in _PROMOTE_CMDS:
         if len(argv) < 2:
@@ -131,7 +141,7 @@ def main(argv=None):
         return 0
     proj = argv[1] if len(argv) > 1 else os.getcwd()
     if cmd == "session-review":
-        return _session_review(proj)
+        return _session_review(proj, structured_only)
     if cmd == "session-reviewed":
         return _session_reviewed(proj)
     if cmd == "due":

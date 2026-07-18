@@ -193,6 +193,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         _commit_store(proj, scope or scope_default, entries, bodies)
     if not store_existed and store_dir.exists():      # this add created a brand-new store dir:
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
+    _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
     return slug
 
 
@@ -282,6 +283,48 @@ def _ref_slug(raw):
     """The slug inside a [[ref]]; tolerates a `type:` prefix and a `|label` suffix."""
     core = raw.split("|", 1)[0].split(":", 1)[-1]
     return _canon_slug(core)
+
+
+def dangling_wikilinks(text, existing):
+    """[(target, closest-existing-or-None)] for each `[[ref]]` in `text` whose canonical slug is NOT
+    in `existing`. PURE - the write-time catch for an invented-phrase link before it becomes a
+    store-wide dangling ref a later `--check-tree` has to find. Deduped, order-preserving."""
+    import difflib
+    ex = {_canon_slug(s) for s in existing}
+    out, seen = [], set()
+    for m in _WIKILINK_RX.finditer(text or ""):
+        target = _ref_slug(m.group(1))
+        if not target or target in ex or target in seen:
+            continue
+        seen.add(target)
+        near = difflib.get_close_matches(target, ex, n=1)
+        out.append((target, near[0] if near else None))
+    return out
+
+
+def _existing_slugs(anchor):
+    """Every slug pointed at anywhere in the tree (pointer blocks only - cheap, no body reads)."""
+    slugs = set()
+    for lvl in curated_levels_under(anchor):
+        try:
+            text = sig.claude_local_md_path(lvl).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        _scope, pointers = us.parse_pointer_index(text)
+        slugs.update(p.slug for p in pointers)
+    return slugs
+
+
+def _warn_dangling_wikilinks(anchor, text, self_slug):
+    """Best-effort stderr warning (never raises) for each `[[ref]]` in a just-added fact that resolves
+    to no slug in the tree - the write-time catch for invented-phrase links (the root cause of a
+    dream's orphan refs)."""
+    try:
+        for target, near in dangling_wikilinks(text, _existing_slugs(anchor) | {self_slug}):
+            hint = " (did you mean [[%s]]?)" % near if near else ""
+            sys.stderr.write("~ warning: wikilink [[%s]] resolves to no slug in the tree%s\n" % (target, hint))
+    except Exception:                                    # noqa: BLE001 - a warning must never break add
+        pass
 
 
 def inbound_ref_sources(levels, slug):
