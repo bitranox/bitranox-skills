@@ -80,14 +80,15 @@ mattered to this conversation.
 
 ### 2. Classify each candidate
 
-| Kind                                                                                            | Home                                                                                                                                 |
-|-------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                 |
-| Recurring process/tooling/environment mistake (wrong command, shell/SSH/OS quirk, stale output) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it |
-| Discovery or miss (a re-derived tool/path, a measured timing, a gotcha, a working procedure)    | the most relevant existing `project`/`reference` memory, or a new one                                                                |
-| Architecture/topology/data-flow realization                                                     | the right altitude per step 3b; unsure -> ask the user                                                                               |
-| A skill was wrong, missing, or mis-triggered                                                    | PROPOSE (step 5); never rewrite an existing skill inline (sole exception: this skill, see the meta-loop)                             |
-| Nothing durable                                                                                 | drop it                                                                                                                              |
+| Kind                                                                                            | Home                                                                                                                                           |
+|-------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| User correction or working-style directive ("from now on...", "always/never...")                | a `feedback` memory AND, if it must bind future sessions, a CLAUDE.md guardrail line                                                           |
+| Recurring process/tooling/environment mistake (wrong command, shell/SSH/OS quirk, stale output) | the project's recurring-error record if it has one (bump count + date), else a `feedback` memory phrased as the check that avoids it           |
+| Discovery or miss (a re-derived tool/path, a measured timing, a gotcha, a working procedure)    | the most relevant existing `project`/`reference` memory, or a new one                                                                          |
+| Architecture/topology/data-flow realization                                                     | the right altitude per step 3b; unsure -> ask the user                                                                                         |
+| A skill was wrong, missing, or mis-triggered                                                    | PROPOSE (step 5); never rewrite an existing skill inline (sole exception: this skill, see the meta-loop)                                       |
+| A multi-step manual chore re-done from scratch a 2nd time (or a local tool that came up short)  | PROPOSE a LOCAL tool in `toolbox` (step 6); build/enhance it TDD only after user OK - never auto-author, never hand-roll around a fixable tool |
+| Nothing durable                                                                                 | drop it                                                                                                                                        |
 
 ### 3. Dedup BEFORE writing (mandatory)
 
@@ -180,6 +181,24 @@ do not just write the note louder:
   MUST propagate upstream - local-only `~/.claude/hooks` is the classic loss.
 Memory changes what the model is TOLD; a guard changes what it can DO. A must-hold rule ends in a
 guard.
+
+**A recurring manual CHORE ends in a TOOL** (the fourth endpoint; a craftsman builds his own jigs).
+Distinct from a rule violation: this is re-doing the same multi-step WORK by hand (parse/scan/extract/
+reformat a thing you have hand-rolled before), not skipping a rule. Same ladder, one step over:
+- First time: just do it by hand.
+- Second time (re-doing the same chore from scratch): PROPOSE a tool - "this recurring chore is worth
+  a tool" - and wait for the user's OK. Never auto-author (a fuzzy "did I re-run a similar script"
+  detector would re-create the gate false-positive class; this is a model judgement in THIS reflection).
+- On OK, build it in the **LOCAL `toolbox`** (a personal `~/.claude/skills/toolbox/` skill),
+  TDD (RED core-function test first), best library + PEP 723 deps run via `uv run` (its SKILL.md
+  carries the contract). Tools stay LOCAL by default.
+- ENHANCE, do not work around: a toolbox tool that is buggy/insufficient in use gets a RED regression
+  test + a fix (propose-first), never a hand-rolled bypass - the tool analogue of
+  `flag-a-skill-when-a-real-bug-slips-past-it`.
+- CONTRIBUTE upstream only when a local tool proves BROADLY useful to other users: propose it via the
+  `contrib_queue` + upstream loop (references/upstream-propagation.md), landing it in a shared
+  `meta-toolbox` skill or a relevant existing skill - exactly the local-stays-local / share-when-broad
+  split skills already use. Never automatic.
 
 ### 7. Report
 
