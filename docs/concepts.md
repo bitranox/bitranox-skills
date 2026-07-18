@@ -203,6 +203,14 @@ by a small script - so it runs the same way every time instead of being re-deriv
 guessed) on each pass. That is the shift from deliberate effort to habit. It is meant for routines,
 not for the rules that must stay front of mind.
 
+A craftsman does not keep re-doing a fiddly task by hand - he builds a jig for it, and reaches for
+that jig ever after. The system works the same way. The second time it finds itself doing the same
+multi-step chore from scratch, it offers to turn that chore into a small, tested tool and keeps it in
+a personal toolbox, ready next time instead of re-deriving the steps (and getting them subtly wrong).
+These jigs are yours and stay on your machine by default. Each is built the careful way - test first,
+the right library for the job - and when one comes up short in use it is fixed in place rather than
+worked around, so the toolbox grows more reliable over time instead of being rebuilt every session.
+
 There is a second version of the same idea: the right tool for the right job. When the system hands a
 piece of work to a helper, it picks the model that fits the work - like a craftsperson reaching for
 the right tool rather than using the same one for everything. Deep, get-it-right reasoning goes to the
@@ -226,9 +234,11 @@ store is backed up, so every change is reversible.
 ## 10. What helps everyone, shared
 
 Now and then a lesson turns out to be useful far beyond your setup. When that happens, the system can
-package it as a skill and offer it back to the shared marketplace, so other people benefit too. That
-is opt-in and proposed, never automatic - but it is how individual learning turns into something the
-whole community compounds on.
+package it as a skill and offer it back to the shared marketplace, so other people benefit too. The
+same goes for a jig from your toolbox: a tool that proves broadly useful is offered upstream too, so a
+private helper you built for yourself can become one everybody shares. Both are opt-in and proposed,
+never automatic - but it is how individual learning, and the tools that individual learning produces,
+turn into something the whole community compounds on.
 
 ## 11. A curated library you can still mark up
 

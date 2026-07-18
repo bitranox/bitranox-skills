@@ -146,3 +146,35 @@ Below opus-class -> offer switch-model-or-continue per "The session model is fix
 `bitranox:process-agents-subagent-driven-development` (a /model switch keeps the conversation;
 opus is the universally-available deep tier, fable sits above it but needs paid API credits, and
 a fable session may equally switch DOWN afterward to save cost). Auto mode: continue + log.
+
+## Toolbox pass (consolidate + contribute the local tools)
+
+The per-turn loop (`bitranox:meta-self-improve` step 6) CREATES and ENHANCES the agent's local tools;
+the dream is where they get CONSOLIDATED and CONTRIBUTED - the tool analogue of what a dream already
+does for memory (dedup/merge, and skill-fit contribution). Each dream mode states its delta; the
+mechanics live here once.
+
+The toolbox is MACHINE-GLOBAL, not per-tree: a personal skill at `~/.claude/skills/toolbox/`. List
+the live inventory with `uv run ~/.claude/skills/toolbox/tools/toolbox.py list` (name + one-line
+purpose) - the same set regardless of which tree the dream runs in. If that path does not exist,
+there is no toolbox yet: skip this pass.
+
+**PROPOSE-ONLY.** The dream DETECTS and PROPOSES; it never edits tool code. A merge/enhance/removal is
+a TDD code change and runs through `meta-self-improve`'s propose-first build (which owns the RED-test
++ fix + the tool's local git repo). The dream's job is to surface the candidate, honoring the mode
+knob (propose: list; auto: queue via `contrib_queue`; off: skip).
+
+- **CONSOLIDATE** (the `tree` delta): from the inventory, flag NEAR-DUPLICATE tools (two tools with
+  overlapping purpose) -> propose merging into one parameterized tool; flag a STALE/superseded tool
+  (its docstring/paths name something deleted, or a newer tool covers it) -> propose flagging. NO
+  usage-based pruning - `forgetting-is-usage-based-only` applies to tools too; remove only on proven
+  redundancy, never because a tool looks unused.
+- **CONTRIBUTE** (the `crosstree`/`-deep` delta): judge which LOCAL tools are broadly useful to OTHER
+  users -> propose contributing upstream via `contrib_queue` + the upstream loop (references/
+  upstream-propagation.md), landing in a shared `meta-toolbox` skill or a relevant existing skill -
+  the tool analogue of the skill-fit step. ALSO surface a chore that recurred across MANY sessions
+  (visible to the cross-session view, missed by a single turn) -> propose a NEW tool. Default stays
+  LOCAL; contribution is never automatic.
+- **`nap` delta**: a cheap glance only; DEFER the full toolbox pass to the tree/crosstree dream (add
+  "toolbox consolidation" to nap's reported deferred list) - it is machine-global work, outside nap's
+  chain-only, minutes budget.
