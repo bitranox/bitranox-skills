@@ -39,6 +39,7 @@ _HOOK_MODULES = {
     "subagent-backstop-nudge": "subagent_backstop_nudge",
     "touched-paths": "touched_paths",
     "subagent-capture": "subagent_capture",
+    "toolbox-nudge": "toolbox_nudge",
     "skill-edit-guard": "skill_edit_guard",
     "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",
