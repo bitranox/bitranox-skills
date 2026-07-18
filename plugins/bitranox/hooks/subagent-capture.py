@@ -73,10 +73,16 @@ def find_signals(event):
     if isinstance(final, str) and final.strip():
         msgs.append(("assistant", final))
     for role, text in msgs:
+        # A subagent's OWN discovery lives only in its ASSISTANT output. Its user-role messages are
+        # the PARENT's dispatch prompt (and tool results) - the main agent's own text, already in its
+        # context - whose instruction phrasing ("always use ...", "do not ...") spuriously matches the
+        # signal patterns and gets re-nudged forever. Scan assistant messages only.
+        if role != "assistant":
+            continue
         if not text.strip():
             continue
-        matched = sig.broad_matches(role, text)          # broad: a subagent narrates loosely
-        strict = (sig.strict_user_hit(text) if role == "user" else sig.strict_asst_hit(text))
+        matched = sig.broad_matches("assistant", text)   # broad: a subagent narrates loosely
+        strict = sig.strict_asst_hit(text)
         if strict:
             matched = sorted(set(matched) | {"strict"})
         if not matched:
