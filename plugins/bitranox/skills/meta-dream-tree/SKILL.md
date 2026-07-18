@@ -170,10 +170,17 @@ the success line, abort-and-show on a miss).
     commit or self-PR; `off` -> skip. `contrib_queue.py drain` ONLY for the ones that actually
     shipped - anything still pending stays queued and is surfaced next session.
 
+10b. **Toolbox pass (consolidate; PROPOSE-ONLY).** Run the CONSOLIDATE delta per
+    references/dream-core.md "Toolbox pass": `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`,
+    then PROPOSE merging near-duplicate tools and flagging any stale/superseded one (no usage-based
+    prune - `forgetting-is-usage-based-only`). Detect + propose ONLY; the actual merge is a TDD change
+    through `bitranox:meta-self-improve`'s tool endpoint, never edited here. Skip if the toolbox path
+    does not exist.
+
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, CLAUDE.md
-    edits (applied/proposed), skill changes, pinned entries left untouched. Nudge `/clear` (the
-    consolidated store loads next session; not clearing loses nothing).
+    edits (applied/proposed), skill changes, toolbox proposals (merges/flags), pinned entries left
+    untouched. Nudge `/clear` (the consolidated store loads next session; not clearing loses nothing).
 
 ## The tree, not "the global layer"
 

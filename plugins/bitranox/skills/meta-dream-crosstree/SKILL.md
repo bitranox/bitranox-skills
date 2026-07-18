@@ -132,9 +132,16 @@ Create one todo per step.
    `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
    `propose`, commit-or-PR in `auto`, skipped in `off`). `contrib_queue.py drain` ONLY for what
    actually shipped.
+7b. **Toolbox pass (contribute; PROPOSE-ONLY).** Run the CONTRIBUTE delta per
+   `bitranox:meta-dream-tree` -> references/dream-core.md "Toolbox pass": list the local toolbox
+   (`uv run ~/.claude/skills/toolbox/tools/toolbox.py list`), judge which tools are broadly useful to
+   OTHER users -> propose contributing upstream via `contrib_queue` + the upstream loop, and surface a
+   chore that recurred across MANY sessions (the cross-session view a single turn misses) -> propose a
+   NEW tool. Detect + propose ONLY; tools stay LOCAL by default; the build runs TDD through
+   `bitranox:meta-self-improve`'s tool endpoint. Skip if the toolbox path does not exist.
 8. **Report.** Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
    cross-pollinations, normalizations, any CLAUDE.md edits (applied or proposed), any skill change,
-   and the pending-contribution count still queued.
+   toolbox proposals (contribute / new tool), and the pending-contribution count still queued.
 
 ## Convergence
 
