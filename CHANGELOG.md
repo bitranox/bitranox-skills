@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.93.0] - 2026-07-19
+
+### Added
+
+- `docs-md-table-formatting`: new `tablekit.py` tool that round-trips a markdown table through JSON
+  (`read` a table to `{headers, alignments, rows}`, edit the JSON, `render` it back fully aligned,
+  or `replace` it in place in a file). Complements `reformat_tables.py` (which only re-aligns) for
+  when you need to change a table's content without hand-padding cells. Stdlib only; ships with
+  `tests/test_tablekit.py` (9 tests: parse, alignment, escaped-pipe and structural round-trip,
+  ragged-row padding, in-place splice).
+
 ## [5.92.2] - 2026-07-19
 
 ### Changed

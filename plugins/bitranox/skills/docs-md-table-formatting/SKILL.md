@@ -104,3 +104,28 @@ python3 reformat_tables.py --backup file.md
 ```
 
 Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks, preserves alignment markers (`:---`, `:---:`, `---:`), handles pipes inside backtick spans, and bails on tables with inconsistent column counts.
+
+## Editing tables via JSON (tablekit.py)
+
+`reformat_tables.py` re-aligns tables in place; when you need to CHANGE a table's
+content (add/remove/reorder rows or columns, retarget alignment) without hand-padding
+every cell, use `tablekit.py` in this directory. It round-trips a table through JSON:
+read it, edit the JSON, and re-emit it fully aligned. `replace` splices the rendered
+table back into the file at its original position, leaving surrounding prose untouched.
+
+```bash
+# Read the Nth table (0-based) to JSON: {headers, alignments, rows}
+python3 tablekit.py read FILE.md --index 0        # omit --index to list all tables (with line spans)
+
+# Render a table's JSON (from stdin) to aligned markdown
+python3 tablekit.py render < table.json
+
+# Edit the JSON in a pipeline, then splice it back into the file (or --stdout to preview)
+python3 tablekit.py read FILE.md --index 0 \
+  | jq '.rows += [["new", "row"]] | .alignments = ["left","right"]' \
+  | python3 tablekit.py replace FILE.md --index 0
+```
+
+`alignments` values are `left` / `right` / `center` / `none`. `rows` is a list of
+cell-lists; ragged rows are padded to the column count on render. Stdlib only; a literal
+`|` in a cell round-trips (escaped as `\|` in the markdown, unescaped in the JSON).
