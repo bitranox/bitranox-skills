@@ -111,6 +111,22 @@
   "choosing",
   "environment-variable"
  ],
+ "coding-python-new-public-library": [
+  "creating",
+  "scaffolding",
+  "public",
+  "bitranox",
+  "python",
+  "library",
+  "pip-installable",
+  "package",
+  "rich-click",
+  "across",
+  "3.9-3.14",
+  "linux",
+  "macos",
+  "windows"
+ ],
  "coding-python-performance-review": [
   "reviewing",
   "python",
