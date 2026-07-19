@@ -116,6 +116,8 @@ consequences that a plain library does not have:
 
 ## Reference
 
-The template's own docs (in the repo) go deeper:
-`docs/installation.md`, `docs/usage.md`, `docs/development.md`,
-`docs/systemdesign/module_reference.md`.
+The template's docs go deeper - open them under
+`https://github.com/bitranox/bitranox_template_py_lib/blob/v1.1.2/docs/` (swap `v1.1.2` for the
+template release you scaffolded from): `installation.md`, `usage.md`, `development.md`, and the
+`systemdesign/` reference. A repo you generate from the template carries these same files locally, so
+inside your new project the plain `docs/...` paths resolve.

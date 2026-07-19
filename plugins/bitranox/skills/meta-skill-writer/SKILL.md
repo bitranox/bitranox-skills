@@ -421,6 +421,40 @@ section) and let the members cite it; a script referenced from OUTSIDE its ownin
 that always needs the path - within its own skill's SKILL.md the announced base directory resolves a
 bare name.
 
+**Referencing external DOCS must be INSTALL-REACHABLE (the same rule, applied to docs).** A skill
+teaching a tool or library usually points at that project's fuller docs (its `README`, a `docs/`
+folder). But the skill ships ALONE - only its own directory - and a package's `README`/`docs/` are
+usually STRIPPED from the installed wheel (the wheel ships `src/` + `py.typed`, not docs). So a bare
+`see docs/api.md` or "the package's README" is a DANGLING pointer on any machine that installed the
+skill: it resolves to nothing. This shipped for real in more than one skill. Every reference you send
+a reader to must resolve FROM AN INSTALL, by one of:
+
+- **Install-local discovery (prefer for API/CLI):** `<tool> --help`, `python -c "help(mod)"`,
+  docstrings. The installed code's own truth - zero rot, no network, always the user's version.
+- **A tag-anchored URL for narrative docs not in `--help`, that the reader RE-PINS to their own
+  version.** `https://github.com/<owner>/<repo>/blob/<tag>/docs/x.md`, and tell the reader to swap
+  `<tag>` for the tag matching THEIR installed version (`<tool> --version`) - that yields docs current
+  for their install, which is what they actually need. Two different rots to avoid: a `blob/main` link
+  shows the latest but 404s on a file rename/move and may not match an older install; a HARD-CODED tag
+  never 404s but silently goes STALE as the library moves past it. Anchoring to a real tag (never
+  404s) PLUS "use your version's tag" (never stale for the reader) beats both. Only a skill that
+  deliberately tracks latest should link a branch - then link the repo or its `docs/` dir (stable),
+  not a deep file path (renamable), and say so.
+- **A DISTILLED copy bundled in the skill dir** (it then ships with the skill) - use when offline use
+  matters or the skill is pinned to one library version; stamp it with the source URL + version so it
+  can be refreshed, and keep it distilled so drift stays bounded.
+- **NEVER a bare package-local path** (`docs/api.md`, "its `docs/`") that is neither shipped in the
+  skill dir nor a URL.
+
+First make the SKILL.md SELF-SUFFICIENT for the common path, so any external reference is for the
+deep minority of cases only: then a rotted link or a stale bundle degrades gracefully instead of
+breaking the skill. Neither a URL (network + link-rot) nor a bundle (drift) is free - the
+self-sufficient body is what makes either safe.
+
+Verify before shipping: `grep -nE '(docs/|README|see [^ ]*\.md|its .docs.)' SKILL.md | grep -v http`
+should surface only references that (a) ship as files in the skill dir (`ls` them) or (b) are
+install-local `--help`/`help()`. Any remaining bare package-local path is the bug.
+
 ## Flowchart Usage
 
 ```dot
@@ -1023,6 +1057,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Hub skills: routing table passes coverage check (file -> table) and accuracy check (table -> file) for all columns (both distilled reference and upstream source if tier 2 exists)
 - [ ] Hub skills: if upstream reference documents exist in subdirectories (e.g., `docs/`, `tutorial/`, `api/`), tier 2 table is present and lists every upstream file with concrete API symbols - run `find docs/ tutorial/ api/ -name '*.md'` (adjust paths) and confirm each result has a row in the tier 2 column
 - [ ] Token budget (tiered): `wc -w SKILL.md` body under 500 words for process/technique skills; reference/hub skills may exceed but keep the body a lean index and push detail to reference files
+- [ ] External doc references are INSTALL-REACHABLE (see "Referencing external DOCS"): every `README`/`docs/`/`see ...md` the reader is sent to either ships in the skill dir, is a version-pinned URL, or is install-local `--help`/`help()` - no bare package-local path. Verify: `grep -nE '(docs/|README|see [^ ]*\.md)' SKILL.md | grep -v http` shows only bundled-or-discoverable hits
 
 **Deployment:**
 - [ ] Place skill in the correct directory:
