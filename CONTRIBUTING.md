@@ -39,9 +39,19 @@ installed copies and do not need a plugin bump.
 
 Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate.py`) will block you:
 
-- **Update `meta-using-bitranox-skills`.** Add the skill to the domains list in
-  `plugins/bitranox/skills/meta-using-bitranox-skills/SKILL.md` (and drop or rename stale entries). The
-  gate checks both directions: every shipped skill must be listed, and every name listed must exist.
+- **Regenerate the derived docs.** A new or renamed skill changes generated artifacts that CI's
+  `test_build_skill_docs.py` verifies. Run both generators, then fix the count by hand:
+  - `python3 plugins/bitranox/hooks/build_skill_docs.py` - regenerates `docs/skills.md` (the catalog).
+  - `python3 plugins/bitranox/hooks/build_skill_triggers.py` - regenerates `hooks/skill_triggers.json`
+    (the router trigger map).
+  - bump the skill count in the root `README.md` (two spots: `N skills` and `All N skills`).
+
+  Skip one and a locally-green change goes red on CI. `docs/skills.md` and `README.md` are repo-meta
+  (outside `plugins/bitranox/`), so they do not need a plugin version bump.
+- **Update `meta-using-bitranox-skills` only on a rename or removal.** Its domains list groups skills
+  by category with exemplars (`coding-*`, `files-edit-*`, ...), so a new skill under an existing
+  category needs no edit. The gate enforces one direction only: a name LISTED there must still exist
+  (fix a stale entry after a rename/removal); an unlisted skill is fine.
 - **Update cross-links.** A rename changes the invocation name (`bitranox:<name>`); fix every
   reference in other skills, hooks, and the README (`grep -rn '<old-name>'`).
 - **Bump the version** per semver above (a rename is MAJOR; a new skill is MINOR).
@@ -50,6 +60,10 @@ Keep the registry in sync, or the local pre-commit gate and CI (`hooks/repo-gate
   `.github/workflows/ci.yml`); a bare `pytest` reports failures that come from missing
   dependencies, not from real defects. Detail: "Every shipped Python script needs sibling tests"
   in `CLAUDE.md`.
+- **Verify before pushing.** Run `python3 plugins/bitranox/hooks/repo-gate.py --ci` - the full
+  CI-parity gate (whole-repo pytest), the same checks CI runs - so a stale artifact is caught
+  locally, not by a red CI run. A bare no-arg `repo-gate.py` checks nothing (it expects a commit
+  event on stdin); the pre-commit hook fires on `git commit` and `git push`.
 
 ## Skill naming: category-prefix scheme
 
