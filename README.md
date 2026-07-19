@@ -3,7 +3,7 @@
 **A Claude Code plugin that learns your way of working.** It notices when a session teaches
 something - a correction, a rule you state, a mistake worth not repeating - captures it as durable
 memory, sleeps on it, and files each lesson exactly where it applies: this project, this group of
-projects, or everything you do. On top of that self-learning memory it ships **59 skills** of
+projects, or everything you do. On top of that self-learning memory it ships **60 skills** of
 software-engineering craft - planning, debugging, code review, clean architecture, language and
 tool references, humanizing prose - refined over real day-to-day work and growing with every
 lesson that proves broadly useful.
@@ -36,7 +36,7 @@ matches its description.
 | [Installation](docs/installation.md)  | Install, auto-update, Windows, verifying the setup                                   |
 | [Setup](docs/setup.md)                | First-session decisions: knobs, tree shape, iron rules, seeding a project            |
 | [Usage](docs/usage.md)                | The daily flow: capture, recall, the nap/tree/crosstree consolidation ladder         |
-| [Skill catalog](docs/skills.md)       | All 59 skills with their triggers, grouped by domain (generated, cannot rot)         |
+| [Skill catalog](docs/skills.md)       | All 60 skills with their triggers, grouped by domain (generated, cannot rot)         |
 | [Architecture](docs/architecture.md)  | Store format, the write engine, the hook pipeline, guards, delivery paths            |
 | [Reference](docs/reference.md)        | Every knob, sentinel file, env var, CLI command, and quirk                           |
 | [Contributing](CONTRIBUTING.md)       | Authoring skills, the quality gates, proposing changes upstream                      |
