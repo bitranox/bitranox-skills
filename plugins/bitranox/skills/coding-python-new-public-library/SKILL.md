@@ -23,28 +23,29 @@ Not for: an application/service (use the app template), or a one-off script.
 
 ## 1. Scaffold the repo
 
-The rename is driven by the **directory name**, and the shipped scripts do the work.
-Name the new directory for your package first, then preview before applying.
+The rename is driven by the **directory name**, so name the new directory for your package
+first. Copy the template, detach the template remote, rename, then reset the history.
 
 ```bash
-# copy the template into a new dir named for your package (no template history)
+# copy the template into a new dir named for your package
 git clone --depth 1 https://github.com/bitranox/bitranox_template_py_lib.git lib_wombat
 cd lib_wombat
-rm -rf .git
-git init -b main                 # NEW repos use main, never master
+git remote remove origin         # detach from the template so nothing pushes back to it
+git branch -m master main        # NEW repos use main, never master
 git config core.fileMode false   # softdev mount: manage exec bits explicitly
 
-./rename_dry.sh    # PREVIEW: rename-project --dry-run. Read it, confirm the new
-                   # name/paths are "lib_wombat" everywhere before applying.
-./rename.sh        # APPLY: rename-project --yes. Takes NO argument - the new name
-                   # comes from the directory, not an arg. `./rename.sh lib_wombat`
-                   # does nothing with that word.
+./rename_dry.sh    # PREVIEW: rename-project --dry-run. Confirm the detected name/paths
+                   # read "lib_wombat" everywhere before applying.
+./rename.sh        # APPLY: rename-project --yes. Takes NO argument - the new name comes
+                   # from the directory, so `./rename.sh lib_wombat` does nothing.
+./reset_git_history.sh   # squash the template history into one fresh commit
 ```
 
 `rename.sh` / `rename_dry.sh` run `rename-project` from
-`git+https://github.com/bitranox/rename_project.git` via `uvx`. `reset_git_history.sh`
-is the alternative when you cloned WITH history and want to squash it in place instead
-of the `rm -rf .git` fresh start above.
+`git+https://github.com/bitranox/rename_project.git` via `uvx`. **`reset_git_history.sh`
+force-pushes to the first remote it finds**, so detach the template `origin` first (above) or
+it rewrites the template's own history; with no remote it rewrites local history only. Add
+your own empty repo as `origin` and push `main` afterwards.
 
 ## 2. Install
 
@@ -104,13 +105,14 @@ consequences that a plain library does not have:
 
 ## Common mistakes
 
-| Mistake                                            | Fix                                                           |
-|----------------------------------------------------|---------------------------------------------------------------|
-| `./rename.sh lib_wombat` (passing the name as arg) | Name the DIRECTORY; run `./rename.sh` with no arg.            |
-| Skipping `./rename_dry.sh`                         | Always preview first; the dry-run is the safety check.        |
-| `git init` on `master`                             | New repos use `main`.                                         |
-| Editing `.github/*`                                | Template-managed; change CI in `default_cicd_public` instead. |
-| Hand-editing the `Makefile` or version in code     | Makefile is bmk-generated; bump only `pyproject.toml`.        |
+| Mistake                                              | Fix                                                                    |
+|------------------------------------------------------|------------------------------------------------------------------------|
+| `./rename.sh lib_wombat` (passing the name as arg)   | Name the DIRECTORY; run `./rename.sh` with no arg.                     |
+| Skipping `./rename_dry.sh`                           | Always preview first; the dry-run is the safety check.                 |
+| `reset_git_history.sh` with the template as `origin` | It force-pushes to the first remote; `git remote remove origin` first. |
+| Keeping the `master` branch                          | New repos use `main` (`git branch -m master main`).                    |
+| Editing `.github/*`                                  | Template-managed; change CI in `default_cicd_public` instead.          |
+| Hand-editing the `Makefile` or version in code       | Makefile is bmk-generated; bump only `pyproject.toml`.                 |
 
 ## Reference
 
