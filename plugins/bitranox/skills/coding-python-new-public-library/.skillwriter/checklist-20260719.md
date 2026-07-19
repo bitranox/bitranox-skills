@@ -35,3 +35,22 @@ skill is a marketplace (protect the branch, bump the plugin version).
 - [x] Trigger map rebuilt (build_skill_triggers.py) and repo-gate.py run clean before commit.
 - [x] Mirrored: identical body ships in the source repo bitranox_template_py_lib at
       skills/new-public-python-library/ (repo copy keeps its own name, per the mirror convention).
+
+## Update 2 (2026-07-19): scaffold procedure aligned with the template README
+
+Change: section 1 switched from `rm -rf .git && git init -b main` to the shipped
+`reset_git_history.sh` flow (clone -> `git remote remove origin` -> `git branch -m master main`
+-> rename_dry -> rename -> reset_git_history), plus a safety warning that `reset_git_history.sh`
+force-pushes to the first remote, so the template `origin` must be detached first or it rewrites
+the template's own history. Common-mistakes table gains that row; the master-branch row reworded.
+
+- [x] Receipt held (skill_receipt.py start meta-skill-writer, this session).
+- [x] Motivation: the template README Quickstart now leads with rename + reset_git_history; the
+      skill taught a different (also-safe) path and lacked the force-push-to-template warning.
+- [x] Verified real: reset_git_history.sh runs `git push --force` to `git remote | head -1`, which
+      right after cloning the template is the template repo itself.
+- [x] Body edit only; description unchanged, so the catalog + trigger map stay in sync (--check).
+- [x] Security scan: generic example names (lib_wombat); no secrets, hosts, or private paths.
+- [x] Version: plugin.json bumped 5.92.1 -> 5.92.2 (PATCH, procedure/wording fix in a skill).
+- [x] Mirrored: same edit applied to the repo copy (its plugin.json bumped 1.0.0 -> 1.0.1).
+- [x] repo-gate.py --ci run clean before push.

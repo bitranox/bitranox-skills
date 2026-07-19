@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.92.2] - 2026-07-19
+
+### Changed
+
+- `coding-python-new-public-library`: the scaffold steps now use the shipped
+  `reset_git_history.sh` (clone, detach the template remote, rename, squash history) and warn that
+  it force-pushes to the first remote it finds - so the template `origin` must be detached first,
+  or it would rewrite the template's own history.
+
 ## [5.92.1] - 2026-07-19
 
 ### Changed
