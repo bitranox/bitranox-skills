@@ -47,6 +47,7 @@ EXCLUDE_FILES = {"conftest.py", "__init__.py"}
 _SEP = re.compile(r"&&|\|\||[;\n|]")
 _COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
 _PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
+_PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
 
 
 def _git(root, *args):
@@ -527,12 +528,15 @@ def run_checks(root, ci):
     return failures
 
 
-def is_commit_or_pr(command):
-    # Match per statement, anchored at its start, so "git commit" embedded in a quoted string or
-    # heredoc body does not count - only an actual `git commit` / `gh pr create` command does.
+def is_gated_command(command):
+    # Match per statement, anchored at its start, so "git commit"/"git push" embedded in a quoted
+    # string or heredoc body does not count - only an actual git commit / git push / gh pr create
+    # command does. Push is gated too: the push is the moment a change reaches CI, and a commit made
+    # where this hook did not fire (a cross-repo `git -C` from another project, or docs regenerated
+    # between commit and push) would otherwise sail straight through to a red CI run.
     for seg in _SEP.split(command or ""):
         seg = seg.strip().lstrip("(").strip()
-        if _COMMIT_RE.match(seg) or _PR_RE.match(seg):
+        if _COMMIT_RE.match(seg) or _PR_RE.match(seg) or _PUSH_RE.match(seg):
             return True
     return False
 
@@ -553,7 +557,7 @@ def main():
         except Exception:  # noqa: BLE001
             return 0
         command = (event.get("tool_input") or {}).get("command") or ""
-        if not is_commit_or_pr(command):
+        if not is_gated_command(command):
             return 0
 
     failures = run_checks(root, ci)
@@ -563,7 +567,7 @@ def main():
             print("repo-gate: all checks passed.")
         return 0
 
-    header = "repo-gate: commit blocked - fix these first:" if not ci else "repo-gate: FAILED"
+    header = "repo-gate: commit/push blocked - fix these first:" if not ci else "repo-gate: FAILED"
     print("\n".join([header, *failures]), file=sys.stderr)
     return 1 if ci else 2
 
