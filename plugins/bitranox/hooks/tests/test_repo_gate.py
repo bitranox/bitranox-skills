@@ -51,7 +51,7 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_o
 
 
 # --------------------------------------------------------------------------
-# is_commit_or_pr
+# is_gated_command
 # --------------------------------------------------------------------------
 
 
@@ -65,18 +65,23 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_o
         ("FOO=bar git commit -m x", True),          # env-assignment prefix
         ("(git commit -m x)", True),                # subshell
         ("gh pr create --fill", True),
+        # push is gated too: it is the moment a change reaches CI
+        ("git push", True),
+        ("git push --force origin master", True),
+        ("git -C /repo push", True),
+        ("git add -A && git commit -m x && git push", True),
         ("git status", False),
-        ("git push", False),
         ("ls && echo commit done", False),
         ("git log --oneline", False),
-        # the false-positive this fix targets: "git commit" only INSIDE a string / heredoc body
+        # the false-positive this fix targets: "git commit"/"git push" only INSIDE a string body
         ('echo "use git commit -m msg -- paths"', False),
+        ('echo "remember to git push after"', False),
         ("python3 -c \"print('git commit -m x')\"", False),
         ("sed -i s/a/b/ f; echo 'commit only your paths: git commit -- f'", False),
     ],
 )
-def test_is_commit_or_pr(cmd, expected):
-    assert RG.is_commit_or_pr(cmd) is expected
+def test_is_gated_command(cmd, expected):
+    assert RG.is_gated_command(cmd) is expected
 
 
 # --------------------------------------------------------------------------
@@ -188,7 +193,7 @@ def test_main_hook_blocks_commit_on_violation(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])  # don't run real pytest
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
     assert RG.main() == 2
-    assert "commit blocked" in capsys.readouterr().err
+    assert "blocked" in capsys.readouterr().err
 
 
 def test_main_hook_allows_clean_commit(tmp_path, monkeypatch):
@@ -197,6 +202,17 @@ def test_main_hook_allows_clean_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
     assert RG.main() == 0
+
+
+def test_main_hook_blocks_push_on_violation(tmp_path, monkeypatch, capsys):
+    # a push is gated too: it is the moment the change reaches CI, so a violation must block it
+    make_repo(tmp_path, bad_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(sys, "stdin",
+                        io.StringIO(json.dumps({"tool_input": {"command": "git push origin master"}})))
+    assert RG.main() == 2
+    assert "blocked" in capsys.readouterr().err
 
 
 def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
