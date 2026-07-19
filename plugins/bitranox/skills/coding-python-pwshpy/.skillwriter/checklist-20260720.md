@@ -9,8 +9,8 @@ Skill type: reference (tool usage).
 
 - [x] Defect verified: table rows were bare package-local paths; the skill dir bundles no such files.
 - [x] Fixed: discovery-first (`uvx pwshpy --help`, `python -c "import pwshpy; help(pwshpy)"`) + a
-      tag-anchored base URL `github.com/bitranox/pwshpy/blob/v1.0.2/<path>` the reader re-pins to their
-      installed version; table now lists paths under that pinned base.
+      default-branch base URL `github.com/bitranox/pwshpy/blob/master/<path>` (latest, matches the
+      uv-installed version); table lists paths under that base.
 - [x] Re-ran the verify grep: remaining `docs/` hits are rows under the stated pinned base URL, not
       bare "read it locally" references.
 - [x] SKILL.md still self-sufficient for the common path.

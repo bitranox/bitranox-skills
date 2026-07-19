@@ -17,8 +17,9 @@ TDD (RED-GREEN, subagent-verified on sonnet):
 
 Checklist:
 - [x] Description unchanged (body-only rule; no CSO/trigger change) - no trigger-map rebuild.
-- [x] Rule states OUTCOME (install-reachable) + mechanisms (discovery / tag-anchored URL re-pinned to
-      the reader's version / distilled bundle) + the NEVER (bare package-local path).
+- [x] Rule LEADS with `--help`/`help()` discovery (run it for current CLI/API; author skills to point
+      at `--help`, not a frozen flag list), then prefers LATEST default-branch doc links (uv keeps
+      tools current); tag-anchored+swap is the version-pinned exception; NEVER a bare package-local path.
 - [x] Two-rots reasoning captured (stale hard-coded tag vs fragile `blob/main`); self-sufficiency-first.
 - [x] Quality-Checks checklist item + verify grep added.
 - [x] ASCII only, no typographic tells.
