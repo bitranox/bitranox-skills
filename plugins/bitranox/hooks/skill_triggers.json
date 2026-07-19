@@ -175,6 +175,22 @@
   "rpyc.service",
   "netref"
  ],
+ "coding-python-send-mail": [
+  "sending",
+  "email",
+  "python",
+  "shell",
+  "especially",
+  "large",
+  "attachments",
+  "loaded",
+  "memory",
+  "bdat",
+  "chunking",
+  "starttls",
+  "authentication",
+  "multi-host"
+ ],
  "coding-python-textual": [
   "building",
   "terminal",
