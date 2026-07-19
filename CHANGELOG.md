@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.92.1] - 2026-07-19
+
+### Changed
+
+- `repo-gate.py`: the pre-commit gate now fires on `git push` as well as `git commit` and
+  `gh pr create`. A change that reaches a push without the commit gate having run - a cross-repo
+  `git -C` from another project, or generated docs regenerated between commit and push - is now
+  caught locally instead of by a red CI run. The full check set (including the generated-docs
+  sync tests) runs at the pre-publish moment.
+
+## [5.92.0] - 2026-07-19
+
+### Added
+
+- `coding-python-new-public-library`: scaffold a new public Python library from the
+  `bitranox_template_py_lib` template - clone and rename it, install it, use its rich-click CLI
+  and library API, and develop and release it with bmk. Also flags that a repo which ships a
+  skill is a plugin marketplace (protect its default branch, version the plugin on every change).
+
 ## [5.85.1] - 2026-07-17
 
 ### Fixed
