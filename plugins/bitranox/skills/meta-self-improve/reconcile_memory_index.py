@@ -228,17 +228,13 @@ def reconcile(level_dir, dry_run=False):
 
 
 def _other_levels_pointing(anchor, level_dir, slug):
-    """True when any OTHER level between anchor and its subtree that we can see (the level's own
-    chain) still has a pointer for `slug`. Conservative: checks every CLAUDE.local.md under the
-    anchor one level deep plus the chain of `level_dir`."""
+    """True when any OTHER curated level in the tree still has a pointer for `slug` - SIBLINGS and
+    DESCENDANTS included, not just `level_dir`'s altitude chain. The archive guard depends on this:
+    dropping a pointer at a HIGH level must not archive the body while a LOWER level still points at
+    it (that leaves an orphan pointer). Scanning only the ancestor chain missed descendant levels."""
     qcanon = _canon(slug)
-    try:
-        import self_improve_signals as sig_mod
-        chain = sig_mod.altitude_chain(str(level_dir))
-    except Exception:  # noqa: BLE001
-        chain = []
-    for lvl in chain:
-        if Path(lvl) == Path(level_dir):
+    for lvl in _all_curated_levels(anchor):
+        if Path(lvl).resolve() == Path(level_dir).resolve():
             continue
         try:
             _s, ptrs = us.parse_pointer_index((Path(lvl) / "CLAUDE.local.md").read_text(encoding="utf-8"))
@@ -249,15 +245,18 @@ def _other_levels_pointing(anchor, level_dir, slug):
     return False
 
 
-def archive_entry(level_dir, slug, archive_subdir=".archive"):
+def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
-    <archive_subdir>/`. Returns True if an entry was removed."""
+    <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
+    Returns True if an entry was (or, under dry_run, would be) removed."""
     d = Path(level_dir)
     scope, entries, bodies = ME.read_store(str(d))
     qcanon = _canon(slug)
     kept = [e for e in entries if _canon(e.slug) != qcanon]
     if len(kept) == len(entries):
         return False
+    if dry_run:                                  # a dry run reports the outcome and writes NOTHING
+        return True
     anchor = ME._anchor(str(d))
     for e in entries:
         if _canon(e.slug) == qcanon:
@@ -506,8 +505,12 @@ def main(argv=None):
 
     if args.archive:
         level = args.dirs[0]
-        if archive_entry(level, args.archive):
-            print("archived %s (pointer dropped at %s)" % (args.archive, level))
+        if archive_entry(level, args.archive, dry_run=args.dry_run):
+            if args.dry_run:
+                print("would archive %s (pointer would be dropped at %s) - dry run, nothing written"
+                      % (args.archive, level))
+            else:
+                print("archived %s (pointer dropped at %s)" % (args.archive, level))
             return 0
         print("! no such entry: %s at %s (nothing archived)" % (args.archive, level))
         return 1
