@@ -429,17 +429,23 @@ usually STRIPPED from the installed wheel (the wheel ships `src/` + `py.typed`, 
 skill: it resolves to nothing. This shipped for real in more than one skill. Every reference you send
 a reader to must resolve FROM AN INSTALL, by one of:
 
-- **Install-local discovery (prefer for API/CLI):** `<tool> --help`, `python -c "help(mod)"`,
-  docstrings. The installed code's own truth - zero rot, no network, always the user's version.
-- **A tag-anchored URL for narrative docs not in `--help`, that the reader RE-PINS to their own
-  version.** `https://github.com/<owner>/<repo>/blob/<tag>/docs/x.md`, and tell the reader to swap
-  `<tag>` for the tag matching THEIR installed version (`<tool> --version`) - that yields docs current
-  for their install, which is what they actually need. Two different rots to avoid: a `blob/main` link
-  shows the latest but 404s on a file rename/move and may not match an older install; a HARD-CODED tag
-  never 404s but silently goes STALE as the library moves past it. Anchoring to a real tag (never
-  404s) PLUS "use your version's tag" (never stale for the reader) beats both. Only a skill that
-  deliberately tracks latest should link a branch - then link the repo or its `docs/` dir (stable),
-  not a deep file path (renamable), and say so.
+- **Install-local discovery FIRST - the installed code's own truth (zero rot, no network, always the
+  reader's version).** For CLI options, the skill must direct the reader/LLM to RUN `<tool> --help`
+  (and `<tool> <subcommand> --help`) instead of freezing a flag list that goes stale; for the API,
+  `python -c "import mod; help(mod)"` / docstrings. When a command's flags or an API signature are in
+  question, running `--help`/`help()` beats reading any doc - it is the authoritative, always-current
+  source. Author every tool/library skill this way: do NOT enumerate every flag in the SKILL.md when
+  `--help` covers it - point the reader at `--help` and keep the body to the judgment `--help` cannot
+  give.
+- **For narrative docs not in `--help`, link the LATEST docs (the default branch).** Tools here are
+  installed/updated via `uv`/`uvx`, so the reader is normally on the latest release and latest docs
+  match: `https://github.com/<owner>/<repo>/blob/<default-branch>/docs/x.md` (use the repo's real
+  default branch - `master` or `main`; `blob/HEAD/...` is branch-name-agnostic and survives a
+  default-branch rename). The one fragility: a deep file link 404s if that file is later renamed or
+  moved - mitigate by linking the `docs/` dir or repo root when the file set is unstable. Do NOT
+  hard-code a version tag as the default - it silently goes STALE as the tool moves past it. Use a
+  tag-anchored URL plus a "swap `<tag>` for your installed version" hint ONLY when the skill is pinned
+  to one library version or version drift would actively mislead.
 - **A DISTILLED copy bundled in the skill dir** (it then ships with the skill) - use when offline use
   matters or the skill is pinned to one library version; stamp it with the source URL + version so it
   can be refreshed, and keep it distilled so drift stays bounded.

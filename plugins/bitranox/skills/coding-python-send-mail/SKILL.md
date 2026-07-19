@@ -139,8 +139,7 @@ for the public API - `send`, `conf`, `ConfMail`, `validate_email_address`, `vali
 the attachment-security constants, all re-exported from the package root.
 
 Narrative detail (every `ConfMail` field, env-var precedence, streaming, attachment security) lives
-in the repo docs - NOT shipped in the pip wheel - pinned to the v1.5.0 release:
-`https://github.com/bitranox/btx_lib_mail/blob/v1.5.0/README.md` and, under
-`https://github.com/bitranox/btx_lib_mail/blob/v1.5.0/docs/`, the files `api.md`, `cli.md`,
-`configuration.md`, `streaming.md`, `attachment-security.md`. Swap `v1.5.0` for your installed
-version's tag.
+in the repo docs (NOT shipped in the pip wheel), on the default branch so they track the latest
+release you get from `uv`: `https://github.com/bitranox/btx_lib_mail/blob/master/README.md` and,
+under `https://github.com/bitranox/btx_lib_mail/blob/master/docs/`, the files `api.md`, `cli.md`,
+`configuration.md`, `streaming.md`, `attachment-security.md`.
