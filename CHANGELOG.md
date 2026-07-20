@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.96.2] - 2026-07-20
+
+### Added
+
+- `compuse-bash`: quick-reference row for capturing a `grep -c` count into a
+  variable. `grep` exits 1 when it matches nothing, so the common "safe" idiom
+  `n=$(grep -c PATTERN file || echo 0)` fires its fallback on a zero count and
+  sets `n` to the two-line string `0\n0`, silently misformatting every
+  comparison and report line built from it. `grep -c` already prints `0`, so
+  the fallback is unnecessary: `n=$(grep -c PATTERN file 2>/dev/null); n=${n:-0}`.
+
 ## [5.95.2] - 2026-07-20
 
 ### Fixed
