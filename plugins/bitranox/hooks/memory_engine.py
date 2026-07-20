@@ -714,6 +714,161 @@ def relocate_entry(from_level, to_level, slug, force=False):
     return rep
 
 
+def _retarget_refs(text, canon_old, new_slug):
+    """Repoint every `[[ref]]` whose target canonicalises to `canon_old`, keeping its own wording.
+
+    A ref may carry a `type:` prefix and a `|label` suffix; both belong to the CITER, not to the
+    target's identity, so a rename must preserve them - rewriting `[[reference:x|see here]]` into a
+    bare `[[y]]` would silently edit someone else's sentence.
+    """
+    def repl(match):
+        inner = match.group(1)
+        if _ref_slug(inner) != canon_old:
+            return match.group(0)
+        head, sep, label = inner.partition("|")
+        parts = head.split(":", 1)                   # mirrors _ref_slug's split, so the two agree
+        prefix = parts[0] + ":" if len(parts) == 2 else ""
+        return "[[%s%s%s%s]]" % (prefix, new_slug, sep, label)
+    return _WIKILINK_RX.sub(repl, text or "")
+
+
+def _retarget_body_name(text, new_slug):
+    """Point a body's frontmatter `name:` at the new slug, which it mirrors.
+
+    Left stale, the body asserts one identity while the pointer asserts another, and a later reader
+    has no way to tell which is real.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            break
+        if lines[i].startswith("name:"):
+            lines[i] = "name: %s\n" % new_slug
+            break
+    return "".join(lines)
+
+
+def _rewrite_inbound_refs(anchor, old_slug, new_slug):
+    """Repoint every citation of `old_slug` across the tree, in pointer hooks AND bodies.
+
+    Rewriting rather than merely reporting is the whole point of rename: citations that survive it
+    are what separate a rename from capturing a new fact and orphaning the old one.
+    Returns [(level, citing_slug, "hook"|"body")].
+    """
+    canon_old = _canon_slug(old_slug)
+    touched = []
+    for level in curated_levels_under(anchor):
+        _scope, entries, _bodies = read_store(str(level))
+        for e in entries:
+            hook = _retarget_refs(e.hook, canon_old, new_slug)
+            if hook != e.hook:
+                us.add_pointer(str(level), slug=e.slug, title=e.title, hook=hook,
+                               source=set(e.source), pin=e.pin)
+                touched.append((str(level), e.slug, "hook"))
+            body = us.body_path(anchor, e.slug)
+            try:
+                text = body.read_text(encoding="utf-8") if body.is_file() else ""
+            except OSError:
+                continue
+            if text:
+                retargeted = _retarget_refs(text, canon_old, new_slug)
+                if retargeted != text:
+                    us.write_if_changed(body, retargeted)
+                    touched.append((str(level), e.slug, "body"))
+    return touched
+
+
+def rename_entry(level, slug, to_slug):
+    """Rename one fact's SLUG in place, rewriting every `[[ref]]` that cites it.
+
+    The slug is the fact's identity: it names the body file, the pointer's `mem:` target, and every
+    wikilink aimed at it. `move` and `relocate` change a fact's LEVEL and never its NAME, so a slug
+    whose words have gone wrong - one stating a premise that later turned out false - had no
+    correction path. Capturing under a better slug leaves the stale fact live beside the new one,
+    and hand-editing the store is exactly what the store-edit guard exists to prevent. The wrong
+    name then keeps asserting its false premise from the always-loaded pointer index, which is the
+    one place a wrong word is read most often and questioned least.
+
+    Same level, same tree, body CONTENT untouched: only the name moves, along with the body's
+    frontmatter `name:` and every inbound citation.
+    Returns {"slug","to_slug","level","renamed","refs_rewritten","refused","warnings"}.
+    """
+    rep = {"slug": slug, "to_slug": to_slug, "level": str(level), "renamed": False,
+           "refs_rewritten": [], "refused": None, "warnings": []}
+    lvl = Path(level).resolve()
+    anchor = us.resolve_anchor(str(lvl))
+    if anchor is None:
+        rep["refused"] = "no anchor for this level"
+        return rep
+
+    canon_new = _canon_slug(to_slug)
+    if not canon_new:
+        rep["refused"] = "the new slug is empty"
+        return rep
+    if canon_new != to_slug:
+        rep["warnings"].append("new slug normalised to %r" % canon_new)
+        to_slug = canon_new
+        rep["to_slug"] = to_slug
+    if _canon_slug(slug) == canon_new:
+        rep["refused"] = "the new slug is the same as the old one"
+        return rep
+
+    _scope, entries, _bodies = read_store(str(lvl))
+    entry = next((e for e in entries if e.slug == slug), None)
+    if entry is None:
+        rep["refused"] = "slug %r not found at this level" % slug
+        return rep
+    if entry.legacy:
+        rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
+        return rep
+
+    # Slugs are TREE-unique, so an existing one names a DIFFERENT fact. Landing on it would destroy
+    # that fact silently; never pick a winner here, deduping is a decision.
+    for other in curated_levels_under(anchor):
+        _s, oentries, _b = read_store(str(other))
+        if any(e.slug == to_slug for e in oentries):
+            rep["refused"] = ("slug %r already exists at %s - slugs are tree-unique; dedup "
+                              "deliberately instead of renaming onto it" % (to_slug, other))
+            return rep
+
+    # COPY-THEN-DROP, the same crash-safety direction as move/relocate: a crash between the two
+    # leaves a visible duplicate, never a lost fact.
+    src_body, dst_body = us.body_path(anchor, slug), us.body_path(anchor, to_slug)
+    if dst_body.exists():
+        rep["refused"] = "a body file already sits at %s" % dst_body
+        return rep
+    try:
+        if src_body.is_file():
+            dst_body.parent.mkdir(parents=True, exist_ok=True)
+            dst_body.write_text(_retarget_body_name(src_body.read_text(encoding="utf-8"), to_slug),
+                                encoding="utf-8")
+        else:
+            rep["warnings"].append("no body file at the old slug; renaming the pointer only")
+    except OSError as exc:
+        rep["refused"] = "could not write the body under the new slug: %s" % exc
+        return rep
+
+    us.add_pointer(str(lvl), slug=to_slug, title=entry.title, hook=entry.hook,
+                   source=set(entry.source) | {"renamed"}, pin=entry.pin)
+    _drop_pointer(str(lvl), slug)
+
+    # After the pointer swap, so the renamed fact's OWN body already sits at the new path and a
+    # self-reference is repointed along with everyone else's.
+    rep["refs_rewritten"] = _rewrite_inbound_refs(anchor, slug, to_slug)
+
+    try:
+        if src_body.is_file():
+            archive = us.central_facts_dir(anchor).parent / ".archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            src_body.replace(archive / (slug + ".md"))
+    except OSError as exc:
+        rep["warnings"].append("old body left in place (archive failed: %s)" % exc)
+    rep["renamed"] = True
+    return rep
+
+
 def _other_levels_pointing_in(anchor, slug):
     """True when any curated level under `anchor` still carries a pointer for `slug`."""
     for lvl in curated_levels_under(anchor):
@@ -874,6 +1029,15 @@ def main(argv=None):
     rl.add_argument("--slug", required=True)
     rl.add_argument("--force", action="store_true",
                     help="relocate even when inbound [[refs]] in the source tree would dangle")
+
+    rn = sub.add_parser("rename",
+                        help="rename one fact's SLUG in place, rewriting every [[ref]] that cites "
+                             "it (same level, same tree, body content untouched)")
+    rn.add_argument("--level", required=True,
+                    help="the level whose pointer block carries the fact")
+    rn.add_argument("--slug", required=True, help="the current slug")
+    rn.add_argument("--to-slug", required=True, dest="to_slug",
+                    help="the new slug (normalised to canonical form)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.cmd == "tree-top":
@@ -932,6 +1096,18 @@ def main(argv=None):
             rep["slug"], rep["from"], rep["to"],
             "CROSS-TREE: body moved + source archived" if rep["cross_tree"]
             else "same tree: pointer move, body untouched"))
+        return 0
+
+    if args.cmd == "rename":
+        rep = rename_entry(args.level, args.slug, args.to_slug)
+        if rep["refused"]:
+            print("! refused: %s" % rep["refused"])
+            return 1
+        for w in rep["warnings"]:
+            print("~ warning: %s" % w)
+        print("renamed %s -> %s at %s" % (rep["slug"], rep["to_slug"], rep["level"]))
+        for lvl, citer, where in rep["refs_rewritten"]:
+            print("    ref repointed: %s (%s) [%s]" % (citer, where, lvl))
         return 0
 
     if args.cmd == "ensure-memory-structure":
