@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.95.2] - 2026-07-20
+
+### Fixed
+
+- `git-footgun-guard` no longer fires on text that merely MENTIONS
+  `git rev-parse --short` with two revisions. It scanned the whole command
+  string, so a heredoc BODY (writing a memory entry, doc, or commit message
+  about the footgun) was judged as if it were a command - the guard blocked
+  any attempt to document the very footgun it guards. Heredoc bodies are now
+  stripped before analysis, and `rev-parse` must be the actual git
+  subcommand, so `git commit -m "...git rev-parse --short A B..."` passes.
+  Genuine breakage still blocks, including quoted operands
+  (`rev-parse --short "$A" "$B"`) and a real invocation following a heredoc.
+
 ## [5.93.0] - 2026-07-19
 
 ### Added

@@ -27,14 +27,67 @@ SEP = re.compile(r"&&|\|\||[;\n|]")
 # `>>out`, `2>&1`, `&>out`, `<in` (operator + attached or space-separated target).
 REDIR = re.compile(r"(?:&|\d+)?>>?(?:&\d+|\s*\S+)|<\s*\S+")
 
+# A heredoc BODY is data, not a command. Without this the guard fires on prose
+# that merely MENTIONS the broken form - so writing the memory entry, doc, or
+# commit message that warns about this footgun is itself blocked by the footgun
+# guard. Match the opener (`<<WORD`, `<<-WORD`, `<<'WORD'`, `<<"WORD"`) and drop
+# every following line up to and including the terminator.
+HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+# git global options that consume a SEPARATE following token, so the subcommand
+# search does not mistake their value for the subcommand.
+GIT_VALUE_OPTS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+)
+
+
+def strip_heredoc_bodies(command: str) -> str:
+    """Drop heredoc bodies, keeping the command lines around them."""
+    out, lines, i = [], command.split("\n"), 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = HEREDOC_OPEN.search(line)
+        i += 1
+        if not m:
+            continue
+        delimiter = m.group(2)
+        # Skip the body; the terminator is the first line that is exactly the
+        # delimiter (bash allows leading tabs with the <<- form).
+        while i < len(lines) and lines[i].strip() != delimiter:
+            i += 1
+        i += 1  # drop the terminator line itself
+    return "\n".join(out)
+
+
+def _revparse_operands(toks: list[str]) -> list[str] | None:
+    """Tokens after `rev-parse` when it is genuinely the git SUBCOMMAND.
+
+    Returns None when this segment is not a `git rev-parse` invocation - e.g.
+    `git commit -m "...git rev-parse --short A B..."`, where the words appear
+    only inside an argument.
+    """
+    idx = 0
+    while idx < len(toks) and "=" in toks[idx] and not toks[idx].startswith("-"):
+        idx += 1  # leading VAR=value environment assignments
+    if idx >= len(toks) or toks[idx].rsplit("/", 1)[-1] != "git":
+        return None
+    idx += 1
+    while idx < len(toks) and toks[idx].startswith("-"):
+        if toks[idx] in GIT_VALUE_OPTS:
+            idx += 1
+        idx += 1
+    if idx >= len(toks) or toks[idx] != "rev-parse":
+        return None
+    return toks[idx + 1 :]
+
 
 def broken_revparse(command: str) -> bool:
-    for segment in SEP.split(command):
+    for segment in SEP.split(strip_heredoc_bodies(command)):
         segment = REDIR.sub(" ", segment)
-        toks = segment.split()
-        if "git" not in toks or "rev-parse" not in toks:
+        rest = _revparse_operands(segment.split())
+        if rest is None:
             continue
-        rest = toks[toks.index("rev-parse") + 1 :]
         if not any(t == "--short" or t.startswith("--short=") for t in rest):
             continue
         # Operands are the non-option tokens after rev-parse (the revisions);

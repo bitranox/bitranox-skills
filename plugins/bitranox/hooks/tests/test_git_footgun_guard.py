@@ -63,6 +63,43 @@ def test_redirection_does_not_mask_real_breakage():
     assert G.broken_revparse("git rev-parse --short A B 2>/dev/null") is True
 
 
+# A heredoc BODY is data, not a command. Documenting the footgun (in a memory
+# entry, a doc, a commit message) must not be blocked by the guard that warns
+# about it - that recursion makes the footgun impossible to write about.
+RP = "git rev-parse --short"  # assembled so this test file is not its own trigger
+
+
+def test_heredoc_body_prose_not_treated_as_command():
+    cmd = "cat > f.md <<'EOF'\nnever use " + RP + " A B here\nEOF"
+    assert G.broken_revparse(cmd) is False
+
+
+def test_heredoc_body_unquoted_delimiter():
+    cmd = "cat > f.md <<EOF\nbad: " + RP + " A B\nEOF"
+    assert G.broken_revparse(cmd) is False
+
+
+def test_heredoc_body_dash_delimiter():
+    cmd = "cat > f.md <<-EOF\nbad: " + RP + " A B\nEOF"
+    assert G.broken_revparse(cmd) is False
+
+
+def test_rev_parse_inside_a_commit_message_not_a_subcommand():
+    assert G.broken_revparse('git commit -m "avoid ' + RP + ' A B"') is False
+
+
+def test_heredoc_does_not_mask_a_real_command_after_it():
+    # the body is skipped, but a genuine broken invocation AFTER the terminator
+    # must still be caught - stripping must end at the delimiter line
+    cmd = "cat > f.md <<'EOF'\nharmless prose\nEOF\n" + RP + " A B"
+    assert G.broken_revparse(cmd) is True
+
+
+def test_quoted_operands_still_blocked():
+    # quoted args are real operands here; only heredoc bodies are data
+    assert G.broken_revparse('git rev-parse --short "$A" "$B"') is True
+
+
 def _run(monkeypatch, command):
     payload = {"tool_input": {"command": command}}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
