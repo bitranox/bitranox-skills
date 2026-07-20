@@ -854,7 +854,25 @@ def rename_entry(level, slug, to_slug):
                    source=set(entry.source) | {"renamed"}, pin=entry.pin)
     _drop_pointer(str(lvl), slug)
 
-    # After the pointer swap, so the renamed fact's OWN body already sits at the new path and a
+    # A slug carried by more than one level is a pre-existing violation (`heal` and the chain-only
+    # `--check` both miss it), but a rename must not LEAVE one behind: dropping only the named
+    # level's pointer turns every other one into an orphan aimed at a body that no longer answers to
+    # that name. Renaming them too keeps the fact reachable from exactly where it was, and the
+    # warning surfaces the duplicate instead of quietly propagating it under a new name.
+    for other in curated_levels_under(anchor):
+        if Path(other).resolve() == lvl:
+            continue
+        _s, oentries, _b = read_store(str(other))
+        dup = next((e for e in oentries if e.slug == slug), None)
+        if dup is None:
+            continue
+        us.add_pointer(str(other), slug=to_slug, title=dup.title, hook=dup.hook,
+                       source=set(dup.source) | {"renamed"}, pin=dup.pin)
+        _drop_pointer(str(other), slug)
+        rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
+                               "renamed there too, dedup it deliberately" % other)
+
+    # After the pointer swaps, so the renamed fact's OWN body already sits at the new path and a
     # self-reference is repointed along with everyone else's.
     rep["refs_rewritten"] = _rewrite_inbound_refs(anchor, slug, to_slug)
 
