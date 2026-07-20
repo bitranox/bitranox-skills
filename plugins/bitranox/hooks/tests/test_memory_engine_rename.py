@@ -141,6 +141,27 @@ def test_rename_onto_a_live_slug_is_refused_no_silent_overwrite(tmp_path):
     assert "TWO" in us.body_path(anchor, "two").read_text(encoding="utf-8"), "the victim survives intact"
 
 
+def test_a_duplicate_pointer_at_another_level_is_renamed_too_not_orphaned(tmp_path):
+    """A slug carried by two levels must not be half-renamed.
+
+    That state is a pre-existing violation which `heal` and the chain-only `--check` both miss, so
+    rename meets it in the wild. Dropping only the named level's pointer leaves the other aimed at
+    a body that no longer answers to that name, which `--check-tree` then reports as an orphan -
+    a rename that CREATES a store problem. Measured against the real store on first use.
+    """
+    _anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Target", "the good one", body="B")
+    # a second level pointing at the SAME slug, carrying its own older wording
+    us.add_pointer(mid, slug="target", title="Stale copy", hook="an older hook", source={"old"})
+
+    rep = E.rename_entry(proj, "target", "renamed")
+
+    assert rep["renamed"] is True
+    assert "target" not in _slugs_at(mid), "the duplicate pointer must not be left orphaned"
+    assert "renamed" in _slugs_at(mid) and "renamed" in _slugs_at(proj)
+    assert any("ALSO pointed at" in w for w in rep["warnings"]), "the duplicate must be surfaced"
+
+
 def test_unknown_slug_and_no_op_rename_are_refused(tmp_path):
     _anchor, _mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Here", "h", body="B")
