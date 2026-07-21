@@ -94,6 +94,8 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 | TypeScript | `any` everywhere, no strict                 | Partial strict, some `any`                 | Strict mode, no `any`, proper generics                   |
 | JavaScript | No JSDoc, no validation                     | Some JSDoc or TypeScript migration started | Full JSDoc with types, or migrated to TypeScript         |
 
+**A type-checker suppression is not a Type Safety pass - flag it.** A per-file `reportX = false`, an `exclude` entry that drops files from the strict run, or a bare `# type: ignore` blinds the checker to real bugs in that scope; score it as a gap and recommend the fix: DEFINE the missing types (the real annotation, or a typed facade - a `Protocol` plus a `cast`, or a local `.pyi` stub), reserving a narrow rule-specific `# pyright: ignore[rule]` (with a remove-when reason) as the last resort. Pattern and worked example: **bitranox:coding-python-enforce-data-architecture-strict**.
+
 **Scoring anchors (all dimensions):**
 
 | Score | Meaning                                                  |

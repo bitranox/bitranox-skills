@@ -179,6 +179,8 @@ External Input -> Pydantic (validate) -> Dataclass (domain) -> Pydantic (seriali
 
 **Never:** Pass `dict[str, Any]` between modules or layers. Dicts acceptable only when: truly dynamic data, <3 keys, single function scope, no business logic.
 
+**Define types; do not suppress the checker.** When pyright/mypy strict flags your code - often a third-party stub gap, not a real defect - DEFINE the missing types: the real annotation, or a typed facade you write (a `Protocol` plus a `cast`, or a local `.pyi` stub on `stubPath`) so call sites are complete. Never reach first for a per-file `reportX = false`, an `exclude` entry, or a bare `# type: ignore` - they blind the same scope to real errors and rot silently; a narrow, rule-specific `# pyright: ignore[rule]` with a remove-when comment is the last resort. Worked example (rich-click's partially-typed decorators fixed with a module-cast Protocol facade): **bitranox:coding-python-enforce-data-architecture-strict**.
+
 ## Core Patterns
 
 ### Ports (Application-owned Protocols)
