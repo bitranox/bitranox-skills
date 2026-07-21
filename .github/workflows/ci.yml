@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0  # need origin/master so the version-bump check can diff against it
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # 3.13+ required: python-performance-review/setup_env.py (and its tests) gate on it.
           python-version: "3.13"
