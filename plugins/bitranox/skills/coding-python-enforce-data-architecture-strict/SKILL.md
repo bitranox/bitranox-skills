@@ -319,6 +319,71 @@ def process_user(data: UserInput) -> UserOutput:
 
 ---
 
+## Define the types; never suppress or exclude the checker
+
+The discipline that forbids stringly-typed values also forbids silencing the type checker. When
+pyright/mypy strict flags your code - very often a third-party stub gap, not a real defect - the
+completion path is to DEFINE the missing types, not to suppress the diagnostic or exclude the file.
+
+Order of preference:
+
+1. Add the real annotation or generic argument.
+2. Wrap a partially-typed third-party symbol in a typed facade you define - a `Protocol` plus a
+   `cast`, or a local `.pyi` stub on `stubPath` - so call sites see complete types.
+3. Only if neither is feasible, a NARROW, rule-specific `# pyright: ignore[theRule]` with a comment
+   naming WHY and the remove-when condition. Never reach first for `reportX = false`, a per-file
+   rule-off, an `exclude` entry, or a bare `# type: ignore` - those blind the same scope to real
+   errors too, and rot silently.
+
+Worked example - rich-click's `option`/`argument`/`version_option` decorators have a
+partially-unknown return type, so pyright strict reports `reportUnknownMemberType` at every
+`@click.option(...)`. click's own decorators are fully typed, but they default the parameter class
+to `click.Option` rather than rich-click's `RichOption` (which changes help rendering), so you
+cannot just import them from click. Cast the MODULE to a `Protocol`: the `cast` is a runtime no-op,
+so the wrappers forward to rich-click's own decorators (RichOption preserved) while pyright sees
+complete types and no rule is silenced:
+
+```python
+from collections.abc import Callable
+from typing import Any, Protocol, cast
+
+import rich_click as click
+
+_CommandDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
+
+
+class _RichClickDecorators(Protocol):
+    option: Callable[..., _CommandDecorator]
+    argument: Callable[..., _CommandDecorator]
+    version_option: Callable[..., _CommandDecorator]
+
+
+_click = cast("_RichClickDecorators", click)  # type-only; forwards to rich_click at runtime
+
+
+def option(*param_decls: str, **attrs: Any) -> _CommandDecorator:
+    return _click.option(*param_decls, **attrs)
+```
+
+Casting the FUNCTION, or `from rich_click import option`, still evaluates the partially-unknown
+member access and stays flagged; only casting the MODULE onto a typed Protocol moves the access to
+a typed surface.
+
+Rationalizations that do not fly here:
+
+- "Just a per-file `reportUnknownMemberType = false` (or scattered `# pyright: ignore`) for the CLI
+  glue, plus a ticket" - a per-file rule-off blinds every future line in that file to real
+  unknown-type bugs, and the ticket has no forcing function; the facade is written ONCE and every
+  call site inherits it, which is fewer edits than scattering ignores.
+- "It is a third-party stub gap, not my code, so suppressing is fair" - the gap is real, but the
+  suppression is YOUR code's permanent blind spot; define the missing types instead, and reserve a
+  narrow, commented, rule-specific ignore only for the case a facade genuinely cannot express.
+- "Exclude the wiring files - they are just glue" - `exclude` kills strict checking for everything
+  in those files; wiring is exactly where an untyped decorator or a wrong-typed option silently
+  breaks the CLI. Keep them checked; type the surface.
+
+---
+
 ## Rationalizations (pressure-tested; these do not fly)
 
 Forced-choice pressure runs (deadline + sunk cost + green suite + a reviewer's LGTM) produced
