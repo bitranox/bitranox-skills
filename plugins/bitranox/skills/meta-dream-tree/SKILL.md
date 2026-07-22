@@ -165,10 +165,13 @@ the success line, abort-and-show on a miss).
     judged shippable but never shipped - they are part of THIS batch. Then collect this dream's
     generalizations that match or warrant a shipped skill, and QUEUE each one
     (`contrib_queue.py add --what ... --target skill:<name> --why ...`) as you find it, so an
-    unshipped one survives this session. Deliver via the upstream loop (`bitranox:meta-self-improve`
-    -> references/upstream-propagation.md) as ONE structured change. `propose` -> self-PR; `auto` ->
-    commit or self-PR; `off` -> skip. `contrib_queue.py drain` ONLY for the ones that actually
-    shipped - anything still pending stays queued and is surfaced next session.
+    unshipped one survives this session. Then DELIVER them via the upstream loop
+    (`bitranox:meta-self-improve` -> references/upstream-propagation.md) as ONE structured change - a
+    REQUIRED end-of-dream action: verify each candidate against the CURRENT skill content first (some
+    may already be shipped -> drop, do not re-add), then `propose` -> self-PR; `auto` -> commit or
+    self-PR; `off` -> skip. `contrib_queue.py drain` ONLY for the ones that actually shipped; leave one
+    queued for next session ONLY when it genuinely needs user input or the mode is `off` - a
+    deliverable one left pending evaporates the intent until a manual re-prompt.
 
 10b. **Toolbox pass (consolidate; PROPOSE-ONLY).** Run the CONSOLIDATE delta per
     references/dream-core.md "Toolbox pass": `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`,
