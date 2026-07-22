@@ -207,13 +207,14 @@ After all issues processed, re-run the rubric. Present before/after scorecard.
 
 ## Common Mistakes
 
-| Mistake                                                                | Fix                                                         |
-|------------------------------------------------------------------------|-------------------------------------------------------------|
-| Dump all issues at once                                                | Present ONE at a time, wait for response                    |
-| Re-raise an accepted item with no new evidence (nagging)               | Respect it silently; re-open only on a ground-truth trigger |
-| Vague suggested fixes ("improve this")                                 | Write specific, actionable instructions                     |
-| Skip saving declined items                                             | ALWAYS append to project instructions file                  |
-| Subjective scoring without rubric                                      | Use the weighted rubric table                               |
-| Leaving the respect-or-reconsider call to a weak/literal session model | Delegate it to a pinned `sonnet` subagent                   |
-| Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                   |
-| Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding          |
+| Mistake                                                                | Fix                                                                                                                                    |
+|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| Dump all issues at once                                                | Present ONE at a time, wait for response                                                                                               |
+| Re-raise an accepted item with no new evidence (nagging)               | Respect it silently; re-open only on a ground-truth trigger                                                                            |
+| Vague suggested fixes ("improve this")                                 | Write specific, actionable instructions                                                                                                |
+| Skip saving declined items                                             | ALWAYS append to project instructions file                                                                                             |
+| Subjective scoring without rubric                                      | Use the weighted rubric table                                                                                                          |
+| Leaving the respect-or-reconsider call to a weak/literal session model | Delegate it to a pinned `sonnet` subagent                                                                                              |
+| Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                                                                                              |
+| Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding                                                                                     |
+| Review only the one code path in front of you                          | Walk the full input/variant/caller matrix (types, sizes, states, callers) of the changed code, one check per branch, on the FIRST pass |

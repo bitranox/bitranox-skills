@@ -374,6 +374,10 @@ OK Fix: Add explicit negations for each specific rationalization.
 Tests pass once ≠ bulletproof.
 OK Fix: Continue REFACTOR cycle until no new rationalizations.
 
+**NO Leaky RED/GREEN fixture (shares a namespace with the live system)**
+If the real resource the scenario is about still exists and is reachable, the subagent finds it and routes around your fixture - a PASS via a path you never put in the prompt (the tell is an effort/tool-call spike). Worst when you test a DOC after fixing the underlying bug: the fix itself is the leak, so a correct answer looks like proof the doc is adequate.
+OK Fix: Make the fixture hermetic - use paths with no real counterpart (a scratch root, a fake tool name, sanitized repo/branch names) and no access to the live repo, so the only reachable answer is the one under test. Verify a PASS against ground truth (tool count, readlink), never at face value.
+
 ## Quick Reference (TDD Cycle)
 
 | TDD Phase        | Skill Testing                   | Success Criteria                       |
