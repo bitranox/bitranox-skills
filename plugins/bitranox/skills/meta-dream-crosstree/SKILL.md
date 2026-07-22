@@ -128,10 +128,14 @@ Create one todo per step.
 7. **Skill-fit -> batched change.** FIRST `contrib_queue.py list` (home:
    `<plugin>/skills/meta-self-improve/`) - contributions earlier sessions judged shippable but never
    shipped are part of THIS batch. QUEUE each new one as you find it (`contrib_queue.py add --what ...
-   --target skill:<name> --why ...`) so it survives this session, then deliver via
-   `bitranox:meta-self-improve` -> "Propagating skill (or hook) improvements upstream" (self-PR in
-   `propose`, commit-or-PR in `auto`, skipped in `off`). `contrib_queue.py drain` ONLY for what
-   actually shipped.
+   --target skill:<name> --why ...`) so it survives this session, then - as a REQUIRED end-of-dream
+   action, not an optional one - DELIVER them via `bitranox:meta-self-improve` -> "Propagating skill
+   (or hook) improvements upstream" (self-PR in `propose`, commit-or-PR in `auto`, skipped in `off`).
+   Verify each candidate against the CURRENT skill content FIRST - some may already be shipped ->
+   drop, do not re-add. `contrib_queue.py drain` ONLY for what actually shipped; leave a contribution
+   queued for a later session ONLY when it genuinely needs user input or the mode is `off`, never as
+   the default for a deliverable one (a queued-but-deliverable contribution evaporates until a manual
+   re-prompt).
 7b. **Toolbox pass (contribute; PROPOSE-ONLY).** Run the CONTRIBUTE delta per
    `bitranox:meta-dream-tree` -> references/dream-core.md "Toolbox pass": list the local toolbox
    (`uv run ~/.claude/skills/toolbox/tools/toolbox.py list`), judge which tools are broadly useful to
@@ -141,7 +145,8 @@ Create one todo per step.
    `bitranox:meta-self-improve`'s tool endpoint. Skip if the toolbox path does not exist.
 8. **Report.** Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
    cross-pollinations, normalizations, any CLAUDE.md edits (applied or proposed), any skill change,
-   toolbox proposals (contribute / new tool), and the pending-contribution count still queued.
+   toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
+   on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending).
 
 ## Convergence
 
