@@ -29,6 +29,9 @@ plugin/marketplace: install anywhere with `/plugin marketplace add bitranox/pwsh
   script that runs on Windows AND Linux.
 - On the command line: clean JSON + a real exit code instead of `Get-* | ConvertTo-Json` (and its
   single-item-collapse quirk).
+- Need to **hand a Python script to a machine with no Python** (a Windows admin, a colleague):
+  `pwshpy pack tool.py` makes one self-extracting `.ps1` that installs `uv` and runs it. Declare
+  third-party deps in a PEP 723 block or with `--with`.
 
 **Not installed?** pwshpy is one `uv tool install pwshpy` away (or run ad-hoc with
 `uvx pwshpy ...`), so reach for it rather than falling back to raw `pwsh`.
@@ -119,6 +122,49 @@ ps.write_records("report.jsonl", errors, jsonl=True)  # streams record-by-record
 (pwshpy writes JSON/JSONL, not CSV; if you specifically need CSV, use the stdlib `csv` module inside
 the `for e in errors:` loop - it still streams.)
 
+## Ship a script to a machine without Python - `pwshpy pack`
+
+Hand someone a Python tool as ONE self-extracting `.ps1`: it unpacks itself into a per-user cache,
+installs `uv` if the machine has none, runs the script, and returns the script's own exit code - on
+Windows PowerShell 5.1 and pwsh 7 alike, with no Python and nothing pre-installed. `unpack` is the
+inverse, so the recipient can read, edit, and repack it.
+
+```bash
+pwshpy pack tool.py -o tool.ps1          # embeds tool.py + every local module it imports
+pwshpy pack tool.py --with rich          # add a dependency at pack time (repeatable)
+pwshpy pack tool.py --include data.json  # embed a file no import reveals
+pwshpy unpack tool.ps1 -o src/           # restore the sources, then edit and repack
+```
+
+```python
+from pwshpy import ps, PackOptions
+
+ps.pack_script("tool.py", "tool.ps1", options=PackOptions(with_packages=["rich"]))
+ps.unpack_script("tool.ps1", "src/")
+```
+
+**Declare the packed script's third-party dependencies** - they are NEVER guessed from import names
+(an import name usually is not a package name: `yaml` is PyYAML, `cv2` is opencv-python). Only
+third-party distributions need it; the standard library and the entry's local modules travel
+automatically. Two ways:
+
+1. A [PEP 723](https://peps.python.org/pep-0723/) block at the top of the entry script - uv resolves
+   it **and** fetches a matching interpreter on the target machine:
+
+   ```python
+   # /// script
+   # requires-python = ">=3.12"
+   # dependencies = ["rich", "httpx"]
+   # ///
+   ```
+
+2. Or at pack time: `pwshpy pack tool.py --with rich --with httpx` (CLI) /
+   `PackOptions(with_packages=["rich", "httpx"])` (library).
+
+The artefact forwards every argument to your script untouched (empty strings, quotes, unicode,
+`-v`/`-d`) and takes its own `-PwshPyHelp` / `-PwshPyInfo` / `-PwshPyClean` / `-PwshPyNoInstallUv` /
+`-PwshPyElevate` switches.
+
 ## Install
 
 ```bash
@@ -137,6 +183,9 @@ pip install "pwshpy[full]"        # + the .NET backend for ps.run / ps.cmdlet / 
 - Reaching for a PowerShell module cmdlet and giving up -> `ps.cmdlet("Verb-Noun", **params)` (needs
   `[full]`).
 - `.to_list()` on a huge event log -> iterate the pipeline instead (it streams, O(1) memory).
+- `pwshpy pack`ing a script whose third-party deps are in neither a PEP 723 block nor `--with` -> the
+  pack warns and the script dies on its first import on the target. Declare them; import names are
+  never auto-guessed into package names.
 
 ## Further reading
 
