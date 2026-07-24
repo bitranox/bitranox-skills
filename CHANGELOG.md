@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.98.3] - 2026-07-24
+
+### Changed
+
+- `coding-python-gitignore` and `coding-python-send-mail`: sync the mirrored skill
+  bodies with their source repos (`igittigitt`, `btx_lib_mail`). Picks up the ruff
+  code-block reformat (trailing-comment spacing) and a `send-mail` reference-section
+  wording fix. The taxonomy-prefixed `name:` and the central-mirror omission of each
+  repo's self-install blockquote are preserved as intended divergences.
+
 ## [5.96.2] - 2026-07-20
 
 ### Added
