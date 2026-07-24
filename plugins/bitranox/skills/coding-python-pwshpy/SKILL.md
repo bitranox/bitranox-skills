@@ -30,8 +30,9 @@ plugin/marketplace: install anywhere with `/plugin marketplace add bitranox/pwsh
 - On the command line: clean JSON + a real exit code instead of `Get-* | ConvertTo-Json` (and its
   single-item-collapse quirk).
 - Need to **hand a Python script to a machine with no Python** (a Windows admin, a colleague):
-  `pwshpy pack tool.py` makes one self-extracting `.ps1` that installs `uv` and runs it. Declare
-  third-party deps in a PEP 723 block or with `--with`.
+  `pwshpy pack tool.py` makes one self-extracting file that installs `uv` and runs it - a `.ps1`
+  for Windows or a `.sh` for any POSIX `/bin/sh` (not only bash). Declare third-party deps in a
+  PEP 723 block or with `--with`.
 
 **Not installed?** pwshpy is one `uv tool install pwshpy` away (or run ad-hoc with
 `uvx pwshpy ...`), so reach for it rather than falling back to raw `pwsh`.
@@ -124,24 +125,32 @@ the `for e in errors:` loop - it still streams.)
 
 ## Ship a script to a machine without Python - `pwshpy pack`
 
-Hand someone a Python tool as ONE self-extracting `.ps1`: it unpacks itself into a per-user cache,
-installs `uv` if the machine has none, runs the script, and returns the script's own exit code - on
-Windows PowerShell 5.1 and pwsh 7 alike, with no Python and nothing pre-installed. `unpack` is the
-inverse, so the recipient can read, edit, and repack it.
+Hand someone a Python tool as ONE self-extracting file: it unpacks itself into a per-user cache,
+installs `uv` if the machine has none, runs the script, and returns the script's own exit code, with
+no Python and nothing pre-installed. Pick the format for the target - a `.ps1` for Windows
+PowerShell 5.1 / pwsh 7, or a `.sh` for **any POSIX `/bin/sh`, not only bash** (dash, busybox ash,
+macOS `sh`, ...). `unpack` is the inverse, so the recipient can read, edit, and repack it.
 
 ```bash
 pwshpy pack tool.py -o tool.ps1          # embeds tool.py + every local module it imports
+pwshpy pack tool.py -o tool.sh           # ...as a POSIX shell runner instead (auto-detected from .sh)
+pwshpy pack tool.py -o run --format sh   # force the shell runner for a name without a .sh suffix
 pwshpy pack tool.py --with rich          # add a dependency at pack time (repeatable)
 pwshpy pack tool.py --include data.json  # embed a file no import reveals
-pwshpy unpack tool.ps1 -o src/           # restore the sources, then edit and repack
+pwshpy unpack tool.ps1 -o src/           # restore the sources, then edit and repack (reads .ps1 or .sh)
 ```
 
 ```python
-from pwshpy import ps, PackOptions
+from pwshpy import ps, PackOptions, RunnerFormat
 
 ps.pack_script("tool.py", "tool.ps1", options=PackOptions(with_packages=["rich"]))
-ps.unpack_script("tool.ps1", "src/")
+ps.pack_script("tool.py", "tool.sh", options=PackOptions(format=RunnerFormat.SH))
+ps.unpack_script("tool.ps1", "src/")  # sniffs zip (.ps1) vs tar (.sh) - never told the format
 ```
+
+Pack and unpack are pure Python (`zipfile`/`tarfile` + base64), so you can build a `.sh` on Windows
+and a `.ps1` on Linux, and `unpack` reads either format on either OS - the format is about the
+TARGET, not the host you pack on. Only *running* the artefact needs the matching interpreter.
 
 **Declare the packed script's third-party dependencies** - they are NEVER guessed from import names
 (an import name usually is not a package name: `yaml` is PyYAML, `cv2` is opencv-python). Only
@@ -162,8 +171,8 @@ automatically. Two ways:
    `PackOptions(with_packages=["rich", "httpx"])` (library).
 
 The artefact forwards every argument to your script untouched (empty strings, quotes, unicode,
-`-v`/`-d`) and takes its own `-PwshPyHelp` / `-PwshPyInfo` / `-PwshPyClean` / `-PwshPyNoInstallUv` /
-`-PwshPyElevate` switches.
+`-v`/`-d`) and takes its own help/info/clean/no-install-uv/elevate switches - spelled
+`-PwshPyHelp` ... on the `.ps1`, `--pwshpy-help` ... on the `.sh`.
 
 ## Install
 
