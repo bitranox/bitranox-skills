@@ -33,6 +33,28 @@ def test_no_match_on_plain_commands():
     assert N.match_tool("echo hello && cat file.py") is None
 
 
+# ---- the pure text extractor (which field each tool hides the chore in) --------------------------
+def test_extract_text_bash_is_the_command():
+    assert N.extract_text("Bash", {"command": "ls -la"}) == "ls -la"
+
+
+def test_extract_text_write_is_the_content():
+    assert N.extract_text("Write", {"file_path": "/tmp/x.py", "content": "print(1)"}) == "print(1)"
+
+
+def test_extract_text_edit_is_the_new_string():
+    assert N.extract_text("Edit", {"old_string": "a", "new_string": "print(1)"}) == "print(1)"
+
+
+def test_extract_text_multiedit_joins_new_strings():
+    txt = N.extract_text("MultiEdit", {"edits": [{"new_string": "alpha"}, {"new_string": "beta"}]})
+    assert "alpha" in txt and "beta" in txt
+
+
+def test_extract_text_unscanned_tool_is_none():
+    assert N.extract_text("Read", {"file_path": "x"}) is None
+
+
 # ---- the main() hook behavior -------------------------------------------------------------------
 @pytest.fixture
 def home(tmp_path, monkeypatch):
@@ -89,9 +111,36 @@ def test_main_dedup_second_time_is_silent(home, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == ""
 
 
-def test_main_ignores_non_bash_tool(home, monkeypatch, capsys):
+def test_main_nudges_on_hand_rolled_write(home, monkeypatch, capsys):
+    """The blind spot: a chore hand-rolled by WRITING a script file, not a Bash one-liner."""
+    _with_tool(home, "jsonl_grep")
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "w1",
+                        "tool_input": {"file_path": "/tmp/scratch.py",
+                                       "content": 'import json\n[json.loads(l) for l in open("t.jsonl")]'}})
+    assert N.main() == 0
+    out = capsys.readouterr().out
+    assert "jsonl_grep" in out and "additionalContext" in out
+
+
+def test_main_nudges_on_edit_new_string(home, monkeypatch, capsys):
+    _with_tool(home, "sshf")
+    _feed(monkeypatch, {"tool_name": "Edit", "session_id": "e1",
+                        "tool_input": {"file_path": "/tmp/f.sh", "old_string": "x",
+                                       "new_string": "ssh -o StrictHostKeyChecking=no -i k host uptime"}})
+    assert N.main() == 0
+    assert "sshf" in capsys.readouterr().out
+
+
+def test_main_silent_on_write_without_matching_content(home, monkeypatch, capsys):
     _with_tool(home)
-    _feed(monkeypatch, {"tool_name": "Edit", "session_id": "s5",
-                        "tool_input": {"command": "git rev-parse --abbrev-ref HEAD"}})
+    _feed(monkeypatch, {"tool_name": "Write", "session_id": "w2",
+                        "tool_input": {"file_path": "/tmp/x.py", "content": "print('hello world')"}})
+    N.main()
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_main_ignores_unscanned_tool(home, monkeypatch, capsys):
+    _with_tool(home)
+    _feed(monkeypatch, {"tool_name": "Read", "session_id": "r1", "tool_input": {"file_path": "x"}})
     N.main()
     assert capsys.readouterr().out.strip() == ""

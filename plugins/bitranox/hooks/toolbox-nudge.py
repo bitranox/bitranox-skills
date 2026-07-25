@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: when a Bash command looks like a hand-rolled chore that the local
-toolbox already has a tested tool for, inject a non-blocking additionalContext pointer ("use the
-jig") - once per tool per session. Silent if the toolbox (or the specific tool) is not installed.
+"""PreToolUse(Bash|Write|Edit|MultiEdit) nudge: when a tool call looks like a hand-rolled chore
+that the local toolbox already has a tested tool for, inject a non-blocking additionalContext
+pointer ("use the jig") - once per tool per session. Silent if the toolbox (or the specific tool)
+is not installed.
 
-Why: the local toolbox only helps if the model remembers it BEFORE hand-rolling. This catches the
-hand-roll at the moment it reaches for the raw materials (the Bash command) and points at the tool
-- the closest thing Claude Code offers to "a supervisor noticing and saying: we have a tool for
-that". additionalContext reaches the model as a system-reminder (probe-verified), never blocks.
+Why: the local toolbox only helps if the model remembers it BEFORE hand-rolling. A chore hides in
+one of two places - a Bash one-liner (the command line) or a script authored via Write/Edit (the
+file CONTENT). Scanning only Bash left a blind spot: writing the same logic into a .py file and
+running it slipped past. So we scan the new text of Write/Edit/MultiEdit too, against the same
+signatures. This catches the hand-roll at the moment it reaches for the raw materials and points at
+the tool - the closest thing Claude Code offers to "a supervisor noticing and saying: we have a
+tool for that". additionalContext reaches the model as a system-reminder (probe-verified), never
+blocks.
 """
 import json
 import os
@@ -38,6 +43,29 @@ def match_tool(command):
     return None
 
 
+# Tools whose call we scan, and WHERE each hides the chore. Bash puts it on the command line;
+# Write/Edit/MultiEdit put it in the NEW text being written (never old_string - that is what is
+# being removed, not authored). Anything else (Read, Grep, ...) is not a place a chore is authored.
+_SCANNED_TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
+
+
+def extract_text(tool_name, tool_input):
+    """The text to scan for a hand-rolled chore, per tool. PURE - unit-testable.
+
+    Returns None for a tool we do not scan, so `match_tool(None)` short-circuits to no nudge.
+    """
+    ti = tool_input or {}
+    if tool_name == "Bash":
+        return ti.get("command", "")
+    if tool_name == "Write":
+        return ti.get("content", "")
+    if tool_name == "Edit":
+        return ti.get("new_string", "")
+    if tool_name == "MultiEdit":
+        return "\n".join(e.get("new_string", "") for e in ti.get("edits", []) if isinstance(e, dict))
+    return None
+
+
 def _toolbox_dir():
     """The local toolbox tools dir (resolved at call time so HOME can be overridden in tests)."""
     return Path(os.path.expanduser("~")) / ".claude" / "skills" / "toolbox" / "tools"
@@ -66,10 +94,10 @@ def main():
         event = json.load(sys.stdin)
     except Exception:                                    # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("tool_name") != "Bash":
+    if not isinstance(event, dict) or event.get("tool_name") not in _SCANNED_TOOLS:
         return 0
-    command = (event.get("tool_input") or {}).get("command", "")
-    hit = match_tool(command)
+    text = extract_text(event.get("tool_name"), event.get("tool_input") or {})
+    hit = match_tool(text)
     if not hit:
         return 0
     tool, why = hit
