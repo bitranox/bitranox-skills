@@ -18,7 +18,26 @@ import argparse
 import sys
 from pathlib import Path
 
-import orjson
+try:                                                     # fast path when available (uv run installs it)
+    import orjson
+
+    def _loads(raw):
+        return orjson.loads(raw)
+
+    _JSONDecodeError = orjson.JSONDecodeError
+
+    def _dumps(obj):
+        return orjson.dumps(obj).decode()
+except ModuleNotFoundError:                              # stdlib fallback so the script runs anywhere
+    import json as _json
+
+    def _loads(raw):
+        return _json.loads(raw)
+
+    _JSONDecodeError = _json.JSONDecodeError
+
+    def _dumps(obj):
+        return _json.dumps(obj, ensure_ascii=False)
 
 
 def _flatten(content) -> str:
@@ -52,8 +71,8 @@ def tail_messages(path, *, skip_sidechain: bool = True, skip_meta: bool = True) 
             if not raw:
                 continue
             try:
-                obj = orjson.loads(raw)
-            except orjson.JSONDecodeError:
+                obj = _loads(raw)
+            except _JSONDecodeError:
                 continue
             role = obj.get("type")
             if role not in ("user", "assistant"):
