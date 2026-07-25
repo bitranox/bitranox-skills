@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.99.0] - 2026-07-25
+
+### Changed
+
+- `toolbox-nudge` hook: close the Write/Edit blind spot. It now scans the new text of
+  `Write`/`Edit`/`MultiEdit` calls (the file content being authored) against the same
+  signatures it already applied to `Bash` command lines, and is wired into the
+  `Edit|Write|MultiEdit` PreToolUse matcher. A chore hand-rolled by writing a script file now
+  gets the same "use the jig" nudge as a one-liner. Still non-blocking, still per-tool
+  per-session dedup, still silent when the toolbox or the specific tool is absent.
+
 ## [5.98.3] - 2026-07-24
 
 ### Changed
