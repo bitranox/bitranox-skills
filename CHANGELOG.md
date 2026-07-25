@@ -38,6 +38,10 @@ installed copies and needs no bump.
 - `toolbox-nudge` hook: three new signatures - `pkill`/`pgrep -f` (self-match risk) -> `procsig`,
   `ip neigh`/`getent hosts OVM-`/`tcpdump ... tap` -> `guestip`, and `/var/log/openvmm/` ->
   `ovmlog`. Each stays silent unless that jig is present in the local toolbox.
+- `meta-self-improve`: new guard-to-chore-ladder crossover rule in section 6. A footgun that
+  graduates to a blocking guard is no longer treated as "handled" when its safe form is still
+  hand-rolled - the chore ladder also fires (propose a jig, then a nudge signature pointing the
+  guard's victims at it). RED/GREEN verified with subagent scenarios.
 
 ## [5.98.3] - 2026-07-24
 
