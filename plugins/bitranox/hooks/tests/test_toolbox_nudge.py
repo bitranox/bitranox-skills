@@ -28,6 +28,26 @@ def test_match_git_state():
     assert N.match_tool("git rev-parse --abbrev-ref HEAD")[0] == "git_state"
 
 
+def test_match_procsig_pkill():
+    assert N.match_tool("pkill -f 'vm-79099-disk-0'")[0] == "procsig"
+
+
+def test_match_procsig_pgrep():
+    assert N.match_tool("pgrep -af openvmm -f")[0] == "procsig"
+
+
+def test_match_guestip_ip_neigh():
+    assert N.match_tool("ip neigh show dev vmbr0 | grep bc:24")[0] == "guestip"
+
+
+def test_match_guestip_getent_ovm():
+    assert N.match_tool("getent hosts OVM-64000")[0] == "guestip"
+
+
+def test_match_ovmlog():
+    assert N.match_tool("tail -100 /var/log/openvmm/79099.log")[0] == "ovmlog"
+
+
 def test_no_match_on_plain_commands():
     assert N.match_tool("ls -la /tmp") is None
     assert N.match_tool("echo hello && cat file.py") is None

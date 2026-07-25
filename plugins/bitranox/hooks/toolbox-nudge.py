@@ -32,6 +32,11 @@ _RULES = [
                 re.S), "ci_triage", "hand-piping a build/CI log for errors"),
     (re.compile(r"for\b.*\bgit -C\b.*\bstatus\b|git rev-parse --abbrev-ref HEAD"), "git_state",
      "checking git branch/status across repo(s)"),
+    (re.compile(r"\b(?:pkill|pgrep)\s+[^\n]*-f\b"), "procsig",
+     "hand-rolling pgrep/pkill -f (self-match risk)"),
+    (re.compile(r"\bip\s+neigh\b|getent\s+hosts\s+OVM-|tcpdump[^\n]*\btap"), "guestip",
+     "resolving a guest IP by hand"),
+    (re.compile(r"/var/log/openvmm/"), "ovmlog", "reading an openvmm per-VM log by hand"),
 ]
 
 
