@@ -19,6 +19,14 @@ installed copies and needs no bump.
 
 ## [5.99.0] - 2026-07-25
 
+### Added
+
+- `compuse-toolbox` skill: a small set of tested Python jigs for recurring computer-use chores -
+  `procsig` (self-match-proof `pgrep`/`pkill -f` replacement), `git_state`, `conflict_scan`,
+  `ci_triage`, `jsonl_grep`, `transcript_tail`. The generic, host-agnostic subset of a personal
+  toolbox, selected by transcript-frequency and recurring-error analysis. Each is a self-contained
+  PEP 723 script with pytest tests; run with `uv run` and get arguments from `--help`.
+
 ### Changed
 
 - `toolbox-nudge` hook: close the Write/Edit blind spot. It now scans the new text of
