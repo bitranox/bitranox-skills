@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.99.3] - 2026-07-25
+
+### Changed
+
+- `meta-skill-writer`: new "Ship tests for every script" rule - a bundled script must IMPORT in a
+  bare environment. The gate/pytest does not provision PEP 723 deps (only `uv run` does), so guard
+  third-party imports with a stdlib fallback and verify in a deps-free venv. Captures the 5.99.1
+  orjson incident as durable authoring guidance.
+
 ## [5.99.2] - 2026-07-25
 
 ### Fixed

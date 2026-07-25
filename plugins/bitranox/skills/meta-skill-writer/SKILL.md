@@ -636,6 +636,14 @@ those tests MUST pass before the skill is considered done. This is not optional.
 - **Keep scripts import-safe** so they can be tested: all run-time work behind
   `if __name__ == "__main__":`, never at module top level (a script that executes on import
   cannot be unit-tested and will run side effects when imported).
+- **A bundled script must IMPORT in a BARE environment.** The contribution gate (and any plain
+  `pytest`) imports your test modules with the interpreter as-is - it does NOT provision a script's
+  PEP 723 `dependencies`; only `uv run <script>` does. So a hard top-level `import orjson` collects
+  fine under `uv run` yet fails the gate with `ModuleNotFoundError` on a clean runner. Guard every
+  third-party import with a stdlib fallback (`try: import orjson ... except ModuleNotFoundError:
+  import json as ...`) - keep the fast path, import anywhere. VERIFY in a fresh venv that has ONLY
+  pytest, not your deps (`uv venv x && uv pip install --python x pytest && x/bin/python -m pytest`);
+  your own machine having the dep installed is exactly what hides this until CI.
 - A `tests/conftest.py` that puts the skill dir on `sys.path` lets tests `import <script>` by
   module name.
 
