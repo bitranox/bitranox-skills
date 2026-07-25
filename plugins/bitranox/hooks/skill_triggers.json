@@ -319,6 +319,22 @@
   "backgrounding",
   "windows"
  ],
+ "compuse-toolbox": [
+  "hand-roll",
+  "small",
+  "one-off",
+  "shell",
+  "python",
+  "utility",
+  "recurring",
+  "computer-use",
+  "chore",
+  "safely",
+  "finding",
+  "killing",
+  "process",
+  "without"
+ ],
  "compuse-vnc": [
   "drive",
   "remote",
