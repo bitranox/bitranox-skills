@@ -182,6 +182,17 @@ do not just write the note louder:
 Memory changes what the model is TOLD; a guard changes what it can DO. A must-hold rule ends in a
 guard.
 
+**A guard is not the end when the SAFE form is still hand-rolled - cross to the chore ladder.** A
+blocking guard stops the WRONG action; it does not PROVIDE the right one. So when a footgun's guard
+lands but you STILL hand-write the safe replacement every time (block `pkill -f` self-match, then
+hand-roll the readlink-over-`/proc` loop; block `sed` on structured files, then hand-roll the
+parse), the CHORE ladder below ALSO fires: propose a jig that DOES the safe thing, and once it
+exists add a nudge signature so the guard's own victims are pointed at it. The two ladders are not
+exclusive - a footgun that both keeps recurring AND leaves a hand-rolled safe form earns BOTH a
+guard and a jig; guard-installed is not "handled". (A guard that instead FALSE-fires on legitimate
+text - a footgun keyword quoted inside a commit message - is the same signal from the other side:
+refine the guard or supply the jig, do not just route around it.)
+
 **A recurring manual CHORE ends in a TOOL** (the fourth endpoint; a craftsman builds his own jigs).
 Distinct from a rule violation: this is re-doing the same multi-step WORK by hand (parse/scan/extract/
 reformat a thing you have hand-rolled before), not skipping a rule. Same ladder, one step over:
