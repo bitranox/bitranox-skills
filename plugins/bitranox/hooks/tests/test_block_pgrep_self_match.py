@@ -80,6 +80,28 @@ def test_explicit_self_exclusion_passes(monkeypatch):
     assert run_main(monkeypatch, 'pgrep -f "[n]ginx" | grep -vw "$$"') == 0
 
 
+def test_git_commit_heredoc_body_not_blocked(monkeypatch):
+    # The real false positive: a commit message (heredoc body) that DISCUSSES the pattern.
+    # A heredoc body is stdin data, never the shell's argv, so it cannot self-match.
+    cmd = "git commit -q -F - <<'MSG'\nnudge: pkill/pgrep -f -> procsig, ip neigh -> guestip\nMSG"
+    assert run_main(monkeypatch, cmd) == 0
+
+
+def test_git_commit_dash_m_message_not_blocked(monkeypatch):
+    # git commit runs git, not pkill - the -m message text cannot self-match a pgrep/pkill call.
+    assert run_main(monkeypatch, 'git commit -m "block pkill -f self-match footgun"') == 0
+
+
+def test_real_pkill_after_commit_message_still_blocks(monkeypatch):
+    # stripping the message must NOT hide a real pkill elsewhere in the command.
+    assert run_main(monkeypatch, 'git commit -m "wip"; pkill -f nginx') == 2
+
+
+def test_real_pkill_with_unrelated_heredoc_still_blocks(monkeypatch):
+    cmd = "pkill -f nginx; cat <<'EOF'\nhello world\nEOF"
+    assert run_main(monkeypatch, cmd) == 2
+
+
 def test_empty_command_passes(monkeypatch):
     assert run_main(monkeypatch, "") == 0
 
