@@ -27,6 +27,9 @@ installed copies and needs no bump.
   `Edit|Write|MultiEdit` PreToolUse matcher. A chore hand-rolled by writing a script file now
   gets the same "use the jig" nudge as a one-liner. Still non-blocking, still per-tool
   per-session dedup, still silent when the toolbox or the specific tool is absent.
+- `toolbox-nudge` hook: three new signatures - `pkill`/`pgrep -f` (self-match risk) -> `procsig`,
+  `ip neigh`/`getent hosts OVM-`/`tcpdump ... tap` -> `guestip`, and `/var/log/openvmm/` ->
+  `ovmlog`. Each stays silent unless that jig is present in the local toolbox.
 
 ## [5.98.3] - 2026-07-24
 
