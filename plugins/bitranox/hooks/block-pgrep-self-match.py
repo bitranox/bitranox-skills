@@ -55,6 +55,22 @@ _DASH_F_PATTERN = re.compile(r"-[a-zA-Z]*f[a-zA-Z]*\s+(?:\"([^\"]*)\"|'([^']*)'|
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
 
+# A heredoc: `<<TAG` (optionally `<<-`, quoted tag) then its body up to a closing TAG line. The body
+# is stdin DATA, never the shell's own argv, so a pgrep/pkill named in it cannot self-match.
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n[ \t]*\2\b", re.DOTALL)
+
+# A `git commit` message argument (`-m`/`--message`, quoted or bare). git runs git, not pkill, so the
+# message text cannot self-match a pgrep/pkill call; and a real pgrep pattern follows `-f`, never `-m`.
+_COMMIT_MSG = re.compile(r"(?:-m|--message)(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|\S+)")
+
+
+def strip_data_bodies(cmd):
+    """Blank out text that is DATA, not a command - heredoc bodies and commit-message args - before
+    self-match scanning, so a commit that merely DISCUSSES `pkill -f` is not read as invoking it."""
+    out = _HEREDOC.sub(lambda m: "<<" + m.group(2), cmd)
+    out = _COMMIT_MSG.sub("-m X", out)
+    return out
+
 
 def bracket_leaks(cmd):
     """Shape 1: a de-bracketed literal appearing contiguously elsewhere in the command.
@@ -94,6 +110,10 @@ def main() -> int:
     cmd = (data.get("tool_input") or {}).get("command") or ""
     if not cmd:
         return 0
+
+    # Scan the command with DATA bodies (heredocs, commit messages) removed, so text that merely
+    # mentions `pkill -f` is not mistaken for invoking it.
+    cmd = strip_data_bodies(cmd)
 
     # Fast path: only guard commands that call pgrep/pkill.
     if not re.search(r"\b(pgrep|pkill)\b", cmd):

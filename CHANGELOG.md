@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.99.2] - 2026-07-25
+
+### Fixed
+
+- `block-pgrep-self-match` guard: ignore data bodies. It scanned the whole command, so a commit
+  that merely DISCUSSED the pattern (a `pkill -f` mention inside a heredoc commit-message body or a
+  `-m` message) false-fired and blocked the commit. It now strips heredoc bodies and `-m`/`--message`
+  values before scanning - both are data, never a real pgrep/pkill invocation. A real `pkill -f`
+  elsewhere in the command still blocks.
+
 ## [5.99.1] - 2026-07-25
 
 ### Fixed
