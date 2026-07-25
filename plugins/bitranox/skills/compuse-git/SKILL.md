@@ -133,6 +133,19 @@ git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (
   enabled per-repo via `GIT_GUARD_STRICT_REPOS="repoA,repoB"` (basenames) - turn it on only for repos you
   work on a single branch directly, since "not on the default branch" is normal in a feature-branch flow.
 
+## Tools
+
+`scripts/git_state.py` automates the pre-commit / pre-push state check above across one or many
+repos (read-only): for each repo it prints the branch, whether HEAD is in sync with its upstream
+(ahead/behind/diverged, or `no-upstream`), and the dirty count, and it exits non-zero if ANY repo
+is out of sync - so it doubles as a bulk pre-push guard.
+
+```bash
+uv run scripts/git_state.py                 # current directory
+uv run scripts/git_state.py repoA repoB     # named repos
+uv run scripts/git_state.py --root ~/src    # every .git repo found under a directory
+```
+
 ## Hooks
 
 `repo-gate` (PreToolUse on Bash, and `--ci`) blocks a commit on a failing gate (tests-exist, pytest, JSON valid, LF endings, the meta-using-bitranox-skills index in sync, and no leaked secrets/private data). `git-footgun-guard` blocks the always-broken `git rev-parse --short <2+ revs>` before it produces the confusing error. `git-commit-branch-guard` warns (never blocks) before a `git commit` when local HEAD is behind/diverged from its upstream (origin moved under you), and - for repos in `GIT_GUARD_STRICT_REPOS` - when you are off the default branch or detached.
