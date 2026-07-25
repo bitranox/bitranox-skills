@@ -17,7 +17,26 @@ from __future__ import annotations
 import argparse
 import sys
 
-import orjson
+try:                                                     # fast path when available (uv run installs it)
+    import orjson
+
+    def _loads(raw):
+        return orjson.loads(raw)
+
+    _JSONDecodeError = orjson.JSONDecodeError
+
+    def _dumps(obj):
+        return orjson.dumps(obj).decode()
+except ModuleNotFoundError:                              # stdlib fallback so the script runs anywhere
+    import json as _json
+
+    def _loads(raw):
+        return _json.loads(raw)
+
+    _JSONDecodeError = _json.JSONDecodeError
+
+    def _dumps(obj):
+        return _json.dumps(obj, ensure_ascii=False)
 
 
 def _get(obj, dotted: str):
@@ -46,8 +65,8 @@ def filter_records(text: str, *, type_=None, role=None, field=None, pattern=None
         if rx and not rx.search(raw):
             continue
         try:
-            obj = orjson.loads(raw)
-        except orjson.JSONDecodeError:
+            obj = _loads(raw)
+        except _JSONDecodeError:
             continue
         if type_ is not None and obj.get("type") != type_:
             continue
@@ -72,7 +91,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     text = open(args.jsonl, encoding="utf-8", errors="replace").read() if args.jsonl else sys.stdin.read()
     for rec in filter_records(text, type_=args.type_, role=args.role, field=args.field, pattern=args.pattern):
-        print(rec if isinstance(rec, str) else orjson.dumps(rec).decode())
+        print(rec if isinstance(rec, str) else _dumps(rec))
     return 0
 
 

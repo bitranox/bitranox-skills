@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.99.1] - 2026-07-25
+
+### Fixed
+
+- `compuse-toolbox` `jsonl_grep` + `transcript_tail`: import cleanly without `orjson`. They hard-
+  imported `orjson` (a PEP 723 dep only `uv run` provisions), so the CI gate's bare-env pytest
+  failed collection with `ModuleNotFoundError: orjson`. Now they use `orjson` when present and fall
+  back to stdlib `json` otherwise - fast path preserved, imports anywhere.
+
 ## [5.99.0] - 2026-07-25
 
 ### Added
