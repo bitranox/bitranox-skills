@@ -23,17 +23,28 @@ worktree. See `bitranox:meta-self-improve` ("Pathfinder discipline").
 
 ```
 1. Read CLAUDE.md / AGENTS.md → collect accepted items
-2. Run project tools → collect objective data
-3. Score 0-10 with rubric
-4. Re-assess accepted items vs ground truth (respect, or reconsider propose-first)
-5. Present Issue N
-   ├── yes → 6a. Implement fix ──┐
-   └── no  → 6b. Save decline ──┤
-                                  ▼
-                           More issues?
-                           ├── yes → back to 5
-                           └── no  → 7. Re-score
+   ┌───────────────────────────────────────────────────────── SWEEP ─────────┐
+   │ 2. Run project tools → collect objective data                           │
+   │ 3. Score 0-10 with rubric                                               │
+   │ 4. Re-assess accepted items vs ground truth                             │
+   │ 4b. Walk the aspect checklist - every row, every sweep                  │
+   │ 5. Present Issue N                                                      │
+   │    ├── yes → 6a. Implement fix ──┐                                      │
+   │    └── no  → 6b. Save decline ──┤                                       │
+   │                                   ▼                                     │
+   │                            More issues in THIS sweep?                   │
+   │                            ├── yes → back to 5                          │
+   │                            └── no  → end of sweep                       │
+   └────────────────────────────┬────────────────────────────────────────────┘
+                                ▼
+                   Did this sweep find anything, or fix anything?
+                   ├── yes → SWEEP AGAIN from 2 (fixes create findings)
+                   └── no  → 7. Re-score and report
 ```
+
+**The outer loop is the point.** One sweep is not a review. Keep sweeping until a sweep that
+walked the whole checklist finds nothing and changes nothing; that clean sweep is the exit
+condition, not "I presented the issues I noticed".
 
 ## Step 1: Read Project Instructions File First
 
@@ -222,9 +233,55 @@ If the section exists, append. Do not duplicate entries. If the section does not
 - If the user RE-AFFIRMS it, refresh its acceptance note in place - rewrite the rationale to the current ground truth and date it - so the record reflects reality (replace the stale wording; do not append a "superseded" note).
 - If the user CHANGES it, implement the fix (Step 6a) and update or remove the acceptance note accordingly.
 
-## Step 7: Re-score
+## Step 7: Sweep again, and only then re-score
 
-After all issues processed, re-run the rubric. Present before/after scorecard.
+**Do not stop after one sweep.** Go back to Step 2 and sweep again whenever the sweep just
+finished found ANY issue or applied ANY fix. Stop only when a full sweep - one that walked every
+row of the aspect checklist - produces no findings and no changes. Then re-run the rubric and
+present the before/after scorecard, with the per-sweep finding counts.
+
+Two independent reasons, both observed rather than theorised:
+
+**A fix creates findings.** It changes code that was not previously reviewed, and it is written
+under the momentum of having just understood the problem, which is when the adjacent case gets
+missed. Real examples from one project: replacing a `gather` with a worker pool made results
+arrive out of order, so the existing zip-by-position silently paired results with the wrong hosts;
+a typed facade written for one platform module was then re-derived as a bare import in a sibling,
+breaking the same type check the facade existed to fix; and a fix landed alongside a test whose
+fixture wrote platform-translated newlines, reddening CI on a file the fix never touched.
+
+**One sweep does not see everything.** Attention goes where the last thing led. Measured on that
+same project, four invocations found 4, 2, 1, then 0 issues - and the later sweeps were not
+picking up scraps. Sweep 2 found a correctness bug that silently produced wrong results under
+concurrency; sweep 3 found a quadratic loop costing about eighteen minutes on a wide input. Both
+had been present, and reachable, during sweep 1. Nothing about them was subtle; they were simply
+in parts of the code that sweep had not looked at.
+
+The user should not have to invoke the skill four times to get four sweeps.
+
+### The aspect checklist
+
+Walk EVERY row each sweep, and say which rows you walked. A sweep that reports "no findings"
+without naming its coverage is a sweep that stopped looking, and it is indistinguishable in the
+transcript from a thorough one.
+
+| Aspect                | Ask                                                                        |
+|-----------------------|----------------------------------------------------------------------------|
+| Public API surface    | Every exported name: signature, contract, error behaviour, docs            |
+| CLI surface           | Every subcommand x every output mode x a failing input; exit codes agree   |
+| Concurrency           | Task/memory growth vs input size; ordering assumptions; cancellation       |
+| Resource lifetime     | Sockets, files, handles, registries: freed on every path including errors  |
+| Unbounded input       | Big/append-only files, wide ranges, long lists - streamed or bounded       |
+| Algorithmic cost      | Loops nested over inputs; per-item work inside a per-item loop             |
+| Error contract        | One hierarchy, consistent types, nothing leaking a foreign exception       |
+| Cross-platform        | Each supported OS's branch, and the type check for each                    |
+| Packaging             | Builds, installs clean, entry points and marker files present in the wheel |
+| Tests                 | Stable across repeats, and each file passing in isolation                  |
+| Shipped skill         | Covers the whole API and CLI (see the always-on checks)                    |
+| Docs and changelog    | Match the code as it is now, including what the current change added       |
+
+Report per sweep: which rows were walked, what each found, and the running total. That record is
+what makes "no findings" credible.
 
 ## Common Mistakes
 
@@ -239,3 +296,6 @@ After all issues processed, re-run the rubric. Present before/after scorecard.
 | Present MINOR issues before SEVERE                                     | Sort by severity: SEVERE > MEDIUM > MINOR                                                                                              |
 | Silently skip an accepted item ground truth now contradicts            | Re-open it as a propose-first "Reconsider" finding                                                                                     |
 | Review only the one code path in front of you                          | Walk the full input/variant/caller matrix (types, sizes, states, callers) of the changed code, one check per branch, on the FIRST pass |
+| Stop after one sweep because its issue list is empty                   | The list being empty means THIS sweep is done. Sweep again from Step 2; stop only when a full checklist walk finds and changes nothing |
+| Report "no findings" without saying what was examined                  | Name the checklist rows walked. An unqualified "nothing found" reads identically whether you looked or not                             |
+| Leave the user to re-invoke the skill for another pass                 | The loop is the skill's job. Four invocations to reach zero findings is three invocations too many                                     |
