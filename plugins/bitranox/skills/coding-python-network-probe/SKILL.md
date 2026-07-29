@@ -47,6 +47,7 @@ Python 3.10+.
 | Wake a sleeping host        | `wake_on_lan(mac)`                                                   |
 | Largest unfragmented packet | `path_mtu(host)`                                                     |
 | What can this host do       | `icmp_available()`                                                   |
+| Package metadata            | `print_info()`                                                       |
 | Name to address, and back   | `resolve(name)`, `reverse_dns(ip)`                                   |
 | Compare two hardware addresses | `normalise_mac(written)`                                           |
 | Parse a port specification  | `parse_ports("22,80,8000-8100")`                                     |
