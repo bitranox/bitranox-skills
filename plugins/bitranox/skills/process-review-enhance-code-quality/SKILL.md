@@ -154,6 +154,21 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
   missing_api = [n for n in package.__all__ if n not in named]
   ```
 
+  **Coverage is the easy half. Also check what it ASSERTS.** A skill can name every symbol and
+  still describe them wrongly, and that passes any coverage check. Two kinds of statement rot
+  toward actively misleading an agent, so re-verify each against the code every review:
+
+  - **Absence claims** - "no X yet", "not supported", "does not", "cannot", "only on Linux". These
+    are true when written and become false the moment the feature lands, and unlike an omission
+    they do not merely fail to help: they steer an agent away from something that now works. Grep
+    the skill for the negation and check each hit against the code.
+  - **Contract claims** - "never raises", "always returns", "needs no privileges", exit codes.
+    An agent writes error handling against these. Where one is load-bearing, the honest check is
+    whether a test pins it; if nothing does, that is a finding in its own right.
+
+  Neither is mechanically decidable, so this one is read-and-verify rather than a script. Budget
+  for it: it is a handful of greps, and it is the half that produces the SEVERE findings.
+
 ## Step 4: Re-assess Deliberately Accepted Items (respect, or reconsider)
 
 Cross-reference your findings against **all** deliberately accepted items from Step 1 (the "Code Quality" section AND inline "by design" notes throughout the file). For each match, choose an outcome - do NOT just delete it:
