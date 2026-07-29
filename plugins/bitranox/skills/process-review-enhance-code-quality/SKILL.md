@@ -108,7 +108,7 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 
 Present the scorecard as a table with per-dimension scores and the weighted total.
 
-**Three always-on robustness checks** (score under Resource Safety and Security):
+**Four always-on checks** (score under Resource Safety, Security and Documentation):
 - **Bounded memory on large/unbounded data.** Reading big files, huge database result sets, or
   huge log files must stream/iterate/chunk/paginate - never load the whole thing into memory or
   accumulate unbounded. Materialize only when the dataset is provably and safely bounded.
@@ -121,6 +121,27 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
 - **Validated structured input.** Structured data passed in (a dict, JSON, an API/IPC payload, a
   deserialized object) is parsed into a typed model before use - never trusted to have the right
   keys, types, or shape. Exception: items the project instructions deliberately accept.
+- **A shipped skill covers the whole surface.** If the repo ships a Claude Code skill (a
+  `skills/<name>/SKILL.md`, usually alongside `.claude-plugin/`), check it against the code by
+  SCRIPT, not by reading: every CLI subcommand from the tool's own `--help`, and every public name
+  from the package's `__all__` (or the language's equivalent export list), must appear in it. Score
+  under Documentation.
+
+  This is not pedantry about completeness. A usage skill is what an agent consults to decide what
+  the tool can do, so anything it omits is a capability that does not get used, and anything it
+  states in the past tense - "no X surface yet" - actively steers an agent away from a feature that
+  now exists. Both failures have shipped in practice: a skill that named eight of thirty callables,
+  and one that asserted a whole subsystem did not exist two releases after it did.
+
+  Flag as MEDIUM, or SEVERE where the skill makes a claim the code contradicts. The fix is to name
+  the missing surface; leave per-flag detail to `--help`, which cannot go stale. A check worth
+  keeping in the repo:
+
+  ```python
+  named = pathlib.Path("skills/<name>/SKILL.md").read_text()
+  missing_cmd = [c for c in commands_from_help() if c not in named]
+  missing_api = [n for n in package.__all__ if n not in named]
+  ```
 
 ## Step 4: Re-assess Deliberately Accepted Items (respect, or reconsider)
 

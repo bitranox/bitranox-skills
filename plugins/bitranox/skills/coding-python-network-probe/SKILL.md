@@ -48,6 +48,9 @@ Python 3.10+.
 | Largest unfragmented packet | `path_mtu(host)`                                                     |
 | What can this host do       | `icmp_available()`                                                   |
 | Name to address, and back   | `resolve(name)`, `reverse_dns(ip)`                                   |
+| Compare two hardware addresses | `normalise_mac(written)`                                           |
+| Parse a port specification  | `parse_ports("22,80,8000-8100")`                                     |
+| Trace over your own transport | `trace_path(transport, ...)`, `atrace_path(...)`                   |
 | async equivalents           | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports` |
 
 ```python
@@ -63,6 +66,31 @@ Run `ipscout --help` and `ipscout <command> --help` for every flag. That is the
 authoritative, always-current list; do not trust a flag list copied into any
 document, including this one. Check `ipscout.__all__` before assuming a
 function exists.
+
+## From the shell
+
+Eighteen subcommands, one per capability above:
+
+```
+ping          ping-many     reachable     traceroute    scan-ports
+mac           find-ip       arp-scan      neighbours    gateway
+subnet        interfaces    resolve       reverse-dns   mtu
+wake          capabilities  info
+```
+
+```bash
+ipscout ping 1.1.1.1 -c 4
+ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
+ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
+ipscout find-ip dc:b2:2f:44:34:59 --scan
+ipscout arp-scan --network 192.168.1.0/24
+ipscout capabilities                      # what this host can actually do
+ipscout --json subnet                     # every command takes --json
+```
+
+`ipscout <command> --help` is the authoritative flag list for each. `capabilities` is worth
+knowing about: it reports what this host can do - ICMP per family, traceroute - so a caller can
+find out without provoking an error.
 
 ## The error contract
 
@@ -91,7 +119,7 @@ answer:
 ```python
 ipscout.lookup_mac("8.8.8.8")
 # MacLookup(mac='...', scope=MacScope.NEXT_HOP, via_ip='192.168.1.1')
-ipscout.get_mac_address("8.8.8.8")   # None: refuses to pass off the gateway's
+ipscout.get_mac_address("8.8.8.8")  # None: refuses to pass off the gateway's
 ```
 
 There is also no protocol that asks "who has this MAC" - RARP is dead. So
@@ -161,7 +189,7 @@ provoking it:
 
 ```python
 if not ipscout.icmp_available():
-    reachable = ipscout.is_reachable(host)   # falls back to TCP
+    reachable = ipscout.is_reachable(host)  # falls back to TCP
 ```
 
 Or `ping(host, allow_tcp_fallback=True)`. The fallback is always opt-in and the
