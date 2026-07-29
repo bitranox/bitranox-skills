@@ -895,16 +895,16 @@
   "reviewing",
   "pruning",
   "tests",
+  "language",
   "deciding",
   "unit",
   "integration",
   "mock",
-  "monkeypatch",
+  "patch",
   "real",
   "dependency",
   "edge",
-  "adversarial",
-  "inputs"
+  "adversarial"
  ],
  "process-test-driven-development": [
   "implementing",
