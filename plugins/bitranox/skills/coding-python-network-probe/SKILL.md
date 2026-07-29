@@ -140,6 +140,10 @@ reached, `1` not reached, `2` error, independent of output format.
 - **Async is executor-backed on Windows.** Genuinely async on Linux and macOS,
   where a sweep of thousands shares one socket on one thread. `IcmpSendEcho`
   is a blocking C call with no asyncio integration.
+- **A connect scan cannot tell CLOSED from FILTERED on Windows.** Measured on
+  a runner: a closed port there goes quiet rather than refusing, so it reports
+  `FILTERED`. On Linux and macOS a refusal is reported as `CLOSED`. A SYN scan
+  draws the line everywhere it can run, which is not Windows.
 - **No DHCP traffic is sent.** `subnet_info()` reads the lease the OS's own
   client already stored. The DHCP fields may be unset on macOS and Windows;
   the addressing fields work everywhere.
