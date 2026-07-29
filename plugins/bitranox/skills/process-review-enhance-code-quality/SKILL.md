@@ -89,7 +89,7 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 |-----------------|--------|----------------------------------------------------------------|
 | Architecture    | 16%    | Layer separation, dependency direction, SOLID principles       |
 | Type Safety     | 15%    | See language-specific criteria below                           |
-| Testing         | 20%    | Coverage %, test quality, edge cases, isolation                |
+| Testing         | 20%    | See "Testing is not the coverage number" below                 |
 | Error Handling  | 8%     | Consistency, domain exceptions, exit codes                     |
 | Security        | 15%    | Input validation/sanitization, secrets handling, dep audit     |
 | Resource Safety | 10%    | Bounded memory on large data (stream/chunk, no unbounded load) |
@@ -106,6 +106,31 @@ Use this rubric to score the project. Each dimension is 0-10, final score is the
 | JavaScript | No JSDoc, no validation                     | Some JSDoc or TypeScript migration started | Full JSDoc with types, or migrated to TypeScript         |
 
 **A type-checker suppression is not a Type Safety pass - flag it.** A per-file `reportX = false`, an `exclude` entry that drops files from the strict run, or a bare `# type: ignore` blinds the checker to real bugs in that scope; score it as a gap and recommend the fix: DEFINE the missing types (the real annotation, or a typed facade - a `Protocol` plus a `cast`, or a local `.pyi` stub), reserving a narrow rule-specific `# pyright: ignore[rule]` (with a remove-when reason) as the last resort. Pattern and worked example: **bitranox:coding-python-enforce-data-architecture-strict**.
+
+**Testing is not the coverage number - audit the test DESIGN.** Testing carries the heaviest weight
+here, and a green suite at high coverage is the single easiest thing to mistake for a pass. Coverage
+says which lines RAN, never whether anything would have FAILED. Score the design, using
+**bitranox:process-test-design** as the criteria (mock-vs-real, adversarial inputs, determinism,
+pruning) - load it for this dimension rather than judging "test quality" ad hoc. Cap Testing at 5
+when any of these holds, however green the run:
+
+| Test-design gap            | What it looks like                                                                                                                 |
+|----------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| Self-mocked internals      | The suite patches the code under test's own methods/module rather than injecting a collaborator at a seam. Fix: make it injectable |
+| No integration / e2e proof | Nothing exercises the real DB, HTTP, broker, or filesystem, so the contract is unproven and the mocked path can be flatly broken   |
+| Tests that cannot fail     | Asserts nothing, restates the implementation, or asserts on the mock; a call-order assertion over private methods is this          |
+| Filler                     | Tests the language, the framework, or a constructor storing its arguments - deletable with nothing lost                            |
+| Flaky or order-dependent   | Needs a re-run, a real `sleep`, or a specific execution order; shared mutable state between tests                                  |
+
+**Recommend DELETING low-value tests, do not preserve them.** A test that cannot fail is negative
+value: it costs maintenance and buys false confidence. Never propose a type-checker or lint
+suppression to keep one alive - that is two gaps, not a fix. Deletions belong in the findings list
+like any other change, with the count and the reason.
+
+**The tell that this matters:** in the baseline that motivated this section, a service's record-to-database
+step was patched out in every test. The suite was 10/10 green; the real code inserted into a table
+nothing ever created, so the function failed on the first real call. A coverage-led read scored that
+suite adequate. Ask of any mocked-out path: if the mock were removed, would this still work?
 
 **Scoring anchors (all dimensions):**
 
@@ -287,20 +312,20 @@ Walk EVERY row each sweep, and say which rows you walked. A sweep that reports "
 without naming its coverage is a sweep that stopped looking, and it is indistinguishable in the
 transcript from a thorough one.
 
-| Aspect                | Ask                                                                        |
-|-----------------------|----------------------------------------------------------------------------|
-| Public API surface    | Every exported name: signature, contract, error behaviour, docs            |
-| CLI surface           | Every subcommand x every output mode x a failing input; exit codes agree   |
-| Concurrency           | Task/memory growth vs input size; ordering assumptions; cancellation       |
-| Resource lifetime     | Sockets, files, handles, registries: freed on every path including errors  |
-| Unbounded input       | Big/append-only files, wide ranges, long lists - streamed or bounded       |
-| Algorithmic cost      | Loops nested over inputs; per-item work inside a per-item loop             |
-| Error contract        | One hierarchy, consistent types, nothing leaking a foreign exception       |
-| Cross-platform        | Each supported OS's branch, and the type check for each                    |
-| Packaging             | Builds, installs clean, entry points and marker files present in the wheel |
-| Tests                 | Stable across repeats, and each file passing in isolation                  |
-| Shipped skill         | Covers the whole API and CLI (see the always-on checks)                    |
-| Docs and changelog    | Match the code as it is now, including what the current change added       |
+| Aspect             | Ask                                                                                     |
+|--------------------|-----------------------------------------------------------------------------------------|
+| Public API surface | Every exported name: signature, contract, error behaviour, docs                         |
+| CLI surface        | Every subcommand x every output mode x a failing input; exit codes agree                |
+| Concurrency        | Task/memory growth vs input size; ordering assumptions; cancellation                    |
+| Resource lifetime  | Sockets, files, handles, registries: freed on every path including errors               |
+| Unbounded input    | Big/append-only files, wide ranges, long lists - streamed or bounded                    |
+| Algorithmic cost   | Loops nested over inputs; per-item work inside a per-item loop                          |
+| Error contract     | One hierarchy, consistent types, nothing leaking a foreign exception                    |
+| Cross-platform     | Each supported OS's branch, and the type check for each                                 |
+| Packaging          | Builds, installs clean, entry points and marker files present in the wheel              |
+| Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated |
+| Shipped skill      | Covers the whole API and CLI (see the always-on checks)                                 |
+| Docs and changelog | Match the code as it is now, including what the current change added                    |
 
 Report per sweep: which rows were walked, what each found, and the running total. That record is
 what makes "no findings" credible.
@@ -321,3 +346,6 @@ what makes "no findings" credible.
 | Stop after one sweep because its issue list is empty                   | The list being empty means THIS sweep is done. Sweep again from Step 2; stop only when a full checklist walk finds and changes nothing |
 | Report "no findings" without saying what was examined                  | Name the checklist rows walked. An unqualified "nothing found" reads identically whether you looked or not                             |
 | Leave the user to re-invoke the skill for another pass                 | The loop is the skill's job. Four invocations to reach zero findings is three invocations too many                                     |
+| Score Testing from coverage % and a green run                          | Coverage says which lines RAN, not whether anything could FAIL. Audit the design per `bitranox:process-test-design`                    |
+| Treat a mocked-out path as covered                                     | Ask whether it would still work with the mock removed. A self-mocked step can be flatly broken and the suite stays green               |
+| Only ever ADD tests                                                    | Deleting a test that cannot fail is a finding too. Filler is negative value - propose the deletion, never a suppression to preserve it |
