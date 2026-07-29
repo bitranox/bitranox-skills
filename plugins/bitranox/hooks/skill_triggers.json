@@ -111,6 +111,22 @@
   "choosing",
   "environment-variable"
  ],
+ "coding-python-network-probe": [
+  "python",
+  "code",
+  "ping",
+  "host",
+  "sweep",
+  "many",
+  "hosts",
+  "reachability",
+  "measure",
+  "round-trip",
+  "time",
+  "packet",
+  "loss",
+  "traceroute"
+ ],
  "coding-python-new-public-library": [
   "creating",
   "scaffolding",
