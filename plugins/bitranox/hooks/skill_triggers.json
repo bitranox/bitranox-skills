@@ -117,7 +117,6 @@
   "ping",
   "host",
   "sweep",
-  "many",
   "hosts",
   "reachability",
   "measure",
@@ -125,7 +124,8 @@
   "time",
   "packet",
   "loss",
-  "traceroute"
+  "traceroute",
+  "scan"
  ],
  "coding-python-new-public-library": [
   "creating",
