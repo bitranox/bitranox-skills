@@ -134,9 +134,16 @@ Present the scorecard as a table with per-dimension scores and the weighted tota
   keys, types, or shape. Exception: items the project instructions deliberately accept.
 - **A shipped skill covers the whole surface.** If the repo ships a Claude Code skill (a
   `skills/<name>/SKILL.md`, usually alongside `.claude-plugin/`), check it against the code by
-  SCRIPT, not by reading: every CLI subcommand from the tool's own `--help`, and every public name
-  from the package's `__all__` (or the language's equivalent export list), must appear in it. Score
-  under Documentation.
+  SCRIPT, not by reading. Three sets must appear in it, and they are not the same as "everything
+  exported": every CLI subcommand from the tool's own `--help`; every public CALLABLE; and every
+  type a caller has to WRITE - the enums passed as arguments, and the exception types caught.
+  Score under Documentation.
+
+  Payload and result types are deliberately out. A caller reads `result.reached` without ever
+  naming `ResponseObject`, so listing it is noise, while omitting the enum a `family=` argument
+  takes is a real gap. Draw the line at "would the user have to type this name", not at the export
+  list - a rule that demands every exported symbol makes the skill a duplicate of the API
+  reference, and one nobody keeps current.
 
   This is not pedantry about completeness. A usage skill is what an agent consults to decide what
   the tool can do, so anything it omits is a capability that does not get used, and anything it
