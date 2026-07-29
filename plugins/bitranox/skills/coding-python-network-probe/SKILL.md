@@ -95,7 +95,8 @@ find out without provoking an error.
 
 ## The error contract
 
-Setup problems raise; network conditions do not.
+Setup problems raise; network conditions do not. `except IPScoutError` catches every one of
+them, and `AddressFamily.IPV4` / `IPV6` is what the `family=` argument takes.
 
 - A host that is down, times out, or loses every packet returns
   `reached=False`. It does **not** raise.
