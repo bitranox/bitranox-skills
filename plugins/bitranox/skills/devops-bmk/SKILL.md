@@ -168,7 +168,7 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog                      |
 | `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                          |
 | `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                     |
-| `make release` \| `r`                   | Tag `vX.Y.Z`, push, create the GitHub release via `gh`                         |
+| `make release` \| `r`                   | Tag `vX.Y.Z`, push, create the GitHub release via `gh` (see the skill note below) |
 | `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                |
 | `make build` \| `bld`                   | Build wheel + sdist                                                            |
 | `make clean` \| `cl`                    | Remove build artifacts and caches                                              |
@@ -177,6 +177,19 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make ensure`                           | Install missing external tools for this OS (see section 5)                     |
 | `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                        |
 | `make help`                             | List available targets                                                         |
+
+**If the project ships a Claude Code skill**, two version rules apply and neither is optional.
+An install re-fetches a skill only when `.claude-plugin/plugin.json` changes version, so a release
+that edits `skills/` without moving that version ships the code and leaves every install on the old
+skill - no error, nothing to notice, and the skill then documents behaviour the tool no longer has.
+
+- `bump`, `push` and `release` raise `plugin.json` to the package version whenever it lags, and
+  never lower it. The plugin version can legitimately be AHEAD, because a skill ships more often
+  than the package it documents; writing the package version there unconditionally would move an
+  install backward to a version it already had.
+- `release` refuses outright when `skills/` changed since the last tag and the plugin version did
+  not move. That is the one case the sync cannot fix: the two versions were already equal, so there
+  was nothing to raise. Bump `plugin.json` yourself and release again.
 
 Run `bmk --help` or `bmk <command> --help` for the complete, current list (there are also `config`,
 `config-deploy`, `send-email`, `run`, `info`, `logdemo`, ...).
