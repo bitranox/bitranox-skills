@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.107.1] - 2026-07-30
+
+### Fixed
+
+- **coding-python-new-public-library: the description claimed the wrong Python floor.** It said CI
+  runs "Python 3.9-3.14" where `bitranox_template_py_lib` declares `requires-python = ">=3.10"` and
+  classifies 3.10 through 3.14. The description is what the skill router matches on, so a wrong
+  version range there is a wrong trigger as well as a wrong fact. Found by the new mirror audit.
+
 ## [5.107.0] - 2026-07-30
 
 ### Added

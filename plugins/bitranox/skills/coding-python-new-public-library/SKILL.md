@@ -1,6 +1,6 @@
 ---
 name: coding-python-new-public-library
-description: Use when creating or scaffolding a NEW public bitranox Python library - a pip-installable package with a rich-click CLI, CI across Python 3.9-3.14 on Linux/macOS/Windows, and a PyPI release - or when installing or using a library built from the bitranox_template_py_lib template. Keywords - new library, scaffold, project template, rename-project, bmk, make test, make release, uv pip install.
+description: Use when creating or scaffolding a NEW public bitranox Python library - a pip-installable package with a rich-click CLI, CI across Python 3.10-3.14 on Linux/macOS/Windows, and a PyPI release - or when installing or using a library built from the bitranox_template_py_lib template. Keywords - new library, scaffold, project template, rename-project, bmk, make test, make release, uv pip install.
 ---
 
 # New public Python library (from the bitranox template)
