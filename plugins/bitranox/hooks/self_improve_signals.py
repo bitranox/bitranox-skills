@@ -221,7 +221,8 @@ def dream_mode(proj=None):
     """Dream mode (single source of truth = the machine-local config; see load_config):
       off     -> no dream nudges; a manual dream consolidates memory only, no CLAUDE.md/skill proposals
       auto    -> dream applies CLAUDE.md edits and ships skill changes WITHOUT per-change prompts
-      propose -> (default) dream asks before CLAUDE.md edits and routes skill changes to a self-PR
+      propose -> (default) dream applies CLAUDE.md edits too (backed up, reported per file, and
+                 gated by the ancestor-reachability invariant) and routes skill changes to a self-PR
     Reads `~/.claude/.bitranox-memory.json`; without it, the recommended default applies.
     """
     return load_config().get("dream_mode", "propose")

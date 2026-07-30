@@ -45,8 +45,40 @@ def test_each_skill_references_the_core(name):
 @pytest.mark.parametrize("literal,desc", [
     ("NARROWEST level whose PLACE-HERE", "the placement routing prompt"),
     ("**`propose`** (default)", "the mode-knob bullets"),
+    ("## Boundaries (the whole family", "the family Boundaries block"),
 ])
 def test_family_literals_single_sourced_in_core(literal, desc):
     files = list(FAMILY.values()) + [CORE, PASSES]
     hits = [str(f) for f in files if literal in _read(f)]
     assert hits == [str(CORE)], "%s must live ONLY in dream-core.md; found in: %s" % (desc, hits)
+
+
+def test_claude_md_policy_is_not_gated_on_version_control():
+    """The CLAUDE.md policy must not key off git tracking.
+
+    Gitignore is irrelevant to LOADING, so a `version-controlled CLAUDE.md` qualifier silently put
+    every non-tracked file outside the policy, and the matching `never trim a TRACKED lower copy`
+    guard made a dream HOLD a trim purely because the file was committed (observed 2026-07-30).
+    The test is deliberately narrow: it bans the qualifier next to CLAUDE.md, not the words
+    `tracked`/`version-controlled` generally - Durability legitimately still discusses git.
+    """
+    banned = ("version-controlled CLAUDE.md", "CLAUDE.md (version-controlled)",
+              "`CLAUDE.md` (version-controlled)", "trim a TRACKED lower copy")
+    offenders = []
+    for f in list(FAMILY.values()) + [CORE, PASSES]:
+        text = _read(f)
+        for phrase in banned:
+            if phrase in text:
+                offenders.append("%s: %r" % (f.name, phrase))
+    assert not offenders, (
+        "the CLAUDE.md policy must be gated on ANCESTOR REACHABILITY, not git tracking; found: %s"
+        % offenders)
+
+
+def test_the_reachability_invariant_is_stated_in_passes():
+    """dream-passes.md owns the case model, so the invariant that replaced the git guard lives there."""
+    text = _read(PASSES)
+    assert "ANCESTOR DIRECTORY" in text, "dream-passes.md lost the reachability invariant"
+    assert "SIBLING or CHILD" in text, (
+        "dream-passes.md must keep the sibling/child exclusion - it is the one way a trim can still "
+        "silently lose a rule")

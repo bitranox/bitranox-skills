@@ -54,11 +54,24 @@ holds only the stale version you were replacing, so it is your only restore sour
 
 Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory.json` via
 `self_improve_signals.load_config()`):
-- **`propose`** (default): apply safe private-memory consolidation; ASK before editing a
-  version-controlled CLAUDE.md; route skill changes to a self-PR. Mention the `dream_mode`
-  knob (`bitranox:meta-memory-settings`) at the end.
-- **`auto`**: no per-change prompts - apply CLAUDE.md edits and ship skill changes directly.
+- **`propose`** (default): apply safe private-memory consolidation; apply CLAUDE.md consolidation
+  under the reachability invariant (see Boundaries) and REPORT every file touched; route skill
+  changes to a self-PR. Mention the `dream_mode` knob (`bitranox:meta-memory-settings`) at the end.
+- **`auto`**: no per-change prompts - CLAUDE.md edits as above, plus ship skill changes directly.
 - **`off`**: no nudges; a manual run consolidates PRIVATE memory only.
+
+## Boundaries (the whole family; skills point here, they do not restate it)
+
+- **Private memory + the curated stores:** back up, then apply (reversible via the backup).
+- **`CLAUDE.md`:** back up, then apply, then REPORT per file. A rule may be REMOVED only when the
+  reachability invariant holds (`dream-passes.md` -> "CLAUDE.md reconciliation"): a covering rule at
+  an ANCESTOR directory, delivered as always-loaded text. Otherwise rewrite in place and keep it.
+  Git tracking is not a factor - it decides whether an edit needs a commit, never whether a rule
+  reaches context.
+- **Skills / hooks (shared, published):** never silently edit; route through the upstream-PR loop.
+- **Pinned entries:** exempt from archive/move/reword without approval of that specific change.
+- **Structural moves** (relocating a directory, migrating a memory slug, creating a rung): always
+  PROPOSED with consequences, never applied by the dream.
 
 ## Capture-first (unconditional on a manual run)
 
