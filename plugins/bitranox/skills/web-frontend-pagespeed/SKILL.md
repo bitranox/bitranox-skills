@@ -1,83 +1,77 @@
 ---
 name: web-frontend-pagespeed
-description: Use when a web asset is served with the wrong caching or compression - a fixed-URL file stuck stale behind a long max-age, a bundle refetched on every page view, an asset silently inheriting no-cache, JavaScript or CSS going out uncompressed, gzip that appears not to work, or an unexplained bandwidth bill from repeat downloads. Keywords - Cache-Control, max-age, immutable, ETag, gzip, brotli, Content-Encoding, gzip_types, nginx add_header inheritance, cache busting.
+description: Use when verifying or fixing how a site caches and compresses its assets - bandwidth or CDN cost up with flat request volume, a bundle refetched on every navigation, an asset that will not pick up a new deploy, compression that looks enabled but is not, or a header check that came back clean and you need to know whether to believe it. Keywords - Cache-Control, max-age, immutable, ETag, 304, revalidation, gzip, Content-Encoding, gzip_types, add_header inheritance.
 ---
 
-# Pagespeed: caching and compression
+# Pagespeed: verifying caching and compression
 
-> **STATUS: SEEDED, NOT COMPLETE.** This skill currently covers only caching and
-> compression, seeded from one debugging session. Still missing: Core Web Vitals and LCP,
-> render-blocking resources, image format and sizing strategy, preload and priority hints,
-> a Lighthouse workflow, and any bundled audit script. Treat what is here as reliable and
-> the absence of a topic as "not written yet", not "not applicable".
+> **STATUS: SEEDED, NOT COMPLETE.** Covers only caching and compression verification.
+> Missing: Core Web Vitals, LCP, render-blocking resources, image strategy, preload hints,
+> Lighthouse workflow, bundled audit script. Absence of a topic here means "not written yet".
 
-## Overview
+## Why this exists
 
-Two defects cause most avoidable transfer, and both are invisible to a casual check: an asset
-that is never cached, and an asset that is never compressed. Neither shows up as an error.
+The facts below are not obscure. The failure mode is not knowing them, it is **not running the
+check**, and then **believing a clean result that was never capable of being dirty**. Both defects
+here are silent: no error, no warning, just bytes leaving again.
 
-## Cache-Control by resource class
+## Run these checks
 
-| Resource                                 | Value                                 | Why                                        |
-|------------------------------------------|---------------------------------------|--------------------------------------------|
-| HTML                                     | `no-cache`                            | Always revalidated; unchanged pages 304    |
-| Fixed-URL assets (favicons, unhashed js) | `public, max-age=86400`               | A regenerated file propagates within a day |
-| URL-versioned or content-hashed assets   | `public, max-age=31536000, immutable` | New content always means a new URL         |
-| Content that is overwritten in place     | short `max-age`, never `immutable`    | Same URL, new bytes                        |
-
-**The rule everything follows from: `immutable` is valid only when the URL changes as the
-content changes.** A fixed URL plus `immutable` means stale until expiry with no way to push a
-fix. If you want the long cache, version the URL first (`?v=N` or a hashed filename) and bump it
-on every change.
-
-## nginx add_header inheritance cuts both ways
-
-A `location` with its **own** `add_header` drops **all** inherited ones. A `location` with
-**none** inherits the server-level set, including `Cache-Control`.
-
-That second direction is the one that bites: a proxied asset location that sets no header of its
-own silently inherits a server-level `Cache-Control: no-cache`, and every asset behind it is
-refetched on every page view. Nothing errors; the bytes just leave again.
-
-`bitranox:sec-appsec-web-baseline` documents the same trap from the security-header side. Check
-both whenever you add an `add_header` to a location.
-
-## Compression: `gzip_types` matches Content-Type literally
-
-Modern servers send JavaScript as `text/javascript` (current IANA and WHATWG guidance), not
-`application/javascript`. A `gzip_types` list naming only the latter compresses **nothing**,
-while `text/css` and `text/html` next to it compress fine, so the config looks like it works.
-
-List both. The same literal-match trap applies to any type you assume is covered.
-
-## Verify with GET, never HEAD
-
-`curl -I` sends HEAD. There is no body, so there is no `Content-Encoding`, and an uncompressed
-response is indistinguishable from a compressed one. Compare bytes on the wire:
+Check at the hop the visitor reaches (a CDN or reverse proxy can add, strip, or override both).
 
 ```bash
-curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' https://host/app.js | grep -i content-encoding
-curl -s -H 'Accept-Encoding: gzip' https://host/app.js | wc -c    # vs the uncompressed size
+# 1. What headers does this asset ACTUALLY carry? GET, never HEAD - see below.
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' https://host/path/app.js
+
+# 2. Is it really compressed? Compare bytes on the wire, do not trust the header alone.
+curl -s -H 'Accept-Encoding: gzip' https://host/path/app.js | wc -c
+curl -s                            https://host/path/app.js | wc -c
+
+# 3. Does revalidation actually cost nothing? A no-cache asset needs a validator,
+#    or every "revalidation" is a full 200 with the whole body.
+curl -s -o /dev/null -D - https://host/path/app.js | grep -iE 'etag|last-modified'
 ```
 
-Check headers at the edge the visitor actually reaches. A reverse proxy or CDN in front can add,
-strip, or override both caching and compression, so an origin-side check can grade the wrong hop.
+## What a false clean looks like
+
+| Check                             | Why it can read clean while broken                                                                                                                                             |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `curl -I` for compression         | HEAD has no body, so the gzip filter never runs and `Content-Encoding` is never emitted, **for every file**. Uncompressed and compressed look identical                        |
+| `Cache-Control: no-cache` present | `no-cache` means revalidate, not do-not-store. Cheap only if the origin emits `ETag`/`Last-Modified`; a proxied app that sends neither turns each revalidation into a full 200 |
+| A location "has no cache policy"  | With no `add_header` of its own it INHERITS the server-level one, often `no-cache`. Absence of config is a policy                                                              |
+| A later regex location for assets | A `^~` prefix match stops location selection; regex locations are never evaluated for that prefix                                                                              |
+| `gzip_types` names the type       | Matching is literal against the response `Content-Type`. `application/javascript` does not match `text/javascript`, which is what modern servers send                          |
+
+## Decision rules
+
+**`immutable` requires a URL that changes with its content.** Hashed or versioned filename, or
+no `immutable`. On a fixed URL it means stale until expiry with no way to push a fix. Until the
+build fingerprints the filename, use a bounded `max-age`.
+
+**`add_header` inheritance cuts both ways.** A location with its own `add_header` drops all
+inherited ones. A location with none inherits the whole server-level set. Adding one header to a
+location silently removes the rest there, which is also how security headers get lost; see
+`bitranox:sec-appsec-web-baseline`.
+
+**robots and bandwidth are different problems.** If the cost is crawler volume rather than repeat
+downloads, caching will not fix it; see `bitranox:web-seo-crawl-indexing`.
 
 ## Common mistakes
 
-| Mistake                                             | Reality                                                               |
-|-----------------------------------------------------|-----------------------------------------------------------------------|
-| `immutable` on a fixed URL                          | Stale until expiry, unfixable; version the URL first                  |
-| Assuming a proxied location has no cache policy     | With no `add_header` it inherits the server-level one, often no-cache |
-| Adding one `add_header` to a location               | Silently drops every inherited header there; re-add what you need     |
-| `curl -I` to check compression                      | HEAD has no body, so no `Content-Encoding`; use GET and compare bytes |
-| Listing only `application/javascript` in gzip_types | Servers send `text/javascript`; nothing gets compressed               |
-| Grading the origin for a site behind a proxy        | The edge can add or strip both; measure where visitors land           |
+| Mistake                                     | Reality                                                            |
+|---------------------------------------------|--------------------------------------------------------------------|
+| `curl -I` to test compression               | False negative on every file; use GET and compare wire bytes       |
+| Reading `no-cache` as "not cached"          | It is revalidate-every-time; without validators that is a full 200 |
+| `immutable` on an unhashed path             | Stale until expiry, unfixable                                      |
+| Assuming a proxied location has no policy   | It inherits the server-level `Cache-Control`                       |
+| Adding one `add_header` to a location       | Drops every inherited header there                                 |
+| Only `application/javascript` in gzip_types | Servers send `text/javascript`; nothing compresses                 |
+| Grading the origin behind a CDN             | Measure where visitors actually land                               |
 
 ## Scope boundary
 
-| Concern                                    | Skill                                 |
-|--------------------------------------------|---------------------------------------|
-| Security headers, CSP, HSTS, cookie flags  | `bitranox:sec-appsec-web-baseline`    |
-| Layout, viewport, tap targets, RTL         | `bitranox:web-frontend-responsive-ux` |
-| robots.txt, crawl budget, indexing control | `bitranox:web-seo-crawl-indexing`     |
+| Concern                              | Skill                                 |
+|--------------------------------------|---------------------------------------|
+| Security headers, CSP, HSTS, cookies | `bitranox:sec-appsec-web-baseline`    |
+| Layout, viewport, tap targets, RTL   | `bitranox:web-frontend-responsive-ux` |
+| robots.txt, crawl budget, indexing   | `bitranox:web-seo-crawl-indexing`     |
