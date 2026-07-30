@@ -181,9 +181,12 @@ the success line, abort-and-show on a miss).
     does not exist.
 
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
-    counts + one line each: merges, placements (with direction), voice rewrites, prunes, CLAUDE.md
-    edits (applied/proposed), skill changes, toolbox proposals (merges/flags), pinned entries left
-    untouched. Nudge `/clear` (the consolidated store loads next session; not clearing loses nothing).
+    counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
+    changes, toolbox proposals (merges/flags), pinned entries left untouched. CLAUDE.md edits are
+    APPLIED, so the report is the only place the user sees them: per RULE, name every file touched,
+    the ANCESTOR covering home it now relies on, and the transformation (removed / rewritten in
+    place); a rule left alone for want of an ancestor is listed too, never silently skipped.
+    Nudge `/clear` (the consolidated store loads next session; not clearing loses nothing).
 
 ## The tree, not "the global layer"
 
@@ -205,10 +208,8 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 
 ## Boundaries
 
-- Private memory + the tree-top store: back up, then apply (reversible via backup).
-- Version-controlled CLAUDE.md: propose-first in `propose`; only through the sanctioned paths.
-- Skills/hooks (shared): never silently edit; the upstream loop only.
-- Pinned entries: exempt from archive/move/reword without explicit user approval.
+- The family Boundaries (memory, CLAUDE.md, skills/hooks, pinned entries, structural moves) live in
+  references/dream-core.md and apply here unchanged - read them there, they are not restated.
 - Circle-breaker: consolidated twice and it keeps coming back -> escalate to a guard or the user.
 
 ## Deliverables (a completed dream has ALL of these)

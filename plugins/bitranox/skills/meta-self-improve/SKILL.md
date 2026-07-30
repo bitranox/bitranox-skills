@@ -122,8 +122,9 @@ entry only when nothing covers it.
   (labelled SUBAGENT LEARNINGS); you are the only one who can route + write them. Judge each: capture
   the durable ones (routing `--proj` by SUBJECT, same rule), drop the task-local noise. They are
   surfaced ONCE - if you skip them they are gone.
-- An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md`
-  (propose-first; policy in `bitranox:meta-dream-tree`).
+- An intermediate must-hold rule for a whole subtree goes in that level's `CLAUDE.md` (propose-first
+  at CAPTURE time; the case model + guards live in `bitranox:meta-dream-tree` ->
+  references/dream-passes.md "CLAUDE.md reconciliation").
 - **Normalization, not duplication:** store a general rule ONCE at its altitude; a lower entry
   cites `[[general-slug]]` plus only its delta. References point UPWARD only.
 - **Promotion to the tree's top is gated**: user-stated rules promote eagerly; a model-inferred
@@ -157,7 +158,7 @@ Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
       --title "..." --hook "When ..., ..." --body-file <tmpfile> [--source <key>] [--pin] [--slug s]
 
 Risk ladder: engine `add` at the project level is additive - auto-apply. Rewriting/deleting an
-existing entry, restructuring or editing a version-controlled CLAUDE.md, pruning - propose-first
+existing entry, restructuring or editing any CLAUDE.md, pruning - propose-first
 with a diff. Shared/published artifacts - never auto-edit; respect push gates.
 
 ### 5. New-skill gaps: propose first

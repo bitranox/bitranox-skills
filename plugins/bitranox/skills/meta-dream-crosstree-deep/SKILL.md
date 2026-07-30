@@ -40,7 +40,7 @@ the scan in step 3 is run; do not duplicate the rest.
    and CONSOLIDATE a rule duplicated across many sibling `CLAUDE.md` UP to their common ancestor (the
    biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
    nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-tree`
-   "CLAUDE.md reconciliation"; every `CLAUDE.md` edit is propose-first, never without confirmation.)
+   "CLAUDE.md reconciliation"; a removal needs an ANCESTOR covering home, and is backed up + reported.)
 3b. **Misplacement audit - EXHAUSTIVE here.** Run crosstree's step 4b
    (`reconcile_memory_index.py --check-misplaced <anchor>`) over EVERY tree, not just the ones this
    run touched: a wrong-tree fact is invisible from inside its own tree, so it survives every
@@ -109,12 +109,12 @@ the scan in step 3 is run; do not duplicate the rest.
 
 ## Boundaries (unchanged from meta-dream-crosstree)
 
-- Tree-top curated stores + private project memory: back up, then apply.
-- **`CLAUDE.md` (version-controlled): never edit without user confirmation** - propose-first in `propose`,
-  apply in `auto`, only through the sanctioned bounded paths. A reconciliation delete/lift or an org-chart
-  move is always PROPOSED (with consequences), never an unconfirmed edit; the dream never relocates a
-  directory or migrates a memory slug itself.
-- Skills / hooks (shared, public): never silently edit; route through the upstream-PR loop.
+- The family Boundaries (memory, CLAUDE.md, skills/hooks, pinned entries, structural moves) live in
+  `bitranox:meta-dream-tree` -> references/dream-core.md and apply here unchanged. The CLAUDE.md
+  case model + guards are in references/dream-passes.md "CLAUDE.md reconciliation".
+- An ORG-CHART proposal (moving a project, creating a rung, splitting a department) is the one this
+  skill adds: always PROPOSED with its consequences, never applied - the dream never relocates a
+  directory, migrates a memory slug, or touches a repo.
 - **Never a cross-tree reference.** Bridge trees only by lift-to-common-ancestor or self-contained copy.
 
 ## Cost note

@@ -91,7 +91,7 @@ Create one todo per step.
    and across trees CONSOLIDATE the same rule duplicated in many sibling `CLAUDE.md` UP to their common
    ancestor - the highest-leverage context saving; new + corroborated + nowhere-else -> promote. (The
    case model + guards live in `bitranox:meta-dream-tree` "CLAUDE.md reconciliation"; every
-   `CLAUDE.md` edit stays propose-first and never happens without user confirmation.) Keep promoted
+   `CLAUDE.md` removal obeys the reachability invariant, is backed up, and is reported.) Keep promoted
    rules CONCRETE (never water a
    concrete-but-universal rule down); abstract only when specifics fit nowhere else. Gate the
    corroboration the same way as the tree dream: `dream_state.py saw-promotable <slug>` to record a
@@ -144,9 +144,13 @@ Create one todo per step.
    NEW tool. Detect + propose ONLY; tools stay LOCAL by default; the build runs TDD through
    `bitranox:meta-self-improve`'s tool endpoint. Skip if the toolbox path does not exist.
 8. **Report.** Counts: stores scanned, items gathered (lift vs local copy), promotions to global,
-   cross-pollinations, normalizations, any CLAUDE.md edits (applied or proposed), any skill change,
+   cross-pollinations, normalizations, any skill change,
    toolbox proposals (contribute / new tool), and any contribution still queued (only those blocked
    on user input or `off`-mode - deliverable ones are shipped THIS run, not left pending).
+   **CLAUDE.md edits are applied, so the report is the only place the user sees them:** per RULE,
+   list every file touched, the ANCESTOR covering home the rule now relies on, and the
+   transformation (removed / rewritten in place). A rule left alone because no ancestor covered it
+   is listed too - never silently skipped.
 
 ## Convergence
 
@@ -157,10 +161,9 @@ re-moving the same item, stop and treat it as a bug (the circle-breaker), do not
 
 ## Boundaries
 
-- **Tree-top curated stores + private project memory:** back up, then apply.
-- **CLAUDE.md (version-controlled):** propose-first in `propose`, apply in `auto`, only through the
-  sanctioned bounded paths (CLAUDE.md policy in `bitranox:meta-self-improve`).
-- **Skills / hooks (shared, public):** never silently edit; route through the upstream-PR loop.
+- The family Boundaries (memory, CLAUDE.md, skills/hooks, pinned entries, structural moves) live in
+  `bitranox:meta-dream-tree` -> references/dream-core.md and apply here unchanged. The CLAUDE.md
+  case model + guards are in references/dream-passes.md "CLAUDE.md reconciliation".
 - **Never a cross-tree reference.** Bridge trees only by lift-to-common-ancestor or a self-contained
   copy. A sideways or downward pointer dangles when the lower / sibling tree is deleted.
 

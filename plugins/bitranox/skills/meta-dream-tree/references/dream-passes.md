@@ -28,7 +28,7 @@ When memory contradicts a hand-written `CLAUDE.md` rule, GROUND TRUTH decides - 
 A CLAUDE.md can be outdated just like a memory can be wrong. Verify against the actual state (the
 code, files, system, measurements, git history): if the evidence shows MEMORY is wrong, correct
 the memory (engine); if it shows the CLAUDE.md is OUTDATED, propose the CLAUDE.md fix
-(propose-first, as every CLAUDE.md edit); if ground truth cannot be established, ASK the user -
+(backed up and reported, as every CLAUDE.md edit); if ground truth cannot be established, ASK the user -
 never silently prefer either side. Memory-vs-memory: a narrower rule that CONTRADICTS a higher one
 becomes a self-contained OVERRIDE (more-specific wins at load), NOT a `[[reference]]`; flag a
 persistent contradiction for the user.
@@ -57,9 +57,11 @@ from emptiness or a new-entry-only grep. For a rule found in the chain:
     delete on topic-overlap alone: READ both, FOLD every unique detail from the `CLAUDE.md` rule
     INTO the surviving memory entry (via the engine), VERIFY the survivor fully subsumes it, only
     THEN propose the deletion.
-  - **If the source `CLAUDE.md` is itself UNTRACKED:** ensure the covering store is locally
-    git-tracked FIRST (the Durability pass), then fold + delete - never concentrate a rule into a
-    fragile untracked home.
+  - **Git tracking is NOT a condition here.** Whether the source or the covering home is tracked,
+    gitignored, or outside a repo has no bearing on the trim: gitignore is irrelevant to LOADING
+    (verified - a gitignored file is still read in a trusted workspace), and the store's own
+    durability is the Durability pass's job, not a gate on this one. Judge only by the
+    reachability invariant below.
   - **Coverage can also be a HOOK or a SKILL.** A hook enforces automatically but is
     BOUNDARY-LIMITED (fires only at its trigger, only where the plugin is installed); judge
     "covered" against the UNION of {hook enforcement + skill + always-loaded memory} and keep the
@@ -71,9 +73,32 @@ from emptiness or a new-entry-only grep. For a rule found in the chain:
   ground truth (see Contradiction / override above): evidence decides which side is outdated;
   unresolvable -> ask the user.
 - Guards: never LIFT a narrow rule into a tier that loads where it is irrelevant (net context
-  loss); never demote a must-always directive into a lazy body; never trim a TRACKED lower copy
-  into a LESS durable broader home (propose an umbrella repo first if needed). Propose-first in
-  `propose`, apply in `auto`; never touch `CLAUDE.md` without confirmation.
+  loss); never demote a must-always directive into a lazy body; never remove a rule whose covering
+  home fails the reachability invariant below. Back up first (every CLAUDE.md edit is reversible),
+  then apply, and REPORT every file touched.
+
+### The reachability invariant (the ONLY test for removing a rule)
+
+> Remove a rule from a `CLAUDE.md` only when a covering rule lives at an ANCESTOR DIRECTORY of that
+> file and is delivered as ALWAYS-LOADED TEXT. Otherwise rewrite in place (deduplicate, shorten,
+> merge) and KEEP the rule where it is.
+
+Ancestor `CLAUDE.md` and `CLAUDE.local.md` text loads into every session started at or below that
+directory, via the native cascade. Three ways a trim still loses a rule:
+
+- **A SIBLING or CHILD is not a covering home.** It never loads where the trimmed file loaded,
+  however adjacent it looks. Test it as path arithmetic: the covering home's directory must be an
+  ancestor-or-self of the trimmed file's directory. Two projects sharing a rule means it belongs at
+  their COMMON ANCESTOR, not in whichever of the two you kept.
+- **A `mem:` pointer covers only as far as its HOOK.** Folding a rule into a memory fact is
+  legitimate, but only the trigger-first hook line in the ancestor's pointer block is always in
+  context; the body is read on demand. If the rule must fire unprompted, the hook has to carry the
+  trigger - which ENHANCE-BEFORE-DELETE above already requires.
+- **An ancestor's `@import` whose target sits ABOVE the workspace root is silently skipped** (only
+  the raw `@...` line travels as text). Prefer the ancestor's own TEXT as the covering home.
+
+Git plays no part in this decision: not tracked-vs-ignored, not the remote, not who could clone it.
+Those affect whether an edit needs a commit, never whether a rule reaches context.
 
 ## Point a rule at its skill or HOOK; do not restate it
 
