@@ -672,3 +672,42 @@ def test_mirror_of_dispatches_from_the_command_line(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirror-of", str(public / "libs" / "thing")])
 
     assert RG.main() == 0
+
+
+def test_a_twin_that_the_manifest_does_not_list_is_reported(tmp_path, monkeypatch):
+    # The manifest is hand-maintained, and a missing entry is invisible: it simply stops
+    # checking that pair. coding-python-layered-config went unchecked exactly that way.
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {})
+
+    found = RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public)
+
+    assert found == [("coding-python-thing", "libs/thing/skills/python-thing")]
+
+
+def test_a_listed_twin_is_not_reported_as_unlisted(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+
+
+def test_a_repo_skill_with_its_own_description_is_not_a_mirror(tmp_path, monkeypatch):
+    # Matching on the description is what makes this reliable; an unrelated skill that
+    # merely lives in a tool repo must not be reported as somebody's twin.
+    public = _mirror_tree(tmp_path)
+    write(public / "libs" / "other" / "skills" / "unrelated" / "SKILL.md", "---\nname: unrelated\ndescription: Use when doing something else entirely.\n---\n")
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+
+    assert RG.unlisted_mirrors(public / "KI" / "bitranox-skills", public) == []
+
+
+def test_every_manifest_entry_points_at_a_real_twin_on_this_machine():
+    # Guards the other direction: an entry whose path no longer exists silently degrades
+    # to "skipped forever". Only meaningful where the fleet is checked out.
+    here = Path(RG.__file__).resolve()
+    public = next((p for p in here.parents if p.name == "public"), None)
+    if public is None:
+        pytest.skip("not inside the shared public/ tree")
+    missing = [rel for rel in RG.MIRRORED_SKILLS.values() if not (public / rel / "SKILL.md").is_file()]
+    assert missing == [], "MIRRORED_SKILLS points at a twin that does not exist: %s" % missing

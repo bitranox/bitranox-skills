@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.109.0] - 2026-07-30
+
+### Added
+
+- **The mirror audit reports a twin the manifest does not list.** `MIRRORED_SKILLS` is
+  hand-maintained, and a missing entry is invisible: it does not fail, it simply stops checking that
+  pair. `coding-python-layered-config` had gone unchecked exactly that way and had drifted - the
+  marketplace copy documented `read_config(default_file=...)` and the `lib_layered_config` twin did
+  not. `--mirrors` now matches every repo skill's description against the marketplace catalog and
+  names any pair the manifest is missing.
+
+### Fixed
+
+- **coding-python-layered-config added to the manifest, and its twin brought level.** The
+  `default_file` parameter and the note that it is the only way to seed the `defaults` layer were
+  in the marketplace copy only; verified against `core.py` before propagating.
+
 ## [5.108.1] - 2026-07-30
 
 ### Changed
