@@ -71,6 +71,10 @@ must match.
 - `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits all eight, changed or not, and
   exits non-zero when any has drifted. This is local only: the twins are sibling repos that a CI
   clone does not have, so CI cannot run it.
+- `repo-gate.py --mirror-of <tool-repo>` asks the same question from the other side, about that one
+  repo's pair only. It is what a tool repo's release pipeline runs before pushing, where another
+  repo's drift would be no reason to block. Safe to run anywhere: a repo with no mirrored skill, a
+  machine with no marketplace checkout, and a path outside the tree all print why and pass.
 - To fix drift, regenerate the stale side from the other, re-apply the three divergences, and bump
   THAT repo's `plugin.json` - both copies ship, so both need a version the installer can see.
 

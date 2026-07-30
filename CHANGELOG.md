@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.108.0] - 2026-07-30
+
+### Added
+
+- **repo-gate `--mirror-of <tool-repo>`: the mirror check from the tool repo's side.** `--mirrors`
+  audits all eight pairs and fails if any has drifted, which is right for a sweep and wrong for a
+  release: one repo's release must not be blocked by another repo's drift. This mode resolves the
+  pair belonging to the repo it is pointed at, locates the marketplace from the shared `public/`
+  tree rather than requiring it as the working directory, and exits non-zero only for that pair. It
+  passes with a reason when there is nothing to compare - no mirrored skill in that repo, no
+  marketplace checkout, no `public/` tree - so a pipeline can run it in every repo unconditionally.
+
 ## [5.107.1] - 2026-07-30
 
 ### Fixed

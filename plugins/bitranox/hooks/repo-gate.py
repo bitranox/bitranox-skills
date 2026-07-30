@@ -626,6 +626,37 @@ def check_skill_mirrors(root):
     return mirror_failures(root, touched & set(MIRRORED_SKILLS))
 
 
+def audit_mirror_of(tool_repo):
+    """Print the state of the mirrored pair belonging to one tool repo.
+
+    The counterpart to ``--mirrors`` for the other side of the mirror: a release pipeline
+    running inside a tool repo asks only about ITS pair, because another repo's drift is
+    not a reason to block this release. Returns 1 if that pair has drifted, else 0, and
+    says so and returns 0 when there is nothing to compare - the repo ships no mirrored
+    skill, or this machine has no marketplace checkout - so it is safe to run everywhere.
+    """
+
+    tool = Path(tool_repo).resolve()
+    public = _public_tree(tool / "x")  # _public_tree looks at parents, so descend one
+    if public is None:
+        print("mirror check: no public/ tree above %s - nothing to compare" % tool)
+        return 0
+    marketplace = public / "KI" / "bitranox-skills"
+    if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
+        print("mirror check: no bitranox-skills checkout at %s - nothing to compare" % marketplace)
+        return 0
+    mine = sorted(name for name, rel in MIRRORED_SKILLS.items() if (public / rel).resolve().is_relative_to(tool))
+    if not mine:
+        print("mirror check: %s ships no skill mirrored in bitranox-skills" % tool.name)
+        return 0
+    fails = mirror_failures(marketplace, set(mine))
+    for name in mine:
+        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
+    for failure in fails:
+        print("\n" + failure)
+    return 1 if fails else 0
+
+
 def audit_mirrors(root):
     """Print the state of every mirrored pair. Returns the number that have drifted."""
 
@@ -689,8 +720,16 @@ def is_gated_command(command):
 
 
 def main():
-    ci = "--ci" in sys.argv[1:]
-    mirrors = "--mirrors" in sys.argv[1:]
+    args = sys.argv[1:]
+    ci = "--ci" in args
+    mirrors = "--mirrors" in args
+
+    if "--mirror-of" in args:
+        # Runs from INSIDE a tool repo, so it must not require the marketplace as cwd:
+        # it locates the marketplace from the shared public/ tree itself.
+        index = args.index("--mirror-of")
+        target = args[index + 1] if len(args) > index + 1 else "."
+        return audit_mirror_of(target)
 
     root = repo_root()
     if root is None or not is_bitranox_skills(root):
