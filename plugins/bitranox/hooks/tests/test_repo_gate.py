@@ -612,3 +612,63 @@ def test_every_mirrored_entry_names_a_real_marketplace_skill():
     missing = [name for name in RG.MIRRORED_SKILLS if not (here / name / "SKILL.md").is_file()]
 
     assert missing == [], "MIRRORED_SKILLS names a skill that does not exist: %s" % missing
+
+
+def _mirror_tree(tmp_path, twin_body=TWIN_BODY):
+    """A public/ tree with the marketplace and one tool repo that mirrors a skill."""
+    public = tmp_path / "public"
+    write(public / "KI" / "bitranox-skills" / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", twin_body)
+    return public
+
+
+def test_mirror_of_reports_in_sync_for_the_repo_it_is_run_in(tmp_path, monkeypatch, capsys):
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    rc = RG.audit_mirror_of(public / "libs" / "thing")
+
+    assert rc == 0
+    assert "in sync" in capsys.readouterr().out
+
+
+def test_mirror_of_fails_on_drift_in_the_repo_it_is_run_in(tmp_path, monkeypatch, capsys):
+    public = _mirror_tree(tmp_path, TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    rc = RG.audit_mirror_of(public / "libs" / "thing")
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "DRIFT" in out and "DIFFERENT" in out
+
+
+def test_mirror_of_is_silent_and_green_where_there_is_nothing_to_compare(tmp_path, monkeypatch, capsys):
+    # A release pipeline runs this in EVERY repo, so the three "not applicable" cases
+    # must pass rather than block: no mirrored skill here, no marketplace checkout, no
+    # public/ tree at all.
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    (public / "libs" / "other").mkdir(parents=True)
+
+    assert RG.audit_mirror_of(public / "libs" / "other") == 0
+    assert "ships no skill mirrored" in capsys.readouterr().out
+
+    bare = tmp_path / "public" / "libs" / "thing"
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    import shutil
+
+    shutil.rmtree(public / "KI")
+    assert RG.audit_mirror_of(bare) == 0
+    assert "no bitranox-skills checkout" in capsys.readouterr().out
+
+    assert RG.audit_mirror_of(tmp_path / "nowhere") == 0
+    assert "no public/ tree" in capsys.readouterr().out
+
+
+def test_mirror_of_dispatches_from_the_command_line(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--mirror-of", str(public / "libs" / "thing")])
+
+    assert RG.main() == 0
