@@ -46,6 +46,12 @@ def main(argv=None):
     ls.add_argument("proj", nargs="?", default=None)
     dr = sub.add_parser("drain", help="clear the queue - only after the changes actually shipped")
     dr.add_argument("proj", nargs="?", default=None)
+    dp = sub.add_parser("drop", help="remove ONE disproven/stale intent - it is never re-queued")
+    dp.add_argument("--index", required=True, type=int, help="1-based index from `list`")
+    dp.add_argument("--reason", default="", help="why it is wrong or stale (kept in the tombstone)")
+    dp.add_argument("proj", nargs="?", default=None)
+    rj = sub.add_parser("rejected", help="show the dropped intents and why")
+    rj.add_argument("proj", nargs="?", default=None)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if not args.cmd:
@@ -54,8 +60,15 @@ def main(argv=None):
     proj = args.proj or os.getcwd()
 
     if args.cmd == "add":
-        sig.add_contribution(proj, {"what": args.what, "target": args.target,
-                                    "why": args.why, "source": args.source})
+        queued = sig.add_contribution(proj, {"what": args.what, "target": args.target,
+                                             "why": args.why, "source": args.source})
+        if not queued:
+            # already queued, or previously DROPPED as wrong/stale - either way not a new TODO
+            dropped = any((r.get("what"), r.get("target") or "") == (args.what, args.target)
+                          for r in sig.read_rejected(proj))
+            print("not queued (%s): %s" % ("rejected earlier" if dropped else "already queued",
+                                           args.what))
+            return 0
         print("queued: %s%s" % (args.what, " -> %s" % args.target if args.target else ""))
         return 0
 
@@ -65,10 +78,34 @@ def main(argv=None):
             print("no pending upstream contributions for %s" % proj)
             return 0
         print("%d pending upstream contribution(s):" % len(recs))
+        for i, r in enumerate(recs, 1):                 # numbered so `drop --index` can target one
+            print("  %d. %s%s%s" % (i, r.get("what") or "",
+                                    " -> %s" % r["target"] if r.get("target") else "",
+                                    " (%s)" % r["why"] if r.get("why") else ""))
+        return 0
+
+    if args.cmd == "drop":
+        try:
+            rec = sig.drop_contribution(proj, args.index, args.reason)
+        except IndexError as exc:
+            print("! refused: %s" % exc, file=sys.stderr)
+            return 2
+        print("dropped: %s%s%s" % (rec.get("what") or "",
+                                   " -> %s" % rec["target"] if rec.get("target") else "",
+                                   " (%s)" % args.reason if args.reason else ""))
+        print("  it will NOT be re-queued by a later dream.")
+        return 0
+
+    if args.cmd == "rejected":
+        recs = sig.read_rejected(proj)
+        if not recs:
+            print("no dropped contributions for %s" % proj)
+            return 0
+        print("%d dropped contribution(s):" % len(recs))
         for r in recs:
             print("  - %s%s%s" % (r.get("what") or "",
                                   " -> %s" % r["target"] if r.get("target") else "",
-                                  " (%s)" % r["why"] if r.get("why") else ""))
+                                  " (%s)" % r["reason"] if r.get("reason") else ""))
         return 0
 
     sig.drain_contributions(proj)                       # drain
