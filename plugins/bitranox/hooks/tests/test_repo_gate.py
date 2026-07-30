@@ -506,3 +506,109 @@ def test_cso_lint_rejects_block_scalar_and_quoted_descriptions(tmp_path):
     _skill(tmp_path, "eta", '"Use when eta gadgets rust in coastal climates"')
     fails = RG.cso_failures(tmp_path, ["plugins/bitranox/skills/eta/SKILL.md"])
     assert fails and "plain" in fails[0] and "scalar" in fails[0]
+
+
+# --------------------------------------------------------------------------
+# Mirrored skills: a skill that also ships from its own tool repo
+# --------------------------------------------------------------------------
+
+
+MIRROR_BODY = """---
+name: coding-python-thing
+description: Use when doing the thing.
+---
+
+# Doing the thing (coding-python-thing)
+
+One paragraph of content.
+"""
+
+TWIN_BODY = """---
+name: python-thing
+description: Use when doing the thing.
+---
+
+# Doing the thing (python-thing)
+
+> The `thing` repo is itself a Claude Code plugin/marketplace. Install this skill
+> anywhere with `/plugin marketplace add bitranox/thing` then `/plugin install thing`.
+> It is also mirrored in the central bitranox marketplace as `coding-python-thing`.
+
+One paragraph of content.
+"""
+
+
+def test_the_name_line_the_h1_and_the_self_install_note_are_not_drift():
+    # Each copy uses its own repo's skill name in both places, and only the tool repo's
+    # copy tells the reader to add that marketplace. Reporting those would make the
+    # check cry wolf on every pair, every time.
+    assert RG.normalise_mirror(MIRROR_BODY) == RG.normalise_mirror(TWIN_BODY)
+
+
+def test_a_multi_line_self_install_blockquote_is_dropped_whole():
+    # A line-at-a-time rule leaves the continuation lines behind and reports them as
+    # drift; this is the shape that actually ships in igittigitt and btx_lib_mail.
+    normalised = RG.normalise_mirror(TWIN_BODY)
+
+    assert "marketplace add" not in normalised
+    assert "mirrored in the central" not in normalised
+    assert "One paragraph of content." in normalised
+
+
+def test_a_blockquote_that_is_not_the_self_install_note_is_kept() -> None:
+    quoted = TWIN_BODY.replace("> The `thing` repo", "> A quote worth keeping").replace(
+        "> anywhere with `/plugin marketplace add bitranox/thing` then `/plugin install thing`.\n", ""
+    ).replace("> It is also mirrored in the central bitranox marketplace as `coding-python-thing`.\n", "")
+
+    assert "A quote worth keeping" in RG.normalise_mirror(quoted)
+
+
+def test_changed_content_is_reported_as_drift(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY.replace("One paragraph", "A DIFFERENT paragraph"))
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert len(fails) == 1
+    assert "libs/thing/skills/python-thing" in fails[0]
+    assert "DIFFERENT" in fails[0]
+
+
+def test_an_identical_pair_reports_nothing(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_a_twin_that_is_not_checked_out_is_skipped_not_failed(tmp_path, monkeypatch):
+    # Another machine has the marketplace without the tool repos. Failing there would
+    # block every commit for a contributor who cannot possibly fix it.
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/absent/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_no_public_tree_means_no_comparison(tmp_path):
+    root = tmp_path / "elsewhere" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+
+    assert RG.mirror_failures(root, set(RG.MIRRORED_SKILLS)) == []
+
+
+def test_every_mirrored_entry_names_a_real_marketplace_skill():
+    # A manifest key that no longer matches a skill dir would silently stop checking that
+    # pair - the exact rot this check exists to catch.
+    here = Path(RG.__file__).resolve().parent.parent / "skills"
+    missing = [name for name in RG.MIRRORED_SKILLS if not (here / name / "SKILL.md").is_file()]
+
+    assert missing == [], "MIRRORED_SKILLS names a skill that does not exist: %s" % missing

@@ -52,6 +52,28 @@ does not silently break it. These rules are enforced/encoded by `.gitattributes`
 When a learning here applies beyond this repo (it usually does), it also belongs in the shared
 `skill-writer` skill's "Bundled scripts and hooks: keep them cross-platform" section.
 
+## A skill that also ships from its own tool repo has a twin to keep in sync
+
+Eight skills exist twice: here, and in the repo of the tool they document (the map is
+`MIRRORED_SKILLS` in `hooks/repo-gate.py`). Both copies are installed by real users, so drift is
+not cosmetic - and it goes both ways. A marketplace edit that is never mirrored back leaves the
+tool repo's own installs a release behind; a repo edit that is never mirrored forward leaves this
+marketplace describing behaviour the tool no longer has. The second kind is the dangerous one: an
+absence claim that has gone stale ("it refuses to do X") does not merely fail to help, it steers an
+agent away from something that now works.
+
+Three differences are by convention and are never drift: the `name:` field, that same name echoed
+in the H1, and the tool repo's self-install blockquote (true there, nonsense here). Everything else
+must match.
+
+- The commit gate checks the twin of any mirrored skill the current change touches. Pre-existing
+  drift elsewhere does not block an unrelated commit.
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits all eight, changed or not, and
+  exits non-zero when any has drifted. This is local only: the twins are sibling repos that a CI
+  clone does not have, so CI cannot run it.
+- To fix drift, regenerate the stale side from the other, re-apply the three divergences, and bump
+  THAT repo's `plugin.json` - both copies ship, so both need a version the installer can see.
+
 ## Every shipped Python script needs sibling tests
 
 Any `.py` this plugin ships - a `skills/<skill>/` script OR a `hooks/` script - must have tests in a
