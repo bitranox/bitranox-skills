@@ -26,10 +26,15 @@ Checks:
   5. version-bump - HOOK MODE ONLY (maintainer pre-commit): if anything under plugins/
                     changed vs origin/master, plugin.json version must differ. Skipped in
                     CI: bumping is a merge/release decision, not a contributor's PR gate.
+  6. skill-mirrors - HOOK MODE ONLY: a skill that also ships from its own tool repo must
+                    match that twin apart from the documented divergences. Local only,
+                    because the twins are sibling repos that a CI clone does not have.
+                    Run `repo-gate.py --mirrors` to audit every pair, changed or not.
 
 Pure standard library; shells out to git and pytest via subprocess.
 """
 
+import difflib
 import json
 import os
 import re
@@ -505,6 +510,147 @@ def check_cso(root):
 
 
 
+#: Skills that ship from BOTH this marketplace and their own tool repo, mapped to the
+#: twin's path under the shared `public/` tree. The two copies must stay identical apart
+#: from the divergences below, and both directions drift: a marketplace edit that is never
+#: mirrored back leaves the tool repo's own installers a release behind, and a repo edit
+#: that is never mirrored forward leaves this marketplace describing behaviour the tool
+#: dropped. Measured 2026-07-30: the coding-python-network-probe mirror still told an agent
+#: that a default sweep refuses to run, two ipscout releases after it stopped doing that.
+MIRRORED_SKILLS = {
+    "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
+    "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",
+    "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
+    "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
+    "coding-python-send-mail": "libs/btx_lib_mail/skills/python-send-mail",
+    "compuse-vnc": "apps/utils/vnc-remote-control/skills/vnc-remote-control",
+    "devops-bmk": "apps/utils/bmk/skills/devops-bmk",
+    "infra-proxmox-bindsnap": "apps/pve-bindsnap/skills/proxmox-bindsnap",
+}
+
+#: The self-install note only the tool repo's copy carries: there it is true and useful,
+#: here it would tell a reader to add a marketplace they are already inside. Matched
+#: against a whole blockquote rather than one line, because it wraps over several and a
+#: line-at-a-time rule leaves the continuation behind and reports it as drift.
+_SELF_INSTALL_RX = re.compile(r"/plugin marketplace add|/plugin install", re.I)
+
+
+def _public_tree(root):
+    """Return the shared `public/` tree holding the tool repos, or None off this machine."""
+
+    for parent in Path(root).resolve().parents:
+        if parent.name == "public":
+            return parent
+    return None
+
+
+def normalise_mirror(text):
+    """Return the comparable body of a mirrored SKILL.md.
+
+    Three divergences are by convention, not drift, so they are erased rather than
+    reported: the `name:` field (each copy uses its own repo's skill name), the same name
+    echoed in the H1, and the tool repo's self-install blockquote. Everything else is
+    content, and content that differs between the copies is drift by definition.
+    """
+
+    source = text.splitlines()
+    lines = []
+    index = 0
+    while index < len(source):
+        line = source[index]
+        if line.startswith("> "):
+            end = index
+            while end < len(source) and source[end].startswith(">"):
+                end += 1
+            block = source[index:end]
+            index = end
+            if not _SELF_INSTALL_RX.search("\n".join(block)):
+                lines.extend(block)
+            continue
+        index += 1
+        if line.startswith("name:"):
+            lines.append("name: <per-repo>")
+        elif line.startswith("# "):
+            lines.append(re.sub(r"\s*\([^()]*\)\s*$", " (<per-repo>)", line))
+        else:
+            lines.append(line)
+    # A dropped blockquote leaves a blank line behind on the side that carried it.
+    joined = "\n".join(lines)
+    while "\n\n\n" in joined:
+        joined = joined.replace("\n\n\n", "\n\n")
+    return joined.strip() + "\n"
+
+
+def mirror_failures(root, names):
+    """Return a failure per mirrored skill in ``names`` whose twin has drifted."""
+
+    public = _public_tree(root)
+    if public is None:
+        return []
+    fails = []
+    for name in sorted(names):
+        relative = MIRRORED_SKILLS.get(name)
+        if relative is None:
+            continue
+        here = Path(root) / "plugins" / "bitranox" / "skills" / name / "SKILL.md"
+        twin = public / relative / "SKILL.md"
+        if not here.exists() or not twin.exists():
+            # The tool repo is not checked out on this machine, so there is nothing to
+            # compare against. Silence is right: the audit mode reports the skip.
+            continue
+        mine, theirs = normalise_mirror(here.read_text(encoding="utf-8")), normalise_mirror(twin.read_text(encoding="utf-8"))
+        if mine == theirs:
+            continue
+        sample = [line for line in difflib.unified_diff(theirs.splitlines(), mine.splitlines(), "twin", "marketplace", lineterm="", n=0) if line[:1] in "+-" and line[:3] not in ("---", "+++")]
+        fails.append(
+            "skills/%s has drifted from its twin at %s (%d differing lines). Regenerate the "
+            "stale side from the other, re-apply only the name/H1/self-install divergences, and "
+            "bump that repo's plugin.json. First lines:\n      %s"
+            % (name, relative, len(sample), "\n      ".join(sample[:6]))
+        )
+    return fails
+
+
+def check_skill_mirrors(root):
+    """Gate the mirrored twin of every skill this change touches.
+
+    Scoped to what changed, like the review and description checks: pre-existing drift in
+    a skill nobody is editing must not block an unrelated commit, and the maintainer has
+    ``--mirrors`` for the full sweep.
+    """
+
+    changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    touched = {m.group(1) for m in (_SKILL_MD_RX.match(p) for p in changed) if m}
+    return mirror_failures(root, touched & set(MIRRORED_SKILLS))
+
+
+def audit_mirrors(root):
+    """Print the state of every mirrored pair. Returns the number that have drifted."""
+
+    public = _public_tree(root)
+    if public is None:
+        print("no public/ tree above %s - nothing to compare" % root)
+        return 0
+    drifted = 0
+    for name in sorted(MIRRORED_SKILLS):
+        relative = MIRRORED_SKILLS[name]
+        twin = public / relative / "SKILL.md"
+        if not twin.exists():
+            print("SKIP    %-34s twin not checked out: %s" % (name, relative))
+            continue
+        fails = mirror_failures(root, {name})
+        if fails:
+            drifted += 1
+            print("DRIFT   %-34s %s" % (name, relative))
+            print("        " + fails[0].split("First lines:\n")[-1].strip()[:400])
+        else:
+            print("in sync %-34s %s" % (name, relative))
+    print("\n%d of %d mirrored pairs have drifted." % (drifted, len(MIRRORED_SKILLS)))
+    return drifted
+
+
 def run_checks(root, ci):
     failures = []
     failures += check_tests_exist(root)
@@ -523,6 +669,7 @@ def run_checks(root, ci):
     if not ci:
         failures += check_version_bumped(root)
         failures += check_skill_review(root)
+        failures += check_skill_mirrors(root)
     pytest_paths = [root] if ci else [root / "plugins" / "bitranox" / "hooks" / "tests"]
     failures += check_pytest(root, pytest_paths)
     return failures
@@ -543,13 +690,19 @@ def is_gated_command(command):
 
 def main():
     ci = "--ci" in sys.argv[1:]
+    mirrors = "--mirrors" in sys.argv[1:]
 
     root = repo_root()
     if root is None or not is_bitranox_skills(root):
-        if ci:
+        if ci or mirrors:
             print("repo-gate: not inside the bitranox-skills repo", file=sys.stderr)
             return 1
         return 0  # hook mode in some other repo: never interfere
+
+    if mirrors:
+        # The full sweep the commit gate deliberately does not do: it reports every pair,
+        # including the ones no current change touches.
+        return 1 if audit_mirrors(root) else 0
 
     if not ci:
         try:

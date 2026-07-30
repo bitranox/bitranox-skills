@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.107.0] - 2026-07-30
+
+### Added
+
+- **repo-gate: the mirrored-skill drift check.** Eight skills ship both here and from the repo of
+  the tool they document, and nothing compared the two copies - the coding-python-network-probe
+  mirror had gone a release stale and was telling agents a default sweep refuses to run. The commit
+  gate now checks the twin of any mirrored skill a change touches, and
+  `repo-gate.py --mirrors` audits all eight. The `name:` field, the name echoed in the H1, and the
+  tool repo's self-install blockquote are normalised away as conventional; anything else is
+  reported with the differing lines. Local only, since the twins are sibling repos a CI clone does
+  not have. Audit at the time of writing: six pairs in sync, two drifted
+  (`coding-python-new-public-library` description, `devops-bmk` body).
+
 ## [5.106.1] - 2026-07-30
 
 ### Fixed
