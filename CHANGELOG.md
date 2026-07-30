@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.106.1] - 2026-07-30
+
+### Fixed
+
+- **coding-python-network-probe: resynced with its ipscout twin.** The mirror still told an agent
+  that `arp_scan()` with no argument "refuses a sweep wider than 4096 addresses ... Pass a narrower
+  network", which ipscout stopped doing: a default sweep now covers the subnets that fit inside one
+  sweep's 4096-address budget and reports the ones it skipped. An absence claim like that does not
+  merely fail to help, it steers an agent away from a working default. Also adds the names a caller
+  has to write and could not find in it - `ScanMethod`, `NeighbourState`, `IPScoutSweepError`,
+  `SweepScope` - the `sweep_scope()` / `scope=` surface, the `skipped` field and bare-mode error
+  shape in the JSON section, and the exit-code sentence (a malformed command line exits 2).
+
 ## [5.99.3] - 2026-07-25
 
 ### Changed
