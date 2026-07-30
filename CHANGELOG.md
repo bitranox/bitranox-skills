@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.109.1] - 2026-07-30
+
+### Changed
+
+- **coding-python-layered-config reformatted to match what bmk produces.** The twin lives in a
+  bmk-managed repo whose gate runs a whole-tree markdown format, so it rewrites that skill's code
+  blocks on every run. Holding a different hand-formatting here would re-drift the pair after every
+  `make` in `lib_layered_config`; the mirror now carries the formatted form. Content is identical.
+
 ## [5.109.0] - 2026-07-30
 
 ### Added
