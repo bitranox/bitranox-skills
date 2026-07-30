@@ -1,44 +1,57 @@
-# skill-writer checklist - web-seo-crawl-indexing (2026-07-30, new skill seeded from one session)
+# skill-writer checklist - web-seo-crawl-indexing (2026-07-30, new skill, rescoped after a failed RED)
 
-New skill under the existing `web` category (`web-seo-...`; sub-prefixes are free-form, top-level
-`web` is in skill-taxonomy.json). Seeded with the crawl-versus-index distinction, crawl traps and
-sitemap shape; the SKILL.md declares the gaps in a STATUS block.
+New skill under the existing `web` top-level category (sub-prefixes are free-form; `web` is in
+skill-taxonomy.json).
 
-RED evidence came from a live session rather than dispatched pressure scenarios. The central rule is
-in the skill because getting it backwards was a live near-miss, not a hypothetical:
+## RED round 1 - FAILED, and the skill was rewritten because of it
 
-- An asset host was serving a URL space where the overwhelming majority of crawler fetches went to
-  paths carrying `<meta name="robots" content="noindex">`, measured by classifying the access log by
-  URL class and user agent. The indexable assets received a negligible share.
-- My first draft of the robots.txt would have blocked a legacy path that measurement then showed was
-  still receiving real human arrivals from a search engine. Blocking it would have frozen its index
-  entries instead of letting the existing `noindex` retire them cleanly. The measurement, not the
-  reasoning, caught it. That is why "measure before editing" and "check real arrivals, not just
-  crawler hits" are both in the skill.
-- A sitemap listing directory URLs was inherited from a predecessor site that served directory
-  listings; on a host without them every entry resolved to a 404, steering crawlers away from the
-  assets. Verified by requesting sampled URLs from it.
+The first draft was a fact sheet. Two sealed baseline subagents (sonnet, fictional `.test` hosts,
+no filesystem access, 0 tool calls each) got the deindexing scenario and the asset-host scenario
+WITHOUT the skill. Both answered correctly and unaided, and one exceeded the draft: it named that
+a blocked image URL makes a product feed fail validation and DISAPPROVES the listing rather than
+demoting it, and argued that robots.txt is structurally the wrong bandwidth tool because the
+crawlers that obey are the ones sending visitors while the scrapers driving cost ignore it. The
+draft had neither point.
+
+Conclusion drawn: fact-sheet framing earns nothing against model knowledge. Rewritten around the
+checks to run before editing robots.txt and the silent, delayed nature of every mistake in it.
+Both baseline insights folded in.
+
+## RED/GREEN round 2 - paired A/B on a non-leading scenario
+
+Round 1's scenarios framed the wrong answer as suspicious, inviting disagreement. Round 2 gave a
+realistic ops request with a deadline ("put a robots.txt on it that stops the crawling", 20
+minutes) and no hint that it was a bad idea. Same prompt to both arms.
+
+- **Baseline (no skill, 0 tool calls): SHIPPED A HARMFUL FILE.** It reasoned well on strategy
+  (robots.txt is voluntary, real lever is rate limiting) but shipped a wildcard `Disallow: /` with
+  a hand-rolled per-UA allowlist, which blocks the product images for any crawler it did not think
+  to enumerate. The file also contains a parse bug: a blank line inside the `anthropic-ai` group
+  terminates the record, leaving an orphaned `Disallow`. It never mentioned feed disapproval.
+- **With the skill (1 tool call, the Read): CORRECT.** Refused to ship a block, returned to ops
+  with the reason, named the disapproval consequence, separated the HTML-page decision from the
+  asset decision with the correct noindex-then-block ordering, and listed the specific log checks
+  to run first. It explicitly preferred reporting a no-op over shipping something that looks like
+  action.
+
+The difference is a shipped artifact that harms versus one that does not, so not a marginal
+effect. Evidence is n=1 per arm; recorded as such rather than generalised.
 
 - [x] Receipt held (skill_receipt.py start meta-skill-writer, this session)
-- [x] RED: the crawl-budget split, the live search arrivals, and the dead sitemap URLs were each
-      measured from access logs and HTTP status checks, not assumed
-- [x] GREEN: every observed failure has a section and a Common-mistakes row, including the one my
-      own first draft would have committed
-- [x] Verified against ground truth before writing (log classification and sampled HTTP statuses)
+- [x] RED round 1 run sealed and FAILED (baseline passed unaided) - skill rewritten, not shipped as-is
+- [x] Baseline findings folded in: feed disapproval, and robots.txt being the wrong lever for volume
+- [x] RED round 2 with a non-leading scenario reproduced the target failure (baseline blocked assets)
+- [x] GREEN round 2 verified against the working-tree version, not an installed copy
 - [x] CSO description: trigger-first "Use when", no workflow summary, third person, keyword tail
-      (robots.txt, Disallow, noindex, crawl budget, crawl trap, sitemap, deindex)
-- [x] Skill type identified: technique/reference. Self-contained SKILL.md, no bundled scripts, so
-      no `tests/` is owed
-- [x] Cross-references use skill names with no `@` links; no bare package-local doc paths
-- [x] Security scan: generic prose only. No secrets, hostnames, IPs, internal paths, private project
-      names, or real URLs from the originating environment
-- [x] No measured operational figures from the originating environment in the skill body
+- [x] Skill type: technique/procedure. Self-contained, no bundled scripts, so no `tests/` is owed
+- [x] Cross-references use skill names, no `@` links, no bare package-local doc paths
+- [x] Security scan: generic prose only; no secrets, hostnames, IPs, internal paths, project names
+- [x] No measured operational figures from the originating environment in the body
 - [x] Docs describe current state: no legacy or migration narrative
-- [x] Incompleteness declared in the body so a reader is not misled about coverage
+- [x] Incompleteness declared in the body
 
-NOT done, deliberately, and named in the STATUS block as the completion path: subagent baseline and
-pressure scenarios per the skill-writer Iron Law, and the remaining dimensions (canonical and
-hreflang, structured data, pagination and faceted navigation, sitemap generation and submission,
-Search Console workflow). `web-frontend-responsive-ux` still routes sitemap work to a
-`web-frontend-sitemap` name; repointing that row edits its SKILL.md and so owes its own review
-artifact, deferred to when these skills are completed.
+NOT done, named in the STATUS block: canonical and hreflang, structured data, pagination and
+faceted navigation, sitemap generation and submission, Search Console workflow. Testing is n=1 per
+arm on one scenario. Separately deferred: `web-frontend-responsive-ux` still routes sitemap work to
+a `web-frontend-sitemap` name, and repointing that row edits its SKILL.md so it owes its own review
+artifact.
