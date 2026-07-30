@@ -392,12 +392,17 @@ def add_contribution(proj, record, max_items=100):
     Deduped on (what, target) - re-noticing the same gap is not a second TODO. Stamped with `ts`.
     Best-effort: never raises."""
     if not isinstance(record, dict) or not record.get("what"):
-        return
+        return False
     try:
         cur = read_contributions(proj)
         key = (str(record.get("what")), str(record.get("target") or ""))
         if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
-            return
+            return False
+        # A DROPPED intent stays dropped. Without this the dedup key only spans the LIVE queue, so a
+        # later dream that re-notices a disproven gap silently re-queues it and every future dream
+        # re-evaluates it again.
+        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in read_rejected(proj)):
+            return False
         rec = dict(record)
         rec.setdefault("ts", time.time())
         cur.append(rec)
@@ -406,8 +411,9 @@ def add_contribution(proj, record, max_items=100):
         f = contrib_file(proj)
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+        return True
     except OSError:
-        pass
+        return False
 
 
 def drain_contributions(proj):
@@ -416,6 +422,66 @@ def drain_contributions(proj):
         contrib_file(proj).unlink()
     except OSError:
         pass
+
+
+# ---- rejected: a disproven or stale intent leaves the queue AND stays gone ---------------------
+# Draining is for what SHIPPED. An intent that turns out wrong (verified false) or stale (superseded)
+# must also leave, but deleting it alone is not enough: the add-dedup only spans the live queue, so
+# the next dream that re-notices the same gap re-queues it and it gets re-evaluated forever. The
+# tombstone is what makes a drop stick.
+
+def rejected_file(proj):
+    """Tombstones for contributions dropped as wrong or stale (never re-queued)."""
+    return _audit_dir() / (proj_key(proj) + ".contrib-rejected.jsonl")
+
+
+def read_rejected(proj):
+    """The dropped contributions for `proj`, oldest first. [] when none."""
+    out = []
+    try:
+        for ln in rejected_file(proj).read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("what"):
+                out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def drop_contribution(proj, index, reason="", max_items=200):
+    """Remove the 1-based `index` entry from the queue and tombstone it. Returns the dropped record.
+
+    Raises IndexError on an out-of-range index so a mistyped selector cannot silently delete the
+    wrong intent (or none, while reporting success)."""
+    cur = read_contributions(proj)
+    if not isinstance(index, int) or index < 1 or index > len(cur):
+        raise IndexError("no queued contribution at index %r (queue holds %d)" % (index, len(cur)))
+    rec = cur.pop(index - 1)
+    tomb = dict(rec)
+    tomb["reason"] = str(reason or "")
+    tomb["dropped_ts"] = time.time()
+    try:
+        f = contrib_file(proj)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if cur:
+            f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+        else:
+            f.unlink(missing_ok=True)
+        prev = read_rejected(proj)
+        prev.append(tomb)
+        if len(prev) > max_items:
+            prev = prev[-max_items:]
+        rf = rejected_file(proj)
+        rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return rec
 
 
 # ---- nap-owed: make the post-compaction consolidation non-optional ----------------------------
