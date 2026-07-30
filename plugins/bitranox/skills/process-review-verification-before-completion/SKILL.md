@@ -94,6 +94,9 @@ NO "Should pass now" / "Looks correct"
 OK Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
 NO "I've written a regression test" (without red-green verification)
 ```
+On the revert, the test must fail **with the bug's own symptom** - not an import error, a fixture
+blowing up, or a different assertion. A test that fails for an unrelated reason passes red-green
+while proving nothing about the bug.
 
 **Build:**
 ```

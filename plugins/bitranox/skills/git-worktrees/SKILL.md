@@ -143,20 +143,22 @@ Ready to implement <feature-name>
 
 ## Quick Reference
 
-| Situation                      | Action                                             |
-|--------------------------------|----------------------------------------------------|
-| Already in linked worktree     | Skip creation (Step 0)                             |
-| In a submodule                 | Treat as normal repo (Step 0 guard)                |
-| Native worktree tool available | Use it (Step 1a)                                   |
-| No native tool                 | Git worktree fallback (Step 1b)                    |
-| `.worktrees/` exists           | Use it (verify ignored)                            |
-| `worktrees/` exists            | Use it (verify ignored)                            |
-| Both exist                     | Use `.worktrees/`                                  |
-| Neither exists                 | Check instruction file, then default `.worktrees/` |
-| Directory not ignored          | Add to .gitignore + commit                         |
-| Permission error on create     | Sandbox fallback, work in place                    |
-| Tests fail during baseline     | Report failures + ask                              |
-| No package.json/Cargo.toml     | Skip dependency install                            |
+| Situation                      | Action                                                                                                                                                                                                                                                                                      |
+|--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Already in linked worktree     | Skip creation (Step 0)                                                                                                                                                                                                                                                                      |
+| In a submodule                 | Treat as normal repo (Step 0 guard)                                                                                                                                                                                                                                                         |
+| Native worktree tool available | Use it (Step 1a)                                                                                                                                                                                                                                                                            |
+| No native tool                 | Git worktree fallback (Step 1b)                                                                                                                                                                                                                                                             |
+| `.worktrees/` exists           | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
+| `worktrees/` exists            | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
+| Both exist                     | Use `.worktrees/`                                                                                                                                                                                                                                                                           |
+| Neither exists                 | Check instruction file, then default `.worktrees/`                                                                                                                                                                                                                                          |
+| Directory not ignored          | Add to .gitignore + commit                                                                                                                                                                                                                                                                  |
+| Permission error on create     | Sandbox fallback, work in place                                                                                                                                                                                                                                                             |
+| Tests fail during baseline     | Report failures + ask                                                                                                                                                                                                                                                                       |
+| No package.json/Cargo.toml     | Skip dependency install                                                                                                                                                                                                                                                                     |
+| Returning to an OLD worktree   | `git status --porcelain` FIRST - a long-lived worktree can hold an abandoned prior op's dirty state; `git stash push -u` it. Never `commit -a` over it.                                                                                                                                     |
+| Sharing a build cache dir      | Give each worktree its OWN `CARGO_TARGET_DIR` (or equivalent). One shared incremental cache across trees with different sources serializes builds on the target lock and can emit phantom errors that only a full clean fixes. Use a compiler cache (sccache) for cross-tree reuse instead. |
 
 ## Common Mistakes
 

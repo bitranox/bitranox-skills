@@ -161,6 +161,32 @@ FINDING - the feature is missing or the doc is wrong - not a red test left in th
 failing test is a broken gate, and a skipped one is a comment that rots. Report the gap, and write the
 test when the behavior lands.
 
+## A gate that only ever passed has not been shown to gate
+
+A regression/perf gate that compares each run ONLY against a committed baseline answers "did this
+move", never "is this right". A cell already broken when the baseline was seeded passes forever, and
+a slow bleed of sub-threshold regressions never trips it. Pair the relative check with an ABSOLUTE
+sanity bound (or a sibling/reference cell measured in the SAME run), declare a known-bad cell with a
+tracking id so it is reported rather than frozen in, and make a declared cell that RECOVERS fail too
+so a stale waiver cannot re-hide a fix.
+
+The same doubt applies to any gate: validate it against a KNOWN-BAD input once, so you have seen it
+go red. Otherwise "green for months" is equally consistent with "it stopped gating months ago".
+
+Two mechanics worth stating because they silently defeat a test that looks right:
+
+- **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
+  namespace and never reaches the consumer's already-bound name, so the test runs against the
+  original value and passes for the wrong reason. Patch at the CONSUMER (`setattr(consumer, "X")`)
+  or, better, inject - which is why this skill prefers a seam over patching in the first place.
+- **A correctness test cannot prove an INDEX is used.** Results rank correctly whether the store
+  used the index or full-scanned. Assert the plan (`EXPLAIN` shows an index scan, `list_indices` is
+  non-empty), or the check silently passes on an O(n) path.
+
+Prove a codec/serializer swap by SEMANTIC equivalence - decode the new output with the OLD decoder
+and compare the values - not by byte-equality, which fails on harmless ordering or padding changes
+and passes on a compatible-looking but wrong encoding.
+
 ## Quick checklist
 
 - [ ] Real dependency or an injected fake behind the real interface; patch only where you own no seam

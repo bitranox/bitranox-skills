@@ -256,3 +256,19 @@ export UV_INDEX_PRIVATE_PASSWORD=token
 5. When generating `pyproject.toml` configuration, cross-check with `03-project-config.md` and `10-configuration.md`.
 6. When suggesting commands, verify flags and options against the relevant doc before recommending them.
 7. For integration-specific questions (FastAPI, Jupyter, PyTorch, etc.), check `15-integrations.md` first - each integration has its own `##` section.
+
+## Gotcha: PEP 723 metadata is read from the HANDED file only
+
+`uv run <file>` parses the `# /// script` block of THAT file to build the environment, before
+execution. It does not follow imports. So a thin launcher (`uv run launcher.py` where `launcher.py`
+does `import report; report.main()`) builds the env from the launcher's own block - absent or
+different - and `report.py`'s declared dependencies are never installed. The import itself succeeds,
+then it dies at the first line that touches a declared dep, which points at the wrong file.
+
+Run the script that carries the metadata, or duplicate the block into the entry file. The same
+applies to any indirection - `runpy`, an `exec`, a wrapper that re-dispatches.
+
+Related, for a script SHIPPED with tests: a plain `pytest` imports your test module with the
+interpreter as-is and does NOT provision PEP 723 deps (only `uv run <script>` does), so a hard
+top-level third-party import passes under `uv run` and fails the gate on a clean runner. Guard it
+with a stdlib fallback and verify in a venv holding only pytest.
