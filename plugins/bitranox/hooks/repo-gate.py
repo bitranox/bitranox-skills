@@ -519,6 +519,7 @@ def check_cso(root):
 #: that a default sweep refuses to run, two ipscout releases after it stopped doing that.
 MIRRORED_SKILLS = {
     "coding-python-gitignore": "libs/igittigitt/skills/python-gitignore",
+    "coding-python-layered-config": "libs/lib_layered_config/skills/python-layered-config",
     "coding-python-network-probe": "libs/ipscout/skills/python-network-probe",
     "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
     "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
@@ -678,8 +679,46 @@ def audit_mirrors(root):
             print("        " + fails[0].split("First lines:\n")[-1].strip()[:400])
         else:
             print("in sync %-34s %s" % (name, relative))
+    for unlisted in unlisted_mirrors(root, public):
+        print("UNLISTED %-33s %s" % unlisted)
     print("\n%d of %d mirrored pairs have drifted." % (drifted, len(MIRRORED_SKILLS)))
     return drifted
+
+
+def _description(path):
+    """Return a SKILL.md's description line, collapsed to one line."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = re.search(r"^description:\s*(.+)$", text, re.M)
+    return " ".join(match.group(1).split()) if match else ""
+
+
+def unlisted_mirrors(root, public):
+    """Return (marketplace skill, repo path) pairs that look mirrored but are not listed.
+
+    A skill and its twin keep the same description by convention, so an exact match on
+    that line is a reliable tell. The manifest is hand-maintained and a missing entry is
+    invisible - it simply stops checking that pair - which is how
+    coding-python-layered-config went unchecked until a scan found it.
+    """
+    listed = {(public / rel).resolve() for rel in MIRRORED_SKILLS.values()}
+    catalog = {}
+    for skill in sorted((Path(root) / "plugins" / "bitranox" / "skills").glob("*/SKILL.md")):
+        description = _description(skill)
+        if description:
+            catalog.setdefault(description, skill.parent.name)
+
+    found = []
+    for pattern in ("*/*/skills/*/SKILL.md", "*/*/*/skills/*/SKILL.md"):
+        for twin in sorted(public.glob(pattern)):
+            if twin.parent.resolve() in listed or "bitranox-skills" in twin.parts:
+                continue
+            name = catalog.get(_description(twin))
+            if name:
+                found.append((name, str(twin.parent.relative_to(public))))
+    return found
 
 
 def run_checks(root, ci):

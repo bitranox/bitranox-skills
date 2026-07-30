@@ -54,8 +54,9 @@ When a learning here applies beyond this repo (it usually does), it also belongs
 
 ## A skill that also ships from its own tool repo has a twin to keep in sync
 
-Eight skills exist twice: here, and in the repo of the tool they document (the map is
-`MIRRORED_SKILLS` in `hooks/repo-gate.py`). Both copies are installed by real users, so drift is
+Nine skills exist twice: here, and in the repo of the tool they document (the map is
+`MIRRORED_SKILLS` in `hooks/repo-gate.py`; `--mirrors` also reports a twin the map does NOT list,
+which is how the ninth was found after going unchecked). Both copies are installed by real users, so drift is
 not cosmetic - and it goes both ways. A marketplace edit that is never mirrored back leaves the
 tool repo's own installs a release behind; a repo edit that is never mirrored forward leaves this
 marketplace describing behaviour the tool no longer has. The second kind is the dangerous one: an
