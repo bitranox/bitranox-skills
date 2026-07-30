@@ -658,6 +658,26 @@ modules = ["<pkg>.orders", "<pkg>.billing", "<pkg>.shipping"]
 
 Multi-context: add per-context layering + independence contracts. See `review-checklists.md`.
 
+**These contracts are `root_package`-scoped, so a THIRD-PARTY import into the domain is INVISIBLE to
+them.** `layers` and `independence` reason only about modules under `root_package`; `myapp.domain`
+importing `pydantic`, `sqlalchemy` or `httpx` violates nothing they can see, and `lint-imports`
+passes. A green run is therefore NOT evidence that the domain is dependency-free - the check most
+people believe they are making is the one it does not make. Add an explicit `forbidden` contract
+naming the third-party packages the domain must stay clear of:
+
+```toml
+[[tool.importlinter.contracts]]
+name = "Domain imports no frameworks"
+type = "forbidden"
+source_modules = ["<pkg>.domain"]
+forbidden_modules = ["pydantic", "sqlalchemy", "httpx", "fastapi"]
+```
+
+Note also that an `independence` contract needs 2+ modules to assert anything: listed with a single
+module it is vacuous and passes unconditionally. And none of these see a DYNAMIC import
+(`importlib.import_module`, a string-keyed plugin registry). Prove any contract bites by injecting a
+violation once and watching it go red.
+
 ## Refactoring Path (framework-centric -> layered architecture)
 
 1. Extract domain to `.../domain/`

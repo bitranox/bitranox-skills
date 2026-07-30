@@ -51,6 +51,13 @@ For the modern Python pick behind each, see `bitranox:coding-python-use-modern-l
   DoS vector - see `bitranox:coding-input-sanitization`). Check disk / CPU / memory headroom before
   a heavy step (`shutil.disk_usage`, `os.cpu_count`, load) rather than assuming it is there; stream
   or paginate large data instead of materializing it whole.
+- **ISOLATE each item in a batch of INDEPENDENT tasks.** A loop over N unrelated units (sync 38
+  apps, poll 20 hosts) must not let one failure end the run. `set -euo pipefail` around such a loop
+  does exactly that: the FIRST failing unit aborts the script, every later unit silently never runs,
+  and the log shows no error because nothing errored - it stopped. The symptom is "sometimes only
+  some of them updated", which reads like a flaky dependency and is not. Catch per unit, record the
+  failure with the unit's name, keep going, and exit non-zero at the END with a tally. Reserve
+  fail-fast for a genuine DEPENDENCY chain, where later steps are meaningless once one fails.
 
 ## Common mistakes
 
