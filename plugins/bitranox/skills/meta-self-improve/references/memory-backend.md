@@ -154,6 +154,19 @@ ARCHIVES the source body - one live copy, old one recoverable. Same-tree it just
 `move` (the body already sits at the right anchor). It refuses a divergent slug in the target tree
 (slugs are tree-unique, so landing on one would destroy a different fact) and refuses when the
 fact leaving the tree would dangle any inbound `[[ref]]` left behind (`--force` warns instead).
+
+**`move` is CHAIN-ONLY, and it guards only INBOUND refs - promoting a fact strands its OWN outbound
+refs.** It walks the altitude chain, so it accepts ancestor <-> descendant only and REFUSES a
+SIBLING move (`sibling levels - a move follows the altitude chain`) as well as a cross-tree one; a
+fact that belongs under a sibling subtree cannot be relocated there at all, which is a placement
+finding to report, not a move to retry. And its ref guard is one-directional: it refuses a DOWN-move
+that would dangle refs pointing AT the fact, but never checks the refs the fact itself MAKES. So
+lifting a fact to a common ancestor silently strands every `[[ref]]` it makes to facts left below
+(measured: a crosstree promotion round took a tree from 2 to 14 `--check-tree` problems). Before
+promoting, read the body's `[[refs]]`: lift the genuinely-shared targets too, or demote the
+irreducibly-local ones to plain prose. Chasing it by lifting targets alone cascades - each lifted
+target drags its own refs up with it.
+
 `heal` runs every session (skip-fast when healthy), is
 CHAIN-scoped and normalizes drifted grammar only; a pointer whose body is missing is REPORTED, never
 fabricated - it does NOT detect cross-sibling duplicate pointers, which is `--check-tree`'s job.

@@ -197,6 +197,17 @@ visible", that is JSON mode succeeding -- add `--human` to watch it work.
 Some pipeline stages call external tools (git, pwsh, shellcheck, shfmt, bashate, PSScriptAnalyzer).
 If a run complains one is missing:
 
+**The `.sh` shell-lint gate's settings (know these before "fixing" a diff).** bmk runs `shfmt -i 4 -ci`
+and `bashate --max-line-length 120`. Both matter: matching shfmt's indent but omitting `-ci` (indent
+switch cases) still yields a rejected diff, and `bashate` reads NO config file - not `pyproject.toml`,
+not `.bashaterc` - so without the explicit flag it falls back to its 79-char default and flags lines
+the project considers fine. Reformatting to your local defaults instead of these values is the usual
+cause of "passes locally, fails the gate".
+
+Before bmk 3.13.2 the gate's file discovery also descended into a NESTED git worktree and linted
+another branch's checkout as part of yours. The tell is a lint error naming a path you do not
+recognise; upgrade, or move the nested checkout outside the tree.
+
 ```bash
 make ensure                 # install everything missing for this OS
 bmk ensure --dry-run        # just report what would be installed
