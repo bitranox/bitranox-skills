@@ -930,6 +930,22 @@
   "strict-transport-security",
   "hsts"
  ],
+ "web-frontend-pagespeed": [
+  "asset",
+  "served",
+  "wrong",
+  "caching",
+  "compression",
+  "fixed-url",
+  "file",
+  "stuck",
+  "stale",
+  "behind",
+  "long",
+  "max-age",
+  "bundle",
+  "refetched"
+ ],
  "web-frontend-responsive-ux": [
   "page",
   "work",
@@ -945,6 +961,22 @@
   "fitting",
   "vertically",
   "phone"
+ ],
+ "web-seo-crawl-indexing": [
+  "deciding",
+  "crawlers",
+  "fetch",
+  "index",
+  "writing",
+  "changing",
+  "robots.txt",
+  "choosing",
+  "between",
+  "disallow",
+  "noindex",
+  "page",
+  "stays",
+  "search"
  ],
  "write-humanize-de": [
   "editing",
