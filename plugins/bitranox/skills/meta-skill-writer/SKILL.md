@@ -518,6 +518,57 @@ Choose most relevant language:
 
 You're good at porting - one great example is enough.
 
+### An example from a real scenario is not a real address
+
+"From a real scenario" means the SHAPE is real, never that the values are. A skill ships to every
+install and to a public repo, so an address, MAC, hostname, user or path copied out of the machine
+you developed on is published with it - and it reads as authoritative, so readers paste it back.
+Substitute the reserved documentation values, which look real and name nothing:
+
+| For               | Use                                                 | Reserved by |
+|-------------------|-----------------------------------------------------|-------------|
+| IPv4              | `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` | RFC 5737    |
+| IPv6              | `2001:db8::/32`                                     | RFC 3849    |
+| MAC               | `00:00:5e:00:53:00` .. `:ff`                        | RFC 7042    |
+| IPv6 link-local   | the EUI-64 form of one, `fe80::200:5eff:fe00:53af`  | (derived)   |
+| Hostname / domain | `example.com`, `host.example`                       | RFC 2606    |
+| Path              | `/path/to/project`, `~/project`                     | -           |
+
+Vendored upstream documentation keeps its own examples - rewriting them would make the copy
+disagree with its source. This rule is about values YOU add.
+
+### Write the skill and its artifacts in the present tense, not as a story
+
+A skill says what is true now. A review artifact says what was verified. Neither is a session log,
+and the reader has neither your transcript nor your machine.
+
+**Keep out of both:** what the operator instructed, permitted or changed their mind about; which
+tool or agent you reached for and when; scratch and temp paths; how the skill looked before this
+edit; who caught what. **Keep in the artifact:** the claim tested, how it was tested, and the
+outcome - a verbatim line of agent output earns its place when it IS the evidence, a paragraph of
+narrative around it does not.
+
+The trap is that provenance feels like rigour while you are writing it, because it is what you
+just lived through. Test it by reading a line back and asking what a reader DOES differently
+knowing it. "The operator lifted a restriction mid-session" changes nothing for anyone; "a
+subagent on the old text wrote the call the library refuses" is the test result.
+
+<Bad>
+```markdown
+- [x] Subagent scenarios run, both arms, after the operator lifted the standing no-dispatch
+      instruction mid-session. Verified with a script at /tmp/scratch-9f2/verify.py on the dev
+      box, whose LAN address is 192.0.2.139.
+```
+</Bad>
+
+<Good>
+```markdown
+- [x] RED: a subagent given the pre-change text wrote `ping(entry.ip)`, which the library refuses.
+      GREEN: given the new text, `ping(entry.scoped)`.
+- [x] Every code block executed against the real library, not reviewed.
+```
+</Good>
+
 ## File Organization
 
 ### Self-Contained Skill
@@ -1065,6 +1116,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Quick reference table
 - [ ] Common mistakes section
 - [ ] No narrative storytelling
+- [ ] No session narrative or private provenance in the skill OR its review artifact (operator instructions, which tool you reached for and when, scratch/temp paths, how it looked before the edit) - see "Write the skill and its artifacts in the present tense"
+- [ ] Every address, MAC, hostname and path YOU added is a reserved documentation value, not one from your machine - see "An example from a real scenario is not a real address". Verify: `grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|([0-9a-f]{2}:){5}[0-9a-f]{2}|/home/|/Users/|/tmp/' SKILL.md`
 - [ ] Supporting files only for tools or heavy reference
 - [ ] Hub skills: routing table with topic descriptions for each supporting file
 - [ ] Hub skills: "Use the Read tool..." instruction in body

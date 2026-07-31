@@ -1,6 +1,6 @@
 ---
 name: coding-python-network-probe
-description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, find a MAC address or the host holding one, read the neighbour/ARP cache, look up the default gateway or a route, inspect local interfaces and subnets, send a wake-on-LAN packet, find the path MTU, or watch a DHCP handshake to learn the address of a machine that has just been started and does not have one yet - especially when it must run as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and must not shell out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, or subprocess around a system network command, or for tcpdump/tshark to watch a VM or container boot and find its address.
+description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, find a MAC address or the host holding one, read the neighbour/ARP cache, look up the default gateway or a route, inspect local interfaces and subnets, reach an IPv6 link-local (fe80::) address that needs its interface zone, send a wake-on-LAN packet, find the path MTU, or watch a DHCP handshake to learn the address of a machine that has just been started and does not have one yet - especially when it must run as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and must not shell out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, or subprocess around a system network command, or for tcpdump/tshark to watch a VM or container boot and find its address.
 ---
 
 # Network probing from Python, unprivileged on the default paths
@@ -32,32 +32,32 @@ Python 3.10+.
 
 ## Quick reference
 
-| Task                           | Call                                                                 |
-|--------------------------------|----------------------------------------------------------------------|
-| Ping one host                  | `ping("1.1.1.1", 4)`                                                 |
-| Sweep many, concurrently       | `ping_many(hosts, concurrency=64)`                                   |
-| Is it up, by any means         | `is_reachable(host)`                                                 |
-| Path to a host                 | `traceroute(host)`                                                   |
-| Scan ports                     | `scan_ports(host, "22,80,8000-8100")`                                |
-| MAC of an address              | `lookup_mac(ip)`, `get_mac_address(ip)`                              |
-| Which host holds a MAC         | `find_ip_by_mac(mac, scan=True)`                                     |
-| Neighbour / ARP cache          | `neighbours()`, `arp_scan(network)`; `entry.state` is a `NeighbourState` |
-| What a sweep will cover        | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`  |
-| Sweep exactly that plan        | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)` |
-| Default route, any route       | `default_gateway()`, `query_route(ip)`                               |
-| Interfaces and subnets         | `local_interfaces()`, `subnet_info()`, `local_networks()`            |
-| Wake a sleeping host           | `wake_on_lan(mac)`                                                   |
-| Address of a machine just started | `observe_dhcp(mac, interface="br0")` -> every offer, in order      |
-| ... startable before you start it | `with observe_dhcp_session(mac, interface="br0") as s:`            |
-| ... and just the one that answers | `observe_dhcp_first_reachable(mac, interface="br0")`               |
-| Largest unfragmented packet    | `path_mtu(host)`                                                     |
-| What can this host do          | `icmp_available()`, `dhcp_capture_available()`                       |
-| Package metadata               | `print_info()`                                                       |
-| Name to address, and back      | `resolve(name)`, `reverse_dns(ip)`                                   |
-| Compare two hardware addresses | `normalise_mac(written)`                                             |
-| Parse a port specification     | `parse_ports("22,80,8000-8100")`                                     |
-| Trace over your own transport  | `trace_path(transport, ...)`, `atrace_path(...)`                     |
-| async equivalents              | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports` |
+| Task                              | Call                                                                     |
+|-----------------------------------|--------------------------------------------------------------------------|
+| Ping one host                     | `ping("1.1.1.1", 4)`                                                     |
+| Sweep many, concurrently          | `ping_many(hosts, concurrency=64)`                                       |
+| Is it up, by any means            | `is_reachable(host)`                                                     |
+| Path to a host                    | `traceroute(host)`                                                       |
+| Scan ports                        | `scan_ports(host, "22,80,8000-8100")`                                    |
+| MAC of an address                 | `lookup_mac(ip)`, `get_mac_address(ip)`                                  |
+| Which host holds a MAC            | `find_ip_by_mac(mac, scan=True)`                                         |
+| Neighbour / ARP cache             | `neighbours()`, `arp_scan(network)`; `entry.state` is a `NeighbourState` |
+| What a sweep will cover           | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`      |
+| Sweep exactly that plan           | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)`     |
+| Default route, any route          | `default_gateway()`, `query_route(ip)`                                   |
+| Interfaces and subnets            | `local_interfaces()`, `subnet_info()`, `local_networks()`                |
+| Wake a sleeping host              | `wake_on_lan(mac)`                                                       |
+| Address of a machine just started | `observe_dhcp(mac, interface="br0")` -> every offer, in order            |
+| ... startable before you start it | `with observe_dhcp_session(mac, interface="br0") as s:`                  |
+| ... and just the one that answers | `observe_dhcp_first_reachable(mac, interface="br0")`                     |
+| Largest unfragmented packet       | `path_mtu(host)`                                                         |
+| What can this host do             | `icmp_available()`, `dhcp_capture_available()`                           |
+| Package metadata                  | `print_info()`                                                           |
+| Name to address, and back         | `resolve(name)`, `reverse_dns(ip)`                                       |
+| Compare two hardware addresses    | `normalise_mac(written)`                                                 |
+| Parse a port specification        | `parse_ports("22,80,8000-8100")`                                         |
+| Trace over your own transport     | `trace_path(transport, ...)`, `atrace_path(...)`                         |
+| async equivalents                 | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports`     |
 
 ```python
 import ipscout
@@ -88,7 +88,7 @@ wake          observe-dhcp  capabilities  info
 ipscout ping 1.1.1.1 -c 4
 ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
 ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
-ipscout find-ip dc:b2:2f:44:34:59 --scan
+ipscout find-ip 00:00:5e:00:53:af --scan
 ipscout arp-scan --network 192.168.1.0/24
 ipscout observe-dhcp 02:00:5e:10:00:00 --interface br0   # needs root
 ipscout capabilities                      # what this host can actually do
@@ -136,10 +136,69 @@ ipscout.get_mac_address("8.8.8.8")  # None: refuses to pass off the gateway's
 There is also no protocol that asks "who has this MAC" - RARP is dead. So
 `find_ip_by_mac(mac, scan=True)` sweeps and then reads the cache. It returns a
 **list**: one hardware address legitimately holds several addresses, commonly
-an IPv4 and an IPv6 link-local on the same NIC.
+an IPv4 and an IPv6 link-local on the same NIC. Each address is listed once.
 
 `network=` and `scope=` apply only with `scan=True`, and are refused without it
 rather than ignored - without a sweep there is only the cache to search.
+
+## One MAC can carry several interfaces, and one address several machines
+
+Both directions of that mapping are many-to-one, and code that assumes either
+is one-to-one fails silently rather than loudly.
+
+**One hardware address, several interfaces.** A MANA NIC presents the synthetic
+adapter and its VF under the same address, so a MAC-to-one-interface map drops
+whichever it sees second and an index comparison ends up comparing against a
+list. Nothing here keeps such a map: `local_interfaces()` is keyed by interface
+name and every record carries its own `mac`, so both appear and you decide per
+interface by its own address. The neighbour cache holds an entry per interface
+for the same reason, which is why `find_ip_by_mac` lists each address once
+instead of once per entry.
+
+**One address, several machines.** An address is only unique per link: a
+link-local address names a different machine on each interface, and a
+multi-homed host can hold the same address on two of them. So `lookup_mac`
+answers from the entry learned on the interface the frame would actually leave
+by, and the `MacLookup` it returns carries that interface - the answer says
+which link it is about rather than leaving you to guess.
+
+### Writing a link-local address: name the interface, by index
+
+A `fe80::` address needs the zone that RFC 4007 writes after a `%`, and
+**every call takes it**: `ping`, `is_reachable`, `scan_ports`, `traceroute`,
+`lookup_mac`, `query_route`. Without one there is no link to send on, so it is
+refused by name rather than reported as an unreachable host.
+
+```python
+interface = next(i for i in ipscout.local_interfaces() if i.name == "eth0")
+ipscout.ping(f"fe80::200:5eff:fe00:5310%{interface.index}")
+```
+
+Use `interface.index`, not `interface.name`. The index is the one spelling
+that works on every platform: **Windows reports a friendly name here**
+(`Ethernet 4`) that neither `getaddrinfo` nor `if_nametoindex` recognises, both
+of which speak a different namespace (`ethernet_32775`). An interface name as a
+zone fails resolution outright there - measured on a real Windows host. The
+names in `neighbours()` and `query_route()` come from that second namespace and
+do work as zones, but only the index is portable.
+
+**Join the zone yourself only when you started from an interface.** What a
+lookup hands back already carries it: a cache entry offers `scoped`, and
+`find_ip_by_mac` returns that form, so an answer goes straight back in.
+
+```python
+entry = ipscout.neighbours()[0]
+entry.ip  # 'fe80::200:5eff:fe00:53af'  - no link, so no probe accepts it
+entry.scoped  # 'fe80::200:5eff:fe00:53af%eth0'
+ipscout.ping(entry.scoped)
+
+ipscout.ping(ipscout.find_ip_by_mac("00:00:5e:00:53:af")[0])
+```
+
+Do not add a zone to one of those - `f"{found}%{interface.index}"` builds
+`fe80::1%eth0%2`, which is refused. `scoped` joins the interface only where it
+means something, an IPv6 link-local address, and is the plain address for
+everything else, so an IPv4 answer is unchanged.
 
 ## Finding a machine that has not got an address yet
 
@@ -199,12 +258,12 @@ and is refused by name rather than silently returning nothing.
 Everything above is unprivileged. These are not, and each raises
 `IPScoutPermissionError` naming the exact remedy rather than degrading:
 
-| Operation                     | Needs                                                                                                             |
-|-------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| Operation                                | Needs                                                                                                             |
+|------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
 | `scan_ports(..., method=ScanMethod.SYN)` | root / `CAP_NET_RAW`. Unavailable on Windows at any privilege level: raw TCP sends have been blocked since XP SP2 |
-| `lookup_mac(ip, active=True)` | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator    |
-| Traceroute on macOS           | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all                                   |
-| `observe_dhcp(...)` and its session | root / `CAP_NET_RAW` on Linux, root on macOS (`/dev/bpf`), Administrator on Windows (`SIO_RCVALL`, no driver) |
+| `lookup_mac(ip, active=True)`            | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator    |
+| Traceroute on macOS                      | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all                                   |
+| `observe_dhcp(...)` and its session      | root / `CAP_NET_RAW` on Linux, root on macOS (`/dev/bpf`), Administrator on Windows (`SIO_RCVALL`, no driver)     |
 
 Two rules these follow, worth relying on:
 
