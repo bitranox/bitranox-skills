@@ -441,8 +441,11 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
             continue
         if not dry_run:
             # add with no body keeps the existing central body; Fix A re-adopts the dangling slug.
+            # allow_over_cap_hook: a rehome MOVES a stored hook verbatim, so a legacy over-cap one
+            # must travel with its fact rather than block the move.
             ME.add_or_update_entry(to_level, title=slug.replace("-", " "),
-                                   hook=ME._body_description(text), slug=slug)
+                                   hook=ME._body_description(text), slug=slug,
+                                   allow_over_cap_hook=True)
         done.append(slug)
     return done
 

@@ -147,7 +147,8 @@ Compose the entry per the specs in references/memory-backend.md:
   self-sufficient (keep names/paths/flags/numbers in it). A trigger-less hook never fires during
   reasoning; the engine warns on one. Aim under the 350-char SOFT cap, but a complete trigger-first
   hook may run up to the 500-char HARD cap - never drop load-bearing detail just to silence the
-  advisory soft-cap warning.
+  advisory soft-cap warning. Past 500 the engine REFUSES the add (exit 1, nothing written): rewrite
+  the hook to the one directive that fires, and let the body carry the rest.
 - **Body: framed prose with reasoning.** The fact, then `**Why:**` and `**How to apply:**` lines
   (the engine adds the frontmatter frame).
 
@@ -252,8 +253,9 @@ scaffolding when the goal is met.
 - [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
 - [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
 - [ ] Every hook trigger-first ("When <situation>, <directive>.") and self-sufficient. The 350-char
-      soft-cap warning is advisory - acceptable; only the 500-char HARD cap (truncation) must be
-      avoided. Never trim a complete hook just to silence the soft-cap warning.
+      soft-cap warning is advisory - acceptable; the 500-char HARD cap is a refusal, so an add that
+      exits 1 needs the hook rewritten (surplus detail into the body), not the fact abandoned. Never
+      trim a complete hook just to silence the soft-cap warning.
 - [ ] Every body carries the fact plus **Why:** and **How to apply:**.
 - [ ] Everything written at ONE PROJECT level - the level of the fact's SUBJECT (the cwd unless the
       routing evidence says the learning is about a repo you edited elsewhere); never an ancestor,

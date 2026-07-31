@@ -54,9 +54,14 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
   unprompted mid-task body read in 100% of runs; a trigger-less hook never fires):
   `When <situation>, <directive>.` - directive second person, 1-3 complete sentences. Soft cap 350
   chars (`add` warns past it - advisory only, never a reason to trim; the missing-trigger warning is
-  the one that matters). The HARD cap is 500 chars (`cap_hook` word-boundary-truncates past it). The
-  hook must stay self-sufficient: keep the load-bearing names, paths, flags, and numbers in it, even
-  if that pushes it past the soft cap (but under the 500 hard cap).
+  the one that matters). The HARD cap is 500 chars and `add` REFUSES a longer hook rather than
+  truncating it, because every pointer line is always-loaded context and a silently cut one still
+  reads like a complete instruction. The refusal is checked BEFORE the lock, so it is atomic: the
+  CLI prints `! refused:` and exits 1, no body file and no pointer line are written, and on an
+  update the existing entry keeps its old hook. Nothing needs cleaning up - rewrite the hook, move
+  the surplus detail into the body, and re-run `add`; do not delete detail to fit. The hook must
+  stay self-sufficient: keep the load-bearing names, paths, flags, and numbers in it, even if that
+  pushes it past the soft cap.
 - **The body is FRAMED as a native memory entry** (probe-verified ~5x application lift over bare
   prose - the model discounts bodies that do not look like genuine memory entries). The engine
   frames automatically; write the prose with the reasoning sections:
