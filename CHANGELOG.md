@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.116.0] - 2026-07-31
+
+### Added
+
+- **infra-storage-check-zpools: install, configure and operate `check_zpools`.** Covers monitoring
+  ZFS pool health, capacity and errors, running scrubs, email alerting with deduplication, and the
+  systemd daemon - from a cron entry, a script driving `--format json`, or as a Python library.
+  Mirrored from the tool repo (`apps/utils/check_zpools`), which is now its own single-plugin
+  marketplace. Written because the alternative agents reach for is scraping `zpool status` text and
+  wrapping a scrub in a sleep loop with a hard timeout; that timeout is exactly the defect the
+  package was built to remove, and it fires as a false alarm on any pool slower than the guess.
+
 ## [5.115.1] - 2026-07-31
 
 ### Changed
