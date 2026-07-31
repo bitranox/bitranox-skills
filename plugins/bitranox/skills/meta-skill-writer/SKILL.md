@@ -1027,9 +1027,44 @@ Task tool call:
 
 Agent should now comply. If agent still fails: skill is unclear or incomplete - revise and re-test.
 
+**Require a `Skill gaps` section from every test subagent, RED and GREEN.** End each dispatch
+prompt with:
+
+```
+End your reply with a section headed "Skill gaps": what you could not turn into a concrete
+action, what you had to guess, and anywhere the text was silent or said two different things.
+```
+
+Compliance is the weakest thing a GREEN run tells you. An agent that followed the new text
+successfully may have guessed at three other things on the way, and it will not mention them
+unless asked - so a GREEN with nothing reported is indistinguishable from a GREEN that was never
+asked. This matters most for technique and reference skills, whose dominant failure is not a
+violated rule but a SILENT or SELF-CONTRADICTORY one.
+
+Ask for the evidence the run produces, never its verdict. "No problems found" is cheap to assert
+without looking, so a required success statement converts a silent miss into a confident
+all-clear. Require the concrete artifact instead: the quoted line it acted on, the command it
+actually ran, the question it could not answer from the text.
+
 ### REFACTOR: Close Loopholes
 
 Agent found new rationalization? Add explicit counter. Re-test until bulletproof.
+
+**GREEN's gaps list is REFACTOR input, not a pass.** A GREEN that closes every RED gap routinely
+opens new ones, and the edit itself is what opens them: the new rule now sits beside older text
+written for the old behaviour, and the two disagree. Work the list before you ship - a gap GREEN
+reported is a gap that reached a reader.
+
+**Where the loop stops:** every gap on the list is either CLOSED in the text or DECLINED in the
+review artifact with a reason (out of scope, owned by another skill, judgement the skill should
+leave open). A surviving gap is fine; a surviving gap nobody decided about is not, so the exit
+condition is an empty undecided list, never an empty list. Re-test only the questions your fix
+touched, not the whole skill - a full re-run costs a cycle and answers nothing you changed.
+
+**Verify each fix by quote-back.** Re-ask the contested question and require the answer to be a
+DIRECT QUOTE of the governing text, or the single word NONE. A paraphrase proves the model can
+reason to the answer; only a quote proves the skill says it. NONE means you have not written the
+rule yet, however clear it felt while editing.
 
 **REQUIRED REFERENCE:** See testing-skills-with-subagents.md for the complete testing methodology:
 - How to write pressure scenarios
@@ -1105,6 +1140,10 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Run scenarios WITH skill - verify agents now comply
 
 **REFACTOR Phase - Close Loopholes:**
+- [ ] Every RED and GREEN dispatch asked for a `Skill gaps` section, and each reply's list is
+      recorded - a GREEN that reported nothing because it was never asked is not a pass
+- [ ] Every gap GREEN reported is closed or explicitly declined with a reason
+- [ ] Each fix verified by quote-back (a direct quote of the governing text, or NONE)
 - [ ] Identify NEW rationalizations from testing
 - [ ] Add explicit counters (if discipline skill)
 - [ ] Build rationalization table from all test iterations
