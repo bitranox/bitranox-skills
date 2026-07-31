@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.116.2] - 2026-07-31
+
+### Fixed
+
+- **infra-storage-check-zpools: corrected the `uvx @latest` claim.** Measured on a real host
+  right after a release - the first `@latest` call still resolved the previous version and a
+  call seconds later got the new one, because uv caches index metadata. "Re-resolves on every
+  invocation" would have had a reader conclude a release is live instantly.
+
 ## [5.116.1] - 2026-07-31
 
 ### Fixed
