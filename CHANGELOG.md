@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.121.0] - 2026-08-01
+
+### Added
+
+- **meta-skill-writer: every test dispatch must ask its subagent for a `Skill gaps` section, and
+  GREEN's list is REFACTOR input rather than a pass.** Compliance is the weakest thing a GREEN run
+  reports: an agent that followed the new text may have guessed at three other things on the way
+  and will not mention them unless asked, so a GREEN with nothing reported is indistinguishable
+  from a GREEN that was never asked. This is the dominant failure for technique and reference
+  skills, whose problem is rarely a violated rule and usually a silent or self-contradictory one.
+  The paired rule is to require the evidence a run produces rather than its verdict - a mandated
+  "no problems found" turns a silent miss into a confident all-clear.
+- **A stopping condition for the REFACTOR loop, and quote-back verification.** Every reported gap
+  is closed in the text or declined in the review artifact with a reason, so the exit condition is
+  an empty UNDECIDED list rather than an empty list; a fix re-tests only the questions it touched.
+  Each fix is verified by re-asking the contested question and requiring a direct quote of the
+  governing text, or the word NONE - a paraphrase proves the model can reason to the answer, only
+  a quote proves the skill says it.
+
 ## [5.120.0] - 2026-07-31
 
 ### Changed
