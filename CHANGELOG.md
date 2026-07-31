@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.123.0] - 2026-08-01
+
+### Changed
+
+- **meta-skill-writer: baseline contamination arrives by two routes, and the documented fix closed
+  only one.** The existing guidance covered the agent EXPLORING its way to the answer and
+  prescribed a scratch dir outside the repo. That does nothing about the second route: a setup that
+  injects retrieved context per prompt - a memory or recall hook, a RAG layer, an auto-loaded rules
+  file - hands the rule under test to the baseline agent wherever it runs, because the injection is
+  keyed to the PROMPT rather than the directory. The RED then passes on knowledge the skill never
+  taught, silently, and the author reads a correct answer as proof there is no gap. The scratch-dir
+  fix is now marked as closing route 1 only.
+- **The tell is a citation you cannot find**, and it has two explanations that both void the
+  baseline: grep the quote across the rules and memory corpus, and if it is there the environment
+  injected it, if it is nowhere the model fabricated it. A fabricated rule that happens to match the
+  author's intuition is not proof the gap is absent. Isolation is ranked, including that blanket
+  switches which disable hooks and plugins wholesale (`--bare`, `CLAUDE_CONFIG_DIR`) do isolate it
+  and take authentication with them, so neither actually runs. A baseline that cannot be isolated is
+  recorded as not-evidence rather than counted as a pass.
+
 ## [5.122.0] - 2026-08-01
 
 ### Added

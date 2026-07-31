@@ -54,13 +54,47 @@ This is identical to TDD's "write failing test first" - you MUST see what agents
 - [ ] **Identify patterns** - which excuses appear repeatedly?
 - [ ] **Note effective pressures** - which scenarios trigger violations?
 
-**Watch for baseline contamination (tool/library-usage skills).** When the skill teaches how to USE
-a tool or library, a baseline subagent whose cwd is that tool's own repo will explore the files,
-discover the tool, and use it - so the "clean baseline" shows the skill's target behavior for the
-wrong reason, and RED falsely looks like GREEN. The baseline must reflect what an agent does WITHOUT
-knowing the tool: run it with neutral framing ("do not read or explore files or repos; answer from
-what you already know") or from a scratch dir outside the tool's repo. Confirm the baseline used the
-raw fallback (e.g. shelled out to `pwsh` / `Get-*`, hand-rolled the API) before trusting it.
+**Watch for baseline contamination - it arrives by two routes, and the obvious fix closes only one.**
+
+**Route 1, the agent GOES and gets it (tool/library-usage skills).** A baseline subagent whose cwd
+is the tool's own repo will explore the files, discover the tool, and use it - so the "clean
+baseline" shows the skill's target behavior for the wrong reason, and RED falsely looks like GREEN.
+Close it with neutral framing ("do not read or explore files or repos; answer from what you already
+know") or a scratch dir outside the tool's repo - which closes THIS route ONLY, never route 2.
+Confirm the baseline used the raw fallback (e.g. shelled out to `pwsh` / `Get-*`, hand-rolled the
+API) before trusting it.
+
+**Route 2, the environment BRINGS it, and a scratch dir does not help.** If your setup injects
+retrieved context per prompt - a memory or recall hook, a RAG layer, an auto-loaded rules file -
+then once the rule you are testing exists in that corpus, it is handed to the baseline agent
+wherever it runs. A scratch dir with no project files above it changes nothing, because the
+injection is keyed to the PROMPT, not the directory. The RED then passes on knowledge the skill
+never taught, and it passes silently: you see a correct answer and conclude there is no gap.
+
+The tell is a CITATION YOU CANNOT FIND. The reply quotes a sentence and attributes it to the file
+you supplied, and the sentence is not in that file - the model presents injected text as if it read
+it, rather than saying where it came from. So grep the quote against the file before believing any
+baseline that passes. A reply that names your rule in vocabulary you never gave it is the same
+signal, weaker.
+
+An unfindable quote has two explanations, and BOTH void the baseline as evidence. Grep it across
+your rules and memory corpus to tell them apart: found there, the environment injected it and the
+run measured your corpus rather than the model; found nowhere, the model fabricated it. A fabricated
+rule that happens to match your intuition is not proof the gap is absent - it is a coin landing your
+way, and it will land the other way for a reader. Either result means re-run isolated, never ship
+on it.
+
+Isolate it before you trust a passing baseline, cheapest first:
+
+1. Wall the retrieval to a scope your clean room is outside of, run there, then RESTORE the setting
+   and verify the restored value. One key, no data at risk.
+2. If the clean room must sit inside that scope, move the ONE entry aside, not the whole corpus.
+3. Blanket switches that disable hooks and plugins wholesale (for this CLI, `--bare` and
+   `CLAUDE_CONFIG_DIR`) do isolate it - and both take AUTH with them, so neither runs. Check that
+   before planning around one.
+
+A baseline you cannot isolate is not evidence. Say so in the review artifact rather than counting
+it as a pass.
 
 **Example:**
 
