@@ -148,17 +148,32 @@ lines where it does not.
 | **Receiver re-parse**            | Call sites that immediately split/parse/cast a callee's return                   | Any. The callee had the structured value and discarded it                                       |
 | **Boolean/stringly parameter**   | Flag parameters, and strings compared against literals                           | Any that selects behaviour. It wants an enum, which often already exists                        |
 
-**The counting is HALF the row. The other half is REQUIRED OUTPUT, not advice.** Once a shape
-recurs, open every site of the DOMINANT shape and report this verdict verbatim, with numbers:
+**The counting is HALF the row. The other half is QUOTED EVIDENCE - not a verdict.** For the
+DOMINANT shape, PASTE the actual source line that produces the "true"/success value at each site:
 
-> Meaning check: read N of N sites of `<shape>`. Consistent: yes/no. Inverted: `<names>` or none.
+> - `check_battery.chargeCheck` -> `return [true, \`charge ${pct}%\`]`
+> - `check_controller.degradedModeCheck` -> `return [true, "controller is running in degraded mode"]`
 
-A row that reports counts without that line has not been walked. This is not ceremony: the
-polarity defect it looks for is a live correctness bug that outranks every refactor the census
-produces, and it is precisely what gets skipped, because finishing the count FEELS like finishing
-the row. Measured: after this section was first added, a reviewer that had previously found a
-planted inverted check as its top SEVERE finding counted 26 instances correctly and stopped -
-losing the bug entirely. The count is not the answer; it is what tells you where to look.
+Then state the conclusion UNDER the quotes. Do not state it instead of them.
+
+**Cap it when the sites are many.** Above roughly 15, quote every site whose message text and
+boolean disagree in sentiment - a `true` beside wording that describes a fault, a `false` beside
+wording that describes health - and give the number you skipped: "quoted 6 of 26 sites; the other
+20 read `[false, <fault text>]` / `[true, <healthy text>]`." A capped-but-honest sample beats a
+complete-sounding summary.
+
+**Why quotes and not a verdict.** A verdict is an assertion ABOUT the work; a quote is a
+BYPRODUCT of it. Measured twice on the same fixture. First: a reviewer counted 26 instances
+correctly and simply stopped, losing a planted inverted check it had found before the census
+existed. So the check was made a required output line - and the reviewer then wrote
+"read 13 of 13 sites ... Inverted: none" about a file it had cited in two other findings, where
+`degradedModeCheck` returns `true` for "degraded" - and wrote 13 where there were 26, having
+summarised the FILE count without ever enumerating sites. The demand for a verdict did not
+produce the reading; it produced a confident false all-clear, which is worse than the silence it
+replaced. You cannot paste that `return [true, "...degraded mode"]` line and still write
+"inverted: none".
+
+The count is not the answer. It is what tells you which lines to quote.
 
 The rest of the judgement, applied to what the counts turned up:
 
@@ -214,6 +229,17 @@ and read the exit code:
 The distinction that carries the weight is **"it ran and the answer is no" versus "it could not
 run"**. A human-formatted table plus exit 0 collapses those into one observation, and the caller
 proceeds on nothing.
+
+**On this row, OVER-report rather than under-report.** The costs are asymmetric. Flagging a tool
+that turns out not to need a structured mode costs someone a small, additive, backward-compatible
+change that breaks no human caller. Missing one costs an agent that drives the tool and silently
+acts on the wrong answer, and nothing in the output says so. When unsure whether a CLI is
+machine-driven today, raise it anyway and let the owner decline - that decline is a one-line
+accepted item, and it is recorded rather than re-derived every review.
+
+This asymmetry is specific to THIS row. Do not carry it to the interface-shape census, where
+over-reporting means churning working code and the clean "counted, found nothing" answer is the
+valuable one.
 
 Do NOT assume the existing checklist row covers this. "Every subcommand x every output mode x a
 failing input" audits the modes that EXIST and never asks whether a machine-readable one exists.
@@ -416,9 +442,9 @@ return shape, the largest parameter group and how many signatures carry it, how 
 offer the structured mode out of how many exist.
 
 Interface shape needs one thing more, because counting is the half that gets done: the row is
-walked only once the MEANING CHECK line is reported too ("read N of N sites of `<shape>`;
-consistent yes/no; inverted `<names>` or none"). A count with no verdict is where a real
-polarity bug hides, and it hid there in testing.
+walked only once the dominant shape's success-value lines are QUOTED (capped and counted when
+there are many). A verdict does not count - "inverted: none" was reported in testing about a file
+containing `return [true, "...degraded mode"]`. Paste the lines; the conclusion goes under them.
 
 ## Common Mistakes
 
