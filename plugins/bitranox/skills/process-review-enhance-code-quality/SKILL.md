@@ -148,17 +148,28 @@ lines where it does not.
 | **Receiver re-parse**            | Call sites that immediately split/parse/cast a callee's return                   | Any. The callee had the structured value and discarded it                                       |
 | **Boolean/stringly parameter**   | Flag parameters, and strings compared against literals                           | Any that selects behaviour. It wants an enum, which often already exists                        |
 
-Then JUDGE, because a count is a lead and not a verdict:
+**The counting is HALF the row. The other half is REQUIRED OUTPUT, not advice.** Once a shape
+recurs, open every site of the DOMINANT shape and report this verdict verbatim, with numbers:
+
+> Meaning check: read N of N sites of `<shape>`. Consistent: yes/no. Inverted: `<names>` or none.
+
+A row that reports counts without that line has not been walked. This is not ceremony: the
+polarity defect it looks for is a live correctness bug that outranks every refactor the census
+produces, and it is precisely what gets skipped, because finishing the count FEELS like finishing
+the row. Measured: after this section was first added, a reviewer that had previously found a
+planted inverted check as its top SEVERE finding counted 26 instances correctly and stopped -
+losing the bug entirely. The count is not the answer; it is what tells you where to look.
+
+The rest of the judgement, applied to what the counts turned up:
 
 - **A shared NAME is not a shared concept.** Two functions taking `key` where one means an ssh
   key path and the other a lookup key are not a clump; merging them is a new bug, not a fix.
-- **A dominant return shape needs its MEANING checked at every site.** If forty functions return
-  `(bool, string)`, confirm all forty mean the same thing by the bool. One that inverts it is a
-  live defect the census just handed you, and it outranks the refactor.
 - **Ask what would catch a positional mistake.** A type checker catches a swap between different
   types and catches NOTHING between two same-typed fields, which is where the expensive bugs are.
 - **Prefer the named type that already exists** - extending one usually beats adding a sibling.
 - **Rank by parameters removed per line changed**, and say which findings are NOT worth doing.
+- **Counting nothing is a real result.** If the counts come back clean, say so with the numbers
+  and move on. The census must be able to exonerate a codebase, or it will start inventing work.
 
 **The tell that this matters.** Measured, not assumed. A package whose gate was fully green
 (formatter, linter, strict type checker, import contracts, 650 tests) carried 43 of 568 annotated
@@ -379,22 +390,22 @@ Walk EVERY row each sweep, and say which rows you walked. A sweep that reports "
 without naming its coverage is a sweep that stopped looking, and it is indistinguishable in the
 transcript from a thorough one.
 
-| Aspect             | Ask                                                                                     |
-|--------------------|-----------------------------------------------------------------------------------------|
-| Public API surface | Every exported name: signature, contract, error behaviour, docs                         |
-| CLI surface        | Every subcommand x every output mode x a failing input; exit codes agree                |
-| Concurrency        | Task/memory growth vs input size; ordering assumptions; cancellation                    |
-| Resource lifetime  | Sockets, files, handles, registries: freed on every path including errors               |
-| Unbounded input    | Big/append-only files, wide ranges, long lists - streamed or bounded                    |
-| Algorithmic cost   | Loops nested over inputs; per-item work inside a per-item loop                          |
-| Error contract     | One hierarchy, consistent types, nothing leaking a foreign exception                    |
-| Cross-platform     | Each supported OS's branch, and the type check for each                                 |
-| Packaging          | Builds, installs clean, entry points and marker files present in the wheel              |
-| Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated |
-| Shipped skill      | Covers the whole API and CLI (see the always-on checks)                                 |
-| Docs and changelog | Match the code as it is now, including what the current change added                    |
-| Interface shape    | COUNT first: clumps, long lists, anonymous returns, tramps, re-parses, flag params      |
-| Machine-drivable   | Structured mode exists per subcommand; typed errors; stderr diagnostics; exit codes     |
+| Aspect             | Ask                                                                                                                                                   |
+|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Public API surface | Every exported name: signature, contract, error behaviour, docs                                                                                       |
+| CLI surface        | Every subcommand x every output mode x a failing input; exit codes agree                                                                              |
+| Concurrency        | Task/memory growth vs input size; ordering assumptions; cancellation                                                                                  |
+| Resource lifetime  | Sockets, files, handles, registries: freed on every path including errors                                                                             |
+| Unbounded input    | Big/append-only files, wide ranges, long lists - streamed or bounded                                                                                  |
+| Algorithmic cost   | Loops nested over inputs; per-item work inside a per-item loop                                                                                        |
+| Error contract     | One hierarchy, consistent types, nothing leaking a foreign exception                                                                                  |
+| Cross-platform     | Each supported OS's branch, and the type check for each                                                                                               |
+| Packaging          | Builds, installs clean, entry points and marker files present in the wheel                                                                            |
+| Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated                                                               |
+| Shipped skill      | Covers the whole API and CLI (see the always-on checks)                                                                                               |
+| Docs and changelog | Match the code as it is now, including what the current change added                                                                                  |
+| Interface shape    | COUNT (clumps, long lists, anonymous returns, tramps, re-parses, flags) THEN the meaning check on the dominant shape - both, or the row is not walked |
+| Machine-drivable   | Structured mode exists per subcommand; typed errors; stderr diagnostics; exit codes                                                                   |
 
 Report per sweep: which rows were walked, what each found, and the running total. That record is
 what makes "no findings" credible.
@@ -403,6 +414,11 @@ Two of these rows are COUNTED, not read, and a sweep that reports "no findings" 
 naming the counts did not walk them. State the numbers: how many functions share the dominant
 return shape, the largest parameter group and how many signatures carry it, how many subcommands
 offer the structured mode out of how many exist.
+
+Interface shape needs one thing more, because counting is the half that gets done: the row is
+walked only once the MEANING CHECK line is reported too ("read N of N sites of `<shape>`;
+consistent yes/no; inverted `<names>` or none"). A count with no verdict is where a real
+polarity bug hides, and it hid there in testing.
 
 ## Common Mistakes
 
