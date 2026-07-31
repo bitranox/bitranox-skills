@@ -53,8 +53,28 @@ cost of the fix is four lines.
       no separate judgement step to skip - every one of its five rows is mechanical.
 - [x] ASCII only (36 added lines verified); version 5.113.0; repo gate re-run.
 
-## Not done
+## Re-replay - the required-output line FAILED, the quoted-evidence rule PASSED
 
-- [ ] Re-replay the shape fixture against 5.113.0 to confirm the meaning check now fires. The
-      required-output line is a plausible fix, not a verified one. Left open deliberately rather
-      than assumed - the same mistake this checklist exists to record.
+- [x] Against 5.113.0 (required verdict line): the line duly appeared, reading "read 13 of 13
+      sites ... Inverted: none", about a codebase containing
+      `return [true, "controller is running in degraded mode"]` - in a file the same reviewer
+      cited in two other findings - and said 13 where there are 26, having summarised the FILE
+      count without enumerating sites. A verdict is an assertion ABOUT the work; only evidence
+      is a byproduct OF it. So the demand for a verdict produced a confident false all-clear,
+      which is worse than the silence it replaced.
+- [x] Against 5.114.0 (quoted evidence, capped): PASS. The inversion is back as Issue 1, SEVERE,
+      the first finding, and the row carries pasted success-value lines plus an explicit cap
+      ("Quoted 19 of 26 success sites"). Same fixture, same model, and this time with the
+      fixture's own gate actually working - `tsc --noEmit` exit 0 and 6 vitest tests, both
+      measured, after the earlier run wasted two SEVERE findings on my broken scaffolding.
+
+## Residual weakness, recorded not glossed
+
+The 19 quoted lines did NOT include `degradedModeCheck`, and the reviewer's closing clause -
+"the remaining 7 follow the same pattern" - is false, since one of the seven is the outlier. It
+found the bug by reading the sites in order to quote them, not from the quotes themselves. So
+the cap works as a forcing function but its summary clause still invites the generalisation that
+hides an outlier. If this recurs, the fix is to require the cap's UNQUOTED remainder be
+characterised by a property that an outlier would break (quote the boolean beside each message's
+sentiment) rather than by "same pattern". Not changed now: one observation, and the primary
+mechanism is working.
