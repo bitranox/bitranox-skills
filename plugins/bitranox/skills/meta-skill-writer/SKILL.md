@@ -1055,6 +1055,30 @@ opens new ones, and the edit itself is what opens them: the new rule now sits be
 written for the old behaviour, and the two disagree. Work the list before you ship - a gap GREEN
 reported is a gap that reached a reader.
 
+**Diff GREEN against RED in BOTH directions - what appeared, and what DISAPPEARED.** A new step
+does not add to the agent's attention, it competes for it, so an edit that works can still cost a
+result the baseline produced. Line the two outputs up item by item and account for every baseline
+item that is missing from GREEN. Do this even when GREEN is obviously richer: more findings, or
+the exact findings you wrote the step to produce, is what a net-negative edit looks like from the
+gained side alone.
+
+A lost result is a REFACTOR requirement, not an acceptable trade - rank by value, not by count.
+One correctness finding traded for four style findings is a worse review, and the edit ships as an
+improvement because the tally went up.
+
+Confirm the loss reproduces before you restructure anything. One run per condition shows a
+mechanism is plausible, never that it is stable, so a single absence is a hypothesis with three
+live rivals: the edit displaced it, the run varied, or the baseline item was wrong to begin with.
+Re-run the same arm and keep everything else fixed - same model, same prompt, same input. An
+absence that survives is a lost result; one that does not is noise, and restructuring the skill
+around noise costs you the version you already had.
+
+When the lost item was a JUDGEMENT that had to follow a mechanical step, making the rule more
+emphatic will not bring it back. Anything optional after a satisfying mechanical action gets
+skipped, and a rule stated as prose after a concrete table reads as commentary on the table.
+Make the judgement a REQUIRED OUTPUT of the step instead: the row reports its verdict, not only
+its count.
+
 **Where the loop stops:** every gap on the list is either CLOSED in the text or DECLINED in the
 review artifact with a reason (out of scope, owned by another skill, judgement the skill should
 leave open). A surviving gap is fine; a surviving gap nobody decided about is not, so the exit
@@ -1143,6 +1167,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Every RED and GREEN dispatch asked for a `Skill gaps` section, and each reply's list is
       recorded - a GREEN that reported nothing because it was never asked is not a pass
 - [ ] Every gap GREEN reported is closed or explicitly declined with a reason
+- [ ] GREEN diffed against RED in BOTH directions, with every baseline result missing from GREEN
+      accounted for - a lost result is a REFACTOR requirement, not a trade
 - [ ] Each fix verified by quote-back (a direct quote of the governing text, or NONE)
 - [ ] Identify NEW rationalizations from testing
 - [ ] Add explicit counters (if discipline skill)
