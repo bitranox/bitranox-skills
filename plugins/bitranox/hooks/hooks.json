@@ -80,6 +80,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/shell-prefix-selfref-guard.py\""
+          }
+        ]
+      },
+      {
         "matcher": "Task|Agent",
         "hooks": [
           {
