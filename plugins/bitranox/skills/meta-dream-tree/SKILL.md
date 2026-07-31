@@ -170,9 +170,12 @@ the success line, abort-and-show on a miss).
     (`bitranox:meta-self-improve` -> references/upstream-propagation.md) as ONE structured change - a
     REQUIRED end-of-dream action: verify each candidate against the CURRENT skill content first (some
     may already be shipped -> drop, do not re-add), then `propose` -> self-PR; `auto` -> commit or
-    self-PR; `off` -> skip. `contrib_queue.py drain` ONLY for the ones that actually shipped; leave one
-    queued for next session ONLY when it genuinely needs user input or the mode is `off` - a
-    deliverable one left pending evaporates the intent until a manual re-prompt.
+    self-PR; `off` -> skip. Close each delivered one individually with `contrib_queue.py ship --match
+    <unique text> --note <where it landed>`, and each disproven one with `drop` - `--match` not
+    `--index`, which shifts under the previous close, and never `drain`, which closes the WHOLE
+    queue and so fits only a sweep where every entry shipped. Leave one queued for next session
+    ONLY when it genuinely needs user input or the mode is `off` - a deliverable one left pending
+    evaporates the intent until a manual re-prompt.
 
 10b. **Toolbox pass (consolidate; PROPOSE-ONLY).** Run the CONSOLIDATE delta per
     references/dream-core.md "Toolbox pass": `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`,

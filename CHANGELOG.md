@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.124.0] - 2026-08-01
+
+### Added
+
+- **`contrib_queue.py ship` closes ONE delivered contribution, and `shipped` lists them.** The queue
+  could only `drain` (all-or-nothing) or `drop` (a tombstone labelled rejected), so a delivered
+  contribution had to be recorded as a rejection - which tells every later reader the work was not
+  done. Both outcomes live in one tombstone file under an `outcome` field rather than two files,
+  because the re-queue block reads the closed set and a second file is one more read for that check
+  to forget; a forgotten one silently resurrects delivered work as a TODO. Records written before
+  the field existed were all drops, so a missing `outcome` reads as rejected.
+- **`--match TEXT` selects an entry by unique text instead of a position.** An index comes from a
+  listing and SHIFTS under the previous close, so closing two entries by the indices of one listing
+  hits the wrong second entry. Measured: an agent following the old instructions filed the delivered
+  contribution as a drop and then destroyed a contribution that was meant to stay queued, stamping
+  it with the other entry's reason. `--match` refuses on no match or an ambiguous match rather than
+  guessing, and exactly one selector is required.
+
+### Fixed
+
+- **Three skills told you to `drain` "ONLY for the ones that actually shipped; leave one queued"** -
+  an operation `drain` cannot perform, since it clears the whole queue. meta-self-improve,
+  meta-dream-tree and meta-dream-crosstree now close each entry individually by outcome, select by
+  `--match`, and reserve `drain` for a sweep where every entry shipped.
+- **Re-queueing something already delivered no longer reports it as "rejected earlier".**
+
 ## [5.123.0] - 2026-08-01
 
 ### Changed
