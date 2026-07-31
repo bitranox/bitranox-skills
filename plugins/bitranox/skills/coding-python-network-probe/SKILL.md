@@ -175,17 +175,24 @@ runs out. That makes 12 seconds a floor on every call; if that is too slow,
 iterate `session.offers()` rather than shortening `timeout`, which truncates
 the second offer and re-creates the bug above.
 
-Linux and Windows, and it needs elevation on both: root or `CAP_NET_RAW` on
-Linux, Administrator on Windows. macOS raises `IPScoutUnsupportedError`. Ask
-`dhcp_capture_available()` first.
+All three platforms, and every one needs elevation: root or `CAP_NET_RAW` on
+Linux, root on macOS, Administrator on Windows. Ask `dhcp_capture_available()`
+first.
 
-**The two platforms do not promise the same thing, and the difference decides
-whether this works for you.** On Linux the capture binds to a bridge and sees
+**They do not all promise the same thing, and the difference decides whether
+this works for you.** On Linux and macOS the capture binds to a bridge and sees
 the traffic the bridge forwards, including frames addressed to a guest - which
 is the VM case this exists for. On Windows it uses `SIO_RCVALL`, which sees
 what reaches *this host's* interface; on a Hyper-V virtual switch that excludes
 other guests unless the port is set to mirror. So Windows is right for DHCP on
-this host's own segment, and Linux is right for watching a guest boot.
+this host's own segment, and the POSIX pair for watching a guest boot.
+
+**The macOS device path has not been run on real hardware.** No CI runner may
+open a BPF device, so its ioctl encoding and record splitting are pinned by
+tests while the syscalls themselves are untested. Linux is the one to trust for
+anything that matters; treat macOS as new until you have exercised it. On macOS
+name a bridge or physical interface, not `lo0` - loopback is not Ethernet-framed
+and is refused by name rather than silently returning nothing.
 
 ## What needs privilege, and what it does about it
 
@@ -197,7 +204,7 @@ Everything above is unprivileged. These are not, and each raises
 | `scan_ports(..., method=ScanMethod.SYN)` | root / `CAP_NET_RAW`. Unavailable on Windows at any privilege level: raw TCP sends have been blocked since XP SP2 |
 | `lookup_mac(ip, active=True)` | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator    |
 | Traceroute on macOS           | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all                                   |
-| `observe_dhcp(...)` and its session | root / `CAP_NET_RAW` on Linux, Administrator on Windows (`SIO_RCVALL`, no driver). macOS raises `IPScoutUnsupportedError` |
+| `observe_dhcp(...)` and its session | root / `CAP_NET_RAW` on Linux, root on macOS (`/dev/bpf`), Administrator on Windows (`SIO_RCVALL`, no driver) |
 
 Two rules these follow, worth relying on:
 
