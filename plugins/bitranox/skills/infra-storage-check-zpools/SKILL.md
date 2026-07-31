@@ -15,7 +15,18 @@ Monitors ZFS pools and alerts on them. Reads `zpool status -j --json-int` (never
 scrapes text), checks pools against configured thresholds, emails alerts with
 deduplication, runs scrubs, and can run continuously as a systemd daemon.
 
-Works on Linux, FreeBSD and macOS wherever ZFS is present. Python 3.10+.
+**Requires OpenZFS 2.3 or newer** - that is the binding constraint, not the operating
+system. `zpool status -j --json-int` is what everything here reads, and the `-j` JSON
+interface arrived in OpenZFS 2.3; on anything older the command exits non-zero and no
+subcommand that touches a pool can work. Verify with `zpool status -j > /dev/null`.
+
+Linux and FreeBSD are the native homes. macOS works through the third-party OpenZFS on
+macOS port, and on Windows ZFS is not native at all - the OpenZFS on Windows driver is
+still beta, so WSL is the practical route there. Both ports track upstream but lag it,
+so check the 2.3 requirement on either rather than assuming it. Python 3.10+.
+
+Two commands are narrower than the rest: `service-install` needs systemd, and
+`alias-create` is Linux-only. Everything else runs wherever a readable pool does.
 
 ## Install
 
