@@ -998,6 +998,14 @@ above. A skill that runs a worklist is the default candidate; a skill that only 
 
 This is "watch the test fail" - you must see what agents naturally do before writing the skill.
 
+**A baseline that PASSES is a result to investigate, not a verdict.** Before concluding "no gap",
+rule out all three ways it falsely passes: a CAPABLE model reasoned around the rigid rule (re-run
+pinned to a weak, literal tier), the SCENARIO spelled the answer out (re-run realistically,
+withholding the trap), or the ENVIRONMENT supplied it - the agent explored its way to the answer,
+or injected context handed it over. That third one is silent and a scratch directory does not close
+it; the tell is a quoted sentence you cannot find in the file you supplied. See
+testing-skills-with-subagents.md, "Watch for baseline contamination", before trusting a pass.
+
 ### GREEN: Write Minimal Skill
 
 Write skill that addresses those specific rationalizations. Don't add extra content for hypothetical cases.
