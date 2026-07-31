@@ -20,7 +20,7 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 1. **Pydantic at Boundaries**: All external data (API requests, file reads, env vars, CLI args) must be parsed into Pydantic models immediately upon entry
 2. **Pydantic for Export**: All outputs (API responses, file writes, serialization) must use Pydantic's `.model_dump()` or `.model_dump_json()`
 3. **No Internal Dicts**: Inside the application, never use raw dicts for structured data - always typed models
-4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire.
+4. **Enums for Constants**: All string literals representing categories, statuses, modes, or fixed values must be Enums. For values that cross an external boundary as strings, use `StrEnum` (Python 3.11+) or `class X(str, Enum)` so Pydantic parses and serializes them without changing the wire format; reserve `IntEnum` for values that are genuinely integers on the wire. **If your floor is 3.10 and you take the `class X(str, Enum)` fallback, its default string form is version-dependent** - read "The `str, Enum` fallback formats differently on 3.10 and 3.11+" below before you interpolate a member anywhere.
 5. **Minimize Conversions**: Ideal flow is ONE parse at input, ONE dump at output - nothing in between
 6. **String-to-Enum at Edges Only**: Convert strings to Enums only at system boundaries (input parsing). All functions and methods must accept and use the Enum type directly - never convert str->Enum inside business logic. This mirrors the class/Pydantic rule: parse once at entry, use typed objects throughout
 7. **No Compatibility Shims**: Remove all compatibility shims - code must use dataclass fields and enums directly. No wrapper methods, aliases, or backward-compatibility layers that accept old formats
@@ -34,6 +34,34 @@ Refactor Python code to follow strict data architecture rules using Pydantic mod
 | Need validation                            | Pydantic `BaseModel`         |
 | Fixed string values (string on the wire)   | `StrEnum` / `str, Enum`      |
 | Simple value objects                       | `NamedTuple` or `@dataclass` |
+
+### The `str, Enum` fallback formats differently on 3.10 and 3.11+
+
+`enum.StrEnum` is safe: `str(member)`, `format(member)` and an f-string all give the VALUE on
+every version that has it. The `class X(str, Enum)` fallback for a 3.10 floor is NOT:
+
+```python
+class C(str, Enum):
+    A = "capacity"
+
+f"{C.A}"      # 3.10 -> "capacity"      3.11+ -> "C.A"
+format(C.A)   # 3.10 -> "capacity"      3.11+ -> "C.A"
+str(C.A)      # "C.A" on EVERY version
+C.A.value     # "capacity" on every version
+```
+
+Python 3.11 made `__format__` follow `__str__` for mixed-in enums. So a member interpolated into
+a key, a filename, a log line or any hand-built payload silently changes shape across the version
+matrix, and the 3.10 lane is the one that looks correct.
+
+This is the one place the "avoid unnecessary `.value` access" guidance above does NOT apply.
+Comparisons, assignments and Pydantic serialization take the member directly; **anything that
+builds a string by interpolation takes `.value`.** Measured cost of getting it wrong: an alert-state
+key built as `f"{pool}:{category}"` wrote `rpool:IssueCategory.CAPACITY` instead of `rpool:capacity`
+on 3.11+, which orphans every previously-written state entry and re-fires every open alert.
+
+Pin the wire form with a test that asserts the exact string, and run the whole declared version
+range - a single-interpreter green cannot see this.
 
 ### Anti-Patterns to Eliminate
 
@@ -109,7 +137,7 @@ output = OutputModel(**asdict(internal))
      * Unnecessary dataclass wrappers when Pydantic can be used directly
      * Any conversion that doesn't add value - minimize total conversions
      * **Count total conversions** in the data flow - goal is MINIMUM possible (ideally: 1 at input, 1 at output)
-     * **Enum usage**: Use `StrEnum`/`str, Enum` for string-valued fields and `IntEnum` only for integer-valued ones. Avoid unnecessary `.value` access or conversions - use the enum member directly in comparisons and assignments. Remove compatibility shims for enums (no wrapper methods, aliases, or backward-compatibility layers)
+     * **Enum usage**: Use `StrEnum`/`str, Enum` for string-valued fields and `IntEnum` only for integer-valued ones. Avoid unnecessary `.value` access or conversions - use the enum member directly in comparisons and assignments. The exception is string INTERPOLATION under the `str, Enum` fallback, where `.value` is required and not optional (see "The `str, Enum` fallback formats differently on 3.10 and 3.11+"). Remove compatibility shims for enums (no wrapper methods, aliases, or backward-compatibility layers)
 
 3. **Refactor the Code** following these rules:
    - Import external data immediately into Pydantic models with validation
@@ -389,17 +417,17 @@ Rationalizations that do not fly here:
 Forced-choice pressure runs (deadline + sunk cost + green suite + a reviewer's LGTM) produced
 exactly these excuses - two baseline subjects shipped incomplete conversions using them:
 
-| Excuse                                                                              | Reality                                                                                                                                                                                                                                                             |
-|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "The remaining dict params are internal helpers - do not gold-plate"                | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt.                                                |
-| "The reviewer's LGTM overrode the definition of done"                               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance.                                                                  |
-| "I'm basically done - the last functions do not matter"                             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.                                                                          |
-| "Shipping verified-green beats an unverified conversion"                            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.                                                                                                                        |
-| "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under. |
-| "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead.                                                                                 |
-| "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                    |
-| "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                |
-| "TODO + follow-up ticket, clean it after the demo"                                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.                                                                                  |
+| Excuse                                                                              | Reality                                                                                                                                                                                                                                                                                                                        |
+|-------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "The remaining dict params are internal helpers - do not gold-plate"                | An internal helper with multiple callers is where an untyped dict is riskiest (shape drift = runtime KeyError). "Internal" names the call site, not an exemption; only a small single-function local dict is exempt.                                                                                                           |
+| "The reviewer's LGTM overrode the definition of done"                               | A reviewer comment does not rewrite the mandate you were invoked under. Reframing the unfinished 5/23 as "an explicit, reviewed scope decision" is the capitulation itself, dressed as governance.                                                                                                                             |
+| "I'm basically done - the last functions do not matter"                             | Sunk cost makes "basically done" feel true regardless of whether the remainder matters. The DoD was every function; the last mile is mechanical because the hard work is already verified.                                                                                                                                     |
+| "Shipping verified-green beats an unverified conversion"                            | The conversion is mechanical and re-verified by the same suite in minutes. This excuse converts a 15-minute completion into a permanent gap.                                                                                                                                                                                   |
+| "Converting under deadline pressure is riskier - ship the gap, finish next release" | Maybe - but that trade is the HUMAN's to make, not yours. Surface the DoD-vs-deadline conflict explicitly and ASK ("ship 18/23 now, or slip the window?"); a unilateral "ship partial, track the rest" is silent downscoping of the mandate you were invoked under.                                                            |
+| "A StrEnum on the wire is risky - keep a shim accepting both"                       | StrEnum members ARE str: the wire bytes are identical. The shim adds no safety, silently swallows stray raw strings, and becomes permanent. Pin the wire value with a test instead. (True for `enum.StrEnum`. The `class X(str, Enum)` fallback formats as `C.A` on 3.11+ when interpolated - use `.value` there, not a shim.) |
+| "Enum internally, but DB/API stay raw strings - feels safer"                        | That leaves the write path and response body - where a status typo causes the incident - unprotected. Backwards.                                                                                                                                                                                                               |
+| "Tests pass, so the conversion chain does not matter"                               | The defect is architectural, not behavioral - "tests pass" was never in question. Green tests do not make Model->dict->Model round-trips acceptable.                                                                                                                                                                           |
+| "TODO + follow-up ticket, clean it after the demo"                                  | A TODO on shipped code has no forcing function. If a genuine freeze (a live demo in minutes) blocks the fix, do it immediately AFTER in the SAME working session - never a ticket.                                                                                                                                             |
 
 Catch yourself forming these phrases mid-run - "basically done", "internal helpers are fine",
 "tests are green so it's correct", "feels safer to accept both", "we'll get it later", "the
