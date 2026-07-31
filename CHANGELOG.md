@@ -17,6 +17,39 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.115.0] - 2026-07-31
+
+### Changed
+
+- **coding-python-network-probe re-synced with its ipscout twin, which had gained a whole
+  capability.** The mirror described eighteen subcommands and said nothing about `observe_dhcp`,
+  two releases after ipscout shipped it - so an agent consulting this skill was told the DHCP
+  observation surface did not exist. It now carries the full surface: `observe_dhcp`,
+  `observe_dhcp_session`, `observe_dhcp_first_reachable`, `dhcp_capture_available`, the
+  `observe-dhcp` subcommand, the Linux and Windows capture backends with their differing promises,
+  and the ordering rule that the address a machine kept is the LAST offer rather than the first.
+  The headline also stopped claiming "without admin rights" outright, since four operations now
+  need elevation and one of them has no unprivileged alternative at all.
+
+### Added
+
+- **The mirror gate now guards the tool-repo side too, which is the side that actually drifts.**
+  `repo-gate.py` already fired on every `git commit`/`git push` on the machine, but returned 0 in
+  any repo that is not this one - so editing a mirrored skill in its OWN repo was unguarded, and
+  the marketplace only found out if somebody happened to commit here afterwards. That asymmetry is
+  why `coding-python-network-probe` drifted twice. A commit in a repo owning a mirrored skill now
+  compares the pair and blocks on drift, naming which side to regenerate.
+
+  A repo owning no mirrored skill stays silent, so the gate does not narrate everywhere. The
+  "cannot compare" case is deliberately not a bare exit 0: with no marketplace checkout there is
+  nothing to diff, and passing in silence is indistinguishable from passing because the pair is in
+  sync, which would leave the guard permanently green and worthless. It passes - blocking would
+  break anyone without the checkout - but says so through `additionalContext`, the one exit-0
+  channel the model reads.
+
+  Known limit, unchanged by this: `repo_root()` reads the cwd, so a cross-repo
+  `git -C <other-repo> commit` is still judged against the wrong repo.
+
 ## [5.109.1] - 2026-07-30
 
 ### Changed

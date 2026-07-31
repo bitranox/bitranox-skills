@@ -1,9 +1,9 @@
 ---
 name: coding-python-network-probe
-description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, find a MAC address or the host holding one, read the neighbour/ARP cache, look up the default gateway or a route, inspect local interfaces and subnets, send a wake-on-LAN packet, or find the path MTU - especially when it must run as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and must not shell out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, or subprocess around a system network command.
+description: Use when Python code needs to ping a host, sweep hosts for reachability, measure round-trip time or packet loss, run a traceroute, scan ports, find a MAC address or the host holding one, read the neighbour/ARP cache, look up the default gateway or a route, inspect local interfaces and subnets, send a wake-on-LAN packet, find the path MTU, or watch a DHCP handshake to learn the address of a machine that has just been started and does not have one yet - especially when it must run as an ordinary user with no root, sudo, Administrator or CAP_NET_RAW, and must not shell out to ping, tracert, arp, ip, ifconfig or netstat. Also use when reaching for icmplib, scapy, python-nmap, netifaces, or subprocess around a system network command, or for tcpdump/tshark to watch a VM or container boot and find its address.
 ---
 
-# Network probing from Python without admin rights
+# Network probing from Python, unprivileged on the default paths
 
 ## Overview
 
@@ -47,8 +47,11 @@ Python 3.10+.
 | Default route, any route       | `default_gateway()`, `query_route(ip)`                               |
 | Interfaces and subnets         | `local_interfaces()`, `subnet_info()`, `local_networks()`            |
 | Wake a sleeping host           | `wake_on_lan(mac)`                                                   |
+| Address of a machine just started | `observe_dhcp(mac, interface="br0")` -> every offer, in order      |
+| ... startable before you start it | `with observe_dhcp_session(mac, interface="br0") as s:`            |
+| ... and just the one that answers | `observe_dhcp_first_reachable(mac, interface="br0")`               |
 | Largest unfragmented packet    | `path_mtu(host)`                                                     |
-| What can this host do          | `icmp_available()`                                                   |
+| What can this host do          | `icmp_available()`, `dhcp_capture_available()`                       |
 | Package metadata               | `print_info()`                                                       |
 | Name to address, and back      | `resolve(name)`, `reverse_dns(ip)`                                   |
 | Compare two hardware addresses | `normalise_mac(written)`                                             |
@@ -72,13 +75,13 @@ function exists.
 
 ## From the shell
 
-Eighteen subcommands, one per capability above:
+Nineteen subcommands, one per capability above:
 
 ```
 ping          ping-many     reachable     traceroute    scan-ports
 mac           find-ip       arp-scan      neighbours    gateway
 subnet        interfaces    resolve       reverse-dns   mtu
-wake          capabilities  info
+wake          observe-dhcp  capabilities  info
 ```
 
 ```bash
@@ -87,6 +90,7 @@ ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
 ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
 ipscout find-ip dc:b2:2f:44:34:59 --scan
 ipscout arp-scan --network 192.168.1.0/24
+ipscout observe-dhcp 02:00:5e:10:00:00 --interface br0   # needs root
 ipscout capabilities                      # what this host can actually do
 ipscout --json subnet                     # every command takes --json
 ```
@@ -137,6 +141,52 @@ an IPv4 and an IPv6 link-local on the same NIC.
 `network=` and `scope=` apply only with `scan=True`, and are refused without it
 rather than ignored - without a sweep there is only the cache to search.
 
+## Finding a machine that has not got an address yet
+
+Every other call needs the target already up and answering: the neighbour cache
+only knows hosts that have sent traffic, and a sweep needs a host that already
+holds an address. A machine that has just been started has neither, and it
+DHCPs about a second after the start command. `observe_dhcp` watches that
+exchange.
+
+Two rules that are easy to get wrong, and both cost real debugging:
+
+**Start watching before you start the machine.** A one-shot `observe_dhcp(...)`
+begins capturing when it is called, which is already too late if you issued the
+start command first. Use the session:
+
+```python
+with ipscout.observe_dhcp_session(mac, interface="br0", timeout=150) as watch:
+    start_the_machine()  # the handshake happens ~1s into this
+    addresses = watch.result()  # blocks until the exchange goes quiet
+```
+
+**The address it settled on is the LAST element, not the first.** A pool that
+hands out an address the guest declines offers the working one afterwards, so
+the list is chronological, not ranked. Taking `[0]` is how a perfectly
+reachable machine gets reported as never having booted. Either check each one,
+or let `observe_dhcp_first_reachable(mac, interface="br0")` do it - it returns
+as soon as a candidate answers, so a SUCCESSFUL lookup skips the settle
+wait entirely. Finding nothing still costs the whole `timeout`, because
+giving up earlier would declare a machine absent while its window was open.
+
+`result()` returns once 12 seconds pass with no new address, or when `timeout`
+runs out. That makes 12 seconds a floor on every call; if that is too slow,
+iterate `session.offers()` rather than shortening `timeout`, which truncates
+the second offer and re-creates the bug above.
+
+Linux and Windows, and it needs elevation on both: root or `CAP_NET_RAW` on
+Linux, Administrator on Windows. macOS raises `IPScoutUnsupportedError`. Ask
+`dhcp_capture_available()` first.
+
+**The two platforms do not promise the same thing, and the difference decides
+whether this works for you.** On Linux the capture binds to a bridge and sees
+the traffic the bridge forwards, including frames addressed to a guest - which
+is the VM case this exists for. On Windows it uses `SIO_RCVALL`, which sees
+what reaches *this host's* interface; on a Hyper-V virtual switch that excludes
+other guests unless the port is set to mirror. So Windows is right for DHCP on
+this host's own segment, and Linux is right for watching a guest boot.
+
 ## What needs privilege, and what it does about it
 
 Everything above is unprivileged. These are not, and each raises
@@ -147,6 +197,7 @@ Everything above is unprivileged. These are not, and each raises
 | `scan_ports(..., method=ScanMethod.SYN)` | root / `CAP_NET_RAW`. Unavailable on Windows at any privilege level: raw TCP sends have been blocked since XP SP2 |
 | `lookup_mac(ip, active=True)` | root / `CAP_NET_RAW` on Linux and macOS. Windows IPv4 needs none (`SendARP`); Windows IPv6 needs Administrator    |
 | Traceroute on macOS           | a raw socket, so root. Unprivileged macOS does not surface Time Exceeded at all                                   |
+| `observe_dhcp(...)` and its session | root / `CAP_NET_RAW` on Linux, Administrator on Windows (`SIO_RCVALL`, no driver). macOS raises `IPScoutUnsupportedError` |
 
 Two rules these follow, worth relying on:
 
@@ -155,6 +206,10 @@ Two rules these follow, worth relying on:
   does not quietly become a connect scan.
 - **The unprivileged route to the same answer is named in the message.**
   Usually `arp_scan()`, which sweeps and then reads the cache, needing nothing.
+  `observe_dhcp` is the one exception, and its message says so plainly: there
+  is no unprivileged way to watch another machine's traffic. It points at
+  `subnet_info()`, which needs nothing but describes only this host, or at
+  running the observer on the host that owns the bridge.
 
 ## Do not reach for these instead
 
@@ -187,9 +242,15 @@ output format.
   a runner: a closed port there goes quiet rather than refusing, so it reports
   `FILTERED`. On Linux and macOS a refusal is reported as `CLOSED`. A SYN scan
   draws the line everywhere it can run, which is not Windows.
-- **No DHCP traffic is sent.** `subnet_info()` reads the lease the OS's own
-  client already stored. The DHCP fields may be unset on macOS and Windows;
-  the addressing fields work everywhere.
+- **ipscout never sends DHCP traffic.** `subnet_info()` reads the lease the
+  OS's own client already stored, and `observe_dhcp` only listens - it never
+  requests an address or answers anybody. The DHCP fields on `subnet_info()`
+  may be unset on macOS and Windows; the addressing fields work everywhere.
+- **`observe_dhcp` puts the interface in promiscuous mode.** It has to: on a
+  bridge a reply is forwarded to the guest's own port and never reaches this
+  host otherwise, and a Linux client does not set the broadcast flag that
+  would make it visible. Pass `promiscuous=False` to decline, and expect to
+  see only broadcast replies if you do.
 - **`path_mtu` may return `None`.** That is an answer, not a failure: an MTU
   sizes packets, so a guessed one is a silent black hole.
 - **`wake_on_lan` returns nothing.** Nothing acknowledges a magic packet, so a
@@ -213,6 +274,9 @@ ICMP round trip and a filtered port is not a dead host.
 
 ## Common mistakes
 
+- Taking `observe_dhcp(...)[0]` as the machine's address. It is the first
+  address OFFERED, which is frequently the one the guest declined; the one
+  it kept is last. Check them, or use `observe_dhcp_first_reachable`.
 - Treating `is_reachable` as `ping(...).reached`. The first never raises and
   tries TCP; the second raises on a bad name and reports ICMP only.
 - Reading `scan_ports` as a boolean map. It returns `PortState`: `CLOSED` means
