@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.116.1] - 2026-07-31
+
+### Fixed
+
+- **infra-storage-check-zpools now states the requirement that actually decides whether the
+  tool runs: OpenZFS 2.3+.** It previously led with an operating-system list, which is the
+  wrong constraint - `zpool status -j --json-int` is what the whole package reads, and that
+  JSON interface arrived in OpenZFS 2.3, so an older ZFS fails on every pool-touching
+  subcommand no matter how well supported the platform is. Also corrected the platform notes:
+  ZFS on macOS and Windows exists only as third-party ports (the Windows one still beta), and
+  both lag upstream, so the version has to be checked rather than assumed.
+
 ## [5.116.0] - 2026-07-31
 
 ### Added
