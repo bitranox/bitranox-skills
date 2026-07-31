@@ -57,10 +57,13 @@ sudo "$VENV_DIR/bin/uvx" check_zpools@latest service-install --uvx-version @late
 sudo "$VENV_DIR/bin/uvx" check_zpools@latest alias-create --all-users
 ```
 
-`@latest` re-resolves on every invocation, so a release reaches the host without
-a redeploy. Omit it to pin to whatever version is cached. The **daemon resolves
-only at startup**, so after a release it needs `systemctl restart check_zpools`;
-cron invocations pick it up on their next run.
+`@latest` re-resolves, so a release reaches the host without a redeploy, but uv
+caches index metadata briefly - a just-published version can still resolve to the
+previous one for a short window (observed on a real host minutes after a release).
+Force it with `uvx --refresh` when that matters. Omit `@latest` to pin to whatever
+is cached. The **daemon resolves only at startup**, so after a release it keeps
+running the old version until `systemctl restart check_zpools`; cron invocations
+pick it up on their next run.
 
 ## Configure
 
