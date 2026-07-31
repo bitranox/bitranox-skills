@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.122.0] - 2026-08-01
+
+### Added
+
+- **meta-skill-writer: diff GREEN against RED in BOTH directions - what appeared, and what
+  disappeared.** A new step does not add to an agent's attention, it competes for it, so an edit
+  that works can still cost a result the baseline produced. A richer GREEN is exactly what a
+  net-negative edit looks like from the gained side alone: one correctness finding traded for four
+  style findings is a worse review that ships as an improvement because the tally went up. A lost
+  result is a REFACTOR requirement ranked by value rather than count.
+- **Confirm a loss reproduces before restructuring.** One run per condition shows a mechanism is
+  plausible, never that it is stable, so a single absence is a hypothesis with three live rivals:
+  the edit displaced it, the run varied, or the baseline item was wrong. Re-run the same arm with
+  everything else fixed; restructuring a skill around noise costs the version you already had.
+- **A judgement that must follow a mechanical step becomes a required OUTPUT of that step.**
+  Anything optional after a satisfying mechanical action gets skipped, and a rule stated as prose
+  after a concrete table reads as commentary on the table - so the row reports its verdict, not
+  only its count. Making the prose more emphatic does not bring the judgement back.
+
 ## [5.121.0] - 2026-08-01
 
 ### Added
