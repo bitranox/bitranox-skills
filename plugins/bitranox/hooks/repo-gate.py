@@ -758,6 +758,70 @@ def is_gated_command(command):
     return False
 
 
+def gate_tool_repo_mirror(root):
+    """Check the mirror of a skill edited in its OWN repo, before it is committed.
+
+    The gate fires on every ``git commit``/``git push`` on the machine, but it used to
+    return 0 in any repo that is not the marketplace. That left the tool-repo side of a
+    mirrored pair unguarded, which is the side that actually drifted: measured twice on
+    ``coding-python-network-probe``, which described a subsystem as absent two releases
+    after it shipped.
+
+    Returns 2 to block a drifted pair, 0 otherwise. Silent when this repo owns no
+    mirrored skill, so it does not narrate in every unrelated repo.
+
+    The "cannot compare" case is deliberately NOT a bare 0. With no marketplace checkout
+    there is nothing to diff, and passing in silence is indistinguishable from passing
+    because the pair is in sync - which would make this guard permanently green and
+    worthless. It still passes, because blocking would break anyone without the
+    checkout, but it says so through ``additionalContext``, the one exit-0 channel the
+    model actually reads (plain stdout/stderr on exit 0 does not reach it).
+    """
+
+    if root is None:
+        return 0
+    try:
+        event = json.load(sys.stdin)
+    except Exception:  # noqa: BLE001
+        return 0
+    if not is_gated_command((event.get("tool_input") or {}).get("command") or ""):
+        return 0
+
+    public = _public_tree(root / "x")
+    if public is None:
+        return 0
+    mine = sorted(name for name, rel in MIRRORED_SKILLS.items() if (public / rel).resolve().is_relative_to(root))
+    if not mine:
+        return 0
+
+    marketplace = public / "KI" / "bitranox-skills"
+    if not (marketplace / "plugins" / "bitranox" / "skills").is_dir():
+        _say_unverifiable(mine, marketplace)
+        return 0
+
+    fails = mirror_failures(marketplace, set(mine))
+    if not fails:
+        return 0
+    for name in mine:
+        print("%-8s%-34s %s" % ("DRIFT" if any(name in f for f in fails) else "in sync", name, MIRRORED_SKILLS[name]))
+    for failure in fails:
+        print("\n" + failure)
+    print("repo-gate: blocked - a skill this repo ships has drifted from its marketplace twin.", file=sys.stderr)
+    return 2
+
+
+def _say_unverifiable(names, marketplace):
+    """Tell the model the mirror could not be checked, rather than exiting 0 in silence."""
+
+    note = (
+        "repo-gate: could not verify the marketplace mirror of %s - no bitranox-skills checkout at %s. "
+        "The commit is allowed, but nothing confirmed the twin is in sync; run "
+        "'repo-gate.py --mirror-of <this repo>' where the marketplace is checked out." % (", ".join(names), marketplace)
+    )
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": note}}))
+
+
+
 def main():
     args = sys.argv[1:]
     ci = "--ci" in args
@@ -775,7 +839,10 @@ def main():
         if ci or mirrors:
             print("repo-gate: not inside the bitranox-skills repo", file=sys.stderr)
             return 1
-        return 0  # hook mode in some other repo: never interfere
+        # Hook mode outside the marketplace. Not "never interfere" any more: if THIS repo
+        # ships a skill mirrored into the marketplace, the pair is checked from this side
+        # too. Everything else still passes untouched.
+        return gate_tool_repo_mirror(root)
 
     if mirrors:
         # The full sweep the commit gate deliberately does not do: it reports every pair,

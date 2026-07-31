@@ -711,3 +711,71 @@ def test_every_manifest_entry_points_at_a_real_twin_on_this_machine():
         pytest.skip("not inside the shared public/ tree")
     missing = [rel for rel in RG.MIRRORED_SKILLS.values() if not (public / rel / "SKILL.md").is_file()]
     assert missing == [], "MIRRORED_SKILLS points at a twin that does not exist: %s" % missing
+
+
+# --------------------------------------------------------------------------
+# The tool-repo side of the gate: a mirrored skill edited in ITS OWN repo
+# --------------------------------------------------------------------------
+
+
+def _tool_repo_commit(monkeypatch, public, repo, command="git commit -m x"):
+    """Drive hook mode as though the commit happened inside a tool repo."""
+    monkeypatch.setattr(RG, "repo_root", lambda: repo)
+    monkeypatch.setattr(RG, "_public_tree", lambda _start: public)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": command}})))
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py"])
+
+
+def test_a_commit_in_a_tool_repo_blocks_when_its_mirror_has_drifted(tmp_path, monkeypatch, capsys):
+    # The asymmetry this closes: the gate already fires on every git commit, but used to
+    # return 0 in any repo that is not the marketplace - so editing a mirrored skill in
+    # its OWN repo was unguarded. Measured twice in practice: the network-probe mirror
+    # described a subsystem as absent two releases after it shipped.
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace("One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
+
+    assert RG.main() == 2
+    assert "DRIFT" in capsys.readouterr().out
+
+
+def test_a_commit_in_a_tool_repo_passes_when_the_mirror_is_in_sync(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
+
+    assert RG.main() == 0
+
+
+def test_a_repo_that_ships_no_mirrored_skill_is_still_silent(tmp_path, monkeypatch, capsys):
+    # The gate must not start narrating in every unrelated repo on the machine.
+    public = _mirror_tree(tmp_path)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    _tool_repo_commit(monkeypatch, public, public / "libs" / "unrelated")
+
+    assert RG.main() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_non_commit_command_in_a_tool_repo_is_not_checked(tmp_path, monkeypatch):
+    public = _mirror_tree(tmp_path, twin_body=TWIN_BODY.replace("One paragraph of content.", "DRIFTED: a capability the mirror never heard of."))
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    _tool_repo_commit(monkeypatch, public, public / "libs" / "thing", command="git status")
+
+    assert RG.main() == 0
+
+
+def test_a_missing_marketplace_checkout_says_so_instead_of_passing_silently(tmp_path, monkeypatch, capsys):
+    # THE failure mode that would make this whole guard worthless: with no marketplace
+    # on the machine there is nothing to compare, and a bare exit 0 is indistinguishable
+    # from "in sync". It must pass - blocking would break anyone without the checkout -
+    # but it has to SAY it could not check, on the channel the model actually reads.
+    public = tmp_path / "public"
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    monkeypatch.setattr(RG, "MIRRORED_SKILLS", {"coding-python-thing": "libs/thing/skills/python-thing"})
+    _tool_repo_commit(monkeypatch, public, public / "libs" / "thing")
+
+    assert RG.main() == 0
+    printed = capsys.readouterr().out
+    assert "additionalContext" in printed, "an unverifiable mirror must reach the model, not exit 0 in silence"
+    assert "could not" in printed.lower() or "nothing to compare" in printed.lower()
