@@ -132,10 +132,12 @@ Create one todo per step.
    action, not an optional one - DELIVER them via `bitranox:meta-self-improve` -> "Propagating skill
    (or hook) improvements upstream" (self-PR in `propose`, commit-or-PR in `auto`, skipped in `off`).
    Verify each candidate against the CURRENT skill content FIRST - some may already be shipped ->
-   drop, do not re-add. `contrib_queue.py drain` ONLY for what actually shipped; leave a contribution
-   queued for a later session ONLY when it genuinely needs user input or the mode is `off`, never as
-   the default for a deliverable one (a queued-but-deliverable contribution evaporates until a manual
-   re-prompt).
+   drop, do not re-add. Close each delivered one individually with `contrib_queue.py ship --match
+   <unique text> --note <where it landed>`, and each disproven one with `drop` - `--match` not
+   `--index`, which shifts under the previous close, and never `drain`, which closes the WHOLE
+   queue and so fits only a sweep where every entry shipped. Leave a contribution queued for a
+   later session ONLY when it genuinely needs user input or the mode is `off`, never as the default
+   for a deliverable one (a queued-but-deliverable contribution evaporates until a manual re-prompt).
 7b. **Toolbox pass (contribute; PROPOSE-ONLY).** Run the CONTRIBUTE delta per
    `bitranox:meta-dream-tree` -> references/dream-core.md "Toolbox pass": list the local toolbox
    (`uv run ~/.claude/skills/toolbox/tools/toolbox.py list`), judge which tools are broadly useful to

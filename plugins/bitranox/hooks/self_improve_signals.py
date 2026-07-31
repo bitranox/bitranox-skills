@@ -398,10 +398,11 @@ def add_contribution(proj, record, max_items=100):
         key = (str(record.get("what")), str(record.get("target") or ""))
         if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
             return False
-        # A DROPPED intent stays dropped. Without this the dedup key only spans the LIVE queue, so a
-        # later dream that re-notices a disproven gap silently re-queues it and every future dream
-        # re-evaluates it again.
-        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in read_rejected(proj)):
+        # A CLOSED intent stays closed, whichever outcome closed it. Without this the dedup key only
+        # spans the LIVE queue, so a later dream that re-notices a disproven gap silently re-queues
+        # it and every future dream re-evaluates it again - and a DELIVERED one comes back as a TODO
+        # for work already shipped. Read the closed set, never just the rejections.
+        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in read_closed(proj)):
             return False
         rec = dict(record)
         rec.setdefault("ts", time.time())
@@ -424,19 +425,31 @@ def drain_contributions(proj):
         pass
 
 
-# ---- rejected: a disproven or stale intent leaves the queue AND stays gone ---------------------
-# Draining is for what SHIPPED. An intent that turns out wrong (verified false) or stale (superseded)
-# must also leave, but deleting it alone is not enough: the add-dedup only spans the live queue, so
-# the next dream that re-notices the same gap re-queues it and it gets re-evaluated forever. The
-# tombstone is what makes a drop stick.
+# ---- closed: an intent leaves the queue AND stays gone, by one of two OUTCOMES -----------------
+# An intent leaves the queue either because it SHIPPED or because it was disproven/superseded, and
+# both must stay gone: the add-dedup spans only the live queue, so a later dream that re-notices the
+# same gap re-queues it and it gets re-evaluated forever. The tombstone is what makes leaving stick.
+#
+# Both outcomes live in ONE file with an `outcome` field rather than two files, because the re-queue
+# block reads the closed set - a second file is one more read for that check to forget, and a
+# forgotten one silently resurrects a delivered contribution. Reporting filters by outcome instead,
+# so a shipped contribution is never described to the reader as rejected.
+
+SHIPPED = "shipped"
+REJECTED = "rejected"
+
 
 def rejected_file(proj):
-    """Tombstones for contributions dropped as wrong or stale (never re-queued)."""
+    """Tombstones for contributions that have left the queue, either outcome (never re-queued)."""
     return _audit_dir() / (proj_key(proj) + ".contrib-rejected.jsonl")
 
 
-def read_rejected(proj):
-    """The dropped contributions for `proj`, oldest first. [] when none."""
+def read_closed(proj):
+    """Every contribution that has left the queue, oldest first, both outcomes. [] when none.
+
+    This is the set the re-queue block must consult: a delivered intent and a disproven one are
+    equally not-a-TODO. Records written before the outcome field existed were all drops, so a
+    missing `outcome` reads as rejected."""
     out = []
     try:
         for ln in rejected_file(proj).read_text(encoding="utf-8").splitlines():
@@ -448,24 +461,58 @@ def read_rejected(proj):
             except ValueError:
                 continue
             if isinstance(rec, dict) and rec.get("what"):
+                rec.setdefault("outcome", REJECTED)
                 out.append(rec)
     except OSError:
         return []
     return out
 
 
-def drop_contribution(proj, index, reason="", max_items=200):
-    """Remove the 1-based `index` entry from the queue and tombstone it. Returns the dropped record.
+def read_rejected(proj):
+    """The contributions dropped as wrong or stale, oldest first. Excludes what SHIPPED."""
+    return [r for r in read_closed(proj) if r.get("outcome") != SHIPPED]
 
-    Raises IndexError on an out-of-range index so a mistyped selector cannot silently delete the
-    wrong intent (or none, while reporting success)."""
+
+def read_shipped(proj):
+    """The contributions that actually shipped, oldest first."""
+    return [r for r in read_closed(proj) if r.get("outcome") == SHIPPED]
+
+
+def resolve_contribution(proj, index=None, match=None):
+    """The 0-based position of exactly ONE queued contribution, by `index` (1-based) or `match`.
+
+    `match` is a case-insensitive substring of the entry's `what` or `target`, and exists because an
+    INDEX SHIFTS under the previous close: closing two entries by the indices of one listing hits
+    the wrong second entry, which silently destroys a contribution that was meant to stay queued.
+    Raises IndexError (out of range, no match, or an ambiguous match) rather than guessing."""
     cur = read_contributions(proj)
+    if match:
+        needle = str(match).lower()
+        hits = [i for i, r in enumerate(cur)
+                if needle in str(r.get("what") or "").lower()
+                or needle in str(r.get("target") or "").lower()]
+        if not hits:
+            raise IndexError("no queued contribution matches %r (queue holds %d)" % (match, len(cur)))
+        if len(hits) > 1:
+            raise IndexError("%r matches %d queued contributions - narrow it: %s"
+                             % (match, len(hits), "; ".join(str(cur[i].get("what"))[:40] for i in hits)))
+        return hits[0]
     if not isinstance(index, int) or index < 1 or index > len(cur):
         raise IndexError("no queued contribution at index %r (queue holds %d)" % (index, len(cur)))
-    rec = cur.pop(index - 1)
+    return index - 1
+
+
+def _close_contribution(proj, index, outcome, note="", max_items=200, match=None):
+    """Remove ONE entry from the queue (by `index` or `match`) and tombstone it under `outcome`.
+
+    Raises IndexError on a selector that does not resolve to exactly one entry, so a mistyped or
+    shifted selector cannot silently close the wrong intent (or none, while reporting success)."""
+    cur = read_contributions(proj)
+    rec = cur.pop(resolve_contribution(proj, index, match))
     tomb = dict(rec)
-    tomb["reason"] = str(reason or "")
-    tomb["dropped_ts"] = time.time()
+    tomb["outcome"] = outcome
+    tomb["note" if outcome == SHIPPED else "reason"] = str(note or "")
+    tomb["closed_ts"] = time.time()
     try:
         f = contrib_file(proj)
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -473,7 +520,7 @@ def drop_contribution(proj, index, reason="", max_items=200):
             f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
         else:
             f.unlink(missing_ok=True)
-        prev = read_rejected(proj)
+        prev = read_closed(proj)
         prev.append(tomb)
         if len(prev) > max_items:
             prev = prev[-max_items:]
@@ -482,6 +529,20 @@ def drop_contribution(proj, index, reason="", max_items=200):
     except OSError:
         pass
     return rec
+
+
+def drop_contribution(proj, index=None, reason="", max_items=200, match=None):
+    """Close ONE entry (by 1-based `index` or by `match`) as DISPROVEN or stale."""
+    return _close_contribution(proj, index, REJECTED, reason, max_items, match)
+
+
+def ship_contribution(proj, index=None, note="", max_items=200, match=None):
+    """Close ONE entry (by 1-based `index` or by `match`) as DELIVERED. Returns the record.
+
+    Distinct from `drop_contribution` only in the outcome recorded: both leave the queue and both
+    block a re-queue, but a delivered contribution reported back as rejected misleads every later
+    reader about whether the work was done."""
+    return _close_contribution(proj, index, SHIPPED, note, max_items, match)
 
 
 # ---- nap-owed: make the post-compaction consolidation non-optional ----------------------------

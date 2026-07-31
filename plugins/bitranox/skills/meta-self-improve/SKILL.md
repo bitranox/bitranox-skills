@@ -138,7 +138,11 @@ entry only when nothing covers it.
   lost, not the fact: `contrib_queue.py add --what ... --target skill:<name> --why ... "<cwd>"`
   (home: `<plugin>/skills/meta-self-improve/`, launch via `hooks/run-python.sh`). The queue is
   durable and SessionStart surfaces it every session WITHOUT consuming it, so the intent survives a
-  session end. Drain only after it actually ships.
+  session end. Close an entry only once it actually shipped, and by the right outcome: `ship --match
+  <unique text> --note <where it landed>` for delivered, `drop --match ... --reason ...` for
+  disproven or stale. Select by `--match`, never `--index`: an index shifts under the previous
+  close, so two closes from one listing destroy the wrong entry. A delivered contribution recorded
+  as rejected tells every later reader the work was not done.
 
 ### 4. Write it (the engine, fail-loud)
 
