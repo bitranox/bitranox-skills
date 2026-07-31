@@ -542,6 +542,22 @@
   "clone",
   "fails"
  ],
+ "infra-storage-check-zpools": [
+  "monitoring",
+  "pool",
+  "health",
+  "running",
+  "scrubs",
+  "machine",
+  "script",
+  "timer",
+  "checking",
+  "capacity",
+  "read",
+  "write",
+  "checksum",
+  "errors"
+ ],
  "marketing-rory": [
   "working",
   "marketing",

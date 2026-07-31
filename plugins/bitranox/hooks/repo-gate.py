@@ -527,6 +527,7 @@ MIRRORED_SKILLS = {
     "compuse-vnc": "apps/utils/vnc-remote-control/skills/vnc-remote-control",
     "devops-bmk": "apps/utils/bmk/skills/devops-bmk",
     "infra-proxmox-bindsnap": "apps/pve-bindsnap/skills/proxmox-bindsnap",
+    "infra-storage-check-zpools": "apps/utils/check_zpools/skills/check-zpools",
 }
 
 #: The self-install note only the tool repo's copy carries: there it is true and useful,
