@@ -79,20 +79,20 @@ def hook_over_budget(hook):
     return len(hook or "") > HOOK_SOFT_MAX
 
 
-HOOK_HARD_MAX = 500   # hard cap, chars: a longer pointer line risks being wrapped by a markdown
-                      # formatter and then DROPPED on the next block round-trip (orphaning its body).
-                      # The body keeps the full detail, so truncating the always-loaded hook is safe.
+HOOK_HARD_MAX = 500   # hard cap, chars. Every pointer line is ALWAYS loaded - at every level of the
+                      # cascade, in the main session and again in every subagent that inherits it -
+                      # so this is a CONTEXT BUDGET: it bounds what one fact costs a session that
+                      # never uses it. It is not wrap protection: a formatter that wraps at 80
+                      # columns splits a median-length line just as surely as a 1000-char one.
+                      # Detail past the cap belongs in the body, which is read on demand.
 
 
-def cap_hook(hook):
-    """Hard-cap a hook to one round-trip-safe pointer line, truncating at a word boundary.
-    Returns the hook unchanged when within `HOOK_HARD_MAX`."""
-    h = (hook or "").strip()
-    if len(h) <= HOOK_HARD_MAX:
-        return h
-    cut = h[:HOOK_HARD_MAX]
-    sp = cut.rfind(" ")
-    return (cut[:sp] if sp >= HOOK_HARD_MAX - 80 else cut).rstrip()
+def hook_over_hard_cap(hook):
+    """True when a hook exceeds the hard cap. The write path REFUSES such a hook instead of
+    truncating it: a silent word-boundary cut leaves an always-loaded line that still reads as a
+    complete instruction while its tail is gone, which misleads a reader more than an omission
+    would. The author moves the detail into the body instead."""
+    return len((hook or "").strip()) > HOOK_HARD_MAX
 
 
 # Trigger-first hooks fire during reasoning; trigger-less ones don't (probe-verified: hooks leading

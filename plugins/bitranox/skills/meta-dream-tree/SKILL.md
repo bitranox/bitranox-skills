@@ -132,12 +132,13 @@ the success line, abort-and-show on a miss).
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
-   the 500-char HARD cap that `cap_hook` would truncate, trigger-less hooks, and bodies missing the
+   the 500-char HARD cap - `add` refuses one, so any that exist were hand-edited or arrived with a
+   legacy store, and each needs a rewrite - trigger-less hooks, and bodies missing the
    `**Why:**`/`**How to apply:**` frame - a tracked backlog number, advisory). Then apply judgment on
    top: a hook whose trigger does not actually name the situations its body applies to (the FIRING
    check - would this line catch your attention at the right moment?). Do
    NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
-   to the hard cap. Queue offenders to a sonnet
+   to the hard cap, which the engine enforces by refusal. Queue offenders to a sonnet
    rewrite (trigger-first, facts preserved, slug-stable via `add --slug`), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
 

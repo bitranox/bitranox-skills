@@ -726,8 +726,8 @@ loads as always-in-context cascade text, and every fact body lives centrally at
 framed as a native memory entry (frontmatter, then **Why:** / **How to apply:**), read on demand
 via the retrieval recipe the block itself carries. Write ONLY through the engine -
 `hooks/memory_engine.py add ...` launched via `hooks/run-python.sh` (it upserts by slug, enforces
-tree-unique slugs, frames the body, locks, stays mtime-neutral); never hand-edit the block or a
-body (a PreToolUse guard denies it).
+tree-unique slugs and the 500-char hook cap, frames the body, locks, stays mtime-neutral); never
+hand-edit the block or a body (a PreToolUse guard denies it).
 
 A memory MCP (`basic-memory`) is NOT a backend/home - only an OPTIONAL, read-only full-text+graph
 SEARCH index OVER those local files, to sharpen cross-project recall; when absent, recall falls back

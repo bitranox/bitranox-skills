@@ -72,6 +72,18 @@ class SlugCollision(ValueError):
         self.slug, self.suggestion = slug, suggestion
 
 
+class HookTooLong(ValueError):
+    """Raised when an authored hook exceeds the always-loaded pointer line's hard cap. Refused rather
+    than truncated, so no fact ever ships a line that reads complete while its tail is missing - the
+    author moves the detail into the body, which is read on demand."""
+
+    def __init__(self, length, limit=None):
+        self.length = int(length)
+        self.limit = us.HOOK_HARD_MAX if limit is None else int(limit)
+        super().__init__("hook is %d chars, over the %d-char hard cap; move the detail into the body "
+                         "and keep the hook one trigger-first directive" % (self.length, self.limit))
+
+
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
 
 def _anchor(proj):
@@ -143,12 +155,18 @@ def _framed_body(slug, hook, type_, body):
 
 
 def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin=False,
-                        scope_default="", slug=None):
+                        scope_default="", slug=None, allow_over_cap_hook=False):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Merges the provenance `source` set on update, ensures the level's pointer block + scope, and
-    writes under a lock, mtime-neutral. Returns the slug."""
+    writes under a lock, mtime-neutral. Returns the slug.
+
+    An over-cap hook raises `HookTooLong` BEFORE anything is written, so a refusal never half-writes
+    or clobbers the entry it was updating. `allow_over_cap_hook` exists for the movers only (rehome,
+    migrate): they carry text that is ALREADY stored, and refusing there would strand the fact."""
     slug = slug or slugify(title, type_)
-    hook = us.cap_hook(hook)                          # hard-cap so the pointer line round-trips safely
+    hook = (hook or "").strip()
+    if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
+        raise HookTooLong(len(hook))
     src = set(source or ())
     anchor = _anchor(proj)
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
@@ -923,7 +941,8 @@ def _body_unframed(body):
 def lint_tree(anchor):
     """READ-ONLY voice/frame sweep over every curated level under `anchor` (defect J - the store had
     no sweep verb, so the debt was rediscovered every dream). Reports: hooks over the HARD cap
-    (`cap_hook` would truncate - a wrap-drop risk), hooks missing a trigger phrase (never fire during
+    (the write path refuses one, so any that exist are hand-edited or legacy), hooks missing a
+    trigger phrase (never fire during
     reasoning), and bodies missing the `**Why:**`/`**How to apply:**` frame. Advisory: a tracked
     backlog number, never a failure. Returns a report dict."""
     anchor = _anchor(str(anchor))
@@ -1084,7 +1103,8 @@ def main(argv=None):
         rep = lint_tree(args.tree)
         print("voice/frame lint: %s" % rep["anchor"])
         for lvl, slug, n in rep["over_cap"]:
-            print("    ! hook over HARD cap (%d chars, cap_hook would truncate): %s [%s]" % (n, slug, lvl))
+            print("    ! hook over HARD cap (%d chars, hand-edited past the refusal): %s [%s]"
+                  % (n, slug, lvl))
         for lvl, slug in rep["no_trigger"]:
             print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
         for lvl, slug in rep["unframed"]:
@@ -1162,15 +1182,11 @@ def main(argv=None):
             slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
                                        scope_default=args.scope, slug=args.slug)
-        except SlugCollision as c:
+        except (SlugCollision, HookTooLong) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
-        if len(args.hook or "") > us.HOOK_HARD_MAX:
-            print("~ warning: hook was %d chars, TRUNCATED to the %d-char hard cap (full detail stays "
-                  "in the body): rewrite as 1-3 directive sentences"
-                  % (len(args.hook), us.HOOK_HARD_MAX))
-        elif us.hook_over_budget(args.hook):
+        if us.hook_over_budget(args.hook):
             print("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char hard "
                   "cap; keep it self-sufficient, do not trim load-bearing detail to silence this)"
                   % (len(args.hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))

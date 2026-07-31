@@ -17,6 +17,55 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.120.0] - 2026-07-31
+
+### Changed
+
+- **The 500-char memory-hook cap now refuses instead of truncating.** `add_or_update_entry`
+  raises `HookTooLong` before anything is written and the CLI prints `! refused:` and exits 1,
+  where it used to word-boundary-truncate and print a warning. Six hooks had reached the store
+  cut mid-sentence, one ending "Its 27", each of them an always-loaded pointer line that still
+  reads like a complete instruction while its tail is gone - which misleads a reader more than
+  an omission does. The warning printed at every one of those writes and was ignored every time,
+  so the check had to become a gate. The surplus detail belongs in the body, which is read on
+  demand and has no cap. The movers (`reconcile --rehome`, `migrate_memory`) pass
+  `allow_over_cap_hook=True`: they carry text that is already stored, and refusing there would
+  strand a legacy fact rather than improve it.
+- **Corrected the cap's stated rationale.** The constant claimed 500 protected a pointer line
+  from being wrapped by a markdown formatter and dropped on the next round-trip. It does not: a
+  formatter that wraps at 80 columns splits a median-length hook just as surely as a 1000-char
+  one. What the cap actually bounds is always-loaded context - every pointer line is loaded at
+  every level of the cascade, in the session and again in every subagent that inherits it.
+
+## [5.119.0] - 2026-07-31
+
+### Added
+
+- **A Bash guard against a prefix assignment referenced on its own command line.** `VAR=value cmd
+  "$VAR"` passes an empty argument: the prefix binds the variable in the command's environment
+  while the current shell expands `$VAR` first and has no such variable. Heredoc bodies are
+  stripped, so documenting the footgun is not blocked by it.
+
+## [5.118.0] - 2026-07-31
+
+### Changed
+
+- **coding-python-network-probe: IPv6 link-local zones and the many-to-one MAC/interface
+  mapping.** Reaching a link-local address needs the RFC 4007 zone, with `interface.index` the
+  only spelling that works on every platform. Examples moved to the reserved documentation
+  ranges (RFC 5737, 3849, 7042, 2606); they had carried real addresses from the authoring
+  machine.
+- **meta-skill-writer: documentation values, and present-tense artifacts.** A skill and its
+  review artifact describe what the skill does now, not how the session that wrote it went.
+
+## [5.117.0] - 2026-07-31
+
+### Changed
+
+- **Enum formatting trap, marker wiring, BSD grep, and the mirror blockquote.** Skill corrections
+  covering the 3.10/3.11 enum string-form flip, pytest markers that skip nothing until conftest
+  wires them, BSD grep's missing GNU escapes, and the mirrored-skill self-install blockquote.
+
 ## [5.116.2] - 2026-07-31
 
 ### Fixed

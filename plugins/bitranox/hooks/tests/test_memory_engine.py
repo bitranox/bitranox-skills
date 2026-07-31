@@ -307,6 +307,14 @@ def test_cli_add_warns_over_hook_budget(tmp_path, capsys, proj):
     assert rc == 0 and "~ warning: hook is" in out                  # advisory, exit stays 0
 
 
+def test_cli_add_over_hard_cap_refusal_exit_one(tmp_path, capsys, proj):
+    over = "x" * (us.HOOK_HARD_MAX + 1)
+    rc = E.main(["add", "--proj", proj, "--title", "Over", "--hook", over, "--body", "B"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "! refused:" in out and "hard cap" in out
+    assert E.read_store(proj)[1] == []                              # refused BEFORE any write
+
+
 # ---- move: the dream's re-leveling primitive (pointer-line ops only; the body never moves) -------
 
 def _three_levels(tmp_path):
@@ -479,7 +487,7 @@ def test_lint_tree_reports_over_cap_triggerless_and_unframed(tmp_path, capsys):
                           body="Prose.\n\n**Why:** reason\n\n**How to apply:** steps", scope_default="p")
     # trigger-less hook + unframed body (no **Why:**/**How to apply:**)
     E.add_or_update_entry(mid, "Bad", "just a statement, no trigger", body="bare prose", scope_default="m")
-    # over-HARD-cap hook: add() hard-caps, so inject directly to simulate a legacy/hand-edited line
+    # over-HARD-cap hook: add() refuses one, so inject directly to simulate a hand-edited/legacy line
     us.add_pointer(anchor, slug="huge", title="Huge", hook="When " + ("x" * 600) + " do z")
     rc = E.main(["lint", "--tree", proj])
     out = capsys.readouterr().out

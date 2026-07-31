@@ -26,18 +26,38 @@ def _drop_pointer(proj, slug):
     path.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
-# ---- C1: hard hook cap --------------------------------------------------------------------------
+# ---- C1: the hard hook cap REFUSES, it does not truncate ----------------------------------------
 
-def test_cap_hook_leaves_short_and_truncates_long_at_word_boundary():
-    assert us.cap_hook("a short hook") == "a short hook"
-    capped = us.cap_hook("When something happens " * 40)   # ~920 chars
-    assert len(capped) <= us.HOOK_HARD_MAX
-    assert capped == capped.rstrip() and " " in capped     # word boundary, no trailing space
+OVER_CAP_HOOK = "When x, " + "yy " * 400        # ~1200 chars
 
 
-def test_add_hard_caps_an_over_long_hook(proj):
-    E.add_or_update_entry(proj, "Title", "When x, " + "yy " * 400, body="B", type_="reference")
-    assert len(E.read_store(proj)[1][0].hook) <= us.HOOK_HARD_MAX
+def test_hook_over_hard_cap_predicate():
+    assert not us.hook_over_hard_cap(None) and not us.hook_over_hard_cap("a short hook")
+    assert not us.hook_over_hard_cap("x" * us.HOOK_HARD_MAX)          # the cap itself is allowed
+    assert us.hook_over_hard_cap("x" * (us.HOOK_HARD_MAX + 1))
+    assert not us.hook_over_hard_cap(" " + "x" * us.HOOK_HARD_MAX + " ")   # measured after strip
+
+
+def test_add_refuses_an_over_cap_hook_and_writes_nothing(proj):
+    with pytest.raises(E.HookTooLong):
+        E.add_or_update_entry(proj, "Title", OVER_CAP_HOOK, body="B", type_="reference")
+    assert E.read_store(proj)[1] == []                          # no pointer
+    assert not us.body_path(proj, "reference-title").is_file()   # and no body
+
+
+def test_add_refusal_leaves_an_existing_entry_untouched(proj):
+    slug = E.add_or_update_entry(proj, "Title", "When x, do y.", body="B", type_="reference")
+    with pytest.raises(E.HookTooLong):
+        E.add_or_update_entry(proj, "Title", OVER_CAP_HOOK, type_="reference")
+    entry = E.read_store(proj)[1][0]
+    assert entry.slug == slug and entry.hook == "When x, do y."
+
+
+def test_a_mover_may_carry_an_already_stored_over_cap_hook_verbatim(proj):
+    """rehome/migrate MOVE text that is already in a store; refusing there would strand the fact."""
+    E.add_or_update_entry(proj, "Title", OVER_CAP_HOOK, body="B", type_="reference",
+                          allow_over_cap_hook=True)
+    assert E.read_store(proj)[1][0].hook == OVER_CAP_HOOK.strip()
 
 
 # ---- A: add re-adopts a dangling body -----------------------------------------------------------
