@@ -132,6 +132,49 @@ step was patched out in every test. The suite was 10/10 green; the real code ins
 nothing ever created, so the function failed on the first real call. A coverage-led read scored that
 suite adequate. Ask of any mocked-out path: if the mock were removed, would this still work?
 
+**Interface shape - COUNT it, do not read for it.** Score under Architecture (the seams) and
+Maintainability (the churn). This is the shapes units pass BETWEEN each other, and it is the gap
+a review most reliably walks past, because every individual signature looks reasonable. It only
+appears in aggregate, so the method is a census, not a read. Language-agnostic - parameters,
+returns and call edges exist everywhere: use a parser where one exists, `grep` over signature
+lines where it does not.
+
+| Signal                           | Count                                                                            | Worth a finding when                                                                            |
+|----------------------------------|----------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| **Data clump**                   | For each pair/triple of parameter NAMES, how many signatures contain all of them | The same group in 3+ functions. That group is an unnamed object                                 |
+| **Long parameter list**          | Parameters per function, descending                                              | More than 4-5, especially two functions sharing most of a long list                             |
+| **Anonymous multi-value return** | Returns that are a tuple/pair/array/out-param/bare map, bucketed by shape        | Any shape returned by 3+ functions. A shape that dominates the codebase is a missing named type |
+| **Parameter tramp**              | Parameters used ONLY as an argument to a forwarded call, never read              | Any; threaded 3+ levels deep is the strongest evidence an object belongs there                  |
+| **Receiver re-parse**            | Call sites that immediately split/parse/cast a callee's return                   | Any. The callee had the structured value and discarded it                                       |
+| **Boolean/stringly parameter**   | Flag parameters, and strings compared against literals                           | Any that selects behaviour. It wants an enum, which often already exists                        |
+
+Then JUDGE, because a count is a lead and not a verdict:
+
+- **A shared NAME is not a shared concept.** Two functions taking `key` where one means an ssh
+  key path and the other a lookup key are not a clump; merging them is a new bug, not a fix.
+- **A dominant return shape needs its MEANING checked at every site.** If forty functions return
+  `(bool, string)`, confirm all forty mean the same thing by the bool. One that inverts it is a
+  live defect the census just handed you, and it outranks the refactor.
+- **Ask what would catch a positional mistake.** A type checker catches a swap between different
+  types and catches NOTHING between two same-typed fields, which is where the expensive bugs are.
+- **Prefer the named type that already exists** - extending one usually beats adding a sibling.
+- **Rank by parameters removed per line changed**, and say which findings are NOT worth doing.
+
+**The tell that this matters.** Measured, not assumed. A package whose gate was fully green
+(formatter, linter, strict type checker, import contracts, 650 tests) carried 43 of 568 annotated
+returns in one anonymous 2-tuple, two 11-parameter functions, one parameter group across 20
+signatures, and 8 receiver re-parses. Three structural reviews read that code and rated the tuple
+cosmetic. Then a purpose-built fixture with 26 instances of one pair-return and one silently
+inverted check was reviewed twice: the weaker model missed the shape entirely, the stronger found
+it and ranked it MINOR, tenth of eleven findings - and missed the inversion that the weaker one
+caught. Neither counted. That is the failure this section exists to prevent: not blindness, but
+local judgement of a global pattern.
+
+Worth doing on its own once a named type exists: tighten the CONTAINER annotations too
+(`list[pair]` -> `list[Named]`). A named tuple is assignable to the anonymous one but not the
+reverse, so tightening makes the type checker surface every remaining raw construction - eight of
+them, in the measured case, none reachable from a green test run.
+
 **Scoring anchors (all dimensions):**
 
 | Score | Meaning                                                  |
@@ -143,6 +186,30 @@ suite adequate. Ask of any mocked-out path: if the mock were removed, would this
 | 9-10  | Excellent, best practices throughout, no meaningful gaps |
 
 Present the scorecard as a table with per-dimension scores and the weighted total.
+
+**A CLI must be drivable by a machine, not only by a person.** Score under Error Handling and
+Documentation. Applies to anything with subcommands and an exit code, in any language. Check all
+five, and check them by RUNNING the tool - ask for the structured mode on a command that FAILS,
+and read the exit code:
+
+| Requirement                                           | What to look for                                                                                                                                        |
+|-------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A structured mode exists at all                       | `--json` (or equivalent) on every subcommand, not just the one that was easiest                                                                         |
+| An envelope that reports completeness                 | `{ok, command, data, skipped}` - a reader must be able to tell a complete answer from a partial one                                                     |
+| A bare mode that stays parseable on failure           | `--json-bare` for `jq`; on error it emits `{type, message}`, never a traceback into a pipeline expecting data                                           |
+| Typed errors, not prose                               | An error CLASS name a caller can branch on, rather than a string to regex                                                                               |
+| Diagnostics on stderr, exit codes that mean something | Warnings and progress never enter the parsed stream; exit codes fixed and format-independent (0 success, 1 the question answered "no", 2 could not run) |
+
+The distinction that carries the weight is **"it ran and the answer is no" versus "it could not
+run"**. A human-formatted table plus exit 0 collapses those into one observation, and the caller
+proceeds on nothing.
+
+Do NOT assume the existing checklist row covers this. "Every subcommand x every output mode x a
+failing input" audits the modes that EXIST and never asks whether a machine-readable one exists.
+Measured: given a CLI with no structured mode, warnings on stdout, and exit 0 on a failed
+inspection, four independent reviews across two models flagged the inconsistent exception handling
+and the missing tests, and not one raised any of the five rows above. One review explicitly noted
+the exit codes were "inconsistent" without observing that a failure reported success.
 
 **Four always-on checks** (score under Resource Safety, Security and Documentation):
 - **Bounded memory on large/unbounded data.** Reading big files, huge database result sets, or
@@ -326,9 +393,16 @@ transcript from a thorough one.
 | Tests              | Could they fail? Real seams not self-mocks, an e2e path, no filler; stable and isolated |
 | Shipped skill      | Covers the whole API and CLI (see the always-on checks)                                 |
 | Docs and changelog | Match the code as it is now, including what the current change added                    |
+| Interface shape    | COUNT first: clumps, long lists, anonymous returns, tramps, re-parses, flag params      |
+| Machine-drivable   | Structured mode exists per subcommand; typed errors; stderr diagnostics; exit codes     |
 
 Report per sweep: which rows were walked, what each found, and the running total. That record is
 what makes "no findings" credible.
+
+Two of these rows are COUNTED, not read, and a sweep that reports "no findings" on them without
+naming the counts did not walk them. State the numbers: how many functions share the dominant
+return shape, the largest parameter group and how many signatures carry it, how many subcommands
+offer the structured mode out of how many exist.
 
 ## Common Mistakes
 
