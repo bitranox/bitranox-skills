@@ -62,6 +62,21 @@ separate config or workspace project, Go build tags, Rust `#[ignore]`, a `bats` 
 project's own docs so the split is discoverable - inventing a private convention per test file is
 how the integration tier quietly stops running.
 
+**A marker only skips when something acts on it - registering it is not wiring it.** In pytest,
+listing a name under `[tool.pytest.ini_options] markers` silences the unknown-marker warning and
+nothing more; the skip has to come from a `pytest_runtest_setup` hook in `conftest.py` that reads
+`item.iter_markers()` and calls `pytest.skip()`. A marker that guards a CONDITION (a platform, a
+capability, an available service) is the dangerous case, because a registered-but-unwired one reads
+exactly like a guard and runs everywhere. Before you trust one, grep `conftest.py` for the marker
+name; if only the config mentions it, it is documentation. Then prove the skip fires by forcing the
+condition rather than assuming.
+
+Watch for two families that mean the same thing - one wired, one not. A repo that carries both
+(`posix_only`/`windows_only` wired to a real skip, and `os_posix`/`os_windows` registered and inert)
+hands you a coin flip. Fix that at the root by wiring the unwired family, not by renaming the
+markers in the one test that failed: the rename fixes today's file and leaves the trap armed for the
+next test someone writes.
+
 **What decides the tier is the dependency, not the realism.** A test belongs in the marked tier when
 it needs something the machine does not already provide - an external service, a shared DB, Docker,
 credentials, the real network - or when it is slow enough to hurt the default run. A dependency you

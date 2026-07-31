@@ -30,6 +30,8 @@ A command in `ssh host '...'` is parsed by the LOCAL shell, then the REMOTE shel
 
 An SSH session is a flaky external resource: it can drop, hang, or time out mid-command. Never infer failure from a dropped connection - retry under a timeout and re-query the real state. For the self-healing patterns (retry+backoff, timeouts, graceful degradation), see `bitranox:coding-resilience`.
 
+**The remote tools are not the ones you have locally.** On a BSD host - FreeBSD, pfSense, or a macOS CI runner - `grep` and `sed` are the BSD builds, and GNU backslash escapes are NOT special there: `\t`, `\d`, `\s`, `\+` match literal characters, and a pattern that ENDS in a backslash aborts with `grep: trailing backslash (\)`. That compounds with the quoting layers above, because local-bash -> ssh -> remote-`sh` can mangle a backslash before grep ever sees it, so a pattern verified locally arrives malformed. Use POSIX classes and literal characters instead (`[[:space:]]`, `[[:alnum:]]`, an actual tab), or - better for anything structured - `scp` the file back and parse it in Python, where you get real regex and real error messages.
+
 ## Authentication and host keys
 
 - **Never ask for, type, or accept an SSH password.** A password in a command or prompt leaks into

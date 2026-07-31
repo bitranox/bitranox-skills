@@ -5,12 +5,6 @@ description: Use when monitoring ZFS pool health or running scrubs from a machin
 
 # check_zpools
 
-> The `check_zpools` repo is itself a Claude Code plugin/marketplace. Install this
-> skill in any project with `/plugin marketplace add bitranox/check_zpools` then
-> `/plugin install check_zpools`. It is also mirrored in the central bitranox
-> marketplace (<https://github.com/bitranox/bitranox-skills>) as
-> `infra-storage-check-zpools`.
-
 Monitors ZFS pools and alerts on them. Reads `zpool status -j --json-int` (never
 scrapes text), checks pools against configured thresholds, emails alerts with
 deduplication, runs scrubs, and can run continuously as a systemd daemon.
