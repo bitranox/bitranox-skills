@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.115.1] - 2026-07-31
+
+### Changed
+
+- **coding-python-network-probe re-synced: ipscout gained a macOS capture backend.** The skill now
+  says all three platforms are supported, that every one needs elevation, and that the macOS device
+  path has not been run on real hardware - the last of which matters more than the first, since an
+  agent reading "supported" would otherwise trust it equally with Linux. Caught by the tool-repo
+  mirror gate added in 5.115.0, on its first real outing.
+
 ## [5.115.0] - 2026-07-31
 
 ### Changed
