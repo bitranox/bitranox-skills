@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.132.0] - 2026-08-01
+
+### Changed
+
+- **A handoff to a skill that does not ship now says so: "(PLANNED, not yet shipped)".** Twelve rows
+  across `web-frontend-responsive-ux`, `sec-appsec-web-baseline` and `meta-self-improve` named
+  siblings a reader cannot install, so the tables read as coverage that exists. The rows are kept -
+  they are the record of what each family is meant to cover, and the reserved names are still the
+  names a future sibling gets built under - but a reader can now tell a plan from an installable
+  skill, and a future audit will not re-report them as dangling.
+- **Found the last four by a catalogue-wide sweep, not by a reviewer.** After fixing the six a
+  reviewer had flagged in one skill, a regex over every SKILL.md for `<category>-<name>` references
+  resolving to no shipped directory surfaced four more in two skills nobody had raised them
+  against - two of which were false positives worth recording, since `git-footgun-guard` and
+  `git-commit-branch-guard` are hooks rather than skills and do ship. Catalogue-wide result: 0
+  unmarked references to non-shipping skills.
+
 ## [5.131.0] - 2026-08-01
 
 ### Added
