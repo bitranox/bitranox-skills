@@ -35,6 +35,36 @@ _TELL = re.compile("[" + _char_class() + "]")
 _INLINE = re.compile(r"`[^`]*`")
 
 
+def transform_outside_code(text, fn):
+    """Rebuild `text` with `fn` applied to every stretch that is NOT code, leaving inline-code
+    spans and fenced blocks byte-identical.
+
+    This is the write-side twin of `find_tell_lines`, and it exists so the detector and any
+    rewriter agree about what counts as code. Without a shared primitive they drift: the sweep hook
+    skipped code while a rewriter did not, so a file could pass the hook and still have the tell
+    inside a deliberate example rewritten - which is how a curly-quote example in this repo was
+    once flattened into two identical halves."""
+    out = []
+    in_fence = False
+    for line in (text or "").splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        pos, parts = 0, []
+        for m in _INLINE.finditer(line):
+            parts.append(fn(line[pos:m.start()]))
+            parts.append(m.group(0))            # the span, verbatim
+            pos = m.end()
+        parts.append(fn(line[pos:]))
+        out.append("".join(parts))
+    return "".join(out)
+
+
 def find_tell_lines(text):
     """Return ['<lineno>: <line>', ...] for lines carrying a tell OUTSIDE inline-code spans and
     fenced blocks. Empty list means clean."""

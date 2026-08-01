@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.134.0] - 2026-08-01
+
+### Fixed
+
+- **`strip_typographic_tells.py` rewrote the deliberate examples it was told to leave alone.** The
+  tell-sweep hook skips inline-code spans and fenced blocks; the strip script did not, so a file
+  the sweep passed could still have its examples flattened by the script - which is how a
+  curly-quote example in this repo was once turned into two identical halves. Both now share ONE
+  definition of code, `tell_chars.transform_outside_code`, added beside the existing detector as
+  its write-side twin. Two implementations of "what is code" drifting apart is what caused this, so
+  the fix is a shared primitive rather than a second copy of the scanner.
+- **The same script ships TWICE**, in `write-humanize-en` and `write-humanize-de`, byte-identical
+  and under one module name. The English fix looked absent in the whole-plugin suite because in a
+  full run the German copy loads first - so the English tests had been exercising the German
+  script. Both are fixed and verified identical. The duplication and the module-name collision are
+  recorded as an open design question: a test in one skill can silently exercise the other's copy.
+- **write-humanize-de's claim became true rather than needing correction.** It already said the
+  exact character survives both the hook and an accidental run; that was false before this fix.
+
 ## [5.133.0] - 2026-08-01
 
 ### Changed

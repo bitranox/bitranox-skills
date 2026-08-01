@@ -263,3 +263,35 @@ def test_verdict_emoji_normalized_to_ascii_markers():
     assert mod.normalize(src) == "OK done NO broken WARN risky"
     plain_check = chr(0x2713)
     assert mod.normalize("keep %s and ->" % plain_check) == "keep %s and ->" % plain_check
+
+
+# ---- code is left alone, matching the tell-sweep hook ---------------------------------------
+
+EM_DASH = chr(0x2014)
+CURLY = chr(0x201C) + "quoted" + chr(0x201D)
+
+
+def test_normalize_leaves_an_inline_code_span_untouched():
+    out = mod.normalize("prose em%sand `code em%s` end\n" % (EM_DASH, EM_DASH))
+    assert out == "prose em - and `code em%s` end\n" % EM_DASH
+
+
+def test_normalize_leaves_a_fenced_block_untouched():
+    src = "before %s\n```\nfenced %s\n```\n" % (CURLY, CURLY)
+    out = mod.normalize(src)
+    assert "fenced %s" % CURLY in out          # the example survives
+    assert '"quoted"' in out                    # the prose above it does not
+
+
+def test_normalize_still_rewrites_ordinary_prose():
+    assert mod.normalize("plain em%sdash\n" % EM_DASH) == "plain em - dash\n"
+
+
+def test_normalize_agrees_with_the_hook_about_what_is_code():
+    """A file the sweep hook passes must survive the script unchanged - that is the whole point."""
+    import sys as _sys, pathlib as _pathlib
+    _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[3] / "hooks"))
+    import tell_chars as TC
+    src = "clean prose here\n```\nfenced em%s\n```\nand `inline em%s` too\n" % (EM_DASH, EM_DASH)
+    assert TC.find_tell_lines(src) == []        # the hook says clean
+    assert mod.normalize(src) == src              # so the script must not touch it

@@ -51,3 +51,45 @@ def test_verdict_emoji_flagged_plain_check_allowed():
     assert TC.find_tell_lines("verdict: %s fail\n" % cross)
     assert TC.find_tell_lines("note: %s%s risky\n" % (warn, sel))
     assert TC.find_tell_lines("verdict: %s pass\n" % plain_check) == []
+
+
+# ---- transform_outside_code: the primitive the strip script and the hook must share -----------
+
+EM = chr(0x2014)
+
+
+def _to_dash(s):
+    return s.replace(EM, "-")
+
+
+def test_transform_leaves_an_inline_code_span_untouched():
+    out = TC.transform_outside_code("prose em%sdash and `code em%sdash` here\n" % (EM, EM), _to_dash)
+    assert out == "prose em-dash and `code em%sdash` here\n" % EM
+
+
+def test_transform_leaves_a_fenced_block_untouched():
+    src = "before em%s\n```\nfenced em%s\n```\nafter em%s\n" % (EM, EM, EM)
+    out = TC.transform_outside_code(src, _to_dash)
+    assert out == "before em-\n```\nfenced em%s\n```\nafter em-\n" % EM
+
+
+def test_transform_handles_tilde_fences():
+    src = "~~~\ntilde em%s\n~~~\nprose em%s\n" % (EM, EM)
+    out = TC.transform_outside_code(src, _to_dash)
+    assert "tilde em%s" % EM in out and "prose em-" in out
+
+
+def test_transform_handles_several_spans_on_one_line():
+    src = "a em%s `x em%s` b em%s `y em%s` c em%s\n" % (EM, EM, EM, EM, EM)
+    out = TC.transform_outside_code(src, _to_dash)
+    assert out.count(EM) == 2                      # only the two spans keep it
+    assert "`x em%s`" % EM in out and "`y em%s`" % EM in out
+
+
+def test_transform_preserves_text_with_no_trailing_newline():
+    assert TC.transform_outside_code("em%s" % EM, _to_dash) == "em-"
+
+
+def test_transform_of_empty_and_none_is_empty():
+    assert TC.transform_outside_code("", _to_dash) == ""
+    assert TC.transform_outside_code(None, _to_dash) == ""

@@ -22,6 +22,12 @@ is itself pure ASCII and passes the same check.
 """
 
 import sys
+from pathlib import Path
+
+# The hook and this script MUST agree about what counts as code, or a file that passes the sweep
+# still gets its deliberate examples rewritten. One implementation, in the shared module.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+import tell_chars  # noqa: E402
 
 
 def _build_table():
@@ -70,8 +76,12 @@ TABLE = _build_table()
 
 
 def normalize(text):
-    """Return text with every typographic tell replaced by its ASCII form."""
-    return text.translate(TABLE)
+    """Return text with every typographic tell OUTSIDE code replaced by its ASCII form.
+
+    Inline-code spans and fenced blocks are left byte-identical: a tell inside them is usually a
+    deliberate example of the very character being documented, and rewriting it destroys the
+    example. This is the same code definition the tell-sweep hook uses."""
+    return tell_chars.transform_outside_code(text, lambda s: s.translate(TABLE))
 
 
 def _main(argv):
