@@ -1069,3 +1069,24 @@ def test_skills_invoked_tallies_skill_tool_calls():
 
 def test_skills_invoked_empty_when_no_skill_calls():
     assert S.skills_invoked('{"type":"assistant","message":{"content":[]}}') == {}
+
+
+def test_altitude_chain_handles_a_relative_path(tmp_path, monkeypatch):
+    """A relative path must yield the same chain as its absolute form.
+
+    `Path(".").anchor` is `""` and `Path("") == Path(".")`, so the "is this the filesystem root?"
+    guard used to fire for every relative input and return an EMPTY chain. Nothing errored: the
+    caller just saw a level with no ancestors, which reads exactly like a clean result. It made
+    `reconcile --check .` report success while resolving nothing.
+    """
+    top = tmp_path / "top"
+    (top / "proj").mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("top\n", encoding="utf-8")
+    (top / "proj" / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+
+    absolute = S.altitude_chain(str(top / "proj"))
+    monkeypatch.chdir(top / "proj")
+    relative = S.altitude_chain(".")
+
+    assert absolute, "fixture built no chain at all, so the comparison would be vacuous"
+    assert [Path(p).resolve() for p in relative] == [Path(p).resolve() for p in absolute]
