@@ -125,4 +125,4 @@ def test_shim_smoke():
         ["bash", str(SHIM), str(SCRIPT)], input=payload, capture_output=True, text=True
     )
     assert r.returncode == 2
-    assert "needed a single commit" in r.stderr
+    assert "Needed a single revision" in r.stderr

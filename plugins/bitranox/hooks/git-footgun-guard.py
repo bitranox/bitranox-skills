@@ -3,7 +3,7 @@
 `git rev-parse --short` with two or more revisions.
 
 `--short` abbreviates a SINGLE revision; passing two or more makes git fail with
-`fatal: needed a single commit` (exit 128), a confusing error that is easy to
+`fatal: Needed a single revision` (exit 128), a confusing error that is easy to
 dismiss as a transient quirk. It is deterministic: drop `--short` to print full
 hashes for multiple revs, or call rev-parse once per rev. This guard blocks the
 broken form before it runs and names the fix, so the error never has to be
@@ -108,7 +108,7 @@ def main() -> int:
         return 0
     sys.stderr.write(
         "git rev-parse --short takes a SINGLE revision; with 2+ revs it fails "
-        "`fatal: needed a single commit` (exit 128).\n"
+        "`fatal: Needed a single revision` (exit 128; the text is LOCALIZED - match the code).\n"
         "Fix: drop --short to print full hashes for multiple revs, or run "
         "rev-parse once per rev. Deterministic, not a transient quirk.\n"
     )

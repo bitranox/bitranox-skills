@@ -7,7 +7,7 @@ description: Use when about to hand-roll a small one-off shell/Python utility fo
 
 A small set of tested Python jigs for recurring computer-use chores. Reach for one BEFORE
 hand-rolling a throwaway `pgrep`/`awk`/`jq`/`json.loads` one-liner - the jig has already handled the
-edge cases (self-match, IPv6-first, exit-code traps) that the one-liner gets wrong.
+edge cases (self-match, exit-code traps, wrapper argv) that the one-liner gets wrong.
 
 Each jig is a self-contained PEP 723 script: run it with `uv run` (uv provisions its deps), and get
 its full arguments from `--help`. Run from the skill directory, or give the full path.

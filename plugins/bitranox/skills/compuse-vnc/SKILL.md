@@ -105,6 +105,8 @@ VNC_REMOTE_CONTROL_PASSWORD=secret vnc-remote-control --port 5901 key enter
 ## Proxmox / no-network VMs
 
 The VM's console is a VNC/RFB server on the host. Reach it directly, or SSH-tunnel to the console
-port (see `bitranox:compuse-ssh`). `openvmm` is the ideal layout-aware target so arbitrary
+port with `ssh -N -L <local-port>:127.0.0.1:<console-port> <user>@<host>`, then point the client at
+`127.0.0.1:<local-port>` (`-N` because no remote command is wanted, and binding the forward to the
+host's loopback keeps the console off its network). `openvmm` is the ideal layout-aware target so arbitrary
 characters and non-US layouts type reliably; plainer VNC servers still work for any text a fixed
 (usually US) layout can produce.

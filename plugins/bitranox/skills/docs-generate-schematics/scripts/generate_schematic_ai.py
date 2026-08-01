@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["httpx2"]
+# ///
 """
 AI-powered scientific schematic generation using Nano Banana 2.
 
