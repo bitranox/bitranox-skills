@@ -186,6 +186,18 @@ do not just write the note louder:
   never auto-created). Guards follow the cross-platform script rules in
   `bitranox:meta-skill-writer`; a globally-useful guard belongs in the shared plugin's `hooks/` and
   MUST propagate upstream - local-only `~/.claude/hooks` is the classic loss.
+- **Lifting a local hook into the plugin is a TWO-STEP retirement, and half of it is worse than
+  neither.** After the plugin's copy is registered, remove the local hook's `settings.json` entry
+  (via the host `update-config` skill) AND retire the file. Both copies otherwise fire and the one
+  that blocks FIRST wins, so a stale local hook silently overrides the newer plugin version while
+  the plugin looks installed and current - the failure never announces itself. Dropping only the
+  file leaves a registered hook erroring on every matching call; dropping only the entry leaves an
+  armed file for the next stale runbook line. Retire it as a non-executable shim that exits
+  non-zero naming its replacement, keeping the original as `.orig-<date>`.
+  **Prove coverage before removing, never assume the newer one is a superset:** feed BOTH copies
+  the same synthetic hook events and compare verdicts across the real cases AND the ones that must
+  NOT fire. Measured on this pattern: a stale local guard blocked text that merely MENTIONED the
+  footgun it guards, so it blocked writing the documentation for its own rule.
 Memory changes what the model is TOLD; a guard changes what it can DO. A must-hold rule ends in a
 guard.
 

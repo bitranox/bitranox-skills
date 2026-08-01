@@ -42,7 +42,9 @@ reviewing Rust; each rule states the failure it prevents.
 ## Dependencies
 
 - **Pick the minimal purpose-specific crate over the heavyweight general one** when you need one narrow
-  thing (e.g. `jpeg-encoder` ~50 KB vs `image` ~2 MB for JPEG-only encoding). Smaller compile time,
+  thing (e.g. `jpeg-encoder` against `image` for JPEG-only encoding - roughly a 40x source-size
+  difference when this was written; check the current figures with `cargo tree` plus the crate
+  pages rather than trusting a number here). Smaller compile time,
   binary, and attack surface.
 - **Feature-gate optional heavy deps** so a lightweight consumer can opt out (`[features]` + `#[cfg(feature
   = "...")]`), rather than pulling a web framework or rich-CLI crate into every build.
