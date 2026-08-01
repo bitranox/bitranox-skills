@@ -60,7 +60,7 @@ def test_find_repos_discovers_git_dirs_and_skips_nested_git(tmp_path):
     assert os.path.join(str(tmp_path), "a") in found
     assert os.path.join(str(tmp_path), "b", "sub") in found
     assert not any("plain" in p for p in found)
-    assert not any(".git" in p for p in found)
+    assert not any(".git" in p for p in found)              # never reports a .git internal dir
 
 
 def test_main_error_path_exits_nonzero_and_does_not_crash(tmp_path, capsys):

@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.136.0] - 2026-08-02
+
+### Changed
+
+- **`git_state.py` ships once, in `compuse-toolbox`.** It was duplicated in `compuse-git`, which
+  now references the owning skill's copy instead. Owner chosen by subject: `compuse-toolbox` exists
+  to ship these six jigs and this is one of them, while `compuse-git` had only borrowed it.
+  `compuse-git` now ships no Python at all, so its `scripts/` and `tests/` directories are gone
+  rather than left holding an orphan conftest.
+
+### Note
+
+The previous release recorded these two copies as "already DRIFTED (15 differing lines)" and
+deferred consolidating them as a which-behaviour-wins decision. That was wrong: comparing the two
+ASTs with docstrings stripped shows the executable code is IDENTICAL, and all 15 lines are
+docstrings or comments. The characterisation came from a line count rather than a diff.
+
+Neither TEST file was a superset by name, so both were compared body-by-body instead of picked.
+`compuse-git`'s apparently unique test proved byte-identical to the toolbox's under a different
+name, and the toolbox additionally carries a `None`-branch regression - so nothing was lost. The
+surviving copy absorbed what the deleted one did better: the usage block, the `find_repos`
+docstring, and a clarifying test comment.
+
+Duplicate `.py` basenames across the plugin drop from 6 to 4. The remainder are benign: vendored
+`demos/` and `examples/` files the gate already excludes from test runs, plus per-directory
+`conftest.py`.
+
 ## [5.135.0] - 2026-08-02
 
 ### Changed

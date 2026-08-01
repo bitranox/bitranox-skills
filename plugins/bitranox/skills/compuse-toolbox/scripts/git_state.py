@@ -7,7 +7,13 @@ count, and this-session's staged files.
 Why: the shared-checkout + snapshot-before-bulk-rewrite rules mean every risky commit/bulk op is
 preceded by the same hand-typed branch / HEAD==origin / dirty check. This does it once, read-only.
 
-Run: `uv run scripts/git_state.py [REPO ...] [--root DIR]`
+Run:
+  uv run scripts/git_state.py                 # the current directory
+  uv run scripts/git_state.py repoA repoB     # named repos
+  uv run scripts/git_state.py --root ~/src    # every .git repo found under a directory
+
+Exit status is 1 if any repo is out of sync (behind/ahead/diverged or has no upstream), so this
+doubles as a pre-push guard.
 """
 from __future__ import annotations
 
@@ -60,6 +66,7 @@ def git_state(repo) -> dict:
 
 
 def find_repos(root) -> list[str]:
+    """Walk `root` and return every directory that contains a .git (does not descend into .git)."""
     import os
     repos = []
     for dirpath, dirs, _files in os.walk(str(root)):
