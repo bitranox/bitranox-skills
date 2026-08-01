@@ -43,7 +43,7 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
    routing prompt (in the core), applying only moves whose from AND to levels are ON the chain
    (up or down). Low/UNSURE and anything involving a sibling stays put. Pinned entries untouched.
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
-   (propose-first per the removal policy).
+   (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
 6. **Verify + report + state the leftovers**: the core's verification contract (manifest diff,
    reconcile `TOTAL problems: 0` over the chain), then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,

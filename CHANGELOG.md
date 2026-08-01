@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.128.0] - 2026-08-01
+
+### Fixed
+
+Fourth batch from the isolated sweep, this one almost entirely in the meta-* skills, where the
+defects are cross-references that point at the wrong file, wrong step, or wrong name:
+
+- **meta-memory-settings claimed the CLI validates values; it did not.** `set dream_mode
+  notarealvalue` exited 0 and stored the string, and `set nudges banana` silently became `False`.
+  A realistic typo (`dream_mode of`) therefore produced a config that every reader falls back to a
+  default on, forever and silently. Fixed in the CODE: enum knobs and bools now refuse an unknown
+  value with exit 2 and a message naming the legal choices, with seven tests written first and
+  observed failing. `skill_placement` is relabelled ADVISORY - no shipped code reads it.
+- **meta-self-improve's upstream-propagation reference still taught `drop --index`** after
+  `contrib_queue` gained `ship` and `--match` earlier the same day - an incomplete propagation of
+  our own change, caught by the sweep. It also pointed at `update-config` as if this plugin shipped
+  it; that is a Claude Code host skill.
+- **meta-skill-writer stated the frontmatter cap as "1024 characters total"**, which reads as name
+  plus description combined; the vendored spec in the same skill says 64 and 1024 separately. Three
+  references to `python-use-modern-libraries` now use its shipped name.
+- **meta-dream-crosstree's corroboration gate described a counter it does not use.** It promises
+  ">= 2 distinct projects" while `note_promotion_candidate` counts one sighting per DREAM, so two
+  projects corroborating in a single run count as one.
+- **meta-dream-crosstree-deep pointed at the wrong steps three times**, including an instruction to
+  run the sibling's steps 4-8 that would re-run the promotion gate its own step 3 just performed.
+- **meta-dream-nap's "removal policy" named no home.**
+
 ## [5.127.0] - 2026-08-01
 
 ### Fixed
