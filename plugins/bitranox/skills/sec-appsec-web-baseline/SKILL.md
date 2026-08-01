@@ -74,13 +74,13 @@ Defaults this skill prescribes; deviate only with a reason. Full values + snippe
 
 | Concern                                                   | Skill                        |
 |-----------------------------------------------------------|------------------------------|
-| GDPR/privacy: consent, third-party calls, IP leakage      | `sec-privacy-web-gdpr`       |
-| Authentication / session / login flows                    | `sec-auth-*`                 |
-| Secret scanning / credential hygiene                      | `sec-secrets-*`              |
-| Active pentest / exploitation                             | `sec-pentest-*`              |
+| GDPR/privacy: consent, third-party calls, IP leakage      | `sec-privacy-web-gdpr` (PLANNED, not yet shipped)       |
+| Authentication / session / login flows                    | `sec-auth-*` (PLANNED, not yet shipped)                 |
+| Secret scanning / credential hygiene                      | `sec-secrets-*` (PLANNED, not yet shipped)              |
+| Active pentest / exploitation                             | `sec-pentest-*` (PLANNED, not yet shipped)              |
 | Performance / Core Web Vitals (CSP can affect what loads) | `web-frontend-pagespeed`     |
 | Responsive layout / touch / viewport                      | `web-frontend-responsive-ux` |
-| Deep accessibility beyond the baseline                    | `web-frontend-a11y-audit`    |
+| Deep accessibility beyond the baseline                    | `web-frontend-a11y-audit` (PLANNED, not yet shipped)    |
 
 ## Common mistakes
 

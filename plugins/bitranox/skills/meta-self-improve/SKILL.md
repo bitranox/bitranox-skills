@@ -227,7 +227,7 @@ reformat a thing you have hand-rolled before), not skipping a rule. Same ladder,
   `flag-a-skill-when-a-real-bug-slips-past-it`.
 - CONTRIBUTE upstream only when a local tool proves BROADLY useful to other users: propose it via the
   `contrib_queue` + upstream loop (references/upstream-propagation.md), landing it in a shared
-  `meta-toolbox` skill or a relevant existing skill - exactly the local-stays-local / share-when-broad
+  a shared `meta-toolbox` (PLANNED, not yet shipped) skill or a relevant existing skill - exactly the local-stays-local / share-when-broad
   split skills already use. Never automatic.
 
 ### 7. Report
