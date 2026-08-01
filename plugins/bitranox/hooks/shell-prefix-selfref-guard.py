@@ -28,37 +28,17 @@ import json
 import re
 import sys
 
+# Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
+# guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
+# can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
+from shell_text import strip_heredoc_bodies  # noqa: F401
+
 # Statement separators. A prefix assignment dies at the end of ITS command, so a
 # reference after one of these is a deliberate use of the shell's own variable.
 SEP = re.compile(r"&&|\|\||[;\n|]")
 
-# A heredoc BODY is data, not a command. Without this the guard fires on prose
-# that merely MENTIONS the pattern, which would block documenting the footgun it
-# guards - a failure this repo has shipped before.
-HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-
 # NAME=value at a command position. The value is optional (`VAR= cmd` is legal).
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
-
-
-def strip_heredoc_bodies(command: str) -> str:
-    """Drop heredoc bodies, keeping the command lines around them."""
-
-    out: list[str] = []
-    lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        out.append(line)
-        opener = HEREDOC_OPEN.search(line)
-        index += 1
-        if not opener:
-            continue
-        delimiter = opener.group(2)
-        while index < len(lines) and lines[index].strip() != delimiter:
-            index += 1
-        index += 1  # drop the terminator line itself
-    return "\n".join(out)
 
 
 def strip_single_quoted(segment: str) -> str:
