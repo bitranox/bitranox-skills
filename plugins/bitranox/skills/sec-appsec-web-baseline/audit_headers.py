@@ -38,6 +38,29 @@ _SUBRESOURCE_TAG = re.compile(
 )
 _SUBRESOURCE_ATTR = re.compile(r"""(?:src|data|srcset|href)\s*=\s*["']([^"']+)["']""", re.I)
 
+# <link> is the one tag above that does NOT always load: rel decides. `canonical`, `alternate`,
+# `dns-prefetch` and friends are metadata or connection hints, so an http:// href there is not
+# mixed content, and grading it SEVERE sends the reader chasing a non-existent insecure load.
+_LINK_TAG = re.compile(r"<link\b", re.I)
+_LINK_REL = re.compile(r"""\brel\s*=\s*["']?([^"'>]+)""", re.I)
+_NON_LOADING_LINK_RELS = frozenset({
+    "canonical", "alternate", "author", "license", "next", "prev", "prefetch-dns",
+    "dns-prefetch", "preconnect", "bookmark", "help", "search", "tag", "nofollow",
+    "noopener", "noreferrer", "pingback", "profile", "me", "index", "up",
+})
+
+
+def _link_loads_a_subresource(tag: str) -> bool:
+    """Whether a `<link>` actually fetches something into the page.
+
+    An absent or unrecognised `rel` counts as loading: a security check fails LOUD, so a rel this
+    list has not seen yet is reported rather than silently dropped."""
+    match = _LINK_REL.search(tag)
+    if not match:
+        return True
+    rels = {part.strip().lower() for part in match.group(1).split() if part.strip()}
+    return bool(rels - _NON_LOADING_LINK_RELS)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -181,6 +204,8 @@ def _mixed_content(html: str, *, https: bool) -> list[Finding]:
         return []
     seen: list[str] = []
     for tag in _SUBRESOURCE_TAG.findall(html):
+        if _LINK_TAG.match(tag) and not _link_loads_a_subresource(tag):
+            continue
         for attr_val in _SUBRESOURCE_ATTR.findall(tag):
             for piece in re.split(r"[,\s]+", attr_val.strip()):
                 if piece.lower().startswith("http://") and piece not in seen:

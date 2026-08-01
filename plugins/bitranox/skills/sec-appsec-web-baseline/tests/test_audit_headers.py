@@ -225,3 +225,37 @@ def test_is_internal_ip_public_and_garbage():
     assert not a._is_internal_ip("88.116.105.146")  # public WAN
     assert not a._is_internal_ip("8.8.8.8")
     assert not a._is_internal_ip("not-an-ip")
+
+
+# --- mixed content: a <link> only counts when its rel actually LOADS something ---------------
+
+def _mixed(html):
+    return a._mixed_content(html, https=True)
+
+
+def test_link_canonical_over_http_is_not_mixed_content():
+    """rel=canonical is metadata; it loads nothing, so it cannot be mixed content."""
+    assert _mixed('<link rel="canonical" href="http://example.com/page">') == []
+
+
+def test_non_loading_link_rels_are_not_mixed_content():
+    for rel in ("canonical", "alternate", "dns-prefetch", "preconnect", "author", "license", "next"):
+        html = '<link rel="%s" href="http://example.com/x">' % rel
+        assert _mixed(html) == [], "rel=%s loads nothing" % rel
+
+
+def test_loading_link_rels_are_still_mixed_content():
+    for rel in ("stylesheet", "preload", "icon", "shortcut icon", "manifest", "apple-touch-icon"):
+        html = '<link rel="%s" href="http://example.com/x.css">' % rel
+        assert _mixed(html), "rel=%s does load a subresource" % rel
+
+
+def test_a_link_with_no_rel_is_treated_as_loading():
+    """Unknown or absent rel stays a finding: a security check fails loud, not silent."""
+    assert _mixed('<link href="http://example.com/x.css">')
+
+
+def test_other_subresource_tags_are_unaffected():
+    assert _mixed('<img src="http://example.com/a.png">')
+    assert _mixed('<script src="http://example.com/a.js"></script>')
+    assert _mixed('<a href="http://example.com/page">x</a>') == []      # navigation, not a load

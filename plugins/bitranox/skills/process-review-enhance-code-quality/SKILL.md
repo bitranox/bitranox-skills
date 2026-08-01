@@ -7,7 +7,8 @@ description: Use when asked to rate, score, audit, or improve code quality of a 
 
 ## Overview
 
-Score a project 0-10, identify issues by severity, walk the user through fixes one-by-one, track decisions in the project instructions file so declined items are never re-raised.
+Score a project 0-10, identify issues by severity, walk the user through fixes one-by-one, track decisions in the project instructions file so a declined item is not re-raised while its
+reason still holds.
 
 > **Project instructions file** depends on your CLI tool:
 > **Claude Code** → `CLAUDE.md` | **Codex** → `AGENTS.md` | **Kilo Code / Windsurf** → equivalent config file.

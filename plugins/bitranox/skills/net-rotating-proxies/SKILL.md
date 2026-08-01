@@ -20,9 +20,13 @@ in the background while downloading.
 
 ## The rules (always)
 
-1. **Persistent pool, re-tested every run.** Proxies constantly die, recover, and appear, so a
-   saved list is never trusted as-is. Keep `pool.txt` (all candidates), and derive `live.txt`
-   (passed reachability test) freshly each run. Never assume yesterday's live proxy still works.
+1. **Persistent pool, disproven at use time.** Proxies constantly die, recover, and appear, so a
+   saved list is never trusted as-is. Keep `pool.txt` (all candidates) and `live.txt` (passed a
+   reachability test at some point). Note what `validate` actually does: it tests only
+   `pool - live - bad`, so an entry already in `live.txt` is NOT re-tested on a later run - the file
+   accumulates. Freshness comes from the other end instead: a proxy that fails during a job is
+   banned to `bad.txt`, and every reader uses `live - bad`. So treat a live entry as
+   not-yet-disproven rather than proven-good, and let the ban path do the pruning.
 2. **Discover from public lists**, merge grow-only and deduped into the pool (github raw proxy
    lists, proxyscrape API). Expect thousands of candidates; only a few percent will be usable.
 3. **Validate reachability in parallel** against a cheap endpoint on the target host before using
@@ -73,7 +77,7 @@ header) is fetched into an isolated env. Subcommands:
 
     # 3. run a worklist through rotating proxies, 16-wide, refreshing the pool in the background
     uv run scripts/proxy_pool.py --store ./.proxies run \
-        --worklist items.txt --workers 16 --per-item-proxies 8 --background-discovery \
+        --worklist items.txt --workers 16 --per-item-proxies 8 --need 24 --background-discovery \
         --test-url https://www.youtube.com/generate_204 \
         --success-glob 'out/{item}*.vtt' \
         --cmd 'yt-dlp --proxy http://{proxy} --skip-download --write-auto-subs --sub-langs en.*,en --sub-format vtt -o out/{item}.%(ext)s https://www.youtube.com/watch?v={item}'
@@ -83,7 +87,8 @@ header) is fetched into an isolated env. Subcommands:
 be a single command: no pipes, `||`, `$?`, redirects, or `case`. It runs once per proxy until one
 succeeds.
 
-`run` holds a self-optimizing working set of the `--need` fastest healthy proxies: it rotates the
+`run` holds a self-optimizing working set of the `--need` fastest healthy proxies - pass it, or
+`--need` defaults to None and the working set is not right-sized at all: it rotates the
 pick with a `--cooldown` rest so no exit-IP is hammered, evicts a proxy once its failure fraction
 exceeds `--flaky-fail-ratio`, and (with `--background-discovery`) re-benchmarks the pool every
 `--bench-interval` seconds, swapping a freshly-found faster proxy in for the slowest idle one.

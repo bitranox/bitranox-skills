@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.129.0] - 2026-08-01
+
+### Fixed
+
+Final batch from the isolated sweep, which is now complete: 66 skills reviewed, 22 clean.
+
+- **sec-appsec-web-baseline graded a harmless `<link rel="canonical" href="http://...">` as SEVERE
+  mixed content.** Its detector counted every `<link>` as a subresource load, but `rel` decides
+  whether one fetches anything. Fixed with a non-loading rel set, deliberately fail-loud in the
+  other direction: an absent or unrecognised `rel` still counts as loading, because a security
+  check should over-report rather than silently drop. Five tests, the two pinning the defect
+  observed failing first.
+- **process-review-receiving-code-review's GitHub reply command silently did nothing.** `gh api`
+  sends GET unless given a method or a field, so the documented
+  `gh api .../comments/{id}/replies` read the thread instead of replying, and exited 0 while doing
+  it. Now `-X POST ... -f body='...'`.
+- **net-rotating-proxies promised freshness its tool does not provide.** Rule 1 said `live.txt` is
+  re-derived each run and yesterday's proxy is never assumed good; `validate()` tests only
+  `pool - live - bad`, so a live entry is never re-tested. The real mechanism - ban at use time,
+  readers compute `live - bad` - is coherent and is now what the rule describes. Its `run` example
+  also omitted the `--need` the prose says sizes the working set.
+- **process-review-enhance-code-quality's overview contradicted its own RECONSIDER branch**,
+  telling readers declined items are "never re-raised".
+
 ## [5.128.0] - 2026-08-01
 
 ### Fixed
