@@ -48,6 +48,7 @@ If you don't need deps, **omit** the PEP 723 block and stay stdlib-only.
 | Code | Meaning                      |
 |-----:|------------------------------|
 | 0    | Success                      |
+| 1    | Check ran, result negative   |
 | 2    | Invalid input / usage error  |
 | 3    | Not found                    |
 | 4    | Conflict / precondition fail |

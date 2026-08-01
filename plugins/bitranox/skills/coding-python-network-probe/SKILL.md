@@ -40,8 +40,8 @@ Python 3.10+.
 | Path to a host                    | `traceroute(host)`                                                       |
 | Scan ports                        | `scan_ports(host, "22,80,8000-8100")`                                    |
 | MAC of an address                 | `lookup_mac(ip)`, `get_mac_address(ip)`                                  |
-| Which host holds a MAC            | `find_ip_by_mac(mac, scan=True)`                                         |
-| Neighbour / ARP cache             | `neighbours()`, `arp_scan(network)`; `entry.state` is a `NeighbourState` |
+| Which host holds a MAC            | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`              |
+| Neighbour / ARP cache             | `neighbours()`, `arp_scan(network)`; both take `family=`                 |
 | What a sweep will cover           | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`      |
 | Sweep exactly that plan           | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)`     |
 | Default route, any route          | `default_gateway()`, `query_route(ip)`                                   |
@@ -88,7 +88,7 @@ wake          observe-dhcp  capabilities  info
 ipscout ping 1.1.1.1 -c 4
 ipscout scan-ports 192.168.1.10 --ports 22,80,443,8000-8100
 ipscout mac 8.8.8.8                       # the gateway's, labelled next_hop
-ipscout find-ip 00:00:5e:00:53:af --scan
+ipscout find-ip 00:00:5e:00:53:af --scan -4   # -4/-6 on find-ip, arp-scan, neighbours too
 ipscout arp-scan --network 192.168.1.0/24
 ipscout observe-dhcp 02:00:5e:10:00:00 --interface br0   # needs root
 ipscout capabilities                      # what this host can actually do
@@ -102,7 +102,13 @@ find out without provoking an error.
 ## The error contract
 
 Setup problems raise; network conditions do not. `except IPScoutError` catches every one of
-them, and `AddressFamily.IPV4` / `IPV6` is what the `family=` argument takes.
+them, and `AddressFamily.IPV4` / `IPV6` is what the `family=` argument takes - on the probes,
+and on the three calls that RETURN addresses (`find_ip_by_mac`, `neighbours`, `arp_scan`).
+
+Those three differ from `resolve` in one way worth knowing: asking for a family the target
+does not have is an **empty result, not an error**. For `resolve` an empty list would be
+indistinguishable from "host down", so it raises; for these, empty already means "not known
+here", and "that MAC holds no IPv6" is an ordinary finding.
 
 - A host that is down, times out, or loses every packet returns
   `reached=False`. It does **not** raise.
@@ -192,7 +198,7 @@ entry.ip  # 'fe80::200:5eff:fe00:53af'  - no link, so no probe accepts it
 entry.scoped  # 'fe80::200:5eff:fe00:53af%eth0'
 ipscout.ping(entry.scoped)
 
-ipscout.ping(ipscout.find_ip_by_mac("00:00:5e:00:53:af")[0])
+ipscout.ping(ipscout.find_ip_by_mac("00:00:5e:00:53:af", family=ipscout.AddressFamily.IPV4)[0])
 ```
 
 Do not add a zone to one of those - `f"{found}%{interface.index}"` builds
@@ -352,6 +358,10 @@ ICMP round trip and a filtered port is not a dead host.
   raise rather than deadlocking - `await aping_many(...)` there.
 - Reading `time_avg_ms` without checking `reached`. Nothing received gives the
   `-1.0` sentinel, not `0.0`, and averaging that across a sweep is nonsense.
+- Taking `find_ip_by_mac(...)[0]` without naming a family, then connecting to it. One MAC
+  commonly holds an IPv4 AND an IPv6 link-local, and the list is in the order the cache
+  learned them, not by family - so the first entry is decided by that order. Pass
+  `family=AddressFamily.IPV4` when the answer is going to be connected to.
 - Reading an empty `find_ip_by_mac(..., scan=True)` as "that host is gone"
   without checking coverage. A sweep with no network given covers the subnets
   this host is attached to that fit inside one sweep's 4096-address budget

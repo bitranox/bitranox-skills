@@ -196,7 +196,8 @@ Ports are `Protocol`s in `application/ports/`. Adapters implement them. The busi
 
 ```python
 class UnitOfWork(Protocol[D]):
-    async def run(self, fn: Callable[[D, RequestContext], Awaitable[T]], *, ctx: RequestContext | None = None) -> T: ...
+    async def run(self, fn: Callable[[D, RequestContext], Awaitable[T]], *,
+                  ctx: RequestContext | None = None, timeout: float | None = None) -> T: ...
 ```
 
 - Runs callable inside transaction scope

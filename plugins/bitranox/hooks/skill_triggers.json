@@ -702,6 +702,22 @@
   "wrong",
   "command"
  ],
+ "meta-skill-audit": [
+  "auditing",
+  "reviewing",
+  "whole",
+  "catalogue",
+  "already-shipped",
+  "skills",
+  "defects",
+  "stale",
+  "claims",
+  "references",
+  "longer",
+  "resolve",
+  "instructions",
+  "reader"
+ ],
  "meta-skill-writer": [
   "creating",
   "skills",

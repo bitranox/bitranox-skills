@@ -17,6 +17,45 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.125.0] - 2026-08-01
+
+### Added
+
+- **`meta-skill-audit`: auditing a catalogue of already-shipped skills, as distinct from authoring
+  one.** There is no RED to watch fail when the skill already exists and readers already have it;
+  what you are hunting is the claim that quietly stopped being true. Ships
+  `scripts/audit_skills.py`, which copies the plugin into a clean room outside the knowledge tree
+  and runs one reviewer per skill in parallel, plus a triage table pairing every finding class with
+  its usual false positive. Two mechanics it encodes, both silent when wrong: isolate from the
+  MEMORY STORE (the recall hook fires in every directory), and treat the PLUGIN as the install unit
+  (judging reachability against one skill directory made 5 of the first 6 findings false).
+
+### Fixed
+
+Findings from the first isolated sweep, each verified against the real files or a live CLI before
+acting, and mirrored to the tool repo's twin where one exists:
+
+- **coding-input-sanitization taught a path-traversal defence that does not work.**
+  `Path(base, name).resolve()` was said to stay under `base.resolve()`; both `..` and an absolute
+  component escape it silently. Now resolves THEN checks containment with `is_relative_to`. Also
+  stopped attributing Python's `shlex` to the Bash reference skill, which does not mention it.
+- **coding-python-clean-architecture's canonical `Account` entity was mutable**, contradicting the
+  same skill's "no mutable state in the domain is a non-negotiable". It is frozen now and its
+  methods return a new entity. Its `UnitOfWork.run()` signature also omitted the `timeout`
+  parameter that `port-contracts.md` - which the skill names as the source - defines, and
+  `script-mode.md`'s flagship example returned an exit code its own table did not list.
+- **coding-python-layered-config documented two CLI invocations that fail.** `env-prefix --slug`
+  does not exist (the slug is positional), and `deploy --profile production` omits five required
+  flags.
+- **coding-python-gitignore showed `config-deploy` and `config-generate-examples` as bare runnable
+  commands**; both exit 2 without their required option.
+- **coding-python-new-public-library sent readers to two repos it never named**, and described a
+  second console command without saying what it is.
+- **coding-python-network-probe had drifted from its ipscout twin**, missing the `family=` argument
+  on the three calls that return addresses, the `-4`/`-6` CLI flags, and the empty-result-is-not-an-
+  error distinction. The marketplace was the stale side, which is the dangerous direction: the shop
+  describing an API the tool has moved past.
+
 ## [5.124.0] - 2026-08-01
 
 ### Added

@@ -48,20 +48,20 @@ class Money:
 
 ```python
 # src/<pkg>/accounts/domain/entities.py
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from .values import Money
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Account:
     """Bank account entity with balance management."""
     id: str
     balance: Money
 
-    def withdraw(self, amount: Money) -> None:
-        self.balance = self.balance.minus(amount)
+    def withdraw(self, amount: Money) -> "Account":
+        return replace(self, balance=self.balance.minus(amount))
 
-    def deposit(self, amount: Money) -> None:
-        self.balance = self.balance.plus(amount)
+    def deposit(self, amount: Money) -> "Account":
+        return replace(self, balance=self.balance.plus(amount))
 ```
 
 ### Events
@@ -150,8 +150,8 @@ def create_transfer_funds(
             ):
                 raise ValueError("Currency mismatch")
 
-            from_acct.withdraw(amount)
-            to_acct.deposit(amount)
+            from_acct = from_acct.withdraw(amount)
+            to_acct = to_acct.deposit(amount)
             await account_repo.save_many([from_acct, to_acct], ctx=_ctx)
 
             evt: FundsTransferred = {
