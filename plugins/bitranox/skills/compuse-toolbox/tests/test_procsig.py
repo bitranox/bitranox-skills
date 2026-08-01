@@ -55,13 +55,29 @@ def test_ancestors_walks_the_ppid_chain(tmp_path):
 
 
 def test_resolve_targets_excludes_self_and_ancestors(tmp_path):
-    # the caller's shell (pid 20) is a match too, but must be excluded so it is never signaled
-    _mkproc(tmp_path, 20, exe="/bin/bash", cmdline=["bash", "-c", "pkill openvmm"], ppid=1)
+    # The matching ancestor (pid 20) is a PLAIN argv on purpose. It used to be `bash -c "pkill
+    # openvmm"`, but a shell carrying the needle is now skipped by the cmdline carve-out before
+    # exclusion is ever consulted - so that fixture would make this test pass green while
+    # exercising resolve_targets not at all.
+    _mkproc(tmp_path, 20, exe="/x/openvmm-supervisor",
+            cmdline=["openvmm-supervisor", "--watch", "openvmm"], ppid=1)
     _mkproc(tmp_path, 300, exe="/x/openvmm", cmdline=["openvmm"], ppid=1)
-    procs = P.scan(tmp_path, cmdline="openvmm")            # matches BOTH (the shell's cmdline holds it)
+    procs = P.scan(tmp_path, cmdline="openvmm")            # matches BOTH
     assert {p["pid"] for p in procs} == {20, 300}
     targets = P.resolve_targets(procs, exclude={20, 1})    # self/ancestor set
     assert targets == [300]
+
+
+def test_a_caller_shell_holding_the_needle_never_even_matches(tmp_path):
+    """The original incident shape, now stopped one layer EARLIER than the exclusion.
+
+    Exclusion only ever covered self and ancestors, and the 2026-07-28 kill hit a SIBLING shell,
+    which is neither. Declining to search a shell's command string removes the whole class rather
+    than one more instance of it.
+    """
+    _mkproc(tmp_path, 20, exe="/bin/bash", cmdline=["bash", "-c", "pkill openvmm"], ppid=1)
+    _mkproc(tmp_path, 300, exe="/x/openvmm", cmdline=["openvmm"], ppid=1)
+    assert [p["pid"] for p in P.scan(tmp_path, cmdline="openvmm")] == [300]
 
 
 # ---- main() find + kill -------------------------------------------------------------------------
@@ -91,3 +107,38 @@ def test_main_kill_nothing_matched_is_rc1(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "_self_and_ancestors", lambda: set())
     monkeypatch.setattr(P, "_kill", lambda pid, sig: None)
     assert P.main(["--kill", "--exe", "openvmm"]) == 1
+
+
+# ---- --cmdline must not match a command string a shell was merely HANDED -------------------------
+
+def test_scan_by_cmdline_skips_a_sibling_shell_carrying_the_needle(tmp_path):
+    """A shell handed a command string is not evidence that the program is running.
+
+    Measured 2026-07-28: `procsig --cmdline bp_sweep_watchdog.py --kill` signaled the real watchdog
+    AND a sibling bash whose argv merely CONTAINED the needle - the caller's own pipeline - which
+    killed the command mid-run. Self and ancestors were excluded; a sibling is neither, so the
+    exclusion could not help. The fix is upstream of it: a shell's command string is never
+    searched.
+    """
+    _mkproc(tmp_path, 400, exe="/usr/bin/python3", cmdline=["python3", "watchdog.py"])
+    _mkproc(tmp_path, 401, exe="/bin/bash", cmdline=["bash", "-c", "python3 watchdog.py & sleep 1"])
+    assert [h["pid"] for h in P.scan(tmp_path, cmdline="watchdog.py")] == [400]
+
+
+def test_scan_by_cmdline_skips_a_shell_behind_a_forking_wrapper(tmp_path):
+    """`timeout 30 ssh host '<cmd>'` is the standard fleet-probe form and must be skipped too.
+
+    timeout/sudo/sshpass FORK AND KEEP their argv, so the shell sits one token further along. An
+    earlier fix that tested only argv[0] against a shell table let exactly this shape through.
+    """
+    _mkproc(tmp_path, 500, exe="/usr/bin/python3", cmdline=["python3", "watchdog.py"])
+    _mkproc(tmp_path, 501, exe="/usr/bin/timeout",
+            cmdline=["timeout", "30", "ssh", "host", "python3 watchdog.py"])
+    assert [h["pid"] for h in P.scan(tmp_path, cmdline="watchdog.py")] == [500]
+
+
+def test_scan_by_cmdline_still_matches_a_plain_argv(tmp_path):
+    """The carve-out must not swallow the ordinary case it exists to protect."""
+    _mkproc(tmp_path, 600, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-79099-disk-0"])
+    _mkproc(tmp_path, 601, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-64000-disk-0"])
+    assert [h["pid"] for h in P.scan(tmp_path, cmdline="vm-79099")] == [600]

@@ -30,6 +30,13 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
 - **`procsig` cannot self-match.** It reads `/proc` directly and always excludes its own process and
   every ancestor, so it structurally cannot signal the shell that launched it - the failure mode
   `pkill -f X` has whenever the shell's own command line contains `X`.
+- **`procsig --cmdline` also never searches a command STRING a shell was handed.** Exclusion covers
+  only self and ancestors, and a SIBLING shell quoting the needle is neither: one such match killed
+  a live command mid-run. So `bash -c '<text>'` and every equivalent is searched only up to the flag
+  that introduces the string, and an argv that MIGHT hold one but cannot be classified with
+  certainty is skipped entirely rather than assumed harmless. The bias is deliberate and one-way - a
+  miss costs you one `kill <pid>`, a false match kills the wrong process - so if an expected process
+  is absent from the listing, match it with `--exe` or `--comm`. Full rules in the tool's `--help`.
 - **The others encode the trap.** `git_state` reads porcelain v2 (no `rev-parse --short` 2-rev
   footgun); `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/`transcript_tail` parse JSONL
   by field, not by fragile text slicing.
