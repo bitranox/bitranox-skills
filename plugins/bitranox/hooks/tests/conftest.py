@@ -44,6 +44,8 @@ _HOOK_MODULES = {
     "skill-edit-guard": "skill_edit_guard",
     "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",
+    "venv-guard": "venv_guard",
+    "warn-inline-powershell": "warn_inline_powershell",
 }
 
 for _stem, _alias in _HOOK_MODULES.items():
