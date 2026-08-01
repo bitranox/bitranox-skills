@@ -825,14 +825,19 @@ def altitude_chain(proj):
     live centrally at the anchor's `.claude-memory/`. Reference-integrity uses this: a `[[ref]]` must
     resolve to a target at the SAME or a LATER (higher) position - upward only."""
     try:
-        here = Path(proj)
+        # Absolute FIRST: a relative path has an empty anchor, and Path("") == Path("."), so the
+        # root guard below fired for every relative input and returned an empty chain in silence -
+        # callers then saw a level with no ancestors and read that as a clean result.
+        here = Path(proj).resolve()
         if here == Path(here.anchor) or here in _excluded_anchor_dirs():
             return []                             # /, ~, tempdir: never an altitude, never a top
         ladder = [here, *here.parents]            # project dir up toward /
-        top = resolve_anchor(proj)                # the tree's anchor, or None
+        top = resolve_anchor(str(here))           # the tree's anchor, or None
         if top is None:                           # project is the top; single-tier chain
             return [here]
-        highest = ladder.index(top)
+        # `ladder` holds RESOLVED paths, so an unresolved anchor would never match and the
+        # ValueError below would quietly degrade the chain to a single level.
+        highest = ladder.index(Path(top).resolve())
         chain = ladder[:highest + 1]
         kept = [d for d in chain if ".claude" not in d.parts]   # a `.claude` config dir (or its
         return kept or chain                                    # worktrees/ scaffold) is never an altitude

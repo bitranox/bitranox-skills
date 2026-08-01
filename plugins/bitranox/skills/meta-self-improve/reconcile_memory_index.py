@@ -154,15 +154,57 @@ def altitude_sources(d):
     return [(_canon(e.slug), e.hook + "\n" + bodies.get(e.slug, "")) for e in entries]
 
 
+def _unpassed_ancestor_levels(dirs):
+    """Ancestor altitudes of `dirs` the caller did NOT pass, narrow -> broad.
+
+    `[[refs]]` are upward-only, so a level's refs can only ever resolve against itself and its
+    ancestors. Resolving against just the dirs handed in therefore reports every legitimate upward
+    ref as an orphan - measured as 5 false orphans from a project dir against 0 from the anchor on
+    the same data.
+
+    Levels the caller DID pass are skipped deliberately: re-adding one at a broader position would
+    also grant its slugs that position, and the downward test (`max(where) < pos`) could then never
+    fire for a full chain.
+    """
+    import self_improve_signals as sig             # hooks/ is on sys.path from this module's import
+
+    def _key(p):
+        try:
+            return Path(p).resolve()
+        except OSError:
+            return None
+
+    passed = {k for k in (_key(d) for d in dirs) if k is not None}
+    seen, out = set(), []
+    for d in dirs:
+        for lvl in sig.altitude_chain(str(d)):
+            key = _key(lvl)
+            if key is None or key in passed or key in seen:
+                continue
+            seen.add(key)
+            out.append(Path(lvl))
+    return out
+
+
 def check_references(dirs):
     """Verify `[[ref]]` integrity across an ordered altitude chain (narrow -> broad). Returns
     {checked, orphans, downward}: `orphans` refs resolve nowhere in the chain; `downward` refs resolve
-    only at a NARROWER altitude than the source. Both are (source_slug, ref_slug) pairs."""
+    only at a NARROWER altitude than the source. Both are (source_slug, ref_slug) pairs.
+
+    Ancestor altitudes above `dirs` are pulled in as TARGET providers automatically, so checking a
+    single project dir is correct rather than a wall of false orphans. Only the passed dirs supply
+    ref SOURCES, so `checked` still counts what the caller asked about."""
     dirs = [Path(d) for d in dirs]
     targets = {}                                  # slug -> set of altitude positions offering it
     for pos, d in enumerate(dirs):
         for s in altitude_targets(d):
             targets.setdefault(s, set()).add(pos)
+
+    # Ancestors sit at positions broader than every passed dir, which is what they are; an upward
+    # ref out of the listed dirs is the only direction the storage spec permits.
+    for offset, lvl in enumerate(_unpassed_ancestor_levels(dirs)):
+        for s in altitude_targets(lvl):
+            targets.setdefault(s, set()).add(len(dirs) + offset)
 
     orphans, downward, checked = [], [], 0
     for pos, d in enumerate(dirs):
@@ -487,6 +529,12 @@ def main(argv=None):
                          "paths, i.e. captured in the wrong store (capture routes by cwd). Reports "
                          "candidates + the relocate command; never moves anything. Exit 1 if any")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    # Absolutize ONCE at the boundary. A relative dir reached the level/anchor resolution in
+    # several downstream paths and produced confident nonsense rather than an error: `--check .`
+    # examined 0 refs and printed success, while `--check-tree .` invented 33 problems and labelled
+    # every level "[.]". Both agreed with the absolute form the moment the input was resolved.
+    args.dirs = [str(Path(d).resolve()) for d in args.dirs]
 
     if args.check_misplaced:
         anchor = ME._anchor(args.dirs[0])
