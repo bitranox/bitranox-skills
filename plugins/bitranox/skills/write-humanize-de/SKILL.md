@@ -53,8 +53,10 @@ Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
 enthalten solche Zeichen absichtlich. Deshalb steht jedes solche Beispiel in einem
-Code-Span oder Codeblock: Der tell-sweep-Hook überspringt Code, sodass das exakte Zeichen
-sowohl den Hook als auch einen versehentlichen Durchlauf übersteht. Neue Beispiele
+Code-Span oder Codeblock: Hook und `strip_typographic_tells.py` teilen sich EINE Definition von
+Code (`tell_chars.transform_outside_code`), sodass das exakte Zeichen sowohl den Hook als auch
+einen versehentlichen Durchlauf übersteht - eine Datei, die der Sweep durchlässt, kann das Skript
+nicht mehr verändern. Neue Beispiele
 ebenfalls in Backticks setzen. Danach die inhaltlichen Umschreibungen vornehmen.
 
 ---
