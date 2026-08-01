@@ -272,3 +272,22 @@ Related, for a script SHIPPED with tests: a plain `pytest` imports your test mod
 interpreter as-is and does NOT provision PEP 723 deps (only `uv run <script>` does), so a hard
 top-level third-party import passes under `uv run` and fails the gate on a clean runner. Guard it
 with a stdlib fallback and verify in a venv holding only pytest.
+
+## Gotcha: a missing extra is a HARD error in uv, only a warning in pip
+
+`uv pip compile --extra dev pyproject.toml` fails with `error: Requested extra not found: dev` and
+exits 2 when the project declares no such extra. `uv pip install -e .[dev]` and pip both only warn
+and install the base package, so the same repo can survive the install step and then kill a later
+compile step in the same workflow - and a sweep across several repos dies only on the one that
+declares no extras.
+
+Select the flag from what the project actually DECLARES rather than assuming a convention, since the
+`dev` set may be a PEP 735 dependency group instead of an extra:
+
+```python
+selector = []
+if "dev" in data.get("project", {}).get("optional-dependencies", {}):
+    selector = ["--extra", "dev"]
+elif "dev" in data.get("dependency-groups", {}):
+    selector = ["--group", "dev"]
+```

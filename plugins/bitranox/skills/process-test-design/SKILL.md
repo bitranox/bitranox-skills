@@ -188,7 +188,7 @@ so a stale waiver cannot re-hide a fix.
 The same doubt applies to any gate: validate it against a KNOWN-BAD input once, so you have seen it
 go red. Otherwise "green for months" is equally consistent with "it stopped gating months ago".
 
-Two mechanics worth stating because they silently defeat a test that looks right:
+Four mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
   namespace and never reaches the consumer's already-bound name, so the test runs against the
@@ -197,6 +197,18 @@ Two mechanics worth stating because they silently defeat a test that looks right
 - **A correctness test cannot prove an INDEX is used.** Results rank correctly whether the store
   used the index or full-scanned. Assert the plan (`EXPLAIN` shows an index scan, `list_indices` is
   non-empty), or the check silently passes on an O(n) path.
+- **Two files sharing a BASENAME collide, and the loser's tests exercise the winner.** Python
+  resolves an import to the first match on `sys.path`, and pytest's default `prepend` mode prepends
+  each test root as it collects, so with two same-named modules the one collected FIRST wins for the
+  whole run. The other directory's tests then run against a file you never changed. Both suites stay
+  green, so nothing announces it; the tell is a fix that reads as absent in the full run while
+  passing in isolation, and the shadowed file's real coverage is zero. Ship the module once, or run
+  `--import-mode=importlib`, which keys modules by path instead of basename.
+- **A teardown on a doctest's LAST line does not run when an earlier line raises.** A
+  `mock.patch(...).start()` closed only by a trailing `mock.patch.stopall()` leaks the patch into
+  every test collected after it, and under `--doctest-modules` the doctest executes in the collected
+  module's namespace, so the leak is global. The resulting failures land far away and look unrelated
+  to the doctest. Prefer a real injectable seam over patching inside a doctest at all.
 
 Prove a codec/serializer swap by SEMANTIC equivalence - decode the new output with the OLD decoder
 and compare the values - not by byte-equality, which fails on harmless ordering or padding changes

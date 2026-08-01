@@ -83,6 +83,12 @@ once at the edge.
   Validate what is ALLOWED (type, charset, range) and use the sink's real escaping primitive.
 - **One global `sanitize()` that strips characters.** Context-free stripping corrupts valid data and
   still misses context-specific attacks. There is no universal sanitizer; escape per sink.
+- **"It takes an argv, so there is no shell to inject into."** Removing the shell removes ONE sink,
+  not the need to validate. `chpasswd` reads `user:password` one entry PER LINE from stdin, so a
+  newline inside a password smuggles in a second entry - run as root, that sets root's password, with
+  no shell anywhere. Likewise a name beginning with `-` is parsed as an OPTION by `useradd`/`gpasswd`
+  rather than as a name. Reject `\n` in a password at the boundary and allowlist account names to a
+  POSIX pattern. The sink here is a line-oriented parser; treat it like any other sink.
 
 ## Language notes
 

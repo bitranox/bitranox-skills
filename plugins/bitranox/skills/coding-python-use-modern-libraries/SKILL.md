@@ -101,3 +101,14 @@ swap it out.
   point is "best tool", not "most dependencies".
 - Logging and CLI framework are deliberately left to each project's own conventions rather
   than prescribed here.
+- **`subprocess` raises a DIFFERENT exception type per OS for the same condition, so never branch
+  on which one you got.** A missing `cwd` raises `FileNotFoundError` on POSIX but
+  `OSError [WinError 267] "The directory name is invalid"` on Windows, so a
+  `FileNotFoundError -> 127 / OSError -> 126` mapping returns two different exit codes for one
+  condition - and the POSIX run stays green because POSIX happens to raise the type the code
+  expected. Pre-check the path yourself (`Path(cwd).exists()` / `.is_dir()`) and decide the result
+  explicitly, then run the missing-path test on Windows before trusting its exit code.
+- **On 3.14+, `except A, B:` without parentheses is VALID (PEP 758) and catches both.** On 3.13 and
+  earlier the same line is a `SyntaxError` under the old Python-2 `except E, name:` grammar, so it
+  reads like an obvious bug. Check `requires-python` or the interpreter and probe with `python -c`
+  before "fixing" it; on 3.14+ adding parentheses is a style choice, not a correction.
