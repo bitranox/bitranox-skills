@@ -11,7 +11,7 @@ RPyC was inspired by the work of **Eyal Lotem** on [pyinvoke](https://pybuild.so
 
 The logo is derived from the [Python logo](https://www.python.org/community/logos/), with explicit permission. I created it using *Power Point* (sorry, I'm no graphic designer :), and all the files are made available here:
 
-- ![image](../_static/rpyc3-logo-tiny.png)
-- ![image](../_static/rpyc3-logo-medium.png)
-- ![image](../_static/rpyc3-logo-big.png)
+- ![image](https://raw.githubusercontent.com/tomerfiliba-org/rpyc/master/docs/_static/rpyc3-logo-tiny.png)
+- ![image](https://raw.githubusercontent.com/tomerfiliba-org/rpyc/master/docs/_static/rpyc3-logo-medium.png)
+- ![image](https://raw.githubusercontent.com/tomerfiliba-org/rpyc/master/docs/_static/rpyc3-logo-big.png)
 - Also in `the original </_static/rpyc3-logo.ppt>` Power Point master.

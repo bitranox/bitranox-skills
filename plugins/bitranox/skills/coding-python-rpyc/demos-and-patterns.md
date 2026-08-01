@@ -318,7 +318,7 @@ Pattern: Server constructs GTK widgets on the client via passed proxy objects. D
 ```python
 class Web8Service(rpyc.Service):
     def exposed_get_page(self, gtk, content, page):
-        lbl = gtk.Label("Hello mate")
+        lbl = gtk.Label("Hello mate")   # illustrative; the real demo builds its page differently
         lbl.show()
         content.pack_start(lbl)
 ```

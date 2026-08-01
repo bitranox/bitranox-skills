@@ -22,7 +22,7 @@ Protocol configuration is passed as a dict via `protocol_config` (server) or `co
 | `instantiate_custom_exceptions`       | `False`      | Allow instantiating custom exception classes                    |
 | `instantiate_oldstyle_exceptions`     | `False`      | Allow old-style exception instantiation                         |
 | `propagate_SystemExit_locally`        | `False`      | Propagate `SystemExit` locally                                  |
-| `propagate_KeyboardInterrupt_locally` | `False`      | Propagate `KeyboardInterrupt` locally                           |
+| `propagate_KeyboardInterrupt_locally` | `True`       | Propagate `KeyboardInterrupt` locally                           |
 | `logger`                              | `None`       | Logger instance for protocol debugging                          |
 | `connid`                              | `None`       | Connection ID string                                            |
 | `credentials`                         | `None`       | Credentials dict                                                |
@@ -59,9 +59,9 @@ rpyc_classic.py [options]
 
 | Switch               | Description                                  | Default                |
 |----------------------|----------------------------------------------|------------------------|
-| `-m`, `--mode=MODE`  | Serving mode: `threaded`, `forking`, `stdio` | `threaded`             |
+| `-m`, `--mode=MODE`  | Serving mode: `threaded`, `forking`, `stdio`, `oneshot` | `threaded`  |
 | `-p`, `--port=PORT`  | TCP port                                     | `18812` (SSL: `18821`) |
-| `--host=HOSTNAME`    | Bind address                                 | `0.0.0.0`              |
+| `--host=HOSTNAME`    | Bind address                                 | `localhost`            |
 | `--ipv6`             | Bind IPv6 socket                             | IPv4                   |
 | `--logfile=FILENAME` | Log file                                     | `stderr`               |
 | `-q`, `--quiet`      | Quiet mode (no logging)                      | off                    |

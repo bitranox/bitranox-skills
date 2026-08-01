@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.130.0] - 2026-08-01
+
+### Fixed
+
+The two vendored-documentation skills, where every sweep finding is now repaired rather than left
+as upstream's problem. The divergence from upstream is deliberate and listed in each skill's review
+artifact, so a future re-vendor is a merge rather than a copy.
+
+- **coding-python-rpyc: eight wrong claims, each re-derived from the installed rpyc 6.0.2 rather
+  than from the report.** The `--host` default was documented twice as `0.0.0.0`; the tool says
+  `localhost`, so a reader expecting a remotely reachable server got a local-only one. `--mode`
+  omitted `oneshot`. `propagate_KeyboardInterrupt_locally` was documented as the opposite of its
+  actual default. `conn.builtin` (singular) contradicted every other page. The monkey-patch example
+  used `rpyc.modules`, which does not exist - the CONNECTION has `.modules`, the package does not.
+  The boilerplate ReadMe promised output after 30s from a client that sleeps 10. And three files
+  disagreed about the Python floor, now reconciled on the distribution's declared `>=3.8`.
+- **Its "Per-module API" row pointed at 11 files that contain no API content** - each is a
+  ~121-byte stub reading "See source code". The row says so now and routes to `help()` on the
+  installed package.
+- **coding-python-textual: three shipped examples could not run** - two unparseable (nested quotes,
+  an unterminated string) and one declaring a `CSS_PATH` whose `.tcss` lived in a different
+  directory. The stylesheet now sits beside the app that declares it.
+- **Every unresolved link in both skills now resolves** (13 targets: changelog, license, three
+  never-vendored logo paths, and a dotted Python path that Markdown cannot resolve). Verified by a
+  link sweep reporting 0 unresolved in each.
+
 ## [5.129.0] - 2026-08-01
 
 ### Fixed

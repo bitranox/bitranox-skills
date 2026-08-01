@@ -12,7 +12,7 @@ src="_static/fish-text-black.png" title="Tomer's Blog"/>
 
 A new version has been released!
 
-Be sure to read the [changelog](changelog.md) before upgrading!
+Be sure to read the [changelog](https://github.com/tomerfiliba-org/rpyc/blob/master/CHANGELOG.rst) before upgrading!
 
 Please use the [github issues](https://github.com/tomerfiliba/rpyc/issues) to ask questions report problems. **Please do not email me directly**
 
@@ -59,5 +59,5 @@ For an introductory reading (that may or may not be slightly outdated), David Me
 - [Tutorial](tutorial.md)
 - [Documentation](docs.md)
 - [API Reference](api.md)
-- [License](license.md)
-- [Changelog](changelog.md)
+- [License](https://github.com/tomerfiliba-org/rpyc/blob/master/LICENSE) (not shipped here)
+- [Changelog](https://github.com/tomerfiliba-org/rpyc/blob/master/CHANGELOG.rst)

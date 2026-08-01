@@ -13,7 +13,7 @@ Use the Read tool to load referenced files identified as relevant for full detai
 
 **Install:** `pip install rpyc`
 **Default ports:** Classic `18812`, SSL `18821`, Registry `18811`
-**Python:** CPython 3.7+ (no Python 2<->3 crossing)
+**Python:** CPython 3.8+ (rpyc 6.x `Requires-Python >=3.8`; no Python 2<->3 crossing)
 **Dependencies:** None for core; `plumbum` for zero-deploy; `pywin32` for `PipeStream` on Windows
 **Repository:** https://github.com/tomerfiliba-org/rpyc
 
@@ -74,7 +74,7 @@ Try distilled references (above) first. Use upstream docs below only when more d
 | Tutorial 5: Async     | `rpyc.async_()`, `AsyncResult` (`.error`), `BgServingThread`, `conn.poll_all()`, `conn.serve`, event producer/consumer                                                                      | `tutorial/tut5.md`             |
 | Use cases             | remote testing, administration, hardware access, GIL workaround, distributed computation, clustering                                                                                        | `docs/usecases.md`             |
 | Release process       | `hatch build`, `hatch publish`, git tagging, PyPI, semantic versioning, CHANGELOG                                                                                                           | `docs/rpyc-release-process.md` |
-| Per-module API        | `core.brine`, `core.protocol`, `core.netref`, `core.service`, `core.stream`, `utils.server`, `utils.registry`, `utils.authenticators`, `utils.factory`, `utils.classic`, `utils.zerodeploy` | `api/*.md` (11 files)          |
+| Per-module API        | STUBS ONLY - each `api/*.md` is a one-line pointer to the source, not API detail. For signatures use `python -c "import rpyc; help(rpyc.core.protocol)"` on the installed package. |
 
 ---
 

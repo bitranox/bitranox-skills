@@ -8,13 +8,16 @@ If you don't want to mess with virtualenvs or mess with system directories, inst
 
     pip install rpyc --user
 
-Be sure to read the [changelog](changelog.md) before upgrading versions! Also, always link your own applications against a fixed major version of rpyc!
+Be sure to read the [changelog](https://github.com/tomerfiliba-org/rpyc/blob/master/CHANGELOG.rst)
+before upgrading versions (it does not ship with this skill)! Also, always link your own applications against a fixed major version of rpyc!
 
 ## Platforms and Interpreters
 
 RPyC is a pure-python library, and as such can run on any architecture and platform that runs python (or one of its other implementations), both 32-and 64-bit. This is also true for a client and its server, which may run on different architectures. The latest release supports:
 
-- **Python** (CPython) 2.7-3.7
+- **Python** (CPython) >= 3.8 for current rpyc (6.x declares `Requires-Python >=3.8`). The
+  2.7-3.7 range below is upstream text from an older release and does not apply to what you
+  install today.
 - May work on py2.6
 - May work with **Jython** and **IronPython**. However, these are not primary concerns for me. Breakage may occur at any time.
 
