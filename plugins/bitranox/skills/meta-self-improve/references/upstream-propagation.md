@@ -23,11 +23,14 @@ That queue is DURABLE and per-project: SessionStart surfaces it every session an
 Queue first, then do the steps below now or later. `contrib_queue.py list` shows what is pending
 (numbered); `contrib_queue.py drain` clears it - ONLY after the change actually shipped.
 
-**A DISPROVEN or STALE intent must be DROPPED, not left to sit.** `drain` is for what shipped; an
-entry that turns out FALSE (you verified the claim and it is wrong) or SUPERSEDED (a later release
-already covers it) has to leave the queue too, or every future dream re-reads and re-evaluates it
-forever. Use `contrib_queue.py drop --index N --reason "<why>"` (the index comes from `list`), and
-`contrib_queue.py rejected` to see what was dropped and why. The drop writes a TOMBSTONE, which is
+**Close every entry by its OUTCOME, and close it individually.** `ship --match <text> --note <where
+it landed>` for one that DELIVERED; `drop --match <text> --reason "<why>"` for one that turns out
+FALSE (you verified the claim and it is wrong) or SUPERSEDED (a later release already covers it).
+Either way it has to leave the queue, or every future dream re-reads and re-evaluates it forever.
+Select with `--match`, not `--index`: an index comes from a listing and SHIFTS under the previous
+close, so two closes from one listing hit the wrong second entry. `drain` closes the WHOLE queue at
+once and fits only a sweep where every entry shipped. `contrib_queue.py shipped` and
+`contrib_queue.py rejected` show what left and why. The drop writes a TOMBSTONE, which is
 the part that makes it stick: `add` dedups only against the LIVE queue, so without the tombstone the
 next dream that re-notices the same gap silently re-queues it. A re-add of a dropped intent is
 refused and says so. An out-of-range index is refused rather than deleting the wrong entry.

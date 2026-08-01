@@ -206,7 +206,7 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 
 **Frontmatter (YAML):**
 - Only two fields supported: `name` and `description` (custom fields are stripped by Claude Code)
-- Max 1024 characters total
+- Caps are PER FIELD, not combined: `name` 64 characters, `description` 1024
 - `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
 - `description`: Third-person, describes ONLY when to use (NOT what it does)
   - Start with "Use when..." to focus on triggering conditions
@@ -635,17 +635,17 @@ so Windows does not silently break it:
   ordinary assistant phrasing.
 - **Do real work in this preference order; drop a level only when the one above cannot do it:**
   1. **A modern, well-maintained library for the job.** Consult the
-     **`python-use-modern-libraries`** skill and use its pick (httpx2 for HTTP, orjson for
+     **`bitranox:coding-python-use-modern-libraries`** skill and use its pick (httpx2 for HTTP, orjson for
      JSON, rtoml for TOML, ruamel.yaml for YAML, and so on). Do not fall back to dated
      defaults (`urllib`/`requests`, stdlib `json`) when a clearly better library exists.
      Declare deps via `uv` so they land in an isolated, reproducible environment, never the
      user's system Python: a CLI tool via `uvx <tool>`, or a script with PEP-723 inline
      metadata run by `uv run script.py` (uv fetches the deps on run, no prompt).
-     - **Libraries on the `python-use-modern-libraries` list are pre-approved** - use them and
+     - **Libraries on the `bitranox:coding-python-use-modern-libraries` list are pre-approved** - use them and
        let `uv` fetch them; do NOT ask first.
      - For a library NOT on that list, first vet it: trustworthy (reputable maintainer or
        community, not a typo-squat), common (widely adopted), and modern (actively maintained,
-       current releases). If it passes, propose adding it to the `python-use-modern-libraries`
+       current releases). If it passes, propose adding it to the `bitranox:coding-python-use-modern-libraries`
        list so the curated set grows. Each new entry needs: a proper one-line description of
        what it is for, the older library/libraries it replaces, and why it is better. Then use
        it. If it fails vetting, prefer a curated alternative or stdlib. Either way surface the
@@ -1158,7 +1158,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 
 **GREEN Phase - Write Minimal Skill:**
 - [ ] Name uses only letters, numbers, hyphens (no parentheses/special chars)
-- [ ] YAML frontmatter with only name and description (max 1024 chars)
+- [ ] YAML frontmatter with only name and description (`name` <= 64 chars, `description` <= 1024)
 - [ ] Description starts with "Use when..." and includes specific triggers/symptoms
 - [ ] Description does NOT summarize workflow (triggers only - see CSO section)
 - [ ] Description written in third person

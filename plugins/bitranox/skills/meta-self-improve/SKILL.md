@@ -181,7 +181,8 @@ do not just write the note louder:
 - Recurs once: strengthen it (mark MUST, add the failing example) and bump its
   `recurrence: N (last YYYY-MM-DD)` line.
 - Count reaches 2: STOP re-wording - prose has failed. Escalate to a DETERMINISTIC guard (a
-  PreToolUse/Stop hook via the `update-config` skill, a CI check, or a real code fix; user-gated,
+  PreToolUse/Stop hook via Claude Code's built-in `update-config` skill - a HOST skill, not one this
+  plugin ships - or a CI check, or a real code fix; user-gated,
   never auto-created). Guards follow the cross-platform script rules in
   `bitranox:meta-skill-writer`; a globally-useful guard belongs in the shared plugin's `hooks/` and
   MUST propagate upstream - local-only `~/.claude/hooks` is the classic loss.

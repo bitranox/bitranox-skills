@@ -94,8 +94,11 @@ Create one todo per step.
    `CLAUDE.md` removal obeys the reachability invariant, is backed up, and is reported.) Keep promoted
    rules CONCRETE (never water a
    concrete-but-universal rule down); abstract only when specifics fit nowhere else. Gate the
-   corroboration the same way as the tree dream: `dream_state.py saw-promotable <slug>` to record a
-   sighting, `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
+   corroboration the same way as the tree dream, and know what the counter measures: it records one
+   sighting PER DREAM, not one per project, so two projects corroborating inside a SINGLE crosstree
+   run still count as one - the >= 2 distinct projects test is your judgement, the dwell counter is
+   the mechanical backstop that also requires a second run. `dream_state.py saw-promotable <slug>`
+   records a sighting, `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
    to clear after an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
    `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a no-op).
 4b. **Misplacement audit (wrong-TREE facts).** ONLY the cross-tree modes can see this: a fact

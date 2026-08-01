@@ -69,7 +69,8 @@ the scan in step 3 is run; do not duplicate the rest.
      cross-tree consolidation above), or a truly-universal rule with no top home. Propose CREATING that
      folder's `CLAUDE.md` (a home for the lifted shared rule[s]) at the LOWEST common ancestor whose
      children share a domain - NEVER a generic bucket (`projects/`, `apps/`, `public/`); its child-derived
-     scope descriptor is synthesized by the Step 3 per-level scope-descriptor subagent (see below) and
+     scope descriptor is synthesized by the per-level scope-descriptor subagent described in step 4
+     below and
      written into that rung's pointer-block scope (in `CLAUDE.local.md`), not hand-typed into the `CLAUDE.md`. A
      structural-only look-alike (siblings that merely seem related, no shared-rule evidence) is SURFACED
      as a question, not auto-proposed. The **workspace-root `CLAUDE.md`** is the file-tree HQ; because the
@@ -80,7 +81,7 @@ the scan in step 3 is run; do not duplicate the rest.
      `bitranox:meta-self-improve` never does this on its own). Creating a rung is light - a new
      `CLAUDE.md`, NO slug migration - but it adds a tier to the ancestor chain of every project beneath
      it, so recheck their deltas. Reuse the per-level scope-descriptor synthesis mechanism
-     (`meta-self-improve` "Synthesize a scope descriptor at EVERY altitude" + the
+     (`bitranox:meta-dream-tree` step 0b "Scope-descriptor synthesis" + the
      `<!-- bitranox:self-learning -->` scope block in the `CLAUDE.local.md` pointer block): a SUBAGENT (capable model, not haiku) reads
      the docs of the directories directly beneath the new rung and returns its descriptor. Propose-first,
      never created without confirmation.
@@ -96,7 +97,8 @@ the scan in step 3 is run; do not duplicate the rest.
      (default: private)**, and whether it stays local-only or gets a remote (a remote is needed only to
      share the rung to other machines/people; local-only still gives version history + makes a trim
      safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
-5. **Then steps 4-8 of meta-dream-crosstree exactly** (outbound cross-pollination, re-dedup + reconcile via
+5. **Then steps 5-8 of meta-dream-crosstree exactly** (step 4, the promotion gate, is already
+   done above as this skill's step 3 - do not run it twice) (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check` over the LEVEL dirs AND `--check-tree <anchor>` per affected tree
    for `TOTAL tree problems: 0` - home: `<plugin>/skills/meta-self-improve/` - skill-fit batched change,
    the toolbox contribute pass (step 7b: propose contributing a broadly-useful local tool + a

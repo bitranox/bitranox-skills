@@ -22,13 +22,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import self_improve_signals as sig  # noqa: E402
 
 
+# The knobs whose value is one of a fixed set. Without this the CLI stored anything it was given:
+# `set dream_mode of` (the realistic typo for `off`) wrote the literal string and exited 0, leaving
+# a config that every reader then falls back to a default on, silently and forever.
+ENUM_CHOICES = {
+    "dream_mode": ("off", "auto", "propose"),
+    "privacy": ("open", "walled"),
+    "promotion": ("corroborated", "eager"),
+    "skill_placement": ("lowest", "user", "project"),
+    "mcp_search": ("off", "auto"),
+}
+
+_TRUE_WORDS = ("1", "true", "yes", "on")
+_FALSE_WORDS = ("0", "false", "no", "off")
+
+
 def _coerce(key, raw):
     """Coerce a string value to the type of that knob's default (bool / int / list / str).
-    A list knob accepts a JSON array (`["/a","/b"]`) or a comma/os.pathsep-separated string."""
+    A list knob accepts a JSON array (`["/a","/b"]`) or a comma/os.pathsep-separated string.
+
+    Raises ValueError on a value the knob cannot hold, so a typo is refused rather than stored."""
     import json as _json
     default = sig.DEFAULT_CONFIG[key]
+    if key in ENUM_CHOICES:
+        value = str(raw).strip()
+        if value not in ENUM_CHOICES[key]:
+            raise ValueError("%s must be one of: %s (got %r)"
+                             % (key, ", ".join(ENUM_CHOICES[key]), value))
+        return value
     if isinstance(default, bool):  # bool BEFORE int (bool is an int subclass)
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+        word = str(raw).strip().lower()
+        if word not in _TRUE_WORDS + _FALSE_WORDS:
+            raise ValueError("%s must be one of: %s (got %r)"
+                             % (key, ", ".join(_TRUE_WORDS + _FALSE_WORDS), str(raw).strip()))
+        return word in _TRUE_WORDS
     if isinstance(default, list):
         s = str(raw).strip()
         if s.startswith("["):
@@ -69,8 +96,9 @@ def main(argv=None):
             return 2
         try:
             value = _coerce(key, raw)
-        except ValueError:
-            print("bad value %r for %s" % (raw, key), file=sys.stderr)
+        except ValueError as exc:
+            # surface WHICH values are legal - "bad value" alone leaves the caller guessing
+            print("bad value for %s: %s" % (key, exc), file=sys.stderr)
             return 2
         _print_config(sig.save_config({key: value}))
         return 0
