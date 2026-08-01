@@ -15,15 +15,17 @@ quality threshold or the iteration cap is hit.
 ## Requirements
 
 - `OPENROUTER_API_KEY` in the environment (both scripts talk to OpenRouter).
-- `httpx2` for the AI script (PEP-723/uv handles it; the wrapper is stdlib-only).
+- `httpx2` for the AI script: run it with `uv run`, which reads the script's PEP 723 block
+  and fetches the dependency. Plain `python3` only works if httpx2 is already installed. The
+  wrapper script is stdlib-only.
 
 ## Usage
 
 ```bash
 # AI generation with quality-review loop
-python3 scripts/generate_schematic_ai.py "CONSORT participant flow for a two-arm RCT" -o flow.png
-python3 scripts/generate_schematic_ai.py "Neural network architecture diagram" -o arch.png --iterations 2
-python3 scripts/generate_schematic_ai.py "Simple block diagram" -o diagram.png --doc-type poster
+uv run scripts/generate_schematic_ai.py "CONSORT participant flow for a two-arm RCT" -o flow.png
+uv run scripts/generate_schematic_ai.py "Neural network architecture diagram" -o arch.png --iterations 2
+uv run scripts/generate_schematic_ai.py "Simple block diagram" -o diagram.png --doc-type poster
 
 # Thin wrapper (single shot, no review loop)
 python3 scripts/generate_schematic.py "Data pipeline overview" -o pipeline.png

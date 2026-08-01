@@ -101,4 +101,4 @@ The default ssh shell on Windows is `cmd.exe`; to make it PowerShell set the `De
 
 ## Hook / script
 
-`block-pgrep-self-match` (PreToolUse on Bash) catches the echo-label pgrep self-match, including `ssh ... 'pgrep ...'`. For remote PowerShell, a `runps.sh`-style wrapper that syntax-checks the `.ps1` with `pwsh` locally, then does the scp + `-File` run, avoids the cmd-quoting trap.
+`block-pgrep-self-match` (PreToolUse on Bash) catches the echo-label pgrep self-match, including `ssh ... 'pgrep ...'`. For remote PowerShell, write yourself a small wrapper - no such script ships here - that syntax-checks the `.ps1` with `pwsh` locally, then does the scp plus `-File` run. That sequence is what avoids the cmd-quoting trap.

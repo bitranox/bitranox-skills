@@ -20,7 +20,9 @@ still beta, so WSL is the practical route there. Both ports track upstream but l
 so check the 2.3 requirement on either rather than assuming it. Python 3.10+.
 
 Two commands are narrower than the rest: `service-install` needs systemd, and
-`alias-create` is Linux-only. Everything else runs wherever a readable pool does.
+`alias-create` is Linux-only. Everything else runs wherever a readable pool does - so on
+FreeBSD, macOS or WSL, drop those two lines from the install sequence below and schedule the
+check with whatever that host uses (cron, launchd, a timer of its own).
 
 ## Install
 
@@ -47,8 +49,8 @@ VENV_DIR=/opt/check_zpools/python-3.14.0
 sudo "$PYTHONINTERPRETER" -m venv "$VENV_DIR"
 sudo "$VENV_DIR/bin/python" -m pip install --upgrade pip uv
 sudo "$VENV_DIR/bin/uvx" check_zpools@latest config-deploy --target app
-sudo "$VENV_DIR/bin/uvx" check_zpools@latest service-install --uvx-version @latest
-sudo "$VENV_DIR/bin/uvx" check_zpools@latest alias-create --all-users
+sudo "$VENV_DIR/bin/uvx" check_zpools@latest service-install --uvx-version @latest  # systemd only
+sudo "$VENV_DIR/bin/uvx" check_zpools@latest alias-create --all-users                # Linux only
 ```
 
 `@latest` re-resolves, so a release reaches the host without a redeploy, but uv

@@ -25,10 +25,14 @@ GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
 BRANCH=$(git branch --show-current)
 ```
 
-**Submodule guard:** `GIT_DIR != GIT_COMMON` is also true inside git submodules. Before concluding "already in a worktree," verify you are not in a submodule:
+**Submodule note:** a plain submodule does NOT trip this test - measured with these exact commands,
+`GIT_DIR` and `GIT_COMMON` both resolve to `<super>/.git/modules/<name>`, so they compare equal and
+the submodule reads as a normal checkout, which is how you want to treat it. The pair differs only
+in a linked worktree. Run this if you want it stated explicitly, or when a submodule may itself
+have a worktree attached:
 
 ```bash
-# If this returns a path, you're in a submodule, not a worktree - treat as normal repo
+# Returns a path when you are inside a submodule; empty otherwise
 git rev-parse --show-superproject-working-tree 2>/dev/null
 ```
 

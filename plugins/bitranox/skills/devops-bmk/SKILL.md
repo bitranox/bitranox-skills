@@ -51,7 +51,7 @@ installed for you (see below). `uvx bmk install` is only the bootstrap that writ
 Once a project has the Makefile (section 2), every `make` first runs
 
 ```bash
-uv tool install --reinstall --force --refresh-package bmk "bmk>=<minimum>"
+uv tool install --reinstall --force "bmk>=<minimum>"
 ```
 
 which installs **bmk on its own** into uv's default tool dir and runs it from there
@@ -67,9 +67,9 @@ pyright and pip-audit inspected your real `.venv`, so the suite and the audit de
 environments.
 
 - The install runs on **every** `make`, deliberately. `--reinstall` re-resolves the spec, so a new
-  bmk release is picked up with nothing to remember; `--refresh-package bmk` refreshes uv's cached
-  index, without which a release published minutes ago stays invisible and you silently keep the
-  old bmk. It costs a second or two per invocation. Do not gate it behind a stamp file.
+  bmk release is picked up with nothing to remember, and it already implies `--refresh` (uv's own
+  help says so), which is why no separate `--refresh-package` is needed to see a release published
+  minutes ago. It costs a second or two per invocation. Do not gate it behind a stamp file.
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
 
@@ -144,7 +144,8 @@ of modified files after every sync.
 ## 2. Bootstrap the Makefile
 
 ```bash
-bmk install        # writes / updates a bmk-managed Makefile in the current directory
+uvx bmk install    # writes / updates a bmk-managed Makefile in the current directory
+                   # (`uvx` so this works before bmk is on PATH; plain `bmk install` once it is)
 make test          # from now on, drive everything through make
 ```
 
@@ -277,7 +278,7 @@ check and the audit all describe one environment.
 | `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                      |
 | `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                      |
 | `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                                 |
-| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf ...` before install.                                                                                                                                                        |
+| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                        |
 
 ## Further reading
 

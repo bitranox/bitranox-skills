@@ -17,6 +17,37 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.127.0] - 2026-08-01
+
+### Fixed
+
+Third batch from the isolated sweep. Each defect was re-measured, not taken from the report:
+
+- **compuse-git printed the wrong git error text**, and the more useful half is that the text is
+  LOCALIZED - the first check came back in German. Detect the `rev-parse --short` footgun by exit
+  code 128, never by grepping the message. The same wrong string lived in the shipped
+  `git-footgun-guard` hook and its test; all three fixed together.
+- **git-worktrees guarded against a condition git does not produce.** Step 0 claimed
+  `GIT_DIR != GIT_COMMON` is "also true inside git submodules". Measured with the skill's own
+  commands: plain submodule SAME, linked worktree DIFFER, normal checkout SAME.
+- **docs-generate-schematics could not resolve its own dependency.** It claimed `httpx2` is handled
+  by "PEP-723/uv" while neither script carried an inline metadata block and every documented
+  invocation was plain `python3`. uv reads inline metadata only from the file it is handed.
+- **devops-bmk carried a redundant flag with a false rationale** (`--reinstall` already implies
+  `--refresh`, per uv's own help), a bootstrap that dropped the `uvx` prefix the rest of the skill
+  requires, and a `git config ... .insteadOf ...` ending in a literal ellipsis.
+- **compuse-vnc sent readers to a skill with no tunnelling content**; it now gives the `ssh -N -L`
+  line itself.
+- **compuse-toolbox's procsig over-claimed.** It said the tool never puts the match string on a
+  command line; its own argv carries it. The guarantee is one-directional and now says so. The
+  skill also advertised an "IPv6-first" edge case no tool there touches.
+- **docs-md-table-formatting's GOOD example contradicted its own rule 1**, showing widths the
+  shipped formatter would never emit. It is now that formatter's actual output.
+- **infra-storage-check-zpools ran two Linux/systemd-only commands unconditionally** in a
+  production-install block, two paragraphs after saying they are Linux/systemd-only.
+- **compuse-ssh named a `runps.sh` wrapper that ships nowhere**; it now describes the wrapper to
+  write and says none ships.
+
 ## [5.126.0] - 2026-08-01
 
 ### Fixed

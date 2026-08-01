@@ -7,8 +7,10 @@ Why: `pgrep -f X` / `pkill -f X` match against /proc/<pid>/cmdline, and the shel
 command holds X in its own cmdline, so it matches (and kills) itself - the classic
 pgrep-self-match footgun, where a stray match kills your own shell. This tool
 reads /proc directly and ALWAYS excludes its own process and every ancestor (the caller's shell),
-so it structurally cannot signal the caller. It never puts the match string on a command line
-another pgrep could see either.
+so it structurally cannot signal the caller. What it does NOT do is hide the needle: procsig's own
+argv carries the match string like any other command, so somebody else's broad cmdline sweep can
+still match THIS process. The guarantee is one-directional - procsig will not kill you; it cannot
+stop a third party's sweep from killing procsig.
 
 Match by (pick one):
   --exe PATH_OR_BASENAME   the /proc/<pid>/exe target (cannot self-match a command line at all)

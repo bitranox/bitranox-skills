@@ -36,14 +36,17 @@ Every cell in a column must be padded with trailing spaces to match the widest c
 No spaces between pipes and dashes in the separator row. Dash count = column width + 2 (matching the space-padded content cells).
 
 ```txt
-# BAD  -  spaces around dashes
+# BAD  -  spaces around dashes, and columns wider than their content
 | Name  | Value    |
 | ----- | -------- |
 
-# GOOD  -  dashes touch pipes
-| Name  | Value    |
-|-------|----------|
+# GOOD  -  dashes touch pipes, width follows the widest cell (rule 1)
+| Name | Value |
+|------|-------|
 ```
+
+That GOOD block is exactly what `reformat_tables.py` emits for the BAD input above: it re-sizes
+each column to its widest cell, so stale padding does not survive the pass.
 
 ### 3. Content cells have exactly one space padding
 
