@@ -53,7 +53,8 @@ uv run --with playwright playwright install chromium
 uv run audit_responsive.py http://localhost:8000/view/ABC123 --out ./audit-out
 
 # subset, add the i18n text-expansion pass, point axe at an offline mirror
-uv run audit_responsive.py "$URL" --profiles "iPhone SE (landscape)" "iPad mini (portrait)" --i18n
+uv run audit_responsive.py "$URL" --profiles "iPhone SE (landscape)" "iPad mini (portrait)" --i18n \
+  --axe-url http://localhost:8000/vendor/axe.min.js
 ```
 
 `report.json` is `{ url, totals:{SEVERE,MEDIUM,MINOR}, passed, devices:[...] }`; exit code is

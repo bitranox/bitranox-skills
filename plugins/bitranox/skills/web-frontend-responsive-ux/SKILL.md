@@ -235,7 +235,7 @@ prescribes (proven in real galleries). Deviate only with a reason.
 - **Keep a shared element the SAME rendered size across pages.** The logo/brand mark (and other shared
   chrome) should measure the same height on every page template at a given viewport - not 40px on one
   page, 34px on another. Render each page at one fixed viewport and compare; reconcile via a shared
-  token (brand-token reconciliation itself: `design-brand-consistency`). Error pages (404/50x) are real
+  token (brand-token reconciliation itself: `design-brand-consistency` (PLANNED, not yet shipped)). Error pages (404/50x) are real
   pages too: audit and fit them at every viewport/locale like any other - a permanently-open menu or
   content overflow there is still a bug.
 
@@ -245,13 +245,13 @@ Stay sharp - these belong elsewhere:
 
 | Concern                                                   | Skill                      |
 |-----------------------------------------------------------|----------------------------|
-| Performance/SEO scoring, full Lighthouse, Core Web Vitals | `web-frontend-pagespeed`   |
-| Localization infra (catalogs, locale routing, hreflang)   | `web-frontend-i18n`        |
+| Performance/SEO scoring, full Lighthouse, Core Web Vitals | `web-frontend-pagespeed` - but check its own scope note first: it lists Core Web Vitals, LCP and the Lighthouse workflow as NOT YET WRITTEN, so the handoff is a pointer to the right owner, not a promise of coverage |
+| Localization infra (catalogs, locale routing, hreflang)   | `web-frontend-i18n` (PLANNED, not yet shipped)        |
 | Brand/CI alignment to a reference/landing page            | `design-brand-consistency` |
-| Self-hosting fonts (GDPR), font subsetting                | `web-frontend-fonts`       |
-| GDPR/privacy compliance (consent, IP-leak, third-party)   | `sec-privacy-web-gdpr`     |
-| Deep accessibility beyond the axe baseline                | `web-frontend-a11y-audit`  |
-| `sitemap.xml` + SEO sitemap practices                     | `web-frontend-sitemap`     |
+| Self-hosting fonts (GDPR), font subsetting                | `web-frontend-fonts` (PLANNED, not yet shipped)       |
+| GDPR/privacy compliance (consent, IP-leak, third-party)   | `sec-privacy-web-gdpr` (PLANNED, not yet shipped)     |
+| Deep accessibility beyond the axe baseline                | `web-frontend-a11y-audit` (PLANNED, not yet shipped)  |
+| `sitemap.xml` + SEO sitemap practices                     | `web-frontend-sitemap` (PLANNED, not yet shipped)     |
 
 ## Common mistakes
 

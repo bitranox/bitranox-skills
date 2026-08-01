@@ -75,11 +75,16 @@ let down = false, moved = false, sx, sy, sl, st;
 rail.addEventListener("pointerdown", e => {
   if (e.pointerType !== "mouse" || e.button !== 0) return;   // touch uses native scroll
   down = true; moved = false; sx = e.clientX; sy = e.clientY; sl = rail.scrollLeft; st = rail.scrollTop;
-  rail.classList.add("is-dragging"); rail.setPointerCapture(e.pointerId);
+  // NO setPointerCapture here: it redirects the subsequent click to the rail and kills the
+  // thumbnail link's navigation. Capture only once this is a real drag - see pointermove.
 });
 rail.addEventListener("pointermove", e => {
   if (!down) return;
-  if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4) moved = true;
+  if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4 && !moved) {
+    moved = true;
+    rail.classList.add("is-dragging");
+    rail.setPointerCapture(e.pointerId);   // past the threshold: now it IS a drag
+  }
   rail.scrollLeft = sl - (e.clientX - sx);     // pan both axes; the rail scrolls in whichever it can
   rail.scrollTop  = st - (e.clientY - sy);
 });

@@ -46,6 +46,11 @@ Stop. Don't proceed to Step 2.
 ```bash
 GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
 GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+BRANCH=$(git branch --show-current)          # EMPTY on a detached HEAD - this is what splits
+                                             # the two `GIT_DIR != GIT_COMMON` rows below
+WORKTREE_PATH=$(git rev-parse --show-toplevel)   # capture NOW: options 1 and 4 cd to the main
+                                                 # root before Step 6 runs, and Step 6 cannot
+                                                 # recover it from the current directory
 ```
 
 This determines which menu to show and how cleanup works:
@@ -167,9 +172,10 @@ git branch -D <feature-branch>
 **Only runs for Options 1 and 4.** Options 2 and 3 always preserve the worktree.
 
 ```bash
-GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
-GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
-WORKTREE_PATH=$(git rev-parse --show-toplevel)
+# Use the values captured in STEP 2. Do NOT recompute them here: options 1 and 4 have already
+# cd'd to the main root, so a fresh probe reports GIT_DIR == GIT_COMMON and this step concludes
+# "no worktree to clean up" while the worktree is still on disk. That failure is silent.
+: "${GIT_DIR:?capture in Step 2}" "${GIT_COMMON:?capture in Step 2}" "${WORKTREE_PATH:?capture in Step 2}"
 ```
 
 **If `GIT_DIR == GIT_COMMON`:** Normal repo, no worktree to clean up. Done.

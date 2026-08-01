@@ -36,7 +36,7 @@ curl -s -o /dev/null -D - https://host/path/app.js | grep -iE 'etag|last-modifie
 
 | Check                             | Why it can read clean while broken                                                                                                                                             |
 |-----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `curl -I` for compression         | HEAD has no body, so the gzip filter never runs and `Content-Encoding` is never emitted, **for every file**. Uncompressed and compressed look identical                        |
+| `curl -I` for compression         | Plain `curl -I` sends no `Accept-Encoding`, so nothing is negotiated and `Content-Encoding` is absent whatever the server does. With `--compressed` most servers DO report it on a HEAD (measured on three), but a filter that only runs on a body will not - so a HEAD is unreliable in BOTH directions. Confirm with a GET |
 | `Cache-Control: no-cache` present | `no-cache` means revalidate, not do-not-store. Cheap only if the origin emits `ETag`/`Last-Modified`; a proxied app that sends neither turns each revalidation into a full 200 |
 | A location "has no cache policy"  | With no `add_header` of its own it INHERITS the server-level one, often `no-cache`. Absence of config is a policy                                                              |
 | A later regex location for assets | A `^~` prefix match stops location selection; regex locations are never evaluated for that prefix                                                                              |

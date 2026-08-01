@@ -55,8 +55,11 @@ heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
 mark, bullet) untouched. Do not run it on this skill file itself - the examples below
 contain those characters on purpose. That is also why every such example is kept inside a
-code span or fenced block: the tell-sweep hook skips code, so the exact character survives
-both the hook and an accidental strip. A prose warning alone did not protect them (a
+code span or fenced block: the tell-sweep HOOK skips code, so the exact character survives it.
+That is protection from the hook ONLY - `strip_typographic_tells.py` does NOT skip code, and an
+accidental run rewrites the tell inside a span and inside a fence alike (measured). So the
+do-not-run-it-here warning above is the real protection, not the backticks. A prose warning alone
+did not protect them either (a
 past pass flattened the curly-quote example into two identical halves). Put any new
 example of a tell in backticks. After the pass, do the judgment-based rewrites.
 

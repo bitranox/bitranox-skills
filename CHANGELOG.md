@@ -17,6 +17,41 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.131.0] - 2026-08-01
+
+### Added
+
+- **meta-self-improve: retiring a local hook after lifting it into the plugin.** The escalation
+  ladder already said a globally-useful guard belongs in the shared plugin's `hooks/`, and stopped
+  there. Following it exactly left the local copy armed - and both copies fire, with the one that
+  blocks FIRST winning, so a stale local hook silently overrides the newer plugin version while the
+  plugin looks installed and current. Measured twice on one machine, once by a guard that blocked
+  writing the documentation for its own rule. Removing the `settings.json` entry and retiring the
+  file are both required, and coverage is proved by feeding both copies identical synthetic events
+  before either is removed.
+
+### Fixed
+
+The last five skills from the isolated sweep, whose reports arrived after four batches had shipped:
+
+- **process-ship-finishing-development-branch silently skipped worktree cleanup.** Step 6
+  recomputed its git state from the current directory, but options 1 and 4 `cd` to the main root
+  first - so it saw a normal repo, reported "no worktree to clean up", and exited happy while the
+  worktree remained. It now reuses the values Step 2 captured and refuses to run without them. Step
+  2 also captures `BRANCH`, which is what actually distinguishes the two worktree rows in its own
+  menu table.
+- **web-frontend-responsive-ux shipped the defect its own rule forbids**: a reference example
+  called `setPointerCapture` on `pointerdown`, which SKILL.md says kills the thumbnail link's
+  navigation. Capture now waits for the movement threshold. Its axe example gained the `--axe-url`
+  its comment promised, its Lighthouse handoff no longer promises coverage the target skill
+  disclaims, and six handoffs to unbuilt skills are marked PLANNED.
+- **web-frontend-pagespeed claimed `curl -I` never shows `Content-Encoding`, "for every file".**
+  Measured on three servers: with `--compressed` it does, on all of them.
+- **write-humanize-en claimed code spans protect examples from an accidental strip.** They do not -
+  running the strip script over a probe rewrote the em dash inside an inline span and inside a
+  fenced block alike. They protect from the HOOK, which skips code; the script does not.
+- **coding-rust froze two undated crate sizes** where the ratio carries the argument.
+
 ## [5.130.0] - 2026-08-01
 
 ### Fixed
