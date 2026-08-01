@@ -26,6 +26,28 @@ skills and at the plugin's own hooks, and all of that ships together. Hand a rev
 directory and it reports every sibling reference as dangling. Measured: 5 of the first 6 findings
 in a run framed that way were this one false positive.
 
+## Run the deterministic checks first
+
+Anything a script can decide, decide with a script: it covers the whole catalogue in seconds, it
+cannot hallucinate a quote, and it costs nothing to re-run after every fix. Spend the reviewers on
+what is left - claims that need judgement or a live tool to check.
+
+```bash
+# every shipped example must at least parse
+python3 - <<'EOF'
+import ast, pathlib
+for p in pathlib.Path("skills").rglob("*.py"):
+    if "__pycache__" in str(p): continue
+    try: ast.parse(p.read_text(encoding="utf-8"))
+    except SyntaxError as e: print("%s:%s %s" % (p, e.lineno, e.msg))
+EOF
+```
+
+Worth the same treatment: JSON/YAML files that must parse, `CSS_PATH`-style asset references that
+must resolve, relative links that must land on a shipped file, and the plugin's own mirror gate.
+A real sweep found a shipped example with unescaped nested quotes that had never been executed -
+one second of `ast.parse` over the catalogue, against several minutes of reviewer time per skill.
+
 ## Procedure
 
 1. **Wall recall and record the old value.** `cross_tree_search: false` via `save_config` in
@@ -66,3 +88,12 @@ because the reader runs the one and merely fails to follow the other.
 - **Fixing the marketplace copy and stopping.** The twin ships to real installs too.
 - **Editing a skill during its own sweep.** The room holds a copy; edits to the live tree mid-run
   are not what was reviewed, and the report's line references drift.
+- **Assuming the clean room isolates the MACHINE.** It isolates context, not the filesystem. A
+  reviewer told to verify a claim will install what it needs to verify it: one sweep pip-installed
+  a package into the ambient environment, which flipped a skill's tests from skipping to running
+  and turned a green gate red mid-session. Expect the host to change under you, and never point a
+  sweep at a machine where an install would matter.
+- **Trusting any gate run that OVERLAPS the sweep.** It is unreliable in both directions: the same
+  run reported two failures that neither the isolated nor the ambient interpreter could reproduce
+  once the sweep's concurrent installs had settled. Gate before the sweep or after it, never
+  during, and re-run rather than debugging a result from the overlap.

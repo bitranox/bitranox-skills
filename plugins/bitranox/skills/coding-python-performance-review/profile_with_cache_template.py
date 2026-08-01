@@ -10,7 +10,6 @@ Usage:
 import os
 import sys
 import time
-import subprocess
 from functools import lru_cache
 
 
@@ -18,13 +17,28 @@ def _pytest_argv():
     """Build the pytest argv, only naming a test dir when one exists.
 
     If neither ``tests/`` nor ``test/`` is present, omit the path so pytest
-    discovers tests itself (honouring any pyproject testpaths)."""
-    argv = [sys.executable, '-m', 'pytest']
+    discovers tests itself (honouring any pyproject testpaths). No interpreter
+    prefix: both runs call pytest.main() IN THIS PROCESS - see _run_suite."""
+    argv = []
     testdir = next((d for d in ('tests', 'test') if os.path.isdir(d)), None)
     if testdir:
         argv.append(testdir)
-    argv.append('-v')
+    argv.append('-q')
     return argv
+
+
+def _run_suite():
+    """Run the test suite in THIS process and return the elapsed seconds.
+
+    In-process is not a style choice. The cached run monkey-patches the target
+    module, and a subprocess gets a fresh interpreter that never sees the patch:
+    the cached function is then never called, cache_info() reports 0 hits and 0
+    misses, the hit rate computes as 0, and the verdict is REJECT no matter how
+    good the cache would have been."""
+    import pytest
+    start = time.perf_counter()
+    pytest.main(_pytest_argv())
+    return time.perf_counter() - start
 
 # Constants for cache validation
 MIN_HIT_RATE_PERCENT = 20  # Minimum cache hit rate percentage to recommend caching
@@ -50,10 +64,8 @@ def profile_with_cache():
     # Monkey-patch with cached version
     setattr(module, FUNCTION_NAME, cached_func)
 
-    # Run test suite
-    start = time.perf_counter()
-    result = subprocess.run(_pytest_argv(), capture_output=True)
-    elapsed = time.perf_counter() - start
+    # Run test suite in-process, so the patch above is the code under test
+    elapsed = _run_suite()
 
     # Get cache statistics
     cache_info = cached_func.cache_info()
@@ -64,10 +76,7 @@ def profile_with_cache():
 
 def profile_without_cache():
     """Profile test suite without caching."""
-    start = time.perf_counter()
-    result = subprocess.run(_pytest_argv(), capture_output=True)
-    elapsed = time.perf_counter() - start
-    return elapsed
+    return _run_suite()
 
 def recommend(improvement, hit_rate):
     """Return the RECOMMEND/REJECT verdict string for a cache experiment."""

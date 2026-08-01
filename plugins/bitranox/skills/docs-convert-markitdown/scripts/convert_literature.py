@@ -26,16 +26,21 @@ def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
     # Remove extension
     name = Path(filename).stem
     
-    # Try to extract year
-    year_match = re.search(r'\b(19|20)\d{2}\b', name)
+    # Try to extract year. NOT \b: an underscore is a word character, so \b never fires
+    # between '_' and a digit and the year is missed in the documented Author_Year_Title form.
+    year_match = re.search(r'(?<!\d)(19|20)\d{2}(?!\d)', name)
     if year_match:
         metadata['year'] = year_match.group()
     
     # Split by underscores or dashes
-    parts = re.split(r'[_\-]', name)
+    parts = [p for p in re.split(r'[_\-]', name) if p]
+    if 'year' in metadata:
+        # the caller already gets the year in its own field; leaving it in the title too
+        # means every downstream filename/citation carries it twice
+        parts = [p for p in parts if p != metadata['year']]
     if len(parts) >= 2:
-        metadata['author'] = parts[0].replace('_', ' ')
-        metadata['title'] = ' '.join(parts[1:]).replace('_', ' ')
+        metadata['author'] = parts[0]
+        metadata['title'] = ' '.join(parts[1:])
     else:
         metadata['title'] = name.replace('_', ' ')
     

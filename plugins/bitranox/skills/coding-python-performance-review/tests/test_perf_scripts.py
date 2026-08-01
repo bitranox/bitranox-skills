@@ -214,3 +214,46 @@ def test_profile_template_pytest_argv_conditional(tmp_path, monkeypatch):
     assert "tests" not in pwct._pytest_argv()
     (tmp_path / "tests").mkdir()
     assert "tests" in pwct._pytest_argv()
+
+
+# --- profile_with_cache_template: the cached run must SEE its own patch -------
+
+def test_cached_run_observes_hits_because_the_suite_runs_in_process(monkeypatch, tmp_path):
+    """A subprocess never sees the monkey-patch, so cache_info stays 0/0 and the
+    verdict is REJECT however good the cache is. Pin the in-process behaviour."""
+    import sys as _sys
+    import types as _types
+
+    calls = {"n": 0}
+    mod = _types.ModuleType("fake_target_mod")
+
+    def slow(x):
+        calls["n"] += 1
+        return x * 2
+
+    mod.function_to_cache = slow
+    monkeypatch.setitem(_sys.modules, "fake_target_mod", mod)
+    monkeypatch.setattr(pwct, "MODULE_NAME", "fake_target_mod")
+    monkeypatch.setattr(pwct, "FUNCTION_NAME", "function_to_cache")
+
+    fake_pytest = _types.ModuleType("pytest")
+
+    def fake_main(argv):
+        # stands in for the suite: exercises the patched attribute twice with one argument
+        for _ in range(2):
+            _sys.modules["fake_target_mod"].function_to_cache(21)
+        return 0
+
+    fake_pytest.main = fake_main
+    monkeypatch.setitem(_sys.modules, "pytest", fake_pytest)
+
+    _elapsed, info, hit_rate = pwct.profile_with_cache()
+    assert info.hits == 1 and info.misses == 1     # second call is a hit
+    assert hit_rate == 50.0                        # not the always-0 of the subprocess version
+    assert calls["n"] == 1                         # the cache really absorbed the second call
+
+
+def test_pytest_argv_has_no_interpreter_prefix():
+    """argv feeds pytest.main() in-process, so an interpreter path would be read as a test path."""
+    argv = pwct._pytest_argv()
+    assert argv and not any(a.endswith("python") or a == "-m" for a in argv)
