@@ -110,7 +110,7 @@ If you have python modules that make use of the `socket` module (say, `telnetlib
     import telnetlib
 
     machine_c = rpyc.classic.connect("machine-c")
-    telnetlib.socket = rpyc.modules.socket
+    telnetlib.socket = machine_c.modules.socket
 
 This is called [monkey-patching](https://en.wikipedia.org/wiki/Monkey_patch), it's a very handy technique which you can use in other places as well, to override functions, classes and entire modules. For instance :
 

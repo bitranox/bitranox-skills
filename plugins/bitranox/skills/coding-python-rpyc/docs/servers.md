@@ -31,7 +31,9 @@ The classic server takes the following command-line switches (try running it wit
 
 - `-m`, `--mode=MODE` - the serving mode (`threaded`, `forking`, or `stdio`). The default is `threaded`; `stdio` is useful for integration with inetd.
 - `-p`, `--port=PORT` - the TCP port (only useful for `threaded` or `forking` modes). The default is `18812`; for SSL the default is `18821`.
-- `--host=HOSTNAME` - the host to bind to. The default is `0.0.0.0`.
+- `--host=HOSTNAME` - the host to bind to. The default is `localhost` (verified against
+  `rpyc_classic.py --help`; it is NOT the wildcard, so a remote client cannot reach it until you
+  pass `--host 0.0.0.0` deliberately).
 - `--ipv6` - if given, binds an IPv6 socket. Otherwise, binds an IPv4 socket (the default).
 - `--logfile=FILENAME` - the log file to use. The default is `stderr`
 - `-q`, `--quiet` - if given, sets quiet mode (no logging).

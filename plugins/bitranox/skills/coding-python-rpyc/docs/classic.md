@@ -16,6 +16,6 @@ RPyC installs `rpyc_classic.py` to your Python scripts directory (e.g., `C:\Pyth
     stdout, stderr = proc.communicate()
     print(stdout.split())
 
-    remote_list = conn.builtin.range(7)
+    remote_list = conn.builtins.range(7)
 
     conn.execute("print('foo')")

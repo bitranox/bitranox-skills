@@ -185,7 +185,8 @@ We can add Textual by modifying the following line:
 dependencies = ["textual==0.47.1"]
 ```
 
-At the time of writing, the latest Textual is `0.47.1`.
+The version pinned above is an example, not a recommendation - check the current release with
+`pip index versions textual` (or on PyPI) and pin whatever you actually tested against.
 The entry in `dependencies` will ensure we get that particular version, even when newer versions are released.
 
 See the Hatch docs for more information on specifying [dependencies](https://hatch.pypa.io/latest/config/dependency/).

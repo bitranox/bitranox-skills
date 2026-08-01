@@ -26,6 +26,6 @@ you should read from the client console:
         old stat: os.stat_result(st_mode=33204, st_ino=1181245, st_dev=2053, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1596994889, st_mtime=1596994889, st_ctime=1596994889)
         new stat: os.stat_result(st_mode=33204, st_ino=1181245, st_dev=2053, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1596995295, st_mtime=1596995295, st_ctime=1596995295)
 
-then after 30s at the server console you see:
+then after 10s (the client's `sleep(10)`) at the server console you see:
 
         client closed.

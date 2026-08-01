@@ -166,7 +166,7 @@ width: auto;
 
 ```python
 widget.styles.width = 10
-widget.styles.width = "50%
+widget.styles.width = "50%"
 widget.styles.width = "auto"
 ```
 
