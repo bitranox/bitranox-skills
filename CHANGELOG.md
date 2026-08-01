@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.135.0] - 2026-08-02
+
+### Changed
+
+- **`strip_typographic_tells.py` ships once, at `<plugin>/hooks/`, instead of twice.** It was
+  duplicated byte-identically in `write-humanize-en` and `write-humanize-de` under one module name,
+  so in a whole-plugin pytest run the German copy loaded first and the English tests exercised the
+  German script - which is exactly how the previous release's code-span fix appeared to be missing
+  while passing in isolation. Both skills now invoke the shared copy, whose `tell_chars` dependency
+  is a sibling there rather than three levels up. The German test file was verified to be a strict
+  subset (0 language-specific lines) before removal, so the ~54-test drop in the suite total is
+  duplicate coverage going away, not coverage lost.
+- **`repo-gate`'s comment no longer cites a collision that no longer exists.** It explains why the
+  gate passes `--import-mode=importlib`, and named these two files as the example; it now names
+  `test_git_state.py`, which still collides.
+
+### Note
+
+`git_state.py` is also shipped twice, by `compuse-git` and `compuse-toolbox`, but those copies have
+already DRIFTED (15 differing lines), so consolidating them is a which-behaviour-wins decision
+rather than a mechanical de-duplication. Left as-is and recorded here.
+
 ## [5.134.0] - 2026-08-01
 
 ### Fixed

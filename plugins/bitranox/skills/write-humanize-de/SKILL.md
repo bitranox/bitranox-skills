@@ -26,7 +26,7 @@ switch-model-or-continue an (das Hauptmodell kann sich nicht selbst umschalten).
 
 Wenn du Text zum Humanisieren bekommst:
 
-1. **Deterministischen Typografie-Durchlauf ausführen** - `python3 scripts/strip_typographic_tells.py DATEI`
+1. **Deterministischen Typografie-Durchlauf ausführen** - `bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py DATEI`
    (siehe unten). Immer zuerst, vor jedem inhaltlichen Umschreiben.
 2. **KI-Muster identifizieren** - Nach den unten aufgeführten Mustern suchen
 3. **Problematische Stellen umschreiben** - KI-Typisches durch natürliche Alternativen ersetzen
@@ -42,9 +42,9 @@ Vor dem inhaltlichen Umschreiben die mechanischen Typografie-Anzeichen mit dem
 mitgelieferten Skript entfernen. Das ist schneller und zuverlässiger als Handarbeit und
 ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach besteht:
 
-    python3 scripts/strip_typographic_tells.py DATEI          # Datei direkt ersetzen
-    cat DATEI | python3 scripts/strip_typographic_tells.py -  # oder einen Stream normalisieren
-    python3 scripts/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py DATEI          # Datei direkt ersetzen
+    cat DATEI | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # oder einen Stream normalisieren
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten
 
 Das Skript liegt im Ordner `scripts/` dieses Skills. Es ersetzt Geviert- und
 Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
@@ -555,7 +555,7 @@ Er sagte "das Projekt liegt im Zeitplan", aber andere widersprachen.
 ## Ablauf
 
 1. Den deterministischen Typografie-Durchlauf ausführen:
-   `python3 scripts/strip_typographic_tells.py DATEI` (verpflichtend, immer vor dem
+   `bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py DATEI` (verpflichtend, immer vor dem
    inhaltlichen Umschreiben)
 2. Den Eingabetext sorgfältig lesen
 3. Alle Instanzen der oben genannten Muster identifizieren
