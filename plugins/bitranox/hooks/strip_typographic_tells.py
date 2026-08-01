@@ -24,9 +24,10 @@ is itself pure ASCII and passes the same check.
 import sys
 from pathlib import Path
 
-# The hook and this script MUST agree about what counts as code, or a file that passes the sweep
-# still gets its deliberate examples rewritten. One implementation, in the shared module.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+# The sweep hook and this script MUST agree about what counts as code, or a file that passes the
+# sweep still gets its deliberate examples rewritten. One implementation, in the shared module -
+# which is a sibling here, so this works whether the file is imported or run directly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tell_chars  # noqa: E402
 
 

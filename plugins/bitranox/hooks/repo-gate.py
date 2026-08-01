@@ -383,8 +383,8 @@ def check_pytest(root, paths):
     target = [str(p) for p in paths if p.exists()]
     if not target:
         return []
-    # import-mode=importlib: skill test files share basenames (e.g. two
-    # test_strip_typographic_tells.py), which the default prepend mode cannot import
+    # import-mode=importlib: skill test files share basenames (e.g. two test_git_state.py),
+    # which the default prepend mode cannot import
     # side by side. examples/ and demos/ are documentation, not convention tests -
     # exempt from tests-exist, so exempt from the run too.
     cmd = [

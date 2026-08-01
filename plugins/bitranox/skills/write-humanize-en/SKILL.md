@@ -28,7 +28,7 @@ its model). See `bitranox:process-agents-subagent-driven-development` ("The sess
 
 When given text to humanize:
 
-1. **Run the deterministic typographic pass** - `python3 scripts/strip_typographic_tells.py FILE`
+1. **Run the deterministic typographic pass** - `bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py FILE`
    (see "Deterministic typographic pass" below). Always first, before any judgment rewriting.
 2. **Identify AI patterns** - Scan for the patterns listed below
 3. **Rewrite problematic sections** - Replace AI-isms with natural alternatives
@@ -44,9 +44,9 @@ Before any judgment rewriting, strip the mechanical typographic tells with the b
 script. It is faster and more reliable than fixing them by hand, and it is the exact
 inverse of the tell-sweep check, so the text passes that gate afterward:
 
-    python3 scripts/strip_typographic_tells.py FILE          # rewrite a file in place
-    cat FILE | python3 scripts/strip_typographic_tells.py -  # or normalize a stream
-    python3 scripts/strip_typographic_tells.py --check FILE  # report only, exit 1 if tells remain
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py FILE          # rewrite a file in place
+    cat FILE | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # or normalize a stream
+    bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check FILE  # report only, exit 1 if tells remain
 
 The script is bundled in this skill's `scripts/` directory (run it with that path, or the
 skill's absolute path when installed as a plugin). It replaces em and en dashes, curly
@@ -586,7 +586,7 @@ Also watch for: `contentReference[oaicite:0]{index=0}`, `oai_citation`, `+1` art
 
 ## Process
 
-1. Run the deterministic typographic pass: `python3 scripts/strip_typographic_tells.py FILE`
+1. Run the deterministic typographic pass: `bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py FILE`
    (mandatory, and always before any judgment rewriting)
 2. Read the input text carefully
 3. Identify all instances of the patterns above
