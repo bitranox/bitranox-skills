@@ -82,8 +82,39 @@ def test_silent_for_a_command_that_is_not_a_gate_run(tmp_path):
     proj = _project(tmp_path)
     other = tmp_path / "other"
     other.mkdir()
-    for cmd in ("ls -la", "git status", "make docs", "echo pytest-is-mentioned-here"):
+    for cmd in ("ls -la", "git status", "make docs"):
         assert G.build_notice(cmd, proj, str(other)) is None, cmd
+
+
+def test_silent_when_a_tool_name_is_only_MENTIONED(tmp_path):
+    """The tool must be in COMMAND position, not merely present as a word.
+
+    An earlier version matched the token anywhere, so `echo pytest is great` and a commit message
+    naming a test file both fired. A guard that goes off on prose about the thing it guards is the
+    failure that gets guards ignored. Caught by a side-by-side probe, not by these unit tests - the
+    original case here used a hyphenated token that could never have matched.
+    """
+    proj = _project(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    for cmd in ("echo pytest is great",
+                'git commit -m "fix pytest config"',
+                "grep -rn pytest docs/",
+                "cat notes-about-ruff.md"):
+        assert G.build_notice(cmd, proj, str(other)) is None, cmd
+
+
+def test_still_fires_through_a_launcher(tmp_path):
+    """Command position must not mean literally token zero: launchers stand in front."""
+    proj = _project(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    for cmd in ("uv run pytest -q",
+                "python -m pytest",
+                "env -u VIRTUAL_ENV uv run pyright",
+                "PYTHONPATH=. pytest",
+                "timeout 300 pytest"):
+        assert G.build_notice(cmd, proj, str(other)), cmd
 
 
 def test_make_fires_only_on_pipeline_targets(tmp_path):
