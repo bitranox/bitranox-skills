@@ -138,15 +138,18 @@ git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (
 
 ## Tools
 
-`scripts/git_state.py` automates the pre-commit / pre-push state check above across one or many
-repos (read-only): for each repo it prints the branch, whether HEAD is in sync with its upstream
+`git_state.py` automates the pre-commit / pre-push state check above across one or many repos
+(read-only): for each repo it prints the branch, whether HEAD is in sync with its upstream
 (ahead/behind/diverged, or `no-upstream`), and the dirty count, and it exits non-zero if ANY repo
 is out of sync - so it doubles as a bulk pre-push guard.
 
+It ships ONCE, in the skill that owns the jigs: `skills/compuse-toolbox/scripts/git_state.py`
+(see `bitranox:compuse-toolbox` for the rest of them).
+
 ```bash
-uv run scripts/git_state.py                 # current directory
-uv run scripts/git_state.py repoA repoB     # named repos
-uv run scripts/git_state.py --root ~/src    # every .git repo found under a directory
+uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py                 # current directory
+uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py repoA repoB     # named repos
+uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py --root ~/src    # every .git repo below a dir
 ```
 
 ## Hooks
