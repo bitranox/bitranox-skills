@@ -32,7 +32,7 @@ def test_extract_metadata_dash_separator(literature):
     md = literature.extract_metadata_from_filename("Jones-2022-Climate.pdf")
     assert md["year"] == "2022"
     assert md["author"] == "Jones"
-    assert md["title"] == "2022 Climate"  # year is also part of the split parts
+    assert md["title"] == "Climate"  # the year lives in md["year"], not in the title
 
 
 def test_extract_metadata_unicode_author(literature):

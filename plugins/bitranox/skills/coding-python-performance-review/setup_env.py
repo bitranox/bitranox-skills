@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = []
+# ///
 """Portable, stdlib-only bootstrap for the python-performance-review skill.
 
 Replaces the old POSIX-only bash "Setup" step. Cross-platform (works on

@@ -45,3 +45,22 @@ tests. Ships with plugin 5.125.0.
       or machine paths added.
 - [x] Honest limitation stated IN the skill rather than hidden: one reviewer per skill per run is a
       sample, so a skill that reports clean once is unmeasured rather than verified clean.
+
+## Amendment, same session: deterministic checks first
+
+- [x] The sweep's own results changed the skill. A one-second `ast.parse` over every shipped `.py`
+      in the catalogue found the same broken example a reviewer had spent minutes reaching, and
+      proved the other 65 skills clean of that whole defect class at the same time. The skill now
+      opens with the deterministic pass and reserves reviewers for what needs judgement or a live
+      tool.
+- [x] Verified before claiming: the sweep script reported `broken shipped .py files: 0` after the
+      fix, and had reported the `border_title.py` SyntaxError before it.
+- [x] Second amendment, also from the sweep's own behaviour: a reviewer pip-installed a package
+      into the ambient environment at 02:41 while verifying a skill's claims, which flipped that
+      skill's tests from skipping to running and turned a previously green gate red. The clean room
+      isolates CONTEXT, not the filesystem. Recorded in Common Mistakes with the instruction to
+      re-run the gate after a sweep rather than trusting a pre-sweep result.
+- [x] Third amendment: a gate run that OVERLAPPED the sweep reported two failures that neither the
+      isolated CI dependency set nor the ambient interpreter could reproduce once the concurrent
+      installs settled. Recorded as its own mistake - gate before or after a sweep, never during,
+      and re-run rather than debugging a result from the overlap.

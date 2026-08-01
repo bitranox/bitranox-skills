@@ -12,7 +12,7 @@ description: Use when reviewing Python code for performance - identifying cachin
 Your approach:
 - **Systematic Identification:** Find ALL pure functions, expensive computations, uncompiled regex
 - **Profile with REAL Data:** Use actual test suite, never synthetic benchmarks
-- **Measure Evidence:** Cache hit rate must be >20%, improvement must be >5%
+- **Measure Evidence:** Cache hit rate must be >=20%, improvement must be >5%
 - **Cross-Reference:** Identify functions called frequently in profiling data
 - **Reject Low-Benefit:** Don't recommend changes if criteria not met
 - **Regex Hygiene:** Every repeated regex call must use a compiled pattern
@@ -60,7 +60,7 @@ Use the Read tool to load referenced files for full details.
 | Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch        |
 | Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns |
 | Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data  |
-| Performance claims checker    | validate_perf_claims.py        | Extract and validate performance claims from a diff       |
+| Performance claims extractor  | validate_perf_claims.py        | Extract claims from a diff; YOU validate each by profiling |
 | Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison       |
 
 ## Workflow

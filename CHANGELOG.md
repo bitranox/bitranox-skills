@@ -17,6 +17,35 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.126.0] - 2026-08-01
+
+### Fixed
+
+Second batch from the isolated sweep, each verified by re-running the thing it describes:
+
+- **coding-python-performance-review's cache experiment always said REJECT.** The template patched
+  the target function in-process and then ran the suite in a SUBPROCESS, which never sees the
+  patch, so `cache_info()` reported 0 hits and 0 misses and the verdict was fixed regardless of how
+  good the cache would have been. Both runs are in-process now, with two regression tests proven
+  red against the old template. Also: `setup_env.py` gained the PEP 723 block that makes the
+  skill's "uv run fetches an isolated 3.13+ interpreter" claim true, the claims EXTRACTOR is no
+  longer described as validating, and the hit-rate threshold matches the code.
+- **coding-python-send-mail told readers to lift the 25 MiB attachment cap with
+  `attachment_max_size_bytes=None`.** On the call that value is the sentinel for "no override", so
+  the default still applied and the large send - the skill's headline use case - failed anyway.
+  `None` disables the check only on the config object.
+- **compuse-bash's mtime-sort command did not sort.** `find -printf '%T@ %p\n' | sort -zrn` mixes
+  newline records with NUL-splitting sort, so the input passes through untouched - in the very row
+  that teaches "sort by MTIME, never lexical order" for keeping the newest file.
+- **A shipped Textual example did not parse** (unescaped nested quotes), in the file and in the
+  guide page embedding it. `ast.parse` over every shipped `.py` now reports zero broken files
+  across all 67 skills.
+- **docs-convert-markitdown never extracted a year** from the `Author_Year_Title.pdf` pattern its
+  own docstring advertises: `\b` does not fire between an underscore and a digit. Its seven tests
+  had skipped in every environment lacking `markitdown`, including the documented CI set, so the
+  defect shipped green - and the two tests disagreed with each other about the title, which nobody
+  could see because neither ran.
+
 ## [5.125.0] - 2026-08-01
 
 ### Added
