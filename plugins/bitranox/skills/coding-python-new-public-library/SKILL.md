@@ -19,7 +19,8 @@ sequence plus the pitfalls that a from-memory guess gets wrong.
   with a registered CLI command).
 - Installing or using a library that was built from this template.
 
-Not for: an application/service (use the app template), or a one-off script.
+Not for: an application/service (use the app template,
+`github.com/bitranox/bitranox_template_py_cli`), or a one-off script.
 
 ## 1. Scaffold the repo
 
@@ -59,7 +60,8 @@ For installing a FINISHED library (as a user): `uv pip install <name>`, or
 
 ## 3. Use the result
 
-The template ships a rich-click CLI (two console commands plus `python -m <pkg>`)
+The template ships a rich-click CLI (two console commands - the package name with underscores
+and with hyphens, both bound to the same entry point - plus `python -m <pkg>`)
 and a small library API. Replace the placeholder behaviors with your own.
 
 ```bash
@@ -111,7 +113,7 @@ consequences that a plain library does not have:
 | Skipping `./rename_dry.sh`                           | Always preview first; the dry-run is the safety check.                 |
 | `reset_git_history.sh` with the template as `origin` | It force-pushes to the first remote; `git remote remove origin` first. |
 | Keeping the `master` branch                          | New repos use `main` (`git branch -m master main`).                    |
-| Editing `.github/*`                                  | Template-managed; change CI in `default_cicd_public` instead.          |
+| Editing `.github/*`                                  | Template-managed; change CI in `default_cicd_public` (`github.com/bitranox/default_cicd_public`) instead.          |
 | Hand-editing the `Makefile` or version in code       | Makefile is bmk-generated; bump only `pyproject.toml`.                 |
 
 ## Reference

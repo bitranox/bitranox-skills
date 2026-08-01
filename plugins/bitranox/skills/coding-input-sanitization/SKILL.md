@@ -49,15 +49,15 @@ Test the edge with the adversarial input battery (UTF/emoji/CJK/binary/wrong-typ
 The same value is safe for one sink and dangerous for another, so escaping belongs at the sink, not
 once at the edge.
 
-| Sink                  | Rule                                                                                                                                           | Never                                                          |
-|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------|
-| SQL                   | parametrized query / bound parameters (driver placeholders or the ORM query API)                                                               | string-concat or f-string external data into SQL               |
-| HTML / templates      | autoescape ON (`select_autoescape(default=True, default_for_string=True)`); a trusted rich-text field opts out per-interpolation with `\|safe` | disable autoescape globally; mark untrusted data `\|safe`      |
-| Shell / subprocess    | `subprocess.run([argv...])` no shell; `shlex.split` a user template into list elements                                                         | `shell=True` with untrusted input; f-string into a shell line  |
-| File path             | confine to a base dir (`Path(base, name).resolve()` stays under `base.resolve()`); reject `..`, absolute, NUL                                  | join user input into a path unchecked (traversal)              |
-| Deserialization       | a safe format (JSON) parsed into a typed model                                                                                                 | `pickle` / `yaml.load` / `eval` on untrusted data              |
-| Outbound URL (SSRF)   | allowlist host + scheme; block internal/link-local ranges and redirects to them                                                                | fetch a user-supplied URL unrestricted                         |
-| Log / response header | strip CR/LF + control chars before writing                                                                                                     | write user data into a header/log line raw (injection/forging) |
+| Sink                  | Rule                                                                                                                                            | Never                                                                                                                  |
+|-----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| SQL                   | parametrized query / bound parameters (driver placeholders or the ORM query API)                                                                | string-concat or f-string external data into SQL                                                                       |
+| HTML / templates      | autoescape ON (`select_autoescape(default=True, default_for_string=True)`); a trusted rich-text field opts out per-interpolation with `\|safe`  | disable autoescape globally; mark untrusted data `\|safe`                                                              |
+| Shell / subprocess    | `subprocess.run([argv...])` no shell; `shlex.split` a user template into list elements                                                          | `shell=True` with untrusted input; f-string into a shell line                                                          |
+| File path             | confine to a base dir by resolving THEN checking: `p = Path(base, name).resolve()`, keep only if `p.is_relative_to(base.resolve())`; reject NUL | trust the join to confine - `Path(base, "../../etc/passwd")` and `Path(base, "/etc/passwd")` both resolve OUTSIDE base |
+| Deserialization       | a safe format (JSON) parsed into a typed model                                                                                                  | `pickle` / `yaml.load` / `eval` on untrusted data                                                                      |
+| Outbound URL (SSRF)   | allowlist host + scheme; block internal/link-local ranges and redirects to them                                                                 | fetch a user-supplied URL unrestricted                                                                                 |
+| Log / response header | strip CR/LF + control chars before writing                                                                                                      | write user data into a header/log line raw (injection/forging)                                                         |
 
 ## Quick checklist
 
@@ -87,6 +87,6 @@ once at the edge.
 ## Language notes
 
 Examples are Python (the primary stack); the principle is language-agnostic. Rust:
-`bitranox:coding-rust`. Bash: `bitranox:coding-bash-reference` (quoting, `shlex`, never eval untrusted
-input). Boundary-parsing architecture (where the edge is, typed models flowing inward):
+`bitranox:coding-rust`. Bash: `bitranox:coding-bash-reference` (quoting, never eval untrusted
+input); `shlex` is Python's, for building an argv from a string - see the shell sink above. Boundary-parsing architecture (where the edge is, typed models flowing inward):
 `bitranox:coding-python-clean-architecture`, `bitranox:coding-python-enforce-data-architecture-strict`.

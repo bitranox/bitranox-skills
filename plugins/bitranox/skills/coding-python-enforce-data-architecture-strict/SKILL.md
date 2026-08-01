@@ -253,8 +253,9 @@ STEP C - RUN TESTS:
 STEP D - FINAL VERIFICATION:
   - Read `.data_arch_violations.json` and confirm total_violations == 0
   - Grep only to surface candidates: `-> dict`, `: dict` in signatures. A hit is a lead, not
-    proof - a bare `== "..."` matches legitimate string comparisons and the permitted small
-    local dicts. Judge each hit against the Exceptions rule; do NOT auto-loop on raw match count.
+    proof - `: dict` also matches the permitted small local dicts and annotations that are not
+    signatures at all. Judge each hit against the Exceptions rule; do NOT auto-loop on raw match
+    count.
   - If a real violation is found: GOTO STEP A
   - If clean:
     * Update state file: all files status = "clean"
