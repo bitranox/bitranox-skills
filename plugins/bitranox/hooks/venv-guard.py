@@ -40,16 +40,54 @@ _MAKE_TARGETS = {
 }
 
 
+# Tokens that stand IN FRONT of the real command rather than being it. Without this, the tool name
+# has to be matched in command position or `echo pytest is great` and
+# `git commit -m "fix pytest config"` both look like test runs - the guard-fires-on-prose failure.
+_PREFIXES = {
+    "env", "uv", "uvx", "poetry", "pdm", "hatch", "pipx", "python", "python3", "py",
+    "time", "timeout", "nice", "ionice", "sudo", "doas", "run", "exec", "-m",
+}
+
+
+def _runs_a_tool(tokens: list[str]) -> bool:
+    """True when the first REAL command in `tokens` is one of the gate tools.
+
+    Walks past option flags, their values, VAR=value assignments, numeric operands (a `timeout`
+    duration, a `nice` level) and known launchers. The first token that is none of those decides,
+    so a tool name appearing later - in an echo, a commit message, a grep pattern, a filename -
+    never counts. The TOOLS test comes FIRST so that `python -m pytest` is not mistaken for `-m`
+    consuming its value.
+    """
+    previous_was_flag = False
+    for token in tokens:
+        name = token.rsplit("/", 1)[-1]
+        if name in _TOOLS:
+            return True
+        if token.startswith("-"):
+            previous_was_flag = True
+            continue
+        if "=" in token.split("/", 1)[0]:              # VAR=value assignment before the command
+            previous_was_flag = False
+            continue
+        if previous_was_flag or token.isdigit():       # a flag's value, or a bare numeric operand
+            previous_was_flag = False
+            continue
+        if name in _PREFIXES:                          # a launcher; the real command follows
+            continue
+        return False                                   # a different command owns this statement
+    return False
+
+
 def looks_like_a_gate_run(command: str) -> bool:
     """True when a statement in `command` runs tests, lint, type-check or an audit."""
     for segment in _SEP.split(command or ""):
         tokens = segment.split()
         if not tokens:
             continue
-        if any(t in _TOOLS or t.rsplit("/", 1)[-1] in _TOOLS for t in tokens):
+        if _runs_a_tool(tokens):
             return True
-        if "make" in tokens:
-            targets = [t for t in tokens[tokens.index("make") + 1:] if not t.startswith("-")]
+        if tokens[0].rsplit("/", 1)[-1] == "make":
+            targets = [t for t in tokens[1:] if not t.startswith("-")]
             if any(t in _MAKE_TARGETS for t in targets):
                 return True
     return False
