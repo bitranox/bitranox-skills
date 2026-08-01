@@ -79,9 +79,11 @@ Skip any step = lying, not verifying
 
 **For a risky/large completion claim, get an INDEPENDENT verifier.** You cannot fully check your own
 work (you share the doer's optimism). Dispatch an **`opus`** adversarial verifier subagent with fresh
-context (re-run the commands, check requirements line-by-line, try to DISPROVE "done") - correctness
-verification is exactly the deep-reasoning role that warrants opus. (Command execution itself stays in
-the main agent; tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
+context (re-run the commands ITSELF, check requirements line-by-line, try to DISPROVE "done") -
+correctness verification is exactly the deep-reasoning role that warrants opus. The verifier RUNS the
+commands rather than reading yours: a verifier handed your output inherits the same optimism this
+section says you cannot check in yourself, and a misreported result is exactly what survives that.
+(Tiers: "Concrete tiers" in `bitranox:process-agents-subagent-driven-development`.)
 
 **Tests:**
 ```

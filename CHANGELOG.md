@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.133.0] - 2026-08-01
+
+### Changed
+
+Three skills gave two instructions for the same step. Each was decided on the verbatim text of both
+sides rather than resolved by guess:
+
+- **process-plan-writing-plans told a weak-tier reader both to delegate the self-review and never to
+  delegate it.** Self-review is now never delegable at any tier, and the skill says why: it is a
+  fresh-eyes pass over the plan YOU just wrote against the spec, and a subagent that never watched
+  the plan take shape cannot know what was considered and rejected. Delegation remains available for
+  the design/decomposition, which is what the capability clause was really for.
+- **process-review-verification-before-completion told its verifier to "re-run the commands" and,
+  one sentence later, that "command execution itself stays in the main agent".** The verifier runs
+  them itself. A verifier handed the main agent's output inherits exactly the optimism the section
+  opens by saying you cannot check in yourself - and this session kept proving it, since re-running
+  is what exposed the wrong `curl -I` claim, the strip script's real behaviour, and rpyc's real
+  `--host` default, each of which read fine on the page.
+- **meta-dream-crosstree-deep demanded the `opus` tier for a decision its sibling defines as
+  "opus-class OR ABOVE".** Read literally it told a session on a MORE capable tier to switch down.
+  Both skills now carry the sibling's wording, including why opus is the floor.
+
+A fourth reported conflict was investigated and dismissed: `meta-dream-nap` deferring the toolbox
+pass is not a contradiction of `dream-core.md`, which says each dream mode states its delta - and
+deferring IS nap's delta. Left unchanged.
+
 ## [5.132.0] - 2026-08-01
 
 ### Changed

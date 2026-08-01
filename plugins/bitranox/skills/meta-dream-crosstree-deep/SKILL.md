@@ -27,10 +27,11 @@ the scan in step 3 is run; do not duplicate the rest.
    flags a DUPLICATE/MERGE only from the BODIES (not a title/topic match), and every such finding is a
    CANDIDATE the main agent VERIFIES before merging - a summary+detail pair, a valid cross-link, or a
    cited-across-a-subtree fact is not a duplicate (see "Dedup semantics" in references/dream-core.md). Keep the
-   promotion gate and altitude/normalization decisions INLINE on the main agent at the **`opus`** tier
-   - and if the session is not on `opus`, offer switch-model-or-continue per "The session model is
-   fixed" in `bitranox:process-agents-subagent-driven-development` (the main agent cannot self-switch
-   its model). (Tiers: "Concrete tiers" in the same skill.)
+   promotion gate and altitude/normalization decisions INLINE on the main agent at **opus-class OR
+   ABOVE** (opus is the universally-available deep tier; fable sits above it but needs paid API
+   credits) - if the session is below opus-class, offer switch-model-or-continue per "The session
+   model is fixed" in `bitranox:process-agents-subagent-driven-development` (a /model switch keeps
+   the conversation; the main agent cannot self-switch). (Tiers: "Concrete tiers" in the same skill.)
 3. **Promotion gate + CLAUDE.md reconciliation.** Before promoting any candidate to a tree's top,
    dedup it against that tree's existing top store, the shipped skills, AND every `CLAUDE.md` in the tree
    (project roots + ancestors + the workspace), not just the memory stores. During the conversion phase
