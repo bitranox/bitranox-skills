@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 67 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 68 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -136,6 +136,7 @@ Marketing/advertising/branding/positioning/pricing/persuasion/growth.
 Authoring the marketplace itself: writing/adopting skills, self-improvement, harness/hooks config.
 
 - [`meta-adopting-external-skills`](../plugins/bitranox/skills/meta-adopting-external-skills/SKILL.md) - Use when importing, adopting, forking, or integrating a useful third-party Claude Code skill into the bitranox marketplace - given a repo URL, an installed plugin path, or a pasted SKILL.md - or when asked to bring an external skill up to bitranox standards. The adopted skill is added alongside the user's other installed plugins, never replacing them.
+- [`meta-audit-local-skills-and-hooks`](../plugins/bitranox/skills/meta-audit-local-skills-and-hooks/SKILL.md) - Use when reviewing the Claude Code skills and hooks on a machine that no plugin ships - a personal ~/.claude/skills or ~/.claude/hooks entry, a project's .claude/skills, a hook registered in settings.json - or when a local hook silently stopped firing, a tests dir exists but nothing actually runs, a retired shim sits beside its replacement, or a local skill duplicates a marketplace one
 - [`meta-collect-knowledge`](../plugins/bitranox/skills/meta-collect-knowledge/SKILL.md) - Use to pull in knowledge from your OTHER projects or trees that is relevant to the current one - on "collect knowledge", "/collect-knowledge", when starting/seeding a fresh project, or when a learning reveals a topic this project now touches. Cascade only flows down one ancestor chain, so useful knowledge filed in a sibling project or another knowledge tree is otherwise invisible here; this gathers it in safely. Also runs as the inbound pass of bitranox:meta-dream-crosstree.
 - [`meta-dream-crosstree`](../plugins/bitranox/skills/meta-dream-crosstree/SKILL.md) - Use on "dream crosstree", "/dream-crosstree", "consolidate across projects", "global consolidation", occasionally after several per-project dreams, or when two projects or knowledge trees have learned related things that should be shared. This is the expensive cross-project/cross-tree pass reading every store; for one project's routine tidy use bitranox:meta-dream-tree. Honors an off/auto/propose mode. Formerly named meta-dream-global - answers to that name too.
 - [`meta-dream-crosstree-deep`](../plugins/bitranox/skills/meta-dream-crosstree-deep/SKILL.md) - Use on "deep crosstree dream", "/dream-crosstree-deep", "deep cross-project scan", or when you want the exhaustive cross-project/cross-tree read regardless of whether anything obviously changed - the full semantic fan-out over ALL project memory stores AND their CLAUDE.md files, no convergence shortcut, no asking. For the normal, cheaper global dream that convergence-checks first and asks before the expensive scan, use meta-dream-crosstree.

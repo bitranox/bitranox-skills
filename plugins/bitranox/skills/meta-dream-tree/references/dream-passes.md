@@ -146,6 +146,19 @@ for a recurring phrasing gap, propose broadening the family patterns in `self_im
 (role-split strict sets + BROAD audit nets, with a regression test; never concatenate the
 role-split sets) via the upstream loop. Nothing slipped -> no-op.
 
+## Local skill/hook audit - the PROJECT half (per tree)
+
+A tree's own `.claude/skills` is shipped by no plugin, so not one marketplace gate reaches it: a
+description the router cannot derive a trigger from, a script with no test, a `tests/` dir that
+exists but does not collect, all survive indefinitely. Run
+`bitranox:meta-audit-local-skills-and-hooks` over THIS tree with `--no-personal` - the personal
+`~/.claude` half is machine-global and belongs to the deep crosstree dream, not here. Invoke the
+SKILL (Skill tool); the skill name is not a command, and its own `audit_local.py` is what takes
+`--root <tree> --no-personal`. Follow that
+skill for the procedure, above all its refusal to edit a dir some plugin owns; do not restate the
+rule here and do not re-derive the target list with a `find`, which is how a tool repo's mirrored
+twin gets edited. Findings follow this project's dream mode. No `.claude/skills` in the tree -> no-op.
+
 ## Durability: keep each store locally git-tracked (auto, machine-local)
 
 Every dream, ensure the anchor's `.claude-memory/` is version-controlled by a LOCAL git repo
