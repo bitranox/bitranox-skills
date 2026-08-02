@@ -86,18 +86,19 @@ the scan in step 3 is run; do not duplicate the rest.
      `<!-- bitranox:self-learning -->` scope block in the `CLAUDE.local.md` pointer block): a SUBAGENT (capable model, not haiku) reads
      the docs of the directories directly beneath the new rung and returns its descriptor. Propose-first,
      never created without confirmation.
-   - **No shared/tracked home for the rung? Propose an umbrella repo.** If the folder that should hold the
-     rung is NOT itself a tracked, shareable git repo (it is a plain directory whose members are each
-     their OWN independent repos - common for a fleet/host tree), then a `CLAUDE.md` placed there is
-     untracked and machine-local, and trimming the members' TRACKED copies into it would LOSE
-     version-controlled knowledge (other clones never see the rung). In that case do NOT create a bare
-     untracked rung and do NOT trim; instead PROPOSE an **umbrella repo** to host the rung: a thin repo
-     named **`umbrella-<topic>`** (e.g. `umbrella-machines`) that version-controls ONLY the rung
-     `CLAUDE.md` files and ignores the nested member repos (a whitelist `.gitignore`; see
-     `bitranox:coding-python-gitignore`). ASK the user whether it should be **private or public
-     (default: private)**, and whether it stays local-only or gets a remote (a remote is needed only to
-     share the rung to other machines/people; local-only still gives version history + makes a trim
-     safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
+   - **A rung on an untracked folder is a normal rung - git tracking NEVER gates the trim.** When the
+     folder that should hold the rung is a plain directory whose members are each their OWN repos
+     (common for a fleet or host tree), its `CLAUDE.md` is machine-local. That is not a reason to skip
+     the rung, and not a reason to leave the members' tracked copies in place. The cascade loads a file
+     by PATH, not by repo membership, and the machine is backed up as a machine. Judge the trim by the
+     REACHABILITY INVARIANT alone (`bitranox:meta-dream-tree` -> references/dream-passes.md): is there a
+     covering rule at an ANCESTOR DIRECTORY, delivered as always-loaded text? Nothing else - not
+     tracked-vs-ignored, not the remote, not who else could clone it - enters that decision.
+     An **umbrella repo** (a thin `umbrella-<topic>` repo version-controlling ONLY the rung `CLAUDE.md`
+     files and ignoring the nested member repos via a whitelist `.gitignore`; see
+     `bitranox:coding-python-gitignore`) is worth PROPOSING when the user wants the rung's history
+     reviewable or shared to other machines. Ask private-or-public (default: private) then. It is a
+     distribution choice, raised on its own merits, never a precondition for lifting.
 4b. **Local harness audit - the PERSONAL half (machine-global, deep dream only).** `~/.claude/skills`
    and `~/.claude/hooks` plus the hooks wired in `~/.claude/settings.json` load in EVERY session on
    this machine whatever the cwd, and no marketplace gate reaches any of them. Run
