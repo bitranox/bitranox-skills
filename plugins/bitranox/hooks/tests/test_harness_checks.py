@@ -7,6 +7,7 @@ selection gets eyeballed.
 """
 
 import json
+import os
 import shutil
 import subprocess
 
@@ -562,3 +563,20 @@ def test_discover_shipped_surfaces_a_tool_repo_skills_dir(tmp_path):
 def test_discover_shipped_ignores_a_local_project_skills_dir(tmp_path):
     _skills(tmp_path / "work" / "orchard" / ".claude", "orchard-build")
     assert hc.discover_shipped([tmp_path / "work"], home=tmp_path / "home") == []
+
+
+def test_uncollectable_tests_reports_a_path_that_actually_resolves(tmp_path):
+    """The reported path must be usable, not pytest's rootdir-relative rendering.
+
+    pytest prints `ERROR <path>` relative to its invocation dir, so a tests dir far from the
+    cwd came back as `../../../../../../tmp/.../test_x.py` - a path that only resolves from
+    one directory and defeats copy-paste."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_broken.py").write_text("import a_module_that_is_not_installed\n",
+                                          encoding="utf-8")
+    problems = hc.uncollectable_tests(tests)
+    assert problems, "expected a collection failure to report"
+    path = problems[0][0]
+    assert not path.startswith(".."), path
+    assert os.path.isabs(path) and os.path.exists(path), path

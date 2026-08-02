@@ -192,3 +192,33 @@ def test_claim_check_does_not_hijack_an_ordinary_grep():
 def test_conflict_scan_still_wins_its_own_shape():
     """conflict_scan's rule is listed first and uses -rn, so the new rule must not shadow it."""
     assert N.match_tool("grep -rn '^<<<<<<<' .")[0] == "conflict_scan"
+
+
+# --- a heredoc body is DATA, not a command ------------------------------------------------------
+
+def test_a_tool_name_inside_a_heredoc_body_does_not_nudge():
+    """Writing prose that MENTIONS a chore must not fire the nudge for it.
+
+    A fact body containing the word pgrep, written with `cat > f <<'EOF' ... EOF`, fired the
+    procsig nudge: the heredoc body is data being written, not a command being run. Same family
+    as the git-footgun and shell-prefix guards, which already strip heredoc bodies."""
+    command = (
+        "cat > /tmp/body.md <<'EOF'\n"
+        "Same root as the pgrep -f \"X\" self-match trap, where a keyword that also appears in\n"
+        "your own command line makes the check match itself.\n"
+        "EOF\n"
+        "echo done\n"
+    )
+    assert N.match_tool(N.extract_text("Bash", {"command": command})) is None
+
+
+def test_a_real_invocation_outside_the_heredoc_still_nudges():
+    """The control: stripping data must not disarm the guard for an actual command."""
+    command = (
+        "cat > /tmp/body.md <<'EOF'\n"
+        "just some prose\n"
+        "EOF\n"
+        "pgrep -f openvmm\n"
+    )
+    matched = N.match_tool(N.extract_text("Bash", {"command": command}))
+    assert matched is not None and matched[0] == "procsig"

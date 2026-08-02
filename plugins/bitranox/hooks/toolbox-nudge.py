@@ -19,6 +19,11 @@ import re
 import sys
 from pathlib import Path
 
+# Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
+# guard fire on prose that merely mentions the chore it watches for. Re-exported so callers and
+# tests can keep reaching it as `toolbox_nudge.strip_heredoc_bodies`.
+from shell_text import strip_heredoc_bodies  # noqa: F401
+
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
 _RULES = [
@@ -69,7 +74,10 @@ def extract_text(tool_name, tool_input):
     """
     ti = tool_input or {}
     if tool_name == "Bash":
-        return ti.get("command", "")
+        # Only the command LINES are a chore being hand-rolled. A heredoc body is content being
+        # written, so scanning it nudges about prose that merely names the tool - which is how
+        # documenting a footgun trips the guard that watches for it.
+        return strip_heredoc_bodies(ti.get("command", ""))
     if tool_name == "Write":
         return ti.get("content", "")
     if tool_name == "Edit":

@@ -207,3 +207,61 @@ def test_refused_dirs_are_reported_with_their_owner(tree):
     code, out, _ = _run(["targets", "--root", str(tree.work)])
     assert code == 0
     assert "%s\n      shipped by the plugin at %s" % (tree.shipped, tree.shipped.parent) in out
+
+
+# --- the personal harness is a target in its own right ------------------------------------------
+
+def _personal_home_with_hook_defects(tmp_path):
+    """A home whose ~/.claude/hooks holds real defects and whose skills dir is absent."""
+    home = tmp_path / "home"
+    hooks = home / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "bash $HOME/.claude/hooks/gone.sh"}]}]}}),
+        encoding="utf-8")
+    (hooks / "orphan-hook.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    return home
+
+
+def test_personal_hooks_are_checked_when_no_personal_skills_dir_exists(tmp_path):
+    """A machine with hooks but no personal SKILL must not get a silent all-clear.
+
+    The hooks half used to run only as a rider on the ~/.claude/skills target, so a home with
+    no skills dir reported `0 finding(s) across 0 target(s)` and exit 0 while its hooks were
+    broken - the exact false-clean the skill exists to prevent."""
+    home = _personal_home_with_hook_defects(tmp_path)
+    assert not (home / ".claude" / "skills").exists()
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1, out
+    assert "[registration]" in out and "gone.sh" in out
+    assert "[orphan-hook]" in out
+
+
+def test_personal_hooks_are_checked_when_the_skills_dir_is_present_but_empty(tmp_path):
+    """An empty skills dir yields no target either, so it must not suppress the hooks half."""
+    home = _personal_home_with_hook_defects(tmp_path)
+    (home / ".claude" / "skills").mkdir()
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1, out
+    assert "[registration]" in out and "[orphan-hook]" in out
+
+
+def test_no_personal_still_suppresses_the_personal_harness(tmp_path):
+    """The per-tree dream passes --no-personal; it must keep opting out of ~/.claude entirely."""
+    home = _personal_home_with_hook_defects(tmp_path)
+    code, out, _ = _run_check(["check", "--home", str(home), "--no-personal"])
+    assert code == 0, out
+    assert "[registration]" not in out and "[orphan-hook]" not in out
+
+
+def test_personal_findings_are_not_double_reported_when_a_skills_dir_exists(tmp_path):
+    """With a real personal skill present, each hook finding must still appear exactly once."""
+    home = _personal_home_with_hook_defects(tmp_path)
+    skill = home / ".claude" / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Use when you need a demo skill.\n---\n\n# demo\n",
+        encoding="utf-8")
+    _, out, _ = _run_check(["check", "--home", str(home)])
+    assert out.count("[orphan-hook]") == 1, out

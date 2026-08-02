@@ -155,10 +155,17 @@ def cmd_check(args, out=None, err=None):
     results, total = [], 0
     for target in selected:
         findings = check_skills(target, shipped)
-        if target == home / ".claude" / "skills" and not args.no_personal:
-            findings += check_personal(home)
         total += len(findings)
         results.append({"target": str(target),
+                        "findings": [{"check": c, "message": m} for c, m in findings]})
+    # The personal harness is a target in its own right, never a rider on ~/.claude/skills.
+    # Hanging it off that target meant a home with broken hooks but no personal skill produced
+    # no target at all, so the run printed "0 finding(s) across 0 target(s)" and exited 0 over
+    # exactly the rot this check exists to find.
+    if not args.no_personal:
+        findings = check_personal(home)
+        total += len(findings)
+        results.append({"target": str(home / ".claude"),
                         "findings": [{"check": c, "message": m} for c, m in findings]})
     if args.json:
         print(json.dumps({"ok": True, "command": "check",

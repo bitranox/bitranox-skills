@@ -458,13 +458,24 @@ def uncollectable_tests(tests_dir, python=None):
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
     if "No module named pytest" in text:
         return [(str(tests_dir), "pytest not installed - collection unverified")]
-    out = [(line[len("ERROR "):].strip(), _first_error_line(text))
+    out = [(_resolve_reported_path(line[len("ERROR "):].strip()), _first_error_line(text))
            for line in text.splitlines() if line.startswith("ERROR ")]
     if out:
         return out
     culprit = _internalerror_culprit(text, tests_dir)
     return [culprit] if culprit else [(str(tests_dir),
                                        _first_error_line(text) or "collection failed")]
+
+
+def _resolve_reported_path(token):
+    """pytest's `ERROR <path>` rendered as an absolute path when it resolves.
+
+    pytest prints that path relative to its invocation dir, so a tests dir far from the cwd
+    comes back as a `../../../../..` chain that only resolves from one directory. Absolutise it
+    when it points at a real file; leave anything else (a nodeid, an odd rendering) untouched
+    rather than inventing a path."""
+    candidate = os.path.abspath(token)
+    return candidate if os.path.exists(candidate) else token
 
 
 def _first_error_line(text):
