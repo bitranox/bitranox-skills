@@ -1150,3 +1150,34 @@ def test_proj_key_survives_a_none_or_odd_argument():
     """State-file naming must never raise: a broken key would take every hook down with it."""
     for odd in (None, 123):
         assert isinstance(S.proj_key(odd), str) and len(S.proj_key(odd)) == 16
+
+
+# ---- injected skill bodies are not user prose ------------------------------------------------
+
+_SKILL_BODY = (
+    "Base directory for this skill: /home/u/.claude/plugins/cache/mkt/plug/9.9.9/skills/demo\n"
+    "\n# demo\n\nWhen the gate misses a signal, fix the WHOLE family, not just the one phrase.\n"
+    "Do not always run the subset; a wrong verdict here is worse than none.\n"
+)
+
+
+def test_an_injected_skill_body_is_recognised():
+    assert S.is_injected_skill_body(_SKILL_BODY)
+    assert S.is_injected_skill_body("   \n" + _SKILL_BODY)      # leading whitespace still counts
+
+
+def test_ordinary_user_prose_is_not_an_injected_skill_body():
+    assert not S.is_injected_skill_body("no, that's wrong - always run make test first")
+    assert not S.is_injected_skill_body("")
+    assert not S.is_injected_skill_body(None)
+
+
+def test_a_user_merely_QUOTING_the_marker_is_not_suppressed():
+    """The marker only counts at the START; else quoting it in a real correction hides the signal."""
+    quoted = "you're wrong about the path - it prints 'Base directory for this skill: /x' at the top"
+    assert not S.is_injected_skill_body(quoted)
+
+
+def test_the_skill_body_would_otherwise_match_the_broad_user_patterns():
+    """Guards the premise: without suppression this text IS a candidate, so the test can fail."""
+    assert S.broad_matches("user", _SKILL_BODY)

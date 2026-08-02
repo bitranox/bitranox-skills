@@ -185,6 +185,14 @@ def main():
         pass
 
     last_user, last_asst = _last_messages(transcript)
+
+    # Invoking a skill injects its whole SKILL.md as a type="user" message, so a skill whose own
+    # prose contains a directive ("from now on", "always run") would fire the gate on itself every
+    # time it is used. Blank the user half only: the ASSISTANT half of that same turn is real and
+    # must still be able to block.
+    if _sig.is_injected_skill_body(last_user):
+        last_user = ""
+
     if not (last_user.strip() or last_asst.strip()):
         return 0
 

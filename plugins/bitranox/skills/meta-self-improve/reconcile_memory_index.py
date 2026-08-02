@@ -466,7 +466,33 @@ def check_tree(anchor):
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor),
-            "decoy_anchors": find_decoy_anchors(anchor)}
+            "decoy_anchors": find_decoy_anchors(anchor),
+            "frame_only_bodies": find_frame_only_bodies(anchor)}
+
+
+def find_frame_only_bodies(anchor):
+    """Slugs whose central body is its frontmatter frame and nothing else.
+
+    Every other tree check passes such a fact: the pointer resolves, the body FILE exists, the slug
+    is unique and the frame is well formed. Only the content is absent - so the always-loaded hook
+    promises a rule and the walk-up retrieval it advertises delivers an empty file. The engine now
+    refuses to create one, but stores written before that still carry them."""
+    anchor = Path(anchor)
+    out = []
+    facts = us.central_facts_dir(anchor)
+    if not facts.is_dir():
+        return out
+    for p in sorted(facts.glob("*.md")):
+        try:
+            raw = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # split on the CLOSING delimiter exactly once; a chained line-range strip would eat the
+        # payload it was meant to unwrap and report every body as frame-only
+        body = raw[4:].partition("\n---\n")[2] if raw.startswith("---\n") else raw
+        if not body.strip():
+            out.append(p.stem)
+    return out
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -588,6 +614,10 @@ def main(argv=None):
         for store in rep["decoy_anchors"]:
             print("    ! decoy anchor (orphan .claude-memory below the tree top; shadows the "
                   "walk-up retrieval path with stale/stub bodies): %s" % store)
+            problems += 1
+        for slug in rep["frame_only_bodies"]:
+            print("    ! frame-only body (frontmatter and nothing else; the pointer promises a rule "
+                  "and the reader gets an empty file): %s" % slug)
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)

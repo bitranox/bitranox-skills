@@ -794,3 +794,39 @@ def test_relocate_force_overrides_the_dangling_refusal_with_a_warning(two_trees)
 def test_relocate_missing_slug_is_refused(two_trees):
     rep = E.relocate_entry(str(two_trees.proj_a), str(two_trees.proj_b), "nope")
     assert rep["relocated"] is False and "not found" in (rep["refused"] or "")
+
+
+# ---- an empty body on a NEW fact is data loss, not a terse entry --------------------------------
+
+def test_a_new_fact_with_an_empty_body_is_refused(proj):
+    """A frame-only fact ships a convincing always-loaded hook with nothing behind it.
+
+    The pointer promises a rule and the retrieval recipe delivers an empty file, and no integrity
+    check reports it - so refuse at the only moment the content still exists to supply.
+    """
+    for empty in ("", "   \n\n  "):
+        with pytest.raises(E.EmptyBody):
+            E.add_or_update_entry(proj, "Bodyless", "When x happens, do y.", body=empty)
+
+
+def test_the_refusal_writes_nothing(proj):
+    """Refused BEFORE the lock, like an over-cap hook: no pointer line, no body file."""
+    with pytest.raises(E.EmptyBody):
+        E.add_or_update_entry(proj, "Bodyless", "When x happens, do y.", body="")
+    local = Path(proj) / "CLAUDE.local.md"
+    assert not local.exists() or "bodyless" not in local.read_text(encoding="utf-8")
+
+
+def test_an_UPDATE_may_still_omit_the_body(proj):
+    """Empty body on an existing slug keeps the stored one - that is the documented update path."""
+    slug = E.add_or_update_entry(proj, "Real", "When x, do y.", body="a real body")
+    again = E.add_or_update_entry(proj, "Real", "When x, do z.", body="")
+    assert again == slug
+    body = us.body_path(Path(E._anchor(proj)), slug).read_text(encoding="utf-8")
+    assert "a real body" in body
+
+
+def test_a_new_fact_with_a_real_body_still_works(proj):
+    """Must-not-break: the refusal is for EMPTY only."""
+    slug = E.add_or_update_entry(proj, "Fine", "When x, do y.", body="something worth reading")
+    assert us.body_path(Path(E._anchor(proj)), slug).is_file()

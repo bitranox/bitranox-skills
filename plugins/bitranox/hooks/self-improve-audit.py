@@ -21,7 +21,8 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import (audit_file, broad_matches, is_test_fixture_noise, skills_invoked,
+from self_improve_signals import (audit_file, broad_matches, is_injected_skill_body,
+                                  is_test_fixture_noise, skills_invoked,
                                   strict_asst_hit, strict_user_hit, tool_matches)
 
 # Bound how much transcript we read (sessions can be many MB); the tail covers a long
@@ -117,6 +118,12 @@ def find_candidates(transcript_path):
             # flood the audit with phantom misses when the session's own work is this very code.
             matched = [] if is_test_fixture_noise(text) else tool_matches(text)
         else:
+            # Invoking a skill injects its whole SKILL.md as a type="user" message, so the prose
+            # scan would read shipped documentation as the user's own words and report the skill
+            # to itself as a missed signal, every session. Same shape as the tool-text fixture
+            # suppression above: the text is DATA, not something anyone said.
+            if is_injected_skill_body(text):
+                continue
             strict = strict_user_hit(text) if role == "user" else strict_asst_hit(text)
             if strict:
                 continue

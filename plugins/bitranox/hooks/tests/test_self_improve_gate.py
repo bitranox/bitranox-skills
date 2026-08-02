@@ -352,3 +352,27 @@ def test_german_signal_blocks(tmp_path, monkeypatch, capsys):
     tp = make_transcript(tmp_path, user="nein, das ist falsch")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
     assert decision_of(capsys) == "block"
+
+
+def test_gate_does_not_block_on_an_invoked_skills_own_body(tmp_path, monkeypatch, capsys):
+    """Invoking a skill injects its SKILL.md as a type=user message; its prose is not a directive."""
+    body = ("Base directory for this skill: /home/u/.claude/plugins/cache/m/p/1/skills/demo\n"
+            "\n# demo\n\nFrom now on always run the full gate. Never skip it.\n")
+    tp = make_transcript(tmp_path, user=body)
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) is None
+
+
+def test_gate_still_blocks_on_a_real_user_directive(tmp_path, monkeypatch, capsys):
+    """The must-not-break half: an ordinary directive must still block."""
+    tp = make_transcript(tmp_path, user="from now on always run the full gate before pushing")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"
+
+
+def test_gate_still_blocks_when_the_ASSISTANT_admits_a_miss_under_a_skill_body(tmp_path, monkeypatch, capsys):
+    """Suppressing the user half must not disable the assistant half of the same turn."""
+    body = "Base directory for this skill: /x/skills/demo\n\n# demo\n\nsome documentation.\n"
+    tp = make_transcript(tmp_path, user=body, asst="you're right, my mistake - I read the stale log")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
+    assert decision_of(capsys) == "block"

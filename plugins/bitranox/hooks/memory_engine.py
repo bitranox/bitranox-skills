@@ -72,6 +72,19 @@ class SlugCollision(ValueError):
         self.slug, self.suggestion = slug, suggestion
 
 
+class EmptyBody(ValueError):
+    """Raised when a NEW fact is given no body. The frame alone would ship an always-loaded pointer
+    promising a rule with nothing behind it, and no integrity check reports an absent body - so it is
+    refused at the one moment the content still exists to supply. An UPDATE may still omit the body:
+    there, empty means "keep the stored one"."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%r is new and its body is empty; a frame-only fact ships a hook with "
+                         "nothing behind it. Pass --body/--body-file with the fact plus its "
+                         "**Why:** and **How to apply:** lines" % slug)
+
+
 class HookTooLong(ValueError):
     """Raised when an authored hook exceeds the always-loaded pointer line's hard cap. Refused rather
     than truncated, so no fact ever ships a line that reads complete while its tail is missing - the
@@ -169,6 +182,15 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         raise HookTooLong(len(hook))
     src = set(source or ())
     anchor = _anchor(proj)
+    # An empty body is the documented UPDATE path ("keep the stored one"), but on a CREATE there is
+    # nothing to keep: it writes the frontmatter frame and stops, leaving a convincing always-loaded
+    # hook with nothing behind it. Nothing downstream reports that - heal normalizes grammar, --check
+    # counts refs, --check-tree checks slug uniqueness, lint --tree looks for UNFRAMED bodies, not
+    # absent ones - so the only signal is a reader walking up to an empty file. Refuse here, while
+    # the content still exists to supply. Keyed on the body FILE, so a mover carrying stored text
+    # (rehome/migrate, which pass no body) is unaffected.
+    if not (body or "").strip() and not us.body_path(anchor, slug).is_file():
+        raise EmptyBody(slug)
     store_dir = us.central_facts_dir(anchor).parent   # the `.claude-memory` store dir for this tree
     store_existed = store_dir.exists()
     lock_target = sig.claude_local_md_path(proj)
@@ -1182,7 +1204,7 @@ def main(argv=None):
             slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
                                        scope_default=args.scope, slug=args.slug)
-        except (SlugCollision, HookTooLong) as c:
+        except (SlugCollision, HookTooLong, EmptyBody) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
