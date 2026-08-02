@@ -159,7 +159,8 @@ the success line, abort-and-show on a miss).
 9. **Behavioral passes.** Run the catalog in references/dream-passes.md (each pass on its own
    trigger): CLAUDE.md reconciliation (chain-gated - runs EVERY dream, rule-by-rule, both
    directions), contradiction/override, skill/hook pointing, filler words, model review,
-   skill-gap review, gate-coverage audit, durability/git + squash, backup reminder.
+   skill-gap review, gate-coverage audit, local skill/hook audit (this tree's `.claude/skills`,
+   `--no-personal`), durability/git + squash, backup reminder.
 
 10. **Skill-fit -> batched change.** FIRST drain what is already pending: `contrib_queue.py list`
     (home: `<plugin>/skills/meta-self-improve/`) shows the skill/hook contributions earlier sessions

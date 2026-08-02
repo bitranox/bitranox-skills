@@ -132,3 +132,72 @@ def test_a_reviewer_timeout_is_recorded_not_swallowed(tmp_path):
                 runner=lambda *_a: "(TIMEOUT after 900s)")
     body = (tmp_path / "room" / "reports" / "alpha.audit.txt").read_text(encoding="utf-8")
     assert "TIMEOUT" in body                          # a silent zero would read as 'clean'
+
+
+# --- staging a loose skills dir ---------------------------------------------------------------
+
+def _loose(tmp_path):
+    """A `~/.claude`-shaped home: a small skills dir beside a huge sibling that must not be copied."""
+    claude = tmp_path / "home" / ".claude"
+    (claude / "skills" / "toolbox").mkdir(parents=True)
+    (claude / "skills" / "toolbox" / "SKILL.md").write_text(
+        "---\nname: toolbox\ndescription: Use when reaching for a local tool.\n---\n",
+        encoding="utf-8")
+    bulk = claude / "projects" / "transcripts"
+    bulk.mkdir(parents=True)
+    (bulk / "huge.jsonl").write_text("x" * 5000, encoding="utf-8")
+    (claude / "plugins" / "cache").mkdir(parents=True)
+    (claude / "plugins" / "cache" / "installed.txt").write_text("y" * 5000, encoding="utf-8")
+    return claude
+
+
+def test_prepare_room_from_skills_copies_only_the_skills_dir(tmp_path):
+    """The point of the flag: `~/.claude` is gigabytes, and a reviewer reads none of it."""
+    claude = _loose(tmp_path)
+    room = A.prepare_room_from_skills(claude / "skills", tmp_path / "room")
+    assert (room / "skills" / "toolbox" / "SKILL.md").is_file()
+    assert not (room / "projects").exists()
+    assert not (room / "plugins").exists()
+    copied = sum(p.stat().st_size for p in room.rglob("*") if p.is_file())
+    assert copied < 5000, "staged room must not carry the bulky siblings"
+
+
+def test_prepare_room_from_skills_is_discoverable_by_skill_names(tmp_path):
+    claude = _loose(tmp_path)
+    room = A.prepare_room_from_skills(claude / "skills", tmp_path / "room")
+    assert A.skill_names(room) == ["toolbox"]
+
+
+def test_prepare_room_from_skills_stages_hooks_when_asked(tmp_path):
+    """A skill may reference a sibling hook; without it staged the reviewer calls it dangling."""
+    claude = _loose(tmp_path)
+    hooks = claude / "hooks"
+    hooks.mkdir()
+    (hooks / "guard.py").write_text("x = 1\n", encoding="utf-8")
+    room = A.prepare_room_from_skills(claude / "skills", tmp_path / "room", hooks)
+    assert (room / "hooks" / "guard.py").is_file()
+
+
+def test_prepare_room_from_skills_skips_caches_and_git(tmp_path):
+    claude = _loose(tmp_path)
+    (claude / "skills" / "toolbox" / "__pycache__").mkdir()
+    (claude / "skills" / "toolbox" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+    room = A.prepare_room_from_skills(claude / "skills", tmp_path / "room")
+    assert not (room / "skills" / "toolbox" / "__pycache__").exists()
+
+
+def test_audit_all_accepts_a_skills_dir_instead_of_a_plugin(tmp_path):
+    claude = _loose(tmp_path)
+    seen = []
+
+    def runner(prompt, cwd, model, timeout):
+        seen.append(str(cwd))
+        return "NO FINDINGS"
+
+    results = audit_all_via(tmp_path, claude, runner)
+    assert results == {"toolbox": 0} and seen and seen[0].endswith("plugin")
+
+
+def audit_all_via(tmp_path, claude, runner):
+    return A.audit_all(None, tmp_path / "room", runner=runner, log=lambda *a: None,
+                                  skills_dir=claude / "skills")

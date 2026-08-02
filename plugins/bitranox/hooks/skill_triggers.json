@@ -590,6 +590,22 @@
   "repo",
   "installed"
  ],
+ "meta-audit-local-skills-and-hooks": [
+  "reviewing",
+  "claude",
+  "code",
+  "skills",
+  "hooks",
+  "machine",
+  "plugin",
+  "ships",
+  "personal",
+  "entry",
+  "project",
+  "hook",
+  "registered",
+  "settings.json"
+ ],
  "meta-collect-knowledge": [
   "pull",
   "knowledge",

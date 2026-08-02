@@ -98,6 +98,13 @@ the scan in step 3 is run; do not duplicate the rest.
      (default: private)**, and whether it stays local-only or gets a remote (a remote is needed only to
      share the rung to other machines/people; local-only still gives version history + makes a trim
      safe ON THIS MACHINE). Until that shared home exists, keep the rung additive (no trim).
+4b. **Local harness audit - the PERSONAL half (machine-global, deep dream only).** `~/.claude/skills`
+   and `~/.claude/hooks` plus the hooks wired in `~/.claude/settings.json` load in EVERY session on
+   this machine whatever the cwd, and no marketplace gate reaches any of them. Run
+   `bitranox:meta-audit-local-skills-and-hooks` for the personal half; follow that skill for the
+   procedure and for its refusal to edit a dir a plugin owns. The per-tree dream owns the PROJECT
+   half (its own `.claude/skills`, with `--no-personal`), so do not repeat that here.
+
 5. **Then steps 5-8 of meta-dream-crosstree exactly** (step 4, the promotion gate, is already
    done above as this skill's step 3 - do not run it twice) (outbound cross-pollination, re-dedup + reconcile via
    `reconcile_memory_index.py --check` over the LEVEL dirs AND `--check-tree <anchor>` per affected tree
@@ -106,9 +113,11 @@ the scan in step 3 is run; do not duplicate the rest.
    cross-session recurring chore -> a new tool), report counts). The tree-wide check matters MORE here:
    promoting to common ancestors across many trees is exactly what can leave a slug pointed at from two
    levels, which the chain-only `--check` cannot see.
-   **Add one line crosstree's report list has no slot for: the org-chart proposals from step 4**
-   (moves / new rungs / splits / umbrella-repo suggestions, applied or proposed). Without it a deep
-   run can generate them and never surface them.
+   **Add two lines crosstree's report list has no slot for: the org-chart proposals from step 4**
+   (moves / new rungs / splits / umbrella-repo suggestions, applied or proposed) **and the personal
+   harness findings from step 4b** (counts per check, plus how many dirs were REFUSED as
+   plugin-owned - a refusal count of zero on a machine holding tool repos means the ownership
+   filter did not run). Without them a deep run can generate both and never surface either.
 
 ## Boundaries (unchanged from meta-dream-crosstree)
 

@@ -123,10 +123,34 @@ def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitr
     return name, count_findings(out)
 
 
+def prepare_room_from_skills(skills_dir, room_root, hooks_dir=None, reuse=False):
+    """Stage a loose `skills/` dir as a plugin-shaped room. Returns the room's plugin dir.
+
+    `prepare_room` copies the WHOLE plugin dir, which is right for a plugin and ruinous for a
+    skills dir whose parent is `~/.claude`: reviewing two personal skills would copy gigabytes of
+    transcripts, caches and installed plugins. Stage only what a reviewer reads."""
+    room_root = Path(room_root)
+    room = room_root / "plugin"
+    (room_root / "reports").mkdir(parents=True, exist_ok=True)
+    if room.exists() and not reuse:
+        shutil.rmtree(room)
+    room.mkdir(parents=True, exist_ok=True)
+    ignore = shutil.ignore_patterns(".skillwriter", "__pycache__", "*.pyc", ".pytest_cache", ".git")
+    if not (room / "skills").exists():
+        shutil.copytree(Path(skills_dir), room / "skills", ignore=ignore)
+    if hooks_dir and Path(hooks_dir).is_dir() and not (room / "hooks").exists():
+        shutil.copytree(Path(hooks_dir), room / "hooks", ignore=ignore)
+    return room
+
+
 def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(),
-              prefix="bitranox", reuse=False, runner=_subprocess_runner, log=print):
+              prefix="bitranox", reuse=False, runner=_subprocess_runner, log=print,
+              skills_dir=None, hooks_dir=None):
     """Audit every selected skill. Returns {skill: finding_count}."""
-    room = prepare_room(plugin_src, room_root, reuse=reuse)
+    if skills_dir:
+        room = prepare_room_from_skills(skills_dir, room_root, hooks_dir, reuse=reuse)
+    else:
+        room = prepare_room(plugin_src, room_root, reuse=reuse)
     reports = Path(room_root) / "reports"
     names = skill_names(room, only)
     log("auditing %d skill(s) in %s with %d job(s)" % (len(names), room, jobs))
@@ -144,7 +168,14 @@ def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Audit shipped skills in a clean room.")
-    ap.add_argument("--plugin", required=True, help="the plugin dir to audit (holds skills/, hooks/)")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--plugin", help="the plugin dir to audit (holds skills/, hooks/)")
+    src.add_argument("--skills-dir", dest="skills_dir",
+                     help="a loose skills/ dir to audit - staged into the room on its own, so a "
+                          "huge parent like ~/.claude is never copied")
+    ap.add_argument("--hooks-dir", dest="hooks_dir", default="",
+                    help="with --skills-dir: a hooks dir to stage alongside, so a skill's "
+                         "reference to a sibling hook still resolves in the room")
     ap.add_argument("--room", required=True, help="clean-room root, OUTSIDE the knowledge tree")
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--jobs", type=int, default=6)
@@ -154,7 +185,8 @@ def main(argv=None):
     ap.add_argument("--reuse-room", action="store_true", help="keep an existing plugin copy")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     audit_all(args.plugin, args.room, args.model, args.jobs, args.timeout,
-              tuple(s.strip() for s in args.only.split(",")), args.prefix, args.reuse_room)
+              tuple(s.strip() for s in args.only.split(",")), args.prefix, args.reuse_room,
+              skills_dir=args.skills_dir, hooks_dir=args.hooks_dir)
     return 0
 
 

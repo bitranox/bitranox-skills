@@ -42,8 +42,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-EXCLUDE_DIRS = {"tests", "demos", "examples", "__pycache__", "scripts_examples"}
-EXCLUDE_FILES = {"conftest.py", "__init__.py"}
+_HOOKS_DIR = Path(__file__).resolve().parent
+if str(_HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOOKS_DIR))
+
+import harness_checks as hc  # noqa: E402
+
+# Re-exported: these predicates are shared with the local-harness audit, which applies the same
+# rules to the skills and hooks no plugin ships. One definition, so the two cannot drift apart.
+EXCLUDE_DIRS = hc.EXCLUDE_DIRS
+EXCLUDE_FILES = hc.EXCLUDE_FILES
 
 # git commit / gh pr create detection. Anchored at a COMMAND position (statement start, after a shell
 # separator) so the literal text "git commit" inside a quoted string or heredoc body - e.g. a CHANGELOG
@@ -90,24 +98,12 @@ def _packages(root):
     return [p for p in pkgs if p.is_dir()]
 
 
-def _ships_scripts(pkg):
-    for p in pkg.rglob("*.py"):
-        rel_parts = set(p.relative_to(pkg).parts[:-1])
-        if rel_parts & EXCLUDE_DIRS or p.name in EXCLUDE_FILES:
-            continue
-        return True
-    return False
-
-
-def _has_tests(pkg):
-    for t in pkg.rglob("test_*.py"):
-        if "examples" not in t.relative_to(pkg).parts and "demos" not in t.relative_to(pkg).parts:
-            return True
-    return False
+_ships_scripts = hc.ships_scripts
+_has_tests = hc.has_tests
 
 
 def check_tests_exist(root):
-    missing = [str(p.relative_to(root)) for p in _packages(root) if _ships_scripts(p) and not _has_tests(p)]
+    missing = [str(p.relative_to(root)) for p in hc.packages_missing_tests(_packages(root))]
     if missing:
         return ["These packages ship .py but have no tests/test_*.py:"] + [f"  {m}" for m in missing]
     return []
@@ -456,12 +452,7 @@ def check_pytest(root, paths):
 # ---- skill review artifact + CSO description lint (skill-usage enforcement) ---------------------
 
 _SKILL_MD_RX = re.compile(r"^plugins/bitranox/skills/([^/]+)/SKILL\.md$")
-_CSO_STOP = {
-    "use", "when", "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
-    "are", "was", "has", "have", "not", "but", "its", "any", "all", "one", "how", "what", "why",
-    "where", "which", "should", "must", "can", "will", "also", "such", "them", "then", "than",
-    "good", "need", "want", "like", "just",
-}
+_CSO_STOP = hc.CSO_STOP
 
 
 def _changed_vs_origin(root):
@@ -506,16 +497,7 @@ def check_skill_review(root):
     return skill_review_failures(root, changed)
 
 
-def _frontmatter_description(path):
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not text.startswith("---"):
-        return None
-    fm = text.split("---", 2)[1]
-    m = re.search(r"^description:\s*(.+(?:\n(?![a-zA-Z_-]+:).*)*)", fm, re.M)
-    return " ".join(m.group(1).split()) if m else None
+_frontmatter_description = hc.frontmatter_description
 
 
 def cso_failures(root, changed):
@@ -528,25 +510,10 @@ def cso_failures(root, changed):
         m = _SKILL_MD_RX.match(p)
         if not m:
             continue
-        desc = _frontmatter_description(root / p)
+        desc = hc.frontmatter_description(root / p)
         if desc is None:
             continue
-        if desc[:1] in (">", "|", '"', "'"):
-            fails.append("skills/%s: description must be a single-line plain YAML scalar - no "
-                         "'>-'/'|' block scalar and no wrapping quotes (the style marker leaks "
-                         "into the generated catalog and router; reword any ': ' instead)."
-                         % m.group(1))
-            continue
-        if not desc.lower().startswith("use "):
-            fails.append("skills/%s: description must be trigger-first ('Use when <situations>...'), "
-                         "never a summary of what the skill does (CSO rule)." % m.group(1))
-            continue
-        kws = {t for t in re.findall(r"[a-z0-9][a-z0-9_-]{3,}", desc.lower())
-               if t not in _CSO_STOP}
-        if len(kws) < 3:
-            fails.append("skills/%s: description yields fewer than 3 distinctive keywords - the "
-                         "skill router cannot derive triggers from it; name concrete situations, "
-                         "tools, and symptoms." % m.group(1))
+        fails.extend(hc.cso_failures_for("skills/%s" % m.group(1), desc))
     return fails
 
 
