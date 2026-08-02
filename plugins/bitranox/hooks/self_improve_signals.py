@@ -27,8 +27,33 @@ from pathlib import Path
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
 def proj_key(proj):
-    """Stable per-project key (matches the gate's state-file scheme)."""
-    return hashlib.sha1(proj.encode("utf-8", "replace")).hexdigest()[:16]
+    """Stable per-project key (matches the gate's state-file scheme).
+
+    The path is normalized to an absolute, dot-free form BEFORE hashing, so one project spelled
+    `.`, with a trailing slash, or through a `..` segment yields ONE key. Hashing the raw string
+    meant a relative spelling addressed a different state file entirely - measured as
+    `contrib_queue.py list .` reporting an empty queue while the absolute path reported a pending
+    item, and `dream_state.py done .` recording against a key nothing else reads. Silent in both
+    directions: no error, just a confident answer about a project that does not exist.
+
+    This names ~15 per-project state files (dream marker, contribution queue and its closed logs,
+    session, watermark, promote counters, filler/topical word lists, recall caches), so the choice
+    of normalizer is a compatibility decision:
+
+    * `abspath`, deliberately NOT `resolve`: following symlinks would re-key any project reached
+      through one and orphan every state file it already has. The defect here is SPELLING, not
+      aliasing, and the fix stays inside that scope.
+    * An already-absolute, normalized path hashes exactly as before, so nothing existing moves.
+      A test pins that with a literal digest.
+
+    A non-string argument is coerced rather than raised on - a key that throws would take down
+    every hook that names a state file.
+    """
+    try:
+        normalized = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+    except (TypeError, ValueError):
+        normalized = str(proj)
+    return hashlib.sha1(normalized.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def audit_file(proj):

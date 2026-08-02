@@ -1090,3 +1090,63 @@ def test_altitude_chain_handles_a_relative_path(tmp_path, monkeypatch):
 
     assert absolute, "fixture built no chain at all, so the comparison would be vacuous"
     assert [Path(p).resolve() for p in relative] == [Path(p).resolve() for p in absolute]
+
+
+# ---- proj_key must not depend on how the path was SPELLED -----------------------------------------
+
+def test_proj_key_is_stable_for_an_already_absolute_path():
+    """PIN: an absolute, normalized path keeps its historical key.
+
+    proj_key names ~15 per-project state files (dream marker, contribution queue, session,
+    watermark, promote, filler, recall caches). Changing the key for a path that was already
+    absolute would ORPHAN every one of them - the queue would read empty, the dream would think it
+    had never run. This literal is that guarantee: normalization may only affect paths that were
+    not already in this form.
+    """
+    assert S.proj_key("/opt/project-x") == "528c04d3cbe1a627"
+
+
+def test_proj_key_ignores_relative_spelling(tmp_path, monkeypatch):
+    """`.` and the absolute path are the SAME project and must share one key.
+
+    Measured before the fix: `contrib_queue.py list .` reported an empty queue while the absolute
+    path reported a pending item, and `dream_state.py done .` recorded against a different key -
+    so a dream could mark itself done against a phantom project.
+    """
+    target = tmp_path / "proj"
+    target.mkdir()
+    monkeypatch.chdir(target)
+    absolute = S.proj_key(str(target))
+    assert S.proj_key(".") == absolute
+    assert S.proj_key("") == absolute            # argparse default / empty string is the cwd too
+
+
+def test_proj_key_ignores_trailing_slash_and_dot_segments(tmp_path):
+    base = str(tmp_path / "proj")
+    (tmp_path / "proj").mkdir()
+    expected = S.proj_key(base)
+    for spelling in (base + "/", base + "/.", str(tmp_path) + "/./proj", base + "/../proj"):
+        assert S.proj_key(spelling) == expected, spelling
+
+
+def test_proj_key_does_not_follow_symlinks(tmp_path):
+    """Deliberate: abspath, not resolve.
+
+    Following symlinks would re-key any project reached through one, orphaning its existing state
+    on machines where a path component happens to be a link. The defect being fixed is spelling,
+    not aliasing, so the fix stays inside that scope.
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return                                    # unprivileged Windows cannot symlink
+    assert S.proj_key(str(link)) != S.proj_key(str(real))
+
+
+def test_proj_key_survives_a_none_or_odd_argument():
+    """State-file naming must never raise: a broken key would take every hook down with it."""
+    for odd in (None, 123):
+        assert isinstance(S.proj_key(odd), str) and len(S.proj_key(odd)) == 16
