@@ -397,3 +397,37 @@ def test_check_misplaced_names_the_relocate_command_to_run(tmp_path, capsys):
     R.main(["--check-misplaced", top_a])
     out = capsys.readouterr().out
     assert "relocate" in out and "--slug beta-deploy" in out, out
+
+
+# ---- a frame-only body is invisible to every other check ---------------------------------------
+
+def test_check_tree_reports_a_frame_only_body(tmp_path):
+    """A body that is frontmatter and nothing else: the pointer promises a rule, the reader gets air.
+
+    The engine now refuses to CREATE one, but stores written before that still hold them, and no
+    other tree check can see it - the pointer resolves, the body file exists, the slug is unique,
+    and the frame is well formed. Only its emptiness is wrong.
+    """
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    slug = ME.add_or_update_entry(str(proj), "Real Fact", "When x happens, do y.",
+                                 body="a real body", type_="reference")
+    # simulate a pre-refusal store: strip the body back to its frame
+    p = us.body_path(Path(ME._anchor(str(proj))), slug)
+    head, sep, _body = p.read_text(encoding="utf-8")[4:].partition("\n---\n")
+    assert sep, "fixture assumption: the body carries a frontmatter frame"
+    p.write_text("---\n" + head + "\n---\n", encoding="utf-8")
+
+    rep = R.check_tree(str(proj))
+    assert slug in rep["frame_only_bodies"]
+
+
+def test_check_tree_does_not_flag_a_real_body(tmp_path):
+    """Must-not-break: a body with actual prose is not frame-only."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    slug = ME.add_or_update_entry(str(proj), "Real Fact", "When x happens, do y.",
+                                 body="a real body\n\n**Why:** because\n\n**How to apply:** do it",
+                                 type_="reference")
+    assert R.check_tree(str(proj))["frame_only_bodies"] == []
+    assert slug

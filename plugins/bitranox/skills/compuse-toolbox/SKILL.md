@@ -1,6 +1,6 @@
 ---
 name: compuse-toolbox
-description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, checking git branch/sync/dirty state across repos, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, or sweeping a repo for every occurrence of something without silently skipping gitignored files. Check these tested jigs first instead of writing throwaway code.
+description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, or sweeping a repo for every occurrence of something without silently skipping gitignored files. Check these tested jigs first instead of writing throwaway code.
 ---
 
 # compuse-toolbox
@@ -14,16 +14,17 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 
 ## Tools
 
-| Tool              | Use it when you would otherwise hand-roll...                                                    | Invoke                                                          |
-|-------------------|-------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|
-| `procsig`         | `pgrep -f` / `pkill -f` - which self-matches the shell running it and can kill your own session | `uv run scripts/procsig.py --exe <name> [--kill]`               |
-| `git_state`       | a `git rev-parse` + `git status` branch/sync/dirty check before a risky commit or bulk op       | `uv run scripts/git_state.py [REPO ...] [--root DIR]`           |
-| `conflict_scan`   | a `grep -rn '^<<<<<<<'` sweep for merge-conflict markers with file:line                         | `uv run scripts/conflict_scan.py [PATH ...]`                    |
-| `ci_triage`       | piping a build/CI log through `grep`/`sed`/`awk` to find the error lines                        | `uv run scripts/ci_triage.py --file LOG [--step ...]`           |
-| `jsonl_grep`      | a `json.loads` loop to filter a JSONL by type/role or extract a field                           | `uv run scripts/jsonl_grep.py <file> [--type ...]`              |
-| `transcript_tail` | parsing a Claude Code transcript JSONL for the last user/assistant text                         | `uv run scripts/transcript_tail.py <file> [--role ...]`         |
-| `claim_check`     | a `grep -c` / `grep -l` sweep to decide whether some text is already present in a set of files  | `uv run scripts/claim_check.py FILE... --pattern P --control C` |
-| `grep_all`        | a repo-wide `grep -r` that must be COMPLETE - it silently skips gitignored files | `uv run scripts/grep_all.py PATTERN [PATH ...] [--glob G]` |
+| Tool              | Use it when you would otherwise hand-roll...                                                    | Invoke                                                                             |
+|-------------------|-------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `procsig`         | `pgrep -f` / `pkill -f` - which self-matches the shell running it and can kill your own session | `uv run scripts/procsig.py --exe <name> [--kill]`                                  |
+| `git_state`       | a `git rev-parse` + `git status` branch/sync/dirty check before a risky commit or bulk op       | `uv run scripts/git_state.py [REPO ...] [--root DIR]`                              |
+| `conflict_scan`   | a `grep -rn '^<<<<<<<'` sweep for merge-conflict markers with file:line                         | `uv run scripts/conflict_scan.py [PATH ...]`                                       |
+| `ci_triage`       | piping a build/CI log through `grep`/`sed`/`awk` to find the error lines                        | `uv run scripts/ci_triage.py --file LOG [--step ...]`                              |
+| `jsonl_grep`      | a `json.loads` loop to filter a JSONL by type/role or extract a field                           | `uv run scripts/jsonl_grep.py <file> [--type ...]`                                 |
+| `transcript_tail` | parsing a Claude Code transcript JSONL for the last user/assistant text                         | `uv run scripts/transcript_tail.py <file> [--role ...]`                            |
+| `claim_check`     | a `grep -c` / `grep -l` sweep to decide whether some text is already present in a set of files  | `uv run scripts/claim_check.py FILE... --pattern P --control C`                    |
+| `grep_all`        | a repo-wide `grep -r` that must be COMPLETE - it silently skips gitignored files                | `uv run scripts/grep_all.py PATTERN [PATH ...] [--glob G]`                         |
+| `gate`            | running gates then acting on the result - `<gate> \| grep summary && git push`                  | `uv run scripts/gate.py --log L [--summary RE] --gate C [--gate C ...] [--then C]` |
 
 Per-tool arguments live in each tool's `--help` (loaded only when used, so this index stays small).
 
@@ -51,6 +52,13 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   git considers ignored, which is exactly the number a normal grep would have missed. Measured
   on this tree: 73 pointer blocks found, 55 of them gitignored, against 17 from the session
   grep. A zero in that stderr line means the two agree and your earlier grep was safe.
+- **`gate` reports the gate's OWN exit status, never a pipe's.** `<gate> | grep summary && git push`
+  exits with `grep`'s status, so a red gate whose log still holds a green-looking line reads as
+  success and the `&&` fires; writing `rc=$?` after the pipe records the same wrong status. `gate`
+  runs each command with no shell and no pipe, so `returncode` is the gate's, sends output to a log,
+  and greps the summary from that log AFTERWARDS - then runs `--then` only on a real pass. The
+  plugin already BLOCKS the masked form (`hooks/block-masked-gate-exit.py`); this is the safe form
+  to reach for instead of hand-rolling per-gate `rc=$?` capture and temp files each time.
 - **The others encode the trap.** `git_state` reads porcelain v2 (no `rev-parse --short` 2-rev
   footgun); `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/`transcript_tail` parse JSONL
   by field, not by fragile text slicing.

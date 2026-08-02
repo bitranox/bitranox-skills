@@ -1662,6 +1662,22 @@ def is_test_fixture_noise(text):
     return bool(_TEST_FIXTURE_PATTERN.search(text or ""))
 
 
+# Invoking a skill (the Skill tool, or a /slash-command) injects the WHOLE SKILL.md as a
+# transcript message of type "user" - so the prose scan reads shipped documentation as if the
+# user had typed it. A skill that merely CONTAINS "always run" or "wrong" then reports itself
+# as a missed learning signal, every session, forever. Measured over 12 transcripts of one
+# project: 9 injected bodies, 2 of them producing candidate misses.
+#
+# Anchored at the START only. A user QUOTING the marker inside a real correction must still be
+# scanned, so a substring search here would suppress the very signal the audit exists to catch.
+_SKILL_BODY_MARKER = "base directory for this skill:"
+
+
+def is_injected_skill_body(text):
+    """True when a "user" message is really an injected SKILL.md, not something the user wrote."""
+    return (text or "").lstrip().lower().startswith(_SKILL_BODY_MARKER)
+
+
 def skills_invoked(transcript_text):
     """{skill_name: count} for every Skill tool call in a raw transcript.
 

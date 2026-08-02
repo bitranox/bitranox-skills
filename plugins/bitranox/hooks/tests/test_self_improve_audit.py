@@ -178,3 +178,37 @@ def test_report_names_the_skills_that_ran(tmp_path, monkeypatch):
     assert A.main() == 0
     report = S.audit_file(str(tmp_path)).read_text(encoding="utf-8")
     assert "compuse-git" in report, report
+
+
+# ---- an invoked skill's own body is not a user learning signal --------------------------------
+
+# Matches the BROAD user patterns only (no strict directive), which is the real leak: a strict hit
+# is already excluded as "the gate caught it", so only broad-only text reaches the candidate list.
+_INJECTED_SKILL_BODY = (
+    "Base directory for this skill: /home/u/.claude/plugins/cache/mkt/plug/9.9.9/skills/demo\n"
+    "\n# demo\n\nDo not always run the subset; a wrong verdict here is worse than none.\n"
+)
+
+
+def test_the_injected_body_would_otherwise_be_a_candidate(tmp_path):
+    """Premise guard: without suppression this text IS a broad-only candidate, so the next test can fail."""
+    assert not S.strict_user_hit(_INJECTED_SKILL_BODY)
+    assert S.broad_matches("user", _INJECTED_SKILL_BODY)
+
+
+def test_an_invoked_skills_body_is_not_a_candidate_miss(tmp_path):
+    t = make_transcript(tmp_path, [("user", _INJECTED_SKILL_BODY)])
+    assert A.find_candidates(t) == []
+
+
+def test_a_real_broad_only_user_miss_still_surfaces(tmp_path):
+    """The must-not-break half: suppression must not swallow an ordinary broad-recall miss."""
+    t = make_transcript(tmp_path, [("user", "the deploy path is wrong, it is under /srv not /opt")])
+    assert A.find_candidates(t)
+
+
+def test_a_message_that_QUOTES_the_marker_mid_sentence_still_surfaces(tmp_path):
+    """Anchored at the start: quoting the marker must not hide a real signal."""
+    t = make_transcript(tmp_path, [
+        ("user", "the header reads 'Base directory for this skill: /x' but the deploy path is wrong")])
+    assert A.find_candidates(t)
