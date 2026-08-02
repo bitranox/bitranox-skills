@@ -1,6 +1,6 @@
 ---
 name: compuse-toolbox
-description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, checking git branch/sync/dirty state across repos, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, or deciding from a grep whether some text is already present in a set of files. Check these tested jigs first instead of writing throwaway code.
+description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, checking git branch/sync/dirty state across repos, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, or sweeping a repo for every occurrence of something without silently skipping gitignored files. Check these tested jigs first instead of writing throwaway code.
 ---
 
 # compuse-toolbox
@@ -23,6 +23,7 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 | `jsonl_grep`      | a `json.loads` loop to filter a JSONL by type/role or extract a field                           | `uv run scripts/jsonl_grep.py <file> [--type ...]`              |
 | `transcript_tail` | parsing a Claude Code transcript JSONL for the last user/assistant text                         | `uv run scripts/transcript_tail.py <file> [--role ...]`         |
 | `claim_check`     | a `grep -c` / `grep -l` sweep to decide whether some text is already present in a set of files  | `uv run scripts/claim_check.py FILE... --pattern P --control C` |
+| `grep_all`        | a repo-wide `grep -r` that must be COMPLETE - it silently skips gitignored files | `uv run scripts/grep_all.py PATTERN [PATH ...] [--glob G]` |
 
 Per-tool arguments live in each tool's `--help` (loaded only when used, so this index stays small).
 
@@ -44,6 +45,12 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   ABSENT (exit 1), and no answer is given. That converts a silent false all-clear into a loud
   failure - the exact shape behind a `grep -c` whose `file:count` output was never parsed, and a
   threshold set above the whole distribution so no pair could ever match.
+- **`grep_all` cannot silently under-report.** In a Claude Code session `grep` routes to a
+  gitignore-aware backend, so a repo-wide sweep drops ignored files and the miss reads as a
+  clean result. `grep_all` walks the filesystem itself and then reports how many of its hits
+  git considers ignored, which is exactly the number a normal grep would have missed. Measured
+  on this tree: 73 pointer blocks found, 55 of them gitignored, against 17 from the session
+  grep. A zero in that stderr line means the two agree and your earlier grep was safe.
 - **The others encode the trap.** `git_state` reads porcelain v2 (no `rev-parse --short` 2-rev
   footgun); `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/`transcript_tail` parse JSONL
   by field, not by fragile text slicing.
