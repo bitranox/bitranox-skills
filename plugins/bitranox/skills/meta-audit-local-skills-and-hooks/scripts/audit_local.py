@@ -111,10 +111,34 @@ def check_skills(target, shipped=None):
     return found
 
 
-def check_personal(home=None):
-    """Deterministic findings for the personal harness: registrations, hooks, tombstones."""
+def check_personal(home=None, shipped_root=None):
+    """Deterministic findings for the personal harness: registrations, hooks, tombstones, and any
+    local hook or skill script the marketplace now ships too.
+
+    The dedup half exists because contributing upstream is ASYNCHRONOUS for anyone without commit
+    rights: the PR lands in a later session, so no session is standing at the contribution to retire
+    the local copy when the twin finally appears. Every other check keeps passing - the file exists,
+    it is registered, its tombstone is well formed - because none of them asks whether the plugin
+    now ships the same thing."""
     home = Path(home) if home is not None else Path.home()
     claude, found = home / ".claude", []
+    if shipped_root:
+        for local, twin, status in hc.duplicate_shipped_files(
+                [claude / "hooks", claude / "skills"], shipped_root):
+            if status == "identical":
+                found.append(("duplicate-of-shipped",
+                              "%s is byte-identical to the shipped %s. Retire the local copy "
+                              "(delete it, or leave a tombstone naming the replacement) so there is "
+                              "one source of truth, and repoint whatever still invokes the local "
+                              "path." % (local, twin)))
+            else:
+                found.append(("duplicate-of-shipped",
+                              "%s DIFFERS from the shipped %s. Do NOT delete it to dedup: read the "
+                              "diff first and say which side holds what. If the local copy is ahead "
+                              "(a fix, a wider scope), CONTRIBUTE that upstream and retire it only "
+                              "once the improvement has landed - deduping here would throw the "
+                              "improvement away. If the shipped copy is ahead, retire the local one."
+                              % (local, twin)))
     settings = [p for p in sorted(claude.glob("settings*.json")) if p.is_file()]
     registered = hc.registered_paths(settings, home=home)
     for path in settings:
@@ -163,7 +187,8 @@ def cmd_check(args, out=None, err=None):
     # no target at all, so the run printed "0 finding(s) across 0 target(s)" and exited 0 over
     # exactly the rot this check exists to find.
     if not args.no_personal:
-        findings = check_personal(home)
+        # --shipped names a skills/ dir; its PARENT is the plugin root, which also holds hooks/.
+        findings = check_personal(home, shipped_root=Path(args.shipped).parent if args.shipped else None)
         total += len(findings)
         results.append({"target": str(home / ".claude"),
                         "findings": [{"check": c, "message": m} for c, m in findings]})

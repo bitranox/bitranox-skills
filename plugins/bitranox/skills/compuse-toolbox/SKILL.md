@@ -59,6 +59,10 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   and greps the summary from that log AFTERWARDS - then runs `--then` only on a real pass. The
   plugin already BLOCKS the masked form (`hooks/block-masked-gate-exit.py`); this is the safe form
   to reach for instead of hand-rolling per-gate `rc=$?` capture and temp files each time.
+  Launch this one with plain `python3`, not `uv run`: it declares no dependencies, and `uv run`
+  puts its own ephemeral interpreter on the environment the CHILD gates inherit - measured, a gate
+  shelling out to `python3 -m pytest` then died with `No module named pytest` and reported a false
+  RED. Every other jig here is fine under `uv run`; only this one runs other commands.
 - **The others encode the trap.** `git_state` reads porcelain v2 (no `rev-parse --short` 2-rev
   footgun); `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/`transcript_tail` parse JSONL
   by field, not by fragile text slicing.

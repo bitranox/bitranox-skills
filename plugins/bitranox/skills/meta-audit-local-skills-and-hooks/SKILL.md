@@ -53,9 +53,13 @@ silently drifts. Report it and stop.
 Anything a script can decide, a script decides: registrations that name a missing file, hook
 scripts nothing registers, malformed tombstones, test dirs that cannot collect, skills shipping a
 script with no test, front matter whose name disagrees with its directory or whose description is
-not trigger-first, a local skill duplicating a shipped one, and graveyards.
+not trigger-first, a local skill duplicating a shipped one, a local hook or skill script the
+marketplace now ships too (`duplicate-of-shipped`), and graveyards.
 
-Two of those repay a closer look, because the obvious version of each check is wrong:
+Pass `--shipped <marketplace>/skills` or the duplicate checks stay silent - the run has nothing to
+compare against and cannot tell you so.
+
+Three of those repay a closer look, because the obvious version of each check is wrong:
 
 - **A `tests/` dir that exists is not a `tests/` dir that runs.** The check collects it. A module
   importing a retired shim dies at import, so every "does it have tests?" check reports it green.
@@ -63,6 +67,13 @@ Two of those repay a closer look, because the obvious version of each check is w
   stale caller fail loudly instead of silently skipping a guard. Deleting one re-arms the trap.
   The check asks whether it is well formed (non-executable, exits non-zero, names a replacement,
   registered nowhere), never whether it should exist. Read the mode; do not assert it.
+- **A duplicate is not automatically the local copy's fault.** `duplicate-of-shipped` reports the
+  pair, never a verdict, because the local side can be AHEAD - a fix applied here, or a wider scope
+  than the shipped one covers. So the finding splits: byte-IDENTICAL means retiring the local copy
+  costs nothing and is the fix; DIFFERS means read the diff and say which side holds what before
+  touching anything. If the local copy is ahead, CONTRIBUTE that upstream and retire it only once
+  the improvement lands - deleting it to "dedup" throws the improvement away, which is a worse
+  outcome than the duplicate. Whatever still invokes the local path gets repointed either way.
 
 ## Step 3 - review the prose
 

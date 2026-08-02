@@ -627,3 +627,59 @@ def _stale_nodeids(root):
         for name in missing:
             out.append((cache, "caches node ids for %s, which no longer exists" % name))
     return out
+
+
+# --- a local file the plugin also ships -------------------------------------------------------
+# Contributing upstream is ASYNCHRONOUS for anyone without commit rights: the PR lands in a later
+# session, so at the moment the twin appears there is nobody standing at the contribution to retire
+# the local copy. Retiring at contribute time cannot close that window, and the duplicate then
+# survives every routine pass because each existing check asks a question it still satisfies. A
+# recurring dedup pass is what closes it.
+
+def shipped_file_index(shipped_root):
+    """{basename: path} for every .py a plugin ships - its hooks/ plus every skill's scripts/tools."""
+    root = Path(shipped_root)
+    index = {}
+    if not root.is_dir():
+        return index
+    for sub in ("hooks", "skills"):
+        base = root / sub
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*.py"):
+            if "__pycache__" in p.parts or "tests" in p.parts:
+                continue
+            index.setdefault(p.name, p)
+    return index
+
+
+def duplicate_shipped_files(local_dirs, shipped_root):
+    """(local, shipped, status) per local .py whose basename the plugin also ships.
+
+    status is "identical" (safe to retire) or "drifted" (NOT safe to retire yet). The distinction is
+    load-bearing: a local copy can be drifted because it is AHEAD - a fix applied locally, or a wider
+    scope - and deleting that to "dedup" destroys the improvement instead of sharing it. A drifted
+    pair is a CONTRIBUTE signal first and a retire signal only afterwards.
+
+    A RETIRED tombstone is skipped: it is the completed retirement, and reporting it would push a
+    reader to delete the very thing that makes a stale caller fail loudly."""
+    index = shipped_file_index(shipped_root)
+    out = []
+    if not index:
+        return out
+    for d in local_dirs:
+        d = Path(d)
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.py")):
+            if "__pycache__" in p.parts or p.name not in index:
+                continue
+            if is_retired_shim(p):
+                continue
+            twin = index[p.name]
+            try:
+                same = p.read_bytes() == twin.read_bytes()
+            except OSError:
+                continue
+            out.append((str(p), str(twin), "identical" if same else "drifted"))
+    return out
