@@ -92,6 +92,28 @@ def _toolbox_dir():
     return Path(os.path.expanduser("~")) / ".claude" / "skills" / "toolbox" / "tools"
 
 
+def _shipped_dir():
+    """The compuse-toolbox scripts dir INSIDE THIS PLUGIN, resolved relative to this hook.
+
+    Relative, so it names whichever plugin version is actually running - a path with a version in
+    it would rot at the next update, and the installed cache dir for the old version is pruned."""
+    return Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox" / "scripts"
+
+
+def _tool_invocation(tool):
+    """How to run `tool`: the local copy if there is one, else the shipped one, else None.
+
+    A tool broadly useful enough to be contributed upstream gets DELETED locally (one source of
+    truth), and those are precisely the ones most worth nudging about - so keying the nudge on the
+    local file alone would turn every successful contribution into a silently lost guard."""
+    if (_toolbox_dir() / (tool + ".py")).is_file():
+        return "the local `toolbox` skill", "uv run ~/.claude/skills/toolbox/tools/%s.py --help" % tool
+    if (_shipped_dir() / (tool + ".py")).is_file():
+        return ("the shipped `bitranox:compuse-toolbox` skill",
+                "uv run %s/%s.py --help" % (_shipped_dir(), tool))
+    return None
+
+
 def _already_nudged(session, tool):
     """Per-session dedup: True if `tool` was already nudged this session; else record it. Best-effort."""
     if not session:
@@ -122,14 +144,15 @@ def main():
     if not hit:
         return 0
     tool, why = hit
-    if not (_toolbox_dir() / (tool + ".py")).is_file():  # no toolbox / this tool -> stay silent
+    found = _tool_invocation(tool)
+    if not found:                                        # nowhere local, nowhere shipped -> silent
         return 0
+    home, invoke = found
     if _already_nudged(event.get("session_id") or "", tool):
         return 0
-    msg = ("The local `toolbox` skill has a tested tool for this (%s): "
-           "`uv run ~/.claude/skills/toolbox/tools/%s.py --help`. Prefer it over hand-rolling; if it "
+    msg = ("%s has a tested tool for this (%s): `%s`. Prefer it over hand-rolling; if it "
            "falls short, ENHANCE it (propose-first, per bitranox:meta-self-improve) rather than "
-           "working around it." % (why, tool))
+           "working around it." % (home.capitalize() if home.startswith("the") else home, why, invoke))
     sys.stdout.write(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "additionalContext": msg}}) + "\n")
     return 0
