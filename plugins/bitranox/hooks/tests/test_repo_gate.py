@@ -779,3 +779,56 @@ def test_a_missing_marketplace_checkout_says_so_instead_of_passing_silently(tmp_
     printed = capsys.readouterr().out
     assert "additionalContext" in printed, "an unverifiable mirror must reach the model, not exit 0 in silence"
     assert "could not" in printed.lower() or "nothing to compare" in printed.lower()
+
+
+# ---- duplicate .py basenames ---------------------------------------------------------------------
+
+def _repo_with(tmp_path, rel_paths):
+    """A git repo whose tracked files are `rel_paths` (the check enumerates via git ls-files)."""
+    for rel in rel_paths:
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_duplicate_basenames_are_reported(tmp_path):
+    """Two modules with one name: whichever is collected FIRST wins for the whole pytest run, so
+    the other directory's tests silently exercise a file nobody changed. Both suites stay green."""
+    root = _repo_with(tmp_path, ["a/helper.py", "b/helper.py"])
+    fails = RG.check_duplicate_basenames(root)
+    assert fails, "a duplicate basename was not reported"
+    assert any("helper.py" in f for f in fails)
+
+
+def test_unique_basenames_pass(tmp_path):
+    root = _repo_with(tmp_path, ["a/one.py", "b/two.py"])
+    assert RG.check_duplicate_basenames(root) == []
+
+
+def test_conftest_duplicates_are_benign(tmp_path):
+    """pytest handles per-directory conftest.py specially; every test dir legitimately has one."""
+    root = _repo_with(tmp_path, ["a/tests/conftest.py", "b/tests/conftest.py"])
+    assert RG.check_duplicate_basenames(root) == []
+
+
+def test_vendored_demos_and_examples_are_exempt(tmp_path):
+    """Same exemption the pytest run already makes: those trees are documentation, not convention."""
+    root = _repo_with(tmp_path, ["a/helper.py", "x/demos/helper.py", "y/examples/helper.py"])
+    assert RG.check_duplicate_basenames(root) == []
+
+
+def test_three_copies_are_all_named(tmp_path):
+    root = _repo_with(tmp_path, ["a/dup.py", "b/dup.py", "c/dup.py"])
+    joined = "\n".join(RG.check_duplicate_basenames(root))
+    for d in ("a/dup.py", "b/dup.py", "c/dup.py"):
+        assert d in joined, d
+
+
+def test_the_real_repo_has_no_duplicate_basenames():
+    """Guards the consolidation this check was written for: the plugin ships each module once."""
+    root = Path(__file__).resolve().parents[3].parent
+    assert (root / ".git").exists(), "expected to run inside the repo checkout"
+    assert RG.check_duplicate_basenames(root) == []

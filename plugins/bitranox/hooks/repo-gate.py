@@ -148,6 +148,53 @@ def check_lf_endings(root):
     return ["Files contain CRLF (must be LF):"] + crlf if crlf else []
 
 
+# pytest handles a per-directory conftest.py specially, so every test dir legitimately has one.
+_BENIGN_DUPLICATE_BASENAMES = frozenset({"conftest.py"})
+# Same exemption the pytest run makes: these trees are documentation, not convention.
+_VENDORED_DIRNAMES = frozenset({"demos", "examples"})
+
+
+def check_duplicate_basenames(root):
+    """Two shipped .py files must not share a basename.
+
+    Python resolves an import to the FIRST match on sys.path, so with two same-named modules the
+    one collected first wins for an entire run and the other directory's tests silently exercise a
+    file nobody changed. Nothing announces it: both suites stay green, the shadowed file's real
+    coverage is zero, and a fix in it reads as absent in the full run while passing in isolation.
+
+    The pytest invocation here passes --import-mode=importlib, which lets such a pair be IMPORTED
+    side by side - that keeps the run working but hides the collision rather than surfacing it,
+    and it does nothing for any other tool or for a consumer importing these modules. Two real
+    duplications shipped in this plugin before this check existed.
+    """
+    rc, out, _ = _git(root, "ls-files", "*.py")
+    if rc != 0:
+        return []                                     # cannot enumerate -> do not block
+    by_name = {}
+    for rel in out.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        parts = Path(rel).parts
+        if _VENDORED_DIRNAMES.intersection(parts):
+            continue
+        name = Path(rel).name
+        if name in _BENIGN_DUPLICATE_BASENAMES:
+            continue
+        by_name.setdefault(name, []).append(rel)
+    duplicates = {n: paths for n, paths in by_name.items() if len(paths) > 1}
+    if not duplicates:
+        return []
+    lines = ["Two or more .py files share a basename - a whole-repo pytest run imports only the "
+             "first, so the other directory's tests exercise the wrong file while both suites "
+             "stay green. Ship the module once and import it, or rename:"]
+    for name in sorted(duplicates):
+        lines.append("  %s:" % name)
+        for path in sorted(duplicates[name]):
+            lines.append("    %s" % path)
+    return lines
+
+
 def check_version_bumped(root):
     rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
     if rc != 0:
@@ -383,10 +430,11 @@ def check_pytest(root, paths):
     target = [str(p) for p in paths if p.exists()]
     if not target:
         return []
-    # import-mode=importlib: skill test files share basenames (e.g. two test_git_state.py),
-    # which the default prepend mode cannot import
-    # side by side. examples/ and demos/ are documentation, not convention tests -
-    # exempt from tests-exist, so exempt from the run too.
+    # import-mode=importlib keys modules by full path rather than basename. check_duplicate_basenames
+    # above is what actually FORBIDS a collision; this flag only stops a stray one from silently
+    # substituting a module during the run, and it also covers the benign per-directory conftest.py.
+    # examples/ and demos/ are documentation, not convention tests - exempt from tests-exist, so
+    # exempt from the run too.
     cmd = [
         sys.executable, "-m", "pytest", "-q",
         "--import-mode=importlib", "-p", "no:cacheprovider",
@@ -727,6 +775,7 @@ def run_checks(root, ci):
     failures += check_tests_exist(root)
     failures += check_json_valid(root)
     failures += check_lf_endings(root)
+    failures += check_duplicate_basenames(root)
     failures += check_skills_index(root)
     failures += check_attribution(root)
     failures += check_skill_naming(root)
