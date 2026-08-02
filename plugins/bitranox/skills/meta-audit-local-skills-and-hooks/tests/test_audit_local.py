@@ -265,3 +265,82 @@ def test_personal_findings_are_not_double_reported_when_a_skills_dir_exists(tmp_
         encoding="utf-8")
     _, out, _ = _run_check(["check", "--home", str(home)])
     assert out.count("[orphan-hook]") == 1, out
+
+
+# ---- a local file the plugin now ships too -------------------------------------------------------
+
+def _plugin_with(tmp_path, hooks=(), scripts=()):
+    """A plugin tree: <plug>/hooks/*.py and <plug>/skills/compuse-toolbox/scripts/*.py."""
+    plug = tmp_path / "plug"
+    (plug / "hooks").mkdir(parents=True)
+    for name, text in hooks:
+        (plug / "hooks" / name).write_text(text, encoding="utf-8")
+    sd = plug / "skills" / "compuse-toolbox" / "scripts"
+    sd.mkdir(parents=True)
+    for name, text in scripts:
+        (sd / name).write_text(text, encoding="utf-8")
+    return plug
+
+
+def test_a_local_hook_the_plugin_now_ships_is_reported(tmp_path):
+    """The PR case: the twin lands in a LATER session, so nothing retires the local copy.
+
+    Contributing upstream is asynchronous for anyone without commit rights, so the moment the
+    shipped copy appears there is no session standing at the contribution to clean up after it.
+    A recurring dedup pass is the only thing that closes the window.
+    """
+    plug = _plugin_with(tmp_path, hooks=[("venv-guard.py", "print('shipped')\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "venv-guard.py").write_text("print('local')\n", encoding="utf-8")
+    found = audit_local.check_personal(home, shipped_root=plug)
+    assert any(c == "duplicate-of-shipped" and "venv-guard.py" in m for c, m in found)
+
+
+def test_a_retired_tombstone_is_NOT_reported_as_a_duplicate(tmp_path):
+    """A tombstone is the FIX, not the rot - flagging it would push you to re-arm the trap."""
+    plug = _plugin_with(tmp_path, hooks=[("venv-guard.py", "print('shipped')\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "venv-guard.py").write_text(
+        '"""RETIRED 2026-08-02 - superseded by the plugin\'s hooks/venv-guard.py."""\n'
+        "raise SystemExit(1)\n", encoding="utf-8")
+    found = audit_local.check_personal(home, shipped_root=plug)
+    assert not [m for c, m in found if c == "duplicate-of-shipped"]
+
+
+def test_a_DRIFTED_pair_is_not_told_to_delete_the_local_copy(tmp_path):
+    """A local copy can be drifted because it is AHEAD - a local fix, or a wider scope.
+
+    Deduping that by deletion destroys the improvement instead of sharing it, so a drifted pair
+    must read as a CONTRIBUTE signal first and a retire signal only after the improvement lands.
+    """
+    plug = _plugin_with(tmp_path, hooks=[("h.py", "a\nb\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "h.py").write_text("a\nb\nLOCAL FIX\n", encoding="utf-8")
+    msg = [m for c, m in audit_local.check_personal(home, shipped_root=plug)
+           if c == "duplicate-of-shipped"][0]
+    assert "DIFFERS" in msg
+    assert "CONTRIBUTE" in msg and "Do NOT delete" in msg
+
+
+def test_an_IDENTICAL_pair_is_safe_to_retire(tmp_path):
+    """The other half: no information lives only in the local copy, so retiring it costs nothing."""
+    plug = _plugin_with(tmp_path, hooks=[("h.py", "a\nb\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "h.py").write_text("a\nb\n", encoding="utf-8")
+    msg = [m for c, m in audit_local.check_personal(home, shipped_root=plug)
+           if c == "duplicate-of-shipped"][0]
+    assert "byte-identical" in msg and "Retire the local copy" in msg
+
+
+def test_a_local_only_hook_is_not_reported(tmp_path):
+    """Must-not-break: a hook with no shipped twin is the normal case."""
+    plug = _plugin_with(tmp_path, hooks=[("other.py", "x\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "mine.py").write_text("x\n", encoding="utf-8")
+    found = audit_local.check_personal(home, shipped_root=plug)
+    assert not [m for c, m in found if c == "duplicate-of-shipped"]

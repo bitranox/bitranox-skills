@@ -247,8 +247,14 @@ reformat a thing you have hand-rolled before), not skipping a rule. Same ladder,
   existing skill - exactly the local-stays-local / share-when-broad split skills already use.
   Never automatic.
 - **A contribution ENDS by RETIRING the local original - landing it upstream is only half.** Same
-  two-step shape as lifting a hook, and half of it is worse than neither: delete the local copy and
-  its tests once the shipped copy is committed, so there is ONE source of truth. Two copies do not
+  two-step shape as lifting a hook, and half of it is worse than neither. WHEN depends on whether
+  you can land it yourself: with COMMIT RIGHTS, delete the local copy and its tests in the same
+  change that pushes the shipped one, because there is no window to forget in. Via a PR, the twin
+  appears in a LATER session with nobody standing at the contribution, so retire it when it lands -
+  and do not rely on remembering: `bitranox:meta-audit-local-skills-and-hooks` reports every local
+  hook or skill script the marketplace also ships (`duplicate-of-shipped`), and the deep dream runs
+  that audit, so the pass catches what the moment could not. Either way the end state is ONE source
+  of truth. Two copies do not
   stay in sync by good intentions - measured on this machine, EIGHT local tools had been contributed
   and left in place, and all eight had drifted from their shipped twin (code-identical with
   docstrings stripped, but the shipped prose had been scrubbed of private references and had gained
