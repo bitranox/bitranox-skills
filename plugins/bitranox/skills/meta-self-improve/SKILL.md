@@ -29,6 +29,23 @@ Use the Read tool to load a referenced file when its detail is needed. **REQUIRE
 references/memory-backend.md is the storage spec - Read it BEFORE the first engine call of a
 session.
 
+## Before moving a fact: map its refs in BOTH directions
+
+`move` guards only INBOUND refs. It refuses a down-move that would dangle one, and never looks at
+the refs the fact itself MAKES, so lifting a fact to a common ancestor silently strands every
+outbound ref to a fact left below. Ask for both halves first:
+
+```bash
+bash <plugin>/hooks/run-python.sh <plugin>/skills/meta-self-improve/ref_map.py \
+  --root <anchor> <slug> [<slug> ...] [--json]
+```
+
+Read it as: a non-empty **inbound** list is what a down-move will be refused for (re-point those
+refs first, or leave the fact); an **outbound** target sitting BELOW the level you are lifting to
+is what will be stranded (lift the shared targets too, or demote the irreducibly-local ones to
+plain prose). `DANGLING` means the target exists nowhere. Underscores and dashes are the same slug,
+matching the engine, so `[[a_b]]` against a fact named `a-b` is a match and not a defect.
+
 ## When to run
 
 Any turn with a learning signal. Signal families (the gated Stop hook fires on all of them): a user
