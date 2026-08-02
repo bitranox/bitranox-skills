@@ -42,6 +42,12 @@ the scan in step 3 is run; do not duplicate the rest.
    biggest cross-tree context saving); new + corroborated (>= 2 distinct projects, or user-stated) +
    nowhere-else -> promote, kept CONCRETE. (Case model + guards: `bitranox:meta-dream-tree`
    "CLAUDE.md reconciliation"; a removal needs an ANCESTOR covering home, and is backed up + reported.)
+   **For the CONSOLIDATION half - a section copy-pasted across many repos and since drifted - run
+   `bitranox:meta-consolidate-claude-md` and follow it.** It owns measure -> verify -> converge ->
+   lift, and above all the rule that the copies must be checked against GROUND TRUTH before one is
+   promoted: drift means most of them are now wrong, so deduplicating by picking the most-copied
+   variant installs a stale claim at an ancestor where it binds every repo below. Do not re-derive
+   that procedure here.
 3b. **Misplacement audit - EXHAUSTIVE here.** Run crosstree's step 4b
    (`reconcile_memory_index.py --check-misplaced <anchor>`) over EVERY tree, not just the ones this
    run touched: a wrong-tree fact is invisible from inside its own tree, so it survives every
