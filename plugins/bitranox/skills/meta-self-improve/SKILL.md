@@ -243,9 +243,19 @@ reformat a thing you have hand-rolled before), not skipping a rule. Same ladder,
   test + a fix (propose-first), never a hand-rolled bypass - the tool analogue of
   `flag-a-skill-when-a-real-bug-slips-past-it`.
 - CONTRIBUTE upstream only when a local tool proves BROADLY useful to other users: propose it via the
-  `contrib_queue` + upstream loop (references/upstream-propagation.md), landing it in a shared
-  a shared `meta-toolbox` (PLANNED, not yet shipped) skill or a relevant existing skill - exactly the local-stays-local / share-when-broad
-  split skills already use. Never automatic.
+  `contrib_queue` + upstream loop (references/upstream-propagation.md), landing it in a relevant
+  existing skill - exactly the local-stays-local / share-when-broad split skills already use.
+  Never automatic.
+- **A contribution ENDS by RETIRING the local original - landing it upstream is only half.** Same
+  two-step shape as lifting a hook, and half of it is worse than neither: delete the local copy and
+  its tests once the shipped copy is committed, so there is ONE source of truth. Two copies do not
+  stay in sync by good intentions - measured on this machine, EIGHT local tools had been contributed
+  and left in place, and all eight had drifted from their shipped twin (code-identical with
+  docstrings stripped, but the shipped prose had been scrubbed of private references and had gained
+  usage detail the local copy never got). Before deleting, check what still INVOKES the local path -
+  a nudge or a doc keyed on the local file turns a successful contribution into a silently lost
+  guard, so point it at the shipped copy rather than letting it fall quiet. Keep the local copy only
+  when it genuinely diverges on purpose, and then say so in its docstring.
 
 ### 7. Report
 

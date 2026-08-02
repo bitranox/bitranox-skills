@@ -1,6 +1,7 @@
 """Tests for toolbox-nudge.py (PreToolUse Bash nudge toward a local toolbox tool). ASCII only."""
 import io
 import json
+import sys
 
 import pytest
 
@@ -107,9 +108,24 @@ def test_main_nudges_when_tool_present(home, monkeypatch, capsys):
     assert "git_state" in out and "additionalContext" in out
 
 
-def test_main_silent_when_tool_absent(home, monkeypatch, capsys):
+def test_main_falls_back_to_the_shipped_copy_when_the_local_one_is_absent(home, monkeypatch, capsys):
+    """An empty local toolbox is no longer silence: git_state ships with the plugin.
+
+    This test used to assert silence, which encoded the old local-only contract. Retiring a local
+    tool after contributing it upstream is now the norm, so silence there would lose the guard for
+    exactly the tools broadly useful enough to ship.
+    """
     (home / ".claude" / "skills" / "toolbox" / "tools").mkdir(parents=True)   # empty, no git_state.py
     _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s2"))
+    N.main()
+    out = capsys.readouterr().out.strip()
+    assert "compuse-toolbox" in out and "git_state" in out
+
+
+def test_main_silent_when_the_tool_exists_neither_locally_nor_shipped(home, monkeypatch, capsys):
+    (home / ".claude" / "skills" / "toolbox" / "tools").mkdir(parents=True)
+    monkeypatch.setattr(N, "_shipped_dir", lambda: home / "no-such-plugin-dir")
+    _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s2b"))
     N.main()
     assert capsys.readouterr().out.strip() == ""
 
@@ -222,3 +238,48 @@ def test_a_real_invocation_outside_the_heredoc_still_nudges():
     )
     matched = N.match_tool(N.extract_text("Bash", {"command": command}))
     assert matched is not None and matched[0] == "procsig"
+
+
+# ---- a tool that moved upstream must still be nudged, pointing at the shipped copy ---------------
+
+def _event(cmd, session="s1"):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": session}
+
+
+def _run(event, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    N.main()
+    out = capsys.readouterr().out.strip()
+    return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out else None
+
+
+def test_nudge_points_at_the_shipped_copy_when_there_is_no_local_one(tmp_path, monkeypatch, capsys):
+    """Retiring a local tool after contributing it upstream must not silence its nudge.
+
+    The tools most worth nudging about are exactly the ones broadly useful enough to ship, so
+    keying the nudge on the LOCAL file alone turns a successful contribution into a lost guard.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))          # no local toolbox at all
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    msg = _run(_event("pkill -f myserver"), monkeypatch, capsys)
+    assert msg is not None, "nudge went silent for a tool that ships with the plugin"
+    assert "compuse-toolbox" in msg and "procsig" in msg
+
+
+def test_a_local_tool_still_wins(tmp_path, monkeypatch, capsys):
+    """Local-only tools (no shipped twin) keep working, and a local copy is preferred if present."""
+    tools = tmp_path / ".claude" / "skills" / "toolbox" / "tools"
+    tools.mkdir(parents=True)
+    (tools / "procsig.py").write_text("# local\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    msg = _run(_event("pkill -f myserver", session="s2"), monkeypatch, capsys)
+    assert msg is not None and "skills/toolbox/tools/procsig.py" in msg
+
+
+def test_still_silent_for_a_tool_that_exists_nowhere(tmp_path, monkeypatch, capsys):
+    """Must-not-break: a match for a tool neither local nor shipped stays silent."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(N, "_shipped_dir", lambda: tmp_path / "nowhere")
+    assert _run(_event("pkill -f myserver", session="s3"), monkeypatch, capsys) is None
