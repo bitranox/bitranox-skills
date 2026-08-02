@@ -401,20 +401,27 @@ def find_decoy_anchors(anchor):
     below-level slug to that NEARER store FIRST and reads a stale or empty-stub body. A migration
     that centralizes bodies to the top must delete the drained sub-stores; this flags one it left
     behind. Backup dirs (`<store>-*`, e.g. `-migration-backup-...`) and any store nested inside them
-    are NOT decoys - they are in no level's ancestor chain - so descent prunes them. Returns sorted
-    absolute paths; empty is the healthy answer (exactly one store per tree, at the top)."""
+    are NOT decoys - they are in no level's ancestor chain - so descent prunes them. Neither is a
+    store inside the dream's own backup root: that lives at `~/.claude/self-improve-audit/`, which
+    is INSIDE the `~/.claude` tree, so every snapshotted store there reads as a decoy (measured: 26
+    of them). Prune it by RESOLVED PATH, never by dirname, so a project owning a `self-improve-audit/`
+    dir of its own is still walked. Returns sorted absolute paths; empty is the healthy answer
+    (exactly one store per tree, at the top)."""
     import os
     import self_improve_signals as sig
     anchor = Path(anchor).resolve()
+    audit_root = sig._audit_dir().resolve()
     found = []
     for root, dirs, _files in os.walk(str(anchor)):
         rootp = Path(root)
         for d in dirs:
             if d == us.STORE_DIRNAME and rootp.resolve() != anchor:
                 found.append(str(rootp / d))
-        # never descend into a store, a backup/variant dir (`<store>-*`), or a vendored dir
+        # never descend into a store, a backup/variant dir (`<store>-*`), a vendored dir, or the
+        # dream's own backup root
         dirs[:] = [d for d in dirs
-                   if not d.startswith(us.STORE_DIRNAME) and d not in sig.VENDOR_DIRNAMES]
+                   if not d.startswith(us.STORE_DIRNAME) and d not in sig.VENDOR_DIRNAMES
+                   and (rootp / d).resolve() != audit_root]
     return sorted(found)
 
 

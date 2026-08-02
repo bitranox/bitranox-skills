@@ -938,11 +938,21 @@ def _other_levels_pointing_in(anchor, slug):
 
 def curated_levels_under(anchor):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` carrying a managed pointer block),
-    pruning vendored/build/cache dirs - a bounded os.walk of the whole subtree, SIBLINGS included.
-    THE single tree-walk (reconcile's `_all_curated_levels` delegates here) so the two never drift."""
+    pruning vendored/build/cache dirs and the dream's own backup root - a bounded os.walk of the
+    whole subtree, SIBLINGS included.
+    THE single tree-walk (reconcile's `_all_curated_levels` delegates here) so the two never drift.
+
+    Backups go under `~/.claude/self-improve-audit/` so a snapshot is never re-read as live memory.
+    That holds for a tree on another mount, but `~/.claude` is itself an anchor (it carries a
+    `CLAUDE.md`, and `~` is an excluded anchor so the walk stops there), putting the backup root
+    INSIDE that tree - every backed-up pointer block then reads as a live level (measured: 6028
+    spurious problems from `--check-tree ~/.claude`). Prune by RESOLVED PATH, never by dirname, so a
+    project that happens to own a `self-improve-audit/` dir is still walked."""
+    audit_root = sig._audit_dir().resolve()
     out = []
     for root, dirs, files in os.walk(str(anchor)):
-        dirs[:] = [d for d in dirs if d not in sig.VENDOR_DIRNAMES]
+        dirs[:] = [d for d in dirs if d not in sig.VENDOR_DIRNAMES
+                   and Path(root, d).resolve() != audit_root]
         if "CLAUDE.local.md" not in files:
             continue
         try:
