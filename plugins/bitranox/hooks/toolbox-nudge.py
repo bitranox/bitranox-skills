@@ -37,6 +37,14 @@ _RULES = [
     (re.compile(r"\bip\s+neigh\b|getent\s+hosts\s+OVM-|tcpdump[^\n]*\btap"), "guestip",
      "resolving a guest IP by hand"),
     (re.compile(r"/var/log/openvmm/"), "ovmlog", "reading an openvmm per-VM log by hand"),
+    # LAST, so a more specific rule above keeps its own shape. A `grep` carrying -c/-l/-L is being
+    # asked "is this THERE?", and its NEGATIVE answer is the one that cannot be trusted: `grep -c`
+    # exits 1 on zero and prints file:count under -r, `-l` prints nothing for both "absent" and
+    # "never looked". Each of those produced a confident false ABSENT in one session. The pipe and
+    # semicolon exclusions keep the flag search inside this command, so `... | wc -l` is not read as
+    # grep's own flag.
+    (re.compile(r"\bgrep\b[^\n|;]*?\s-[A-Za-z]*[clL]"), "claim_check",
+     "deciding whether text is PRESENT from a raw grep count/list, whose negative cannot be trusted"),
 ]
 
 

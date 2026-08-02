@@ -164,3 +164,31 @@ def test_main_ignores_unscanned_tool(home, monkeypatch, capsys):
     _feed(monkeypatch, {"tool_name": "Read", "session_id": "r1", "tool_input": {"file_path": "x"}})
     N.main()
     assert capsys.readouterr().out.strip() == ""
+
+
+# ---- claim_check: a presence check whose NEGATIVE answer cannot be trusted ------------------------
+
+def test_match_claim_check_on_grep_count():
+    """`grep -c` decides "is it there?" - and returns file:count under -r, exits 1 on zero.
+
+    Both shapes produced a confident false ABSENT in one session, twice.
+    """
+    assert N.match_tool('grep -c "LC_ALL=C" skill.md')[0] == "claim_check"
+    assert N.match_tool('grep -ric "pattern" file.md')[0] == "claim_check"
+
+
+def test_match_claim_check_on_file_listing():
+    assert N.match_tool('grep -l "needle" *.md')[0] == "claim_check"
+    assert N.match_tool('grep -rL "needle" src/')[0] == "claim_check"
+
+
+def test_claim_check_does_not_hijack_an_ordinary_grep():
+    """A plain search is not a presence CHECK; nudging on every grep would get the hook ignored."""
+    for cmd in ('grep -rn "needle" src/', 'grep -i pattern file', "grep --color=auto x y"):
+        matched = N.match_tool(cmd)
+        assert matched is None or matched[0] != "claim_check", cmd
+
+
+def test_conflict_scan_still_wins_its_own_shape():
+    """conflict_scan's rule is listed first and uses -rn, so the new rule must not shadow it."""
+    assert N.match_tool("grep -rn '^<<<<<<<' .")[0] == "conflict_scan"
