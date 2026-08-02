@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.150.3] - 2026-08-03
+
+### Changed
+
+- **`infra-proxmox-bindsnap`** names the vetted pve-container builds (6.1.10 and 6.1.12 as of
+  pve-bindsnap 1.2.0) while keeping the node's own journal line and the project's
+  compatible-versions page as the authority, and points out that the snapshot checksum covers
+  `AbstractConfig.pm` from `libpve-guest-common-perl`, so an upgrade of either package can move a
+  node into TEST mode. Mirrored byte-for-byte (apart from the `name:` line) into the pve-bindsnap
+  repo's own copy of the skill.
+
 ## [5.136.0] - 2026-08-02
 
 ### Changed
