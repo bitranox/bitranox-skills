@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.152.1] - 2026-08-03
+
+### Fixed
+
+- **`coding-python-enforce-data-architecture-strict`** closes three gaps found while running it
+  over a 15k-line package. The refactor step said "launch subagents in PARALLEL for each file",
+  but this refactor is not per-file independent - the Enums land in `enums.py` and the models in
+  `models.py`, so several agents reach for the same shared file. It now requires partitioning
+  into NON-OVERLAPPING file sets with one owner per shared file, and telling each agent the
+  explicit list it may touch plus that others are editing the repo concurrently. Measured: three
+  parallel agents produced a transient failure from a half-written sibling edit.
+  The refactor agents are now also required to run the TYPE CHECKER, not just the tests: a
+  StrEnum member compares and hashes equal to its string value, so existing string-literal
+  assertions stay green while the checker errors on the changed signature. Measured: three agents
+  each reported "731 passed" while pyright had 24 errors. The orchestrator must re-run the gate
+  itself, since agents sampling mid-flight disagree with each other.
+  The analysis agents are now told to reply with JSON and nothing else, and are given the
+  NOT-a-violation list (small local dicts, free-form envelopes, dynamically-keyed maps). An
+  analyser that answered in prose lost all eight of its findings while citing a count that made
+  the loss look like a result.
+
 ## [5.152.0] - 2026-08-03
 
 ### Added
