@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.152.2] - 2026-08-03
+
+### Fixed
+
+- **repo-gate** `MIRRORED_SKILLS` pointed `compuse-vnc` at
+  `apps/utils/vnc-remote-control/...`, but the repo directory is underscored
+  (`vnc_remote_control`); only the skill directory inside it is hyphenated. The entry
+  therefore resolved to nothing and the mirror check skipped that skill silently - the exact
+  "an entry whose path no longer exists silently degrades to skipped forever" failure the
+  twin-exists test was written to catch, which had been failing on it. The two copies turn
+  out to be in sync, so nothing drifted while the check was dead. Verified by injecting a
+  drift line into the twin and confirming the check reports it, then restoring the twin
+  byte-identical: an "in sync" that could not have said otherwise would prove nothing.
+
 ## [5.152.1] - 2026-08-03
 
 ### Fixed
