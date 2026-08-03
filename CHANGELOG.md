@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.154.0] - 2026-08-03
+
+### Added
+
+- **`process-review-enhance-code-quality`**: the interface-shape census now has to JUDGE before it
+  cuts. The table told a review to count and the bullets told it to weigh the counts, but nothing
+  told it to find out what a parameter is FOR before proposing to remove or relocate it - and a
+  tramp rate cannot see the reasons that make removal a regression: a test seam, a production
+  override, an unexercised variation point. Measured: given only counts, a review recommended
+  folding two 94%-and-96%-forward-only parameters into an existing object across ~157 signatures,
+  called it "close to codemod-able" and ranked it "do first", never asking what either was for.
+  With the rule, the same scenario enumerates who supplies a non-default value first and rejects
+  the ambient/delete option because it would force injecting tests onto patching a global.
+  Also added: gather call-site evidence by PARSER, since the commonest parameter names (`key`,
+  `value`, `id`, `name`, `type`, `index`, `data`, `compare`, `callback`, `handler`) collide with
+  the language's own - a `key=` grep returned 20 sites of which every one in the project's code
+  was Python's sort key; a high tramp rate does not select WHICH fix, and bundling a near-pure
+  tramp into an object threads the same value through the same functions for ~zero parameters
+  removed; a fix must beat the status quo on EVERY rubric dimension, not just the one that found
+  it; and counting something and LEAVING it is a finished result, recorded with its counts so the
+  next review does not re-derive them and answer differently.
+
 ## [5.153.0] - 2026-08-03
 
 ### Added

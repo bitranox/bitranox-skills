@@ -180,12 +180,46 @@ The rest of the judgement, applied to what the counts turned up:
 
 - **A shared NAME is not a shared concept.** Two functions taking `key` where one means an ssh
   key path and the other a lookup key are not a clump; merging them is a new bug, not a fix.
+- **Before proposing to remove or relocate a parameter, find out WHAT IT IS FOR - go and look.**
+  A tramp count says the parameter is not used HERE. It cannot see why it is threaded, and the
+  reasons are precisely the ones that make removing it a regression: a TEST SEAM (the suite
+  substitutes a double at that parameter), a PRODUCTION OVERRIDE (one caller, maybe one
+  deployment, passes something else), or a deliberate VARIATION POINT not yet exercised. So
+  before recommending anything, enumerate WHO SUPPLIES A NON-DEFAULT VALUE, across production
+  call sites AND tests, and say what you found. A parameter whose only non-default supplier is
+  the test suite is an injection seam: deleting it does not remove plumbing, it forces those
+  tests onto patching a global, which is a worse design and a LOWER Testing score.
+  This is the step a census cannot prompt you to take, so take it explicitly. Measured: given
+  only the counts, a review recommended folding two 94%-and-96%-forward-only parameters into an
+  existing object across ~157 signatures, called it "close to codemod-able", ranked it "do
+  first" - and never asked what either parameter was for. The same review handed the purpose up
+  front declined the same refactor. The counts were identical; only the investigation differed.
+- **Gather the call-site evidence by PARSER, never by text match, because the commonest
+  parameter names collide with the language's own.** Searching call sites for `key=` in Python
+  returns `sorted(key=lambda ...)` and `max(key=len)`; the same trap waits on `value`, `id`,
+  `name`, `type`, `index`, `data`, `compare`, `callback`, `handler` in any language with a
+  standard library. Resolve each hit against its DECLARATION - type, defining scope - and drop
+  the builtin or framework call that merely shares the spelling. Measured: a `key=` grep
+  returned 20 call sites, and every one inside the project's own code was the language's sort
+  key. The count was real; the thing it counted was not the parameter under review.
 - **Ask what would catch a positional mistake.** A type checker catches a swap between different
   types and catches NOTHING between two same-typed fields, which is where the expensive bugs are.
 - **Prefer the named type that already exists** - extending one usually beats adding a sibling.
+- **A high tramp rate says the parameter does not belong in those signatures. It does NOT say
+  which fix.** There are three - introduce the object, DELETE the parameter and resolve it at
+  the edge, or leave it - and the census implies none of them. Note especially that bundling a
+  near-pure tramp into an object threads the SAME value through the SAME functions inside a new
+  wrapper: same ceremony, same call sites touched, close to zero parameters actually removed.
+- **A fix must beat the status quo on EVERY rubric dimension, not just the one that found it.**
+  Score the candidate against the rest of the rubric before proposing it, and say so. A
+  structural win that costs a testability loss is not a win.
 - **Rank by parameters removed per line changed**, and say which findings are NOT worth doing.
-- **Counting nothing is a real result.** If the counts come back clean, say so with the numbers
-  and move on. The census must be able to exonerate a codebase, or it will start inventing work.
+- **Counting nothing is a real result. So is counting something and leaving it.** If the counts
+  come back clean, say so with the numbers. If they come back loud and no available fix improves
+  the code, that is equally a finished result - record it as an accepted item WITH the counts and
+  the reason each candidate fix was rejected, so the next review does not re-derive the same
+  numbers and reach a different answer. The census must be able to exonerate a codebase, or it
+  will start inventing work.
 
 **The tell that this matters.** Measured, not assumed. A package whose gate was fully green
 (formatter, linter, strict type checker, import contracts, 650 tests) carried 43 of 568 annotated
