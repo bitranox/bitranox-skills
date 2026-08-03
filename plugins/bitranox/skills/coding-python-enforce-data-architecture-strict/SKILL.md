@@ -189,7 +189,16 @@ INITIALIZATION:
      - Each subagent prompt MUST include:
        * The file path to analyze
        * The violation patterns to search for (from Architecture Rules above)
+       * The patterns that are NOT violations, spelled out - a small single-function local
+         dict, a free-form external JSON envelope, and DYNAMICALLY-keyed maps (queue index to
+         count, metric name to value, MAC to address). Without this an analyser reports every
+         `dict[str, X]` it sees, and you spend the loop re-judging its false positives.
        * Instruction to return JSON: {"file": "path", "violations": [{"line": N, "type": "...", "description": "..."}]}
+       * **"Reply with the JSON object and NOTHING else - no preamble, no summary, no markdown
+         fence."** Say it explicitly. An analyser that answers in prose ("Findings reported
+         above: 8 items across 4 files") loses every finding, because the detail it refers to
+         was never in what you received - and the count it cites makes the loss look like a
+         result. Re-run that agent; do not reconstruct its numbers.
      - Collect all subagent results
      - Update `.data_arch_violations.json` with violations from each subagent
      - Calculate total_violations = sum of all violations across files
@@ -199,11 +208,22 @@ INITIALIZATION:
 
   STEP B - PARALLEL REFACTORING (use subagents):
      - Read `.data_arch_violations.json`
-     - For files with violations, launch subagents (Task tool, subagent_type="general-purpose", model="sonnet") in PARALLEL
-       (per-file refactor is bounded sonnet work; pin the tier)
+     - PARTITION the work into NON-OVERLAPPING file sets, one per subagent, BEFORE launching
+       anything. This refactor is not per-file independent: an Enum lives in `enums.py` and a
+       model in `models.py`, so several agents will reach for the SAME shared file. Give each
+       shared file exactly ONE owner (or edit it yourself first and let the others only
+       import from it). Measured: three agents editing one checkout in parallel produced a
+       transient test failure from a half-written sibling edit, and one agent had to re-read
+       files before every write to avoid clobbering another's work.
+     - Launch subagents (Task tool, subagent_type="general-purpose", model="sonnet") in PARALLEL,
+       one per file SET (per-file refactor is bounded sonnet work; pin the tier)
      - Each subagent prompt MUST include:
        * The full Architecture Rules section (copy from this document)
        * The specific violations for that file (from state file)
+       * The EXPLICIT list of files it may touch, and a statement that other agents are
+         editing the rest of the repo concurrently so it must not edit anything outside that
+         list. An agent that finds a needed fix in someone else's file REPORTS it instead of
+         making it - that hand-off is how the last error gets found, not a failure.
        * The state file path: `.data_arch_violations.json`
        * Instruction to fix ALL violations
        * Instruction to UPDATE the state file after fixing:
@@ -211,8 +231,17 @@ INITIALIZATION:
          - Clear the violations array for that file
          - Recalculate total_violations as the sum of all violations arrays (never
            decrement: parallel subagents sharing one counter race and lose updates)
+       * **Instruction to run the TYPE CHECKER as well as the tests, and to report the error
+         count.** Tests alone cannot verify this refactor: a `StrEnum` member compares and
+         hashes equal to its string value, so every existing string-literal call site and
+         assertion stays green while the type checker errors on the changed signature.
+         Measured: three agents each reported "731 passed" while pyright had 24 errors, all
+         of them call sites still passing raw literals into newly-Enum-typed parameters.
        * Instruction to return: {"file": "path", "fixed": ["violation1", ...], "remaining": [...]}
      - After all subagents complete: Read state file and verify updates
+     - **Re-run the gate YOURSELF.** A subagent's green is not the gate's green: it may have
+       sampled mid-flight while a sibling was still writing, and agents' reported counts will
+       disagree with each other for exactly that reason. Yours is the only authoritative one.
 
      >>> GOTO STEP A (MANDATORY - must re-analyze to verify fixes and catch new issues)
      >>> DO NOT proceed to STEP C until analysis shows total_violations == 0
