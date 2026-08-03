@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.152.0] - 2026-08-03
+
+### Added
+
+- **`compuse-toolbox`** gains `winlog`, for reading a Windows-written log whose text `grep` cannot
+  find or that `cat`s with spaces between the letters. PowerShell writes UTF-16 from `Tee-Object`
+  but UTF-8 or ANSI from `Set-Content`, so a log created by one and appended to by the other is
+  MIXED, with no BOM to announce it: nothing errors, `grep` simply finds nothing, and a wait loop
+  keyed on a completion marker reports "not finished" for a run that finished. `winlog` decodes per
+  segment, normalizes CRLF, and names a MIXED file on stderr so it gets fixed at the writer rather
+  than worked around in every reader.
+  `iconv -f UTF-16LE` is not an equivalent: measured on the real log it decoded the UTF-16 tail,
+  exited 0, and silently turned the ASCII head into mojibake, losing the header and the line
+  recording which account the task ran as. `file` reports such a log as plain `data`. 24 tests,
+  including the original mixed artifact and a control asserting the naive decode really does miss
+  the marker.
+
 ## [5.151.0] - 2026-08-03
 
 ### Added
