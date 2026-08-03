@@ -539,7 +539,11 @@ MIRRORED_SKILLS = {
     "coding-python-new-public-library": "libs/bitranox_template_py_lib/skills/new-public-python-library",
     "coding-python-pwshpy": "apps/utils/pwshpy/skills/using-pwsh",
     "coding-python-send-mail": "libs/btx_lib_mail/skills/python-send-mail",
-    "compuse-vnc": "apps/utils/vnc-remote-control/skills/vnc-remote-control",
+    # The REPO dir is underscored (vnc_remote_control) while the SKILL dir inside it is
+    # hyphenated. Spelling both with hyphens pointed this entry at nothing, so the mirror
+    # check skipped compuse-vnc silently - the exact "degrades to skipped forever" failure
+    # the twin-exists test below guards against.
+    "compuse-vnc": "apps/utils/vnc_remote_control/skills/vnc-remote-control",
     "devops-bmk": "apps/utils/bmk/skills/devops-bmk",
     "infra-proxmox-bindsnap": "apps/pve-bindsnap/skills/proxmox-bindsnap",
     "infra-storage-check-zpools": "apps/utils/check_zpools/skills/check-zpools",
