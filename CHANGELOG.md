@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.153.0] - 2026-08-03
+
+### Added
+
+- **`process-agents-dispatching-parallel`** gains the two rules that a real parallel refactor
+  proved missing, at the canonical source rather than copied into each consumer.
+  PARTITION: the skill listed "shared state" only under *When NOT to Use*, an all-or-nothing
+  framing, when the normal case is work that separates cleanly except for a few shared files (the
+  enum module, the models module, a registry). It now requires assigning every file to exactly one
+  agent, giving each its allow-list, telling it others are editing the tree concurrently, and
+  having it REPORT a needed change in someone else's file rather than make it. Measured: three
+  agents on one checkout produced a transient failure from a half-written sibling edit, and the
+  last remaining error was found only because an agent refused to reach outside its set.
+  VERIFY YOURSELF, AND THE WHOLE GATE: agents sample mid-flight (three reported 30, 1 and 5 type
+  errors for the same tree minutes apart) and they run the cheap check - three truthfully reported
+  "731 passed" while the type checker had 24 errors, since enum members compare equal to the
+  strings the old call sites still passed.
+  Also pins the return shape when results must be AGGREGATED: "expected output: summary" invites
+  prose, and an agent answering "Findings reported above: 8 items across 4 files" obeys the skill
+  while every finding is lost and the count makes the loss read as a result.
+
 ## [5.152.2] - 2026-08-03
 
 ### Fixed
