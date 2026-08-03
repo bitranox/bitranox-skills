@@ -57,13 +57,39 @@ Group failures by what's broken:
 
 Each domain is independent - fixing tool approval doesn't affect abort tests.
 
+**Mostly-independent is the normal case, and it needs a PARTITION rather than a coin flip.**
+"Shared state" under *When NOT to Use* is the all-or-nothing extreme; far more often the work
+separates cleanly except for a handful of genuinely shared files - the enum module, the models
+module, a registry every domain appends to. Do not abandon the fan-out over those, and do not hope
+the agents happen to miss each other. Decide the split BEFORE dispatching:
+
+- Assign every file to exactly ONE agent, and give each agent its allow-list explicitly.
+- A file several domains must touch gets ONE owner - or edit it yourself first and let the others
+  only read from it.
+- Tell each agent that other agents are editing the rest of the tree concurrently, and that a
+  needed change in someone else's file is to be REPORTED, not made. Say it in those words, or a
+  helpful agent reaches across "just this once". The hand-off is a feature: in one measured run
+  the last remaining error surfaced precisely because an agent refused to touch a file outside
+  its set and named it instead.
+
+Measured: three agents refactoring one checkout in parallel produced a transient test failure from
+a half-written sibling edit, and one reported having to re-read every file before each write to
+avoid clobbering another's work. Nothing warned them - the collision showed up only as a test that
+failed once and passed on re-run.
+
 ### 2. Create Focused Agent Tasks
 
 Each agent gets:
 - **Specific scope:** One test file or subsystem
 - **Clear goal:** Make these tests pass
 - **Constraints:** Don't change other code
-- **Expected output:** Summary of what you found and fixed
+- **Expected output:** Summary of what you found and fixed. **If you must AGGREGATE the results -
+  sum findings, merge scores, build one report - pin a machine-readable shape and say "reply with
+  that object and NOTHING else: no preamble, no summary, no markdown fence."** A prose answer is a
+  valid response to "expected output: summary", so an agent that writes *"Findings reported above:
+  8 items across 4 files"* is obeying this skill while every finding is lost - the detail it refers
+  to was never in what came back, and the count makes the loss read as a result. Re-run that agent;
+  never reconstruct its numbers from the summary.
 - **An explicit model tier:** pin `model` per agent (do not inherit the session model - it is often
   `opus`, the most expensive). Default fan-out to `sonnet`; use `haiku` for mechanical domains and
   `opus` only for a domain needing deep design judgment. Full mapping: see "Concrete tiers" in
@@ -93,6 +119,19 @@ When agents return:
 - Verify fixes don't conflict
 - Run full test suite
 - Integrate all changes
+
+**Re-run the gate YOURSELF, and run the WHOLE gate.** An agent's green is not the gate's green,
+for two separate reasons:
+
+- It sampled while siblings were still writing, so its numbers describe a tree that no longer
+  exists. The tell is that the agents disagree with each other: in one run three agents reported
+  30, 1 and 5 type errors for the same checkout, minutes apart. None was wrong; none was current.
+  Yours, run after they all finish, is the only authoritative one.
+- Agents run the cheap check. Told to verify, they run the tests - which is one stage of a gate
+  that also lints and type-checks. Measured on a refactor that changed function signatures to
+  enums: three agents each truthfully reported "731 passed" while the type checker had 24 errors,
+  because the enum members compared equal to the strings the old call sites still passed. Name the
+  exact command they must run, including the type checker, and check it yourself afterwards.
 
 ## Agent Prompt Structure
 
