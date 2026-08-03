@@ -239,6 +239,18 @@ reformat a thing you have hand-rolled before), not skipping a rule. Same ladder,
 - On OK, build it in the **LOCAL `toolbox`** (a personal `~/.claude/skills/toolbox/` skill),
   TDD (RED core-function test first), best library + PEP 723 deps run via `uv run` (its SKILL.md
   carries the contract). Tools stay LOCAL by default.
+- **REGISTERING it needs a passing RETRIEVAL test, not just file + test + index row.** A green unit
+  test says nothing about whether the row is FINDABLE, and a jig nobody finds gets hand-rolled
+  again - the exact chore it was built to end. RED first, before rewriting any row: ask a subagent
+  the question a USER would ask, in their words, with the whole index visible and NONE stated as
+  acceptable ("if nothing fits and you would just use a shell command, say so"). ONE question per
+  agent - a batch primes a 1:1 mapping and lets the agent disambiguate by comparing rows, and
+  without the NONE sentence it picks the nearest row, so the test can never fail. Write the row
+  with the user's NOUN, not the mechanism ("Stalled or hung?" retrieves, "multi-signal verdict"
+  does not), both jobs of a two-job tool, and a real value in the usage column (it gets copied).
+  Measured: a row reading "capped resumable fetch" lost its own download case - asked to cap a
+  5 GB download to 8 Mbit/s, an isolated agent answered NONE and reached for curl, having read
+  "capped" as retries.
 - ENHANCE, do not work around: a toolbox tool that is buggy/insufficient in use gets a RED regression
   test + a fix (propose-first), never a hand-rolled bypass - the tool analogue of
   `flag-a-skill-when-a-real-bug-slips-past-it`.

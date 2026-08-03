@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.151.0] - 2026-08-03
+
+### Added
+
+- **`meta-self-improve`** chore ladder: registering a jig now requires a passing RETRIEVAL test of
+  its index row, not just file + test + row. A green unit test says nothing about whether the row
+  is findable, and a jig nobody finds gets hand-rolled again, which is the chore it was built to
+  end. The method is RED first, one question per agent, whole index visible, and NONE stated as an
+  acceptable answer: a batch of questions primes a 1:1 mapping and lets the agent disambiguate by
+  comparing rows, and without the NONE sentence it picks the nearest row so the test cannot fail.
+  Also records what makes a row retrievable (the user's noun rather than the mechanism, both jobs
+  of a two-job tool, a real value in the usage column). Found by measurement: a row reading
+  "capped resumable fetch" lost its own download case, with an isolated agent answering NONE and
+  reaching for curl after reading "capped" as retries.
+
 ## [5.150.3] - 2026-08-03
 
 ### Changed
