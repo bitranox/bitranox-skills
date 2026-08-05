@@ -65,3 +65,78 @@ def test_missing_file_path_returns_zero(monkeypatch):
 def test_malformed_stdin_returns_zero(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     assert H.main() == 0
+
+
+def run_bash(monkeypatch, cwd, command="cat > doc.md"):
+    """Drive main() with a Bash event, which declares no file_path at all."""
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    event = {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    return H.main()
+
+
+def test_a_table_written_by_bash_is_realigned(tmp_path, monkeypatch):
+    """Verify the formatter reaches markdown a shell command wrote.
+
+    Write and Edit announce their target; Bash does not. A heredoc, a `python3 -`
+    script or `sed -i` therefore slipped past the formatter entirely, which is how
+    a misaligned table shipped from a session that never called Write.
+    """
+    f = tmp_path / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path) == 0
+
+    out = f.read_text(encoding="utf-8")
+    assert out != MISALIGNED
+    assert "| longer | z   |" in out
+
+
+def test_bash_reaches_a_nested_file_it_was_not_told_about(tmp_path, monkeypatch):
+    """Verify the path is found by what changed, not by parsing the command.
+
+    A command can build its target at runtime, so the command text is not a
+    reliable source for the path.
+    """
+    nested = tmp_path / "docs" / "deep"
+    nested.mkdir(parents=True)
+    f = nested / "ref.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path, command="python3 - <<'EOF'") == 0
+
+    assert "| longer | z   |" in f.read_text(encoding="utf-8")
+
+
+def test_bash_ignores_vendored_trees(tmp_path, monkeypatch):
+    """Verify a virtualenv or node_modules is never rewritten."""
+    vendored = tmp_path / ".venv" / "pkg"
+    vendored.mkdir(parents=True)
+    f = vendored / "README.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path) == 0
+
+    assert f.read_text(encoding="utf-8") == MISALIGNED
+
+
+def test_bash_leaves_untouched_markdown_alone(tmp_path, monkeypatch):
+    """Verify only files changed inside the window are considered."""
+    import os
+    import time
+
+    f = tmp_path / "old.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+    stale = time.time() - (H._BASH_WINDOW_SECONDS + 60)
+    os.utime(f, (stale, stale))
+
+    assert run_bash(monkeypatch, tmp_path) == 0
+
+    assert f.read_text(encoding="utf-8") == MISALIGNED
+
+
+def test_bash_with_no_cwd_returns_zero(monkeypatch):
+    """Verify a malformed Bash event never wedges the turn."""
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_name": "Bash", "cwd": "/nonexistent-xyz"})))
+    assert H.main() == 0
