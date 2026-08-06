@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.158.0] - 2026-08-06
+
+### Added
+
+- **`infra-windows-servicing`** (new): the false signals in Windows servicing and component-store
+  repair. Scoped deliberately narrow - baseline testing showed a capable model already produces the
+  repair procedure itself (`takeown` -> `icacls` -> `attrib -R` -> delete, in the right order, and
+  it suggests `robocopy /MIR` as a faster bulk form), and already refuses to kill a quiet DISM job.
+  What it gets wrong is the diagnosis, so the skill teaches only the signals that read as one thing
+  and mean another: a clean `ScanHealth` treated as evidence an update should install, when disk
+  headroom is a separate fault presenting identically (measured: 2 of 17 machines corrupt, the rest
+  simply out of room); "Access is denied" on a delete that is the READ-ONLY ATTRIBUTE rather than an
+  ACL, so `takeown`/`icacls` cannot fix it and each reports success while the operation keeps
+  failing; a permission command succeeding while the operation still fails, which means the
+  diagnosis is wrong rather than that a bigger pass is needed; `icacls /reset` on a `Windows.old`,
+  which rewrites the LIVE installation's ACLs through the hard links an in-place upgrade creates
+  (measured: stripped the SSH host-key ACEs, `no hostkeys available -- exiting`, machine off the
+  network, console recovery); a SYSTEM scheduled task having LESS access than an elevated admin
+  session (measured: 0 of 49 files as SYSTEM, 49 of 49 as admin); a quiet log read as a hang when
+  DISM's `/LogPath` is per-invocation, so a phase handover looks identical to a freeze; and a
+  duration quoted from a reference figure, when the same upgrade measured 1 hour on one machine and
+  5h18m on another on the same host. Also covers `/eula accept` being required with `/quiet`
+  (without it setup exits `0xC190010E` after ~30s and the code points nowhere), the documented
+  unsupported-CPU waiver as distinct from the LabConfig bypasses, and choosing `RestoreHealth`
+  (patches, needs each payload at its exact revision, fails `0x800F0915`) against an in-place
+  upgrade (replaces the store wholesale).
+
 ## [5.154.0] - 2026-08-03
 
 ### Added

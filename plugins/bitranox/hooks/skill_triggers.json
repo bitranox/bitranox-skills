@@ -574,6 +574,22 @@
   "checksum",
   "errors"
  ],
+ "infra-windows-servicing": [
+  "windows",
+  "machine",
+  "install",
+  "cumulative",
+  "update",
+  "component",
+  "store",
+  "damaged",
+  "dism",
+  "setup.exe",
+  "fails",
+  "opaque",
+  "code",
+  "0x800f0915"
+ ],
  "marketing-rory": [
   "working",
   "marketing",
