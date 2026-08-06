@@ -510,6 +510,22 @@
   "disturb",
   "checkout"
  ],
+ "infra-chrome-remote-desktop": [
+  "installing",
+  "registering",
+  "repairing",
+  "chrome",
+  "remote",
+  "desktop",
+  "host",
+  "linux",
+  "container",
+  "workstation",
+  "client",
+  "answers",
+  "valid",
+  "although"
+ ],
  "infra-proxmox": [
   "configuring",
   "managing",

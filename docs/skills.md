@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 69 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 70 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -51,6 +51,7 @@ CI/CD, build and release automation, observability (provider-agnostic).
 
 Self-hosted/on-prem hardware, hypervisors, virtualization, storage.
 
+- [`infra-chrome-remote-desktop`](../plugins/bitranox/skills/infra-chrome-remote-desktop/SKILL.md) - Use when installing, registering, or repairing a Chrome Remote Desktop host on Linux (a VM, an LXC container, or a workstation) - the web client answers "PIN is not valid" although the PIN is right, a session connects and drops straight away, the host shows offline, start-host dies with "Failed to set new config" or "Failed to start host", sudo refuses with "The \"no new privileges\" flag is set", or the host journal logs "pam_acct_mgmt() returned error 7" or "Local login check for <user> failed". Covers the per-connection PAM account check, /etc/shadow group ownership and unix_chkpwd, registering as the target user, single-use OAuth codes, the stored PIN hash, and the chrome-remote-desktop@<user> service.
 - [`infra-proxmox`](../plugins/bitranox/skills/infra-proxmox/SKILL.md) - Use when configuring, managing, or troubleshooting Proxmox VE - installation, host administration, clusters, VMs, containers, storage, Ceph, SDN, firewall, user management, HA, backups, notifications, and CLI tools (pvecm, qm, pct, pvesm, pveceph, ha-manager, pvesh, vzdump). Covers Proxmox VE 9.1.2.
 - [`infra-proxmox-bindsnap`](../plugins/bitranox/skills/infra-proxmox-bindsnap/SKILL.md) - Use when snapshotting or cloning Proxmox LXC containers that have bind/device mounts (mpN -> host paths) - the snapshot button is greyed out, or pct clone / pct snapshot fails with "unable to clone mountpoint (type bind)", or you cannot snapshot a bind-mount container. Covers pve-bindsnap install, verify, the BINDSNAP-FORCE-RUNNING / BINDSNAP-UNSUPPORTED / BINDSNAP-EXCLUDE markers, the checksum guard for an untested pve-container build, clone, and uninstall on a Proxmox VE node.
 - [`infra-storage-check-zpools`](../plugins/bitranox/skills/infra-storage-check-zpools/SKILL.md) - Use when monitoring ZFS pool health or running scrubs from a machine, script, or timer - checking capacity, read/write/checksum errors, device faults, or scrub age; sending pool alerts by email; installing a monitoring daemon as a systemd service; or scripting any of that against JSON output. Covers install (uvx/uv/pip and an isolated production install), the layered configuration and its six sections, every subcommand, exit codes, and the library API. Prefer this over hand-rolling `zpool status` parsing, a scrub-plus-sleep shell loop, or a cron job that greps text.
