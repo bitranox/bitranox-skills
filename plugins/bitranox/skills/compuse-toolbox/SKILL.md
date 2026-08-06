@@ -26,6 +26,7 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 | `grep_all`        | a repo-wide `grep -r` that must be COMPLETE - it silently skips gitignored files                                                                        | `uv run scripts/grep_all.py PATTERN [PATH ...] [--glob G]`                                     |
 | `gate`            | running gates then acting on the result - `<gate> \| grep summary && git push`                                                                          | `uv run scripts/gate.py --log L [--summary RE] --gate C [--gate C ...] [--then C]`             |
 | `winlog`          | `iconv`/`strings -e l` on a WINDOWS log whose text `grep` cannot find, or that `cat`s with spaces between the letters - UTF-16, BOM, or MIXED encodings | `uv run scripts/winlog.py read FILE [--grep DONE-OK] [--tail 20] [--json]` (exit 1 = no match) |
+| `transfer`        | a `curl --limit-rate` / `rsync --bwlimit` big-file download or host-to-host copy that must respect a REAL speed limit (the units differ per tool: `curl 8M` is 8 MiB/s = 67 Mbit, `rsync --bwlimit` is KiB/s), or judging whether a long job has hung | `uv run scripts/transfer.py fetch URL --rate 8Mbit` / `push F user@host:/d/ --rate 8Mbit` / `check --file F --pid N` |
 
 Per-tool arguments live in each tool's `--help` (loaded only when used, so this index stays small).
 
