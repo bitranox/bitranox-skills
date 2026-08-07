@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.158.2] - 2026-08-07
+
+### Fixed
+
+- **`reformat-md-tables` hook**: the Bash fallback no longer descends into a repository checked
+  out under the working directory. It finds files by mtime, and mtime says a file was written,
+  never by whom, so a `git checkout`, `merge` or `clone` inside a vendored checkout restamped
+  every file it touched and the hook read someone else's source as ours and restyled it. Measured:
+  seven docs in a vendored `microsoft/openvmm` mirror carried alignment-only churn nobody made,
+  unnoticed until `git merge --ff-only` refused to run against the local changes. Committing that
+  churn would have been permanent divergence from upstream for a style upstream never adopted.
+  Any directory below the working directory that holds its own `.git` is now pruned; the working
+  directory's own repo stays in scope, and the declared-path Write/Edit route is unchanged. The
+  walk moved from `rglob` to `os.walk` so the prune happens before descending rather than per file.
+
 ## [5.158.0] - 2026-08-06
 
 ### Added

@@ -55,24 +55,38 @@ def _markdown_paths_from_bash(event) -> list[str]:
     at what actually changed: markdown under the working directory whose mtime
     falls inside the window this command ran in. Reformatting is idempotent, so
     catching a neighbouring file costs nothing.
+
+    A NESTED REPOSITORY is the exception, and it is not a cosmetic one. mtime says
+    a file was written, never by whom: a `git checkout`, `merge` or `clone` inside
+    a checkout vendored under the working directory restamps every file it touches,
+    and the fallback then reads someone else's source as ours and restyles it.
+    Measured 2026-08-07: seven docs in a vendored microsoft/openvmm mirror carried
+    alignment-only churn nobody made, unnoticed until `git merge --ff-only` refused
+    to run. Committing that churn would be permanent divergence from upstream for a
+    style they never adopted, so any directory below the working directory that
+    holds its own `.git` is pruned. The working directory's own repo stays in scope.
     """
     cwd = Path(event.get("cwd") or ".")
     if not cwd.is_dir():
         return []
     cutoff = time.time() - _BASH_WINDOW_SECONDS
     found: list[str] = []
-    for path in cwd.rglob("*"):
+    for dirpath, dirnames, filenames in os.walk(cwd):
         if len(found) >= _BASH_FILE_CAP:
             break
-        if not path.is_file() or not path.name.lower().endswith(_MD_SUFFIXES):
-            continue
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        try:
-            if path.stat().st_mtime >= cutoff:
-                found.append(str(path))
-        except OSError:
-            continue
+        here = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not (here / d / ".git").exists()]
+        for name in filenames:
+            if len(found) >= _BASH_FILE_CAP:
+                break
+            if not name.lower().endswith(_MD_SUFFIXES):
+                continue
+            path = here / name
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    found.append(str(path))
+            except OSError:
+                continue
     return found
 
 
