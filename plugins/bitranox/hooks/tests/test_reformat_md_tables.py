@@ -120,6 +120,32 @@ def test_bash_ignores_vendored_trees(tmp_path, monkeypatch):
     assert f.read_text(encoding="utf-8") == MISALIGNED
 
 
+def test_bash_never_rewrites_a_nested_repository(tmp_path, monkeypatch):
+    """Verify markdown belonging to a DIFFERENT repo checked out under cwd is left alone.
+
+    A vendored upstream checkout is someone else's source. The Bash fallback finds
+    files by mtime, and a plain `git checkout` or `git merge` in that checkout
+    restamps every file it touches, so the fallback read hundreds of upstream docs
+    as "just written" and realigned the ones whose tables were not in our house
+    style. Measured 2026-08-07: seven docs in a vendored microsoft/openvmm mirror
+    sat modified with alignment-only churn until a fast-forward refused to run.
+    """
+    (tmp_path / ".git").mkdir()  # cwd is itself a repo, which must stay in scope
+    ours = tmp_path / "ours.md"
+    ours.write_text(MISALIGNED, encoding="utf-8")
+
+    vendored = tmp_path / "public" / "openvmm"
+    (vendored / ".git").mkdir(parents=True)
+    (vendored / "Guide").mkdir()
+    theirs = vendored / "Guide" / "cli.md"
+    theirs.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path) == 0
+
+    assert theirs.read_text(encoding="utf-8") == MISALIGNED  # their repo, untouched
+    assert "| longer | z   |" in ours.read_text(encoding="utf-8")  # ours still realigned
+
+
 def test_bash_leaves_untouched_markdown_alone(tmp_path, monkeypatch):
     """Verify only files changed inside the window are considered."""
     import os
