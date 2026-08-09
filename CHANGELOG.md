@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.164.1] - 2026-08-09
+
+### Fixed
+
+- `net-firewall-pfsense`: `doctor`'s resolver check flagged a CORRECT firewall. It required every
+  entry in `/etc/resolv.conf` to be loopback, but a healthy pfSense box lists its own resolver
+  first and then the configured upstream servers as fallbacks, so those fallbacks were reported as
+  evidence of a hijack. The check had only ever been exercised against a box in the broken state.
+
+  Split into the two signatures that actually mean something: `magicdns_in_resolv_conf` (Tailscale
+  Accept DNS has taken the system resolver over) and `resolver_not_first` (the box does not ask
+  its own resolver first). Upstream servers listed after loopback are no longer a finding, and
+  IPv6 loopback counts. Verified silent against two healthy firewalls and still firing on the
+  fault. The remedy in the message now names the durable fix: turn Accept DNS off and forward the
+  tailnet domain to MagicDNS with an unbound domain override, which keeps tailnet names resolving
+  without handing over the system resolver.
+
 ## [5.164.0] - 2026-08-09
 
 ### Added

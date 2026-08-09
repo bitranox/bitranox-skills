@@ -61,6 +61,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 SNORT_TABLE = "snort2c"
+MAGICDNS = "100.100.100.100"          # Tailscale's fixed MagicDNS address, the same on every tailnet
 CONFIG_FILE = Path(os.environ.get("PFSENSE_JIG_CONFIG", "~/.config/bitranox/pfsense.ini")).expanduser()
 UPGRADE_LOCK = "/var/run/pfSense-upgrade.lock"
 
@@ -326,6 +327,11 @@ def select_one(items: list[dict], key: str, value: str, *, what: str) -> dict:
     return hits[0]
 
 
+def _is_loopback(address: str) -> str | bool:
+    """Whether a nameserver entry points back at this host, in either address family."""
+    return address.startswith("127.") or address in ("::1", "0:0:0:0:0:0:0:1")
+
+
 def override_name(entry: dict) -> str:
     """The fully qualified name of a host override, tolerating an empty host part."""
     host, domain = (entry.get("host") or "").strip(), (entry.get("domain") or "").strip()
@@ -435,15 +441,28 @@ def doctor_findings(*, reservations: list[dict], overrides: list[dict],
                            "to trace. Usually it means the reservation outlived the device.",
                 ))
 
+    # A healthy pfSense resolv.conf lists the box's own resolver FIRST and then the configured
+    # upstream servers as fallbacks, so "every entry is loopback" is the wrong test - it flags a
+    # correct box. The fault has two distinct signatures, checked separately.
     if resolv_conf is not None:
         servers = re.findall(r"^\s*nameserver\s+(\S+)", resolv_conf, re.M)
-        foreign = [s for s in servers if not s.startswith("127.")]
-        if foreign:
+        if MAGICDNS in servers:
             findings.append(Finding(
-                check="resolv_conf_hijacked", severity="warn", subject=", ".join(foreign),
-                detail="the firewall is not resolving through its own resolver. Tailscale's "
-                       "'Accept DNS' rewrites /etc/resolv.conf when left on, which breaks pkg and "
-                       "system upgrades. Turn Accept DNS off on the firewall.",
+                check="magicdns_in_resolv_conf", severity="warn", subject=MAGICDNS,
+                detail="Tailscale's 'Accept DNS' has rewritten /etc/resolv.conf to MagicDNS. When "
+                       "the tailnet has no global nameservers the box then resolves no public name "
+                       "at all, so pkg and system upgrades fail while LAN clients stay fine because "
+                       "they query the resolver directly - which is why this hides for months. Turn "
+                       "Accept DNS off, and forward the tailnet's domain to MagicDNS with an unbound "
+                       "domain override instead: that keeps tailnet names resolving without handing "
+                       "over the system resolver.",
+            ))
+        elif servers and not _is_loopback(servers[0]):
+            findings.append(Finding(
+                check="resolver_not_first", severity="warn", subject=servers[0],
+                detail="the first nameserver is not this firewall's own resolver, so the box does "
+                       "not answer its own queries from unbound. Upstream servers listed AFTER "
+                       "loopback are normal fallbacks and are not a fault.",
             ))
 
     if upgrade_lock:
