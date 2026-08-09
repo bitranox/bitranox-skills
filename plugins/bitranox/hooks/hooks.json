@@ -84,6 +84,18 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/nudge-detector-footguns.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/missing-mechanism-nudge.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/git-revparse-nudge.py\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/arbitrary-sleep-nudge.py\""
           }
         ]
       },
