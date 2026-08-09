@@ -59,6 +59,34 @@ HANDLED = re.compile(r"pipefail|PIPESTATUS")
 SPLIT = re.compile(r"\s*(?:;|&&|\|\||\n)\s*")
 
 
+# A read of the previous command's status. `$?` after a pipeline is the LAST element's status,
+# so a pipe into a truncating filter makes it report the filter, not the command being measured.
+_STATUS_READ = re.compile(r"\$\?")
+
+
+def reads_masked_status(command: str) -> bool:
+    """True when a pipeline into a swallowing filter is followed by a read of `$?`.
+
+    Orthogonal to :func:`masks_a_gate`, which needs the command to be a RECOGNISED gate before it
+    fires. That misses the other half of the same mistake: measuring a command's OWN exit code
+    during verification. Measured 2026-08-09 - `tool verify --sid <absent> | tail -5;
+    echo "rc=$?"` printed rc=0 while the tool had correctly exited 1, so a working negative
+    control read as broken; a passing one would have been recorded as proof. The command being
+    measured is arbitrary, so keying on a gate name can never catch it.
+    """
+    if HANDLED.search(command):
+        return False
+    statements = [s for s in SPLIT.split(command) if s.strip()]
+    piped_into_filter = False
+    for statement in statements:
+        if piped_into_filter and _STATUS_READ.search(statement):
+            return True
+        elements = [e for e in statement.split("|") if e.strip()]
+        if len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:]):
+            piped_into_filter = True
+    return False
+
+
 def masks_a_gate(statement: str) -> bool:
     """True when a gate runs in this pipeline but is not what sets its status."""
     if "|" not in statement:
@@ -85,7 +113,22 @@ def main() -> int:
     if not cmd:
         return 0
 
-    # Fast path: nothing to protect if no gate runs here.
+    # The verification shape, which needs no recognised gate: a pipe into a truncating filter and
+    # then a read of `$?`. Advisory rather than a block - measuring an exit code is legitimate
+    # work, and the mistake is reading the WRONG one, so the fix is to name the right form.
+    if reads_masked_status(cmd):
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                "MASKED EXIT STATUS: this pipes into a truncating filter and then reads `$?`, "
+                "which is the FILTER's status, not the command's. Measured: a tool that had "
+                "correctly exited 1 reported rc=0 this way, so a working negative control read "
+                "as broken - and a passing one would have been recorded as proof. Use "
+                "`cmd > out 2>&1; rc=$?` and read the file, or gate.py for a real gate."
+            ),
+        }}) + "\n")
+
+    # Fast path: nothing further to protect if no gate runs here.
     if not GATE.search(cmd):
         return 0
     # The author already handles the pipe's status correctly.

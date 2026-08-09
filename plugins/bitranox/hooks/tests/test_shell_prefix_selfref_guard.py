@@ -108,3 +108,31 @@ def test_malformed_input_never_wedges_a_turn(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("sys.stdin", io.StringIO("not json at all"))
 
     assert guard.main() == 0
+
+
+# ---- command substitution inside SELF-AUTHORED TEXT --------------------------------------------
+# Same family as the prefix self-reference: the shell evaluates the text before the program sees
+# it. Measured 2026-07-12: a memory --hook describing a fix wrapped the word shutdown in
+# backticks, the double-quoted argument command-substituted it, and the dev box ran the real
+# shutdown - it only survived because polkit denied it.
+
+def test_backticks_inside_a_text_carrying_flag_are_blocked():
+    assert guard.substitutes_inside_text_arg(
+        'memory_engine add --hook "When the box hangs, run `shutdown -r now`."') is True
+    assert guard.substitutes_inside_text_arg(
+        'git commit -m "fix $(whoami) crash"') is True
+    assert guard.substitutes_inside_text_arg(
+        'tool add --why "see `git log`"') is True
+
+
+def test_ordinary_command_substitution_is_untouched():
+    """$() is legitimate nearly everywhere - only text-carrying flags are in scope."""
+    assert guard.substitutes_inside_text_arg("cd $(dirname /a/b) && ls") is False
+    assert guard.substitutes_inside_text_arg('rc=$?; echo "$rc"') is False
+    assert guard.substitutes_inside_text_arg("files=$(ls | head -3)") is False
+    assert guard.substitutes_inside_text_arg('git commit -F /tmp/msg.txt') is False
+
+
+def test_a_text_flag_with_no_substitution_is_fine():
+    assert guard.substitutes_inside_text_arg('git commit -m "plain subject line"') is False
+    assert guard.substitutes_inside_text_arg("tool add --title 'single quoted $(safe)'") is False

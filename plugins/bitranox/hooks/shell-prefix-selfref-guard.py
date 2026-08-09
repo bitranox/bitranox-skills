@@ -64,6 +64,35 @@ def _prefix_names(segment: str) -> list[str]:
     return names
 
 
+# Flags whose argument is SELF-AUTHORED PROSE: a commit subject, a memory hook, a queue reason.
+# Prose is the case where a shell metacharacter is certainly not meant as one.
+TEXT_FLAGS = (
+    "-m", "--message", "--hook", "--title", "--body", "--descr", "--description",
+    "--why", "--what", "--reason", "--note", "--summary", "--subject",
+)
+# A double-quoted argument to one of those flags. Single quotes are NOT this bug: the outer shell
+# does not expand them, which is why the single-quoted form is the documented workaround.
+_TEXT_ARG_RX = re.compile(
+    r"(?<![\w-])(?:%s)\s+\"([^\"]*)\"" % "|".join(re.escape(f) for f in TEXT_FLAGS)
+)
+_SUBSTITUTION_RX = re.compile(r"`[^`]*`|\$\(")
+
+
+def substitutes_inside_text_arg(command: str) -> bool:
+    """Return whether self-authored PROSE carries a command substitution the shell will run.
+
+    Bash evaluates backticks and `$(...)` inside a double-quoted argument BEFORE the program sees
+    the string, so the words are not stored - they are EXECUTED. Measured 2026-07-12: a memory
+    `--hook` describing a fix wrapped the word shutdown in backticks; the dev box ran the real
+    shutdown and survived only because polkit denied it. Every occurrence had exited zero.
+
+    Scoped to prose-carrying flags on purpose. `$(...)` is legitimate nearly everywhere else, so a
+    blanket rule would block ordinary work - and a guard that blocks ordinary work gets disabled.
+    """
+    return any(_SUBSTITUTION_RX.search(arg)
+               for arg in _TEXT_ARG_RX.findall(strip_heredoc_bodies(command)))
+
+
 def self_referencing_prefix(command: str) -> bool:
     """Return whether any segment references a variable it assigns as a prefix."""
 
@@ -88,6 +117,18 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
+    if substitutes_inside_text_arg(command):
+        sys.stderr.write(
+            "Self-authored PROSE carries a command substitution, so the shell will RUN it.\n"
+            "Backticks and $(...) inside a double-quoted argument are evaluated BEFORE the\n"
+            "program sees the string, so the words are not stored - they execute. A memory hook\n"
+            "describing a fix once wrapped `shutdown -r now` in backticks and the dev box ran it;\n"
+            "it survived only because polkit refused. Every occurrence exited 0.\n"
+            "Fix: write the text to a FILE and hand the program the path (git commit -F,\n"
+            "--body-file), or single-quote it - the outer shell does not expand single quotes.\n"
+            "Then READ THE RESULT BACK before pushing.\n"
+        )
+        return 2
     if not self_referencing_prefix(command):
         return 0
     sys.stderr.write(
