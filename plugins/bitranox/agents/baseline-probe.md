@@ -1,7 +1,7 @@
 ---
 name: baseline-probe
 description: Use for a TEXT-ONLY probe - a RED/GREEN baseline, a pressure scenario, a retrieval test, or any question that must be answered from the prompt alone. Has no Bash, Write, Edit or Read, so it cannot reach the filesystem no matter what its prompt says.
-tools: TodoWrite
+tools: ReportFindings, Skill
 model: sonnet
 ---
 
