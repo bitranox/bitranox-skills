@@ -56,6 +56,20 @@ installed copies and needs no bump.
   reaches for firewall rules, aliases and gateways and never gets to ARP. It also runs offline
   against a saved `config.xml` (`doctor --config`), so a snapshot can be audited with no network.
 
+## [5.163.1] - 2026-08-09
+
+### Fixed
+
+- `block-masked-gate-exit.py` false-fired on the very form it recommends. Two narrowings, both
+  found by the guard firing on its own author within hours of shipping:
+  - ADJACENCY: `$?` holds the status of the IMMEDIATELY preceding command, so only the statement
+    directly after a pipeline can be misreading the filter's status. It previously fired on ANY
+    later `$?`, so a command that piped one check into `tail` and then ran a SECOND check
+    redirected to a file - the correct form - was flagged.
+  - Heredoc bodies are stripped, so writing ABOUT the footgun no longer trips the guard that
+    teaches it.
+  The real shape still fires; a control test pins that the narrowing did not disarm it.
+
 ## [5.163.0] - 2026-08-09
 
 ### Added

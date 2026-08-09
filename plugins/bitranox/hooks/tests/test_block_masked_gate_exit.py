@@ -144,6 +144,33 @@ def test_reads_masked_status_ignores_a_status_read_with_no_pipe():
     assert B.reads_masked_status('mytool verify; echo "rc=$?"') is False
 
 
+# ---- false positives found by the guard firing on its author, 2026-08-09 -----------------------
+
+def test_a_status_read_belonging_to_a_LATER_command_is_not_masked():
+    """`$?` refers to the IMMEDIATELY preceding command. Once another command has run, the
+    pipeline's status is gone and the read is about something else entirely - so only the
+    statement directly after the pipe can be the mistake. Measured: this fired on a command that
+    piped one check into `tail`, then ran a SECOND check redirected to a file (the correct form)
+    and read its `$?`, which is exactly the shape the guard tells you to use."""
+    correct = ('pwsh -File chk.ps1 good.ps1 2>&1 | tail -4; echo "=== control ==="; '
+               'pwsh -File chk.ps1 bad.ps1 > out 2>&1; echo "rc=$?"')
+    assert B.reads_masked_status(correct) is False
+
+
+def test_a_heredoc_body_is_data_here_too():
+    """Writing ABOUT the footgun is not committing it - the guard blocked its own documentation."""
+    documenting = ("cat > note.md <<'EOF'\n"
+                   "never write: mytool verify | tail -5; echo \"rc=$?\"\n"
+                   "EOF")
+    assert B.reads_masked_status(documenting) is False
+
+
+def test_the_real_shape_still_fires_after_both_fixes():
+    """The control: narrowing must not disarm the guard."""
+    assert B.reads_masked_status('mytool verify --sid 9 | tail -5; echo "rc=$?"') is True
+    assert B.reads_masked_status("uv run t.py check x | head -3; rc=$?") is True
+
+
 def test_reads_masked_status_respects_the_documented_fixes():
     assert B.reads_masked_status('set -o pipefail; t | tail -1; echo "rc=$?"') is False
     assert B.reads_masked_status('t | tail -1; echo "${PIPESTATUS[0]}"') is False
