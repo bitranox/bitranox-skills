@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.162.0] - 2026-08-09
+
+### Changed
+
+- `gated-prep-nudge.py` widened after probing the shipped hook for gaps. Three shapes slipped
+  through and now have regression tests:
+  - `gh pr create` is gated by this repo's commit gate, so a `--body-file` written beside it is
+    lost exactly like a commit message. It was not in the gated-verb set.
+  - An interpreter that writes through an API rather than a redirect - `python3 - <<PY ...
+    open(f, "w") ... PY` or `python3 -c`. There is no `>` to match on, and it is the shape used
+    constantly for the very job that gets lost: composing a commit message.
+  The write scan reads heredoc BODIES while the verb scan still strips them. That asymmetry is
+  deliberate: the write lives in the body, but prose must not be able to fake a verb.
+
+Not escalated to a block. The fact behind this hook records six hits, all dated on or before
+2026-08-02, which is when the nudge shipped - nothing has recurred since, so there is no evidence
+for taking away a command that may be perfectly fine. Widening what it SEES is the change the
+evidence supports.
+
 ## [5.161.1] - 2026-08-09
 
 ### Fixed
