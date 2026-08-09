@@ -121,3 +121,34 @@ def test_non_bash_payload_exits_clean(monkeypatch):
 def test_block_message_is_ascii(monkeypatch, capsys):
     run_main(monkeypatch, 'pytest -q | tail -3; git commit -m x')
     capsys.readouterr().err.encode("ascii")  # raises if a non-ASCII char slipped in
+
+
+# ---- the VERIFICATION shape: a pipe, then a read of $? -----------------------------------------
+# The gate-then-action shape above did not cover measuring a command's OWN exit code. Measured
+# 2026-08-09: `tool verify ... | tail -5; echo "rc=$?"` printed rc=0 while the tool had exited 1,
+# so a working negative control read as broken - and a passing one would have been recorded as
+# proof. The command need not be a recognised gate for this to mislead.
+
+def test_reads_masked_status_catches_the_verification_shape():
+    assert B.reads_masked_status('mytool verify --sid 9 | tail -5; echo "rc=$?"') is True
+    assert B.reads_masked_status("uv run t.py check x | head -3; rc=$?") is True
+
+
+def test_reads_masked_status_ignores_a_pipe_with_no_status_read():
+    """The negative must be reachable, or every pipeline is blocked."""
+    assert B.reads_masked_status("ls -l | tail -5") is False
+    assert B.reads_masked_status("ls -l | tail -5; echo done") is False
+
+
+def test_reads_masked_status_ignores_a_status_read_with_no_pipe():
+    assert B.reads_masked_status('mytool verify; echo "rc=$?"') is False
+
+
+def test_reads_masked_status_respects_the_documented_fixes():
+    assert B.reads_masked_status('set -o pipefail; t | tail -1; echo "rc=$?"') is False
+    assert B.reads_masked_status('t | tail -1; echo "${PIPESTATUS[0]}"') is False
+
+
+def test_reads_masked_status_only_counts_a_read_AFTER_the_pipe():
+    """`rc=$?` before the pipeline reads something else entirely - not this bug."""
+    assert B.reads_masked_status('true; rc=$?; ls | tail -2') is False

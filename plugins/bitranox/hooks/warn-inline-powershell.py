@@ -40,14 +40,28 @@ _NOTICE = (
     "a layer you are not quoting for.\n"
     "Write the script to a .ps1 file, copy it over, and run it with -File <path>: a file path has "
     "nothing for cmd.exe to eat, and you get local syntax checking plus an artifact you can diff. "
-    "Detail: bitranox:compuse-ssh."
+    "A wrapper already does that pair - `runps.sh <local.ps1> [host] [user] [keyfile]` "
+    "syntax-checks the script locally, then scp's it and runs it with -File - so reach for it "
+    "instead of hand-rolling the copy. Detail: bitranox:compuse-ssh."
 )
+
+
+def _strip_data_regions(command: str) -> str:
+    """Blank out heredoc bodies, which are DATA the shell hands on, not commands it runs.
+
+    Without this the nudge fires on its own documentation and on its own test fixtures: a heredoc
+    that WRITES an example of the wrong form is not an instance of the wrong form. Measured while
+    hardening this hook - appending a test whose fixture string contained
+    `ssh host powershell -Command ...` tripped it.
+    """
+    return re.sub(r"<<-?\s*'?\"?(\w+)'?\"?.*?^\1", "", command, flags=re.S | re.M)
 
 
 def build_notice(command: str) -> str | None:
     """The nudge text, or None. PURE over the command string - no IO, no environment."""
     if not command:
         return None
+    command = _strip_data_regions(command)
     if not _SSH_RX.search(command) or not _SHELL_RX.search(command):
         return None
     if _FILE_FLAG_RX.search(command):

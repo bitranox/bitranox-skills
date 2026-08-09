@@ -92,3 +92,30 @@ def test_hook_never_wedges_a_turn_on_bad_input():
     for bad in ("", "garbage", "[]"):
         r = subprocess.run([sys.executable, str(HOOK)], input=bad, capture_output=True, text=True)
         assert r.returncode == 0, bad
+
+
+# ---- the nudge must name the SAFE FORM, not only the failure -----------------------------------
+# The fact `remote-powershell-file-not-inline` reached recurrence 3 with this hook already in
+# place, and named the reason: the nudge describes the failure without naming the wrapper that
+# already exists on the machine, leaving its reader to hand-roll the fix. Its own stated
+# escalation was to make the message name runps.sh.
+
+def test_the_notice_names_the_wrapper_that_does_it_correctly():
+    notice = W.build_notice("ssh host powershell -Command \"Get-Process | Select Name\"")
+    assert notice is not None
+    assert "runps.sh" in notice, "a guard that does not name the safe form gets routed around"
+
+
+def test_a_heredoc_body_is_data_not_a_command():
+    """A heredoc that WRITES an example of the wrong form is not an instance of it."""
+    writing_a_fixture = (
+        "cat >> t.py <<'EOF'\n"
+        "assert build_notice('ssh h powershell -Command \"a | b\"') is not None\n"
+        "EOF"
+    )
+    assert W.build_notice(writing_a_fixture) is None
+
+
+def test_a_real_inline_invocation_still_fires():
+    """The control: stripping data regions must not disarm the guard."""
+    assert W.build_notice('ssh host powershell -Command "Get-Process | Select Name"') is not None

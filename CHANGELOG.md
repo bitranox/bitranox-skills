@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.161.0] - 2026-08-09
+
+### Changed
+
+- `warn-inline-powershell.py` now names the safe form: the nudge points at `runps.sh`, which
+  syntax-checks a .ps1 locally then scp's it and runs it with `-File`. The fact this guard covers
+  reached recurrence 3 with the guard already installed, and named the reason - it described the
+  failure without naming the wrapper that already exists, leaving its reader to hand-roll the fix.
+- `warn-inline-powershell.py` also stops firing on heredoc BODIES. A heredoc that writes an example
+  of the wrong form is data, not an instance of it; the guard was tripping on its own test fixtures.
+- `block-masked-gate-exit.py` gains `reads_masked_status()`: a pipe into a truncating filter
+  followed by a read of `$?`, with no recognised gate required. The existing detector needs a known
+  gate name, which misses measuring a command's OWN exit code - measured, `tool verify | tail -5;
+  echo "rc=$?"` reported rc=0 while the tool had correctly exited 1, so a working negative control
+  read as broken. Advisory, not a block: measuring an exit code is legitimate, the mistake is
+  reading the wrong one.
+- `shell-prefix-selfref-guard.py` gains `substitutes_inside_text_arg()`, blocking backticks and
+  `$(...)` inside a double-quoted argument to a prose-carrying flag (`-m`, `--hook`, `--title`,
+  `--why`, ...). The shell runs the substitution before the program sees the string: a memory hook
+  once wrapped `shutdown -r now` in backticks and the dev box ran it, surviving only because polkit
+  refused. Scoped to prose flags on purpose - `$(...)` is legitimate nearly everywhere else, and a
+  guard that blocks ordinary work gets disabled.
+
 ## [5.160.0] - 2026-08-09
 
 ### Added
