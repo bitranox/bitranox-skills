@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.163.0] - 2026-08-09
+
+### Added
+
+Three guards finishing the escalation sweep of facts recording a recurrence of 2 or more. All are
+non-blocking nudges: each fires on a shape that is usually a mistake but occasionally deliberate,
+and a block on a maybe teaches the reader to ignore the channel.
+
+- `missing-mechanism-nudge.py` - a `memory_engine add` whose `--hook` asserts something is missing,
+  defaults off, or is never called, without naming where that was checked. Recorded five times,
+  always filed from a neighbouring fix rather than the initialization path. Naming a file, symbol
+  or line in the hook silences it, because that is the check being asked for. Both scans read the
+  HOOK TEXT, not the command: the command line always contains `memory_engine.py`, which the
+  evidence pattern reads as a named file, so scanning the whole thing silenced it on every input.
+- `git-revparse-nudge.py` - `git rev-parse <ref>` without `--verify`. Given a ref it cannot
+  resolve it prints the argument back verbatim and exits 0, so a comparison built on it succeeds
+  against a string that was never a commit. The informational forms (`--show-toplevel`,
+  `--abbrev-ref`, `--git-dir`) ask about the repository rather than a ref and are left alone - they
+  are what you should run when you suspect the cwd is not the repo you think.
+- `arbitrary-sleep-nudge.py` - a bare `sleep` of 60s or more outside a polling loop. A sleep INSIDE
+  `until`/`while`/`for` is pacing the checks, which is waiting on the signal and is the right
+  shape, so it is untouched however long. Short settle pauses are untouched too.
+
 ## [5.162.0] - 2026-08-09
 
 ### Changed
