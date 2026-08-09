@@ -112,3 +112,39 @@ def test_a_non_bash_tool_is_ignored(capsys):
     event = {"tool_name": "Write", "tool_input": {"content": "git commit -F x"}}
     assert N.main(json.dumps(event)) == 0
     assert capsys.readouterr().out.strip() == ""
+
+
+# ---- gaps found by probing the shipped hook, 2026-08-09 ----------------------------------------
+# The fact this hook serves says a further hit is a hook gap, not a wording gap, and names the fix:
+# widen the gated-verb set or the prep shapes, and add the command that slipped through as a
+# regression test. These three slipped through.
+
+def test_gh_pr_create_is_a_gated_verb_too():
+    """repo-gate blocks `gh pr create`, so a body file written beside it is lost the same way."""
+    assert N.notice('printf "body" > body.md; gh pr create --body-file body.md') is not None
+
+
+def test_a_heredoc_body_that_writes_the_file_counts_as_prep():
+    """`python3 - <<PY ... open(f, "w") ... PY` writes with no redirect, so no `>` to match on."""
+    command = ('python3 - <<\'PY\'\n'
+               'open("msg.txt", "w").write("subject")\n'
+               'PY\n'
+               'git commit -F msg.txt')
+    assert N.notice(command) is not None
+
+
+def test_an_inline_interpreter_write_counts_as_prep():
+    assert N.notice('python3 -c \'open("msg.txt","w").write("x")\'; git commit -F msg.txt') is not None
+    assert N.notice('python3 -c \'from pathlib import Path; Path("m").write_text("x")\'; git push') is not None
+
+
+def test_the_write_scan_reads_bodies_while_the_verb_scan_does_not():
+    """Asymmetric ON PURPOSE: the write lives IN the body, the verb must not be faked BY one."""
+    prose_only = "cat > doc.md <<'EOF'\nnever run git commit here\nEOF"
+    assert N.notice(prose_only) is None
+
+
+def test_an_interpreter_that_only_reads_is_not_prep():
+    """The negative must stay reachable, or every python heredoc before a commit nags."""
+    assert N.notice('python3 -c \'print(open("f").read())\'; git commit -m "x"') is None
+    assert N.notice("python3 - <<'PY'\nprint(1)\nPY\ngit commit -m 'x'") is None

@@ -28,11 +28,33 @@ from shell_text import strip_heredoc_bodies
 # command teaches the reader to ignore the channel, which costs more than the miss it prevents.
 # re.M matters: a NEWLINE separates statements just as `;` does, and the verb usually sits on its
 # own line under a heredoc terminator. Without it the common shape is invisible.
-_GATED = re.compile(r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*git\s+(?:commit|push|tag)\b", re.M)
+# `gh pr create` is gated by this repo's own commit gate, so a body file written beside it is lost
+# exactly like a commit message. Verified 2026-08-09 that it slipped through.
+_GATED = re.compile(
+    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*(?:git\s+(?:commit|push|tag)|gh\s+pr\s+create)\b", re.M)
 
 # A write that CREATES the file a later statement reads. Both shapes seen in practice.
 _HEREDOC_TO_FILE = re.compile(r"""(?:^|[;&|]|\bcat\b)[^\n<>]*?>\s*(?P<f>[^\s;&|<>]+)\s*<<-?\s*['"]?\w+""")
 _REDIRECT_TO_FILE = re.compile(r"""\b(?:printf|echo|tee)\b[^\n;&|]*?>\s*(?P<f>[^\s;&|<>]+)""")
+
+# An INTERPRETER that writes with an API rather than a redirect - `python3 - <<PY ... PY` or
+# `python3 -c '...'` calling open(f, "w") or Path(f).write_text(). There is no `>` to match, so the
+# redirect patterns above never see it, and this is a shape used constantly for exactly the job
+# that gets lost: composing a commit message. Verified 2026-08-09 that it slipped through.
+_INTERPRETER = re.compile(r"\b(?:python3?|perl|ruby|node)\b")
+_WRITE_API = re.compile(
+    r"""open\s*\([^)]*['"][wa]|\.write_text\s*\(|\bwriteFileSync\b|\bwrite_bytes\s*\(""")
+
+
+def writes_via_interpreter(command: str) -> bool:
+    """True when an interpreter in this command writes a file through an API, not a redirect.
+
+    Scanned over the RAW command, bodies included - asymmetric to the gated-verb scan on purpose.
+    The write LIVES in the heredoc body, so stripping bodies here would blind the check; the verb
+    scan strips them because prose must not be able to fake a verb.
+    """
+    text = command or ""
+    return bool(_INTERPRETER.search(text) and _WRITE_API.search(text))
 
 
 def written_files(command: str):
@@ -51,19 +73,21 @@ def notice(command):
     if not command or not isinstance(command, str):
         return None
     written = written_files(command)
-    if not written:
+    if not (written or writes_via_interpreter(command)):
         return None
     # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents `git commit`
     # is prose, and nudging on it is how a guard blocks its own documentation.
     if not _GATED.search(strip_heredoc_bodies(command)):
         return None
+    what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
     return (
-        "This command WRITES %s and then runs a gated verb (git commit/push/tag) in the SAME "
-        "command. A PreToolUse gate judges the whole command before any statement runs, so if it "
-        "blocks, that file is never written and the retry fails on a missing input - pointing at "
-        "the wrong cause. Write the file in its OWN earlier command, then run the gated verb. "
-        "(Recorded six times: feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
-        % ", ".join(written)
+        "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr create) in "
+        "the SAME command. A PreToolUse gate judges the whole command before any statement runs, "
+        "so if it blocks, that file is never written and the retry fails on a missing input - "
+        "pointing at the wrong cause. Write the file in its OWN earlier command, then run the "
+        "gated verb. (Recorded six times: "
+        "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
+        % what
     )
 
 
