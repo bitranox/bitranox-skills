@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.159.0] - 2026-08-09
+
+### Added
+
+- `memory_engine add` now reads back the recurrence count a fact body records. When the body states
+  a repeat of 2 or more, the add prints a `~ warning:` naming both escalation endpoints - a
+  deterministic GUARD when a rule keeps being skipped, a JIG when the same multi-step work keeps
+  being re-done by hand, and both when it is both. Advisory: the add still exits 0.
+  `uuid_store.recurrence_count()` is the pure detector, matching only explicit markers
+  (`recurrence: N`, `Nth occurrence`, the ordinal words, `hit N times`, `N recurrences`) and
+  returning the highest, so a body that merely discusses something "recurring" cannot fire it.
+  The count is the one durable "already written down, still happening" signal, and an `add` is the
+  moment it is in hand; `meta-self-improve` step 6 previously relied on the author noticing a
+  number inside prose they were editing for other reasons.
+
+### Changed
+
+- `meta-self-improve` step 6 documents the new advisory, so the skill and the engine name the same
+  trigger. The ladder itself is unchanged: a subagent given the complete step 6 already reaches the
+  jig endpoint, so no rule was added.
+
 ## [5.158.2] - 2026-08-07
 
 ### Fixed

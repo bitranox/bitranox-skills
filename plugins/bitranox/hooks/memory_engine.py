@@ -1225,6 +1225,18 @@ def main(argv=None):
         if us.hook_missing_trigger(args.hook):
             print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
                   "('When <situation>, <directive>'), or it will not fire during reasoning")
+        # The recurrence count is the one durable "this was already written and did not hold"
+        # signal, and this is the moment it is in hand. Naming BOTH ladders is deliberate: the
+        # body cannot say whether a repeat is a rule being skipped or work being re-done, and
+        # the counter living only in the rule ladder is what kept sending readers to a guard
+        # while the jig was never proposed.
+        seen = us.recurrence_count(body)
+        if seen is not None and seen >= us.RECURRENCE_ESCALATE_AT:
+            print("~ warning: this body records recurrence %d - prose has already failed %d times, "
+                  "so do NOT just reword it. Escalate and PROPOSE it to the user in THIS turn: a "
+                  "deterministic GUARD if a rule keeps being skipped, a JIG (toolbox tool) if the "
+                  "same multi-step work keeps being re-done by hand - and BOTH when it is both."
+                  % (seen, seen))
         return 0
     ap.print_help(sys.stderr)
     return 2
