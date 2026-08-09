@@ -107,6 +107,40 @@ def hook_missing_trigger(hook):
     h = " ".join((hook or "").split()).lower()
     return not any(h.startswith(s) for s in _TRIGGER_STARTERS)
 
+
+RECURRENCE_ESCALATE_AT = 2   # at this count, prose has demonstrably failed - escalate, do not reword
+
+_ORDINAL_WORDS = {"second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
+                  "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10}
+
+# Only UNAMBIGUOUS repeat markers, each requiring a number (or a counting word) next to the noun.
+# A body that merely discusses something "recurring" must not match, or every add warns and the
+# signal degrades into noise the reader learns to skip.
+_RECURRENCE_RX = (
+    re.compile(r"\brecurrence:?\s+(\d+)", re.I),           # recurrence: 3 / recurrence 3
+    re.compile(r"\b(\d+)\s*(?:st|nd|rd|th)\s+occurrence", re.I),   # 4th occurrence
+    re.compile(r"\bhit\s+(\d+)\s+times?", re.I),           # hit 4 times
+    re.compile(r"\b(\d+)\s+recurrences\b", re.I),          # 3 recurrences
+)
+_ORDINAL_RX = re.compile(r"\b(%s)\s+occurrence" % "|".join(_ORDINAL_WORDS), re.I)
+
+
+def recurrence_count(body):
+    """The highest repeat count a body explicitly records, or None.
+
+    The count is the one durable signal that a lesson has already been written and did not hold,
+    and it is in hand at exactly the moment a fact is (re)written - so the write path can surface
+    it instead of relying on the author to notice a number inside prose they are editing for other
+    reasons. Advisory, like the hook lints: callers warn, never fail.
+
+    Returns the HIGHEST marker present, because a body often carries an older count plus a fresher
+    "Nth occurrence" note and the escalation should key on the worst case, not the first match.
+    """
+    text = body or ""
+    counts = [int(m.group(1)) for rx in _RECURRENCE_RX for m in rx.finditer(text)]
+    counts += [_ORDINAL_WORDS[m.group(1).lower()] for m in _ORDINAL_RX.finditer(text)]
+    return max(counts) if counts else None
+
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope markers (same grammar the
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 

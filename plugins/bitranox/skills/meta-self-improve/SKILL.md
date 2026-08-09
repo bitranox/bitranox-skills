@@ -196,7 +196,10 @@ Soft rules are advisory - the model can and will skip them. Track recurrence and
 do not just write the note louder:
 - First miss: write the rule (memory and/or CLAUDE.md guardrail).
 - Recurs once: strengthen it (mark MUST, add the failing example) and bump its
-  `recurrence: N (last YYYY-MM-DD)` line.
+  `recurrence: N (last YYYY-MM-DD)` line. The engine reads that count back: an `add` whose BODY
+  records a repeat of 2 or more prints a `~ warning:` naming BOTH endpoints below, so the signal
+  reaches you at the moment you write it rather than depending on you re-reading this section at
+  the end of a long turn.
 - Count reaches 2: STOP re-wording - prose has failed. Escalate to a DETERMINISTIC guard (a
   PreToolUse/Stop hook via Claude Code's built-in `update-config` skill - a HOST skill, not one this
   plugin ships - or a CI check, or a real code fix; user-gated,

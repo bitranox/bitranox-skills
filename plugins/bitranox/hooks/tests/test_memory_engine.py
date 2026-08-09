@@ -675,6 +675,53 @@ def test_cli_add_warns_on_triggerless_hook(proj, capsys):
     assert rc == 0 and "~ warning:" in out and "trigger" in out
 
 
+# ---- recurrence lint: a body recording a repeat IS the escalate signal (advisory) ---------------
+
+def test_recurrence_count_reads_the_explicit_markers():
+    assert us.recurrence_count("**Why:** ... recurrence: 3 (last 2026-07-27).") == 3
+    assert us.recurrence_count("recurrence 2") == 2
+    assert us.recurrence_count("Third occurrence for the runner fleet:") == 3
+    assert us.recurrence_count("this is the second occurrence") == 2
+    assert us.recurrence_count("4th occurrence, in a shape the guard missed") == 4
+    assert us.recurrence_count("hit 4 times in one day") == 4
+    assert us.recurrence_count("recurrence: 3 in one session") == 3
+
+
+def test_recurrence_count_takes_the_highest_marker_present():
+    assert us.recurrence_count("recurrence: 2 (last 2026-01-01). Later: 5th occurrence.") == 5
+
+
+def test_recurrence_count_ignores_prose_that_merely_mentions_recurring():
+    """The negative must be reachable, or every add would warn and the signal would be noise."""
+    assert us.recurrence_count("When a recurring chore shows up, propose a jig.") is None
+    assert us.recurrence_count("this recurrence is annoying") is None
+    assert us.recurrence_count("occurrence of a race condition") is None
+    assert us.recurrence_count("") is None
+    assert us.recurrence_count(None) is None
+
+
+def test_recurrence_below_the_threshold_is_still_reported_but_does_not_escalate():
+    assert us.recurrence_count("recurrence: 1 (last 2026-01-01)") == 1
+    assert us.RECURRENCE_ESCALATE_AT == 2
+
+
+def test_cli_add_warns_when_the_body_records_a_repeat(proj, capsys):
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook",
+                 "When it breaks, fix it.", "--body",
+                 "The thing broke again. recurrence: 3 (last 2026-07-27)."])
+    out = capsys.readouterr().out
+    assert rc == 0, "the recurrence advisory must never fail the add"
+    assert "~ warning:" in out and "recurrence 3" in out
+    assert "GUARD" in out and "JIG" in out, "it must force the choice between BOTH ladders"
+
+
+def test_cli_add_stays_quiet_when_the_body_records_no_repeat(proj, capsys):
+    rc = E.main(["add", "--proj", proj, "--title", "T2", "--hook",
+                 "When it breaks, fix it.", "--body", "A plain fact with no repeat marker."])
+    out = capsys.readouterr().out
+    assert rc == 0 and "recurrence" not in out
+
+
 def test_cli_add_slug_targets_existing_identity(proj, capsys):
     E.add_or_update_entry(proj, "Old title", "When testing, hook.", body="B",
                           scope_default="lvl", slug="my-stable-slug")
