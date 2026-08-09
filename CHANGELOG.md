@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.160.0] - 2026-08-09
+
+### Added
+
+- `subagent-probe-capability-gate.py` (PreToolUse on `Task|Agent`, first in the group): DENIES a
+  dispatch whose own prompt declares it needs no tools ("answer from this message alone", "do not
+  use any tools", "reply with text only") unless it uses an inert agent type. That instruction is
+  prose, and prose does not bind a subagent - measured, a dispatch worded exactly that way explored
+  the real tree, rewrote a stored fact, and committed to two git repositories while reporting only
+  the text it was asked for. The declaration must OPEN a sentence, so prose that merely discusses
+  tool use is untouched (its own negative test caught that false positive before it shipped).
+- `agents/baseline-probe.md`: the inert type the gate names - `tools: TodoWrite`, so no Bash, no
+  Write, no Edit, no Read. Excluding Write is NOT sufficient: probe-verified that `Explore` has no
+  Write tool and still created a file with `echo BREACH > path`, so Bash alone is enough to mutate.
+  An absent or EMPTY `tools:` list means UNRESTRICTED, so an inert agent must name a minimal
+  non-empty list; a test asserts the shipped one grants none of the dangerous tools, by token
+  rather than substring.
+
+Note: agent definitions are read at session start, so a freshly installed type is only selectable
+in a new session. The deny message says so.
+
 ## [5.159.0] - 2026-08-09
 
 ### Added
