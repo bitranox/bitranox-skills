@@ -30,6 +30,8 @@ import json
 import re
 import sys
 
+from shell_text import strip_heredoc_bodies
+
 # Commands whose exit status is a quality verdict worth protecting.
 GATE = re.compile(
     r"\b(?:"
@@ -65,7 +67,7 @@ _STATUS_READ = re.compile(r"\$\?")
 
 
 def reads_masked_status(command: str) -> bool:
-    """True when a pipeline into a swallowing filter is followed by a read of `$?`.
+    """True when a read of `$?` DIRECTLY follows a pipeline into a swallowing filter.
 
     Orthogonal to :func:`masks_a_gate`, which needs the command to be a RECOGNISED gate before it
     fires. That misses the other half of the same mistake: measuring a command's OWN exit code
@@ -73,17 +75,27 @@ def reads_masked_status(command: str) -> bool:
     echo "rc=$?"` printed rc=0 while the tool had correctly exited 1, so a working negative
     control read as broken; a passing one would have been recorded as proof. The command being
     measured is arbitrary, so keying on a gate name can never catch it.
+
+    ADJACENCY is the whole precision of this check. `$?` holds the status of the IMMEDIATELY
+    preceding command, so only the statement directly after the pipeline can be reading the
+    filter's status by mistake; once any other command has run, `$?` is about that one. Without
+    this the guard fired on a command that piped one check into `tail` and then ran a SECOND check
+    redirected to a file - the correct form it exists to recommend.
+
+    Heredoc bodies are stripped first: writing ABOUT the footgun is not committing it.
     """
-    if HANDLED.search(command):
+    text = strip_heredoc_bodies(command or "")
+    if HANDLED.search(text):
         return False
-    statements = [s for s in SPLIT.split(command) if s.strip()]
-    piped_into_filter = False
-    for statement in statements:
-        if piped_into_filter and _STATUS_READ.search(statement):
-            return True
+    statements = [s for s in SPLIT.split(text) if s.strip()]
+    for index, statement in enumerate(statements):
         elements = [e for e in statement.split("|") if e.strip()]
-        if len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:]):
-            piped_into_filter = True
+        piped = len(elements) >= 2 and any(FILTER.match(e) for e in elements[1:])
+        if not piped:
+            continue
+        following = statements[index + 1] if index + 1 < len(statements) else ""
+        if _STATUS_READ.search(following):
+            return True
     return False
 
 
