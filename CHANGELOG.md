@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.164.2] - 2026-08-09
+
+### Fixed
+
+- Version bump for the `block-masked-gate-exit.py` fix below, which shipped WITHOUT one. A parallel
+  session had moved `plugin.json` to 5.164.1 between this clone's last push and this change, so the
+  scripted bump's find-and-replace of the old string matched nothing and reported success anyway.
+  Installs only re-fetch on a version change, so the fix reached nobody until this.
+
+
+### Fixed
+
+- `block-masked-gate-exit.py` false-fired on the very form it recommends. Two narrowings, both
+  found by the guard firing on its own author within hours of shipping:
+  - ADJACENCY: `$?` holds the status of the IMMEDIATELY preceding command, so only the statement
+    directly after a pipeline can be misreading the filter's status. It previously fired on ANY
+    later `$?`, so a command that piped one check into `tail` and then ran a SECOND check
+    redirected to a file - the correct form - was flagged.
+  - Heredoc bodies are stripped, so writing ABOUT the footgun no longer trips the guard that
+    teaches it.
+  The real shape still fires; a control test pins that the narrowing did not disarm it.
+
 ## [5.164.1] - 2026-08-09
 
 ### Fixed
@@ -55,20 +77,6 @@ installed copies and needs no bump.
   dies beyond it, at layer 2, with nothing logged. A baseline agent asked about that symptom
   reaches for firewall rules, aliases and gateways and never gets to ARP. It also runs offline
   against a saved `config.xml` (`doctor --config`), so a snapshot can be audited with no network.
-
-## [5.163.1] - 2026-08-09
-
-### Fixed
-
-- `block-masked-gate-exit.py` false-fired on the very form it recommends. Two narrowings, both
-  found by the guard firing on its own author within hours of shipping:
-  - ADJACENCY: `$?` holds the status of the IMMEDIATELY preceding command, so only the statement
-    directly after a pipeline can be misreading the filter's status. It previously fired on ANY
-    later `$?`, so a command that piped one check into `tail` and then ran a SECOND check
-    redirected to a file - the correct form - was flagged.
-  - Heredoc bodies are stripped, so writing ABOUT the footgun no longer trips the guard that
-    teaches it.
-  The real shape still fires; a control test pins that the narrowing did not disarm it.
 
 ## [5.163.0] - 2026-08-09
 
