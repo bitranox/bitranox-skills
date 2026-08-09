@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.164.0] - 2026-08-09
+
+### Added
+
+- `net-firewall-pfsense` - a skill plus jig for driving a pfSense box, replacing the throwaway PHP
+  that otherwise gets pushed over SSH for every change. `scripts/pfsense.py` is stdlib-only and
+  takes its access from the caller (`--host`/`--user`/`--ssh`, or a named target in the user's own
+  `~/.config/bitranox/pfsense.ini`), so it ships with no host names and no key policy.
+
+  Verbs: `doctor`, `info`, `snapshot`, `dhcp list|rm|rm-static-arp`, `dns list|add|rm`, `arp`,
+  `table list|show|test|del`, `rules`, and the `snort check|why|unblock|verify|fixsteps` set.
+  Configuration changes go through the PHP config API rather than the XML, are dry runs until
+  `--apply`, snapshot first and abort if the snapshot fails, and select by MAC or name so a
+  shifting position cannot delete the wrong row.
+
+  `doctor` reports the faults that raise no error of their own, the costly one being a DHCP
+  reservation with "ARP Table Static Entry" armed: it pins one MAC to an address permanently, and
+  when that is not the MAC currently using it the device stays reachable inside its subnet and
+  dies beyond it, at layer 2, with nothing logged. A baseline agent asked about that symptom
+  reaches for firewall rules, aliases and gateways and never gets to ARP. It also runs offline
+  against a saved `config.xml` (`doctor --config`), so a snapshot can be audited with no network.
+
 ## [5.163.0] - 2026-08-09
 
 ### Added

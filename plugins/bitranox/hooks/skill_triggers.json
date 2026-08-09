@@ -813,6 +813,22 @@
   "clarifying",
   "questions"
  ],
+ "net-firewall-pfsense": [
+  "working",
+  "pfsense",
+  "firewall",
+  "host",
+  "reachable",
+  "inside",
+  "subnet",
+  "dead",
+  "beyond",
+  "nothing",
+  "logged",
+  "table",
+  "static",
+  "entry"
+ ],
  "net-rotating-proxies": [
   "download",
   "scrape",

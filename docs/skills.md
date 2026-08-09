@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 71 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 72 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -61,6 +61,7 @@ Self-hosted/on-prem hardware, hypervisors, virtualization, storage.
 
 Networking: DNS, routing, proxies, firewall, VPN, reverse proxy.
 
+- [`net-firewall-pfsense`](../plugins/bitranox/skills/net-firewall-pfsense/SKILL.md) - Use when working on a pfSense firewall - a host reachable inside its subnet but dead beyond it with nothing logged, "ARP Table Static Entry", DHCP reservations, unbound host overrides, pfctl tables, snort2c blocking a CDN, a config.xml snapshot, or any change you would otherwise make by hand-writing PHP over SSH.
 - [`net-rotating-proxies`](../plugins/bitranox/skills/net-rotating-proxies/SKILL.md) - Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting).
 
 ## sec
