@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.161.1] - 2026-08-09
+
+### Fixed
+
+- `agents/baseline-probe.md` could not be spawned. It declared `tools: TodoWrite`, which is not a
+  recognised tool name in this harness, so the list resolved to nothing and the dispatch was
+  refused with "would be spawned with zero tools" - leaving `subagent-probe-capability-gate.py`
+  denying work and naming a safe form that does not run. Now `tools: ReportFindings, Skill`, both
+  observed in a real agent's tool set. The gate's test now asserts the shipped agent grants at
+  least one KNOWN tool as well as none of the dangerous ones: safe is only half of it, the agent
+  also has to be spawnable.
+
 ## [5.161.0] - 2026-08-09
 
 ### Changed

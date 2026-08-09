@@ -55,6 +55,14 @@ def test_the_shipped_inert_agent_really_excludes_the_dangerous_tools():
     assert granted, "an empty tools list means unrestricted, which is the opposite of inert"
     assert granted.isdisjoint({"Bash", "Write", "Edit", "MultiEdit", "Read", "NotebookEdit",
                                "Agent", "Task"}), f"{granted} would defeat the whole guard"
+    # Safe is only half of it: the agent must also be SPAWNABLE. An unrecognised tool name is
+    # dropped silently, and a list that drops to empty makes the harness refuse the dispatch with
+    # "would be spawned with zero tools" - so the guard would deny work and point at a type that
+    # cannot run. Shipped exactly that way once (tools: TodoWrite, unrecognised here).
+    KNOWN_INERT = {"ReportFindings", "Skill", "ToolSearch"}
+    assert granted & KNOWN_INERT, (
+        f"{granted} contains no tool name observed in a real agent's tool set; the agent would "
+        f"resolve to zero tools and the harness would refuse to spawn it")
 
 
 def test_an_ordinary_dispatch_is_untouched():
