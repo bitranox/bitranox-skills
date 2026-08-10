@@ -23,6 +23,32 @@ import re
 # backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
 HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
+# Statement separators, and the three shapes that mean "a change is leaving this machine".
+SEP = re.compile(r"&&|\|\||[;\n|]")
+COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
+PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
+PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
+
+
+def is_gated_command(command):
+    """True when a statement in `command` is a git commit, a git push, or a gh pr create.
+
+    Match per statement, anchored at its start, so "git commit"/"git push" embedded in a quoted
+    string or heredoc body does not count - only an actual command does. Over-matching is not
+    harmless here: the repo gate blocks on it, and a CHANGELOG line ABOUT committing would then
+    block the commit that adds it.
+
+    It lives in this module rather than in the gate that first needed it because a second consumer
+    now asks the same question for its own reason - a commit is the moment work concludes, which is
+    when the decision-review nudge fires. Two copies of this regex set would drift, and the drift
+    would be silent in both directions: a shape one recognises and the other does not.
+    """
+    for seg in SEP.split(command or ""):
+        seg = seg.strip().lstrip("(").strip()
+        if COMMIT_RE.match(seg) or PR_RE.match(seg) or PUSH_RE.match(seg):
+            return True
+    return False
+
 
 def strip_heredoc_bodies(command: str) -> str:
     """Drop heredoc bodies, keeping the command lines around them.

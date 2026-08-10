@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.171.1] - 2026-08-10
+
+### Changed
+
+- `decision-review-nudge` now fires on a COMMIT, a push, or an opened PR rather than on a
+  file-count threshold. The count was a proxy chosen rather than measured, and it was wrong in
+  both directions: it fired mid-edit on a session that had concluded nothing, and stayed silent on
+  a one-line fix that shipped. A commit is the moment work stops being in progress and starts
+  being something somebody else lives with, which is the moment the question is worth asking.
+- The detection is `shell_text.is_gated_command`, moved there from `repo-gate` and re-exported so
+  the gate's own callers and its 18 parametrized cases are unchanged. Two consumers now ask the
+  same question for different reasons - the gate blocks on it, the nudge times itself by it - and
+  two copies of that regex set would drift silently in both directions, each recognising a command
+  shape the other did not. The move also brings the nudge the gate's hard-won anchoring: a
+  CHANGELOG line ABOUT committing is not a commit.
+- The transcript is read once per session at most: the session-keyed flag short-circuits before
+  the file is opened on every later turn.
+
 ## [5.171.0] - 2026-08-10
 
 ### Added
