@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop hook: after a session that actually built something, ask which decisions are unsettled.
+"""Stop hook: once work has actually concluded, ask which decisions are still unsettled.
 
 The decisions worth a second look are the ones that leave no trace in a diff - a default that
 changes behaviour on upgrade, a version tier, a scope cut, a flaky test waved off. Nothing else
@@ -7,14 +7,15 @@ surfaces them: a code review reads what changed, and a verification gate asks wh
 true, not whether a choice was right. The person who would ask is the person who has to remember
 to ask, which is exactly what does not happen at the end of a long session.
 
-So the ask fires on its own, ONCE per session, when the session has written enough to have made
-real choices. It never blocks twice: the flag it writes is keyed by session id, so a flag left by
-an earlier session can never satisfy this one (a per-PROJECT flag would, and has - it demanded
-work for a compaction that happened in a different session).
+**The trigger is a commit, a push, or an opened PR** - the moment work stops being in progress and
+starts being something somebody else will live with. A file-count threshold was tried first and is
+a worse proxy in both directions: it fires mid-edit on a session that has not concluded anything,
+and it stays silent on a one-line fix that shipped. The detection is `shell_text.is_gated_command`,
+the same predicate the repo gate blocks on, so the two cannot disagree about what counts.
 
-The signal is the distinct-file count from `touched-paths.py`, the PostToolUse recorder that
-already logs what each turn wrote. Reusing it keeps this hook from re-deriving "did real work
-happen" a second way, and it is why the threshold is files rather than a parsed git command.
+It asks ONCE per session. The flag is keyed by session id, so a flag left behind by an earlier
+session can never satisfy this one (a per-PROJECT flag would, and has - it demanded work for a
+compaction that happened in a different session).
 
 Pure standard library. Reads the event JSON on stdin. ALWAYS exits 0 - a nudge must never wedge
 a turn.
@@ -24,20 +25,54 @@ import json
 import sys
 
 import self_improve_signals as sig
+import shell_text
 
-# Below this, a session is answering questions or reading, not choosing. Three distinct files is
-# the point where a turn has committed to something a reader cannot reconstruct from the diff.
-_MIN_TOUCHED_PATHS = 3
+# Transcripts reach many MB in a long session. This is a whole-file scan rather than a tail read,
+# because the commit that concluded the work may be many turns back - but it runs at most once per
+# session (the flag short-circuits every later turn), so the cost is paid once.
+_MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
 
-_REASON = (
-    "This session has written several files, so it has made choices that no diff shows. Before "
-    "you stop, invoke the decision-review skill (Skill tool, name "
-    '"process-review-uncertain-decisions") and answer its question: which important decisions '
-    "did you make that you are NOT confident about, what alternative did you not take, and what "
-    "would settle it. Leave OUT every decision that is already clearly right - the suppression is "
-    "the point, and a list that includes the settled ones puts the sorting back on the reader. If "
-    "nothing is genuinely unsettled, say so in one line and stop."
-)
+
+def bash_commands(transcript_path, max_bytes=_MAX_TRANSCRIPT_BYTES):
+    """Every Bash command string in the transcript, oldest first. [] when unreadable."""
+    out = []
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
+            if fh.read(0) is None:                        # pragma: no cover - defensive
+                return []
+            read = 0
+            for line in fh:
+                read += len(line)
+                if read > max_bytes:
+                    break
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue                              # a partial last line is normal
+                content = (msg.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    if block.get("name") != "Bash":
+                        continue
+                    cmd = (block.get("input") or {}).get("command")
+                    if isinstance(cmd, str) and cmd:
+                        out.append(cmd)
+    except OSError:
+        return []
+    return out
+
+
+def reached_a_conclusion(commands):
+    """True once something was committed, pushed, or opened as a PR."""
+    return any(shell_text.is_gated_command(c) for c in commands)
+
+
+def should_ask(concluded, was_asked):
+    """The whole policy: work has concluded, and this session has not been asked yet."""
+    return bool(concluded) and not was_asked
 
 
 def asked_flag(session):
@@ -61,9 +96,16 @@ def mark_asked(session):
         pass
 
 
-def should_ask(touched_count, was_asked, min_paths=_MIN_TOUCHED_PATHS):
-    """The whole policy, as one pure decision: enough work done, and not asked yet this session."""
-    return touched_count >= min_paths and not was_asked
+_REASON = (
+    "Work concluded this session - something was committed, pushed, or opened as a PR - so the "
+    "choices behind it are now somebody else's to live with. Before you stop, invoke the "
+    'decision-review skill (Skill tool, name "process-review-uncertain-decisions") and answer its '
+    "question: which important decisions did you make that you are NOT confident about, what "
+    "alternative did you not take, and what would settle it. Leave OUT every decision that is "
+    "already clearly right - the suppression is the point, and a list that includes the settled "
+    "ones puts the sorting back on the reader. If nothing is genuinely unsettled, say so in one "
+    "line and stop."
+)
 
 
 def main():
@@ -72,13 +114,16 @@ def main():
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
     session = str(event.get("session_id") or "")
-    if not session:
+    transcript = event.get("transcript_path") or ""
+    if not session or not transcript:
         return 0
+    if already_asked(session):
+        return 0                                          # cheap: no transcript read on later turns
     try:
-        touched = len(sig.read_touched_paths(session))
+        concluded = reached_a_conclusion(bash_commands(transcript))
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
-    if not should_ask(touched, already_asked(session)):
+    if not should_ask(concluded, was_asked=False):
         return 0
     mark_asked(session)                                   # before emitting, so a crash cannot re-nag
     sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))

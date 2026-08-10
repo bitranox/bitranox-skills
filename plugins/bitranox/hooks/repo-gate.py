@@ -48,20 +48,18 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import harness_checks as hc  # noqa: E402
+import shell_text  # noqa: E402
 
 # Re-exported: these predicates are shared with the local-harness audit, which applies the same
 # rules to the skills and hooks no plugin ships. One definition, so the two cannot drift apart.
 EXCLUDE_DIRS = hc.EXCLUDE_DIRS
 EXCLUDE_FILES = hc.EXCLUDE_FILES
 
-# git commit / gh pr create detection. Anchored at a COMMAND position (statement start, after a shell
-# separator) so the literal text "git commit" inside a quoted string or heredoc body - e.g. a CHANGELOG
-# line ABOUT committing - does NOT trip the gate. Over-matching is NOT harmless: it false-fires the
-# version-bump BLOCK, since plugins/ is normally dirty-and-not-yet-bumped mid-work.
-_SEP = re.compile(r"&&|\|\||[;\n|]")
-_COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
-_PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
-_PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
+# git commit / git push / gh pr create detection lives in `shell_text` now: a second hook asks the
+# same question for its own reason (a commit is when work concludes, which is when the
+# decision-review nudge fires), and two copies of this regex set would drift silently in both
+# directions. Re-exported here because this module's own tests and callers name it.
+is_gated_command = shell_text.is_gated_command
 
 
 def _git(root, *args):
@@ -824,19 +822,6 @@ def run_checks(root, ci, full_pytest=None):
         pytest_paths = [root] if full_pytest else [root / "plugins" / "bitranox" / "hooks" / "tests"]
         failures += check_pytest(root, pytest_paths)
     return failures
-
-
-def is_gated_command(command):
-    # Match per statement, anchored at its start, so "git commit"/"git push" embedded in a quoted
-    # string or heredoc body does not count - only an actual git commit / git push / gh pr create
-    # command does. Push is gated too: the push is the moment a change reaches CI, and a commit made
-    # where this hook did not fire (a cross-repo `git -C` from another project, or docs regenerated
-    # between commit and push) would otherwise sail straight through to a red CI run.
-    for seg in _SEP.split(command or ""):
-        seg = seg.strip().lstrip("(").strip()
-        if _COMMIT_RE.match(seg) or _PR_RE.match(seg) or _PUSH_RE.match(seg):
-            return True
-    return False
 
 
 def gate_tool_repo_mirror(root):
