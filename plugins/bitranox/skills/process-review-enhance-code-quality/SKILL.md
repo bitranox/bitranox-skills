@@ -283,7 +283,7 @@ inspection, four independent reviews across two models flagged the inconsistent 
 and the missing tests, and not one raised any of the five rows above. One review explicitly noted
 the exit codes were "inconsistent" without observing that a failure reported success.
 
-**Four always-on checks** (score under Resource Safety, Security and Documentation):
+**Five always-on checks** (score under Resource Safety, Security, Documentation and Testing):
 - **Bounded memory on large/unbounded data.** Reading big files, huge database result sets, or
   huge log files must stream/iterate/chunk/paginate - never load the whole thing into memory or
   accumulate unbounded. Materialize only when the dataset is provably and safely bounded.
@@ -339,6 +339,34 @@ the exit codes were "inconsistent" without observing that a failure reported suc
 
   Neither is mechanically decidable, so this one is read-and-verify rather than a script. Budget
   for it: it is a handful of greps, and it is the half that produces the SEVERE findings.
+- **Every documented invariant is enforced by a test that fails without it.** The project
+  instructions file and the design docs state rules in must/never terms - "an unread end is never
+  a capable end", "the time base is always the device clock". Each one is an unverified CLAIM
+  until something fails when it is broken, and each one is REPORTABLE in its own right: a rule the
+  code breaks is a finding whether or not it maps onto any other check on this list. Walk the set
+  and report the walk as a table - the invariant, the test that owns it, the paths it covers, the
+  verdict - because a reader cannot tell "checked, holds" from "never looked" in prose. Score
+  under Testing.
+
+  Three things separate this from reading the test file:
+
+  - **Enumerate the paths the INVARIANT covers, not the ones the test covers.** A passing test
+    that names the rule proves it holds on ONE path. Where the same idea has several
+    implementations, list them all and check each; the violation lives in the one nobody wrote a
+    test for, and the named test on the neighbouring path is exactly what makes it look covered.
+  - **The evidence is a mutation, not a reading.** Break the invariant in the code and require the
+    suite to go RED. A surviving mutant is a FINDING, not a pass. Reading tells you what a test is
+    NAMED; only the mutation tells you what it HOLDS. Where the code defends in layers, a
+    single-layer mutation gets absorbed and reads green, so mutate the whole stack before you
+    believe it (`bitranox:process-review-verification-before-completion`).
+  - **Drift is a finding in either direction.** Where the code and a documented rule disagree, one
+    of the two is wrong and neither is self-evidently the one to change. Report the disagreement
+    and let the user pick; never quietly rewrite the rule to match the code, and never read the
+    rule as evidence the code is fine.
+
+  An unenforced invariant is MEDIUM; one the code VIOLATES is SEVERE. This is not Step 4 in
+  advance: Step 4 asks whether a deliberate decision still holds, this asks whether a stated rule
+  is true of the code at all.
 
 ## Step 4: Re-assess Deliberately Accepted Items (respect, or reconsider)
 
