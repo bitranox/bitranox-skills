@@ -40,6 +40,7 @@ a turn.
 """
 
 import json
+import os
 import sys
 from typing import NamedTuple
 
@@ -67,48 +68,78 @@ class Signals(NamedTuple):
     offset: int
 
 
+def read_line(raw, commands, goal_state):
+    """Fold one transcript line into the running result. Returns the goal state after it."""
+    try:
+        msg = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return goal_state                                 # a half-written line is normal
+    if not isinstance(msg, dict):
+        return goal_state
+    attachment = msg.get("attachment")
+    if isinstance(attachment, dict) and attachment.get("type") == "goal_status":
+        # The LAST record wins: a goal reports `met: false` on every turn it is still running,
+        # then once with `met: true`.
+        goal_state = GOAL_MET if attachment.get("met") is True else GOAL_ACTIVE
+    content = (msg.get("message") or {}).get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") != "Bash":
+                continue
+            cmd = (block.get("input") or {}).get("command")
+            if isinstance(cmd, str) and cmd:
+                commands.append(cmd)
+    return goal_state
+
+
+def _resume_from(transcript_path, start):
+    """Where to start reading. 0 when the stored offset no longer fits the file.
+
+    A transcript that shrank or was replaced leaves an offset past its end, and seeking past EOF
+    succeeds and reads nothing - so the hook would go silent for good, and that silence looks
+    exactly like "nothing concluded".
+    """
+    try:
+        return 0 if start > os.path.getsize(transcript_path) else max(0, start)
+    except OSError:
+        return 0
+
+
 def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES,
                        goal_state=GOAL_NONE):
     """Scan [start, EOF) and report what is there, plus the offset reached.
 
     `goal_state` carries the state the previous run ended on: a window holding no goal record
     means the goal has not changed, not that it went away.
+
+    The offset stops at the last COMPLETE line. A transcript is appended to live, so its tail can
+    be mid-write; consuming a partial line would mean the rest arrives later as an unparseable
+    fragment, and whatever that line recorded is then lost for good rather than merely late.
     """
     commands = []
+    start = _resume_from(transcript_path, start)
+    consumed = start
     try:
-        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
-            try:
-                fh.seek(start)
-            except (OSError, ValueError):
-                start = 0
+        # BINARY mode, deliberately. In text mode `len(line)` counts CHARACTERS while `seek` wants
+        # a byte position - and only ever one that `tell` produced - so a single non-ASCII
+        # character earlier in the transcript would shift the offset and resume mid-character.
+        # Bytes make the offset arithmetic mean what it says.
+        with open(transcript_path, "rb") as fh:
+            fh.seek(start)
             read = 0
-            for line in fh:
-                read += len(line)
+            for raw in fh:
+                read += len(raw)
                 if read > max_bytes:
                     break
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue                              # a partial last line is normal
-                attachment = msg.get("attachment")
-                if isinstance(attachment, dict) and attachment.get("type") == "goal_status":
-                    # The LAST record wins: a goal reports `met: false` on every turn it is still
-                    # running, then once with `met: true`.
-                    goal_state = GOAL_MET if attachment.get("met") is True else GOAL_ACTIVE
-                content = (msg.get("message") or {}).get("content")
-                if not isinstance(content, list):
-                    continue
-                for block in content:
-                    if not isinstance(block, dict) or block.get("type") != "tool_use":
-                        continue
-                    if block.get("name") != "Bash":
-                        continue
-                    cmd = (block.get("input") or {}).get("command")
-                    if isinstance(cmd, str) and cmd:
-                        commands.append(cmd)
+                goal_state = read_line(raw, commands, goal_state)
+                if not raw.endswith(b"\n"):
+                    break                                 # parsed, but not consumed - see above
+                consumed = start + read
     except OSError:
         return Signals([], goal_state, start)
-    return Signals(commands, goal_state, start + read)
+    return Signals(commands, goal_state, consumed)
 
 
 _GOAL_SCORE = {GOAL_NONE: 0, GOAL_ACTIVE: 1, GOAL_MET: 2}

@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.172.2] - 2026-08-11
+
+### Fixed
+
+- `decision-review-nudge` read the transcript in TEXT mode while treating the result as a byte
+  offset. `len(line)` counts characters there, and `seek` accepts only a position `tell` produced,
+  so a single non-ASCII character anywhere earlier in a transcript shifted every later offset and
+  resumed the next scan mid-character. Transcripts carry non-ASCII routinely. Now read in binary,
+  which makes the arithmetic mean what it says.
+- A partially written last line was consumed. A transcript is appended to live, so its tail can be
+  mid-write; advancing past it meant the rest arrived later as an unparseable fragment and whatever
+  that line recorded was lost for good, where the previous rescan-from-zero had merely made it
+  late. The offset now stops at the last COMPLETE line, and the partial one is still parsed in case
+  it is already valid.
+- An offset past the end of the file wedged the hook silently. A shrunk or replaced transcript
+  leaves a stored offset beyond EOF; seeking there succeeds and reads nothing, so the hook would
+  go quiet for good and the silence would look exactly like "nothing concluded". The offset is now
+  compared against the file size and reset when it no longer fits.
+
 ## [5.172.1] - 2026-08-10
 
 ### Fixed

@@ -200,7 +200,50 @@ def test_a_missing_transcript_reads_as_nothing(tmp_path):
 
 def test_a_scan_reports_how_far_it_read(tmp_path):
     path = transcript(tmp_path, bash_line("ls"))
-    assert DRN.transcript_signals(path).offset == len(pathlib.Path(path).read_text())
+    assert DRN.transcript_signals(path).offset == len(pathlib.Path(path).read_bytes())
+
+
+def test_the_offset_is_bytes_not_characters(tmp_path):
+    """seek() wants a byte position; counting characters shifts it on any non-ASCII line.
+
+    The line is built with ensure_ascii=False on purpose - json.dumps escapes non-ASCII by default,
+    which would leave the fixture pure ASCII and let this test pass without ever exercising it.
+    """
+    line = json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                 "input": {"command": "echo \u20ac\u00fc"}}]},
+    }, ensure_ascii=False)
+    path = transcript(tmp_path, line)
+    raw = pathlib.Path(path).read_bytes()
+    assert len(raw) > len(raw.decode("utf-8")), "fixture must actually contain a multi-byte char"
+    assert DRN.transcript_signals(path).offset == len(raw)
+
+
+def test_a_partial_last_line_is_not_consumed(tmp_path):
+    """Consuming it would lose whatever it records: the rest arrives as an unparseable fragment."""
+    whole = bash_line("git commit -m done")
+    path = transcript(tmp_path, whole, trailing_partial=True)
+    assert DRN.transcript_signals(path).offset == len(whole.encode()) + 1
+
+
+def test_a_line_that_was_mid_write_is_seen_once_it_completes(tmp_path):
+    """The regression this guards: advancing past a partial line loses it for good."""
+    first = bash_line("ls")
+    p = tmp_path / "live.jsonl"
+    p.write_text(first + "\n" + bash_line("git commit -m late")[:20], encoding="utf-8")
+    partial = DRN.transcript_signals(str(p))
+    assert not any("git commit" in c for c in partial.commands)
+    p.write_text(first + "\n" + bash_line("git commit -m late") + "\n", encoding="utf-8")
+    resumed = DRN.transcript_signals(str(p), start=partial.offset)
+    assert any("git commit" in c for c in resumed.commands), "the completed line must be read"
+
+
+def test_an_offset_past_the_end_starts_over(tmp_path):
+    """A shrunk or replaced transcript would otherwise read nothing, silently, forever."""
+    path = transcript(tmp_path, bash_line("git commit -m x"))
+    resumed = DRN.transcript_signals(path, start=10_000_000)
+    assert resumed.commands == ["git commit -m x"]
 
 
 def test_a_scan_that_starts_late_sees_only_what_follows(tmp_path):
