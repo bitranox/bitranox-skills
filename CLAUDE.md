@@ -106,3 +106,32 @@ env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defused
 
 Before believing any failure here, check the dependency set first, then confirm it is pre-existing
 by stashing your change and re-running.
+
+## Enable the pre-push hook once per clone
+
+```bash
+git config core.hooksPath githooks
+```
+
+`githooks/pre-push` runs `repo-gate.py --pre-push`: the maintainer check set plus the whole-repo
+pytest CI runs. Enable it in every clone you push from, because the check that catches a stale
+generated artifact is only as good as the moment it fires.
+
+The PreToolUse `repo-gate` already gates `git commit` and `git push`, but it is a Claude Code hook,
+so it cannot fire when git runs from a terminal, an IDE, or a script. That blind spot is exactly
+one habit wide and a stale `docs/skills.md` shipped through it twice, in 5.166.0 and 5.166.1, each
+time missing a skill the README count then contradicted. A git-level hook has the property the
+PreToolUse one cannot: git runs it for every push whatever invoked it.
+
+Two things make it silently do nothing, both of which have bitten:
+
+- **A non-executable hook is skipped by git without a word.** `core.fileMode` is `false` in this
+  repo, so a working-tree `chmod +x` is not recorded; the index mode is what a fresh clone gets.
+  Verify with `git ls-files -s githooks/pre-push` showing `100755`, and note that a clone still
+  needs its own `chmod +x` only if it turned `core.fileMode` off before checkout.
+- **An inherited `VIRTUAL_ENV` picks the wrong interpreter**, which is how the gate once reported
+  the CI dependencies missing while sitting in an unrelated project's venv. The hook unsets it and
+  prefers `uv`, taking the dependency list from `repo-gate.py --print-test-deps` so it cannot drift
+  from `ci.yml`.
+
+`git push --no-verify` bypasses it for a genuine emergency.
