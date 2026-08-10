@@ -273,10 +273,19 @@ reformat a thing you have hand-rolled before), not skipping a rule. Same ladder,
   stay in sync by good intentions - measured on this machine, EIGHT local tools had been contributed
   and left in place, and all eight had drifted from their shipped twin (code-identical with
   docstrings stripped, but the shipped prose had been scrubbed of private references and had gained
-  usage detail the local copy never got). Before deleting, check what still INVOKES the local path -
-  a nudge or a doc keyed on the local file turns a successful contribution into a silently lost
-  guard, so point it at the shipped copy rather than letting it fall quiet. Keep the local copy only
-  when it genuinely diverges on purpose, and then say so in its docstring.
+  usage detail the local copy never got). Before deleting, GREP THE OLD PATH and repoint every hit,
+  including THE MEMORY STORE - fix a fact's HOOK as well as its body, since the hook is what the
+  model follows at the moment the rule fires. Sweep the facts, the CLAUDE.md cascade, hooks, nudges
+  and docs (`grep -rl '<old/path>'`, via find - Claude Code's grep skips gitignored files, and both
+  the facts and the pointer blocks are gitignored), and require zero hits before you delete.
+  Retiring the FILES while leaving the REFERENCES is
+  the half that bites: measured on this machine, `gate.py` was correctly retired once it shipped in
+  `bitranox:compuse-toolbox`, and the one reference nobody swept was the memory rule prescribing it
+  - the remedy for the tree's most-recurring shell error became a command that could not run, whose
+  documented fallback is hand-rolling, which is exactly how that error recurs. Name the replacement
+  by SKILL rather than by path where you can, since a path under a versioned plugin dir rots on the
+  next bump. Keep the local copy only when it genuinely diverges on purpose, and then say so in its
+  docstring.
 
 ### 7. Report
 
