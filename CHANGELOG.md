@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.171.2] - 2026-08-10
+
+### Added
+
+- `decision-review-nudge` now fires at the end of a `/goal` run. Claude Code records an
+  objective's progress in the transcript as `{"type": "attachment", "attachment": {"type":
+  "goal_status", "met": <bool>, ...}}`, and the LAST such record is the current state - verified
+  against 14 real met-records across 11 transcripts on disk rather than inferred from the binary.
+
+### Changed
+
+- While a goal is RUNNING, the nudge now stays quiet even after a commit. Two reasons, and the
+  second is the load-bearing one: a goal commits as it goes, so those commits are milestones
+  inside the work rather than its end; and Claude Code treats a blocking Stop hook as a reason to
+  stop continuing ("Stop hook prevented continuation"), so firing mid-goal would cut short the
+  very loop the user started. A goal met by work that never touched git still fires - the
+  objective is the conclusion, not the commit.
+
 ## [5.171.1] - 2026-08-10
 
 ### Changed

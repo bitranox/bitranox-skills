@@ -47,6 +47,14 @@ Name the alternative you did not take, and what would settle it. If nothing is g
 unsettled, say that in one line - a short honest answer is the correct output, not a failure to
 find anything.
 
+## When it fires on its own
+
+A Stop hook asks once per session, when the work has actually concluded: a `/goal` objective
+reported met, or - with no goal in play - a commit, a push, or an opened PR. While a goal is still
+running it stays quiet, because a goal commits as it goes and those are milestones rather than the
+end, and because a blocking Stop hook is a reason for Claude Code to stop continuing. Nothing
+stops you asking earlier; the hook exists for the times nobody remembers to.
+
 ## Where the answer goes
 
 Interactive session: say it, in the conversation, and stop. It is for the person reading.
