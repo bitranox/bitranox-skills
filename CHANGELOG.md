@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.169.0] - 2026-08-10
+
+### Added
+
+- `repo-gate`: a test-dependency preflight. The gate runs pytest with `sys.executable`, and a test
+  that exercises an optional backend fails on its ASSERTION when that backend is absent rather
+  than on the import - so a missing package reads as a code defect in a file nobody has touched.
+  Measured: an interpreter without `lxml` turned a green tree into a convincing red one, reporting
+  an XML entity assertion and costing a full misdiagnosis before `CONTRIBUTING.md`'s warning about
+  bare pytest runs explained it. The gate now names the missing packages and prints both the `pip
+  install` line and the full `uv run` invocation, and it SKIPS pytest when any are missing, since
+  running it anyway files the same problem a second time as a failed assertion and that second
+  message is the one a reader acts on. The package list is read from `.github/workflows/ci.yml`,
+  so the gate's idea of CI cannot drift from CI's, and packages are probed by their IMPORT name
+  (`PyYAML` imports as `yaml`), with a missing parent package handled as missing rather than
+  raising (`ruamel.yaml`).
+
 ## [5.168.0] - 2026-08-10
 
 ### Added

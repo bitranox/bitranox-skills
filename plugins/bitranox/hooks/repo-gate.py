@@ -35,6 +35,7 @@ Pure standard library; shells out to git and pytest via subprocess.
 """
 
 import difflib
+import importlib.util
 import json
 import os
 import re
@@ -422,6 +423,53 @@ def check_secrets(root):
     return []
 
 
+# A test that exercises an optional backend fails on its ASSERTION when the backend is absent,
+# not on the import - so a missing dependency reads as a code defect. Measured: no lxml in the
+# interpreter running the gate turned a green tree into a convincing red one, and the reported
+# failure named an XML entity assertion, pointing at code nobody had touched in months.
+_PIP_TO_IMPORT = {"pyyaml": "yaml"}
+
+
+def ci_test_dependencies(root):
+    """The packages CI installs before pytest, read from the workflow so the two cannot drift."""
+    try:
+        text = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    except OSError:
+        return []  # no workflow, so no claim about CI parity to make
+    names = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("pip install "):
+            continue  # skips "python -m pip install --upgrade pip", which installs no test dep
+        names += [tok for tok in stripped[len("pip install "):].split() if not tok.startswith("-")]
+    return names
+
+
+def module_installed(module):
+    """True if `module` can be found by the interpreter that will run pytest."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False  # a missing PARENT raises here rather than returning None (ruamel.yaml)
+
+
+def check_test_dependencies(root, is_installed=None):
+    """Name a missing test dependency, rather than letting it surface as somebody's failed assert."""
+    probe = is_installed or module_installed
+    declared = ci_test_dependencies(root)
+    missing = [n for n in declared if not probe(_PIP_TO_IMPORT.get(n.lower(), n))]
+    if not missing:
+        return []
+    return [
+        "Test dependencies missing from %s - this gate cannot match CI without them:" % sys.executable,
+        "  missing: " + " ".join(missing),
+        "  install: pip install " + " ".join(missing),
+        "  or run the gate with the full CI set:",
+        "    uv run " + " ".join("--with " + n for n in declared)
+        + " python plugins/bitranox/hooks/repo-gate.py --ci",
+    ]
+
+
 def check_pytest(root, paths):
     target = [str(p) for p in paths if p.exists()]
     if not target:
@@ -761,8 +809,14 @@ def run_checks(root, ci):
         failures += check_version_bumped(root)
         failures += check_skill_review(root)
         failures += check_skill_mirrors(root)
-    pytest_paths = [root] if ci else [root / "plugins" / "bitranox" / "hooks" / "tests"]
-    failures += check_pytest(root, pytest_paths)
+    # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
+    # would report the SAME problem a second time as a failed assertion in an unrelated test,
+    # and that second message is the one a reader acts on.
+    missing_deps = check_test_dependencies(root)
+    failures += missing_deps
+    if not missing_deps:
+        pytest_paths = [root] if ci else [root / "plugins" / "bitranox" / "hooks" / "tests"]
+        failures += check_pytest(root, pytest_paths)
     return failures
 
 
