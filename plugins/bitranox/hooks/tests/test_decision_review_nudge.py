@@ -102,9 +102,9 @@ def test_a_met_goal_concludes_the_work():
     assert DRN.reached_a_conclusion(signals(goal_state=DRN.GOAL_MET)) is True
 
 
-def test_a_running_goal_is_not_interrupted_by_its_own_commits():
-    """A goal commits as it goes; those are milestones, and Claude Code stops continuing on a block."""
-    assert DRN.reached_a_conclusion(signals(["git commit -m wip"], DRN.GOAL_ACTIVE)) is False
+def test_a_running_goal_also_counts_so_the_ask_is_never_missed():
+    """The met verdict is written AFTER this hook reads, so waiting for it costs a whole turn."""
+    assert DRN.reached_a_conclusion(signals([], DRN.GOAL_ACTIVE)) is True
 
 
 def test_a_met_goal_fires_even_with_no_commit_at_all():
@@ -188,10 +188,11 @@ def test_a_goal_run_is_asked_when_the_objective_is_met(scratch_home, monkeypatch
     assert json.loads(out)["decision"] == "block"
 
 
-def test_a_goal_still_running_is_left_alone(scratch_home, monkeypatch, capsys):
-    path = transcript(scratch_home, goal_line(met=False), bash_line("git commit -m step"))
-    rc, out = run_main({"session_id": "s4", "transcript_path": path}, monkeypatch, capsys)
-    assert rc == 0 and out == "", "blocking here would cut the goal's own loop short"
+def test_a_one_turn_goal_is_asked_without_waiting_a_turn(scratch_home, monkeypatch, capsys):
+    """The lag this fixes: at Stop time the record still reads met=false, and met=true lands after."""
+    path = transcript(scratch_home, goal_line(met=False))
+    _, out = run_main({"session_id": "s4", "transcript_path": path}, monkeypatch, capsys)
+    assert json.loads(out)["decision"] == "block"
 
 
 def test_a_session_is_asked_once_not_after_every_later_commit(scratch_home, monkeypatch, capsys):
