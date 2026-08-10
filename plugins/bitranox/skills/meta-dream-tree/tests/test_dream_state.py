@@ -95,6 +95,51 @@ def test_session_review_surfaces_buffered_subagent_learnings_and_touched_paths(h
     assert str(tree / "otherproj") in out             # so is the routing evidence
 
 
+def test_session_review_targets_the_transcript_that_actually_compacted(home, tmp_path, capsys):
+    # The obligation is per-PROJECT, the material per-SESSION. Reviewing only the CURRENT session
+    # while clearing the flag discharges the compacted session's stretch unread - measured
+    # 2026-08-10, where 5.6 MB of an earlier session sat unreviewed behind a 3-day-old flag.
+    proj = "/p/x"
+    old = tmp_path / "compacted.jsonl"
+    old.write_text('{"type":"user","message":{"content":"the OLD lesson"}}\n', encoding="utf-8")
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(old))
+
+    assert D.main(["session-review", proj]) == 0
+    out = capsys.readouterr().out
+    assert "the OLD lesson" in out                    # the owed transcript is what comes back
+    assert str(old) in out                            # and it says which file it is showing
+
+
+def test_session_reviewed_marks_the_owed_transcript_it_showed(home, tmp_path, capsys):
+    # review and reviewed must agree on the file, or the watermark advances on the wrong one and
+    # the owed stretch is skipped forever.
+    proj = "/p/x"
+    old = tmp_path / "compacted.jsonl"
+    old.write_text('{"type":"user","message":{"content":"the OLD lesson"}}\n', encoding="utf-8")
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(old))
+
+    D.main(["session-review", proj])
+    capsys.readouterr()
+    assert D.main(["session-reviewed", proj]) == 0
+    assert str(old) in capsys.readouterr().out
+    assert D.sig.get_watermark(proj, str(old), "dream") == old.stat().st_size
+
+    D.main(["session-review", proj])                  # owed one consumed -> back to this session
+    out = capsys.readouterr().out
+    assert "the NEW turn" in out
+
+
+def test_session_review_ignores_an_owed_transcript_that_is_gone(home, tmp_path, capsys):
+    # a deleted or rotated transcript must not strand the review on a path that cannot be read
+    proj = "/p/x"
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(tmp_path / "gone.jsonl"))
+    assert D.main(["session-review", proj]) == 0
+    assert "the NEW turn" in capsys.readouterr().out
+
+
 def test_session_review_is_quiet_when_nothing_new(home, tmp_path, capsys):
     proj = "/p/x"
     _session(home, proj, tmp_path, '{"type":"user","message":{"content":"x"}}\n')

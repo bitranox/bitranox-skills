@@ -18,8 +18,10 @@ def isolate_home(tmp_path, monkeypatch):
     return h
 
 
-def run(monkeypatch, cwd="/proj/x"):
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"cwd": cwd})))
+def run(monkeypatch, cwd="/proj/x", **extra):
+    event = {"cwd": cwd}
+    event.update(extra)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
     rc = H.main()
     return rc
 
@@ -30,6 +32,15 @@ def test_always_nudges_capture(monkeypatch, capsys):
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "meta-dream-nap" in ctx                 # the nap captures first, then chain-tidies
     assert json.loads(json.dumps({"x": ctx}))  # valid/escaped
+
+
+def test_records_which_session_and_transcript_compacted(monkeypatch, isolate_home):
+    # The flag alone cannot say WHICH transcript holds the pre-compaction stretch, so a nap in a
+    # later session clears an obligation it never read. PostCompact has both in its event.
+    run(monkeypatch, "/proj/x", session_id="sid-old", transcript_path="/t/old.jsonl")
+    info = SIG.nap_owed_info("/proj/x")
+    assert info.get("session_id") == "sid-old"
+    assert info.get("transcript_path") == "/t/old.jsonl"
 
 
 def test_records_that_a_nap_is_owed(monkeypatch, isolate_home):

@@ -41,8 +41,12 @@ def main():
     except Exception:  # noqa: BLE001
         due = False
 
-    try:  # a hook cannot RUN the nap; record the obligation and let the Stop gate enforce it
-        mark_nap_owed(proj)
+    try:  # a hook cannot RUN the nap; record the obligation and let the Stop gate enforce it.
+        # Record WHICH session compacted and where its transcript is: the flag is per-project and
+        # outlives its session, so without these a nap in a LATER session clears an obligation whose
+        # material it never opened.
+        mark_nap_owed(proj, session_id=event.get("session_id"),
+                      transcript_path=event.get("transcript_path"))
     except Exception:  # noqa: BLE001 - never disrupt a turn
         pass
 

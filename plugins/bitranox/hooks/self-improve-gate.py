@@ -77,22 +77,38 @@ def _routing_hint(event, proj):
         return ""
 
 
-def _nap_owed_hint(proj):
+def _nap_owed_hint(proj, session_id=""):
     """Prose demanding the post-compaction consolidation, or '' when none is owed.
 
     A compaction clears the model's CONTEXT but NOT the transcript file, so the pre-compaction
     stretch is still recoverable - by a pass that reads from DISK. Hooks have no model and cannot run
-    that pass, so PostCompact records the obligation and this turns it into a Stop-block."""
+    that pass, so PostCompact records the obligation and this turns it into a Stop-block.
+
+    The obligation is per PROJECT and OUTLIVES its session, so it is routinely inherited by a session
+    that never compacted. Telling that session "compaction cleared your context" is false and sends
+    the reader hunting for a compaction in the wrong transcript, so when the owed session is not this
+    one the block names the file that actually compacted and says whose it is."""
     try:
         if not _sig.is_nap_owed(proj):
             return ""
-        return ("A CONTEXT COMPACTION happened and the consolidation has not run since. Compaction "
-                "cleared your context but NOT the session transcript on disk, so this session's "
-                "earlier learnings are still recoverable - but ONLY from the file. Before you stop: "
-                'run the nap (Skill tool, name "meta-dream-nap"). Read the session from DISK '
-                "(dream_state.py session-review), not from what you still remember - what you "
-                "remember is the compacted summary. It is incremental: only the part no reviewer has "
-                "consumed yet comes back. ")
+        info = _sig.nap_owed_info(proj)
+        owed_session = info.get("session_id") or ""
+        owed_transcript = info.get("transcript_path") or ""
+        foreign = bool(owed_session) and bool(session_id) and owed_session != session_id
+        if foreign:
+            head = ("A CONTEXT COMPACTION happened in an EARLIER session and the consolidation has "
+                    "not run since. It was NOT this session, so your own context is intact; what is "
+                    "unread is that session's transcript, still on disk in full%s. Before you stop: "
+                    'run the nap (Skill tool, name "meta-dream-nap"), which reads that file, not '
+                    "this one. " % (" at " + owed_transcript if owed_transcript else ""))
+        else:
+            head = ("A CONTEXT COMPACTION happened and the consolidation has not run since. "
+                    "Compaction cleared your context but NOT the session transcript on disk, so this "
+                    "session's earlier learnings are still recoverable - but ONLY from the file. "
+                    'Before you stop: run the nap (Skill tool, name "meta-dream-nap"). ')
+        return head + ("Read the session from DISK (dream_state.py session-review), not from what "
+                       "you still remember - what you remember is the compacted summary. It is "
+                       "incremental: only the part no reviewer has consumed yet comes back. ")
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return ""
 
@@ -210,7 +226,7 @@ def main():
 
     # A compaction cleared the CONTEXT (the transcript file survives). A hook cannot run the
     # consolidation pass, so PostCompact records an obligation and we refuse to stop while it stands.
-    nap_hint = _nap_owed_hint(proj)
+    nap_hint = _nap_owed_hint(proj, event.get("session_id") or "")
 
     if (nap_hint or sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
             or _REALIZATION_PATTERN.search(last_asst)
