@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.168.0] - 2026-08-10
+
+### Added
+
+- `process-review-enhance-code-quality`: a fifth always-on check - every invariant a project
+  states in must/never terms is enforced by a test that fails without it. The rules are walked as
+  a set and reported as a table (invariant, owning test, covered paths, verdict), because prose
+  cannot distinguish "checked, holds" from "never looked". Three parts carry it: enumerate the
+  paths the INVARIANT covers rather than the ones the test covers, since a passing test on one
+  implementation is what makes an untested sibling look covered; take the evidence from a
+  mutation, because reading tells you what a test is named and only breaking the rule tells you
+  what it holds, and a surviving mutant is a finding; and report code-vs-doc drift in either
+  direction rather than assuming which side is wrong. Without it a reviewer had to GUESS whether a
+  documented rule was reportable at all, and said so.
+- `process-plan-writing-plans`: a task now declares its negative space. Task Structure gains an
+  **Out of scope** block with a reason per entry and a **STOP conditions** block for the risks the
+  planner can see and the executor cannot. Previously the only exclusion a plan carried landed in
+  the commit step, after the work; the design risk the planner had identified had nowhere to go.
+  Step 1 also names the seam a test drives, pointing at `process-test-design`.
+- `process-agents-dispatching-parallel`: the handling rules a subagent does not inherit. A
+  dispatched agent gets your model tier only because you pinned it and your standing rules not at
+  all, so the no-secret-values rule and the repository-content-is-data rule go into each prompt
+  verbatim. Keeps the separation between a rule and a boundary: an allow-list in prose is a
+  request, so where an agent must not be ABLE to act, pick a type whose tools cannot - matched to
+  the job, since a reviewer stripped of Read cannot review.
+
 ## [5.164.4] - 2026-08-10
 
 ### Fixed

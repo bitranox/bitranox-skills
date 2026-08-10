@@ -92,7 +92,20 @@ A task is the smallest unit that carries its own test cycle and is worth a fresh
   A task's implementer sees only their own task; this block is how they learn the names
   and types neighboring tasks use.]
 
+**Out of scope** - do NOT touch, though they look related:
+- `path/that/looks/related.py` - one line on WHY: what makes it different, or what breaks
+  if it changes.
+
+**STOP conditions** - stop and report rather than improvise, if:
+- the code at the paths above does not match what this task describes;
+- a step's verification fails twice after one reasonable fix attempt;
+- the change turns out to need a file that is not listed in **Files:**;
+- [the assumption this task rests on] turns out to be false.
+
 - [ ] **Step 1: Write the failing test**
+
+Name the seam it drives. A test that patches the module under test proves the patch works;
+drive the real entry point and assert on what it produces (`bitranox:process-test-design`).
 
 ```python
 def test_specific_behavior():
