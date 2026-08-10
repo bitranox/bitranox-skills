@@ -49,11 +49,12 @@ find anything.
 
 ## When it fires on its own
 
-A Stop hook asks once per session, when the work has actually concluded: a `/goal` objective
-reported met, or - with no goal in play - a commit, a push, or an opened PR. While a goal is still
-running it stays quiet, because a goal commits as it goes and those are milestones rather than the
-end, and because a blocking Stop hook is a reason for Claude Code to stop continuing. Nothing
-stops you asking earlier; the hook exists for the times nobody remembers to.
+A Stop hook asks once per session, when the work has concluded: a `/goal` is in play, or - with no
+goal - a commit, a push, or an opened PR. A goal counts whether or not it has reported met yet,
+because the verdict is written while the Stop hooks are already running: at the moment the hook
+looks, the record still says not-met, and waiting for it costs a whole turn that a finished session
+may never take. Once per session means the real choice is sometimes-early against sometimes-never.
+Nothing stops you asking earlier; the hook exists for the times nobody remembers to.
 
 ## Where the answer goes
 

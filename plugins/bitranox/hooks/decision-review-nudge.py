@@ -7,19 +7,26 @@ surfaces them: a code review reads what changed, and a verification gate asks wh
 true, not whether a choice was right. The person who would ask is the person who has to remember
 to ask, which is exactly what does not happen at the end of a long session.
 
-**What counts as concluded, in priority order:**
+**What counts as concluded:**
 
-1. A `/goal` objective was MET. Claude Code records the objective's progress in the transcript as
-   an attachment, `{"type": "goal_status", "met": <bool>, "condition": ...}`, and the LAST such
-   record is the current state. Reading it is what lets this hook fire at the end of a goal rather
-   than somewhere in the middle of one.
-2. A goal is RUNNING and not yet met - stay silent, even after a commit. A goal run commits as it
-   goes, and those commits are milestones inside the work, not the end of it. This is also the
-   safe choice: Claude Code treats a blocking Stop hook as a reason to stop continuing, so
-   interrupting an unmet goal would cut short the very loop the user started.
-3. No goal in play - then a commit, a push, or an opened PR is the conclusion. A file-count
+1. A `/goal` is in play at all - met, or still running. Claude Code records progress in the
+   transcript as `{"type": "goal_status", "met": <bool>, "condition": ...}`, and the LAST record
+   is the current state. Firing on EITHER state is deliberate, and it is the fix for a real lag:
+   the goal's verdict is emitted DURING Stop-hook processing, so at the instant this hook reads
+   the transcript the record still says `met: false` and the `met: true` line lands moments later.
+   Waiting for it costs a whole turn, and a session that ends there never gets asked at all.
+   Since the ask happens once per session, the choice is between sometimes-early and
+   sometimes-never, and early is the better failure.
+2. No goal in play - then a commit, a push, or an opened PR is the conclusion. A file-count
    threshold was tried first and is a worse proxy in both directions: it fires mid-edit on a
    session that has concluded nothing, and stays silent on a one-line fix that shipped.
+
+Blocking during a running goal is safe, which an earlier version of this hook got wrong. The CLI
+string "Stop hook prevented continuation" belongs to a hook setting `preventContinuation`, a
+different field this hook never sets; `{"decision": "block"}` feeds a reason back and the turn
+carries on. Measured: the self-improve gate blocked during an active goal in a real session and
+the goal still completed. The once-per-session flag also keeps this far below the consecutive-block
+cap that would end a turn by override.
 
 The command detection is `shell_text.is_gated_command`, the same predicate the repo gate blocks
 on, so the two cannot disagree about what counts.
@@ -94,11 +101,11 @@ def transcript_signals(transcript_path, max_bytes=_MAX_TRANSCRIPT_BYTES):
 
 
 def reached_a_conclusion(signals):
-    """True once the work is somebody else's to live with - a met goal, or a commit outside one."""
-    if signals.goal_state == GOAL_MET:
+    """True once the work is somebody else's to live with - a goal in play, or a commit."""
+    if signals.goal_state in (GOAL_MET, GOAL_ACTIVE):
+        # ACTIVE counts too: the met verdict is written after this hook reads, so waiting for it
+        # costs a turn the session may never take. See the module docstring.
         return True
-    if signals.goal_state == GOAL_ACTIVE:
-        return False        # a goal's own commits are milestones; do not cut its loop short
     return any(shell_text.is_gated_command(c) for c in signals.commands)
 
 

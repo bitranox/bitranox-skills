@@ -17,6 +17,31 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.171.3] - 2026-08-10
+
+### Fixed
+
+- `decision-review-nudge` fired a whole turn late on a `/goal`, and on a session that ended with
+  the goal it never fired at all. Observed live: a one-turn goal was set and achieved, and the
+  hook stayed silent - its session-keyed flag file was never written. The timestamps show why. The
+  goal was set with `met: false` at :49 and reported `met: true` at :07 of the next minute, and
+  the Stop hook read the transcript between the two. The verdict is yielded from INSIDE Stop-hook
+  processing, so no earlier read can see it, and there is no on-disk goal state a hook could read
+  instead (searched, with a control).
+- A `/goal` in play now counts as concluded whether or not it has reported met. Since the ask
+  happens once per session, the real choice is sometimes-early against sometimes-never, and a long
+  goal asked early beats a finished one never asked.
+
+### Changed
+
+- The claim that a blocking Stop hook cuts a goal's loop short was WRONG and is corrected rather
+  than dropped. "Stop hook prevented continuation" belongs to a hook setting `preventContinuation`,
+  a different field this hook never sets; `{"decision": "block"}` feeds a reason back and the turn
+  continues. Measured in a real session: the self-improve gate blocked during an ACTIVE goal and
+  the goal still completed.
+- Verified by replaying the exact failing input - the real transcript truncated at the last
+  `met: false` record - against both the installed copy and the edited source: silent, then fires.
+
 ## [5.171.2] - 2026-08-10
 
 ### Added
