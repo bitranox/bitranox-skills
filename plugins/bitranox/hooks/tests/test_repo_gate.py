@@ -264,9 +264,13 @@ def test_the_tracked_pre_push_hook_is_executable_and_lf():
     root = Path(RG.__file__).resolve().parents[3]
     hook = root / "githooks" / "pre-push"
     assert hook.is_file(), "githooks/pre-push is missing"
-    mode = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "githooks/pre-push"],
+    # Assert on HEAD, not on the index. `git commit -- <pathspec>` re-stages the WORKING TREE
+    # version, and with core.fileMode=false a newly added path is recorded 100644 whatever the
+    # index held - measured here, where the index read 100755 and the commit still shipped 100644.
+    # An index-only assertion passes while the clone gets a hook git silently skips.
+    mode = subprocess.run(["git", "-C", str(root), "ls-tree", "HEAD", "githooks/pre-push"],
                           capture_output=True, text=True, encoding="utf-8").stdout
-    assert mode.startswith("100755"), "githooks/pre-push is not executable in the index: " + mode
+    assert mode.startswith("100755"), "githooks/pre-push is not executable in HEAD: " + mode
     assert b"\r\n" not in hook.read_bytes()
 
 
