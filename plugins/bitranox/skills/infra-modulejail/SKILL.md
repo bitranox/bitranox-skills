@@ -57,6 +57,31 @@ resolve() { modprobe --show-depends "$1" 2>/dev/null | awk '/^insmod/{print $2}'
 
 Feed each name through `resolve` and re-feed new names until the set stops growing.
 
+**The three KEEP inputs are not equally durable, and you must be able to tell them apart.**
+
+| Source of coverage      | Durable?                                                   |
+|-------------------------|------------------------------------------------------------|
+| your explicit whitelist | yes - survives any regeneration                            |
+| the baseline profile    | yes, but implementation-defined; READ it, do not assume it |
+| currently loaded        | NO - only true of the moment the set was built             |
+
+A module kept solely because it happened to be loaded is covered by accident. Regenerate from a
+cold boot, or with the service stopped, and it moves to BLOCK - on a node nobody changed, failing
+silently the next time something asks for it.
+
+So "is this module covered?" is answered by the whitelist and the baseline, never by `lsmod` and
+never by the feature working. Read the baseline rather than guessing at it - in a script-based
+implementation it is a plain variable:
+
+```bash
+grep -nE "^[A-Z_]*(MINIMAL|CONSERVATIVE|DESKTOP|BASELINE)[A-Z_]*=" modulejail.sh
+```
+
+Measured on one node: `overlay` appears in both the whitelist and the baseline, `xt_addrtype` and
+`zfs` in the whitelist only, while `ip_tables`, `iptable_nat`, `iptable_filter` and `xt_conntrack`
+appear in NEITHER - they were unblocked purely because docker had them loaded when the blacklist
+was last built.
+
 ### 2. BLOCK = all installed modules MINUS the KEEP closure
 
 ```bash
@@ -234,6 +259,7 @@ swapon --show                      # the outcome; the unit going active is not t
 | Trusting the dependency closure to be complete    | Runtime `request_module()` helpers are invisible to it       |
 | Reading a working feature as "nothing is blocked" | A built-in fallback can hide a refusal that breaks elsewhere |
 | Regenerating without clearing the failed unit     | Unit stays failed; the correct fix looks ineffective         |
+| Reading coverage off `lsmod` instead of the lists | Loaded-only modules are kept by accident, lost on a regen    |
 
 ## Real-world impact
 
