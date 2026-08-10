@@ -526,6 +526,22 @@
   "valid",
   "although"
  ],
+ "infra-modulejail": [
+  "hardening",
+  "linux",
+  "host",
+  "preventing",
+  "kernel",
+  "loading",
+  "modules",
+  "kernel-module",
+  "allowlist",
+  "blacklist",
+  "modprobe",
+  "install",
+  "override",
+  "reducing"
+ ],
  "infra-proxmox": [
   "configuring",
   "managing",
@@ -844,6 +860,22 @@
   "fetching",
   "many",
   "items"
+ ],
+ "net-tailscale": [
+  "installing",
+  "running",
+  "tailscale",
+  "linux",
+  "container",
+  "joining",
+  "tailnet",
+  "setting",
+  "node",
+  "hostname",
+  "especially",
+  "machine",
+  "cloned",
+  "already"
  ],
  "process-agents-dispatching-parallel": [
   "facing",

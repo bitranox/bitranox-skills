@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 72 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 74 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -52,6 +52,7 @@ CI/CD, build and release automation, observability (provider-agnostic).
 Self-hosted/on-prem hardware, hypervisors, virtualization, storage.
 
 - [`infra-chrome-remote-desktop`](../plugins/bitranox/skills/infra-chrome-remote-desktop/SKILL.md) - Use when installing, registering, or repairing a Chrome Remote Desktop host on Linux (a VM, an LXC container, or a workstation) - the web client answers "PIN is not valid" although the PIN is right, a session connects and drops straight away, the host shows offline, start-host dies with "Failed to set new config" or "Failed to start host", sudo refuses with "The \"no new privileges\" flag is set", or the host journal logs "pam_acct_mgmt() returned error 7" or "Local login check for <user> failed". Covers the per-connection PAM account check, /etc/shadow group ownership and unix_chkpwd, registering as the target user, single-use OAuth codes, the stored PIN hash, and the chrome-remote-desktop@<user> service.
+- [`infra-modulejail`](../plugins/bitranox/skills/infra-modulejail/SKILL.md) - Use when hardening a Linux host by preventing the kernel from loading modules it does not need - kernel-module allowlist or blacklist, modprobe install override, reducing request_module/autoload attack surface, CIS module-blacklisting - especially on a remote or relocating host with no console and no out-of-band power, where a wrong module list can leave it unbootable and unreachable.
 - [`infra-proxmox`](../plugins/bitranox/skills/infra-proxmox/SKILL.md) - Use when configuring, managing, or troubleshooting Proxmox VE - installation, host administration, clusters, VMs, containers, storage, Ceph, SDN, firewall, user management, HA, backups, notifications, and CLI tools (pvecm, qm, pct, pvesm, pveceph, ha-manager, pvesh, vzdump). Covers Proxmox VE 9.1.2.
 - [`infra-proxmox-bindsnap`](../plugins/bitranox/skills/infra-proxmox-bindsnap/SKILL.md) - Use when snapshotting or cloning Proxmox LXC containers that have bind/device mounts (mpN -> host paths) - the snapshot button is greyed out, or pct clone / pct snapshot fails with "unable to clone mountpoint (type bind)", or you cannot snapshot a bind-mount container. Covers pve-bindsnap install, verify, the BINDSNAP-FORCE-RUNNING / BINDSNAP-UNSUPPORTED / BINDSNAP-EXCLUDE markers, the checksum guard for an untested pve-container build, clone, and uninstall on a Proxmox VE node.
 - [`infra-storage-check-zpools`](../plugins/bitranox/skills/infra-storage-check-zpools/SKILL.md) - Use when monitoring ZFS pool health or running scrubs from a machine, script, or timer - checking capacity, read/write/checksum errors, device faults, or scrub age; sending pool alerts by email; installing a monitoring daemon as a systemd service; or scripting any of that against JSON output. Covers install (uvx/uv/pip and an isolated production install), the layered configuration and its six sections, every subcommand, exit codes, and the library API. Prefer this over hand-rolling `zpool status` parsing, a scrub-plus-sleep shell loop, or a cron job that greps text.
@@ -63,6 +64,7 @@ Networking: DNS, routing, proxies, firewall, VPN, reverse proxy.
 
 - [`net-firewall-pfsense`](../plugins/bitranox/skills/net-firewall-pfsense/SKILL.md) - Use when working on a pfSense firewall - a host reachable inside its subnet but dead beyond it with nothing logged, "ARP Table Static Entry", DHCP reservations, unbound host overrides, pfctl tables, snort2c blocking a CDN, a config.xml snapshot, or any change you would otherwise make by hand-writing PHP over SSH.
 - [`net-rotating-proxies`](../plugins/bitranox/skills/net-rotating-proxies/SKILL.md) - Use when a download, scrape, or API pull is blocked or rate-limited by the target (HTTP 429, IP ban, geoblock) and must be routed through proxies, or when fetching many items from a host that throttles per IP (bulk YouTube transcripts, scraping, API harvesting).
+- [`net-tailscale`](../plugins/bitranox/skills/net-tailscale/SKILL.md) - Use when installing or running Tailscale on Linux or in a container/LXC - joining a tailnet with tailscale up, setting a node hostname - and especially when a machine or container was CLONED from one that already had Tailscale (the clone inherits the node identity and collides with or de-authenticates the original), when tailscaled cannot create its tun device in an unprivileged container, or when tailscaled drops the tailnet after a reboot.
 
 ## sec
 
