@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.172.1] - 2026-08-10
+
+### Fixed
+
+- `decision-review-nudge` could go permanently quiet in a long session. Every run rescanned the
+  transcript from byte 0 and stopped at the same size cap, so once a session grew past it NO later
+  commit was ever reachable - and the silence looked exactly like "nothing new concluded". Runs now
+  RESUME: each one starts where the previous stopped, records the offset it reached, and advances
+  that offset even on a quiet turn, so a conclusion beyond the cap is picked up by the next run
+  instead of never. Each run's work is now proportional to what happened since, not to the size of
+  the session.
+- The score accumulates onto the previous run's total rather than being recomputed. A per-window
+  recount would FALL as soon as a window slid past an older commit, and a fallen score can never
+  exceed what was already recorded, which would have stopped the reminder for good.
+- A window holding no goal record now keeps the goal state the previous run ended on, instead of
+  reading absence as "no goal". The state file carries the goal alongside the offset and score.
+
 ## [5.172.0] - 2026-08-10
 
 ### Added

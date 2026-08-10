@@ -46,10 +46,12 @@ from typing import NamedTuple
 import self_improve_signals as sig
 import shell_text
 
-# Transcripts reach many MB in a long session. This is a whole-file scan rather than a tail read,
-# because the commit or the goal record that concluded the work may be many turns back - but it
-# runs at most once per session (the flag short-circuits every later turn), so the cost is paid
-# once.
+# One run reads only what is NEW: it starts where the previous run stopped and remembers the
+# offset it reached. That is what keeps the cap below from hiding anything - a scan that always
+# restarted at byte 0 would truncate at the same place every time, so in a session longer than the
+# cap NO later commit could ever be seen and the reminder would go quiet while looking healthy.
+# Reading forward from the last offset also keeps each run's work proportional to what happened
+# since, rather than to the size of the session.
 _MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
 
 GOAL_NONE = "none"
@@ -58,18 +60,27 @@ GOAL_MET = "met"
 
 
 class Signals(NamedTuple):
-    """What one pass over the transcript found."""
+    """What one pass over a WINDOW of the transcript found."""
 
     commands: list
     goal_state: str
+    offset: int
 
 
-def transcript_signals(transcript_path, max_bytes=_MAX_TRANSCRIPT_BYTES):
-    """Bash commands and the CURRENT goal state, from a single read. Empty when unreadable."""
+def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES,
+                       goal_state=GOAL_NONE):
+    """Scan [start, EOF) and report what is there, plus the offset reached.
+
+    `goal_state` carries the state the previous run ended on: a window holding no goal record
+    means the goal has not changed, not that it went away.
+    """
     commands = []
-    goal_state = GOAL_NONE
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
+            try:
+                fh.seek(start)
+            except (OSError, ValueError):
+                start = 0
             read = 0
             for line in fh:
                 read += len(line)
@@ -96,26 +107,31 @@ def transcript_signals(transcript_path, max_bytes=_MAX_TRANSCRIPT_BYTES):
                     if isinstance(cmd, str) and cmd:
                         commands.append(cmd)
     except OSError:
-        return Signals([], GOAL_NONE)
-    return Signals(commands, goal_state)
+        return Signals([], goal_state, start)
+    return Signals(commands, goal_state, start + read)
 
 
 _GOAL_SCORE = {GOAL_NONE: 0, GOAL_ACTIVE: 1, GOAL_MET: 2}
 
 
-def conclusion_score(signals):
+def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
     """How many times work has concluded, as a number that only ever grows within a session.
 
     Counting rather than answering yes/no is what lets a LATER conclusion be told from the same one
     still sitting in the transcript. Without it the repeat nudge would fire on every turn after the
     first commit, since that commit never leaves the transcript.
 
+    The count ACCUMULATES onto the previous run's total, because each run sees only its own window.
+    Recomputing from the whole file instead would make the score fall as soon as a window slid past
+    an old commit, and a falling score can never exceed what was already recorded - the reminder
+    would stop for good.
+
     A goal scores 1 while running and 2 once met, so the running-to-met transition registers as a
     new conclusion even though no command was run.
     """
-    return _GOAL_SCORE[signals.goal_state] + sum(
-        1 for c in signals.commands if shell_text.is_gated_command(c)
-    )
+    goal_delta = max(0, _GOAL_SCORE[signals.goal_state] - _GOAL_SCORE[previous_goal])
+    commits = sum(1 for c in signals.commands if shell_text.is_gated_command(c))
+    return previous + goal_delta + commits
 
 
 def reached_a_conclusion(signals):
@@ -141,24 +157,41 @@ def decide(score, last_score):
     return ASK_BLOCK if last_score <= 0 else ASK_REMIND
 
 
+class State(NamedTuple):
+    """What the previous run left behind: how far it read, what it counted, where the goal was."""
+
+    offset: int
+    score: int
+    goal: str
+
+
+EMPTY_STATE = State(0, 0, GOAL_NONE)
+
+
 def asked_flag(session):
-    """Session-keyed state holding the last conclusion score. Keyed by session so it cannot go stale."""
+    """Session-keyed state file. Keyed by session so a flag left by an older one cannot go stale."""
     return sig.touched_file(session).with_suffix(".decisions-asked")
 
 
-def last_score(session):
-    """The score at the previous ask. 0 when this session has never been asked."""
+def read_state(session):
+    """The previous run's state. EMPTY_STATE when this session has none, or it is unreadable."""
     try:
-        return int(asked_flag(session).read_text(encoding="utf-8").strip() or 0)
+        raw = json.loads(asked_flag(session).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return 0
+        return EMPTY_STATE
+    if not isinstance(raw, dict):
+        return EMPTY_STATE            # an earlier bare-integer file: start clean rather than guess
+    goal = raw.get("goal")
+    return State(int(raw.get("offset") or 0), int(raw.get("score") or 0),
+                 goal if goal in _GOAL_SCORE else GOAL_NONE)
 
 
-def record_score(session, score):
+def write_state(session, state):
     try:
         f = asked_flag(session)
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("%d\n" % score, encoding="utf-8")
+        f.write_text(json.dumps({"offset": state.offset, "score": state.score,
+                                 "goal": state.goal}) + "\n", encoding="utf-8")
     except OSError:
         pass
 
@@ -192,15 +225,19 @@ def main():
     transcript = event.get("transcript_path") or ""
     if not session or not transcript:
         return 0
+    seen = read_state(session)
     try:
-        score = conclusion_score(transcript_signals(transcript))
+        signals = transcript_signals(transcript, start=seen.offset, goal_state=seen.goal)
+        score = conclusion_score(signals, previous=seen.score, previous_goal=seen.goal)
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
-    seen = last_score(session)
-    verdict = decide(score, seen)
+    verdict = decide(score, seen.score)
+    # The offset advances even on a quiet turn, so the next run scans only what is new. Skipping
+    # this when nothing was found would re-scan the same window forever and, once the window hit
+    # the cap, never reach anything past it.
+    write_state(session, State(signals.offset, score, signals.goal_state))
     if verdict == ASK_NONE:
         return 0
-    record_score(session, score)                          # before emitting, so a crash cannot re-nag
     if verdict == ASK_BLOCK:
         sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
     else:

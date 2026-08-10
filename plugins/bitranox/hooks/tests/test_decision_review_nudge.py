@@ -18,6 +18,7 @@ All content is ASCII.
 
 import io
 import json
+import pathlib
 import sys
 
 import pytest
@@ -63,8 +64,8 @@ def run_main(payload, monkeypatch, capsys):
     return rc, capsys.readouterr().out
 
 
-def signals(commands=(), goal_state=DRN.GOAL_NONE):
-    return DRN.Signals(list(commands), goal_state)
+def signals(commands=(), goal_state=DRN.GOAL_NONE, offset=0):
+    return DRN.Signals(list(commands), goal_state, offset)
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +193,59 @@ def test_a_missing_transcript_reads_as_nothing(tmp_path):
     assert s.commands == [] and s.goal_state == DRN.GOAL_NONE
 
 
+# --------------------------------------------------------------------------
+# Reading only what is new, so the size cap can never hide a later conclusion
+# --------------------------------------------------------------------------
+
+
+def test_a_scan_reports_how_far_it_read(tmp_path):
+    path = transcript(tmp_path, bash_line("ls"))
+    assert DRN.transcript_signals(path).offset == len(pathlib.Path(path).read_text())
+
+
+def test_a_scan_that_starts_late_sees_only_what_follows(tmp_path):
+    first, second = bash_line("git commit -m one"), bash_line("git push")
+    path = transcript(tmp_path, first, second)
+    resumed = DRN.transcript_signals(path, start=len(first) + 1)
+    assert resumed.commands == ["git push"], "a resumed scan must not re-read what it already saw"
+
+
+def test_a_window_without_a_goal_record_keeps_the_goal_it_was_given(tmp_path):
+    """Absence of a record means the goal did not change, not that it went away."""
+    path = transcript(tmp_path, bash_line("ls"))
+    assert DRN.transcript_signals(path, goal_state=DRN.GOAL_MET).goal_state == DRN.GOAL_MET
+
+
+def test_a_commit_past_the_size_cap_is_still_reached_on_a_later_run(tmp_path):
+    """The bug this fixes: a scan that always restarted at byte 0 truncated at the same place
+    every time, so in a session longer than the cap NO later commit could ever be seen."""
+    filler = [bash_line("echo %d" % i) for i in range(40)]
+    path = transcript(tmp_path, *(filler + [bash_line("git commit -m past-the-cap")]))
+    cap = 400                                   # far smaller than the file, to force truncation
+    first = DRN.transcript_signals(path, start=0, max_bytes=cap)
+    assert first.commands and "git commit" not in " ".join(first.commands), "cap must truncate here"
+    seen, guard = first.offset, 0
+    while guard < 50:                           # later runs resume where the previous one stopped
+        nxt = DRN.transcript_signals(path, start=seen, max_bytes=cap)
+        if any("git commit" in c for c in nxt.commands):
+            return
+        if nxt.offset <= seen:
+            break
+        seen, guard = nxt.offset, guard + 1
+    raise AssertionError("the commit past the cap was never reached")
+
+
+def test_the_score_accumulates_across_windows():
+    """Recomputing per window instead would let the score FALL, and a fallen score never fires."""
+    window = signals(["git commit -m new"])
+    assert DRN.conclusion_score(window, previous=5) == 6
+
+
+def test_a_goal_already_counted_is_not_counted_again():
+    already_met = signals([], DRN.GOAL_MET)
+    assert DRN.conclusion_score(already_met, previous=2, previous_goal=DRN.GOAL_MET) == 2
+
+
 def test_non_bash_tool_uses_are_ignored(tmp_path):
     line = json.dumps({
         "type": "assistant",
@@ -257,7 +311,7 @@ def test_a_later_commit_reminds_without_blocking(scratch_home, monkeypatch, caps
 
 def test_another_sessions_flag_does_not_suppress_this_one(scratch_home, monkeypatch, capsys):
     """A per-PROJECT flag outlives its session and silences the next one; a session-keyed flag cannot."""
-    DRN.record_score("an-older-session", 99)
+    DRN.write_state("an-older-session", DRN.State(0, 99, DRN.GOAL_NONE))
     path = transcript(scratch_home, bash_line("git commit -m x"))
     _, out = run_main({"session_id": "s6", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(out)["decision"] == "block"
