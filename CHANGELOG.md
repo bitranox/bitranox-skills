@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.164.4] - 2026-08-10
+
+### Fixed
+
+- `block-masked-gate-exit`: stop firing on text that merely MENTIONS the footgun. The detector
+  matched `$?` anywhere, so an escaped `\$?` in an echo label, a `#` comment, and single-quoted
+  prose all read as status checks - the escaped case being the real one, which fired on the author
+  while documenting this very rule, its third false fire in a day. New shared helper
+  `shell_text.blank_unexpanded_text()` blanks the regions the shell neither executes nor expands
+  (escaped characters, single-quoted strings, comments) while preserving pipes and separators so
+  the command shape is unchanged. A `$?` inside DOUBLE quotes still fires: it genuinely expands
+  there, so `echo "rc=$?"` stays caught, and double-quoted prose is knowingly left as a false
+  positive because the shell cannot tell the two apart either.
+
+### Added
+
+- `files-edit-xml`: a section on editing a file you must DIFF. The existing pattern guarantees the
+  output is well-formed but not minimal, and an lxml round-trip rewrites the whole document -
+  measured at 6863 changed lines for a 6-line edit on a pfSense config, which makes review
+  impossible and hides real mistakes. Documents the three losses (empty-tag collapse, CDATA
+  dropped on `.text` assignment, `&quot;` unescaped) and the rule: prove the round-trip
+  byte-identical on the untouched file before editing.
+- `coding-python-uv`: the cache-safety note now covers WRITING into the cache. Upstream already
+  says never to modify it directly; what was missing is that seeding or warming a shared cache by
+  copying entries in fails silently, because uv writes atomically and a copy does not, so uv
+  trusts a half-copied entry and the error surfaces later in an unrelated build.
+
 ## [5.164.3] - 2026-08-10
 
 ### Fixed

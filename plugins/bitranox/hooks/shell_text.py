@@ -49,3 +49,58 @@ def strip_heredoc_bodies(command: str) -> str:
             index += 1
         index += 1                                    # drop the terminator line itself
     return "\n".join(out)
+
+
+def blank_unexpanded_text(command: str) -> str:
+    """Blank the regions the shell will neither execute nor expand, keeping structure intact.
+
+    A heredoc is not the only data region in a command. These three are just as inert, and a guard
+    that scans them fires on text merely DESCRIBING a footgun:
+
+    - a BACKSLASH-ESCAPED character (`\\$?`), which bash passes through literally;
+    - a SINGLE-quoted string, where no expansion happens at all;
+    - a `#` comment, which is never executed.
+
+    A DOUBLE-quoted string is deliberately left alone: `$?` expands there, so `echo "rc=$?"` is a
+    genuine status read. That also means prose inside double quotes remains indistinguishable from
+    the real thing - the two are identical to the shell, so no scanner can separate them.
+
+    Blanking to spaces rather than deleting keeps offsets, line structure and every pipe, `;` and
+    `&&` outside the quotes, so callers that split on those still see the same command shape.
+    """
+    out: list[str] = []
+    index, size = 0, len(command)
+    in_single = in_double = False
+    while index < size:
+        char = command[index]
+        if in_single:
+            out.append(char if char in "'\n" else " ")
+            in_single = char != "'"
+            index += 1
+        elif char == "\\" and index + 1 < size and not in_double:
+            out.append("  " if command[index + 1] != "\n" else " \n")
+            index += 2
+        elif in_double:
+            if char == "\\" and index + 1 < size:
+                out.append("  " if command[index + 1] != "\n" else " \n")
+                index += 2
+                continue
+            in_double = char != '"'
+            out.append(char)
+            index += 1
+        elif char == "'":
+            in_single = True
+            out.append(char)
+            index += 1
+        elif char == '"':
+            in_double = True
+            out.append(char)
+            index += 1
+        elif char == "#" and (not out or out[-1].isspace()):
+            while index < size and command[index] != "\n":
+                out.append(" ")
+                index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)

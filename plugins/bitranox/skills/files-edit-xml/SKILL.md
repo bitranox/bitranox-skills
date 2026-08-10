@@ -52,6 +52,39 @@ For a quick well-formedness check without editing:
 `python3 -c "import sys; from lxml import etree; etree.parse(sys.argv[1]); print('ok')" config.xml`
 For schema validation: `etree.XMLSchema(etree.parse('schema.xsd')).assertValid(tree)`.
 
+## Editing a file you must DIFF: prove the round-trip first
+
+The pattern above guarantees the output is WELL-FORMED. It says nothing about the output being
+MINIMAL, and on an existing file it will not be: an lxml round-trip rewrites the whole document in
+lxml's style, so a two-value edit lands in a diff thousands of lines long. Measured on a pfSense
+`config.xml`: **6863 changed lines, of which 6 were intended.** On a production config that diff
+cannot be reviewed, so a real mistake hides in it and the change gets approved anyway.
+
+Three losses account for most of it, and none is a bug - each is lxml choosing a legal equivalent:
+
+| What you wrote   | What comes back | Fix                                             |
+|------------------|-----------------|-------------------------------------------------|
+| `<tag></tag>`    | `<tag/>`        | restore the empty-tag form after serializing    |
+| CDATA in `.text` | escaped text    | assign `etree.CDATA(value)`, not a plain string |
+| `&quot;` in text | a bare `"`      | re-escape when the document uses that form      |
+
+So when the file is one you will DIFF - a firewall, app or CI config someone reviews - do not edit
+first. **Prove the transform is byte-identical on the UNTOUCHED file, then edit:**
+
+```python
+original = path.read_bytes()
+tree = etree.parse(io.BytesIO(original), parser)
+assert serialize(tree) == original, "round-trip is lossy - fix the serializer before editing"
+```
+
+`serialize()` is your normalizing writer: it restores the empty-tag form, re-escapes what the
+document escaped, and keeps the original XML declaration verbatim. Until that assertion passes, any
+diff you produce is unreadable. Once it passes, the diff shows exactly your change and nothing else.
+
+The same discipline applies to any format with more than one legal spelling - JSON key order and
+indentation, YAML quoting and flow style. The test is always the same: round-trip the untouched
+file and require zero diff.
+
 ## Common mistakes
 
 | Mistake                                              | Do instead                                                  |
