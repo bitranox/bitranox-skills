@@ -509,6 +509,10 @@ walked only once the dominant shape's success-value lines are QUOTED (capped and
 there are many). A verdict does not count - "inverted: none" was reported in testing about a file
 containing `return [true, "...degraded mode"]`. Paste the lines; the conclusion goes under them.
 
+When the sweep is finished, the fixes you just made are themselves decisions nobody has reviewed.
+Run `bitranox:process-review-uncertain-decisions` over them - this skill judges the code, that one
+asks which of your own calls are still unsettled.
+
 ## Common Mistakes
 
 | Mistake                                                                | Fix                                                                                                                                    |

@@ -249,3 +249,7 @@ git worktree prune  # Self-healing: clean up any stale registrations
 - Clean up worktree for Options 1 & 4 only
 - `cd` to main repo root before worktree removal
 - Run `git worktree prune` after removal
+
+Finishing a branch is the last moment its judgment calls are cheap to revisit. Before the merge or
+the PR, run `bitranox:process-review-uncertain-decisions`: the choices with no trace in the diff -
+a default, a version tier, a scope cut - are invisible to whoever reviews the branch.
