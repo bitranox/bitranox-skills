@@ -215,6 +215,61 @@ def test_main_hook_blocks_push_on_violation(tmp_path, monkeypatch, capsys):
     assert "blocked" in capsys.readouterr().err
 
 
+def test_pre_push_mode_needs_no_stdin_event(tmp_path, monkeypatch):
+    # A real git pre-push hook is handed REF LINES on stdin, not a Claude Code event JSON. Reading
+    # it as JSON fails and the old hook path returns 0, so the gate would pass by accident on the
+    # one caller that fires outside Claude Code.
+    make_repo(tmp_path, bad_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/master abc refs/heads/master def\n"))
+    assert RG.main() == 1                       # a hook exit code, not the PreToolUse 2
+
+
+def test_pre_push_mode_passes_a_clean_tree(tmp_path, monkeypatch):
+    make_repo(tmp_path, good_skill=True)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert RG.main() == 0
+
+
+def test_pre_push_runs_pytest_over_the_whole_repo(tmp_path, monkeypatch):
+    # The stale-catalog test lives in hooks/tests, but a pre-push is the last gate before CI, so it
+    # runs what CI runs. Recording the paths proves the widened scope rather than assuming it.
+    make_repo(tmp_path, good_skill=True)
+    seen = []
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: seen.append(list(paths)) or [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    RG.main()
+    assert seen == [[tmp_path]]                 # whole repo, not just hooks/tests
+
+
+def test_pre_push_keeps_the_maintainer_only_checks(tmp_path, monkeypatch):
+    # version-bump is skipped in CI (a contributor must not be forced to bump) but a pre-push IS
+    # the maintainer, and a missing bump is exactly what makes a shipped change reach nobody.
+    monkeypatch.setattr(RG, "check_version_bumped", lambda root: ["VERSION_SENTINEL"])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    assert "VERSION_SENTINEL" in RG.run_checks(tmp_path, ci=False, full_pytest=True)
+
+
+def test_the_tracked_pre_push_hook_is_executable_and_lf():
+    # core.fileMode is false on this tree, so an exec bit set with chmod is NOT recorded and the
+    # hook installs unrunnable - git silently skips a non-executable hook. The INDEX mode is the
+    # only real answer, and a CRLF hook dies on its shebang.
+    root = Path(RG.__file__).resolve().parents[3]
+    hook = root / "githooks" / "pre-push"
+    assert hook.is_file(), "githooks/pre-push is missing"
+    mode = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "githooks/pre-push"],
+                          capture_output=True, text=True, encoding="utf-8").stdout
+    assert mode.startswith("100755"), "githooks/pre-push is not executable in the index: " + mode
+    assert b"\r\n" not in hook.read_bytes()
+
+
 def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
     make_repo(tmp_path)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)

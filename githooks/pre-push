@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Pre-push gate for the bitranox-skills marketplace.
+#
+# The PreToolUse repo-gate already blocks a `git push` issued through Claude Code, but it is a
+# Claude Code hook: it cannot fire when git runs from a terminal, an IDE, or a script. Every check
+# therefore had a blind spot exactly one habit wide, and a stale generated catalog shipped through
+# it twice - docs/skills.md missing a skill and carrying an outdated description, with README.md
+# still stating the old count.
+#
+# git runs this hook for EVERY push regardless of who invoked it, which is the property the
+# PreToolUse hook cannot have. It delegates to the same gate, so there is one set of checks rather
+# than a second copy to drift.
+#
+# Enable it once per clone (git does not run hooks from a tracked directory unless told where they
+# live, and .git/hooks is not version controlled):
+#
+#     git config core.hooksPath githooks
+#
+# Bypass for a genuine emergency: git push --no-verify
+set -euo pipefail
+
+# Hook mode is entered from the repo root, but resolve it explicitly so the gate is found whatever
+# the caller's cwd is.
+root="$(git rev-parse --show-toplevel)"
+gate="$root/plugins/bitranox/hooks/repo-gate.py"
+
+if [ ! -f "$gate" ]; then
+    echo "pre-push: repo-gate.py not found at $gate - skipping" >&2
+    exit 0
+fi
+
+# An inherited VIRTUAL_ENV points python3 at whatever project the shell last activated, which is
+# how this gate once reported CI dependencies missing while sitting in an unrelated venv. The
+# interpreter must be chosen by this repo, never by the caller's shell.
+unset VIRTUAL_ENV
+
+# uv resolves the CI dependency set on demand, so the gate runs the SAME suite CI runs without the
+# maintainer having to keep those packages in an ambient python. The list comes from the gate
+# itself (parsed from .github/workflows/ci.yml), so it cannot drift from CI. Without uv, fall back
+# to python3 - the gate then names any missing package rather than silently skipping pytest.
+if command -v uv > /dev/null 2>&1; then
+    deps=$(python3 "$gate" --print-test-deps 2> /dev/null || true)
+    with_args=()
+    for dep in $deps; do
+        with_args+=(--with "$dep")
+    done
+    # The gate reads stdin only in PreToolUse mode; --pre-push takes none, so the ref lines git
+    # feeds this hook go unread. Closing stdin keeps that explicit.
+    exec uv run --quiet "${with_args[@]}" python "$gate" --pre-push < /dev/null
+fi
+
+echo "pre-push: uv not found - running the gate with python3, which may lack the CI test set" >&2
+exec python3 "$gate" --pre-push < /dev/null

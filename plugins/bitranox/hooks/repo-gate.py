@@ -789,7 +789,13 @@ def unlisted_mirrors(root, public):
     return found
 
 
-def run_checks(root, ci):
+def run_checks(root, ci, full_pytest=None):
+    """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
+    SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
+    (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
+    whole suite CI runs, not just hooks/tests)."""
+    if full_pytest is None:
+        full_pytest = ci
     failures = []
     failures += check_tests_exist(root)
     failures += check_json_valid(root)
@@ -815,7 +821,7 @@ def run_checks(root, ci):
     missing_deps = check_test_dependencies(root)
     failures += missing_deps
     if not missing_deps:
-        pytest_paths = [root] if ci else [root / "plugins" / "bitranox" / "hooks" / "tests"]
+        pytest_paths = [root] if full_pytest else [root / "plugins" / "bitranox" / "hooks" / "tests"]
         failures += check_pytest(root, pytest_paths)
     return failures
 
@@ -901,6 +907,17 @@ def main():
     args = sys.argv[1:]
     ci = "--ci" in args
     mirrors = "--mirrors" in args
+    pre_push = "--pre-push" in args
+
+    if "--print-test-deps" in args:
+        # The pre-push hook builds its `uv run --with ...` line from this, so the dependency set
+        # stays declared in exactly one place (the CI workflow) instead of being copied into a
+        # shell script that would drift the first time CI gains a package.
+        root = repo_root()
+        if root is None:
+            return 1
+        print("\n".join(ci_test_dependencies(root)))
+        return 0
 
     if "--mirror-of" in args:
         # Runs from INSIDE a tool repo, so it must not require the marketplace as cwd:
@@ -911,6 +928,12 @@ def main():
 
     root = repo_root()
     if root is None or not is_bitranox_skills(root):
+        if pre_push:
+            # Someone pointed core.hooksPath here from another repo. Say so rather than blocking
+            # a push this gate knows nothing about.
+            print("repo-gate: not inside the bitranox-skills repo - pre-push checks skipped",
+                  file=sys.stderr)
+            return 0
         if ci or mirrors:
             print("repo-gate: not inside the bitranox-skills repo", file=sys.stderr)
             return 1
@@ -924,7 +947,7 @@ def main():
         # including the ones no current change touches.
         return 1 if audit_mirrors(root) else 0
 
-    if not ci:
+    if not (ci or pre_push):
         try:
             event = json.load(sys.stdin)
         except Exception:  # noqa: BLE001
@@ -933,16 +956,22 @@ def main():
         if not is_gated_command(command):
             return 0
 
-    failures = run_checks(root, ci)
+    # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so it must
+    # not go through the parse above - that read fails and returns 0, passing the gate by accident
+    # on the one caller that fires when git runs OUTSIDE Claude Code (a terminal, an IDE, a
+    # script). That blind spot is how a stale generated catalog shipped twice.
+    failures = run_checks(root, ci, full_pytest=ci or pre_push)
 
     if not failures:
-        if ci:
+        if ci or pre_push:
             print("repo-gate: all checks passed.")
         return 0
 
-    header = "repo-gate: commit/push blocked - fix these first:" if not ci else "repo-gate: FAILED"
+    header = ("repo-gate: FAILED" if ci else
+              "repo-gate: push blocked - fix these first:" if pre_push else
+              "repo-gate: commit/push blocked - fix these first:")
     print("\n".join([header, *failures]), file=sys.stderr)
-    return 1 if ci else 2
+    return 2 if not (ci or pre_push) else 1
 
 
 if __name__ == "__main__":
