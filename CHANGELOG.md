@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.164.3] - 2026-08-10
+
+### Fixed
+
+- `meta-self-improve`: retiring a contributed tool now names the MEMORY STORE explicitly and
+  gives the sweep a method. The rule already said to check what still INVOKES the local path, and
+  a RED probe confirmed a focused reader DOES derive the memory store from that - so this is not a
+  comprehension gap and the wording was cut to match. What was missing is actionability: the rule
+  named only "a nudge or a doc", never memory, and specified no search method. It now says to fix
+  a fact's HOOK as well as its body (the hook is what fires), to sweep with find because Claude
+  Code's grep skips the gitignored facts and pointer blocks, to require zero hits before deleting,
+  and to name the replacement by SKILL rather than by a path under a versioned plugin dir.
+  Measured: `gate.py` was correctly retired once it shipped in `bitranox:compuse-toolbox`, and the
+  one unswept reference was the memory rule prescribing it, so the remedy for the tree's
+  most-recurring shell error became a command that could not run.
+
 ## [5.164.2] - 2026-08-09
 
 ### Fixed
