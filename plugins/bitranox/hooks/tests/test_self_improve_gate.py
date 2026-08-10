@@ -201,6 +201,36 @@ def test_owed_nap_reason_directs_to_the_nap_and_says_read_from_disk(tmp_path, mo
     assert "compact" in reason.lower()
 
 
+def test_owed_nap_from_another_session_names_that_transcript_and_does_not_claim_this_one(
+        tmp_path, monkeypatch, capsys):
+    # Measured 2026-08-10: a flag three days old blocked a session that had never compacted, while
+    # asserting "compaction cleared your context". The premise was false and sent the reader looking
+    # for a compaction in the wrong transcript. Name the file that actually compacted instead.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    old = tmp_path / "older-session.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    reason = _reason_of(capsys)
+    assert str(old) in reason                       # review THAT file, not this session's
+    assert "EARLIER session" in reason              # and say the compaction was not this one
+
+
+def test_owed_nap_from_this_session_still_reads_as_this_session(tmp_path, monkeypatch, capsys):
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    tp = make_transcript(tmp_path, user="ok", asst="Done.")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-current", transcript_path=tp)
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    reason = _reason_of(capsys)
+    assert "EARLIER session" not in reason
+    assert "meta-dream-nap" in reason
+
+
 def test_no_owed_nap_no_block_on_a_quiet_turn(tmp_path, monkeypatch, capsys):
     _iso_home(tmp_path, monkeypatch)
     tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")

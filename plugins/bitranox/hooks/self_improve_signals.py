@@ -582,12 +582,20 @@ def nap_owed_file(proj):
     return _audit_dir() / (proj_key(proj) + ".nap-owed")
 
 
-def mark_nap_owed(proj):
-    """Record that a post-compaction nap is owed for `proj`. Best-effort."""
+def mark_nap_owed(proj, session_id=None, transcript_path=None):
+    """Record that a post-compaction nap is owed for `proj`. Best-effort.
+
+    The obligation is keyed per PROJECT but the material it protects is per SESSION, so the
+    compacting session's id and transcript path are recorded WITH it. Without them a nap run in a
+    later session reviews only its own transcript while clearing the flag, discharging the
+    compacted stretch unread - and the block text asserts a compaction that session never had."""
     try:
         f = nap_owed_file(proj)
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+        f.write_text(json.dumps({"ts": time.time(),
+                                 "session_id": str(session_id or ""),
+                                 "transcript_path": str(transcript_path or "")},
+                                sort_keys=True), encoding="utf-8")
     except OSError:
         pass
 
@@ -598,6 +606,18 @@ def is_nap_owed(proj):
         return nap_owed_file(proj).is_file()
     except OSError:
         return False
+
+
+def nap_owed_info(proj):
+    """{'ts','session_id','transcript_path'} for the owed nap, or {} when none is owed.
+
+    Tolerates a LEGACY marker written before the session was recorded (it carries only `ts`), so an
+    obligation from an older plugin version still blocks - it just cannot name its transcript."""
+    try:
+        d = json.loads(nap_owed_file(proj).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def clear_nap_owed(proj):

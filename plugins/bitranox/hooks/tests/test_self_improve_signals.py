@@ -483,6 +483,30 @@ def test_nap_owed_marker_lifecycle(home):
     assert S.is_nap_owed("/p/x") is False
 
 
+def test_nap_owed_records_the_compacting_session_and_its_transcript(home, tmp_path):
+    # The obligation is per-PROJECT but the material it protects is per-SESSION. Without the
+    # transcript path recorded, a nap run in a LATER session clears the flag while reviewing only
+    # its own transcript, so the compacted session's stretch is discharged unread.
+    tp = tmp_path / "compacted.jsonl"
+    tp.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed("/p/x", session_id="sid-old", transcript_path=str(tp))
+    info = S.nap_owed_info("/p/x")
+    assert info.get("session_id") == "sid-old"
+    assert info.get("transcript_path") == str(tp)
+
+
+def test_nap_owed_info_tolerates_a_legacy_marker_without_a_transcript(home):
+    # Markers written before the transcript was recorded must not crash the gate or the dream.
+    S.mark_nap_owed("/p/x")
+    info = S.nap_owed_info("/p/x")
+    assert isinstance(info, dict)
+    assert info.get("transcript_path") in (None, "")
+
+
+def test_nap_owed_info_is_empty_when_nothing_is_owed(home):
+    assert S.nap_owed_info("/p/x") == {}
+
+
 def test_mark_dream_done_clears_a_owed_nap(home):
     # running the nap is what discharges the obligation - the marker must not outlive it
     _mem(home, "/p/x")

@@ -47,11 +47,20 @@ _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
 _REVIEWER = "dream"          # the dream's own watermark; the regex audit marks separately
 
 
-def _render_review(subs, touched, skills, text, offset, proj, structured_only=False):
+def _render_review(subs, touched, skills, text, offset, proj, structured_only=False, path="",
+                   owed=False):
     """Render the session-review output STRING (pure). With `structured_only`, the SUBAGENT/ROUTING/
     SKILLS blocks are kept but the raw UNREVIEWED TRANSCRIPT body is suppressed (its byte-count header
-    stays) - the structured value is ~10 lines while the raw dump can be hundreds of KB."""
+    stays) - the structured value is ~10 lines while the raw dump can be hundreds of KB.
+
+    `path` names the file being shown and `owed` says it is a COMPACTED EARLIER session's, not this
+    one - without that the reader assumes their own session and misreads whose learnings these are."""
     lines = []
+    if owed and path:
+        lines.append("== READING THE COMPACTED EARLIER SESSION (not this one): %s ==" % path)
+        lines.append("  Its context was cleared then, not yours now; this is the stretch nobody has")
+        lines.append("  reviewed. Capture from it, then run session-reviewed to discharge the nap.")
+        lines.append("")
     if subs:
         lines.append("== SUBAGENT LEARNINGS (not in your transcript - they die unless captured) ==")
         lines += ["  [%s] %s" % (r.get("agent_type") or "subagent", r.get("snippet") or "") for r in subs]
@@ -77,14 +86,32 @@ def _render_review(subs, touched, skills, text, offset, proj, structured_only=Fa
     return "\n".join(lines)
 
 
+def _review_target(proj):
+    """The transcript this review must read: the OWED one first, else the current session's.
+
+    An owed nap names the transcript that actually compacted, and that file is usually NOT the
+    current session's - the obligation is per project and outlives its session. Reviewing the
+    current session while clearing the flag discharges the compacted stretch unread, so the owed
+    transcript wins for as long as it still has unreviewed bytes. Once consumed (or gone from disk),
+    the target falls back to the live session so an ordinary review is unaffected."""
+    owed = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
+    if owed and os.path.exists(owed):
+        text, _ = sig.unreviewed_transcript_text(proj, _REVIEWER, transcript=owed)
+        if text:
+            return owed
+    return sig.resolve_transcript(proj)
+
+
 def _session_review(proj, structured_only=False):
     """Print the session material to consolidate, read FROM DISK and only the unreviewed part."""
     meta = sig.read_session_meta(proj)
-    path = sig.resolve_transcript(proj)
+    path = _review_target(proj)
     text, offset = sig.unreviewed_transcript_text(proj, _REVIEWER, transcript=path)
     # The transcript basename IS the session id, so a SELF-LOCATED transcript (no meta recorded)
     # still recovers the subagent-learning and touched-path inputs, which are keyed by session id.
-    session = meta.get("session_id") or (Path(path).stem if path else "")
+    # A transcript that is not the live session's is keyed by its OWN id, never the recorded one.
+    session = (Path(path).stem if path and path != meta.get("transcript_path")
+               else meta.get("session_id") or (Path(path).stem if path else ""))
     subs = sig.read_subagent_learnings(session) if session else []
     touched = sig.subject_levels(sig.read_touched_paths(session), proj) if session else []
     skills = sig.skills_invoked(text)
@@ -99,13 +126,16 @@ def _session_review(proj, structured_only=False):
             print("NOTHING NEW since the last review (transcript: %s)" % path)
         return 0
 
-    print(_render_review(subs, touched, skills, text, offset, proj, structured_only))
+    owed = path != sig.resolve_transcript(proj)
+    print(_render_review(subs, touched, skills, text, offset, proj, structured_only,
+                         path=path, owed=owed))
     return 0
 
 
 def _session_reviewed(proj):
     """Advance the dream's watermark to the transcript's current end."""
-    tp = sig.resolve_transcript(proj)   # same resolver as review, so a self-located transcript marks too
+    tp = _review_target(proj)           # the SAME resolver review used, or the mark lands on the
+                                        # wrong file and the owed stretch is skipped forever
     if not tp:
         print("no known transcript for %s - nothing to mark" % proj)
         return 0

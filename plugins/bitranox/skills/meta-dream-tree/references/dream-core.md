@@ -93,6 +93,14 @@ dream in one session costs nothing and re-analyzes nothing. When the pass is don
 `dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop
 gate will not let the session stop until this nap has run.
 
+**The owed transcript is usually NOT this session's.** The obligation is recorded per PROJECT and
+outlives the session that compacted, so it is routinely inherited by a later session that never
+compacted at all. `session-review` therefore targets the transcript that ACTUALLY compacted while it
+still has unreviewed bytes, and prints a `READING THE COMPACTED EARLIER SESSION` banner naming that
+file; `session-reviewed` marks the same file. Read the banner before deciding whose learnings these
+are, and do not clear the obligation any other way - discharging it without reading that file is how
+a compacted session's stretch is lost while the run reports itself consolidated.
+
 ## Backup + manifest (before any edit)
 
 Copy every store the run may touch (the anchor's `.claude-memory/` + each in-scope level's
