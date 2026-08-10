@@ -24,6 +24,7 @@ _HOOK_MODULES = {
     "block-masked-gate-exit": "block_masked_gate_exit",
     "self-improve-gate": "self_improve_gate",
     "self-improve-audit": "self_improve_audit",
+    "decision-review-nudge": "decision_review_nudge",
     "post-compact-nudge": "post_compact_nudge",
     "repo-gate": "repo_gate",
     "tell-sweep": "tell_sweep",

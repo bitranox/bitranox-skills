@@ -150,3 +150,7 @@ From 24 failure memories:
 Run the command. Read the output. THEN claim the result.
 
 This is non-negotiable.
+
+A verified claim is still only a true one. Whether the choices behind it were the RIGHT choices is
+a different question, and this skill does not ask it - `bitranox:process-review-uncertain-decisions`
+does.

@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.171.0] - 2026-08-10
+
+### Added
+
+- `process-review-uncertain-decisions`: a new skill that asks, after work, which decisions were
+  made that the agent is NOT confident about, what alternative was not taken, and what would
+  settle it - while deliberately saying nothing about the decisions that are already right. That
+  suppression is the point: every other review skill here pushes toward more findings, and a list
+  that includes the settled calls hands the sorting back to the reader. The question ships
+  verbatim because a clean-room baseline PASSED on both `haiku` and `sonnet`, returning only the
+  genuinely unsettled calls out of a ten-step session that mixed them with obviously-right ones -
+  so strengthening the wording would have been an unmeasured change to a measured-good prompt.
+- `decision-review-nudge`: the Stop hook that fires it. What the baseline showed missing was never
+  the wording, it was that nothing asks the question at the end of a session, and the person who
+  would ask is the person who has to remember to. It fires ONCE per session, once the session has
+  written enough files to have made real choices, reusing the distinct-file evidence the
+  `touched-paths` recorder already collects rather than deriving "did real work happen" a second
+  way. Its flag is keyed by SESSION, because a per-project flag outlives its session and demands
+  work for something that happened in a different one.
+- The same question is now reachable from three moments that already exist: the end of a quality
+  sweep, a verified completion claim, and finishing a branch. Each is a one-line cross-reference,
+  never a copy, so the question has exactly one home; the hook's once-per-session guard is what
+  keeps three entry points from producing three asks.
+
 ## [5.169.0] - 2026-08-10
 
 ### Added

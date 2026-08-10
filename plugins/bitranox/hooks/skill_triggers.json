@@ -1018,6 +1018,22 @@
   "review",
   "changes"
  ],
+ "process-review-uncertain-decisions": [
+  "finishing",
+  "piece",
+  "work",
+  "feature",
+  "refactor",
+  "plan",
+  "step",
+  "release",
+  "moving",
+  "surface",
+  "choices",
+  "made",
+  "along",
+  "settled"
+ ],
  "process-review-verification-before-completion": [
   "claim",
   "work",
