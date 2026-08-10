@@ -94,7 +94,45 @@ def test_talking_about_a_commit_is_not_committing():
 
 
 # --------------------------------------------------------------------------
-# A /goal run: quiet until the objective is met
+# Block once, then remind: the policy, as one pure decision
+# --------------------------------------------------------------------------
+
+
+def test_nothing_concluded_says_nothing():
+    assert DRN.decide(score=0, last_score=0) == DRN.ASK_NONE
+
+
+def test_the_first_conclusion_blocks():
+    """An ask that can be scrolled past is one that gets scrolled past - stop the session once."""
+    assert DRN.decide(score=1, last_score=0) == DRN.ASK_BLOCK
+
+
+def test_the_same_conclusion_seen_again_says_nothing():
+    """A commit never leaves the transcript, so without this every later turn would re-fire."""
+    assert DRN.decide(score=1, last_score=1) == DRN.ASK_NONE
+
+
+def test_a_further_conclusion_reminds_without_blocking():
+    """A second block would nag, and repeated blocks hit the cap that ends a turn by override."""
+    assert DRN.decide(score=2, last_score=1) == DRN.ASK_REMIND
+
+
+def test_a_goal_going_from_running_to_met_counts_as_new():
+    assert DRN.conclusion_score(signals([], DRN.GOAL_MET)) > DRN.conclusion_score(
+        signals([], DRN.GOAL_ACTIVE))
+
+
+def test_each_further_commit_raises_the_score():
+    assert DRN.conclusion_score(signals(["git commit -m a", "git push"])) > DRN.conclusion_score(
+        signals(["git commit -m a"]))
+
+
+def test_ordinary_commands_never_raise_the_score():
+    assert DRN.conclusion_score(signals(["ls", "pytest -q", "git status"])) == 0
+
+
+# --------------------------------------------------------------------------
+# A /goal run
 # --------------------------------------------------------------------------
 
 
@@ -195,17 +233,31 @@ def test_a_one_turn_goal_is_asked_without_waiting_a_turn(scratch_home, monkeypat
     assert json.loads(out)["decision"] == "block"
 
 
-def test_a_session_is_asked_once_not_after_every_later_commit(scratch_home, monkeypatch, capsys):
+def test_a_session_is_blocked_once_not_after_every_later_turn(scratch_home, monkeypatch, capsys):
     path = transcript(scratch_home, bash_line("git commit -m one"))
     _, first = run_main({"session_id": "s5", "transcript_path": path}, monkeypatch, capsys)
     _, second = run_main({"session_id": "s5", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(first)["decision"] == "block"
-    assert second == "", "the second turn must not re-ask"
+    assert second == "", "the same commit must not re-fire on every later turn"
+
+
+def test_a_later_commit_reminds_without_blocking(scratch_home, monkeypatch, capsys):
+    """The repeat channel: non-blocking, so it rides next to the result instead of stopping it."""
+    one = transcript(scratch_home, bash_line("git commit -m one"), name="a.jsonl")
+    _, first = run_main({"session_id": "s8", "transcript_path": one}, monkeypatch, capsys)
+    two = transcript(scratch_home, bash_line("git commit -m one"), bash_line("git push"),
+                     name="b.jsonl")
+    _, second = run_main({"session_id": "s8", "transcript_path": two}, monkeypatch, capsys)
+    assert json.loads(first)["decision"] == "block"
+    out = json.loads(second)
+    assert "decision" not in out, "a repeat must never block"
+    assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
+    assert "process-review-uncertain-decisions" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_another_sessions_flag_does_not_suppress_this_one(scratch_home, monkeypatch, capsys):
     """A per-PROJECT flag outlives its session and silences the next one; a session-keyed flag cannot."""
-    DRN.mark_asked("an-older-session")
+    DRN.record_score("an-older-session", 99)
     path = transcript(scratch_home, bash_line("git commit -m x"))
     _, out = run_main({"session_id": "s6", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(out)["decision"] == "block"

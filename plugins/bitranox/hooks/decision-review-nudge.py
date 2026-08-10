@@ -100,37 +100,65 @@ def transcript_signals(transcript_path, max_bytes=_MAX_TRANSCRIPT_BYTES):
     return Signals(commands, goal_state)
 
 
+_GOAL_SCORE = {GOAL_NONE: 0, GOAL_ACTIVE: 1, GOAL_MET: 2}
+
+
+def conclusion_score(signals):
+    """How many times work has concluded, as a number that only ever grows within a session.
+
+    Counting rather than answering yes/no is what lets a LATER conclusion be told from the same one
+    still sitting in the transcript. Without it the repeat nudge would fire on every turn after the
+    first commit, since that commit never leaves the transcript.
+
+    A goal scores 1 while running and 2 once met, so the running-to-met transition registers as a
+    new conclusion even though no command was run.
+    """
+    return _GOAL_SCORE[signals.goal_state] + sum(
+        1 for c in signals.commands if shell_text.is_gated_command(c)
+    )
+
+
 def reached_a_conclusion(signals):
     """True once the work is somebody else's to live with - a goal in play, or a commit."""
-    if signals.goal_state in (GOAL_MET, GOAL_ACTIVE):
-        # ACTIVE counts too: the met verdict is written after this hook reads, so waiting for it
-        # costs a turn the session may never take. See the module docstring.
-        return True
-    return any(shell_text.is_gated_command(c) for c in signals.commands)
+    return conclusion_score(signals) > 0
 
 
-def should_ask(concluded, was_asked):
-    """The whole policy: work has concluded, and this session has not been asked yet."""
-    return bool(concluded) and not was_asked
+ASK_NONE = "none"
+ASK_BLOCK = "block"
+ASK_REMIND = "remind"
+
+
+def decide(score, last_score):
+    """The whole policy, as one pure decision.
+
+    The FIRST conclusion in a session blocks, because an ask that can be scrolled past is an ask
+    that gets scrolled past. Every conclusion AFTER it only reminds, without blocking: a second
+    block would be nagging, and repeated blocks run into the consecutive-block cap that ends a turn
+    by override. So the session is stopped once and nudged thereafter.
+    """
+    if score <= 0 or score <= last_score:
+        return ASK_NONE
+    return ASK_BLOCK if last_score <= 0 else ASK_REMIND
 
 
 def asked_flag(session):
-    """Session-keyed marker that the ask already fired. Keyed by session so it cannot go stale."""
+    """Session-keyed state holding the last conclusion score. Keyed by session so it cannot go stale."""
     return sig.touched_file(session).with_suffix(".decisions-asked")
 
 
-def already_asked(session):
+def last_score(session):
+    """The score at the previous ask. 0 when this session has never been asked."""
     try:
-        return asked_flag(session).is_file()
-    except OSError:
-        return False
+        return int(asked_flag(session).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0
 
 
-def mark_asked(session):
+def record_score(session, score):
     try:
         f = asked_flag(session)
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("1\n", encoding="utf-8")
+        f.write_text("%d\n" % score, encoding="utf-8")
     except OSError:
         pass
 
@@ -146,6 +174,14 @@ _REASON = (
     "nothing is genuinely unsettled, say so in one line and stop."
 )
 
+# The repeat. Non-blocking, so it rides along next to the turn's result instead of stopping it -
+# the same channel a PreToolUse nudge uses, which the Stop handler also accepts.
+_REMINDER = (
+    "More work concluded since the decision review. If any of it involved a call you are not "
+    'confident about, say so now - `bitranox:process-review-uncertain-decisions` carries the '
+    "question. Only the unsettled ones; silence is the right answer when there are none."
+)
+
 
 def main():
     try:
@@ -156,16 +192,20 @@ def main():
     transcript = event.get("transcript_path") or ""
     if not session or not transcript:
         return 0
-    if already_asked(session):
-        return 0                                          # cheap: no transcript read on later turns
     try:
-        concluded = reached_a_conclusion(transcript_signals(transcript))
+        score = conclusion_score(transcript_signals(transcript))
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
-    if not should_ask(concluded, was_asked=False):
+    seen = last_score(session)
+    verdict = decide(score, seen)
+    if verdict == ASK_NONE:
         return 0
-    mark_asked(session)                                   # before emitting, so a crash cannot re-nag
-    sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
+    record_score(session, score)                          # before emitting, so a crash cannot re-nag
+    if verdict == ASK_BLOCK:
+        sys.stdout.write(json.dumps({"decision": "block", "reason": _REASON}))
+    else:
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "Stop", "additionalContext": _REMINDER}}))
     return 0
 
 
