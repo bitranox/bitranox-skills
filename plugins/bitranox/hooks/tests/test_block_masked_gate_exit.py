@@ -179,3 +179,43 @@ def test_reads_masked_status_respects_the_documented_fixes():
 def test_reads_masked_status_only_counts_a_read_AFTER_the_pipe():
     """`rc=$?` before the pipeline reads something else entirely - not this bug."""
     assert B.reads_masked_status('true; rc=$?; ls | tail -2') is False
+
+
+# --- inert regions: text that MENTIONS the footgun is not committing it -------------------
+#
+# Third false fire of this guard on the day it shipped, each on prose rather than a command.
+# The escaped case is the one that actually happened, reproduced here from the real command:
+# an echo label describing the rule, written after a `| sed`, was read as a status check.
+
+
+def test_escaped_dollar_question_is_prose_not_a_status_read():
+    """`\\$?` is passed through literally by bash, so it can never be reading a status."""
+    command = 'grep -c "x" f.py | sed \'s/^/n: /\'\necho "=== does it do the \\$?-after-pipe detection? ==="'
+    assert B.reads_masked_status(command) is False
+
+
+def test_a_comment_mentioning_the_footgun_does_not_fire():
+    assert B.reads_masked_status("grep x f | head -3\n# never read $? after a pipe") is False
+
+
+def test_single_quoted_prose_does_not_fire():
+    """No expansion happens inside single quotes, so the text is inert."""
+    assert B.reads_masked_status("grep x f | head -3\necho 'mentions $? literally'") is False
+
+
+def test_double_quoted_status_read_still_fires():
+    """The counterpart the narrowing must NOT cost: `$?` expands inside double quotes.
+
+    This is the whole point of the guard, and it is why double-quoted prose is knowingly left
+    as a false positive - to the shell the two are identical, so no scanner can separate them.
+    """
+    assert B.reads_masked_status('tool verify | tail -5; echo "rc=$?"') is True
+
+
+def test_blanking_preserves_the_command_shape():
+    """Structure outside the inert regions must survive, or the pipeline split changes meaning."""
+    import shell_text
+
+    blanked = shell_text.blank_unexpanded_text("a | tail -2; b && c || d # note")
+    assert "|" in blanked and ";" in blanked and "&&" in blanked and "||" in blanked
+    assert "note" not in blanked

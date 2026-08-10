@@ -30,7 +30,7 @@ import json
 import re
 import sys
 
-from shell_text import strip_heredoc_bodies
+from shell_text import blank_unexpanded_text, strip_heredoc_bodies
 
 # Commands whose exit status is a quality verdict worth protecting.
 GATE = re.compile(
@@ -82,9 +82,13 @@ def reads_masked_status(command: str) -> bool:
     this the guard fired on a command that piped one check into `tail` and then ran a SECOND check
     redirected to a file - the correct form it exists to recommend.
 
-    Heredoc bodies are stripped first: writing ABOUT the footgun is not committing it.
+    Inert regions are blanked first: writing ABOUT the footgun is not committing it. Heredoc bodies
+    were the first such region; escaped `\\$?`, single-quoted strings and `#` comments are the rest,
+    and all three false-fired this guard on the day it shipped. A `$?` inside DOUBLE quotes still
+    counts, because it genuinely expands there - `echo "rc=$?"` is the exact mistake this catches,
+    so prose in double quotes is knowingly left as a false positive rather than lose the real case.
     """
-    text = strip_heredoc_bodies(command or "")
+    text = blank_unexpanded_text(strip_heredoc_bodies(command or ""))
     if HANDLED.search(text):
         return False
     statements = [s for s in SPLIT.split(text) if s.strip()]

@@ -410,6 +410,8 @@ It's safe to run multiple uv commands concurrently, even against the same virtua
 
 Note that it's _never_ safe to modify the cache directly (e.g., by removing a file or directory).
 
+That includes WRITING into it, which is the tempting direction: seeding or "warming" a shared cache by copying entries in with `robocopy`/`rsync`/`cp`. uv writes its entries atomically; a file copy does not, and a half-copied entry is not rejected, because uv trusts what it finds. The failure is therefore silent and delayed: measured on a fleet sharing one cache, a copy-merge left a partial `hatchling`, and the next `uv build` failed with `No module named hatchling.builders.constants` in a project that had nothing to do with the copy. Let the cache cold-fill on first use - the file lock described above already makes a shared cache safe for concurrent readers and writers, so there is nothing to warm.
+
 ### Clearing the cache
 
 uv provides a few different mechanisms for removing entries from the cache:
