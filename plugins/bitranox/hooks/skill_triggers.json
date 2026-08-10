@@ -590,6 +590,22 @@
   "checksum",
   "errors"
  ],
+ "infra-swap-tuning": [
+  "deciding",
+  "linux",
+  "host",
+  "swap",
+  "configuration",
+  "zram",
+  "compressed",
+  "size",
+  "priority",
+  "vm.swappiness",
+  "froze",
+  "kernel",
+  "still",
+  "alive"
+ ],
  "infra-windows-servicing": [
   "windows",
   "machine",

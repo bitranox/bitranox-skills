@@ -1,6 +1,6 @@
 ---
 name: infra-modulejail
-description: Use when hardening a Linux host by preventing the kernel from loading modules it does not need - kernel-module allowlist or blacklist, modprobe install override, reducing request_module/autoload attack surface, CIS module-blacklisting - especially on a remote or relocating host with no console and no out-of-band power, where a wrong module list can leave it unbootable and unreachable.
+description: Use when hardening a Linux host by preventing the kernel from loading modules it does not need - kernel-module allowlist or blacklist, modprobe install override, reducing request_module/autoload attack surface, CIS module-blacklisting - especially on a remote or relocating host with no console and no out-of-band power, where a wrong module list can leave it unbootable and unreachable. Also use when a module silently refuses to load on an already-jailed host: modprobe exits 0 having loaded nothing, lsmod stays empty, a systemd unit fails with "Dependency failed", or journalctl shows "blocked: <module>".
 ---
 
 # infra-modulejail
@@ -93,6 +93,17 @@ Refuse to apply unless ALL hold:
 - **`block.list` is non-empty** (an empty list means the pipeline failed and you have a
   false "success").
 
+**Capture the dry-run from the right STREAM.** A tool that prints its would-be blacklist to
+STDERR hands a stdout-reading verifier an EMPTY set, and then every invariant above passes
+vacuously - including the non-empty check, which is the one meant to catch exactly this.
+Measured on one implementation: stdout carried 1 summary line and 0 `install` lines while stderr
+carried 6725. Redirect both and assert the parsed count is what the summary claims.
+
+```bash
+modulejail --dry-run >out.txt 2>err.txt
+grep -c '^install ' out.txt err.txt      # know which stream you are actually parsing
+```
+
 **Validate the gate against a known-negative:** drop one obviously-required module (e.g.
 `veth` on an LXC host, or your root-disk controller) from the KEEP set and re-run the gate -
 it MUST flag it. A gate that passes your removal is not checking anything. See
@@ -127,6 +138,68 @@ your SSH, and - if WiFi is the post-move uplink - its driver plus `cfg80211`/`ma
 modules your firewall uses. On a KVM host keep `kvm`, `kvm_intel`/`kvm_amd`, `vhost_net`,
 `tun`, `vfio*`.
 
+## The closure misses runtime-loaded modules - discover those by EXERCISING
+
+`modprobe --show-depends` reports only the STATIC dependencies recorded in `modules.dep`. A
+kernel subsystem that asks for a helper at runtime through `request_module()` - the crypto API
+above all, but also filesystem crypto and netfilter helpers - names it by ALIAS at the moment of
+use, so no closure of the KEEP set can predict it. Whitelist the feature, watch it still fail,
+and the failure has MOVED rather than resolved.
+
+The block is silent by construction. `install X /bin/true` runs `/bin/true` INSTEAD of inserting
+the module, so `modprobe X` prints nothing and exits 0 while loading nothing - success by every
+signal a caller can test. The symptom then surfaces somewhere else entirely and never mentions a
+module.
+
+Two different failures come out of one jail, and they look nothing alike:
+
+| What is blocked                      | How it fails                                            |
+|--------------------------------------|---------------------------------------------------------|
+| the module you asked for             | `modprobe` silent, exit 0, `lsmod` empty                |
+| a DEPENDENCY of a whitelisted module | `modprobe: ERROR: could not insert 'X': Unknown symbol` |
+
+The second reads like a broken module or a kernel mismatch rather than a policy decision, so
+sweep every whitelist entry's own `modinfo -F depends` rather than trusting the entry alone.
+
+**Method: exercise the real code path, read what was refused, add it, repeat.**
+
+```bash
+# modulejail logs every refusal under its own syslog tag - this is the discovery channel
+journalctl -t modulejail --since "-1h" \
+  | sed -n 's/.*blocked: \([a-zA-Z0-9_-]*\).*/\1/p' | sort | uniq -c | sort -rn
+```
+
+Start the service, mount the filesystem, select the algorithm - then read that list. Anything on
+it is a runtime request the closure did not predict. Add it to KEEP, regenerate, repeat until the
+list is empty while the feature works.
+
+Worked example - a zram swap device configured for `zstd`:
+
+| Module set                                                         | Found by                |
+|--------------------------------------------------------------------|-------------------------|
+| `zram`                                                             | your explicit whitelist |
+| `lz4_compress`, `lz4hc_compress`, `842_compress`, `842_decompress` | `--show-depends zram`   |
+| `zstd`                                                             | ONLY the modulejail log |
+
+`zstd` is the crypto-API backend requested when `zstd` is written to `comp_algorithm`, and is
+invisible to `--show-depends` at any depth.
+
+**Run `--show-depends` on YOUR kernel; do not copy that list.** It is kernel-specific, and the
+plausible guesses are wrong often enough to be worth naming. Two measured on one 7.0.x build,
+both of which a competent reader would assume the other way:
+
+- `zsmalloc` is a module on that kernel, yet is NOT a dependency of `zram` and is never needed -
+  it is a wrong guess, not a module to go and find.
+- The only zstd object on disk is `zstd.ko`. There is no `zstd_compress.ko` or
+  `zstd_decompress.ko`, although `modinfo zstd_compress` still answers, because it resolves the
+  name through an alias. `modinfo` succeeding is not evidence that a distinct module exists.
+
+**A working feature is not proof nothing is blocked.** On that same host zram selected `[zstd]`
+and compressed correctly while the `zstd` module was still refused, because the kernel also
+carries a built-in zstd backend - the only evidence was dozens of refusals in the log. A kernel
+without that built-in path fails outright on the identical configuration. Treat a non-empty
+refusal list as unfinished work even when the feature looks healthy.
+
 ## Verify (differential, not by inspection)
 
 ```bash
@@ -137,17 +210,30 @@ modprobe -n -v veth     # a KEPT name    -> resolves to a real insmod path
 Re-run any whitelist change through steps 1-4 and regenerate the file; the generated
 `/etc/modprobe.d/modulejail-blacklist.conf` is host-specific and per-kernel.
 
+Regenerating alone is not enough: a unit that already failed on the missing module stays failed,
+so the correct fix reads as ineffective. Clear it and retry. Clear the whole chain, not just the
+unit named in the error - the device and swap units latch their own failed state.
+
+```bash
+systemctl reset-failed systemd-zram-setup@zram0.service dev-zram0.swap
+systemctl restart systemd-zram-setup@zram0.service
+swapon --show                      # the outcome; the unit going active is not the same thing
+```
+
 ## Common mistakes
 
-| Mistake                                          | Consequence                                                  |
-|--------------------------------------------------|--------------------------------------------------------------|
-| Baking the block into the initramfs              | A wrong entry bricks early boot before SSH - unrecoverable   |
-| Hand-picking a short blocklist                   | Barely reduces attack surface; misses the autoloaded classes |
-| Blocking by name without the dependency closure  | Kills a dependency of a kept module; kept driver breaks      |
-| `blacklist X` instead of `install X /bin/true`   | `blacklist` only stops alias autoload, not an explicit load  |
-| Trailing inline `# comment` on an `install` line | modprobe.d mis-parses it; block silently wrong               |
-| Empty `block.list` read as success               | Pipeline failed; you hardened nothing and think you did      |
-| Relocating before a real cold-reboot test        | First real boot at the unreachable site is the test          |
+| Mistake                                           | Consequence                                                  |
+|---------------------------------------------------|--------------------------------------------------------------|
+| Baking the block into the initramfs               | A wrong entry bricks early boot before SSH - unrecoverable   |
+| Hand-picking a short blocklist                    | Barely reduces attack surface; misses the autoloaded classes |
+| Blocking by name without the dependency closure   | Kills a dependency of a kept module; kept driver breaks      |
+| `blacklist X` instead of `install X /bin/true`    | `blacklist` only stops alias autoload, not an explicit load  |
+| Trailing inline `# comment` on an `install` line  | modprobe.d mis-parses it; block silently wrong               |
+| Empty `block.list` read as success                | Pipeline failed; you hardened nothing and think you did      |
+| Relocating before a real cold-reboot test         | First real boot at the unreachable site is the test          |
+| Trusting the dependency closure to be complete    | Runtime `request_module()` helpers are invisible to it       |
+| Reading a working feature as "nothing is blocked" | A built-in fallback can hide a refusal that breaks elsewhere |
+| Regenerating without clearing the failed unit     | Unit stays failed; the correct fix looks ineffective         |
 
 ## Real-world impact
 
