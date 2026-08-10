@@ -832,3 +832,96 @@ def test_the_real_repo_has_no_duplicate_basenames():
     root = Path(__file__).resolve().parents[3].parent
     assert (root / ".git").exists(), "expected to run inside the repo checkout"
     assert RG.check_duplicate_basenames(root) == []
+
+
+# --------------------------------------------------------------------------
+# Test-dependency preflight: a missing optional dep must name itself, not
+# surface as an unrelated assertion failure inside somebody's test.
+# --------------------------------------------------------------------------
+
+
+def _workflow(tmp_path, install_line):
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text(
+        "jobs:\n"
+        "  test:\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          python -m pip install --upgrade pip\n"
+        "          %s\n" % install_line,
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_dependency_list_is_read_from_the_ci_workflow(tmp_path):
+    """Reading the workflow is what stops the gate's idea of CI drifting from CI's."""
+    root = _workflow(tmp_path, "pip install pytest PyYAML lxml")
+    assert RG.ci_test_dependencies(root) == ["pytest", "PyYAML", "lxml"]
+
+
+def test_the_pip_upgrade_line_is_not_read_as_a_dependency(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    names = RG.ci_test_dependencies(root)
+    assert "--upgrade" not in names and names == ["pytest", "lxml"]
+
+
+def test_a_missing_dependency_is_named_with_the_command_that_installs_it(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    msgs = RG.check_test_dependencies(root, is_installed=lambda mod: mod != "lxml")
+    joined = "\n".join(msgs)
+    assert msgs, "a missing dependency must be reported"
+    assert "missing: lxml" in joined
+    assert "pip install lxml" in joined
+
+
+def test_an_installed_dependency_is_not_reported_as_missing(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    joined = "\n".join(RG.check_test_dependencies(root, is_installed=lambda mod: mod != "lxml"))
+    assert "missing: lxml" in joined and "pytest" not in joined.split("missing:")[1].splitlines()[0]
+
+
+def test_all_dependencies_present_reports_nothing(tmp_path):
+    root = _workflow(tmp_path, "pip install pytest lxml")
+    assert RG.check_test_dependencies(root, is_installed=lambda mod: True) == []
+
+
+def test_pyyaml_is_probed_by_its_import_name(tmp_path):
+    """PyYAML installs under one name and imports under another; probing the pip name always misses."""
+    root = _workflow(tmp_path, "pip install PyYAML")
+    probed = []
+
+    def record(mod):
+        probed.append(mod)
+        return True
+
+    RG.check_test_dependencies(root, is_installed=record)
+    assert probed == ["yaml"]
+
+
+def test_a_workflow_that_cannot_be_read_reports_nothing(tmp_path):
+    """No workflow means no claim about CI parity to make - stay silent rather than guess."""
+    assert RG.ci_test_dependencies(tmp_path) == []
+    assert RG.check_test_dependencies(tmp_path, is_installed=lambda mod: False) == []
+
+
+def test_the_default_probe_finds_a_module_that_is_installed():
+    """The injected seam must agree with the real import system, or the tests prove nothing."""
+    assert RG.module_installed("json") is True
+    assert RG.module_installed("a_module_that_is_not_installed_anywhere") is False
+
+
+def test_a_missing_dependency_does_not_also_report_a_pytest_failure(tmp_path, monkeypatch):
+    """One cause, one message: running pytest anyway files the dep problem as a test defect."""
+    root = _workflow(tmp_path, "pip install lxml")
+    monkeypatch.setattr(RG, "module_installed", lambda mod: False)
+    monkeypatch.setattr(RG, "check_pytest", lambda *a, **k: pytest.fail("pytest must not run"))
+    joined = "\n".join(RG.run_checks(root, ci=True))
+    assert "missing: lxml" in joined
+
+
+def test_the_real_workflow_names_the_dependencies_this_gate_relies_on():
+    root = Path(__file__).resolve().parents[3].parent
+    names = RG.ci_test_dependencies(root)
+    assert "pytest" in names and "lxml" in names
