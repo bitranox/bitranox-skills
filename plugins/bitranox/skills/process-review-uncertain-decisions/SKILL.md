@@ -49,12 +49,16 @@ find anything.
 
 ## When it fires on its own
 
-A Stop hook asks once per session, when the work has concluded: a `/goal` is in play, or - with no
-goal - a commit, a push, or an opened PR. A goal counts whether or not it has reported met yet,
-because the verdict is written while the Stop hooks are already running: at the moment the hook
-looks, the record still says not-met, and waiting for it costs a whole turn that a finished session
-may never take. Once per session means the real choice is sometimes-early against sometimes-never.
-Nothing stops you asking earlier; the hook exists for the times nobody remembers to.
+A Stop hook watches for work concluding: a `/goal` in play, or - with no goal - a commit, a push,
+or an opened PR. A goal counts whether or not it has reported met yet, because the verdict is
+written while the Stop hooks are already running, so at the moment the hook looks the record still
+says not-met and waiting for it costs a whole turn a finished session may never take.
+
+It stops the session ONCE, on the first conclusion, because an ask that can be scrolled past is one
+that gets scrolled past. Every conclusion after that only reminds, without blocking. That split is
+what makes the early-versus-late question stop mattering: an early first ask no longer means
+silence for the rest of the session, and a second block would be nagging anyway. Nothing stops you
+asking earlier; the hook exists for the times nobody remembers to.
 
 ## Where the answer goes
 

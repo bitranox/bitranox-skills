@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.172.0] - 2026-08-10
+
+### Added
+
+- `decision-review-nudge` now has a second, NON-BLOCKING channel. The first conclusion in a session
+  still blocks, because an ask that can be scrolled past is one that gets scrolled past; every
+  conclusion after it emits `hookSpecificOutput.additionalContext` instead, which rides along next
+  to the turn's result without stopping it. That retires the trade the previous version had to
+  make: an early first ask no longer means silence for the rest of the session.
+- The channel was verified against the CLI's own embedded hook documentation before use -
+  `{"hookSpecificOutput": {"hookEventName": ..., "additionalContext": ...}}` - and the Stop
+  handler is the code that consumes `additionalContexts` and re-tags them `hookName: "Stop"`, so
+  it is available on this event and not only on PreToolUse where it had previously been measured.
+
+### Changed
+
+- Repeats are told apart by a SCORE rather than a boolean. A commit never leaves the transcript, so
+  a yes/no "has it concluded" would re-fire on every later turn; the hook records the score it last
+  acted on and speaks only when that rises. A goal scores 1 while running and 2 once met, so the
+  running-to-met transition registers as a new conclusion even though no command was run.
+- Repeated blocking was rejected for a second reason beyond nagging: the CLI ends a turn by
+  override once a hook has blocked several times consecutively. A remind-only repeat cannot reach
+  that cap.
+
 ## [5.171.3] - 2026-08-10
 
 ### Fixed
