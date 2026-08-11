@@ -7,9 +7,14 @@ import pytest
 import fleet_ssh as F
 
 
-def plan(argv, home="/home/nobody", default_user="localuser"):
-    """parse_args + plan, which is where the wiring lives (and where the scp-user bug lived)."""
-    built, host, known_hosts = F.plan(F.parse_args(argv), home=home, default_user=default_user)
+def plan(argv, home="/home/nobody", default_user="localuser", config_user=lambda host: None):
+    """parse_args + plan, which is where the wiring lives (and where the scp-user bug lived).
+
+    config_user is injected and answers None by default, so no test shells out to `ssh -G` and no
+    test depends on the ssh_config of the machine it runs on.
+    """
+    built, host, known_hosts = F.plan(F.parse_args(argv), home=home, default_user=default_user,
+                                      config_user=config_user)
     return " ".join(built), host, known_hosts
 
 
@@ -63,6 +68,68 @@ def test_scp_host_finds_the_remote_side():
     assert F.scp_host("root@h:/p", "./f") == "h"
     assert F.scp_host("/a", "/b") is None
     assert F.scp_host("/a", "/mnt/c:/weird") is None
+
+
+# ---- an unstated user must not override ssh_config ---------------------------------------------
+
+def test_an_unstated_user_is_never_written_into_the_argv():
+    """`user@host` on the command line OVERRIDES a `User` directive in ssh_config.
+
+    So filling in the local account when nobody asked would silently log a host whose config says
+    `User root` in as the wrong user - a regression against plain ssh, which the wrapper must not
+    introduce.
+    """
+    line, _host, _kh = plan(["--key", "/k", "h", "uptime"])
+    assert line.endswith(" h uptime")
+    assert "localuser@h" not in line
+
+
+def test_an_unstated_user_is_not_written_into_an_scp_path_either():
+    line, _host, _kh = plan(["--scp", "--key", "/k", "./f", "h:/p"])
+    assert line.endswith("./f h:/p")
+    assert "localuser@" not in line
+
+
+def test_the_key_is_resolved_for_whoever_ssh_says_it_will_be(tmp_path):
+    """Leaving the login to ssh_config must not leave the KEY behind: resolving it for the local
+    account while ssh connects as root is the same identity mismatch one step along."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "root@anyhost_nopass.key").write_text("k")
+    line, _host, _kh = plan(["h", "uptime"], home=str(home), config_user=lambda host: "root")
+    assert "root@anyhost_nopass.key" in line, "the key follows the config's user"
+    assert "root@h" not in line, "but the login is still left to the config"
+
+
+def test_the_local_user_is_the_fallback_when_ssh_config_names_nobody(tmp_path):
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "localuser@anyhost_nopass.key").write_text("k")
+    line, _host, _kh = plan(["h", "uptime"], home=str(home))
+    assert "localuser@anyhost_nopass.key" in line
+    assert "localuser@h" not in line
+
+
+def test_ssh_config_user_reads_ssh_dash_G():
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(list(argv))
+        return _FakeProc(0, stdout="hostname h.example\nuser root\nport 22\n")
+
+    assert F.ssh_config_user("h", run=fake_run) == "root"
+    assert calls == [["ssh", "-G", "h"]], "asks ssh, and does not connect"
+
+
+def test_ssh_config_user_is_none_when_ssh_cannot_answer():
+    def failing(argv, **kw):
+        return _FakeProc(255)
+
+    def missing(argv, **kw):
+        raise OSError("ssh not found")
+
+    assert F.ssh_config_user("h", run=failing) is None
+    assert F.ssh_config_user("h", run=missing) is None
 
 
 # ---- trap 2: -i alone still prompts ------------------------------------------------------------
@@ -151,8 +218,8 @@ def test_host_key_changed_matches_both_ssh_phrasings():
 # ---- the retry: this decides whether a remote command runs once or twice -------------------------
 
 class _FakeProc:
-    def __init__(self, returncode=0, stderr=""):
-        self.returncode, self.stderr = returncode, stderr
+    def __init__(self, returncode=0, stderr="", stdout=""):
+        self.returncode, self.stderr, self.stdout = returncode, stderr, stdout
 
 
 class _Runner:
