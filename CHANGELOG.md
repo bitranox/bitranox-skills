@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.175.0] - 2026-08-11
+
+### Added
+
+- `compuse-toolbox` ships `fleet_ssh`, a jig for driving a host over ssh or scp with one option
+  set and one resolved key. It exists because three traps sit in the hand-typed one-liner it
+  replaces, and two of them fail in ways that do not look like what they are.
+  - scp carries the login user INSIDE the path and has no `--user` flag. A wrapper that reads
+    `--user` only to choose the key hands scp a destination naming nobody, so it connects as the
+    LOCAL user while offering the other user's key: `Permission denied (publickey)` from a command
+    line where the flag looks honoured. `--user` now fills in a remote side that names no user, on
+    either side of the pair, so the key and the login are always the same identity.
+  - `-i <key>` alone still falls back to a PASSWORD PROMPT when the key is rejected, which hangs an
+    unattended run instead of failing it. `BatchMode=yes` is therefore not optional here.
+  - A shared key path can EXIST and be unreadable (root-only on one box, yours on another). Picked
+    by existence, ssh fails with EMPTY stdout and the cause surfaces far downstream as "the command
+    returned nothing". Keys are picked by readability.
+- Host-key checking stays at ssh's strict default. `--trust-changing-host-keys` is the opt-in for a
+  fleet that gets reimaged: it accepts a changed key, keeps that churn in a separate known-hosts
+  file instead of the real one, and heals a mismatch by dropping the stale entry and retrying
+  exactly once. A known-hosts path of `/dev/null` is refused, because ssh then records every key
+  "permanently" into the bit bucket and every connect becomes a first connect - the cause of a
+  "Permanently added" warning that repeats forever and lands in any helper that merges stderr into
+  stdout.
+- Key candidates come from `FLEET_SSH_KEY_CANDIDATES` (os.pathsep-separated templates taking
+  `{user}` and `{home}`), so no site's paths are baked in.
+
 ## [5.172.2] - 2026-08-11
 
 ### Fixed
