@@ -23,6 +23,7 @@ do not tell you.
 | Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin         |
 | Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                      |
 | Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                   |
+| Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size    |
 
 ## A clean health check does not mean an update will install
 
@@ -105,6 +106,52 @@ recovery. `/grant` is additive and cannot remove an ACE a service depends on. Us
 Deleting a hard link is safe - it only decrements the link count. Rewriting permissions through
 one is not. That is the whole distinction.
 
+## Deleting a Windows.old: the fast path, and what it really reclaims
+
+**Discard a mounted image inside the tree before deleting anything.** An interrupted servicing
+run can leave a WIM mounted at `C:\Windows.old\$WinREAgent\Scratch\Mount`, and deleting a tree
+around a live mount corrupts the mount state. It survives reboots and reports `Status : Invalid`,
+so nothing draws attention to it:
+
+```powershell
+dism /English /Get-MountedImageInfo          # any Mount Dir under the target?
+dism /English /Cleanup-Mountpoints           # discards stale/invalid mounts
+```
+
+Abort rather than delete if a mount is still listed afterwards.
+
+**Use `robocopy /MIR` from an empty directory for the bulk, not a per-file loop.** The per-file
+loop above is the right tool for RESIDUE, where you want every blocker reported; it is the wrong
+tool for half a million files, where native multithreaded purge wins by a wide margin:
+
+```powershell
+$empty = Join-Path $env:TEMP ([guid]::NewGuid())
+New-Item -ItemType Directory $empty | Out-Null
+robocopy $empty C:\Windows.old /MIR /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
+cmd /c rd /s /q C:\Windows.old               # removes the emptied shell
+```
+
+Then run the per-file pass only if anything survived. Measured on two guests, nothing did, and no
+`takeown` or `icacls` was needed on either - the cheap diagnostic held.
+
+**The byte total overstates the reclaim by two to three times.** `robocopy /L ... /BYTES` sums
+FILE SIZES, and a Windows.old is full of hard links, so the same physical blocks are counted once
+per link. Measured:
+
+| Files   | Reported | Actually freed | Inflation |
+|---------|----------|----------------|-----------|
+| 163,835 | 22.82 GB | 7.48 GB        | 3.05x     |
+| 569,731 | 25.12 GB | 11.30 GB       | 2.22x     |
+
+Sampling 60 files under `Windows.old\Windows\System32` found 60 of 60 carrying multiple links,
+every one pointing at another path INSIDE `Windows.old` (the System32-to-WinSxS pair), not into
+the live install. So the space does come back - the figure was inflated, not shared. Size the
+expectation from unique data, and never promise the byte total as free space.
+
+**Time scales with FILE COUNT, not size.** Those two runs differed by 1.1x in bytes, 3.5x in file
+count, and 6.2x in elapsed time (13.3 min against 83.0 min), with no permission work in either.
+Count the files before estimating; a tree of comparable size can take six times longer.
+
 ## A SYSTEM task can have LESS access than an admin session
 
 SYSTEM is a different principal from Administrators, not a superset. Servicing files commonly
@@ -185,6 +232,9 @@ Servicing is storage-bound and varies enormously. The same in-place upgrade meas
 one machine and 5h18m on another on the same host**. A `Windows.old` teardown ran ~3h45m of
 permission work that reclaimed nothing, then deleted in 11 minutes.
 
+A delete with NO permission work at all still ranged 13.3 min to 83.0 min across two guests whose
+trees differed by only 1.1x in bytes - file count drove it, not size.
+
 Quote a reference figure and you will understate the expensive path and make the cheap
 preparatory step (survey first, repair only what is broken) look not worth running. Calibrate
 against one measured run on the target before sizing a fleet plan, or say the estimate is
@@ -198,6 +248,8 @@ unmeasured.
 - You concluded "hung" from a quiet log or flat disk without checking worker CPU
 - You are quoting a duration you did not measure on this machine
 - You are treating a clean `ScanHealth` as proof an update should install
+- You are quoting a `robocopy` byte total as the space a delete will free
+- You are about to delete a tree without checking for a mounted image inside it
 
 ## Common mistakes
 
