@@ -146,6 +146,52 @@ def test_non_script_files_ignored(tmp_path):
         assert r.returncode == 0
 
 
+def _heredoc(path, body, marker="EOS", quoted=True, op=">"):
+    q = "'" if quoted else ""
+    return f"cd /tmp && cat {op} {path} <<{q}{marker}{q}\n{body}\n{marker}\n"
+
+
+def _bash_event(session, command):
+    return {"tool_name": "Bash", "session_id": session, "tool_input": {"command": command}}
+
+
+def test_heredoc_write_is_extracted():
+    got = mod.heredoc_writes(_heredoc("del_v1.ps1", DELETE_V1))
+    assert len(got) == 1
+    assert got[0][0] == "del_v1.ps1"
+    assert "robocopy" in got[0][1]
+
+
+def test_heredoc_variants_written_via_bash_nudge(tmp_path):
+    """The regression this hook exists for: the scripts that motivated it were heredocs, not Writes."""
+    sess = "sess-heredoc"
+    r1 = _run(_bash_event(sess, _heredoc("del_v1.ps1", DELETE_V1)), tmp_path)
+    r2 = _run(_bash_event(sess, _heredoc("del_v2.ps1", DELETE_V2, marker="PS")), tmp_path)
+    r3 = _run(_bash_event(sess, _heredoc("del_v3.ps1", DELETE_V3, quoted=False)), tmp_path)
+    assert r1.stdout.strip() == ""
+    assert r2.stdout.strip() == ""
+    assert "TESTED JIG" in r3.stdout, f"heredoc-written third variant should nudge, got {r3.stdout!r}"
+
+
+def test_append_redirect_and_unquoted_marker_are_seen():
+    got = mod.heredoc_writes(_heredoc("x.sh", DELETE_V1, quoted=False, op=">>"))
+    assert [p for p, _ in got] == ["x.sh"]
+
+
+def test_heredoc_into_non_script_ignored():
+    assert mod.heredoc_writes(_heredoc("notes.md", DELETE_V1)) == []
+
+
+def test_stdin_heredoc_without_a_file_is_ignored():
+    """`python3 - <<PY ... PY` writes no file; it must not be counted as authoring a script."""
+    assert mod.heredoc_writes("python3 - <<'PY'\nprint(1)\nPY\n") == []
+
+
+def test_redirect_inside_the_body_is_not_taken_as_the_target():
+    cmd = "cat > real.ps1 <<'EOS'\nrobocopy $empty $root /MIR > decoy.ps1\nEOS\n"
+    assert [p for p, _ in mod.heredoc_writes(cmd)] == ["real.ps1"]
+
+
 def test_broken_stdin_exits_zero():
     r = subprocess.run([sys.executable, str(HOOK)], input="not json",
                        capture_output=True, text=True, timeout=60)
