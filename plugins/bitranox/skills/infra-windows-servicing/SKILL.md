@@ -120,19 +120,41 @@ dism /English /Cleanup-Mountpoints           # discards stale/invalid mounts
 
 Abort rather than delete if a mount is still listed afterwards.
 
-**Use `robocopy /MIR` from an empty directory for the bulk, not a per-file loop.** The per-file
+**Use `robocopy /MIR /XJ` from an empty directory for the bulk, not a per-file loop.** The per-file
 loop above is the right tool for RESIDUE, where you want every blocker reported; it is the wrong
 tool for half a million files, where native multithreaded purge wins by a wide margin:
 
 ```powershell
 $empty = Join-Path $env:TEMP ([guid]::NewGuid())
 New-Item -ItemType Directory $empty | Out-Null
-robocopy $empty C:\Windows.old /MIR /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
+robocopy $empty C:\Windows.old /MIR /XJ /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
 cmd /c rd /s /q C:\Windows.old               # removes the emptied shell
 ```
 
-Then run the per-file pass only if anything survived. Measured on two guests, nothing did, and no
-`takeown` or `icacls` was needed on either - the cheap diagnostic held.
+**`/XJ` is not optional - without it this destroys the live installation.** `/MIR` FOLLOWS
+junctions and directory symlinks by default, and a `Windows.old` ships compatibility links that
+point OUT of the tree. Measured on a 25H2 guest:
+
+```
+C:\Windows.old\Users\All Users      <SYMLINKD>  ->  C:\ProgramData
+C:\Windows.old\Users\Default User   <JUNCTION>  ->  C:\Users\Default
+C:\Windows.old\ProgramData\Desktop  <reparse>   ->  C:\Users\Public\Desktop
+```
+
+Without `/XJ` the mirror walks `All Users` into the **live** `C:\ProgramData` and empties it,
+reporting success while it does. The first symptom is not a file error: SSH starts refusing the
+key, because `C:\ProgramData\ssh` holds the host keys and `administrators_authorized_keys`. Then
+the console goes black and the guest is recoverable only from a snapshot.
+
+Same failure family as `icacls /reset` - the tree is full of links into the running system, so
+anything that RECURSES through them reaches the live OS. `rd /s /q` and `Remove-Item` delete a
+junction ENTRY without descending, so a per-file pass that runs FIRST removes the escape route:
+a guest that survives this did so by accident of ordering, not by being safe.
+
+Then run the per-file pass only if anything survived. **Expect residue above `MAX_PATH`**:
+measured, 16 files remained whose longest path was 262 characters, attributes plain `Archive` -
+no permission work was warranted and none would have helped. robocopy cleared them in about a
+second, because it handles long paths natively and `Remove-Item` does not.
 
 **The byte total overstates the reclaim by two to three times.** `robocopy /L ... /BYTES` sums
 FILE SIZES, and a Windows.old is full of hard links, so the same physical blocks are counted once
@@ -244,6 +266,8 @@ unmeasured.
 
 - A permission command reported success and the operation still fails
 - You are about to run `icacls /reset` on a `Windows.old`
+- You are about to run `robocopy /MIR` against a `Windows.old` without `/XJ`
+- SSH stopped accepting the key right after a `Windows.old` delete - you emptied `C:\ProgramData`
 - You are about to escalate to SYSTEM because admin was denied
 - You concluded "hung" from a quiet log or flat disk without checking worker CPU
 - You are quoting a duration you did not measure on this machine
