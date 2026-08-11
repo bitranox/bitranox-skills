@@ -161,7 +161,7 @@
         ]
       },
       {
-        "matcher": "Write",
+        "matcher": "Write|Bash",
         "hooks": [
           {
             "type": "command",
