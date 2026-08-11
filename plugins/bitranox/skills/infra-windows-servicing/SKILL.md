@@ -120,20 +120,7 @@ dism /English /Cleanup-Mountpoints           # discards stale/invalid mounts
 
 Abort rather than delete if a mount is still listed afterwards.
 
-**Use `robocopy /MIR /XJ` from an empty directory for the bulk, not a per-file loop.** The per-file
-loop above is the right tool for RESIDUE, where you want every blocker reported; it is the wrong
-tool for half a million files, where native multithreaded purge wins by a wide margin:
-
-```powershell
-$empty = Join-Path $env:TEMP ([guid]::NewGuid())
-New-Item -ItemType Directory $empty | Out-Null
-robocopy $empty C:\Windows.old /MIR /XJ /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
-cmd /c rd /s /q C:\Windows.old               # removes the emptied shell
-```
-
-**`/XJ` is not optional - without it this destroys the live installation.** `/MIR` FOLLOWS
-junctions and directory symlinks by default, and a `Windows.old` ships compatibility links that
-point OUT of the tree. Measured on a 25H2 guest:
+**A `Windows.old` contains links that point OUT of the tree.** Measured on a 25H2 guest:
 
 ```
 C:\Windows.old\Users\All Users      <SYMLINKD>  ->  C:\ProgramData
@@ -141,15 +128,61 @@ C:\Windows.old\Users\Default User   <JUNCTION>  ->  C:\Users\Default
 C:\Windows.old\ProgramData\Desktop  <reparse>   ->  C:\Users\Public\Desktop
 ```
 
-Without `/XJ` the mirror walks `All Users` into the **live** `C:\ProgramData` and empties it,
-reporting success while it does. The first symptom is not a file error: SSH starts refusing the
-key, because `C:\ProgramData\ssh` holds the host keys and `administrators_authorized_keys`. Then
-the console goes black and the guest is recoverable only from a snapshot.
+Anything that RECURSES through one reaches the live OS - the same failure family as
+`icacls /reset`. `robocopy /MIR` does, and **`/XJ` does NOT stop it.** Measured on a scratch
+fixture (a tree holding one JUNCTION and one SYMLINKD to a victim directory of 5 files):
 
-Same failure family as `icacls /reset` - the tree is full of links into the running system, so
-anything that RECURSES through them reaches the live OS. `rd /s /q` and `Remove-Item` delete a
-junction ENTRY without descending, so a per-file pass that runs FIRST removes the escape route:
-a guest that survives this did so by accident of ordering, not by being safe.
+| Method                                         | Victim files left | Verdict     |
+|------------------------------------------------|-------------------|-------------|
+| `robocopy $empty tree /MIR /XJ`                | 0 of 5            | DESTRUCTIVE |
+| `rd /s /q tree`                                | 5 of 5            | safe        |
+| `Remove-Item tree -Recurse -Force`             | 5 of 5            | safe        |
+| strip reparse points, then `robocopy /MIR /XJ` | 5 of 5            | safe        |
+
+`/MIR` is `/E` plus `/PURGE`. `/XJ` governs the SOURCE traversal; the purge walks the DESTINATION
+to find extras to delete and follows reparse points there regardless. So `/XJ` reads like
+protection and provides none - do not reach for it as the fix.
+
+On a real guest the mirror walks `All Users` into the live `C:\ProgramData` and empties it while
+reporting success. The first symptom is not a file error: SSH starts refusing the key, because
+`C:\ProgramData\ssh` holds the host keys and `administrators_authorized_keys`. Then the console
+goes black and the guest is recoverable only from a snapshot. **Snapshot before any of this.**
+
+**The safe fast path: strip the link ENTRIES first, then mirror.** `rd /q` on a junction or
+directory symlink removes the link, never its target:
+
+```powershell
+# 1. remove every reparse point in the tree - THIS is what makes the mirror safe, not /XJ
+Get-ChildItem C:\Windows.old -Recurse -Directory -Force -Attributes ReparsePoint -EA SilentlyContinue |
+    ForEach-Object { cmd /c rd /q "`"$($_.FullName)`"" }
+
+# 2. now the purge cannot leave the tree
+$empty = Join-Path $env:TEMP ([guid]::NewGuid())
+New-Item -ItemType Directory $empty | Out-Null
+robocopy $empty C:\Windows.old /MIR /XJ /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
+cmd /c rd /s /q C:\Windows.old               # removes the emptied shell
+```
+
+**Prove it did not escape, every time.** Count the link TARGETS before and after. Equal counts are
+the evidence; "the delete finished" and "robocopy exited 0-7" are not, because this failure reports
+success. Run this before step 1 and again after step 2:
+
+```powershell
+@{ PD    = @(Get-ChildItem 'C:\ProgramData' -Directory -Force -EA SilentlyContinue).Count
+   PDf   = @(Get-ChildItem 'C:\ProgramData' -Recurse -File -Force -EA SilentlyContinue).Count
+   Ssh   = @(Get-ChildItem 'C:\ProgramData\ssh' -File -Force -EA SilentlyContinue).Count
+   Deflt = @(Get-ChildItem 'C:\Users\Default' -Force -EA SilentlyContinue).Count
+   Pub   = @(Get-ChildItem 'C:\Users\Public\Desktop' -Force -EA SilentlyContinue).Count }
+```
+
+Any count lower afterwards means it escaped: restore the guest from the snapshot taken above
+(hypervisor snapshot, VSS, whatever the platform provides - take it while the guest is stopped or
+filesystem-frozen). Do not try to repair `C:\ProgramData` in place.
+
+`rd /s /q` and `Remove-Item -Recurse -Force` are safe on their own for the same reason (they
+delete a link entry without descending) and need no strip pass - use them when speed does not
+matter. `rd /s /q` abandons the whole walk at the first entry it cannot handle, and a measured
+`Remove-Item` pass took ~73 min on a tree the two-step above clears far faster.
 
 Then run the per-file pass only if anything survived. **Expect residue above `MAX_PATH`**:
 measured, 16 files remained whose longest path was 262 characters, attributes plain `Archive` -
@@ -266,7 +299,9 @@ unmeasured.
 
 - A permission command reported success and the operation still fails
 - You are about to run `icacls /reset` on a `Windows.old`
-- You are about to run `robocopy /MIR` against a `Windows.old` without `/XJ`
+- You are about to run `robocopy /MIR` against a `Windows.old` whose reparse points are still there
+- You are treating `/XJ` as the thing that makes that mirror safe - it is measured not to be
+- You deleted a `Windows.old` and did not count `C:\ProgramData` before and after
 - SSH stopped accepting the key right after a `Windows.old` delete - you emptied `C:\ProgramData`
 - You are about to escalate to SYSTEM because admin was denied
 - You concluded "hung" from a quiet log or flat disk without checking worker CPU
