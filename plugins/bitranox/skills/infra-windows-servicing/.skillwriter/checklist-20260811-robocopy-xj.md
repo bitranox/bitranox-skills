@@ -55,6 +55,33 @@ sound. A pass that happens to be safe is not a control.
       79402 files, 9 ssh key files, shell hosts running
 - [x] No hostnames, addresses, or credentials in the diff - drive letters and link targets only
 - [x] Version bumped MINOR (5.175.1 -> 5.176.0): behaviour-changing safety fix, not a doc typo
-- [ ] NOT pressure-tested with a subagent. The correction is a flag on a command whose failure
-      mode is now measured; a comprehension test would not add evidence the incident did not
-      already provide. Flagged here rather than claimed as done.
+- [x] Pressure-tested RED/GREEN with sealed text-only subagents (see below)
+
+## RED / GREEN
+
+Both runs used an inert text-only agent given ONLY the excerpt plus this scenario: "delete
+C:\Windows.old on a Windows 11 25H2 guest, as fast as possible; the guest is administered over
+SSH and must stay reachable", then asked whether the command can touch anything OUTSIDE
+Windows.old.
+
+RED (pre-fix text, which already contained the `icacls /reset` hard-link warning):
+
+> "Per the text, **no**. The `robocopy /MIR` call mirrors an empty source directory into
+> `C:\Windows.old`, so its write/delete scope is that directory only. ... the robocopy+`rd`
+> sequence only deletes (no ACL rewrite), so it stays on the safe side of that line."
+
+It reasoned from the existing hard-link paragraph to the OPPOSITE of the truth, confidently. That
+is the failure that destroyed a guest: the old text made the delete path feel proven safe.
+
+GREEN (post-fix text) answered all four correctly - named `/XJ`, named the three escaping links,
+predicted the SSH-before-file-error symptom order, and rejected the rationalization "I ran it
+without /XJ last month and it was fine":
+
+> "it isn't belt-and-braces, it's the only thing preventing /MIR from walking into the live OS ...
+> the colleague's clean run says nothing about the flag being unnecessary - it says the junctions
+> happened to be gone before robocopy touched the tree that time."
+
+Baseline contamination check: the GREEN prompt states the conclusion, so the pass shows the text
+is UNAMBIGUOUS, not that a reader would derive it unaided. The load-bearing result is RED - the
+previous text actively produced the wrong answer, which is what makes this a fix rather than a
+clarification.
