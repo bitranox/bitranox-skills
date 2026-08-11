@@ -33,6 +33,11 @@ Run:
   uv run scripts/fleet_ssh.py --scp HOST:/etc/os-release ./f    # remote source works too
   uv run scripts/fleet_ssh.py --dry-run --json HOST uptime      # the argv, without running it
 
+An unstated user is never written into the argv, because `user@host` on a command line OVERRIDES a
+`User` directive in ssh_config: filling in the local account by default would silently log a
+config-driven `User root` host in as the wrong one. The key is still resolved for the right
+identity, by asking ssh itself (`ssh -G <host>`, which reads the config without connecting).
+
 Key resolution: the first READABLE of FLEET_SSH_KEY_CANDIDATES (os.pathsep-separated templates
 taking {user} and {home}), else `--key`, else none - in which case ssh uses its own identities.
 
@@ -205,7 +210,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Run ssh/scp with one option set, one resolved key, and no interactive prompt.")
     ap.add_argument("--scp", action="store_true", help="scp mode: the positionals are <src> <dst>")
-    ap.add_argument("--user", help="login user (default: the current local user)")
+    ap.add_argument("--user", help="login user; unset leaves the host bare so ssh_config decides")
     ap.add_argument("--key", help="use this key instead of resolving one")
     ap.add_argument("--timeout", type=int, default=10, help="ConnectTimeout seconds")
     ap.add_argument("--trust-changing-host-keys", action="store_true",
@@ -220,27 +225,64 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def plan(args: argparse.Namespace, *, home: str | None = None,
-         default_user: str | None = None) -> tuple[list[str], str | None, str | None]:
+def ssh_config_user(host: str, run=subprocess.run) -> str | None:
+    """Whom ssh WOULD log in as for this host, per ssh_config. None if it cannot be asked.
+
+    `ssh -G` resolves the config without connecting, so this is a local question with a local
+    answer. It exists so a key can be resolved for the right identity WITHOUT writing that identity
+    into the argv, which is the part that would override the config.
+    """
+    try:
+        done = run(["ssh", "-G", host], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    for line in (done.stdout or "").splitlines():
+        if line.startswith("user "):
+            return line.split(" ", 1)[1].strip() or None
+    return None
+
+
+def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str | None = None,
+         config_user=ssh_config_user) -> tuple[list[str], str | None, str | None]:
     """Work out (argv, host, known_hosts) without running anything. Raises UsageError.
 
     Split from main() because this is where the wiring lives, and the scp-user trap was a wiring
     bug: both halves were right on their own and only their join was wrong.
+
+    Two identities, deliberately not the same one:
+
+    - the LOGIN user is written into the argv only when it was stated (--user, or already inside an
+      scp path). An unstated one stays out, because `user@host` on the command line OVERRIDES a
+      `User` directive in ssh_config - so filling in the local account by default would silently
+      log a config-driven `User root` host in as the wrong account.
+    - the KEY user is who ssh will actually be, asked of ssh itself when it was not stated, so the
+      key still resolves for the right identity. Guessing the local account here instead would
+      offer one user's key while connecting as another, which is the mismatch this jig exists to
+      prevent, just moved one step along.
     """
     home = home if home is not None else os.path.expanduser("~")
     known_hosts = args.known_hosts
     if args.trust_changing_host_keys and not known_hosts:
         known_hosts = DEFAULT_FLEET_KNOWN_HOSTS.format(home=home)
 
+    def key_for(host: str | None, stated: str | None) -> str | None:
+        if args.key:
+            return args.key
+        user = stated or (config_user(host) if host else None) or default_user
+        return resolve_key(user, home=home) if user else None
+
     if args.scp:
         if len(args.rest) < 2:
             raise UsageError("--scp needs <src> <dst>")
         src_in, dst_in = args.rest[0], args.rest[1]
         # A user named in the path wins: someone who wrote root@host meant root. --user only fills
-        # in a side that names nobody, and it fills in the same identity the key is resolved for.
-        user = scp_user(src_in, dst_in) or args.user or default_user or ""
-        key = args.key or (resolve_key(user, home=home) if user else None)
-        src, dst = (with_scp_user(side, user) for side in (src_in, dst_in)) if user else (src_in, dst_in)
+        # in a side that names nobody.
+        stated = scp_user(src_in, dst_in) or args.user
+        key = key_for(scp_host(src_in, dst_in), stated)
+        src, dst = ((with_scp_user(side, stated) for side in (src_in, dst_in)) if stated
+                    else (src_in, dst_in))
         options = build_options(key=key, timeout=args.timeout,
                                 trust_changing_host_keys=args.trust_changing_host_keys,
                                 known_hosts=known_hosts)
@@ -248,13 +290,12 @@ def plan(args: argparse.Namespace, *, home: str | None = None,
 
     if not args.rest:
         raise UsageError("need a <host>")
-    user = args.user or default_user
-    key = args.key or (resolve_key(user, home=home) if user else None)
     host, cmd = args.rest[0], (" ".join(args.rest[1:]) or None)
+    key = key_for(host, args.user)
     options = build_options(key=key, timeout=args.timeout,
                             trust_changing_host_keys=args.trust_changing_host_keys,
                             known_hosts=known_hosts)
-    return build_ssh_argv(host, cmd, user=user, key=key, options=options), host, known_hosts
+    return build_ssh_argv(host, cmd, user=args.user, key=key, options=options), host, known_hosts
 
 
 def main(argv: list[str] | None = None, *, run=subprocess.run) -> int:

@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.175.1] - 2026-08-11
+
+### Fixed
+
+- `fleet_ssh` wrote the current local user into the argv when `--user` was not given, which
+  OVERRIDES a `User` directive in ssh_config: a host configured `User root` would have been logged
+  in as the wrong account, a regression against plain ssh that the wrapper had no business
+  introducing. An unstated user now stays out of the argv entirely, leaving the host bare so the
+  config decides.
+- The key still resolves for the right identity in that case, by asking ssh itself
+  (`ssh -G <host>`, which reads the config without connecting) rather than assuming the local
+  account. Guessing there would have offered one user's key while connecting as another - the same
+  identity mismatch this jig exists to prevent, moved one step along.
+
 ## [5.175.0] - 2026-08-11
 
 ### Added
