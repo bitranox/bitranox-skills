@@ -574,6 +574,22 @@
   "clone",
   "fails"
  ],
+ "infra-proxmox-qemu-windows-storage": [
+  "windows",
+  "proxmox",
+  "qemu",
+  "zvol",
+  "storage",
+  "slow",
+  "wastes",
+  "pool",
+  "space",
+  "boot",
+  "disk",
+  "change",
+  "moving",
+  "virtio-scsi"
+ ],
  "infra-storage-check-zpools": [
   "monitoring",
   "pool",
