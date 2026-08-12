@@ -257,7 +257,7 @@ def test_topic_tokens_link_the_real_rewrites():
 
 # --------------------------------------------------------------- pure: what counts as one JOB
 #
-# These four came out of replaying 2689 script writes from 98 real sessions. Every fixture below
+# These four came out of replaying 2615 script writes from 97 real sessions. Every fixture below
 # is synthetic; the corpus supplied the SHAPES, never any text.
 
 
@@ -523,8 +523,8 @@ def test_a_session_of_probes_leaves_the_change_budget_intact(tmp_path):
 
 # ------------------------------------------------------------- cross-session behaviour, measured
 #
-# The hook was originally tuned on ONE session. These three encode what replaying 98 sessions
-# (2689 script writes) said about the other 97. Fixtures are synthetic - the corpus supplied the
+# The hook was originally tuned on ONE session. These three encode what replaying 97 sessions
+# (2615 script writes) said about the other 96. Fixtures are synthetic - the corpus supplied the
 # shapes and the counts, never any text.
 
 MODULE_UNDER_TEST = """# Ledger of the things this tool has seen, with a bounded window.
@@ -586,7 +586,7 @@ def test_respelling_one_path_does_not_make_it_a_second_variant(tmp_path):
     """Two scripts plus a re-write of one of them is two jobs, not three.
 
     The ledger is keyed by path so that iterating on a file is not counted as authoring another
-    variant; writing it once relative and once absolute defeated that. Measured: 133 of 2689 real
+    variant; writing it once relative and once absolute defeated that. Measured: 110 of 2615 real
     script writes respell a path already in the ledger.
     """
     sess = "sess-respelt"
@@ -723,6 +723,18 @@ def test_redirect_before_the_heredoc_does_not_steal_the_target():
 def test_devnull_alone_yields_nothing():
     """A heredoc with no script target must stay empty, not fall back to some other redirect."""
     assert mod.heredoc_writes("python3 - 2>/dev/null <<'PY'\nprint(1)\nPY\n") == []
+
+
+def test_the_last_script_redirect_wins_when_the_line_carries_two():
+    """Two SCRIPT-suffixed redirects on one opener line: the heredoc's target is the last of them.
+
+    The other failure mode of matching the first redirect, and the worse one: here the first
+    target is itself a script, so the ledger did not merely lose the write - it recorded a file
+    that call never wrote, under the body of the file it did. A census of every heredoc opener in
+    the transcripts found this shape as well as the plain `2>/dev/null` one.
+    """
+    command = "python3 render.py > generated.py && cat > apply_patch.py <<'PY'\nprint(1)\nPY\n"
+    assert [p for p, _ in mod.heredoc_writes(command)] == ["apply_patch.py"]
 
 
 def test_live_shape_records_all_three_scripts(tmp_path):
