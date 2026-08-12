@@ -297,3 +297,142 @@ def test_normalize_agrees_with_the_hook_about_what_is_code():
     src = "clean prose here\n```\nfenced em%s\n```\nand `inline em%s` too\n" % (EM_DASH, EM_DASH)
     assert TC.find_tell_lines(src) == []        # the hook says clean
     assert mod.normalize(src) == src              # so the script must not touch it
+
+
+# ---- em dash: one space per side, and never whitespace at a line edge ------------------------
+#
+# A SPACED em dash used to leave the doubled-space residue "a  -  b": the original spaces stayed
+# and the fixed replacement " - " contributed its own, so every caller tidied it by hand. The
+# collapse has to stay local to the dash - a blanket whitespace collapse joins lines, destroys a
+# markdown hard line break (two trailing spaces), and fights the table-alignment hook.
+
+TWO_EM = chr(0x2E3A)
+THREE_EM = chr(0x2E3B)
+
+
+@pytest.mark.parametrize("dash", [EM_DASH, TWO_EM, THREE_EM])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "a%sb",         # unspaced: the already-correct case, must not gain a second space
+        "a %sb",
+        "a%s b",
+        "a %s b",       # the spaced em dash that produced "a  -  b"
+        "a\t%s\tb",
+    ],
+)
+def test_em_dash_yields_exactly_one_space_per_side(dash, template):
+    assert mod.normalize(template % dash) == "a - b"
+
+
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("a  %s  b", "a  -  b"),             # a wider run is padding, not the script's residue
+        ("a   %s b", "a   - b"),
+        ("a %s   b", "a -   b"),
+        ("| x |  %s   |", "| x |  -   |"),   # a padded table cell keeps its width
+        ("cmd %s  # aligned comment", "cmd -  # aligned comment"),
+    ],
+)
+def test_padding_wider_than_one_space_beside_the_dash_is_preserved(template, expected):
+    # Only the single space that pairs with the emitted one is reused: collapsing a wider run
+    # would rewrite whatever it aligned (a table column, a trailing comment).
+    src = template % EM_DASH
+    out = mod.normalize(src)
+    assert out == expected
+    assert len(out) == len(src)              # one character in, one character out
+
+
+def test_em_dash_padded_with_non_breaking_spaces_collapses_too():
+    # NBSP becomes a plain space before the dash pass runs, so this real-world form collapses too.
+    assert mod.normalize("a" + NBSP + EM_DASH + NBSP + "b") == "a - b"
+
+
+def test_em_dash_at_end_of_line_neither_joins_the_lines_nor_leaves_a_trailing_space():
+    src = "one" + EM_DASH + "\ntwo\n"
+    out = mod.normalize(src)
+    assert out == "one -\ntwo\n"
+    assert out.count("\n") == src.count("\n")
+
+
+def test_a_dash_alone_on_its_line_does_not_absorb_either_newline():
+    src = "a\n" + EM_DASH + "\nb\n"
+    out = mod.normalize(src)
+    assert out.count("\n") == src.count("\n")
+    assert out == "a\n -\nb\n"
+
+
+def test_em_dash_before_a_markdown_hard_line_break_keeps_both_trailing_spaces():
+    src = "text" + EM_DASH + "  \nnext\n"
+    out = mod.normalize(src)
+    assert out == "text -  \nnext\n"
+    # two trailing spaces are a markdown hard break; three would still break but the bytes must
+    # not drift, and one would silently drop the break
+    assert out.splitlines(keepends=True)[0].endswith("-  \n")
+
+
+def test_spaced_em_dash_mid_line_keeps_a_trailing_hard_break():
+    assert mod.normalize("a " + EM_DASH + " b  \nc\n") == "a - b  \nc\n"
+
+
+def test_em_dash_after_indentation_keeps_the_indentation():
+    # the leading run belongs to the line, not to the dash: eating it would re-nest a list item
+    assert mod.normalize("    " + EM_DASH + " item\n") == "    - item\n"
+
+
+def test_whitespace_only_line_around_the_dash_is_preserved():
+    assert mod.normalize("  " + EM_DASH + "  \n") == "  -  \n"
+
+
+def test_a_markdown_list_item_is_not_altered():
+    src = "- item one\n- item two " + EM_DASH + " tail\n"
+    assert mod.normalize(src) == "- item one\n- item two - tail\n"
+
+
+def test_spaced_em_dash_in_a_table_cell_keeps_every_column_width():
+    src = (
+        "| col | note    |\n"
+        "| --- | ------- |\n"
+        "| a   | x " + EM_DASH + " y   |\n"
+    )
+    out = mod.normalize(src)
+    assert [len(ln) for ln in out.splitlines()] == [len(ln) for ln in src.splitlines()]
+    assert "| a   | x - y   |" in out
+
+
+def test_spaced_em_dash_inside_an_inline_code_span_survives():
+    src = "prose " + EM_DASH + " and `code " + EM_DASH + " span` end\n"
+    assert mod.normalize(src) == "prose - and `code " + EM_DASH + " span` end\n"
+
+
+@pytest.mark.parametrize("dash", [HYPHEN, NB_HYPHEN, FIG_DASH, EN_DASH, HORIZ_BAR, MINUS])
+def test_other_dashes_stay_a_bare_hyphen_and_keep_the_original_spacing(dash):
+    # only the em-dash family gains spaces; these must not be pulled into that pass
+    assert mod.normalize("a" + dash + "b") == "a-b"
+    assert mod.normalize("a " + dash + " b") == "a - b"
+    assert mod.normalize("a  " + dash + "  b") == "a  -  b"
+
+
+def test_spaced_em_dash_is_idempotent():
+    src = "a " + EM_DASH + " b\nc" + EM_DASH + "\n  " + EM_DASH + "  \nd" + EM_DASH + "  \n"
+    once = mod.normalize(src)
+    assert mod.normalize(once) == once
+
+
+def test_cli_second_run_leaves_the_file_byte_identical(tmp_path):
+    doc = (
+        "a " + EM_DASH + " b\n"
+        "\n"
+        "| a | b     |\n"
+        "| - | ----- |\n"
+        "| x | y " + EM_DASH + " z |\n"
+    )
+    p = _write(tmp_path, "doc.md", doc)
+    assert _run([str(p)]).returncode == 0
+    first = p.read_bytes()
+    assert b"a - b\n" in first
+    assert b"| x | y - z |\n" in first
+    assert _run([str(p)]).returncode == 0
+    assert p.read_bytes() == first
+    assert _run(["--check", str(p)]).returncode == 0

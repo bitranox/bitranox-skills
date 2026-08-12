@@ -8,6 +8,12 @@ punctuation with plain ASCII, so public-facing text carries no
 typographic "AI tell". The judgment rewrites (promotional language, rule of
 three, and the rest) are described in SKILL.md and stay with the model.
 
+An em dash becomes a spaced hyphen carrying one space per side, reusing the space
+already beside it, so a spaced em dash needs no hand tidy afterwards. Wider
+spacing beside the dash is column padding and stays as it is, as does whitespace
+at either end of the line. The other dashes become a bare hyphen and keep the
+text's spacing.
+
 This is the exact inverse of the tell-sweep detector: running it makes a file
 pass that check. Symbols that are intentionally allowed (arrow, multiply sign,
 >=, <=, !=, check mark, bullet) are left untouched.
@@ -21,6 +27,7 @@ The replacement table is built from code points with chr()/ranges so this script
 is itself pure ASCII and passes the same check.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -49,11 +56,11 @@ def _build_table():
     # Line/paragraph separators -> newline.
     for cp in [0x0085, 0x2028, 0x2029]:
         table[cp] = "\n"
-    # Dashes. Em dash becomes spaced hyphen; the rest become a plain hyphen.
+    # Dashes -> a plain hyphen, keeping whatever spacing the text already had. The em-dash family
+    # (U+2014, U+2E3A, U+2E3B) is deliberately absent: it reads as a spaced hyphen, which a fixed
+    # table entry cannot produce without doubling existing spaces, so `_EM_DASH_RUN` owns it.
     for cp in [0x2010, 0x2011, 0x2012, 0x2013, 0x2015, 0x2212]:
         table[cp] = "-"
-    for cp in [0x2014, 0x2E3A, 0x2E3B]:
-        table[cp] = " - "
     # Quotation marks and guillemets.
     for cp in [0x2018, 0x2019, 0x201A, 0x201B, 0x2039, 0x203A]:
         table[cp] = "'"
@@ -75,6 +82,54 @@ def _build_table():
 
 TABLE = _build_table()
 
+# An em dash becomes a SPACED hyphen, so the replacement has to know what is already next to it.
+# A translate entry cannot: mapping U+2014 to " - " kept the original spaces and turned
+# "a <em dash> b" into "a  -  b", which every caller then tidied by hand. This pattern reuses the
+# space already beside the dash instead, so a spaced em dash comes out as " - ", and it is why the
+# em-dash family is not in TABLE.
+#
+# Exactly ONE space per side is taken ([ \t]? , not [ \t]*): a wider run is column padding, and
+# collapsing it corrupts what it aligned. Measured over the repo's own markdown - injecting a
+# spaced em dash at every spaced hyphen outside code, then running this script - the one-space
+# form round-trips byte-identical, while consuming the whole run rewrote a padded table cell and
+# an aligned trailing comment.
+#
+# The whitespace class is [ \t] and NEVER \s: \s matches a newline, and consuming one joins two
+# lines and silently destroys the structure of the file. Whitespace at a line edge is left alone
+# in both directions - a run reached from the line start is indentation (eating it re-nests a list
+# item) and a trailing run can be a markdown hard line break (two spaces), so a run against a
+# newline is neither consumed nor created.
+_EM_DASHES = "".join(chr(cp) for cp in (0x2014, 0x2E3A, 0x2E3B))
+_ON_THE_LINE = "[^ \t\n]"          # neither horizontal whitespace nor a line break
+_EM_DASH_RUN = re.compile(
+    "(?:(?<=%s)[ \t]?)?[%s](?:[ \t]?(?=%s))?" % (_ON_THE_LINE, _EM_DASHES, _ON_THE_LINE)
+)
+_SPACE_OR_BREAK = (" ", "\t", "\n")
+
+
+def _spaced_hyphen(match):
+    """Return the hyphen with a space only on the sides that face text on the same line.
+
+    A side with NO character at all is a segment edge, which is not necessarily a line edge: the
+    caller splits each line at its inline-code spans, so "`x`<em dash>y" arrives here as
+    "<em dash>y". A space is the safe answer there (dropping it would weld the hyphen onto the
+    code span) and it is also what the old table entry produced."""
+    text = match.string
+    before = text[match.start() - 1] if match.start() else ""
+    after = text[match.end()] if match.end() < len(text) else ""
+    left = "" if before in _SPACE_OR_BREAK else " "
+    right = "" if after in _SPACE_OR_BREAK else " "
+    return left + "-" + right
+
+
+def _normalize_prose(text):
+    """Translate the tells in one non-code stretch, then fix the em-dash spacing.
+
+    The order matters: the table turns non-breaking spaces into plain ones and drops the
+    zero-width characters, so an em dash padded with either reaches the dash pass surrounded by
+    ordinary spaces and collapses like any other."""
+    return _EM_DASH_RUN.sub(_spaced_hyphen, text.translate(TABLE))
+
 
 def normalize(text):
     """Return text with every typographic tell OUTSIDE code replaced by its ASCII form.
@@ -82,7 +137,7 @@ def normalize(text):
     Inline-code spans and fenced blocks are left byte-identical: a tell inside them is usually a
     deliberate example of the very character being documented, and rewriting it destroys the
     example. This is the same code definition the tell-sweep hook uses."""
-    return tell_chars.transform_outside_code(text, lambda s: s.translate(TABLE))
+    return tell_chars.transform_outside_code(text, _normalize_prose)
 
 
 def _main(argv):
