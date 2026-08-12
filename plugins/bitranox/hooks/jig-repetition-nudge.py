@@ -106,13 +106,18 @@ def heredoc_writes(command):
         i += 1                                        # drop the terminator
         # The redirect target must come from the text BEFORE the `<<`, or `<<'EOS'` itself and any
         # redirect inside the body would be mistaken for the destination.
+        #
+        # Take the LAST redirect whose target is a SCRIPT, not the first redirect of any kind.
+        # Real command lines routinely carry an unrelated redirect ahead of the heredoc -
+        # `D=$(ls ... 2>/dev/null); cd "$D" && cat > probe.sh <<'EOS'` - and matching the first
+        # hands back /dev/null, whose suffix is not a script, so the write is dropped in silence.
+        # Measured live: three scripts authored, one recorded, no nudge. Filtering by suffix also
+        # makes the ORDER of the redirects irrelevant (`cat > f.sh 2>/dev/null <<EOS` works too).
         head = line[:opener.start()]
-        target = _REDIRECT.search(head)
-        if not target:
-            continue
-        path = target.group(2)
-        if Path(path).suffix.lower() in SCRIPT_SUFFIXES:
-            out.append((path, "\n".join(body)))
+        targets = [m.group(2) for m in _REDIRECT.finditer(head)
+                   if Path(m.group(2)).suffix.lower() in SCRIPT_SUFFIXES]
+        if targets:
+            out.append((targets[-1], "\n".join(body)))
     return out
 
 
