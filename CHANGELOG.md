@@ -17,6 +17,53 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.197.0] - 2026-08-12
+
+### Added
+
+- **`process-test-driven-development`'s `redcheck` can now assemble the agent's own startup context
+  as the corpus, instead of leaving the reader to enumerate it.** `redcheck` already checked
+  whether a scenario-based RED is testing a lesson the agent was handed before it ever saw the
+  prompt, and its docstring already named the config cascade as an intended corpus. Nothing built
+  that corpus, so every author re-derived the same enumeration by hand - which is what
+  `meta-skill-writer` had been telling them to do since 5.196.0.
+
+  `--corpus-cascade DIR` builds it: every `CLAUDE.md` and `CLAUDE.local.md` from `DIR` up to the
+  filesystem root, plus every memory fact body under a `.claude-memory/facts/` on that chain, each
+  labelled with the path it came from so a hit says which file already teaches the scenario. It
+  enumerates by walking the filesystem and reading the paths directly, never through a search tool,
+  because project `CLAUDE.md` files and memory stores are routinely gitignored and a
+  gitignore-aware search drops them silently, leaving a small corpus in which everything looks
+  clean. `--corpus-cascade-top DIR` bounds the walk to a self-contained fixture tree.
+
+  The verdict now says how much it is worth, in the text output and in the JSON envelope alike. An
+  inherited hit is STRONG: the lesson demonstrably sits in reachable context and the report names
+  the file. A clean result is WEAK: the check compares distinctive terms, so it cannot see a
+  paraphrase, and no hit means NOT CAUGHT rather than absent. Every run reports how many documents
+  it read, and a corpus that assembles nothing is its own outcome (`unchecked`, exit 3) rather than
+  a quiet pass, because an empty corpus makes every scenario look clean.
+
+  Installed plugin skills are deliberately not assembled. Where they live depends on the reader's
+  plugin cache and installed versions, so a built-in path would report a falsely clean corpus on
+  someone else's machine; `--corpus` takes them explicitly.
+
+- **`meta-skill-writer` now points its inherited-context check at that tool.** The RED-phase rule,
+  the RED-phase checklist item, and both the "before trusting a RED" paragraph and route 2 in
+  `testing-skills-with-subagents.md` name the command and state how to read its three answers.
+  `compuse-toolbox` indexes the mode in the user's own words.
+
+### Fixed
+
+- **`redcheck`'s rarity cutoff no longer sits below the band that carries the lesson.** The cutoff
+  that decides which shared terms count as evidence was tuned as a starting floor against a
+  topically diverse corpus. An assembled cascade is not that: it is a few hundred documents from
+  one author's own notes, which reuse that author's vocabulary throughout. Measured over such a
+  corpus, the terms that carry a lesson sit around 1 to 5 percent document frequency while true
+  boilerplate sits an order of magnitude higher, so the old 1 percent cutoff filtered out the
+  evidence itself and a scenario whose lesson was in the corpus still came back clean. The default
+  moves to 5 percent, between the two bands, and `--rarity-max-fraction` exposes it for corpora of
+  a different shape.
+
 ## [5.196.0] - 2026-08-12
 
 ### Added

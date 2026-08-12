@@ -207,14 +207,43 @@ reason, and nothing about the transcript says so.
 `scripts/redcheck.py` checks a scenario for both leaks before an agent dispatch is spent on it:
 
 ```
+uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json
 uv run scripts/redcheck.py --scenario scenario.txt --answer conclusion.txt --corpus docs/ --json
 ```
 
-Exit 0 = clean (neither leak found - this does not prove the RED CAN fail, only that these two
-reasons it might not have been ruled out). Exit 1 = a leak was found; the report names which
-corpus document already teaches the lesson, or which phrase telegraphs the answer. Rewrite the
-scenario (a different domain, de-telegraphed prose) and re-check before dispatching the real
-baseline run.
+**"Is my RED contaminated by what the agent already knows?" is what `--corpus-cascade DIR`
+answers.** Leak 1 is about the agent's own always-loaded context, so pointing the check at some
+docs directory tests the wrong thing. Give it the directory the agent would be dispatched in and
+it assembles that context itself: every `CLAUDE.md` and `CLAUDE.local.md` from there up to the
+filesystem root, plus every memory fact body under a `.claude-memory/facts/` on that chain. It
+walks the filesystem to find them, because project `CLAUDE.md` files and memory stores are
+routinely gitignored and any gitignore-aware search drops them silently, leaving a small corpus
+in which everything looks clean.
+
+Installed plugin skills are deliberately not assembled - where they live depends on the reader's
+plugin cache and installed versions, and a built-in guess would report a falsely clean corpus on
+someone else's machine. Pass `--corpus ~/.claude/skills` or wherever yours actually are.
+
+**The two answers are not worth the same, and the tool says which one it gave you.** A hit is
+STRONG evidence: the lesson demonstrably sits in reachable context, and the report names the file
+it is in. A clean result is WEAK: the check compares distinctive terms, so it cannot see a
+paraphrase, and "no hit" means NOT CAUGHT rather than absent. Do not read a clean run as a sealed
+fixture.
+
+| Exit | Meaning                                                                                            |
+|------|----------------------------------------------------------------------------------------------------|
+| 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail           |
+| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it |
+| 2    | usage or IO error                                                                                  |
+| 3    | unchecked - the corpus assembled 0 documents, so the inherited check never ran                     |
+
+Exit 3 is its own outcome for a reason: an empty corpus makes every scenario look clean, so a
+mistyped start directory would otherwise read as a pass. The run always prints how many documents
+it read.
+
+If a hit comes back, rewrite the scenario (a different domain, de-telegraphed prose) and re-check
+before dispatching the real baseline run. If your corpus reuses one vocabulary throughout and
+nothing ever hits, raise `--rarity-max-fraction`; if boilerplate hits, lower it.
 
 ### REFACTOR - Clean Up
 
