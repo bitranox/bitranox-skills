@@ -113,6 +113,22 @@ reaches for it and cites the stored rule by name.
 memory store on this machine.** If it is, the behavioural RED is not evidence and must not be
 reported as one. It cannot fail honestly, and re-running it only reshuffles which arm wins.
 
+`redcheck --corpus-cascade` in `bitranox:process-test-driven-development` answers this without the
+enumeration being redone by hand. Point it at the directory the agent would be dispatched in and it
+assembles that cascade itself, every `CLAUDE.md` and `CLAUDE.local.md` up to the filesystem root
+plus the memory fact bodies on that chain, then reports which of those documents already teaches
+the scenario:
+
+```
+uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json
+```
+
+Read the two directions differently, because they are not worth the same. A hit is STRONG: the
+lesson is demonstrably in reachable context and the report names the file. A clean result is WEAK:
+the check compares distinctive terms, so it cannot see a paraphrase, and "no hit" means not caught
+rather than absent. Exit 3 means the corpus came back empty and nothing was checked at all, which
+is the one result that would otherwise read as a pass.
+
 Two honest routes when it IS already inherited. The review artifact must say which one you took:
 
 1. **Make the COVERAGE check the evidence.** Verify against the skill FILE that the guidance is
@@ -122,9 +138,11 @@ Two honest routes when it IS already inherited. The review artifact must say whi
    such a checker. A PRESENT verdict ends the job: the guidance already ships, so there is nothing
    to add.
 2. **De-telegraph a behavioural arm into a domain the cascade does NOT teach.** Choose that domain
-   with the same check, run against the cascade and the store instead of the skill. Restate the
-   trap in a subject they are silent on, and keep the scenario from naming or pre-diagnosing it. A
-   scenario that carries its own answer measures the prompt, not the skill.
+   with `redcheck --corpus-cascade` above, which scores a candidate scenario against the assembled
+   cascade and store rather than against the skill file. Restate the trap in a subject they are
+   silent on, and keep the scenario from naming or pre-diagnosing it - the same run flags prose
+   that hands over its own answer. A scenario that carries its own answer measures the prompt, not
+   the skill.
 
 **A RED that does not flip is a legitimate, reportable outcome.** Record it as one. Do not escalate
 into progressively harder scenarios until something finally fails - that manufactures a RED to

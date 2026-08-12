@@ -22,13 +22,36 @@ top of a lesson the agent already knows.
 Stdlib only on purpose: the whole job is set arithmetic over tokens, and a tool used to decide
 whether to trust a test should not itself depend on a resolver.
 
+WHAT THE CORPUS HAS TO BE. Leak 1 is about what the agent ALREADY HAS, so the corpus has to be
+the agent's own always-loaded context or it is checking the wrong thing. `--corpus-cascade DIR`
+assembles that: every CLAUDE.md and CLAUDE.local.md from DIR up to the filesystem root, plus every
+memory fact body under a `.claude-memory/facts/` on that chain. It walks the filesystem directly -
+never a search tool - because project CLAUDE.md files and memory stores are routinely gitignored,
+and every gitignore-aware search drops them silently, leaving a small, falsely clean corpus.
+
+HOW MUCH A VERDICT IS WORTH. The two directions are not symmetric, and the tool says which one it
+is giving you:
+  * INHERITED is STRONG. The lesson is demonstrably sitting in reachable context, and the report
+    names the file it is in.
+  * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
+    NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
+A corpus of zero documents makes every scenario look clean, so it is a distinct outcome
+(`unchecked`, exit 3), never a quiet pass.
+
 Run:
+  `uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json`
   `uv run scripts/redcheck.py --scenario scenario.txt --corpus docs/ --json`
   `uv run scripts/redcheck.py --scenario scenario.txt --answer conclusion.txt --corpus docs/`
 
 Exit codes: 0 = clean (neither leak found - this does NOT prove the RED can fail, only that
 these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 =
-usage/IO error. `--json` emits the machine-readable envelope.
+usage/IO error, 3 = unchecked (a corpus was requested and assembled nothing, so the
+inherited-coverage check never ran). `--json` emits the machine-readable envelope.
+
+Installed plugin/marketplace skills are deliberately NOT assembled: their on-disk location is a
+function of the reader's plugin cache and installed versions, so any built-in path would be a
+guess that reports a falsely clean corpus on someone else's machine. Point `--corpus` at them
+explicitly when you know where they live.
 """
 
 from __future__ import annotations
@@ -42,7 +65,38 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
-__all__ = ["audit", "Audit", "InheritedHit", "AnswerLeak", "Telegraph", "distinctive_terms"]
+__all__ = [
+    "audit",
+    "Audit",
+    "InheritedHit",
+    "AnswerLeak",
+    "Telegraph",
+    "distinctive_terms",
+    "cascade_chain",
+    "load_cascade_corpus",
+    "load_corpus",
+]
+
+# Format-independent, so a caller can branch on the result without parsing text.
+EXIT_CLEAN, EXIT_LEAK, EXIT_ERROR, EXIT_UNCHECKED = 0, 1, 2, 3
+
+# The always-loaded context files an agent inherits from the directory it is dispatched in.
+CASCADE_FILENAMES = ("CLAUDE.md", "CLAUDE.local.md")
+MEMORY_STORE_DIRNAME = ".claude-memory"
+MEMORY_FACTS_SUBDIR = "facts"
+
+# Said on every run, both directions, because the asymmetry is the whole point: the hit proves
+# something and the miss does not, and a reader who is told only "clean" will take it for proof.
+INHERITED_STRONG_NOTE = (
+    "STRONG - the named document already contains this lesson, so an agent that can reach it "
+    "answers from there, not from your scenario. Move the RED to a domain the corpus does not "
+    "teach, or replace the behavioural arm with a text check of the artifact."
+)
+INHERITED_WEAK_NOTE = (
+    "WEAK - a clean result means NOT CAUGHT, not absent. This compares distinctive terms, so it "
+    "cannot see a paraphrase: the lesson may still sit in the agent's context in other words. "
+    "Do not read a clean run as a sealed fixture."
+)
 
 # Shared distinctive terms needed before a corpus document counts as prior coverage.
 # 4 separates the shipped true-coverage fixture (8 shared terms) from its near-miss and
@@ -56,13 +110,19 @@ MIN_SHARED_TERMS = 4
 # reuses none of the corpus document's actual lesson - see
 # test_common_words_over_a_large_corpus_do_not_flag.
 #
-# The right cutoff depends on the shape of the corpus this actually runs against (a few hundred
-# skill/doc files behaves differently from a handful), so 1% is a starting floor, not a measured
-# constant - re-tune it against whatever --corpus is passed, using the near-miss/rarity tests
-# below as the harness: lowering the fraction should eventually make the rare-term test fail
-# (test_rare_terms_still_flag_in_the_same_large_corpus), and raising it should eventually make the
-# boilerplate test fail. Land the threshold between those two.
-RARITY_MAX_FRACTION = 0.01
+# The right cutoff depends on the shape of the corpus, and an assembled cascade has a specific
+# one: a few hundred documents from a single author's own notes, which reuse that author's domain
+# vocabulary everywhere. Measured over one such cascade, the terms that CARRY a lesson sit around
+# 1-5% document frequency while true boilerplate sits an order of magnitude higher (a third of
+# the corpus and up). A cutoff below the signal band filters out the evidence itself, so every
+# scenario comes back clean and the check is decorative - which is worse than absent, because it
+# reads as a pass. 5% lands between the two bands.
+#
+# Re-tune per corpus with --rarity-max-fraction, using the tests as the harness: lowering it
+# should eventually make the rare-term tests fail (test_rare_terms_still_flag_in_the_same_large
+# _corpus, test_a_lesson_is_still_found_when_its_vocabulary_is_common_in_the_corpus), and raising
+# it should eventually make the boilerplate tests fail. Land it between those two.
+RARITY_MAX_FRACTION = 0.05
 
 # Below this many documents the frequency estimate is noise (in a 2-document corpus every term
 # looks common), so the rarity filter is skipped and the count stands alone.
@@ -137,10 +197,34 @@ class Audit:
     inherited: list[InheritedHit] = field(default_factory=list)
     telegraphs: list[Telegraph] = field(default_factory=list)
     answer_leak: AnswerLeak | None = None
+    corpus_documents: int = 0
+    corpus_empty: bool = False
+
+    @property
+    def has_leak(self) -> bool:
+        """A finding the caller must act on, as opposed to a check that could not run."""
+        return bool(self.inherited or self.telegraphs or self.answer_leak)
+
+    @property
+    def evidence_strength(self) -> str:
+        """How much the INHERITED result is worth: a hit proves something, a miss does not."""
+        return "strong" if self.inherited else "weak"
+
+    @property
+    def evidence_note(self) -> str:
+        return INHERITED_STRONG_NOTE if self.inherited else INHERITED_WEAK_NOTE
 
     def as_dict(self) -> dict[str, object]:
         return {
             "verdict": self.verdict,
+            "corpus_documents": self.corpus_documents,
+            "corpus_empty": self.corpus_empty,
+            # Travels with the machine-readable result, so a caller parsing JSON cannot end up
+            # with a bare "clean" and no idea how far that goes.
+            "inherited_evidence": {
+                "strength": self.evidence_strength,
+                "note": self.evidence_note,
+            },
             "inherited": [
                 {"label": h.label, "shared": list(h.shared), "score": round(h.score, 3)}
                 for h in self.inherited
@@ -170,7 +254,10 @@ def distinctive_terms(text: str) -> set[str]:
     return terms
 
 
-def _rare_terms(documents: Sequence[tuple[str, set[str]]]) -> set[str] | None:
+def _rare_terms(
+    documents: Sequence[tuple[str, set[str]]],
+    max_fraction: float = RARITY_MAX_FRACTION,
+) -> set[str] | None:
     """Terms used by only a small share of the corpus, or None if it is too small.
 
     A term most documents contain is boilerplate, and boilerplate alone reaches the
@@ -182,7 +269,7 @@ def _rare_terms(documents: Sequence[tuple[str, set[str]]]) -> set[str] | None:
     frequency: Counter[str] = Counter()
     for _, terms in documents:
         frequency.update(terms)
-    limit = max(1, int(len(documents) * RARITY_MAX_FRACTION))
+    limit = max(1, int(len(documents) * max_fraction))
     return {term for term, count in frequency.items() if count <= limit}
 
 
@@ -192,6 +279,8 @@ def audit(
     answer: str | None = None,
     corpus: Iterable[tuple[str, str]] = (),
     min_shared: int = MIN_SHARED_TERMS,
+    rarity_max_fraction: float = RARITY_MAX_FRACTION,
+    require_corpus: bool = False,
 ) -> Audit:
     """Report every reason this RED scenario might be unable to fail.
 
@@ -203,14 +292,19 @@ def audit(
             than discovered, so the core is testable and the caller decides what the
             agent can actually see.
         min_shared: distinct shared terms before a document counts as coverage.
+        rarity_max_fraction: a term in more than this share of the corpus carries no evidence
+            and is ignored. Corpus-shape dependent - see RARITY_MAX_FRACTION.
+        require_corpus: the caller promised a corpus. If it turns out empty, the verdict is
+            "unchecked" rather than "clean" - zero documents make EVERY scenario look clean,
+            which is the one failure of this tool a reader would never notice.
 
     Returns:
-        An Audit whose verdict is "clean" only when no leak was found.
+        An Audit whose verdict is "clean" only when no leak was found and the corpus was real.
     """
     scenario_terms = distinctive_terms(scenario)
 
     documents = [(label, distinctive_terms(text)) for label, text in corpus]
-    rare = _rare_terms(documents)
+    rare = _rare_terms(documents, rarity_max_fraction)
 
     inherited: list[InheritedHit] = []
     for label, terms in documents:
@@ -238,7 +332,11 @@ def audit(
             if overlap >= ANSWER_LEAK_THRESHOLD:
                 answer_leak = AnswerLeak(overlap, tuple(sorted(shared)))
 
+    corpus_empty = require_corpus and not documents
+
     reasons = []
+    if corpus_empty:
+        reasons.append("unchecked")
     if inherited:
         reasons.append("inherited")
     if telegraphs or answer_leak:
@@ -248,6 +346,8 @@ def audit(
         inherited=inherited,
         telegraphs=telegraphs,
         answer_leak=answer_leak,
+        corpus_documents=len(documents),
+        corpus_empty=corpus_empty,
     )
 
 
@@ -266,6 +366,95 @@ def load_corpus(dirs: Sequence[Path], *, warn=lambda m: None) -> list[tuple[str,
     return out
 
 
+def cascade_chain(start: Path | str, *, top: Path | str | None = None) -> list[Path]:
+    """`start` and every directory above it, nearest first.
+
+    Args:
+        start: the directory the agent under test would be dispatched in.
+        top: highest directory to include. None walks to the filesystem root, which is what a
+            real cascade does; pass it to bound the walk to a fixture tree so the result does
+            not depend on whose machine it runs on.
+
+    Raises:
+        ValueError: `top` is neither `start` nor one of its ancestors, so it cannot bound
+            the walk and silently walking further would be a lie.
+    """
+    resolved = Path(start).resolve()
+    chain = [resolved, *resolved.parents]
+    if top is None:
+        return chain
+    ceiling = Path(top).resolve()
+    if ceiling not in chain:
+        raise ValueError(f"cascade top {ceiling} is not {resolved} or one of its ancestors")
+    return chain[: chain.index(ceiling) + 1]
+
+
+def _add_document(
+    path: Path,
+    documents: list[tuple[str, str]],
+    seen: set[Path],
+    warn,
+) -> None:
+    """Read one document into the corpus - at most once, and never fatally.
+
+    A file that cannot be decoded costs that file and nothing else: one stray latin-1 byte in
+    one note must not take down a walk over a whole tree. The skip is reported rather than
+    swallowed, because a document missing from the corpus is a hole in a "clean" verdict.
+    """
+    if not path.is_file():
+        return
+    try:
+        key = path.resolve()
+    except OSError:
+        key = path
+    if key in seen:  # overlapping start dirs share ancestors; a double read would skew rarity
+        return
+    seen.add(key)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        warn(f"not valid UTF-8, skipping: {path}: {exc.reason}")
+        return
+    except OSError as exc:
+        warn(f"unreadable, skipping: {path}: {exc}")
+        return
+    documents.append((str(path), text))
+
+
+def load_cascade_corpus(
+    starts: Iterable[Path | str],
+    *,
+    top: Path | str | None = None,
+    warn=lambda m: None,
+) -> list[tuple[str, str]]:
+    """Assemble the always-loaded context an agent dispatched from each `starts` dir inherits.
+
+    Collected per directory on the chain: `CLAUDE.md`, `CLAUDE.local.md`, and every markdown
+    fact body under a `.claude-memory/facts/`. Labels are absolute paths, because the label is
+    what a hit reports back and "which file already teaches this" is the actionable half.
+
+    Enumerated by walking the filesystem and reading the paths directly - never by shelling out
+    to a search tool. Project `CLAUDE.md` files, the memory pointer blocks and the fact bodies
+    are all commonly gitignored, and a gitignore-aware search drops them with no warning: the
+    corpus comes back small, everything looks clean, and nothing says why.
+    """
+    documents: list[tuple[str, str]] = []
+    seen: set[Path] = set()
+    for start in starts:
+        directory = Path(start)
+        if not directory.is_dir():
+            warn(f"cascade start is not a directory, skipping: {directory}")
+            continue
+        for level in cascade_chain(directory, top=top):
+            for name in CASCADE_FILENAMES:
+                _add_document(level / name, documents, seen, warn)
+            facts = level / MEMORY_STORE_DIRNAME / MEMORY_FACTS_SUBDIR
+            if facts.is_dir():
+                for body in sorted(facts.rglob("*.md")):
+                    _add_document(body, documents, seen, warn)
+    return documents
+
+
 def _read(spec: str) -> str:
     if spec == "-":
         return sys.stdin.read()
@@ -273,11 +462,14 @@ def _read(spec: str) -> str:
 
 
 def _render(result: Audit) -> str:
-    lines: list[str] = []
-    if result.verdict == "clean":
+    lines: list[str] = [f"corpus: {result.corpus_documents} document(s) read"]
+    if result.corpus_empty:
+        lines.append("UNCHECKED - 0 documents assembled, so the inherited-coverage check")
+        lines.append("  never ran. An empty corpus makes EVERY scenario look clean; fix the")
+        lines.append("  start directory before reading anything here as a result.")
+    if not result.has_leak and not result.corpus_empty:
         lines.append("clean - no inherited coverage, no telegraphing found.")
         lines.append("This does not prove the RED can fail; it rules out the two leaks it checks.")
-        return "\n".join(lines)
     if result.inherited:
         lines.append("INHERITED COVERAGE - the agent is handed this lesson before your prompt:")
         for hit in result.inherited[:10]:
@@ -294,6 +486,7 @@ def _render(result: Audit) -> str:
         lines.append(f"  {', '.join(leak.shared[:12])}")
     if result.telegraphs or result.answer_leak:
         lines.append("  -> present the wrong action as the routine, already-reviewed next step.")
+    lines.append(f"inherited-coverage evidence: {result.evidence_note}")
     return "\n".join(lines)
 
 
@@ -311,7 +504,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="DIR",
         help="a directory of docs the agent already has (repeatable)",
     )
+    parser.add_argument(
+        "--corpus-cascade",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help=(
+            "assemble the corpus from the always-loaded context an agent dispatched in DIR "
+            "inherits: every CLAUDE.md and CLAUDE.local.md from DIR up to the filesystem root, "
+            "plus every memory fact body under a .claude-memory/facts/ on that chain. Walks the "
+            "filesystem, so gitignored files are included (most project CLAUDE.md and every "
+            "memory store are gitignored, and a search tool would drop them silently). "
+            "Repeatable. Assembling nothing is exit 3, not a clean pass."
+        ),
+    )
+    parser.add_argument(
+        "--corpus-cascade-top",
+        metavar="DIR",
+        help=(
+            "stop the --corpus-cascade walk at DIR instead of the filesystem root; DIR must be "
+            "the start directory or one of its ancestors. Use it to check a self-contained "
+            "fixture tree without pulling in the cascade of the machine you are on."
+        ),
+    )
     parser.add_argument("--min-shared", type=int, default=MIN_SHARED_TERMS)
+    parser.add_argument(
+        "--rarity-max-fraction",
+        type=float,
+        default=RARITY_MAX_FRACTION,
+        metavar="F",
+        help=(
+            "ignore a term used by more than this share of the corpus (default "
+            f"{RARITY_MAX_FRACTION}). Corpus-shape dependent: raise it when a corpus reuses one "
+            "vocabulary throughout and nothing ever hits, lower it when boilerplate hits."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope")
     args = parser.parse_args(argv)
 
@@ -326,9 +553,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         scenario = _read(args.scenario)
         answer = _read(args.answer) if args.answer else None
         corpus = load_corpus([Path(d) for d in args.corpus], warn=warn)
-        if not corpus:
+        cascade_requested = bool(args.corpus_cascade)
+        if cascade_requested:
+            corpus += load_cascade_corpus(
+                args.corpus_cascade,
+                top=args.corpus_cascade_top,
+                warn=warn,
+            )
+        if not corpus and cascade_requested:
+            warn("the cascade assembled 0 documents: the inherited-coverage check did not run.")
+        elif not corpus:
             warn("no corpus given: the inherited-coverage check did not run.")
-        result = audit(scenario, answer=answer, corpus=corpus, min_shared=args.min_shared)
+        result = audit(
+            scenario,
+            answer=answer,
+            corpus=corpus,
+            min_shared=args.min_shared,
+            rarity_max_fraction=args.rarity_max_fraction,
+            require_corpus=cascade_requested,
+        )
     except (OSError, ValueError) as exc:
         if args.json:
             print(json.dumps(
@@ -338,7 +581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ))
         else:
             warn(f"redcheck: {exc}")
-        return 2
+        return EXIT_ERROR
 
     if args.json:
         print(json.dumps(
@@ -347,7 +590,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ))
     else:
         print(_render(result))
-    return 0 if result.verdict == "clean" else 1
+    if result.has_leak:
+        return EXIT_LEAK
+    if result.corpus_empty:
+        return EXIT_UNCHECKED
+    return EXIT_CLEAN
 
 
 if __name__ == "__main__":

@@ -1010,7 +1010,11 @@ testing-skills-with-subagents.md, "Watch for baseline contamination", before tru
 agent exploring its way to the answer; it does not stop it already knowing. A dispatched subagent
 still inherits the CLAUDE.md cascade and always-loaded memory index of the machine it runs on, so
 when the lesson under test is ALREADY recorded there, the RED cannot fail honestly. Check that
-before trusting it. If it is inherited, either make the coverage check against the skill FILE the
+before trusting it with `redcheck --corpus-cascade <dir>` from
+`bitranox:process-test-driven-development`, which assembles that machine's cascade and memory fact
+bodies itself and names the document that already teaches your scenario. Read a hit as strong
+evidence, a clean result as only "not caught", and exit 3 as "the corpus was empty, nothing was
+checked". If it is inherited, either make the coverage check against the skill FILE the
 evidence (a text check of the artifact, immune to inherited context) or de-telegraph the
 behavioural arm into a domain that text does not teach - and state in the review artifact which
 route you took. A RED that does not flip is a reportable outcome, not a reason to escalate the
@@ -1165,8 +1169,9 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 - [ ] Create pressure scenarios (3+ combined pressures for discipline skills)
 - [ ] Run scenarios WITHOUT skill - document baseline behavior verbatim
 - [ ] Checked whether the lesson under test is already in the CLAUDE.md cascade or memory store on
-      this machine; if it is, recorded which route replaced the behavioural RED (coverage check
-      against the skill file, or a de-telegraphed arm in a domain that text does not teach)
+      this machine, with `redcheck --corpus-cascade <dir>`; if it is, recorded which route replaced
+      the behavioural RED (coverage check against the skill file, or a de-telegraphed arm in a
+      domain that text does not teach)
 - [ ] Identify patterns in rationalizations/failures
 
 **GREEN Phase - Write Minimal Skill:**
