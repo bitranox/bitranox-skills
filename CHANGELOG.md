@@ -17,6 +17,38 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.180.0] - 2026-08-12
+
+### Added
+
+- **`process-stop-repeating-failure` skill**: after an attempt has been UNDONE (rollback, snapshot
+  restore, revert, git reset), retrying the same mechanism with a flag added is the same attempt in
+  a different hat. The skill gives three options and refuses a fourth: change the instrument, prove
+  the modification on a scratch fixture with a before/after count, or stop and report. Two undos of
+  the same target is a hard stop. A reset-to-baseline that runs before every attempt is METHOD, not
+  damage undone, and is carved out explicitly.
+
+  Written from an incident where a mirror-purge followed a directory symlink out of its tree and
+  emptied live system state; the documented flag that "excludes junctions" governs source traversal
+  while the purge walks the destination, so the fix destroyed the same guest a second time. RED
+  reproduced the failure (the baseline ran the modified command verbatim, citing the review and the
+  clock); GREEN builds the fixture instead. Both arms recorded in `.skillwriter/`.
+
+- **`recovery-retry-gate` hook** (PreToolUse, `Bash|Write|Edit`): fires when the pending call
+  repeats a destructive act on a machine that an earlier rollback had to undo, and points at the
+  skill above with the two event indices as evidence. Deterministic - no model call.
+
+  A periodic history-only watcher was measured first and FAILED: it can only speak after the action
+  it objects to has already run. Judged against the reference incident the gate fires at the exact
+  event that repeated the damage and not at the benign verification before it. Across 1426
+  transcripts (84,820 tool events) it fires in one, and it is silent on all five reset-to-baseline
+  sessions carrying 8 to 32 rollbacks each. Precision rests on 5 firings in a single session, so it
+  ships as a complement to the lexical `jig-repetition-nudge`, not a replacement, and its rate wants
+  re-measuring once it has fired in the wild.
+
+- **`overwatch_ledger`**: shared session-ledger reader (tool, target, intent, outcome, recovery
+  markers) behind the gate.
+
 ## [5.179.5] - 2026-08-12
 
 ### Fixed
