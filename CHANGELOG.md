@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.192.0] - 2026-08-12
+
+### Added
+
+- **`process-test-driven-development` gained `redcheck.py`**, a check for whether a scenario-based
+  RED (a prompt handed to an agent, not code) is even able to fail. Two leaks make a RED that
+  cannot fail look exactly like a good result: inherited coverage, where the agent already has the
+  lesson from its own config cascade or shipped reference material and answers from that instead
+  of the scenario, and telegraphing, where the scenario names the trap or pre-diagnoses the cause
+  and hands over its own answer. `redcheck` checks a scenario for both BEFORE an agent dispatch is
+  spent on it, and names which corpus document already teaches the lesson or which phrase gives
+  the answer away. Indexed in `compuse-toolbox`'s tool table as a cross-reference so that table
+  stays the one place that answers "is there already a tool for this?". Promoted from a personal
+  toolbox jig; the personal copy is retired in favor of this one.
+
 ## [5.191.0] - 2026-08-12
 
 ### Added

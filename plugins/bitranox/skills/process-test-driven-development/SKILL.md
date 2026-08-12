@@ -188,6 +188,34 @@ Confirm:
 
 **Other tests fail?** Fix now.
 
+### Scenario-Based RED: Can It Even Fail? (redcheck)
+
+A RED is not always code. When it is a PROMPT handed to an agent - proving the agent takes the
+wrong action without a fix, rather than proving a function returns the wrong value - "watch it
+fail" gets two extra failure modes that a compiler or a test runner never has:
+
+1. **Inherited coverage.** The agent under test is handed everything it starts with (an ancestor
+   config cascade, shipped reference material) before it ever sees your scenario. If the lesson
+   the RED is meant to test is already written down there, the agent answers from that - not from
+   your scenario - and the RED passes whatever the scenario says.
+2. **Telegraphing.** The scenario names the trap, pre-diagnoses the cause, or frames the decision
+   as suspicious, so the prompt hands over its own answer.
+
+Both leaks make a RED that CANNOT fail look exactly like a good result: it fails, for the wrong
+reason, and nothing about the transcript says so.
+
+`scripts/redcheck.py` checks a scenario for both leaks before an agent dispatch is spent on it:
+
+```
+uv run scripts/redcheck.py --scenario scenario.txt --answer conclusion.txt --corpus docs/ --json
+```
+
+Exit 0 = clean (neither leak found - this does not prove the RED CAN fail, only that these two
+reasons it might not have been ruled out). Exit 1 = a leak was found; the report names which
+corpus document already teaches the lesson, or which phrase telegraphs the answer. Rewrite the
+scenario (a different domain, de-telegraphed prose) and re-check before dispatching the real
+baseline run.
+
 ### REFACTOR - Clean Up
 
 After green only:
