@@ -18,6 +18,7 @@ broken hook never wedges a turn.
 import importlib.util
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,30 @@ _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
 _BASH_WINDOW_SECONDS = 120
 _BASH_FILE_CAP = 40
 _SKIP_DIRS = frozenset({".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+
+# git subcommands that rewrite tracked files wholesale. Every markdown they touch
+# gets a fresh mtime and so looks just-written to the scan below, but none of it
+# was authored by the operator - it is whatever the target revision holds.
+_GIT_TREE_WRITERS = frozenset({
+    "checkout", "switch", "merge", "rebase", "pull", "clone", "reset",
+    "stash", "cherry-pick", "revert", "am", "apply", "restore", "worktree",
+})
+_GIT_CALL_RE = re.compile(r"\bgit\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+([a-z-]+)")
+
+
+def _rewrites_the_tree(command: str) -> bool:
+    """Whether a shell command runs a git subcommand that rewrites tracked files.
+
+    The path-guessing fallback below must not fire for these. Reformatting a file
+    git just wrote is never what was asked for, and mid-operation it is
+    destructive: a `git merge` in a re-cut sequence aborted with "your local
+    changes would be overwritten" because this hook had modified the files the
+    next merge needed, leaving a half-assembled integration branch.
+
+    Matched on the SUBCOMMAND, so read-only git (log, status, diff) still allows
+    the fallback - a doc written beside `git log` is the operator's.
+    """
+    return any(sub in _GIT_TREE_WRITERS for sub in _GIT_CALL_RE.findall(command))
 
 
 def _reformat_file_fn():
@@ -66,6 +91,8 @@ def _markdown_paths_from_bash(event) -> list[str]:
     style they never adopted, so any directory below the working directory that
     holds its own `.git` is pruned. The working directory's own repo stays in scope.
     """
+    if _rewrites_the_tree((event.get("tool_input") or {}).get("command") or ""):
+        return []
     cwd = Path(event.get("cwd") or ".")
     if not cwd.is_dir():
         return []
