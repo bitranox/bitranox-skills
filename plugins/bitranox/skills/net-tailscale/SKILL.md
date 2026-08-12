@@ -1,6 +1,6 @@
 ---
 name: net-tailscale
-description: Use when installing or running Tailscale on Linux or in a container/LXC - joining a tailnet with tailscale up, setting a node hostname - and especially when a machine or container was CLONED from one that already had Tailscale (the clone inherits the node identity and collides with or de-authenticates the original), when tailscaled cannot create its tun device in an unprivileged container, or when tailscaled drops the tailnet after a reboot.
+description: Use when installing or running Tailscale on Linux or in a container/LXC - joining a tailnet with tailscale up, setting a node hostname - and especially when a machine or container was CLONED from one that already had Tailscale (the clone inherits the node identity and collides with or de-authenticates the original), when tailscaled cannot create its tun device in an unprivileged container, when tailscaled drops the tailnet after a reboot, or when a resolver forwarding DNS queries to 100.100.100.100 (MagicDNS/quad-100) SERVFAILs or times out on a FreeBSD/pfSense tailnet node.
 ---
 
 # net-tailscale
@@ -19,10 +19,12 @@ or template you clone from. Install it fresh per machine, after cloning.
 
 Use when: bringing a host or container onto a tailnet; cloning a VM/container that already
 had Tailscale; `tailscaled` fails with a tun/`TUNSETIFF`/permission error in an unprivileged
-LXC; Tailscale drops after reboot or loses its long-poll to the control plane.
+LXC; Tailscale drops after reboot or loses its long-poll to the control plane; a resolver
+forwarding to `100.100.100.100` (MagicDNS/quad-100) SERVFAILs or times out on FreeBSD/pfSense.
 
 For SSH auth/key mechanics see `bitranox:compuse-ssh`; for Proxmox container operations see
-`bitranox:infra-proxmox`.
+`bitranox:infra-proxmox`; for the pfSense-side detection and fix of the DNS trap below see
+`bitranox:net-firewall-pfsense`.
 
 ## Cloning: de-clone the identity BEFORE first start
 
@@ -120,14 +122,40 @@ when its control long-poll goes dead (not merely when the process exists): probe
 a stale/failed result. Build it self-healing per `bitranox:coding-resilience` (timeout,
 backoff, a stderr note on failure).
 
+## DNS: MagicDNS on quad-100 is platform-asymmetric
+
+MagicDNS answers on `100.100.100.100` (quad-100), but WHO answers it depends on the node's OS.
+On Linux, quad-100 is served by the LOCAL `tailscaled`, so it answers even with
+`accept-dns=false` (that flag only keeps `tailscaled` out of `/etc/resolv.conf`; it does not
+disable MagicDNS). On FreeBSD, including pfSense, `tailscaled` does NOT serve quad-100:
+`tailscale status` there reports `Tailscale DNS: disabled`, the tailnet route to
+`100.100.100.100` still exists, and a query against it just times out. That platform gap is the
+trap - a resolver config that forwards to quad-100 is correct on Linux and dead on
+FreeBSD/pfSense with nothing wrong in the config itself.
+
+The tell: an unbound forward zone (or any resolver rule) pointing at `100.100.100.100`
+SERVFAILs on FreeBSD/pfSense - not because the zone is misconfigured, but because its target
+never answers there. Use SERVFAIL vs NXDOMAIN to tell the two apart: SERVFAIL means the zone is
+configured but its target is dead (this platform gap); NXDOMAIN means the name genuinely does
+not exist. SERVFAIL from a quad-100 forward zone on FreeBSD/pfSense is the asymmetry, not a
+broken zone or a typo in the name - do not start there.
+
+Do NOT "fix" it by setting `accept-dns=true` on the FreeBSD/pfSense node: that makes
+`tailscaled` rewrite the node's `resolv.conf`, and pfSense's own package manager (`pkg`) reads
+that file - once Tailscale owns it there, `pkg` and system upgrades stop resolving. For the
+pfSense-side detection and fix (`doctor` catches a `resolv.conf` already rewritten this way),
+see `bitranox:net-firewall-pfsense`.
+
 ## Common mistakes
 
-| Mistake                                              | Consequence                                                         |
-|------------------------------------------------------|---------------------------------------------------------------------|
-| Baking Tailscale into a clone base / template        | Every clone inherits one identity; collisions forever               |
-| Starting the clone without wiping `tailscaled.state` | Clone resumes the SOURCE's identity; original drops off the tailnet |
-| Fixing state but not machine-id / MAC                | DHCP-lease and journald collisions later, misblamed on Tailscale    |
-| `--hostname=new` with the old state still present    | Renames the shared device; no new node is created                   |
-| Assuming `pct clone` copied the host `.conf`         | Clone has no `/dev/net/tun` grant; tailscaled cannot start          |
-| Inline `--auth-key=tskey-...` on the command line    | Key leaks into shell history and logs                               |
-| Restarting only on process death, not a dead poll    | A wedged daemon looks alive while the tailnet is down               |
+| Mistake                                                              | Consequence                                                             |
+|----------------------------------------------------------------------|-------------------------------------------------------------------------|
+| Baking Tailscale into a clone base / template                        | Every clone inherits one identity; collisions forever                   |
+| Starting the clone without wiping `tailscaled.state`                 | Clone resumes the SOURCE's identity; original drops off the tailnet     |
+| Fixing state but not machine-id / MAC                                | DHCP-lease and journald collisions later, misblamed on Tailscale        |
+| `--hostname=new` with the old state still present                    | Renames the shared device; no new node is created                       |
+| Assuming `pct clone` copied the host `.conf`                         | Clone has no `/dev/net/tun` grant; tailscaled cannot start              |
+| Inline `--auth-key=tskey-...` on the command line                    | Key leaks into shell history and logs                                   |
+| Restarting only on process death, not a dead poll                    | A wedged daemon looks alive while the tailnet is down                   |
+| Forwarding a resolver's zone to `100.100.100.100` on FreeBSD/pfSense | `tailscaled` does not serve quad-100 there; SERVFAIL, not a broken zone |
+| Setting `accept-dns=true` on FreeBSD/pfSense to "fix" DNS            | Rewrites `resolv.conf`; breaks `pkg` and system upgrades there          |
