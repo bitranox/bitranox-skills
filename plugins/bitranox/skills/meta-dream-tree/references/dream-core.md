@@ -141,11 +141,14 @@ complementary on inspection - evidence decides, not the agent's topic guess.)
 Low/UNSURE never moves. Pinned entries are EXEMPT from move/reword/archive without the user's
 approval of that specific change - report them separately. Tree-top promotion additionally passes
 the corroboration gate: a user-stated concrete rule promotes eagerly; a model-INFERRED generalization
-needs >= 2 dream sightings. The gate is backed by a real dwell counter (out of the dreamed store, so
-counting never bumps its mtime): record each sighting with `dream_state.py saw-promotable <slug>`,
-ask `dream_state.py should-promote <slug>` (prints `promote`/`hold`), and after an actual promotion
-run `dream_state.py promoted <slug>` to clear it. HOLD keeps the fact at the project level for the
-next dream.
+needs >= 2 DISTINCT PROJECTS. The gate is backed by a real dwell store (out of the dreamed store, so
+counting never bumps its mtime) that counts distinct projects, not sightings - a dream re-reads
+UNCHANGED fact bodies on every run, so counting sightings let one act of judgement corroborate itself.
+Record each sighting with `dream_state.py saw-promotable <slug> <project the fact came from>` (the
+project defaults to the cwd, which is wrong for a fan-out reading other projects' stores), ask
+`dream_state.py should-promote <slug>` (prints `promote`/`hold`), and after an actual promotion run
+`dream_state.py promoted <slug>` to clear every project's sighting at once. HOLD keeps the fact at
+the project level until a SECOND project sights it.
 
 ## Verification contract (every run ends with this)
 

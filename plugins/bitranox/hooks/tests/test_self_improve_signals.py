@@ -3,6 +3,7 @@
 All content is ASCII.
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -407,19 +408,15 @@ def test_project_unseeded_false_when_memory_exists(home):
 # --------------------------------------------------------------------------
 
 
-def test_note_promotion_candidate_increments(home):
-    assert S.note_promotion_candidate("/p/x", "fleet-ssh") == 1
-    assert S.note_promotion_candidate("/p/x", "fleet-ssh") == 2
-    assert S.note_promotion_candidate("/p/x", "other") == 1   # independent per key
-
-
 def test_should_promote_user_stated_is_eager(home):
     assert S.should_promote("user", 1) is True                # user rule promotes on first sight
 
 
 def test_should_promote_inferred_needs_corroboration(home):
-    assert S.should_promote("inferred", 1) is False           # one sighting: not yet
-    assert S.should_promote("inferred", 2) is True            # corroborated across 2 dreams
+    assert S.should_promote("inferred", 1) is False           # one project: not yet
+    assert S.should_promote("inferred", 2) is True            # corroborated by 2 distinct projects
+    # the two sources stay distinct at the SAME dwell: only the inferred path is gated
+    assert S.should_promote("user", 1) is not S.should_promote("inferred", 1)
 
 
 def test_should_promote_eager_mode_overrides(home):
@@ -431,6 +428,62 @@ def test_clear_promotion_candidate(home):
     S.note_promotion_candidate("/p/x", "k")
     S.clear_promotion_candidate("/p/x", "k")
     assert S.note_promotion_candidate("/p/x", "k") == 1       # count was forgotten
+
+
+def test_note_promotion_candidate_counts_distinct_projects(home):
+    # The gate's contract is corroboration across DISTINCT PROJECTS. Repeat sightings inside ONE
+    # project are the same act of judgement re-derived - a deep crosstree fan-out re-reads the same
+    # unchanged fact bodies on every run - so they must add no evidence.
+    assert S.note_promotion_candidate("/p/a", "fleet-ssh") == 1
+    assert S.note_promotion_candidate("/p/a", "fleet-ssh") == 1   # same project: no new evidence
+    assert S.note_promotion_candidate("/p/b", "fleet-ssh") == 2   # a second project corroborates
+    assert S.note_promotion_candidate("/p/a", "other") == 1       # independent per key
+
+
+def test_many_sightings_from_one_project_stay_uncorroborated(home):
+    # 84 sightings in a single pass is the measured number that satisfied the old sighting counter.
+    for _ in range(84):
+        S.note_promotion_candidate("/p/a", "k")
+    assert S.promotion_dwell("/p/a", "k") == 1
+    assert S.should_promote("inferred", S.promotion_dwell("/p/a", "k")) is False
+
+
+def test_promotion_dwell_is_readable_from_any_project(home):
+    # A per-project store structurally cannot see another project's sighting, so the dwell is one
+    # shared property of the slug, answering the same from whichever project asks.
+    S.note_promotion_candidate("/p/a", "k")
+    S.note_promotion_candidate("/p/b", "k")
+    assert S.promotion_dwell("/p/a", "k") == 2
+    assert S.promotion_dwell("/p/b", "k") == 2
+    assert S.should_promote("inferred", S.promotion_dwell("/p/b", "k")) is True
+
+
+def test_clear_promotion_candidate_forgets_every_project(home):
+    S.note_promotion_candidate("/p/a", "k")
+    S.note_promotion_candidate("/p/b", "k")
+    S.clear_promotion_candidate("/p/a", "k")
+    # the WHOLE set goes: one leftover entry would let a single later sighting re-trip the gate
+    assert S.promotion_dwell("/p/b", "k") == 0
+    assert S.note_promotion_candidate("/p/b", "k") == 1
+
+
+def test_legacy_per_project_counter_file_reads_as_zero(home):
+    # State written before the fix is a per-project file of slug -> SIGHTING count, which is exactly
+    # the evidence this gate no longer accepts. It must fail CLOSED: never crash, and never grant a
+    # promotion by reinterpreting one project's repeat count as corroboration.
+    legacy = home / ".claude" / "self-improve-audit" / (S.proj_key("/p/a") + ".promote.json")
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"k": 84}), encoding="utf-8")
+    assert S.promotion_dwell("/p/a", "k") == 0
+    assert S.note_promotion_candidate("/p/a", "k") == 1
+
+
+def test_unreadable_promotion_store_reads_as_zero(home):
+    f = S.promotion_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    for junk in ('{"k": 84}', '{"k": "a"}', "[]", "not json at all"):
+        f.write_text(junk, encoding="utf-8")
+        assert S.promotion_dwell("/p/a", "k") == 0     # unusable shape -> no corroboration
 
 
 # ---- contribution queue: the intent-to-ship must outlive the session ---------------------------
@@ -652,10 +705,12 @@ def test_subject_levels_empty_when_only_cwd_touched(home, tmp_path):
 
 
 def test_promotion_dwell_reads_without_incrementing(home):
-    assert S.promotion_dwell("/p/x", "k") == 0                # unseen -> 0
-    S.note_promotion_candidate("/p/x", "k")
-    assert S.promotion_dwell("/p/x", "k") == 1                # read-only: does not bump
-    assert S.promotion_dwell("/p/x", "k") == 1               # still 1 after a second read
+    # Read from a DIFFERENT project than the one that recorded: asking from /p/x could only stay 1
+    # whether or not the read records, so that arrangement cannot fail and asserts nothing.
+    assert S.promotion_dwell("/p/b", "k") == 0                # unseen -> 0
+    S.note_promotion_candidate("/p/a", "k")
+    assert S.promotion_dwell("/p/b", "k") == 1                # read-only: /p/b did not become a
+    assert S.promotion_dwell("/p/b", "k") == 1                # second corroborator by asking
 
 
 # --------------------------------------------------------------------------

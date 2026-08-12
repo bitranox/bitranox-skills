@@ -192,35 +192,62 @@ def test_session_reviewed_advances_watermark_for_a_self_located_transcript(home,
 
 # ---- corroboration gate (defect F): saw-promotable / should-promote / promoted --------------
 
-def test_should_promote_holds_then_promotes_across_two_dreams(home, capsys):
-    # A model-inferred fact routed to the tree top needs >= 2 dream sightings before it may promote.
-    assert D.main(["saw-promotable", "some-slug", "/p/x"]) == 0
-    assert capsys.readouterr().out.strip() == "1"                  # dwell after first sighting
-    assert D.main(["should-promote", "some-slug", "/p/x"]) == 0
-    assert capsys.readouterr().out.strip() == "hold"              # one sighting: not yet
-    assert D.main(["saw-promotable", "some-slug", "/p/x"]) == 0
-    assert capsys.readouterr().out.strip() == "2"
-    assert D.main(["should-promote", "some-slug", "/p/x"]) == 0
-    assert capsys.readouterr().out.strip() == "promote"          # corroborated across 2 dreams
-
-
 def test_should_promote_is_read_only(home, capsys):
-    # querying should-promote must NOT count as a sighting (else one query would corroborate it)
-    D.main(["saw-promotable", "s", "/p/x"])
+    # Querying must NOT count as a sighting. Asked from the SAME project that recorded, the answer
+    # could only stay "hold" either way, so the read has to come from a SECOND project: if the query
+    # recorded, that project would become the corroborator and the verdict would flip to "promote".
+    D.main(["saw-promotable", "s", "/p/a"])
     capsys.readouterr()
     for _ in range(3):
-        D.main(["should-promote", "s", "/p/x"])
-        assert capsys.readouterr().out.strip() == "hold"          # still 1 sighting after repeated reads
+        D.main(["should-promote", "s", "/p/b"])
+        assert capsys.readouterr().out.strip() == "hold"          # still one corroborator
 
 
-def test_promoted_clears_the_counter(home, capsys):
+def test_repeat_sightings_in_one_project_never_corroborate(home, capsys):
+    """One act of judgement re-derived is not corroboration. A deep crosstree fan-out re-reads the
+    same UNCHANGED fact bodies on every run, so a per-run sighting counter let run 2 corroborate
+    run 1 with no new evidence - 84 sightings were recorded in a single measured pass."""
+    for _ in range(84):
+        assert D.main(["saw-promotable", "s", "/p/x"]) == 0
+        assert capsys.readouterr().out.strip() == "1"             # one project, one corroborator
+    assert D.main(["should-promote", "s", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "hold"
+
+
+def test_two_sightings_in_one_project_still_hold(home, capsys):
     D.main(["saw-promotable", "s", "/p/x"])
     D.main(["saw-promotable", "s", "/p/x"])
     capsys.readouterr()
-    assert D.main(["promoted", "s", "/p/x"]) == 0
+    assert D.main(["should-promote", "s", "/p/x"]) == 0
+    assert capsys.readouterr().out.strip() == "hold"              # N=2 from one project: not evidence
+
+
+def test_two_distinct_projects_corroborate(home, capsys):
+    # Real corroboration must still work: the fix tightens WHAT counts, not whether anything counts.
+    # A model-inferred fact routed to the tree top needs >= 2 distinct projects before it may promote.
+    assert D.main(["saw-promotable", "some-slug", "/p/a"]) == 0
+    assert capsys.readouterr().out.strip() == "1"                 # dwell after the first project
+    assert D.main(["should-promote", "some-slug", "/p/a"]) == 0
+    assert capsys.readouterr().out.strip() == "hold"              # one project: not yet
+    assert D.main(["saw-promotable", "some-slug", "/p/b"]) == 0
+    assert capsys.readouterr().out.strip() == "2"
+    assert D.main(["should-promote", "some-slug", "/p/a"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"           # readable from either project
+    assert D.main(["should-promote", "some-slug", "/p/b"]) == 0
+    assert capsys.readouterr().out.strip() == "promote"
+
+
+def test_promoted_clears_every_project_sighting(home, capsys):
+    D.main(["saw-promotable", "s", "/p/a"])
+    D.main(["saw-promotable", "s", "/p/b"])
     capsys.readouterr()
-    D.main(["should-promote", "s", "/p/x"])
-    assert capsys.readouterr().out.strip() == "hold"              # counter forgotten after promotion
+    assert D.main(["promoted", "s", "/p/a"]) == 0
+    capsys.readouterr()
+    # /p/b's sighting went too - a leftover entry would let one later sighting re-trip the gate
+    assert D.main(["saw-promotable", "s", "/p/b"]) == 0
+    assert capsys.readouterr().out.strip() == "1"
+    assert D.main(["should-promote", "s", "/p/b"]) == 0
+    assert capsys.readouterr().out.strip() == "hold"
 
 
 def test_session_review_reports_which_skills_actually_ran(home, tmp_path, capsys):

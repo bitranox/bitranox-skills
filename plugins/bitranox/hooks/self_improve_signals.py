@@ -1192,58 +1192,89 @@ def project_unseeded(proj):
 
 # ---- quality / dwell gate for global promotion (high blast radius) -------------------
 # The global layer loads into EVERY session, so a wrong entry there is high-blast. A user-stated
-# concrete rule promotes eagerly; a model-INFERRED generalization must be corroborated (seen across
-# >= threshold dreams) first. The dwell counter lives OUT of the dreamed store (here), so counting
-# never bumps the store mtime - the convergence no-op holds.
+# concrete rule promotes eagerly; a model-INFERRED generalization must be corroborated by >=
+# threshold DISTINCT PROJECTS first. The dwell store lives OUT of the dreamed store (here), so
+# recording a sighting never bumps the store mtime - the convergence no-op holds.
+#
+# The dwell counts distinct PROJECTS, not sightings, because the two are not the same evidence: a
+# dream re-reads UNCHANGED fact bodies on every run, so a sighting counter let one act of judgement
+# corroborate itself simply by being re-derived (a measured crosstree pass recorded 84 sightings of
+# the same candidate list in a single run). Repeat sightings inside one project therefore collapse
+# to one corroborator, and the mechanism now says what the prose always claimed.
 
-def _promote_file(proj):
-    return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".promote.json")
+
+def promotion_file():
+    """The sighting store: candidate key -> the project keys that have sighted it.
+
+    SHARED across projects, not per-project, because the question it answers is "how many DISTINCT
+    projects corroborate this?" - a per-project file structurally cannot see another project's
+    sighting, so the count it could offer would only ever be one project's own repeats."""
+    return Path.home() / ".claude" / "self-improve-audit" / "promotion-candidates.json"
 
 
-def _read_counts(path):
+def _read_sightings():
+    """key -> sorted list of project keys that sighted it. Any other shape reads as EMPTY.
+
+    Failing CLOSED is the point. The pre-fix store was per-project and held key -> SIGHTING COUNT,
+    which is precisely the evidence this gate no longer accepts; that file is not read at all, and
+    a hand-edited or truncated store cannot crash a dream or be reinterpreted as corroboration."""
     try:
-        d = json.loads(path.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
+        data = json.loads(promotion_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: sorted({str(p) for p in v}) for k, v in data.items() if isinstance(v, list)}
+
+
+def _write_sightings(data):
+    f = promotion_file()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def note_promotion_candidate(proj, key):
-    """Record that this dream saw promotion-candidate `key`; return its dwell count (number of
-    dreams it has appeared in). Out-of-store, so it does not affect convergence."""
-    f = _promote_file(proj)
-    counts = _read_counts(f)
-    counts[key] = int(counts.get(key, 0)) + 1
-    try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
-    except OSError:
-        pass
-    return counts[key]
+    """Record that `proj` sighted promotion-candidate `key`; return its dwell - the number of
+    DISTINCT projects that have sighted it. Idempotent within a project: re-recording the same
+    project adds no evidence, so N sightings of an unchanged fact body still count as one."""
+    data = _read_sightings()
+    seen = set(data.get(key, ()))
+    seen.add(proj_key(proj))
+    data[key] = sorted(seen)
+    _write_sightings(data)
+    return len(seen)
 
 
 def clear_promotion_candidate(proj, key):
-    """Forget a candidate's dwell count (call after it is promoted, so it is not re-counted)."""
-    f = _promote_file(proj)
-    counts = _read_counts(f)
-    if key in counts:
-        del counts[key]
-        try:
-            f.write_text(json.dumps(counts, sort_keys=True), encoding="utf-8")
-        except OSError:
-            pass
+    """Forget EVERY project's sighting of `key` (call after it is promoted, so it is not re-counted).
+
+    The whole set goes, not the calling project's entry: leaving the other corroborators behind
+    would let one single later sighting re-trip a gate that is supposed to need two. `proj` is
+    accepted so the three promotion verbs share one call shape (a lone-argument variant here would
+    silently take a project path as the key at any call site missed in a rename)."""
+    data = _read_sightings()
+    if key in data:
+        del data[key]
+        _write_sightings(data)
 
 
 def promotion_dwell(proj, key):
-    """The current dwell count for `key` WITHOUT recording a new sighting (read-only) - so a
-    promote/hold decision can be re-queried without inflating the counter. 0 if never seen."""
-    return int(_read_counts(_promote_file(proj)).get(key, 0))
+    """How many DISTINCT projects have sighted `key`, WITHOUT recording a new sighting (read-only) -
+    so a promote/hold decision can be re-queried without inflating the count. 0 if never seen.
+
+    The answer is a property of the KEY, so it reads the same from whichever project asks; `proj` is
+    accepted for the shared call shape described in `clear_promotion_candidate`."""
+    return len(_read_sightings().get(key, ()))
 
 
 def should_promote(source, dwell_count, mode=None, threshold=2):
     """Whether a generalization may be promoted to the always-everywhere global layer.
     source is "user" (user-stated concrete rule -> eager) or "inferred" (model generalization ->
-    needs corroboration). mode comes from the config (`promotion`: corroborated | eager)."""
+    needs corroboration from >= threshold distinct projects, per `promotion_dwell`).
+    mode comes from the config (`promotion`: corroborated | eager)."""
     mode = load_config().get("promotion", "corroborated") if mode is None else mode
     if mode == "eager" or source == "user":
         return True

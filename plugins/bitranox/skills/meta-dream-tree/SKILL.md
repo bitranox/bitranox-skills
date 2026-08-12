@@ -121,10 +121,12 @@ the success line, abort-and-show on a miss).
    `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
    that move - a down-move with inbound refs needs the refs re-pointed first, or stays). Low/UNSURE
    never moves. Tree-top promotion additionally passes the corroboration gate (user-stated: eager;
-   model-inferred: >= 2 dream sightings): record each model-inferred tree-top candidate with
-   `dream_state.py saw-promotable <slug>`, gate the promotion on `dream_state.py should-promote <slug>`
-   (`promote`/`hold`), and after an applied promotion run `dream_state.py promoted <slug>` to clear
-   the counter. HOLD keeps the fact at the project level for the next dream. After moving, normalize
+   model-inferred: >= 2 DISTINCT PROJECTS): record each model-inferred tree-top candidate with
+   `dream_state.py saw-promotable <slug> <project the fact came from>`, gate the promotion on
+   `dream_state.py should-promote <slug>` (`promote`/`hold`), and after an applied promotion run
+   `dream_state.py promoted <slug>` to clear every project's sighting. Repeat sightings from ONE
+   project count once, so re-running a dream over unchanged facts corroborates nothing. HOLD keeps
+   the fact at the project level until a SECOND project sights it. After moving, normalize
    reference+delta
    UPWARD-ONLY: the general lives once at its altitude, lower entries cite `[[general]]` + delta.
    Pinned entries are EXEMPT from move/reword/archive unless the user approves that specific

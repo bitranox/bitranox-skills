@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.187.0] - 2026-08-12
+
+### Changed
+
+- **`meta-dream-tree` / `meta-dream-crosstree` corroboration gate is now STRICTER**
+  (`self_improve_signals.py`, `dream_state.py saw-promotable` / `should-promote` / `promoted`):
+  the dwell that gates promoting a model-INFERRED fact into a tree-top always-loaded block now
+  counts DISTINCT PROJECTS instead of sightings. It previously counted one sighting per dream run,
+  which a dream can satisfy on its own: a fan-out re-reads the same UNCHANGED fact bodies on every
+  run, mechanically re-derives the same candidate list, and the second run corroborates the first
+  with no new evidence (a measured pass recorded 84 sightings in a single run). Repeat sightings
+  from one project now collapse to one corroborator, so N sightings of an unchanged body can never
+  reach the threshold, while two DISTINCT projects still satisfy it - including within a single
+  crosstree run, which the old counter refused. `promoted` clears every project's sighting rather
+  than one, so a single later sighting cannot re-trip a cleared gate. The user-STATED path is
+  untouched and still promotes eagerly; only the inferred path is gated. The prose in both skills
+  and in `references/dream-core.md` claimed ">= 2 distinct projects" while the mechanism counted
+  runs; both now say and do the same thing, and the dream is told to name the project a fact CAME
+  FROM (the argument defaults to the cwd, which collapses a whole fan-out to one corroborator).
+- **State compatibility for the above:** the sighting store moved from a per-project file to one
+  shared `promotion-candidates.json`, because a per-project file structurally cannot see another
+  project's sighting, which is the whole question the gate asks. Pre-existing per-project counter
+  files are NOT migrated and are no longer read: their contents are sighting counts, exactly the
+  evidence this gate no longer accepts, so they read as zero. Any unusable shape fails CLOSED - it
+  can neither crash a dream nor be reinterpreted as corroboration. A candidate part-way to
+  promotion under the old scheme therefore restarts and needs a genuine second project.
+
 ## [5.186.0] - 2026-08-12
 
 ### Changed
