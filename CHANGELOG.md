@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.181.0] - 2026-08-12
+
+### Added
+
+- **`net-tailscale` skill**: new "DNS: MagicDNS on quad-100 is platform-asymmetric" section.
+  `100.100.100.100` is served by the LOCAL `tailscaled`, so it answers on Linux even with
+  `accept-dns=false` - but not on FreeBSD/pfSense, where `tailscale status` reports "Tailscale
+  DNS: disabled" and queries against quad-100 time out while the tailnet route to it still
+  exists. A resolver forward zone pointing at quad-100 SERVFAILs on those platforms as a result;
+  SERVFAIL vs NXDOMAIN is the tell (dead target vs genuinely absent name). Cross-references
+  `bitranox:net-firewall-pfsense` for the pfSense-side detection and fix of the related
+  `accept-dns=true` / `resolv.conf` / `pkg` trap that skill already documents.
+
 ## [5.180.1] - 2026-08-12
 
 ### Changed
