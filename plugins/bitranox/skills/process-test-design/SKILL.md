@@ -117,6 +117,22 @@ promised. But do not just drop it: a missing branch where the axis clearly appli
 size or length reaching a real sink) is a CODE finding - report the absent validation rather than
 writing a test that documents its absence.
 
+## Scrub a captured artifact fully before it becomes a fixture
+
+A captured artifact (a packet capture, a protocol exchange, a log or config dump) committed as a
+test fixture carries more than its headers. A scrub that only touches the header/summary fields
+looks complete while the structured payload underneath - options, TLVs, nested records - still
+carries site topology (internal hostnames, domain names, subnets, device identifiers, vendor/serial
+data). This is general practice, not tied to one protocol: it applies to DHCP, DNS, LLDP, and SNMP
+captures, and equally to log and config dumps - scrub every layer the format defines, not just the
+fields visible in a summary view.
+
+**Assert the shipped fixture's fields in a test**, not only once by eye before committing. A fixture
+nobody asserts on can silently re-acquire unscrubbed content the next time it is regenerated (a
+re-capture, a re-export): the eyeball check does not repeat, the assertion does. Parse the committed
+fixture and assert the sanitized values, including the structured payload fields, so the scrub is
+enforced by the suite rather than remembered by a person.
+
 ## Deterministic and order-independent
 
 - **No dependence on test execution order.** No shared mutable module/global state between tests; each

@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.195.0] - 2026-08-12
+
+### Added
+
+- **`process-test-design` gained a rule on scrubbing a captured artifact before it becomes a test
+  fixture**: a packet capture, protocol exchange, log, or config dump committed as a fixture needs
+  its structured payload scrubbed (options, TLVs, nested records), not just its headers - a
+  header-only scrub can look complete while site topology (internal hostnames, domain names,
+  subnets, device identifiers, vendor/serial data) still sits in the payload underneath. Applies
+  across protocols (DHCP, DNS, LLDP, SNMP) and equally to log/config dumps. Pairs the rule with an
+  enforcement mechanism: assert the shipped fixture's fields in a test, so a re-capture or
+  re-export that reintroduces unscrubbed content fails the suite instead of depending on a person
+  remembering to re-check by eye.
+
 ## [5.194.0] - 2026-08-12
 
 ### Added
