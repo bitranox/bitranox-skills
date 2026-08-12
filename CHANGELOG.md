@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.190.0] - 2026-08-12
+
+### Added
+
+- **`compuse-toolbox` gained `diffbehave.py`**, a differential-execution jig: run two commands on
+  the same inputs and diff what they actually did (exit code, stdout, stderr), instead of judging
+  "does this behave differently" by looking at the two versions - an `ast.dump` comparison, a line
+  count, and a `grep -c` all execute nothing and cannot answer the question. Its `--expect-differ N`
+  flag is the known-negative check: a hand-rolled detector verified only on cases where it already
+  agrees has proved nothing, so the tool fails unless at least N cases come back DIFFER. Promoted
+  from a personal toolbox jig; the personal copy is retired in favor of this one.
+
 ## [5.189.0] - 2026-08-12
 
 ### Added
