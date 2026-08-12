@@ -1082,6 +1082,22 @@
   "request",
   "keep"
  ],
+ "process-stop-repeating-failure": [
+  "action",
+  "re-attempts",
+  "target",
+  "already",
+  "undone",
+  "rollback",
+  "snapshot",
+  "restore",
+  "revert",
+  "reset",
+  "manual",
+  "repair",
+  "next",
+  "attempt"
+ ],
  "process-test-design": [
   "writing",
   "reviewing",

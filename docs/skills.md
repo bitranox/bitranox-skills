@@ -3,7 +3,7 @@
 
 # Skill catalog
 
-All 77 skills shipped by the `bitranox` plugin, grouped by taxonomy category
+All 78 skills shipped by the `bitranox` plugin, grouped by taxonomy category
 ([`skill-taxonomy.json`](../plugins/bitranox/skill-taxonomy.json)). Invoke any of them as
 `/bitranox:<skill>`; Claude also picks one up automatically when a task matches its
 description. Each description below is the skill's own trigger description - it states WHEN
@@ -123,6 +123,7 @@ Software-engineering workflow discipline: plan, review, debug, agent orchestrati
 - [`process-review-uncertain-decisions`](../plugins/bitranox/skills/process-review-uncertain-decisions/SKILL.md) - Use after finishing a piece of work - a feature, a fix, a refactor, a plan step, a release - and before moving on, to surface the choices made along the way that are not settled. Also use on "what are you unsure about", "which decisions are shaky", "review your own decisions", or when a Stop nudge asks for a decision review.
 - [`process-review-verification-before-completion`](../plugins/bitranox/skills/process-review-verification-before-completion/SKILL.md) - Use when about to claim work is complete, fixed, or passing, before committing, opening a PR, or moving to the next task, or when about to express satisfaction with a result ("done", "looks correct", "should work now") or trust an agent's success report
 - [`process-ship-finishing-development-branch`](../plugins/bitranox/skills/process-ship-finishing-development-branch/SKILL.md) - Use when implementation is complete and tests pass and you need to decide how to finish a feature or bugfix branch - merge it, open a pull request, keep it, or discard it, and clean up any worktree
+- [`process-stop-repeating-failure`](../plugins/bitranox/skills/process-stop-repeating-failure/SKILL.md) - Use when the action about to run re-attempts a target that already had to be undone (rollback, snapshot restore, revert, git reset, manual repair), when the next attempt differs from the damaging one only by an added flag, option or guard, when a second undo of the same target is on the table, or when a fix is justified by what the documentation says rather than by a test.
 - [`process-test-design`](../plugins/bitranox/skills/process-test-design/SKILL.md) - Use when writing, reviewing, or pruning tests in ANY language - deciding unit vs integration vs e2e, whether to mock/patch or use the real dependency, which edge/adversarial inputs to cover (unusual UTF, emoji, CJK, binary, wrong types, oversized), why a test is flaky or order-dependent, or whether a test earns its keep. Keywords - mock, monkeypatch, spy, stub, fake, fixture, e2e, integration test, flaky, order-dependent, sleep, adversarial input, low-value test, coverage, pytest, vitest, jest, go test, cargo test, bats. For the red-green discipline see process-test-driven-development; for what to validate at a boundary see coding-input-sanitization.
 - [`process-test-driven-development`](../plugins/bitranox/skills/process-test-driven-development/SKILL.md) - Use when implementing any feature or bugfix, before writing implementation code
 
