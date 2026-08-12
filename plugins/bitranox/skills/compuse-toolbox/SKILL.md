@@ -1,6 +1,6 @@
 ---
 name: compuse-toolbox
-description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, finding which copies of a named file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), or retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path. Check these tested jigs first instead of writing throwaway code.
+description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, finding which copies of a named file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path, or checking by eye whether an old and a new version of something behave the same on the same inputs (or whether a hand-rolled detector ever actually says they differ). Check these tested jigs first instead of writing throwaway code.
 ---
 
 # compuse-toolbox
@@ -28,6 +28,7 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 | `winlog`          | `iconv`/`strings -e l` on a WINDOWS log whose text `grep` cannot find, or that `cat`s with spaces between the letters - UTF-16, BOM, or MIXED encodings                                                                                               | `uv run scripts/winlog.py read FILE [--grep DONE-OK] [--tail 20] [--json]` (exit 1 = no match)                                   |
 | `transfer`        | a `curl --limit-rate` / `rsync --bwlimit` big-file download or host-to-host copy that must respect a REAL speed limit (the units differ per tool: `curl 8M` is 8 MiB/s = 67 Mbit, `rsync --bwlimit` is KiB/s), or judging whether a long job has hung | `uv run scripts/transfer.py fetch URL --rate 8Mbit` / `push F user@host:/d/ --rate 8Mbit` / `check --file F --pid N`             |
 | `fleet_ssh`       | an `ssh -i <key> -o BatchMode=yes -o ConnectTimeout=N` one-liner retyped per call, or an scp whose login user has to go INSIDE the path (`root@host:/p`) and gets forgotten                                                                           | `uv run scripts/fleet_ssh.py [--user U] HOST [cmd]` / `--scp SRC DST` (add `--trust-changing-host-keys` for a fleet you reimage) |
+| `diffbehave`      | a loop that runs an OLD and a NEW version of a script (or two CLIs meant to be equivalent) on the same inputs and diffs stdout/stderr/exit code by eye - or proving a hand-rolled detector is not a rubber stamp that always says SAME                | `uv run scripts/diffbehave.py --a "OLD_CMD" --b "NEW_CMD" --case-file CASES.jsonl` / `--expect-differ N` (known-negative check)  |
 
 Per-tool arguments live in each tool's `--help` (loaded only when used, so this index stays small).
 
@@ -99,6 +100,14 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   without `--no-index`). Batches at most 4 git calls PER REPO regardless of file count, never 2
   per file. `git_state`'s repo-state mode reads porcelain v2 (no `rev-parse --short` 2-rev
   footgun).
+- **`diffbehave` answers "does this behave differently" by RUNNING both sides, never by reading
+  them.** An `ast.dump` diff is identifier-sensitive, so a rename alone reads as a behaviour
+  change, and neither a line count nor a `grep -c` executes anything either - none of the three
+  can answer the question, only running both sides on the same input and diffing what happened
+  can. Its `--expect-differ N` flag is the other half: a hand-rolled detector verified only
+  against cases where it already agrees has proved nothing, so the tool fails unless at least N
+  cases come back DIFFER - a comparison that can only ever say AGREE is a rubber stamp, not a
+  check.
 - **The others encode the trap.** `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/
   `transcript_tail` parse JSONL by field, not by fragile text slicing.
 
