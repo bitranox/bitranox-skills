@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.194.0] - 2026-08-12
+
+### Added
+
+- **`meta-consolidate-claude-md` gained `claudemd_variance.py`**, its first shipped script: the
+  measurement this skill's own procedure prescribes ("split every CLAUDE.md into `## ` sections,
+  hash each body, group, and compute the common ancestor of each group of 3+") but shipped no
+  tool for. Two sessions hand-rolled that exact script from scratch before this one shipped.
+  `claudemd_variance` enumerates by a plain filesystem WALK, never `grep` and never
+  gitignore-aware, so a gitignored CLAUDE.md is found exactly like a tracked one - a hand-rolled
+  version built on the session's own `grep` cannot make that claim. It hashes each section body
+  after a precisely defined whitespace normalisation (trailing whitespace and blank-line runs
+  collapse; leading indentation does NOT, since it is structure, not noise), groups identical
+  bodies per heading, and reports each variant's common ancestor - a single-member variant's
+  ancestor is that file's own parent directory, never the filesystem root - plus the largest
+  variant's share of the group, the number this skill's "60-75% means one dominant version"
+  signal keys on. Indexed in `compuse-toolbox`'s tool table as a cross-reference so that table
+  stays the one place that answers "is there already a tool for this?".
+
 ## [5.193.0] - 2026-08-12
 
 ### Added

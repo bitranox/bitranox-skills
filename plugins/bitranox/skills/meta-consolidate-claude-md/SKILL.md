@@ -15,14 +15,24 @@ skill exists to prevent.
 
 ## 1. Measure - byte-identical groups and their true common ancestor
 
-Split every `CLAUDE.md` into `## ` sections, hash each section body, and group. For each group of
-3+, compute the common ancestor of its member paths. That directory, not the one you assumed, is
-where the text belongs.
+`scripts/claudemd_variance.py` does this measurement, so it never needs hand-rolling again - two
+sessions wrote this exact script from scratch before it shipped:
 
-Enumerate with a walk, never the session `grep`: it routes to a gitignore-aware backend and silently
-drops ignored files. Use `bitranox:compuse-toolbox`'s `grep_all` (it reports how many hits a normal
-grep would have missed) or a plain filesystem walk. Measured on one tree: 73 files by walk, 17 by
-grep, no warning.
+```
+uv run scripts/claudemd_variance.py --root ~/src --json
+```
+
+It splits every `CLAUDE.md` into `## ` sections, hashes each body (whitespace-normalised, so
+trivial reflowing does not read as a different variant - the definition is in `--help`), groups
+the identical ones, and reports each group's common ancestor plus the largest variant's share of
+the group. For each group of 3+, its common ancestor - not the one you assumed - is where the
+text belongs; `--lift-threshold` marks which variants clear that bar.
+
+Enumeration is a plain filesystem WALK, never the session `grep` or any gitignore-aware tool:
+`grep` routes to a gitignore-aware backend and silently drops ignored files. Measured on one
+tree: 73 files by walk, 17 by grep, no warning. `claudemd_variance.py` never shells out at all,
+so it structurally cannot inherit that blind spot; `bitranox:compuse-toolbox`'s `grep_all` is the
+right tool when the question is a text search rather than this section-level measurement.
 
 Then split the variance by CAUSE, because only one kind is liftable:
 
