@@ -255,6 +255,66 @@ def test_topic_tokens_link_the_real_rewrites():
     assert pairs[0] & pairs[2], "the lineage's endpoints share no topic token"
 
 
+# --------------------------------------------------------------- pure: what counts as one JOB
+#
+# These four came out of replaying 2689 script writes from 98 real sessions. Every fixture below
+# is synthetic; the corpus supplied the SHAPES, never any text.
+
+
+def test_the_same_file_spelled_two_ways_is_one_file():
+    """A model writes `tests/t.py` from the repo root and `/repo/tests/t.py` a minute later.
+
+    The ledger's path key exists so that iterating on one script is not counted as writing another
+    variant of it, and a literal string key silently loses that whenever the spelling changes.
+    """
+    assert mod.same_file("tests/t.py", "/home/u/repo/tests/t.py")
+    assert mod.same_file("del.ps1", "C:\\scratch\\del.ps1")
+    assert mod.same_file("./a/b.sh", "a/b.sh")
+    assert mod.same_file("/tmp/a.ps1", "/tmp/a.ps1")
+
+
+def test_two_files_sharing_a_basename_in_different_directories_are_not_one_file():
+    """The negative control. Porting one file into two repos BY HAND is a repeated job, and
+    folding those two into one would hide exactly the case worth reporting."""
+    assert not mod.same_file("/repo/a/tests/t.py", "/repo/b/tests/t.py")
+    assert not mod.same_file("src/conftest.py", "tests/conftest.py")
+    assert not mod.same_file("", "/tmp/a.ps1")
+
+
+def test_a_numbered_name_is_the_same_script_again():
+    """`probe.ps1` then `probe2.ps1` says "attempt 2" in the filename itself."""
+    assert mod.numbered_retry("probe.ps1", "probe2.ps1")
+    assert mod.numbered_retry("/tmp/diag3.ps1", "/tmp/diag7.ps1")
+    assert mod.numbered_retry("check_it.py", "check_it2.py")
+
+
+def test_a_numbered_name_does_not_link_unrelated_scripts():
+    assert not mod.numbered_retry("probe2.ps1", "verify2.ps1")
+    assert not mod.numbered_retry("probe.ps1", "probe.ps1"), "one file is not two attempts"
+    assert not mod.numbered_retry("p1.py", "p2.py"), "a two-character stem is too generic"
+
+
+def test_a_pytest_module_is_not_a_one_off_script():
+    """The hook asks for "a TESTED JIG - a script with pytest cases", so a test suite is the END
+    STATE it wants. Counting test modules as repeated jobs nudges the one behaviour it asks for."""
+    assert mod.is_test_suite_file("test_thing.py")
+    assert mod.is_test_suite_file("/repo/tests/anything.py")
+    assert mod.is_test_suite_file("conftest.py")
+
+
+def test_a_one_off_probe_that_merely_ends_in_test_is_still_a_script():
+    """Real throwaway probes get called `rule_test.py`; suppressing those would lose the repeats
+    this hook exists for. Only the `test_` prefix pytest collects on, and only for .py."""
+    assert not mod.is_test_suite_file("rule_test.py")
+    assert not mod.is_test_suite_file("test1.sh")
+    assert not mod.is_test_suite_file("test_harness.ps1")
+
+
+def test_distinct_jobs_counts_jobs_not_paths():
+    group = ["/repo/probe.py", "probe.py", "/repo/tests/test_probe.py", "/repo/probe2.py"]
+    assert mod.distinct_jobs(group) == ["/repo/probe.py", "/repo/probe2.py"]
+
+
 # --------------------------------------------------------------------------- pure: changes_state
 
 def test_changes_state_sees_a_delete():
@@ -459,6 +519,82 @@ def test_a_session_of_probes_leaves_the_change_budget_intact(tmp_path):
         _run(_write_event(sess, path, body), tmp_path)
     ctx = _context(_run(_write_event(sess, "/scratch/delrobo.ps1", REWRITE_3), tmp_path))
     assert ctx, "the change track was starved by read-only repeats"
+
+
+# ------------------------------------------------------------- cross-session behaviour, measured
+#
+# The hook was originally tuned on ONE session. These three encode what replaying 98 sessions
+# (2689 script writes) said about the other 97. Fixtures are synthetic - the corpus supplied the
+# shapes and the counts, never any text.
+
+MODULE_UNDER_TEST = """# Ledger of the things this tool has seen, with a bounded window.
+def record(entry, entries):
+    entries.append(entry)
+    return entries[-200:]
+"""
+
+
+def _suite_case(name, case):
+    return f'''# Tests for the ledger {name}.
+def test_{case}():
+    assert record({{"p": "x"}}, []) == [{{"p": "x"}}]
+'''
+
+
+def test_a_module_and_its_test_suite_stay_silent(tmp_path):
+    """The single largest false positive across the corpus, and the most self-defeating.
+
+    This hook's remedy is "build it once as a TESTED JIG - a script with pytest cases", so a
+    session writing a module and then filling up tests/ is doing precisely what it asks for.
+    Test-suite files are a quarter of all script writes measured, and every session the pytest
+    rule silenced had been nudged for writing a module beside its tests.
+    """
+    sess = "sess-suite"
+    written = [_run(_write_event(sess, "/repo/src/ledger.py", MODULE_UNDER_TEST), tmp_path)]
+    for name, case in (("window", "the_window_is_bounded"), ("io", "a_reread_round_trips"),
+                       ("bounds", "an_empty_ledger_is_not_an_error")):
+        written.append(_run(_write_event(sess, f"/repo/tests/test_ledger_{name}.py",
+                                         _suite_case(name, case)), tmp_path))
+    written.append(_run(_write_event(sess, "/repo/tests/conftest.py",
+                                     "# Put src on sys.path.\nimport sys\n"), tmp_path))
+    assert [r.stdout.strip() for r in written] == [""] * 5, "nudged a session for writing tests"
+
+
+NUMBERED_PROBES = ("# Which shells does the runner have?\nls -1 /bin/*sh\n",
+                   "# Does the array slice behave?\narr=(a b c); echo \"${arr[@]:1}\"\n",
+                   "# Is the trap inherited by the subshell?\ntrap 'echo bye' EXIT; (exit 3)\n")
+
+
+def test_a_numbered_family_nudges_although_the_names_share_one_short_token(tmp_path):
+    """The other side of the same coin: silence where the repetition is undeniable.
+
+    `net1.sh` .. `net3.sh` reduce to ONE name token, and the topic channel needs two, so a family
+    that says "attempt N" in its own filename went unreported. Measured: two corpus sessions that
+    wrote nine `testN.sh` and three `*_testN.py` got no nudge at all before this channel.
+    """
+    sess = "sess-numbered"
+    quiet = [_run(_write_event(sess, f"/scratch/net{i}.sh", body), tmp_path)
+             for i, body in enumerate(NUMBERED_PROBES[:2], 1)]
+    third = _run(_write_event(sess, "/scratch/net3.sh", NUMBERED_PROBES[2]), tmp_path)
+    assert [r.stdout.strip() for r in quiet] == ["", ""]
+    ctx = _context(third)
+    assert ctx, "a numbered retry family never reached the model"
+    assert "net1.sh" in ctx and "net3.sh" in ctx
+
+
+def test_respelling_one_path_does_not_make_it_a_second_variant(tmp_path):
+    """Two scripts plus a re-write of one of them is two jobs, not three.
+
+    The ledger is keyed by path so that iterating on a file is not counted as authoring another
+    variant; writing it once relative and once absolute defeated that. Measured: 133 of 2689 real
+    script writes respell a path already in the ledger.
+    """
+    sess = "sess-respelt"
+    body = "# Audit the staging tree for leftovers.\nfind /srv/staging -type f | wc -l\n"
+    results = [_run(_write_event(sess, "/work/audit_files.sh", body), tmp_path),
+               _run(_write_event(sess, "audit_files.sh", body + "echo done\n"), tmp_path),
+               _run(_write_event(sess, "/work/audit_files2.sh", body + "echo again\n"), tmp_path)]
+    assert [r.stdout.strip() for r in results] == ["", "", ""], "counted one file as two variants"
 
 
 def test_unrelated_second_script_never_nudges(tmp_path):
