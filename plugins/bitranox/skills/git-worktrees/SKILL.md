@@ -1,6 +1,6 @@
 ---
 name: git-worktrees
-description: Use when starting feature work that needs an isolated workspace or worktree separate from the current branch, or before executing an implementation plan that should not disturb the current checkout
+description: Use when starting feature work that needs an isolated workspace or worktree separate from the current branch, or before executing an implementation plan that should not disturb the current checkout, or when finishing with a worktree - deleting one leaves its per-topic build cache behind outside the checkout, so the disk stays full and nothing lists what to reclaim
 ---
 
 # Git Worktrees
@@ -145,24 +145,62 @@ Tests passing (<N> tests, 0 failures)
 Ready to implement <feature-name>
 ```
 
+## Step 4: Finishing - Reclaim the Per-Topic Build Cache (wtclean)
+
+`git worktree remove` deletes the checkout and nothing else. The per-worktree build cache from
+Step 2 lives OUTSIDE the checkout on purpose (that is what stops several worktrees fighting over
+one `CARGO_TARGET_DIR`), so it survives the removal and piles up invisibly - usually noticed only
+when the disk fills.
+
+`scripts/wtclean.py` removes the worktree AND those caches together, and shows what it will take
+before it takes anything:
+
+```
+uv run scripts/wtclean.py my-feature                 # the plan, with sizes - deletes nothing
+uv run scripts/wtclean.py my-feature --apply         # remove exactly what the plan listed
+uv run scripts/wtclean.py .worktrees/my-feature --cache-dir ~/.cache/targets/my-feature --apply
+```
+
+**Cache locations are a convention, not a discovery.** Git cannot be asked where your build cache
+lives, so the default candidates are `<base>/wt-<topic>-target` and `<base>/wt-<topic>-clippy`,
+with `<base>` your home directory. If yours live somewhere else, name them with `--cache-dir`
+(repeatable) or adjust `--base` / `--prefix` / `--cache-suffix`. A run that matches nothing says
+which paths it checked rather than reporting an empty plan as though you had no caches.
+
+What it refuses, because a delete is not undoable:
+
+- **It is a dry run until `--apply`**, and `--apply` removes exactly what the plan listed - it
+  does not re-scan, so a directory created after you read the plan is not swept up with it.
+- **A worktree holding uncommitted or untracked work** is refused. `--discard-uncommitted`
+  overrides that and forwards `--force` to `git worktree remove`, which DISCARDS the work.
+- **A target that is a symbolic link** is refused: removing through a link can destroy data
+  outside the directory you named. On Windows this does not cover a directory JUNCTION, which is
+  not reported as a symbolic link; the "resolves outside the base" refusal is what covers that.
+- **A topic that is a path rather than a bare name** is refused outright, never normalised - the
+  basename of `../../etc` is the innocent-looking name `etc`.
+
+Exit codes: 0 = nothing blocked, 1 = something was refused or could not be removed, 2 = usage
+error. `--json` emits the machine-readable envelope; warnings go to stderr.
+
 ## Quick Reference
 
-| Situation                      | Action                                                                                                                                                                                                                                                                                      |
-|--------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Already in linked worktree     | Skip creation (Step 0)                                                                                                                                                                                                                                                                      |
-| In a submodule                 | Treat as normal repo (Step 0 guard)                                                                                                                                                                                                                                                         |
-| Native worktree tool available | Use it (Step 1a)                                                                                                                                                                                                                                                                            |
-| No native tool                 | Git worktree fallback (Step 1b)                                                                                                                                                                                                                                                             |
-| `.worktrees/` exists           | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
-| `worktrees/` exists            | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
-| Both exist                     | Use `.worktrees/`                                                                                                                                                                                                                                                                           |
-| Neither exists                 | Check instruction file, then default `.worktrees/`                                                                                                                                                                                                                                          |
-| Directory not ignored          | Add to .gitignore + commit                                                                                                                                                                                                                                                                  |
-| Permission error on create     | Sandbox fallback, work in place                                                                                                                                                                                                                                                             |
-| Tests fail during baseline     | Report failures + ask                                                                                                                                                                                                                                                                       |
-| No package.json/Cargo.toml     | Skip dependency install                                                                                                                                                                                                                                                                     |
-| Returning to an OLD worktree   | `git status --porcelain` FIRST - a long-lived worktree can hold an abandoned prior op's dirty state; `git stash push -u` it. Never `commit -a` over it.                                                                                                                                     |
-| Sharing a build cache dir      | Give each worktree its OWN `CARGO_TARGET_DIR` (or equivalent). One shared incremental cache across trees with different sources serializes builds on the target lock and can emit phantom errors that only a full clean fixes. Use a compiler cache (sccache) for cross-tree reuse instead. |
+| Situation                         | Action                                                                                                                                                                                                                                                                                      |
+|-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Already in linked worktree        | Skip creation (Step 0)                                                                                                                                                                                                                                                                      |
+| In a submodule                    | Treat as normal repo (Step 0 guard)                                                                                                                                                                                                                                                         |
+| Native worktree tool available    | Use it (Step 1a)                                                                                                                                                                                                                                                                            |
+| No native tool                    | Git worktree fallback (Step 1b)                                                                                                                                                                                                                                                             |
+| `.worktrees/` exists              | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
+| `worktrees/` exists               | Use it (verify ignored)                                                                                                                                                                                                                                                                     |
+| Both exist                        | Use `.worktrees/`                                                                                                                                                                                                                                                                           |
+| Neither exists                    | Check instruction file, then default `.worktrees/`                                                                                                                                                                                                                                          |
+| Directory not ignored             | Add to .gitignore + commit                                                                                                                                                                                                                                                                  |
+| Permission error on create        | Sandbox fallback, work in place                                                                                                                                                                                                                                                             |
+| Tests fail during baseline        | Report failures + ask                                                                                                                                                                                                                                                                       |
+| No package.json/Cargo.toml        | Skip dependency install                                                                                                                                                                                                                                                                     |
+| Returning to an OLD worktree      | `git status --porcelain` FIRST - a long-lived worktree can hold an abandoned prior op's dirty state; `git stash push -u` it. Never `commit -a` over it.                                                                                                                                     |
+| Sharing a build cache dir         | Give each worktree its OWN `CARGO_TARGET_DIR` (or equivalent). One shared incremental cache across trees with different sources serializes builds on the target lock and can emit phantom errors that only a full clean fixes. Use a compiler cache (sccache) for cross-tree reuse instead. |
+| Worktree deleted, disk still full | Its per-topic build cache is still there - `git worktree remove` never touches it. `uv run scripts/wtclean.py <topic> [--apply]` (Step 4)                                                                                                                                                   |
 
 ## Common Mistakes
 

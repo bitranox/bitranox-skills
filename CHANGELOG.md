@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.193.0] - 2026-08-12
+
+### Added
+
+- **`git-worktrees` gained `wtclean.py`**, its first shipped script: remove a worktree AND the
+  per-topic build cache it leaves behind. A per-worktree cache is deliberately kept OUTSIDE the
+  checkout, which is what stops several worktrees fighting over one `CARGO_TARGET_DIR`, so
+  `git worktree remove` never touches it and it accumulates at gigabytes a time with nothing
+  listing it. The usual discovery is running out of disk and then hunting by hand with `du` and
+  `rm -rf`. `wtclean` names the worktree and its caches together with sizes, deletes nothing until
+  `--apply`, and then removes exactly what the plan listed rather than re-scanning. It refuses a
+  symlinked target, a checkout holding uncommitted or untracked work (`--discard-uncommitted`
+  overrides that and forwards `--force` to git, discarding the work), and a topic that is a path
+  rather than a bare name. Cache locations are a stated convention with `--cache-dir` /
+  `--base` / `--prefix` / `--cache-suffix` overrides, and a run matching nothing reports which
+  paths it checked instead of an empty plan. Indexed in `compuse-toolbox`'s tool table as a
+  cross-reference so that table stays the one place that answers "is there already a tool for
+  this?". Promoted from a personal toolbox jig; the personal copy is retired in favor of this one.
+
 ## [5.192.0] - 2026-08-12
 
 ### Added
