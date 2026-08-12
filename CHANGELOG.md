@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.188.0] - 2026-08-12
+
+### Added
+
+- **`memory_engine.py move` accepts a SET of slugs that moves as one unit** (`--slug` is now
+  repeatable, and also takes several names after a single flag; the single-slug form is unchanged).
+  The down-move ref guard judges every member by where the WHOLE set lands, so a member citing
+  another member is not dangling. This is what makes a MUTUALLY-CITING pair demotable at all: each
+  one's inbound ref is the other, so single-slug moves refuse in BOTH orders and the only way down
+  was `--force` - which strands exactly the ref the guard exists to protect. Demoting
+  over-promoted facts is the dream's main lever for shrinking an oversized always-loaded tree-top
+  block, and a cluster that cross-links internally is precisely what accumulates there.
+  A citer OUTSIDE the set still refuses without `--force`: the guard is made set-aware, not
+  weakened, and the exemption is keyed to the pointer AT the from-level (a stray duplicate pointer
+  for a moving slug left at a higher level does not move, so it still counts).
+  The set is ATOMIC ON REFUSAL - presence, legacy state, refs and duplicate-pointer conflicts are
+  all decided for every member BEFORE anything is written, because a half-applied move strands the
+  refs the feature exists to keep whole. The write phase stays per-slug add-then-remove, so an
+  interruption leaves a visible duplicate pointer, never a lost fact, and re-running the same
+  command completes it; a write error reports how many pointers already moved and says to re-run.
+  The report gained `slugs` and `moved_slugs`; `slug` is the comma-joined set, identical to the
+  input for a single slug. Every other `move` behaviour is unchanged (sibling / cross-tree / same
+  level / not-found / legacy refusals, the up-move path, divergent-duplicate handling, `--force`).
+
 ## [5.187.0] - 2026-08-12
 
 ### Changed

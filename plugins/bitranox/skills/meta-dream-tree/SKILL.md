@@ -119,8 +119,12 @@ the success line, abort-and-show on a miss).
    core too. Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each
    via engine
    `move --from-level A --to-level B --slug s` and require its success line (`! refused:` aborts
-   that move - a down-move with inbound refs needs the refs re-pointed first, or stays). Low/UNSURE
-   never moves. Tree-top promotion additionally passes the corroboration gate (user-stated: eager;
+   that move - a down-move with inbound refs needs the refs re-pointed first, or stays). When the
+   citer blocking a down-move belongs at the target TOO, move them in ONE call by repeating
+   `--slug`: the guard then judges each member by where the WHOLE set lands, which is the only way
+   a mutually-citing pair goes down at all (no ordering releases it). Never reach for `--force`
+   there - it strands the ref. Low/UNSURE never moves. Tree-top promotion additionally passes the
+   corroboration gate (user-stated: eager;
    model-inferred: >= 2 DISTINCT PROJECTS): record each model-inferred tree-top candidate with
    `dream_state.py saw-promotable <slug> <project the fact came from>`, gate the promotion on
    `dream_state.py should-promote <slug>` (`promote`/`hold`), and after an applied promotion run
