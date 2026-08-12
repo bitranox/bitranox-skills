@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.191.0] - 2026-08-12
+
+### Added
+
+- **`compuse-toolbox` gained `newest.py`**, a jig that picks the latest timestamped file or
+  directory by MTIME, never by name sort. `ls <glob> | sort | tail -1` looks like "the newest"
+  and is not: a longer name sharing the same date prefix sorts AFTER a shorter one, so an extra
+  word beats the date. Pruning the wrong file this way is loud and gets noticed; VERIFYING against
+  the wrong baseline is silent, which is the expensive half. It sorts by mtime only (files and
+  directories alike), breaks a genuine tie deterministically by input order, and prints the AGE of
+  what it picked so a stale answer from a stale set stays visible. Promoted from a personal
+  toolbox jig; the personal copy is retired in favor of this one.
+
 ## [5.190.0] - 2026-08-12
 
 ### Added

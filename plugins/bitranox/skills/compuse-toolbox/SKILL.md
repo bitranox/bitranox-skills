@@ -1,6 +1,6 @@
 ---
 name: compuse-toolbox
-description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, finding which copies of a named file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path, or checking by eye whether an old and a new version of something behave the same on the same inputs (or whether a hand-rolled detector ever actually says they differ). Check these tested jigs first instead of writing throwaway code.
+description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, finding which copies of a named file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path, or checking by eye whether an old and a new version of something behave the same on the same inputs (or whether a hand-rolled detector ever actually says they differ), or picking the latest backup/log/snapshot by eye or with `ls <glob> | sort | tail -1` - which picks the WRONG one whenever a longer name shares the same date prefix as a shorter, newer one. Check these tested jigs first instead of writing throwaway code.
 ---
 
 # compuse-toolbox
@@ -29,6 +29,7 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 | `transfer`        | a `curl --limit-rate` / `rsync --bwlimit` big-file download or host-to-host copy that must respect a REAL speed limit (the units differ per tool: `curl 8M` is 8 MiB/s = 67 Mbit, `rsync --bwlimit` is KiB/s), or judging whether a long job has hung | `uv run scripts/transfer.py fetch URL --rate 8Mbit` / `push F user@host:/d/ --rate 8Mbit` / `check --file F --pid N`             |
 | `fleet_ssh`       | an `ssh -i <key> -o BatchMode=yes -o ConnectTimeout=N` one-liner retyped per call, or an scp whose login user has to go INSIDE the path (`root@host:/p`) and gets forgotten                                                                           | `uv run scripts/fleet_ssh.py [--user U] HOST [cmd]` / `--scp SRC DST` (add `--trust-changing-host-keys` for a fleet you reimage) |
 | `diffbehave`      | a loop that runs an OLD and a NEW version of a script (or two CLIs meant to be equivalent) on the same inputs and diffs stdout/stderr/exit code by eye - or proving a hand-rolled detector is not a rubber stamp that always says SAME                | `uv run scripts/diffbehave.py --a "OLD_CMD" --b "NEW_CMD" --case-file CASES.jsonl` / `--expect-differ N` (known-negative check)  |
+| `newest`          | "which backup/log/snapshot is the latest?" answered with `ls <glob> \| sort \| tail -1` - a longer name sharing the same date prefix sorts AFTER a shorter, newer one, so it silently picks the wrong file OR directory                               | `uv run scripts/newest.py /backups/nightly-*` / `--all` (every match, newest first) / `--json`                                   |
 
 Per-tool arguments live in each tool's `--help` (loaded only when used, so this index stays small).
 
@@ -108,6 +109,13 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   against cases where it already agrees has proved nothing, so the tool fails unless at least N
   cases come back DIFFER - a comparison that can only ever say AGREE is a rubber stamp, not a
   check.
+- **`newest` never compares names.** `ls <glob> | sort | tail -1` looks like "the newest" and is
+  not: a longer name sharing the same date prefix sorts AFTER a shorter one, so an extra word
+  beats the date. Pruning the wrong file this way is loud and gets noticed; VERIFYING against the
+  wrong baseline is silent, which is the expensive half. `newest` sorts by mtime only (files and
+  directories alike), breaks a genuine tie by input order - deterministic, not directory-listing
+  luck - and reports the AGE of what it picked, because the newest member of a stale set is still
+  stale and a bare path gives no way to notice that.
 - **The others encode the trap.** `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/
   `transcript_tail` parse JSONL by field, not by fragile text slicing.
 
