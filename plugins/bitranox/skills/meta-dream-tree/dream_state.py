@@ -9,11 +9,17 @@ Usage (cwd defaults to the current directory):
   dream_state.py due  [cwd]               print "due" or "not-due"
   dream_state.py done [cwd]               record that a dream just completed (silences the nudge)
   dream_state.py mode [cwd]               print the dream mode: off | auto | propose
-  dream_state.py saw-promotable  S [cwd]  record a dream sighting of tree-top-promotion candidate S;
-                                          print its dwell count (dreams it has appeared in)
-  dream_state.py should-promote  S [cwd]  print "promote" or "hold" for a model-inferred candidate S
-                                          (>= 2 dreams corroborates; read-only, does NOT count)
-  dream_state.py promoted        S [cwd]  clear S's dwell count after it was promoted (no re-fire)
+  dream_state.py saw-promotable  S [proj] record that PROJ sighted tree-top-promotion candidate S;
+                                          print its dwell (how many DISTINCT projects have sighted
+                                          it). Idempotent per project, so re-reading an unchanged
+                                          fact cannot corroborate itself. PROJ defaults to the cwd,
+                                          so a fan-out reading OTHER projects' stores must pass the
+                                          project the fact came FROM, not its own cwd.
+  dream_state.py should-promote  S [proj] print "promote" or "hold" for a model-inferred candidate S
+                                          (>= 2 distinct projects corroborates; read-only, does NOT
+                                          count; answers the same from any project)
+  dream_state.py promoted        S [proj] clear S's sightings after it was promoted - EVERY project's,
+                                          so one later sighting cannot re-fire the gate
   dream_state.py session-review  [cwd] [--structured-only]  print the session material the dream must consolidate,
                                           (--structured-only keeps the subagent/routing/skills blocks but suppresses the raw transcript body)
                                           READ FROM DISK: the not-yet-reviewed transcript stretch +
