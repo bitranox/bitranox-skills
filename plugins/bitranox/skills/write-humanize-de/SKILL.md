@@ -46,8 +46,9 @@ ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach
     cat DATEI | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # oder einen Stream normalisieren
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check DATEI  # nur prüfen, Exit 1 bei Resten
 
-Das Skript liegt im Ordner `scripts/` dieses Skills. Es ersetzt Geviert- und
-Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
+Das Skript liegt im `hooks/`-Ordner des Plugins, nicht in einem `scripts/`-Ordner dieses
+Skills - die Befehle oben verwenden bereits den richtigen `<plugin>/hooks/`-Pfad. Es ersetzt
+Geviert- und Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
 geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII, wandelt
 Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
