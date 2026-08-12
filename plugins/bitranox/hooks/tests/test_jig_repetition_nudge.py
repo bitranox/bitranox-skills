@@ -686,3 +686,64 @@ def test_broken_stdin_exits_zero():
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0
     assert r.stdout.strip() == ""
+
+
+# --------------------------------------------------------------------------- real command shapes
+# RED evidence: the first version matched the FIRST redirect on the line, so any command carrying
+# an unrelated redirect ahead of the heredoc yielded /dev/null and the write vanished. Every
+# earlier fixture used a clean `cat > x.sh <<EOS`, which is why the suite stayed green while the
+# hook dropped most real writes. These are shapes taken from actual command lines.
+
+REAL_SHAPES = [
+    ("""D=$(ls -1d /tmp/jig-* 2>/dev/null | tail -1); cd "$D" && cat > probe_b.sh <<'EOS'
+echo hi
+EOS
+""", "probe_b.sh"),
+    ("""mkdir -p /tmp/x 2>/dev/null; cat > /tmp/x/run.ps1 <<'PS'
+Write-Host 1
+PS
+""", "/tmp/x/run.ps1"),
+    ("""cat > tool.sh 2>/dev/null <<'EOS'
+echo hi
+EOS
+""", "tool.sh"),
+    ("""set -e; foo >log.txt 2>&1; cat >> deploy.sh <<EOF
+echo deploy
+EOF
+""", "deploy.sh"),
+]
+
+
+def test_redirect_before_the_heredoc_does_not_steal_the_target():
+    for command, expected in REAL_SHAPES:
+        got = mod.heredoc_writes(command)
+        assert [p for p, _ in got] == [expected], f"{expected!r} not found in {command!r} -> {got}"
+
+
+def test_devnull_alone_yields_nothing():
+    """A heredoc with no script target must stay empty, not fall back to some other redirect."""
+    assert mod.heredoc_writes("python3 - 2>/dev/null <<'PY'\nprint(1)\nPY\n") == []
+
+
+def test_live_shape_records_all_three_scripts(tmp_path):
+    """End-to-end over the exact command shape that silently dropped two of three writes."""
+    sess = "sess-realshape"
+    outs = []
+    for name, body in (("p_a.sh", DELETE_V1), ("p_b.sh", DELETE_V2), ("p_c.sh", DELETE_V3)):
+        cmd = f"""D=$(ls -1d /tmp/x-* 2>/dev/null | tail -1); cd "$D" && cat > {name} <<'EOS'
+{body}
+EOS
+"""
+        outs.append(_run(_bash_event(sess, cmd), tmp_path))
+    state = list(tmp_path.rglob("*.jig-*.json"))
+    assert state, "no ledger written"
+    import json as _json
+    d = _json.loads(state[0].read_text(encoding="utf-8"))
+    entries = d.get("entries", [])
+    names = {pathlib_name(e) for e in entries} if isinstance(entries, list) else set()
+    assert len(entries) == 3, f"expected all 3 scripts recorded, got {len(entries)}: {names}"
+
+
+def pathlib_name(entry):
+    from pathlib import Path as _P
+    return _P(entry.get("p", "")).name if isinstance(entry, dict) else ""
