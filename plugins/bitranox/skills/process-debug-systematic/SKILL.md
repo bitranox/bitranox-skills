@@ -177,6 +177,30 @@ You MUST complete each phase before proceeding to the next.
    - Ask for help
    - Research more
 
+5. **Closed-Source Peer: Escalate to Disassembly After the Second Dead Hypothesis**
+
+   **WHEN the system on the other side of the bug is a closed-source binary you cannot
+   read (a proprietary driver, firmware, appliance, or vendor tool) and you are testing
+   hypotheses about its behavior black-box:**
+
+   - 1st hypothesis dies against measurement -> form a new one (the normal Phase 3 loop).
+   - **2nd hypothesis also dies against measurement -> STOP. Do not form a third
+     black-box guess.** Disassemble the peer instead: a disassembler (for example
+     Ghidra) driven by its scripting/Python bridge, plus any public PDB or symbols the
+     vendor ships.
+   - Read the disassembly to learn the PROTOCOL or format needed for interoperability -
+     never to copy the implementation. Reverse-engineering for interoperability is the
+     sanctioned use here; lifting the vendor's code is not.
+   - Cite an address and a symbol for the conclusion, not "it must be doing X".
+   - A clean refutation of your hypothesis is an equally valid result - it closes the
+     question as surely as a confirmation does, so don't discard the disassembly pass
+     because it disproved you.
+
+   **Why:** each black-box hypothesis costs a full build-deploy-measure cycle. The
+   detail that decides the bug (a parser quirk, a field only read on the first record,
+   a byte offset) can exist nowhere in any public spec, so no amount of further
+   black-box experiment reaches it - only reading the code does.
+
 ### Phase 4: Implementation
 
 **Fix the root cause, not the symptom:**

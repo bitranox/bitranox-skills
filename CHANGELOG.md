@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.182.0] - 2026-08-12
+
+### Added
+
+- **`process-debug-systematic` skill**: new Phase 3 step, "Closed-Source Peer: Escalate to
+  Disassembly After the Second Dead Hypothesis". When the system on the other side of a bug is
+  a closed-source binary (a proprietary driver, firmware, appliance, or vendor tool) and a
+  second black-box hypothesis dies against measurement, stop forming a third guess and
+  disassemble the peer instead (a disassembler such as Ghidra driven by its scripting/Python
+  bridge, plus any public PDB or symbols the vendor ships), citing an address and a symbol for
+  the conclusion. A clean refutation counts as an equally valid result. Reverse-engineering is
+  for learning the protocol needed for interoperability, never for copying the implementation.
+
 ## [5.181.0] - 2026-08-12
 
 ### Added
