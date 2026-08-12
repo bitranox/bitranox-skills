@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.195.1] - 2026-08-12
+
+### Fixed
+
+- **`write-humanize-en`/`-de` no longer point the reader at a `scripts/` directory that does not
+  exist.** The explanatory sentence right after the invocation examples still said the
+  `strip_typographic_tells.py` script is "bundled in this skill's `scripts/` directory" ("liegt im
+  Ordner `scripts/` dieses Skills"), a leftover from before the 2026-08-02 shared-strip-script
+  consolidation moved the script to `plugins/bitranox/hooks/`. The three invocation lines above
+  that sentence were already repointed at the time; only this one explanatory sentence in each
+  skill kept the stale claim. Both files now say the script lives in the plugin's `hooks/`
+  directory, matching the invocation lines and the actual location.
+
 ## [5.195.0] - 2026-08-12
 
 ### Added

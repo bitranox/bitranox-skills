@@ -48,9 +48,10 @@ inverse of the tell-sweep check, so the text passes that gate afterward:
     cat FILE | bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py -  # or normalize a stream
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/strip_typographic_tells.py --check FILE  # report only, exit 1 if tells remain
 
-The script is bundled in this skill's `scripts/` directory (run it with that path, or the
-skill's absolute path when installed as a plugin). It replaces em and en dashes, curly
-quotes and guillemets, ellipsis and dot leaders, non-breaking and zero-width spaces, BOM,
+The script lives in the plugin's `hooks/` directory, not in a `scripts/` directory under
+this skill - the commands above already use the correct `<plugin>/hooks/` path. It replaces
+em and en dashes, curly quotes and guillemets, ellipsis and dot leaders, non-breaking and
+zero-width spaces, BOM,
 heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
 mark, bullet) untouched. Do not run it on this skill file itself - the examples below
