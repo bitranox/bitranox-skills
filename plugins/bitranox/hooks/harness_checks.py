@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -439,32 +440,94 @@ def orphan_scripts(hooks_dir, registered=()):
 
 # --- tests that exist but cannot run ---------------------------------------------------------
 
-def uncollectable_tests(tests_dir, python=None):
-    """Test modules pytest cannot even import, as (nodeid-ish path, first error line).
+_DIRECT_COLLECT_TIMEOUT_S = 180
+_UV_FALLBACK_TIMEOUT_S = 240
+
+
+def _run_pytest(argv, timeout):
+    """Real subprocess seam for a pytest collection attempt, direct or via the uv fallback.
+
+    Explicit encoding/errors: with no encoding, subprocess decodes with the machine's locale
+    codec and fails differently per platform - stdout comes back None on Windows, POSIX raises."""
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout)
+
+
+def uncollectable_tests(tests_dir, python=None, run=_run_pytest, resolve_uv=None):
+    """Test modules pytest cannot even import, as (path, message, unmeasured) triples.
+
+    `unmeasured` is True only when the CHECK itself could not run - neither the launching
+    interpreter nor a `uv run --with pytest` fallback could attempt collection. That is a fact
+    about this machine's environment, not about the target, so it must never be reported under
+    the same label as a real collection failure: a reader who cannot tell the two apart reads an
+    unmeasured result as a defect, exactly what happened when this checker's own missing pytest
+    surfaced as `[tests-uncollectable] pytest not installed`.
 
     A `tests/` dir that exists is not a `tests/` dir that runs. Every check that asks only
-    "is there a test file?" reports a module green when it errors during collection."""
+    "is there a test file?" reports a module green when it errors during collection.
+
+    `run` and `resolve_uv` are the injectable seams (a subprocess call, a PATH lookup); their
+    defaults are the real collaborators."""
     tests_dir = Path(tests_dir)
     if not tests_dir.is_dir():
         return []
+    direct_argv = [python or sys.executable, "-m", "pytest", "--collect-only", "-q",
+                   "-p", "no:cacheprovider", str(tests_dir)]
     try:
-        proc = subprocess.run([python or sys.executable, "-m", "pytest", "--collect-only", "-q",
-                               "-p", "no:cacheprovider", str(tests_dir)],
-                              capture_output=True, text=True, timeout=180)
+        proc = run(direct_argv, timeout=_DIRECT_COLLECT_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
-        return [(str(tests_dir), "could not run pytest: %s" % exc)]
+        return [(str(tests_dir), "could not run pytest: %s" % exc, True)]
     if proc.returncode in (0, 5):  # 5 = nothing collected, which is not a collection failure
         return []
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
     if "No module named pytest" in text:
-        return [(str(tests_dir), "pytest not installed - collection unverified")]
-    out = [(_resolve_reported_path(line[len("ERROR "):].strip()), _first_error_line(text))
+        return _collect_via_uv_fallback(tests_dir, run, resolve_uv or _default_resolve_uv)
+    return _parse_collection_failure(text, tests_dir)
+
+
+def _default_resolve_uv():
+    """Real `resolve_uv` seam: where `uv` sits on PATH, or None."""
+    return shutil.which("uv")
+
+
+def _collect_via_uv_fallback(tests_dir, run, resolve_uv):
+    """Retry collection under `uv run --with pytest`, since uv is already required to launch this
+    script and can provision pytest on demand. Only when this ALSO cannot run does the launching
+    interpreter's missing pytest become an unmeasured result instead of a real measurement."""
+    uv_path = resolve_uv()
+    if not uv_path:
+        return [(str(tests_dir), "pytest is not importable by the launching interpreter, and uv "
+                 "is not on PATH to fall back to - collection unverified", True)]
+    argv = [uv_path, "run", "--with", "pytest", "python", "-m", "pytest", "--collect-only", "-q",
+            "-p", "no:cacheprovider", str(tests_dir)]
+    try:
+        proc = run(argv, timeout=_UV_FALLBACK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return [(str(tests_dir), "uv run --with pytest fallback timed out after %ss - collection "
+                 "unverified" % _UV_FALLBACK_TIMEOUT_S, True)]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [(str(tests_dir), "uv run --with pytest fallback failed to start: %s - collection "
+                 "unverified" % exc, True)]
+    if proc.returncode in (0, 5):
+        return []
+    text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if "No module named pytest" in text:
+        return [(str(tests_dir), "pytest is not importable by the launching interpreter, and the "
+                 "uv fallback did not provide it either - collection unverified", True)]
+    return _parse_collection_failure(text, tests_dir)
+
+
+def _parse_collection_failure(text, tests_dir):
+    """A real, target-attributable collection failure, as (path, message, unmeasured=False)."""
+    out = [(_resolve_reported_path(line[len("ERROR "):].strip()), _first_error_line(text), False)
            for line in text.splitlines() if line.startswith("ERROR ")]
     if out:
         return out
     culprit = _internalerror_culprit(text, tests_dir)
-    return [culprit] if culprit else [(str(tests_dir),
-                                       _first_error_line(text) or "collection failed")]
+    if culprit:
+        path, exception = culprit
+        return [(path, exception, False)]
+    return [(str(tests_dir), _first_error_line(text) or "collection failed", False)]
 
 
 def _resolve_reported_path(token):

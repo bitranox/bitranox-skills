@@ -101,8 +101,9 @@ def check_skills(target, shipped=None):
     found += [("tests-missing", "%s ships a .py but carries no test" % p.name)
               for p in hc.packages_missing_tests(skills)]
     for skill in skills:
-        for path, error in hc.uncollectable_tests(skill / "tests"):
-            found.append(("tests-uncollectable", "%s: %s" % (path, error)))
+        for path, error, unmeasured in hc.uncollectable_tests(skill / "tests"):
+            check = "tests-unmeasured" if unmeasured else "tests-uncollectable"
+            found.append((check, "%s: %s" % (path, error)))
     for name, twin, ratio in hc.unmanaged_twins(target, shipped or {}):
         found.append(("unmanaged-twin",
                       "%s duplicates the shipped skill %s (description match %.0f%%) and no "
@@ -156,8 +157,9 @@ def check_personal(home=None, shipped_root=None):
                           for why in hc.shim_problems(path, registered, home=home)]
         # The hooks dir keeps its tests beside the scripts rather than per-skill, so the
         # collectability check has to be aimed at it explicitly or the loudest defect goes unseen.
-        for path, error in hc.uncollectable_tests(hooks_dir / "tests"):
-            found.append(("tests-uncollectable", "%s: %s" % (path, error)))
+        for path, error, unmeasured in hc.uncollectable_tests(hooks_dir / "tests"):
+            check = "tests-unmeasured" if unmeasured else "tests-uncollectable"
+            found.append((check, "%s: %s" % (path, error)))
         found += [("graveyard", "%s: %s" % (p, why)) for p, why in hc.graveyard_entries(hooks_dir)]
     # Deliberately shallow: ~/.claude holds gigabytes of transcripts and caches that are not
     # harness content, so only the parked-skills case is worth a top-level look.
