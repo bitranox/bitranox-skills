@@ -1,6 +1,6 @@
 ---
 name: compuse-toolbox
-description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), or retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path. Check these tested jigs first instead of writing throwaway code.
+description: Use when about to hand-roll a small one-off shell/Python utility for a recurring computer-use chore - safely finding or killing a process without self-matching pgrep/pkill, running a test/lint gate and acting on its REAL exit status rather than a pipe's, checking git branch/sync/dirty state across repos, finding which copies of a named file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo, scanning for merge-conflict markers, triaging a noisy CI/build log, filtering a JSONL, pulling the last messages from a Claude Code transcript, deciding from a grep whether some text is already present in a set of files, sweeping a repo for every occurrence of something without silently skipping gitignored files, reading a Windows-written log whose text grep cannot find or that prints with spaces between the letters (UTF-16, BOM, or mixed encodings), or retyping an `ssh -i key -o ...` one-liner per call and an scp whose login user has to go inside the path. Check these tested jigs first instead of writing throwaway code.
 ---
 
 # compuse-toolbox
@@ -17,7 +17,7 @@ its full arguments from `--help`. Run from the skill directory, or give the full
 | Tool              | Use it when you would otherwise hand-roll...                                                                                                                                                                                                          | Invoke                                                                                                                           |
 |-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
 | `procsig`         | `pgrep -f` / `pkill -f` - which self-matches the shell running it and can kill your own session                                                                                                                                                       | `uv run scripts/procsig.py --exe <name> [--kill]`                                                                                |
-| `git_state`       | a `git rev-parse` + `git status` branch/sync/dirty check before a risky commit or bulk op                                                                                                                                                             | `uv run scripts/git_state.py [REPO ...] [--root DIR]`                                                                            |
+| `git_state`       | a `git rev-parse` + `git status` branch/sync/dirty check before a risky commit or bulk op; or "which copies of this file across a tree are tracked-and-modified, gitignored, untracked, or outside any repo?"                                         | `uv run scripts/git_state.py [REPO ...] [--root DIR]` / `--files CLAUDE.md --root DIR [--json]`                                  |
 | `conflict_scan`   | a `grep -rn '^<<<<<<<'` sweep for merge-conflict markers with file:line                                                                                                                                                                               | `uv run scripts/conflict_scan.py [PATH ...]`                                                                                     |
 | `ci_triage`       | piping a build/CI log through `grep`/`sed`/`awk` to find the error lines                                                                                                                                                                              | `uv run scripts/ci_triage.py --file LOG [--step ...]`                                                                            |
 | `jsonl_grep`      | a `json.loads` loop to filter a JSONL by type/role or extract a field                                                                                                                                                                                 | `uv run scripts/jsonl_grep.py <file> [--type ...]`                                                                               |
@@ -89,9 +89,18 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   cause. Host-key checking stays at ssh's strict default; `--trust-changing-host-keys` is the
   opt-in for a fleet you reimage, and it keeps that churn in a separate known-hosts file rather
   than `/dev/null`, which would make every connect a first connect.
-- **The others encode the trap.** `git_state` reads porcelain v2 (no `rev-parse --short` 2-rev
-  footgun); `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/`transcript_tail` parse JSONL
-  by field, not by fragile text slicing.
+- **`git_state --files` cannot conflate tracked-and-ignored.** `git status --porcelain -- <path>`
+  is EMPTY for a gitignored file and for a tracked-clean file ALIKE, so a naive per-file check
+  reads them as the same thing - and only the tracked one is restorable with `git checkout`.
+  `--files` classifies with `git ls-files --error-unmatch` (tracked) and `git check-ignore
+  --no-index` (ignored) instead, and asks `check-ignore` only about the paths `ls-files` did NOT
+  report tracked - so TRACKED WINS the tracked-and-ignored case deliberately, not by relying on
+  git's own default (which happens to also hide tracked files from `check-ignore`, but only
+  without `--no-index`). Batches at most 4 git calls PER REPO regardless of file count, never 2
+  per file. `git_state`'s repo-state mode reads porcelain v2 (no `rev-parse --short` 2-rev
+  footgun).
+- **The others encode the trap.** `ci_triage` strips ANSI and isolates a step; `jsonl_grep`/
+  `transcript_tail` parse JSONL by field, not by fragile text slicing.
 
 ## Building or enhancing a jig
 
