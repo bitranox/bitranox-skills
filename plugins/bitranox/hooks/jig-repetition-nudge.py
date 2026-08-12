@@ -26,13 +26,13 @@ dropped at random; these two budgets reach it in 100%, and in 96.7% at the heavi
 A script that CHANGES state gets the looser gate and the larger budget - it is where a rewrite
 costs a machine rather than a wrong answer.
 
-WHAT COUNTS AS A JOB, which is where the noise was. Replaying 2689 script writes from 98 sessions
+WHAT COUNTS AS A JOB, which is where the noise was. Replaying 2615 script writes from 97 sessions
 (one session had supplied every constant here) said the pacing was about right and the IDENTITY of
 a variant was not: a group of three reached three by counting things that are not three attempts
 at one job. Two spellings of one path are one file, and a pytest module is not a one-off script at
-all - it is the very artefact the message asks for, and test-suite files are a quarter of all
-script writes. In the other direction a numbered family - `probe.ps1`, `probe2.ps1`, `probe3.ps1` -
-was invisible, because a short shared stem yields ONE name token where the topic channel needs two.
+all - it is the very artefact the message asks for, and test-suite files are a fifth of all script
+writes. In the other direction a numbered family - `probe.ps1`, `probe2.ps1`, `probe3.ps1` - was
+invisible, because a short shared stem yields ONE name token where the topic channel needs two.
 See same_file, is_test_suite_file, numbered_retry.
 
 Non-blocking (additionalContext), capped per session, silent on any error.
@@ -47,9 +47,15 @@ from shell_text import HEREDOC_OPEN               # noqa: E402 - shared with the
 SCRIPT_SUFFIXES = {".ps1", ".py", ".sh", ".bash", ".psm1"}
 VARIANTS_BEFORE_NUDGE = 3        # a group of three is the smallest that shows a PATTERN, not a retry
 # Jaccard over 3-token shingles; unrelated scripts score ~0. This is the narrowest of the three
-# recall channels by a wide margin: over 98 replayed sessions, moving it anywhere from 0.25 to 0.5
-# changes no session's nudges at all, because a true near-COPY is rarer than a rewrite and the
-# topic channel already has those. Kept because it is the only channel that survives a rename.
+# recall channels by a wide margin: over 97 replayed sessions, raising it from 0.25 to 0.35 or 0.5
+# moves 2 sessions and one nudge, because a true near-COPY is rarer than a rewrite and the topic
+# channel already has those. Kept because it is the only channel that survives a rename.
+#
+# It is also the ONLY constant the corpus argues about. Lowering it to 0.18 costs 3 nudges over 97
+# sessions and reaches two sessions the hook is silent on that a hand census called real repetition
+# (five one-off scripts each editing one pyproject.toml; three spellings of one push script) - they
+# share ONE purpose token, and the topic channel needs two. Two rescues is not enough evidence to
+# move a shipped constant; what would settle it is a labelled set of such sessions.
 SIMILARITY = 0.25
 
 # How many of the group's scripts must not have been named in an earlier nudge. Without it, one
@@ -58,13 +64,15 @@ SIMILARITY = 0.25
 FRESH_SCRIPTS_PER_NUDGE = 3
 
 # Separate budgets. CHANGE = the script being written mutates state; OBSERVE = it only reads.
-# Both BIND, so they are policy rather than a runaway guard: across 98 replayed sessions they
-# withheld 27 and 365 further nudges. 12 is not slack on the change track either - it is the
-# smallest value that still reaches the destructive lineage this hook was built for, which arrives
-# as that session's 11th change nudge; at 8 the lineage is never reported.
+# Both BIND, so they are policy rather than a runaway guard: across 97 replayed sessions they
+# withheld 28 and 354 further nudges. 12 is not slack on the change track either - the destructive
+# lineage this hook was built for arrives as that session's 10th change nudge, so 10 is the floor
+# and at 9 the lineage is never reported. The two spare nudges are deliberate headroom: the floor
+# has already moved once as that session grew, and a cap sitting exactly on it loses the lineage
+# the next time it moves.
 CHANGE_NUDGE_CAP = 12
 # The observe track is where a session's repetition is cheap and constant, so it stays tight: the
-# evidence justified 620 observe nudges across those sessions and this cap withheld 365 of them.
+# evidence justified 607 observe nudges across those sessions and this cap withheld 354 of them.
 OBSERVE_NUDGE_CAP = 3
 OBSERVE_COOLDOWN = 15            # scripts between observe-track nudges; repeated probes are cheap
 
@@ -72,9 +80,12 @@ LEDGER_LIMIT = 200               # bound the state file on a marathon session
 LEDGER_WINDOW = 20               # ledger entries handed to the model; older work is rarely the job
 PURPOSE_WIDTH = 100
 # Per-entry cap on the stored shingle sample, because the state file is read AND rewritten on every
-# script write and the shingles dominate its size. 120 was measured, not guessed: over all 6903
-# pairs of the real corpus it reproduces the full-fidelity near-copy verdict exactly - 0 near-copies
-# missed and 0 invented - while storing 68% of the shingles. Dropping to 80 starts missing them.
+# script write and the shingles dominate its size. 120 is a LOSSY sample, not a free one: over the
+# 113595 within-session pairs of the real corpus it agrees with the untruncated verdict on 73 of 97
+# sessions, and corpus-wide it misses 77 near-copies and invents 10. Raising it recovers some of
+# them (200 misses 45, 400 misses 15) at a proportional cost in state-file size, and the whole band
+# 60 to 200 moves the nudge total by at most one - the near-copy channel is the narrowest of the
+# three, so what it drops the topic and numbered-stem channels almost always still catch.
 SHINGLE_LIMIT = 120
 
 # `cat > x.ps1 <<'EOS'` / `cat >> x.py <<EOF` - the redirect target on a heredoc opener line.
@@ -222,9 +233,9 @@ def same_file(a, b):
 
     The ledger is keyed by path precisely so that iterating on a script is not counted as writing
     another variant of it - but the same file gets written as `tests/t.py` from the repo root and
-    as `/abs/repo/tests/t.py` a minute later, and a string key cannot see that. Measured over 2689
-    real script writes in 98 sessions: 133 respell a path already in the ledger, and 12 nudges
-    named one file twice as though it were two attempts at a job.
+    as `/abs/repo/tests/t.py` a minute later, and a string key cannot see that. Measured over 2615
+    real script writes in 97 sessions: 110 respell a path already in the ledger, and without this
+    rule 4 nudges name one file twice as though it were two attempts at a job.
     """
     parts_a = [p for p in re.split(r"[\\/]+", str(a or "")) if p not in ("", ".")]
     parts_b = [p for p in re.split(r"[\\/]+", str(b or "")) if p not in ("", ".")]
@@ -273,8 +284,8 @@ def distinct_jobs(paths):
     Two spellings of one file are one job however many events they arrive as, and a pytest module
     is not a job at all: this hook's own remedy is "build it once as a TESTED JIG - a script with
     pytest cases", so a session filling up tests/ is producing the END STATE it asks for, and
-    counting that as a repeated job nudges the one behaviour it wants. A quarter of the 2689
-    script writes measured across 98 real sessions are test-suite files, and every session this
+    counting that as a repeated job nudges the one behaviour it wants. A fifth of the 2615
+    script writes measured across 97 real sessions are test-suite files, and every session this
     rule silenced had been nudged for writing a module beside its tests.
 
     The unfolded group is still what the message shows: the model is handed evidence, so it should
@@ -291,9 +302,12 @@ def distinct_jobs(paths):
 def name_tokens(name):
     """Topic tokens from a FILENAME. PURE.
 
-    The 3-character prefix is the load-bearing one: delwinold / delrobo / delsafe / delprogress
-    share no whole word and no 4-character prefix, but they are visibly one family, and on the real
-    corpus adding it moved the delete lineage's first nudge six scripts earlier.
+    The 3-character prefix is the only token a family like delwinold / delrobo / delsafe /
+    delprogress shares - no whole word, no 5-character stem and no 4-character prefix unites them -
+    and it was load-bearing when it was added. It no longer is: ablating it now changes nothing at
+    all over 97 replayed sessions, because numbered_retry and the stated-purpose tokens arrived
+    afterwards and reach those families first. Kept as the one channel that needs neither a number
+    in the name nor a purpose line, and it costs no false positives in the whole corpus.
     """
     out = set()
     for part in re.split(r"[^A-Za-z0-9]+", Path(basename(name)).stem):
