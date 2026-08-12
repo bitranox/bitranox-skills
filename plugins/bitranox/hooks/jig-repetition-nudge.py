@@ -56,7 +56,7 @@ VARIANTS_BEFORE_NUDGE = 3        # a group of three is the smallest that shows a
 # (five one-off scripts each editing one pyproject.toml; three spellings of one push script) - they
 # share ONE purpose token, and the topic channel needs two. Two rescues is not enough evidence to
 # move a shipped constant; what would settle it is a labelled set of such sessions.
-SIMILARITY = 0.25
+SIMILARITY = 0.18
 
 # How many of the group's scripts must not have been named in an earlier nudge. Without it, one
 # nudge's group grows by a script at a time and re-fires on every write; with it, a repeat costs
