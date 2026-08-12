@@ -17,6 +17,43 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.189.0] - 2026-08-12
+
+### Added
+
+- **`git_state.py` gained a `--files GLOB` mode**, answering the per-FILE question the existing
+  repo-level mode cannot: across a tree, which copies of a named file (`CLAUDE.md`, a config) are
+  tracked-and-modified, gitignored, untracked, or outside any repo at all. This has now been
+  hand-rolled twice in two sessions - `git status --porcelain -- <path>` is EMPTY for a gitignored
+  file and for a tracked-clean file ALIKE, so a naive check silently conflates them, and only the
+  tracked one is restorable with `git checkout`. Measured on a real tree: 15 tracked-modified, 37
+  gitignored, 22 outside any repo across 186 `CLAUDE.md` files.
+  Classifies with `git ls-files --error-unmatch` (tracked, read off stdout - it does not stop at
+  the first unmatched pathspec) and `git check-ignore --stdin --no-index` (ignored; `--no-index`
+  is required, because without it git itself silently excludes tracked files from the ignored
+  output, which would make the precedence below true by git's accident rather than this tool's
+  decision), never `git status`. TRACKED WINS the tracked-and-ignored case: `check-ignore` is only
+  ever asked about the paths `ls-files` did NOT report tracked, so a file that is both tracked and
+  matched by a `.gitignore` pattern always classifies tracked-clean/tracked-modified, never
+  ignored - proven by mutation (reordering the precedence, or asking `check-ignore` about every
+  candidate instead of the non-tracked remainder, makes the dedicated precedence test fail).
+  `no-repo` (no enclosing git repo at all) and `untracked` (inside a repo, not tracked, not
+  ignored) are kept distinct - also proven by mutation.
+  Bounded process count: at most 4 git subprocesses PER REPO regardless of how many candidate
+  files it contributes (`ls-files`, `check-ignore` on the non-tracked remainder, an optional
+  `rev-parse --verify HEAD` probe, `diff --name-only HEAD` on the tracked remainder to split
+  tracked-clean from tracked-modified) - never 2 per file. Repo-root discovery is a pure
+  filesystem walk (no subprocess): it reuses the existing `find_repos()` downward walk plus a
+  cheap upward `.git`-presence check from `--root` itself, so `--root` may be either a directory
+  holding many repos or a subdirectory inside one.
+  Follows this skill's CLI conventions: a `--json` envelope (`{"ok", "command": "git-state",
+  "data", "skipped"}`), the match-count summary and any per-repo failures on stderr (stdout stays
+  parseable JSON), and format-independent exit codes (0 at least one file matched the glob, 1 none
+  matched, 2 the walk or every matched repo's git calls failed outright). Cross-platform: argv
+  lists throughout (no shell strings), `--` before every pathspec (leading-dash/space/unicode
+  filenames all verified), and `encoding="utf-8", errors="replace"` on every new subprocess call.
+  16 new tests (23 total in the file); `SKILL.md`'s `git_state` row documents the new mode.
+
 ## [5.188.0] - 2026-08-12
 
 ### Added
