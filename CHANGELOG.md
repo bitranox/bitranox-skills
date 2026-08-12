@@ -17,6 +17,15 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.183.1] - 2026-08-12
+
+### Added
+
+- **`process-agents-dispatching-parallel` skill**: new "Verification" checklist item - check
+  `git status --porcelain` before staging or committing after agents return. A subagent dispatched
+  with a read-only intent still holds Write/Edit/Bash and can write into the tree while reporting
+  only text, so the write is silent even when the agent had no stated reason to write.
+
 ## [5.183.0] - 2026-08-12
 
 ### Added

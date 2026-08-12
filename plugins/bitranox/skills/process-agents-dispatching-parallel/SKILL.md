@@ -240,4 +240,7 @@ After agents return:
 2. **Check for conflicts** - Did agents edit same code?
 3. **Run full suite** - Verify all fixes work together
 4. **Spot check** - Agents can make systematic errors
+5. **Check `git status --porcelain` before staging or committing** - A subagent dispatched with a
+   read-only intent still holds Write/Edit/Bash and can write into the tree while reporting only
+   text, so the write is silent. Check even when you believed the agent had no reason to write.
 
