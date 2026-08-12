@@ -26,12 +26,13 @@ grep, no warning.
 
 Then split the variance by CAUSE, because only one kind is liftable:
 
-| Variance                                    | Verdict                                                           |
-|---------------------------------------------|-------------------------------------------------------------------|
-| Section embeds the package/repo name        | NOT liftable - the name is the point. Leave it per-repo.          |
-| Copies differ only in whitespace            | Converge, then lift.                                              |
-| Copies differ in substance (drift)          | Verify each against ground truth first, THEN converge. Section 2. |
-| Every copy is unique (N copies, N variants) | Nothing shared to extract. Leave it.                              |
+| Variance                                                         | Verdict                                                                                                                                                                                                         |
+|------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Section embeds the package/repo name                             | NOT liftable - the name is the point. Leave it per-repo.                                                                                                                                                        |
+| Copies differ only in whitespace                                 | Converge, then lift.                                                                                                                                                                                            |
+| Copies differ in substance (drift)                               | Verify each against ground truth first, THEN converge. Section 2.                                                                                                                                               |
+| Copies share only a closing pointer sentence; the body is unique | LEAVE IT - the shared bytes are one trailing sentence, not the section. A "largest variant covers X%" reading can be that sentence's share of a short body, not real duplication. Read the body before lifting. |
+| Every copy is unique (N copies, N variants)                      | Nothing shared to extract. Leave it.                                                                                                                                                                            |
 
 A useful signal for whether a lift will be clean: how much of the copies the largest variant covers.
 Around 60-75% means one dominant version to lift. Around 30% means the section has forked and
@@ -77,8 +78,13 @@ references/dream-passes.md): a covering rule at an ANCESTOR DIRECTORY, delivered
 text. Git tracking plays no part - not tracked-vs-ignored, not the remote, not who else could clone
 it. Those decide whether an edit needs a commit, never whether a rule reaches context.
 
-Two guards the mechanical version gets wrong:
+Three guards the mechanical version gets wrong:
 
+- **The invariant is tested per FILE, not per GROUP.** A group's members can straddle the covering
+  ancestor's subtree - some sit under it, some do not. Check each member's own directory against
+  the chosen covering ancestor before trimming that member; one check for "the group" (or for
+  where most of it lives) trims outliers too, and for a member outside the subtree the covering
+  rule is only a SIBLING that never loads there, so it loses guidance with nothing replacing it.
 - **No chain may end up holding the heading twice.** Before lifting a variant to `T`, check whether
   any NON-MEMBER file under `T` still carries that heading - members do not count, the lift strips
   them. Seed the check with headings the target ALREADY holds from an earlier pass, or you will

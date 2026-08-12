@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.184.0] - 2026-08-12
+
+### Added
+
+- **`meta-consolidate-claude-md` skill**: new variance-table row for copies that share only a
+  closing pointer sentence while the body is unique per copy (verdict: LEAVE IT) - a "largest
+  variant covers X%" reading can be that one sentence's share of a short body, not real
+  duplication. Also states the reachability invariant is judged per FILE, not per GROUP: a
+  group's members can straddle the covering ancestor's subtree, so a group-level trim can delete
+  guidance left unreplaced for members sitting outside that ancestor. Measured consolidating a
+  real tree: the existing 60-75% signal pointed at lifting a section appearing in 27 files that
+  was already the correct minimal delta plus one shared pointer line, and 2 of those 27 sat
+  outside the ancestor that would have carried the covering rule.
+
 ## [5.183.1] - 2026-08-12
 
 ### Added
