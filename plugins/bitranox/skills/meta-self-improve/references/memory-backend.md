@@ -133,7 +133,7 @@ Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass
 | `add --proj D --title T --hook H --body-file F [--type feedback\|project\|reference\|user] [--source S] [--pin] [--scope TEXT] [--slug S]`                                              | the printed slug                      |
 | `heal --proj D`                                                                                                                                                                         | `healed N file(s) across M level(s)`  |
 | `set-scope --proj D --scope TEXT`                                                                                                                                                       | `scope updated:` / `scope unchanged:` |
-| `move --from-level A --to-level B --slug S [--force]`                                                                                                                                   | `moved <slug>: A -> B (up\|down)`     |
+| `move --from-level A --to-level B --slug S [--slug S2 ...] [--force]` (several slugs move as ONE set; see below)                                                                        | `moved <slug>: A -> B (up\|down)`     |
 | `relocate --from-level A --to-level B --slug S [--force]`                                                                                                                               | `relocated <slug>: A -> B (...)`      |
 | `rename --level D --slug S --to-slug S2` (fix a WRONG NAME: `move`/`relocate` change a fact's level, never its name; this repoints every inbound `[[ref]]` so nothing is orphaned)      | `renamed <slug> -> <slug2> at D`      |
 | `lint --tree D`                                                                                                                                                                         | `TOTAL over-cap hooks: N \| ...`      |
@@ -153,7 +153,23 @@ merges provenance (`bx:src`) and pin, keeps the existing body when `--body` is e
 body, enforces tree-unique slugs. `move` relocates only a pointer LINE (the body never moves); if the
 target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -
 picking by direction would silently discard the richer hook), and `--force` dedups by keeping the
-LONGER hook and dropping the other. `relocate` is the CROSS-TREE move `move` cannot do: it copies
+LONGER hook and dropping the other.
+
+**`move` takes a SET of slugs that travels together.** Repeat `--slug` (or name several after one
+`--slug`) and the members move as one unit; the down-move ref guard then judges each member by where
+the WHOLE set lands, so a member citing another member is not dangling. That is the only way to
+demote a MUTUALLY-CITING pair or cluster without `--force`: each one's inbound ref is the other, so
+single-slug moves refuse in BOTH orders, and forcing it strands the very ref the guard protects.
+Reach for it whenever a down-move refuses with a citer that itself belongs at the target - the usual
+shape when shrinking an oversized always-loaded block, because an internally cross-linked cluster is
+what accumulates there. A citer OUTSIDE the set still refuses (the guard is set-aware, not weakened),
+and the exemption follows the pointer AT the from-level, so a stray duplicate pointer for a moving
+slug left higher up still counts. The set is ATOMIC ON REFUSAL: presence, legacy state, refs and
+duplicate-pointer conflicts are decided for every member before anything is written, so a refusal
+leaves every pointer where it was. The write phase is per-slug add-then-remove, so an interruption
+leaves a visible duplicate pointer, never a lost fact - re-run the SAME command to complete it.
+
+`relocate` is the CROSS-TREE move `move` cannot do: it copies
 the central body into the TARGET tree's store, points at it there, drops the source pointer and
 ARCHIVES the source body - one live copy, old one recoverable. Same-tree it just delegates to
 `move` (the body already sits at the right anchor). It refuses a divergent slug in the target tree

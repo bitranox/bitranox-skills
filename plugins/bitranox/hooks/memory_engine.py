@@ -405,14 +405,86 @@ def _drop_pointer(level, slug):
     return True
 
 
+def _as_slug_list(slug):
+    """The move's slug SET as an ordered, de-duplicated list. Accepts one slug or an iterable of
+    them, so every existing single-slug caller keeps working untouched."""
+    raw = [slug] if isinstance(slug, str) else list(slug or ())
+    seen, out = set(), []
+    for s in raw:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _dangling_inbound_after_move(src, dst, slugs):
+    """[(level, citer, moved_slug)] for every inbound `[[ref]]` a DOWN-move of `slugs` (all sitting
+    at `src`) to `dst` would push out of cascade reach.
+
+    A citer is SAFE when it will sit AT or BELOW `dst` afterwards, and that includes a citer which
+    is itself in the moving SET: its pointer lands at `dst` with the rest, so a mutually-citing
+    cluster moving together dangles nothing. The exemption is keyed to the pointer AT `src` (the one
+    that actually moves), never to the slug NAME - a stray duplicate pointer for a moving slug left
+    at a higher level stays put and must still count. Pure read, and it takes the WHOLE set, so the
+    answer cannot depend on the order the members are listed in."""
+    chain = {str(Path(x).resolve()) for x in
+             (sig.altitude_chain(str(src)) + sig.altitude_chain(str(dst)))}
+    moving = {_canon_slug(s) for s in slugs}
+    out = []
+    for s in slugs:
+        for lvl, citer in inbound_ref_sources(sorted(chain), s):
+            here = Path(lvl).resolve()
+            if here == src and _canon_slug(citer) in moving:
+                continue                             # a co-mover: it lands at dst too
+            if here == dst or dst in here.parents:
+                continue                             # already at or below the new home
+            out.append((lvl, citer, s))
+    return out
+
+
+def _dedup_pick(entry, dst_entry):
+    """Forced dedup of a divergent duplicate pointer: keep the information-richer (LONGER) hook
+    regardless of move DIRECTION, union provenance + pin. Direction-independent by construction, so
+    it can never discard the richer hook the way a plain overwrite did. Returns ((title, hook,
+    source, pin), warning)."""
+    keep = entry if len(entry.hook or "") >= len(dst_entry.hook or "") else dst_entry
+    fields = (keep.title, keep.hook,
+              set(entry.source) | set(dst_entry.source), entry.pin or dst_entry.pin)
+    warning = ("duplicate at target: kept the longer hook (%d vs %d chars), unioned provenance, "
+               "dropped the shorter source line" % (len(keep.hook or ""),
+                                                    min(len(entry.hook or ""), len(dst_entry.hook or ""))))
+    return fields, warning
+
+
 def move_entry(from_level, to_level, slug, force=False):
-    """Relocate a fact's POINTER LINE between two levels of one tree (the body file never moves -
-    the slug is the identity and the body is anchored centrally). ADD-THEN-REMOVE: the pointer is
-    upserted at the target (merging provenance/pin - which also completes a crash-interrupted
-    move), then dropped at the source; a crash between the two leaves a visible duplicate pointer,
-    never a lost fact. Returns {"slug","from","to","direction","moved","refused","warnings"}."""
-    rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
-           "direction": None, "moved": False, "refused": None, "warnings": []}
+    """Relocate a fact's POINTER LINE - or a whole SET of them, together - between two levels of one
+    tree (the body file never moves - the slug is the identity and the body is anchored centrally).
+
+    `slug` is one slug OR an iterable of slugs. A set moves as ONE unit and the down-move ref guard
+    judges every member by its POST-MOVE placement, so a member citing another member is not
+    dangling. That is the only non-forced way to demote a MUTUALLY-CITING pair: each one's inbound
+    ref is the other, so single-slug moves refuse in BOTH orders and the sole escape was `--force`,
+    which is how a ref actually gets stranded. A citer OUTSIDE the set still refuses - the guard is
+    made set-aware, not weakened.
+
+    ATOMIC ON REFUSAL: the entire set is validated (present at the from-level, non-legacy, refs,
+    duplicate pointers at the target) BEFORE anything is written, so a refusal leaves every pointer
+    exactly where it was; a partial move would strand precisely the refs this protects. The write
+    phase is per-slug ADD-THEN-REMOVE: the pointer is upserted at the target (merging provenance/pin
+    - which also completes a crash-interrupted move), then dropped at the source. An interruption
+    mid-set therefore leaves a visible duplicate pointer, never a lost fact, and re-running the SAME
+    command completes it (both halves are idempotent); a write error is reported as a refusal naming
+    how many pointers already moved, with that same re-run instruction.
+
+    Returns {"slug","slugs","from","to","direction","moved","moved_slugs","refused","warnings"};
+    `slug` is the comma-joined set, identical to the input for a single slug."""
+    slugs = _as_slug_list(slug)
+    rep = {"slug": ", ".join(slugs), "slugs": list(slugs),
+           "from": str(from_level), "to": str(to_level),
+           "direction": None, "moved": False, "moved_slugs": [], "refused": None, "warnings": []}
+    if not slugs:
+        rep["refused"] = "no slug given - name at least one fact to move"
+        return rep
     src = Path(from_level).resolve()
     dst = Path(to_level).resolve()
     a_from, a_to = us.resolve_anchor(str(src)), us.resolve_anchor(str(dst))
@@ -431,61 +503,72 @@ def move_entry(from_level, to_level, slug, force=False):
         return rep
 
     _scope, entries, _bodies = read_store(str(src))
-    entry = next((e for e in entries if e.slug == slug), None)
-    if entry is None:
-        rep["refused"] = "slug %r not found at the from-level" % slug
-        return rep
-    if entry.legacy:
-        rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
-        return rep
+    by_slug = {e.slug: e for e in entries}
+    moving = []
+    for s in slugs:
+        entry = by_slug.get(s)
+        if entry is None:
+            rep["refused"] = "slug %r not found at the from-level" % s
+            return rep
+        if entry.legacy:
+            rep["refused"] = ("entry %r is an unmigrated legacy pointer - run "
+                              "migrate_to_slug_store.py first" % s)
+            return rep
+        moving.append(entry)
 
     if rep["direction"] == "down":
         # a citing entry must sit AT or BELOW the new home, or its [[ref]] leaves cascade reach
-        chain = {str(Path(x).resolve()) for x in
-                 (sig.altitude_chain(str(src)) + sig.altitude_chain(str(dst)))}
-        dangling = [(lvl, s) for lvl, s in inbound_ref_sources(sorted(chain), slug)
-                    if not (Path(lvl).resolve() == dst or dst in Path(lvl).resolve().parents)]
+        dangling = _dangling_inbound_after_move(src, dst, slugs)
         if dangling:
-            what = ", ".join("%s at %s" % (s, lvl) for lvl, s in dangling)
+            # name WHICH member the citer blocks only when the set makes that ambiguous, so the
+            # single-slug refusal reads exactly as it always has
+            what = ", ".join("%s at %s%s" % (citer, lvl, " (cites %s)" % s if len(slugs) > 1 else "")
+                             for lvl, citer, s in dangling)
             if not force:
                 rep["refused"] = "down-move would dangle inbound [[refs]]: %s (use --force to move anyway)" % what
                 return rep
             rep["warnings"].append("moved despite dangling inbound [[refs]]: %s" % what)
 
-    # Duplicate-pointer handling (defect A): the target may ALREADY point at this slug - either a
+    # Duplicate-pointer handling (defect A): the target may ALREADY point at a moving slug - either a
     # crash-interrupted move (add succeeded, drop did not) or a real DIVERGENT duplicate from drift
     # (dedup is exactly when two levels point at one slug). A plain add_pointer overwrites the
     # target's title+hook with the source's, so a divergent duplicate is silent, direction-dependent
     # data loss - the hook is the always-loaded part, and which one survives would depend on move
-    # DIRECTION, not on which hook is better. Detect it before the add-then-remove:
+    # DIRECTION, not on which hook is better. Decide it for EVERY member before the add-then-remove,
+    # so a late member's duplicate can never surface after an earlier member was already written:
     _s2, dst_entries, _b2 = read_store(str(dst))
-    dst_entry = next((e for e in dst_entries if e.slug == slug), None)
-    if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
-        if not force:
-            rep["refused"] = (
-                "target already points at %r with a DIFFERENT hook (duplicate pointer); picking by "
-                "move direction would discard one - dedup deliberately with `add --slug %s` at the "
-                "surviving level, or --force to keep the LONGER hook and drop the other" % (slug, slug))
-            return rep
-        # Forced dedup: keep the information-richer (LONGER) hook regardless of direction, union the
-        # provenance + pin, and drop the source pointer. Direction-independent by construction, so it
-        # can never discard the richer hook the way the old overwrite did.
-        keep = entry if len(entry.hook or "") >= len(dst_entry.hook or "") else dst_entry
-        us.add_pointer(str(dst), slug=slug, title=keep.title, hook=keep.hook,
-                       source=set(entry.source) | set(dst_entry.source), pin=entry.pin or dst_entry.pin)
-        _drop_pointer(str(src), slug)
-        rep["moved"] = True
-        rep["warnings"].append(
-            "duplicate at target: kept the longer hook (%d vs %d chars), unioned provenance, "
-            "dropped the shorter source line" % (len(keep.hook or ""),
-                                                 min(len(entry.hook or ""), len(dst_entry.hook or ""))))
-        return rep
+    dst_by_slug = {e.slug: e for e in dst_entries}
+    plan, dedup_warnings = [], []
+    for entry in moving:
+        dst_entry = dst_by_slug.get(entry.slug)
+        if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
+            if not force:
+                rep["refused"] = (
+                    "target already points at %r with a DIFFERENT hook (duplicate pointer); picking by "
+                    "move direction would discard one - dedup deliberately with `add --slug %s` at the "
+                    "surviving level, or --force to keep the LONGER hook and drop the other"
+                    % (entry.slug, entry.slug))
+                return rep
+            fields, warning = _dedup_pick(entry, dst_entry)
+            dedup_warnings.append(warning)
+        else:
+            # No duplicate, or an IDENTICAL one (crash residue): the normal add-then-remove. An
+            # identical duplicate merges provenance/pin and completes a crash-interrupted move.
+            fields = (entry.title, entry.hook, entry.source, entry.pin)
+        plan.append((entry.slug, fields))
 
-    # No duplicate, or an IDENTICAL one (crash residue): the normal add-then-remove. An identical
-    # duplicate merges provenance/pin and completes a crash-interrupted move - no data at risk.
-    us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
-                   source=entry.source, pin=entry.pin)
-    _drop_pointer(str(src), slug)
+    for s, (title, hook, source, pin) in plan:
+        try:
+            us.add_pointer(str(dst), slug=s, title=title, hook=hook, source=source, pin=pin)
+            _drop_pointer(str(src), s)
+        except OSError as exc:
+            rep["refused"] = (
+                "write failed on %r after %d of %d pointer(s) moved: %s - each move is an idempotent "
+                "add-then-remove, so re-run the SAME command to complete the set"
+                % (s, len(rep["moved_slugs"]), len(plan), exc))
+            return rep
+        rep["moved_slugs"].append(s)
+    rep["warnings"].extend(dedup_warnings)
     rep["moved"] = True
     return rep
 
@@ -1082,10 +1165,16 @@ def main(argv=None):
     ln = sub.add_parser("lint", help="tree-wide voice/frame sweep (advisory backlog, read-only)")
     ln.add_argument("--tree", required=True, dest="tree",
                     help="any dir in the tree (resolved to its anchor); sweeps every curated level")
-    mv = sub.add_parser("move", help="re-level one fact: relocate its pointer line within the tree")
+    mv = sub.add_parser("move", help="re-level one fact (or a set that moves together): relocate "
+                                     "the pointer line(s) within the tree")
     mv.add_argument("--from-level", required=True, dest="from_level")
     mv.add_argument("--to-level", required=True, dest="to_level")
-    mv.add_argument("--slug", required=True)
+    mv.add_argument("--slug", required=True, action="append", nargs="+", metavar="SLUG",
+                    help="the fact to move; name SEVERAL (repeat --slug, or list them after one "
+                         "--slug) to move a SET as one unit - the ref guard then judges each member "
+                         "by where the WHOLE set lands, which is the only way to demote a "
+                         "mutually-citing pair without --force. All or nothing: one bad member "
+                         "refuses the whole set and writes nothing")
     mv.add_argument("--force", action="store_true",
                     help="down-move even when inbound [[refs]] would dangle, OR dedup a divergent "
                          "duplicate-target pointer by keeping the longer hook (warning instead of refusal)")
@@ -1146,7 +1235,9 @@ def main(argv=None):
         return 0
 
     if args.cmd == "move":
-        rep = move_entry(args.from_level, args.to_level, args.slug, force=args.force)
+        # `--slug a --slug b` and `--slug a b` both land as a list of groups; flatten to the set
+        slugs = [s for group in args.slug for s in group]
+        rep = move_entry(args.from_level, args.to_level, slugs, force=args.force)
         if rep["refused"]:
             print("! refused: %s" % rep["refused"])
             return 1

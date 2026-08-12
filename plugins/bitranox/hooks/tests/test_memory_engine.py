@@ -455,6 +455,146 @@ def test_move_refuses_unmigrated_legacy_entry(tmp_path):
     assert rep["moved"] is False and "migrate" in (rep["refused"] or "").lower()
 
 
+# ---- move: a SET of slugs that moves TOGETHER (the mutually-citing pair the guard could not free)
+
+def _citing_pair(level):
+    """Two facts at `level` that cite EACH OTHER: each one's only inbound ref is the other."""
+    E.add_or_update_entry(level, "Fact a", "pairs with [[fact-b]]", body="A", scope_default="a")
+    E.add_or_update_entry(level, "Fact b", "pairs with [[fact-a]]", body="B")
+    return "fact-a", "fact-b"
+
+
+def _slugs_at(level):
+    """The slugs in a level's pointer block (empty when the level has no block yet)."""
+    try:
+        text = (Path(level) / "CLAUDE.local.md").read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {p.slug for p in us.parse_pointer_index(text)[1]}
+
+
+def test_move_down_single_slug_deadlocks_on_a_mutually_citing_pair(tmp_path):
+    # The motivating defect, pinned as a regression: each fact's inbound ref is the other, so the
+    # ref guard refuses BOTH, in EITHER order, and the only escape was --force (which is how a ref
+    # actually gets stranded). Single-slug moves must KEEP refusing - taken alone, either move
+    # really would leave a ref above its target. The set form below is the correct way out.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    assert "dangle" in (E.move_entry(anchor, proj, a)["refused"] or "")
+    assert "dangle" in (E.move_entry(anchor, proj, b)["refused"] or "")
+    assert _slugs_at(anchor) == {a, b}                     # neither moved, nothing lost
+
+
+def test_move_down_multi_slug_releases_the_mutually_citing_pair(tmp_path):
+    # The whole set is evaluated against its POST-move placement, so a member citing another member
+    # is not dangling - both land at the target together.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    rep = E.move_entry(anchor, proj, [a, b])
+    assert rep["moved"] is True and rep["refused"] is None and rep["direction"] == "down"
+    assert rep["slugs"] == [a, b] and rep["moved_slugs"] == [a, b]
+    assert _slugs_at(proj) == {a, b} and _slugs_at(anchor) == set()
+    assert us.body_path(anchor, a).is_file()               # bodies never move, only pointers
+
+
+def test_move_multi_slug_is_order_independent(tmp_path):
+    # Moving {A,B} must equal moving {B,A}: the guard reads the whole set at once, so no result may
+    # depend on which member is processed first.
+    def run(order):
+        root = tmp_path / ("order-" + "-".join(order))
+        root.mkdir()
+        anchor, _mid, proj = _three_levels(root)
+        a, b = _citing_pair(anchor)
+        rep = E.move_entry(anchor, proj, [{"a": a, "b": b}[k] for k in order])
+        return rep["moved"], _slugs_at(proj), _slugs_at(anchor)
+
+    assert run(["a", "b"]) == run(["b", "a"]) == (True, {"fact-a", "fact-b"}, set())
+
+
+def test_move_multi_slug_still_refuses_a_citer_outside_the_set(tmp_path):
+    # The guard is made set-aware, never weakened: a third fact staying ABOVE the new home still
+    # dangles, so the whole set is refused. Without this, "move them together" would be a blanket
+    # bypass of the one check that keeps cascade reach intact.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    E.add_or_update_entry(mid, "Outsider", "also builds on [[fact-a]]", body="C", scope_default="m")
+    rep = E.move_entry(anchor, proj, [a, b])
+    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
+    assert "outsider" in rep["refused"]                    # the blocking citer is named
+    assert _slugs_at(anchor) == {a, b} and _slugs_at(proj) == set()      # nothing moved
+    rep2 = E.move_entry(anchor, proj, [a, b], force=True)  # --force still overrides, with a warning
+    assert rep2["moved"] is True and rep2["warnings"] and _slugs_at(proj) == {a, b}
+
+
+def test_move_multi_slug_exemption_covers_only_the_pointer_that_moves(tmp_path):
+    # The co-mover exemption is keyed to the POINTER at the from-level, not to the slug NAME: a
+    # stray duplicate pointer for a moving slug left at a higher level does not move with the set,
+    # so its [[ref]] would still dangle and the move must keep refusing.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    us.add_pointer(mid, slug=b, title="Fact b", hook="stray copy citing [[fact-a]]")
+    rep = E.move_entry(anchor, proj, [a, b])
+    assert rep["moved"] is False and "dangle" in (rep["refused"] or "")
+    assert _slugs_at(anchor) == {a, b}
+
+
+def test_move_multi_slug_refusal_is_atomic_nothing_moves(tmp_path):
+    # A set is validated in FULL before any write: one bad member (here, absent at the from-level)
+    # must leave every other member's pointer exactly where it was. A partial move would strand
+    # precisely the refs the set form exists to keep whole.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    rep = E.move_entry(anchor, proj, [a, b, "no-such-fact"])
+    assert rep["moved"] is False and "not found" in (rep["refused"] or "")
+    assert _slugs_at(anchor) == {a, b} and _slugs_at(proj) == set()
+
+
+def test_move_multi_slug_divergent_duplicate_refuses_before_any_write(tmp_path):
+    # The duplicate-pointer refusal (defect A) is also evaluated for the WHOLE set first: a second
+    # member's divergent duplicate at the target may not be discovered only after the first member
+    # has already been written.
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    us.add_pointer(proj, slug=b, title="Fact b", hook="a DIFFERENT hook already at the target")
+    rep = E.move_entry(anchor, proj, [a, b])
+    assert rep["moved"] is False and "duplicate" in (rep["refused"] or "")
+    assert _slugs_at(anchor) == {a, b}                     # a was NOT moved ahead of the refusal
+
+
+def test_move_multi_slug_legacy_member_refuses_and_names_it(tmp_path):
+    # The legacy-pointer refusal survives the set form, and names WHICH member is unmigrated.
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(mid, "Fresh", "h", body="B", scope_default="m")
+    u = "22222222-0000-5000-8000-000000000000"
+    bp = us.legacy_body_path(anchor, u)
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text("OLD\n", encoding="utf-8")
+    local = Path(mid) / "CLAUDE.local.md"
+    local.write_text(local.read_text(encoding="utf-8").replace(
+        us.INDEX_END, "- [Old](uuid:%s) - h <!-- bx:slug=old-fact -->\n%s" % (u, us.INDEX_END)),
+        encoding="utf-8")
+    rep = E.move_entry(mid, proj, ["fresh", "old-fact"])
+    assert rep["moved"] is False and "migrate" in (rep["refused"] or "").lower()
+    assert "old-fact" in rep["refused"] and _slugs_at(proj) == set()
+
+
+def test_cli_move_accepts_a_set_and_keeps_the_single_slug_form(tmp_path, capsys):
+    anchor, mid, proj = _three_levels(tmp_path)
+    a, b = _citing_pair(anchor)
+    rc = E.main(["move", "--from-level", anchor, "--to-level", proj, "--slug", a, "--slug", b])
+    out = capsys.readouterr().out
+    assert rc == 0 and "moved" in out and a in out and b in out
+    assert _slugs_at(proj) == {a, b}
+    rc = E.main(["move", "--from-level", proj, "--to-level", anchor, "--slug", a, b])  # one flag
+    out = capsys.readouterr().out
+    assert rc == 0 and _slugs_at(anchor) == {a, b}
+    E.add_or_update_entry(anchor, "Solo", "no refs at all", body="S")
+    rc = E.main(["move", "--from-level", anchor, "--to-level", mid, "--slug", "solo"])
+    out = capsys.readouterr().out
+    assert rc == 0 and out.startswith("moved solo: ")     # unchanged single-slug success line
+    assert _slugs_at(mid) == {"solo"}
+
+
 def test_inbound_ref_sources_scans_hooks_and_bodies(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(anchor, "Base rule", "the base", body="B", scope_default="a")
