@@ -26,6 +26,15 @@ dropped at random; these two budgets reach it in 100%, and in 96.7% at the heavi
 A script that CHANGES state gets the looser gate and the larger budget - it is where a rewrite
 costs a machine rather than a wrong answer.
 
+WHAT COUNTS AS A JOB, which is where the noise was. Replaying 2689 script writes from 98 sessions
+(one session had supplied every constant here) said the pacing was about right and the IDENTITY of
+a variant was not: a group of three reached three by counting things that are not three attempts
+at one job. Two spellings of one path are one file, and a pytest module is not a one-off script at
+all - it is the very artefact the message asks for, and test-suite files are a quarter of all
+script writes. In the other direction a numbered family - `probe.ps1`, `probe2.ps1`, `probe3.ps1` -
+was invisible, because a short shared stem yields ONE name token where the topic channel needs two.
+See same_file, is_test_suite_file, numbered_retry.
+
 Non-blocking (additionalContext), capped per session, silent on any error.
 """
 import json
@@ -37,7 +46,11 @@ from shell_text import HEREDOC_OPEN               # noqa: E402 - shared with the
 
 SCRIPT_SUFFIXES = {".ps1", ".py", ".sh", ".bash", ".psm1"}
 VARIANTS_BEFORE_NUDGE = 3        # a group of three is the smallest that shows a PATTERN, not a retry
-SIMILARITY = 0.25                # Jaccard over 3-token shingles; unrelated scripts score ~0
+# Jaccard over 3-token shingles; unrelated scripts score ~0. This is the narrowest of the three
+# recall channels by a wide margin: over 98 replayed sessions, moving it anywhere from 0.25 to 0.5
+# changes no session's nudges at all, because a true near-COPY is rarer than a rewrite and the
+# topic channel already has those. Kept because it is the only channel that survives a rename.
+SIMILARITY = 0.25
 
 # How many of the group's scripts must not have been named in an earlier nudge. Without it, one
 # nudge's group grows by a script at a time and re-fires on every write; with it, a repeat costs
@@ -45,10 +58,13 @@ SIMILARITY = 0.25                # Jaccard over 3-token shingles; unrelated scri
 FRESH_SCRIPTS_PER_NUDGE = 3
 
 # Separate budgets. CHANGE = the script being written mutates state; OBSERVE = it only reads.
-# Measured on the real 118-script corpus: the change track wants 12 and the observe track 3, so
-# these caps do not bind on the worst real session we have - they are a runaway guard for a
-# pathological one, and the EVIDENCE paces the hook in every normal case.
+# Both BIND, so they are policy rather than a runaway guard: across 98 replayed sessions they
+# withheld 27 and 365 further nudges. 12 is not slack on the change track either - it is the
+# smallest value that still reaches the destructive lineage this hook was built for, which arrives
+# as that session's 11th change nudge; at 8 the lineage is never reported.
 CHANGE_NUDGE_CAP = 12
+# The observe track is where a session's repetition is cheap and constant, so it stays tight: the
+# evidence justified 620 observe nudges across those sessions and this cap withheld 365 of them.
 OBSERVE_NUDGE_CAP = 3
 OBSERVE_COOLDOWN = 15            # scripts between observe-track nudges; repeated probes are cheap
 
@@ -191,6 +207,82 @@ def basename(path):
     return re.split(r"[\\/]", str(path or ""))[-1]
 
 
+def _file_stem(path):
+    """The basename of `path` without its suffix. PURE."""
+    return basename(path).rsplit(".", 1)[0]
+
+
+def same_file(a, b):
+    """Two paths that name ONE file. PURE.
+
+    The ledger is keyed by path precisely so that iterating on a script is not counted as writing
+    another variant of it - but the same file gets written as `tests/t.py` from the repo root and
+    as `/abs/repo/tests/t.py` a minute later, and a string key cannot see that. Measured over 2689
+    real script writes in 98 sessions: 133 respell a path already in the ledger, and 12 nudges
+    named one file twice as though it were two attempts at a job.
+    """
+    parts_a = [p for p in re.split(r"[\\/]+", str(a or "")) if p not in ("", ".")]
+    parts_b = [p for p in re.split(r"[\\/]+", str(b or "")) if p not in ("", ".")]
+    if not parts_a or not parts_b:
+        return False
+    short, long_ = (parts_a, parts_b) if len(parts_a) <= len(parts_b) else (parts_b, parts_a)
+    return long_[-len(short):] == short
+
+
+_TRAILING_DIGITS = re.compile(r"\d+$")
+
+
+def numbered_retry(a, b):
+    """`probe.ps1` and `probe2.ps1`, `diag3.ps1` and `diag7.ps1`: the same script, attempt N. PURE.
+
+    The strongest same-job signal the corpus has, and the topic channel cannot use it: a numbered
+    family's shared stem is by construction NOT rare in that session, so the rarity gate that
+    stops the junk group also discards the one name pattern that means "this again". Whole families
+    stayed silent for it - nine `testN.sh`, seven `*_testN.py`, `probe1` through `probe9`.
+    """
+    stem_a, stem_b = _file_stem(a), _file_stem(b)
+    if stem_a == stem_b:
+        return False
+    bare = _TRAILING_DIGITS.sub("", stem_a)
+    return len(bare) >= 3 and bare == _TRAILING_DIGITS.sub("", stem_b)
+
+
+def is_test_suite_file(path):
+    """A pytest module rather than a one-off script. PURE.
+
+    Restricted to `.py`, to the `test_` prefix pytest actually collects on, to `conftest.py` and to
+    a `tests/` directory. Deliberately NOT the `_test` suffix: real one-off probes get called
+    `era_test.py`, and suppressing those loses the repeats this hook exists to catch.
+    """
+    name = basename(path)
+    if not name.lower().endswith(".py"):
+        return False
+    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p]
+    return (name.startswith("test_") or name == "conftest.py"
+            or any(p in ("tests", "test") for p in parts[:-1]))
+
+
+def distinct_jobs(paths):
+    """`paths` folded to one entry per JOB a jig could replace. PURE.
+
+    Two spellings of one file are one job however many events they arrive as, and a pytest module
+    is not a job at all: this hook's own remedy is "build it once as a TESTED JIG - a script with
+    pytest cases", so a session filling up tests/ is producing the END STATE it asks for, and
+    counting that as a repeated job nudges the one behaviour it wants. A quarter of the 2689
+    script writes measured across 98 real sessions are test-suite files, and every session this
+    rule silenced had been nudged for writing a module beside its tests.
+
+    The unfolded group is still what the message shows: the model is handed evidence, so it should
+    see the files it was actually given.
+    """
+    kept = []
+    for path in paths:
+        if is_test_suite_file(path) or any(same_file(path, other) for other in kept):
+            continue
+        kept.append(path)
+    return kept
+
+
 def name_tokens(name):
     """Topic tokens from a FILENAME. PURE.
 
@@ -289,17 +381,19 @@ def _shares_text(sh, entry):
 def find_kin(path, tokens, sh, entries, rare_shared_needed):
     """Every earlier script that might be the same job. PURE - the loose RECALL filter.
 
-    Either channel is enough: topic (name plus stated purpose) catches a REWRITE, shingles catch a
-    near-COPY. Keyed by path so iterating on ONE file replaces its entry instead of counting as a
-    new variant - editing a script is not the same act as writing another one.
+    Any channel is enough: topic (name plus stated purpose) catches a REWRITE, shingles catch a
+    near-COPY, a numbered stem catches the retry that says so in its own filename. Keyed by file
+    so iterating on ONE script replaces its entry instead of counting as a new variant - editing a
+    script is not the same act as writing another one.
     """
     df = _document_frequency(entries)                 # once, not per candidate: this is a hot path
     kin = []
     for entry in entries:
-        if entry.get("p") == path:
+        if same_file(entry.get("p"), path):
             continue
         if (_shares_topic(tokens, entry, df, len(entries), rare_shared_needed)
-                or _shares_text(sh, entry)):
+                or _shares_text(sh, entry)
+                or numbered_retry(path, entry.get("p"))):
             kin.append(entry)
     return kin
 
@@ -335,7 +429,7 @@ def _save(session, state):
 
 
 def _record(state, path, script_purpose, tokens, sh, mutates):
-    entries = [e for e in state.get("entries") or [] if e.get("p") != path]
+    entries = [e for e in state.get("entries") or [] if not same_file(e.get("p"), path)]
     entries.append({"p": path, "d": script_purpose, "t": sorted(tokens),
                     "s": [list(x) for x in sorted(sketch(sh))], "m": bool(mutates)})
     state["entries"] = entries[-LEDGER_LIMIT:]
@@ -356,9 +450,15 @@ def budget_allows(state, track, written):
 
 
 def should_nudge(group, covered, state, track, written):
-    """The whole firing rule, in one PURE place: enough scripts, enough of them NEW, budget left."""
-    fresh = [p for p in group if p not in covered]
-    return (len(group) >= VARIANTS_BEFORE_NUDGE
+    """The whole firing rule, in one PURE place: enough JOBS, enough of them NEW, budget left.
+
+    Counted in JOBS rather than paths, because a group of three has to be three attempts at one
+    job before it is worth a word: two spellings of one file are one of them, and a pytest module
+    is none.
+    """
+    jobs = distinct_jobs(group)
+    fresh = distinct_jobs([p for p in group if not any(same_file(p, seen) for seen in covered)])
+    return (len(jobs) >= VARIANTS_BEFORE_NUDGE
             and len(fresh) >= FRESH_SCRIPTS_PER_NUDGE
             and budget_allows(state, track, written))
 
