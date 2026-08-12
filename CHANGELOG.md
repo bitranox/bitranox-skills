@@ -17,6 +17,31 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.196.0] - 2026-08-12
+
+### Added
+
+- **`meta-skill-writer` now states that an inert probe agent type bounds an agent's TOOLS, not its
+  CONTEXT, and what to do when that voids a RED.** The "Watch for baseline contamination" section
+  covered injected context arriving from a recall hook or a RAG layer, and its isolation ladder
+  assumes a retrieval setting an author can wall off. It did not cover the form that has no such
+  switch: a dispatched subagent inherits the dispatching session's CLAUDE.md cascade and
+  always-loaded memory index, so stripping Bash, Read and Write stops the agent exploring its way
+  to an answer but not already knowing it. When the lesson under test is already recorded there,
+  the behavioural RED cannot fail honestly, and re-running it only reshuffles which arm wins.
+
+  This is the ordinary case rather than an exotic one: a self-improve loop records the lesson in
+  the memory store first and contributes it to the skill later, so the lesson is already in the
+  always-loaded index by the time anyone RED-tests the change. The reference file now prescribes
+  checking the cascade and store BEFORE trusting a RED, and gives two honest routes when the lesson
+  is already inherited - make the coverage check against the skill FILE the evidence (a fact about
+  the artifact, which inherited context cannot forge, with the negative gated on a control pattern
+  known to appear), or de-telegraph a behavioural arm into a domain that text does not teach - with
+  the review artifact required to record which route was taken. It also states that a RED which
+  does not flip is a legitimate, reportable outcome rather than a reason to escalate into
+  progressively harder scenarios until something fails. `SKILL.md` carries the rule in short form
+  in its RED phase and adds the matching RED-phase checklist item.
+
 ## [5.195.1] - 2026-08-12
 
 ### Fixed

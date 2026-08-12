@@ -96,6 +96,40 @@ Isolate it before you trust a passing baseline, cheapest first:
 A baseline you cannot isolate is not evidence. Say so in the review artifact rather than counting
 it as a pass.
 
+**The commonest form of route 2 is INHERITED context, and an inert probe type does not close it.**
+A dispatched subagent inherits the always-loaded context of the session that dispatched it: the
+CLAUDE.md cascade, plus any always-loaded memory or rules index on the machine it runs on. A probe
+agent type that strips Bash, Read and Write bounds what the agent can GO AND FIND OUT. It does not
+bound what it ALREADY KNOWS, and such a probe still answers machine-specific rules, examples
+included, straight from its startup context.
+
+Treat this as the ordinary case, not an exotic one. A self-improve loop records the lesson in the
+machine's memory store FIRST and contributes it to the skill LATER, so by the time anyone RED-tests
+the skill change, the lesson is already in the always-loaded index by construction. The symptom is
+two arms of the SAME pre-change text disagreeing: one never reaches for the technique, the other
+reaches for it and cites the stored rule by name.
+
+**So before trusting a RED, check whether the lesson is already in the CLAUDE.md cascade or the
+memory store on this machine.** If it is, the behavioural RED is not evidence and must not be
+reported as one. It cannot fail honestly, and re-running it only reshuffles which arm wins.
+
+Two honest routes when it IS already inherited. The review artifact must say which one you took:
+
+1. **Make the COVERAGE check the evidence.** Verify against the skill FILE that the guidance is
+   absent. That is a fact about the artifact you are about to change, so inherited context cannot
+   forge it. Gate the negative on a control pattern you know appears in those files, so a check
+   that never really looked reports BROKEN rather than ABSENT - `bitranox:compuse-toolbox` ships
+   such a checker. A PRESENT verdict ends the job: the guidance already ships, so there is nothing
+   to add.
+2. **De-telegraph a behavioural arm into a domain the cascade does NOT teach.** Choose that domain
+   with the same check, run against the cascade and the store instead of the skill. Restate the
+   trap in a subject they are silent on, and keep the scenario from naming or pre-diagnosing it. A
+   scenario that carries its own answer measures the prompt, not the skill.
+
+**A RED that does not flip is a legitimate, reportable outcome.** Record it as one. Do not escalate
+into progressively harder scenarios until something finally fails - that manufactures a RED to
+match your intuition instead of measuring one.
+
 **Example:**
 
 ```markdown
