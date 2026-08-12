@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.180.1] - 2026-08-12
+
+### Changed
+
+- **`compuse-ssh` skill**: `ssh -t` allocates a pty only when the CLIENT's own stdin is a terminal,
+  so from a pipe, an editor run-shell or an unattended job runner remote interactive `sudo` has no
+  tty to prompt on and fails as repeated `Permission denied`, reading as a wrong password. ssh's own
+  prompt still works there (it reads `/dev/tty`), which makes "the login works but `sudo` does not"
+  the identifying signal rather than a second route - the no-password rule still binds. Added the
+  companion bootstrap path: behind Ubuntu's default `PermitRootLogin prohibit-password` a root key
+  is accepted but a root password refused, so install the key into the sudo user's OWN
+  `authorized_keys` (no `sudo`, no `-t`) or paste it at the console.
+
 ## [5.180.0] - 2026-08-12
 
 ### Added
