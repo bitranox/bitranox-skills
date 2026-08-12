@@ -75,6 +75,43 @@ def run_bash(monkeypatch, cwd, command="cat > doc.md"):
     return H.main()
 
 
+def test_a_git_command_that_rewrites_the_tree_is_skipped(tmp_path, monkeypatch):
+    """Verify markdown restamped by a git operation is left alone.
+
+    checkout, merge, rebase and friends rewrite tracked files wholesale, so every
+    markdown they touch looks just-written to an mtime scan. Reformatting there is
+    never what the operator asked for, and doing it MID-OPERATION is destructive:
+    a `git merge` mid-sequence aborted with "your local changes would be
+    overwritten" because the hook had modified the very files the next merge
+    needed, leaving a half-assembled branch.
+    """
+    for command in (
+        "git merge --no-ff --no-edit origin/topic",
+        "git checkout -B integration upstream/main",
+        "cd /repo && git rebase --onto main base",
+        "git -C /repo pull --ff-only",
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text(MISALIGNED, encoding="utf-8")
+        assert run_bash(monkeypatch, tmp_path, command=command) == 0
+        assert f.read_text(encoding="utf-8") == MISALIGNED, command
+
+
+def test_a_read_only_git_command_still_realigns(tmp_path, monkeypatch):
+    """Verify the skip is scoped to git commands that WRITE the working tree.
+
+    `git log`/`status`/`diff` change nothing, so a markdown file written beside
+    them in the same command is the operator's, and skipping it would quietly
+    give back the gap the Bash fallback exists to close.
+    """
+    f = tmp_path / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path, command="git log --oneline -1 > doc.md") == 0
+
+    assert "| longer | z   |" in f.read_text(encoding="utf-8")
+
+
 def test_a_table_written_by_bash_is_realigned(tmp_path, monkeypatch):
     """Verify the formatter reaches markdown a shell command wrote.
 

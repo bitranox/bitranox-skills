@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.179.5] - 2026-08-12
+
+### Fixed
+
+- **`reformat-md-tables` hook**: the Bash fallback no longer fires for a git command that
+  rewrites the working tree (`checkout`, `switch`, `merge`, `rebase`, `pull`, `clone`, `reset`,
+  `stash`, `cherry-pick`, `revert`, `am`, `apply`, `restore`, `worktree`). Those rewrite tracked
+  files wholesale, so every markdown they touch gets a fresh mtime and reads as just-written to
+  an mtime scan, though none of it was authored by the operator. Reformatting there is never what
+  was asked for, and it is destructive rather than cosmetic: a `git checkout -B` restamped four
+  Guide docs, the hook realigned their tables, and the next `git merge` in the same re-cut aborted
+  with "your local changes would be overwritten", leaving a half-assembled integration branch.
+  Read-only git (`log`, `status`, `diff`) still allows the fallback, since a doc written beside it
+  is the operator's. This is the second half of the 5.158.2 fix, which stopped the fallback
+  descending into a nested repository but not this.
+
 ## [5.175.1] - 2026-08-11
 
 ### Fixed
