@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.186.0] - 2026-08-12
+
+### Changed
+
+- **`meta-audit-local-skills-and-hooks` skill** (`audit_local.py` / `harness_checks.uncollectable_tests`):
+  the `check` path no longer reports `[tests-uncollectable] pytest not installed - collection
+  unverified` whenever the CHECKER's OWN launching interpreter lacks pytest - that message
+  described the tool's environment, not the target, and rendered an unmeasured result as if it
+  were a measurement. It now falls back to `uv run --with pytest python -m pytest` (uv is already
+  required to launch this script), so a target's tests are actually collected before anything is
+  reported. Three outcomes are now kept apart under distinct labels: a real collection failure is
+  still `tests-uncollectable`; a clean collection reports nothing at all; and the check itself
+  being unable to run (the uv fallback also unavailable, or timing out) is a new, separately
+  labelled `tests-unmeasured` finding that can never be mistaken for a defect in the target.
+  Verified against this repo's own skills under a system interpreter with no pytest installed: a
+  healthy tree now reports zero collection findings (previously 3 false positives), and a
+  deliberately broken tests dir is still caught, with the real import error, through the same
+  fallback path.
+
 ## [5.185.0] - 2026-08-12
 
 ### Changed

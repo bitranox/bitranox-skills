@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import types
 
 import pytest
 
@@ -431,6 +432,98 @@ def test_uncollectable_tests_is_quiet_for_an_empty_dir(tmp_path):
     tests = tmp_path / "tests"
     tests.mkdir()
     assert hc.uncollectable_tests(tests) == []
+
+
+# --- the uv fallback, for when the launching interpreter itself lacks pytest -------------------
+#
+# `run` and `resolve_uv` are the real seams: the two collaborators uncollectable_tests reaches
+# outside itself (a subprocess, a PATH lookup). Injecting fakes here exercises the actual
+# decision logic instead of monkeypatching subprocess.run or shutil.which inside the module.
+
+def _missing_pytest():
+    return types.SimpleNamespace(returncode=1, stdout="",
+                                 stderr="ModuleNotFoundError: No module named pytest")
+
+
+def _clean_collection():
+    return types.SimpleNamespace(returncode=0, stdout="3 tests collected\n", stderr="")
+
+
+def _fake_pytest_run(*outcomes):
+    """A `run` fake that returns (or raises) each of `outcomes` in call order, and records every
+    call so a test can prove the fallback actually fired rather than being skipped."""
+    remaining = list(outcomes)
+    calls = []
+
+    def run(argv, timeout):
+        calls.append((list(argv), timeout))
+        outcome = remaining.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    run.calls = calls
+    return run
+
+
+def test_uncollectable_tests_falls_back_to_uv_when_the_launching_interpreter_lacks_pytest(tmp_path):
+    """The checker's own interpreter missing pytest must not end the check: it retries under
+    `uv run --with pytest`, and a clean collection there means no finding at all - the target was
+    actually measured, not guessed at."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_ok.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    run = _fake_pytest_run(_missing_pytest(), _clean_collection())
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv")
+    assert problems == []
+    assert len(run.calls) == 2, "the uv fallback must actually run, not just get considered"
+    fallback_argv = run.calls[1][0]
+    assert fallback_argv[:4] == ["/usr/bin/uv", "run", "--with", "pytest"]
+
+
+def test_uncollectable_tests_uv_fallback_still_reports_a_real_collection_failure(tmp_path):
+    """A target whose tests genuinely fail to collect must still be a finding after the fallback -
+    the fallback answers the question honestly, it does not launder a real defect into a pass."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    broken = types.SimpleNamespace(
+        returncode=2, stdout="", stderr="ERROR tests/test_broken.py\nE   ImportError: nope\n")
+    run = _fake_pytest_run(_missing_pytest(), broken)
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv")
+    assert len(problems) == 1
+    path, _message, unmeasured = problems[0]
+    assert "test_broken" in path
+    assert unmeasured is False
+
+
+def test_uncollectable_tests_reports_unmeasured_not_a_finding_when_uv_fallback_times_out(tmp_path):
+    """A timeout in the fallback is neither "collects fine" nor "pytest missing" - it is a
+    distinct, honestly-labelled failure of the CHECK itself, not a defect of the target."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_ok.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    run = _fake_pytest_run(_missing_pytest(), subprocess.TimeoutExpired(cmd=["uv"], timeout=240))
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: "/usr/bin/uv")
+    assert len(problems) == 1
+    _path, message, unmeasured = problems[0]
+    assert unmeasured is True
+    assert "timed out" in message
+    assert "collects fine" not in message and "not installed" not in message
+
+
+def test_uncollectable_tests_reports_unmeasured_when_uv_is_not_on_path(tmp_path):
+    """When the fallback itself is unavailable (no uv on PATH), say so accurately instead of
+    repeating the plain "pytest not installed" line as if nothing else had been tried."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_ok.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    run = _fake_pytest_run(_missing_pytest())
+    problems = hc.uncollectable_tests(tests, run=run, resolve_uv=lambda: None)
+    assert len(problems) == 1
+    _path, message, unmeasured = problems[0]
+    assert unmeasured is True
+    assert "uv" in message.lower()
+    assert len(run.calls) == 1, "must not shell out to a fallback with nothing to run it"
 
 
 # --- unmanaged twins ----------------------------------------------------------------------------
