@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.183.0] - 2026-08-12
+
+### Added
+
+- **`process-review-verification-before-completion` skill**: new "Failure class resolved" row in
+  the Common Failures table plus a "Fail-fast gates (unmasking)" Key Pattern. A gate that aborts at
+  the first error (rustc, most compilers, staged pipelines, a fail-fast test runner) hides every
+  failure after it - fixing the first only lets the gate run far enough to expose the second, it
+  does not prove the second is fixed too. Re-run the gate itself and require its own green line
+  before reporting a failure class resolved, instead of extrapolating from a model of the cause to
+  "all N items are fixed."
+
 ## [5.182.0] - 2026-08-12
 
 ### Added
