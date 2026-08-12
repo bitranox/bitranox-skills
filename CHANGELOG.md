@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.185.0] - 2026-08-12
+
+### Changed
+
+- **`strip_typographic_tells.py` hook script** (used by `write-humanize-en`/`-de` and the
+  tell-sweep repair path): a SPACED em dash now normalizes straight to ` - ` instead of leaving
+  the doubled-space residue `  -  `. The em-dash family (U+2014, U+2E3A, U+2E3B) left the
+  `str.translate` table, which can only emit a fixed string, and moved to a context-aware pass
+  that reuses the space already beside the dash. The residue was documented as a manual tidy step
+  and the same normalization was hand-rolled twice in one session after the script had run.
+  Deliberate limits, each with a test: the whitespace class is `[ \t]`, never `\s`, so a dash at
+  end of line can never join two lines; whitespace against a newline is neither consumed nor
+  created, so leading indentation and a markdown hard line break (two trailing spaces) survive
+  byte-identical; only ONE space per side is reused, so a wider run stays as it is, which keeps a
+  padded table cell and an aligned trailing comment at their original width. The other dashes
+  (U+2010, U+2011, U+2012, U+2013, U+2015, U+2212) still become a bare hyphen with the text's own
+  spacing untouched. Verified on the repo's own markdown: injecting a spaced em dash at every
+  spaced hyphen that sits outside code, in skill docs and in real table cells, then running the
+  script restores every file byte-identical, and a second run is a no-op.
+
 ## [5.184.0] - 2026-08-12
 
 ### Added
