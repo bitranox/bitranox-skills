@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.198.1] - 2026-08-13
+
+### Changed
+
+- **`infra-windows-servicing` now says HOW to verify the platform property it asks you to check.**
+  The apply-reboot section tells the reader to establish whether a guest-initiated reboot really
+  restarts the guest or tears the VM down, which a GREEN re-run flagged as unanswerable from the
+  text. It now names the signal: read the VM process identity across an ordinary in-guest reboot -
+  a genuine restart keeps the same hypervisor process, a teardown returns a new one - and says to
+  do it once, in advance, on any guest. That was the signal that actually diagnosed the original
+  incident. The re-run also confirmed the rescoped wording reads as a condition rather than a
+  prohibition: asked whether the text forbids in-guest reboots, the reader answered no and quoted
+  the sentence that decides it.
+
 ## [5.198.0] - 2026-08-13
 
 ### Added
