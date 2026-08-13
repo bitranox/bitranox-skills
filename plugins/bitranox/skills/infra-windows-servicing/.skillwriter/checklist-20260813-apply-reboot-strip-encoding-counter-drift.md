@@ -10,7 +10,7 @@ RED arms were chosen by damage prevented, not by coverage:
 
 | Arm | Finding                                      | Damage a reader avoids                         |
 |-----|----------------------------------------------|------------------------------------------------|
-| A   | apply reboot from the hypervisor; NewOS gone | a completed in-place upgrade reverted entirely |
+| A   | interrupted apply; NewOS gone after a revert | a completed in-place upgrade reverted entirely |
 | B   | strip pass through an ASCII layer, no gate   | the mirror empties the live OS                 |
 | C   | live counter drift read as an escape         | a good machine restored over a clean delete    |
 
@@ -168,3 +168,29 @@ NOT re-run: the RED/GREEN arms against the corrected text. The correction REMOVE
 rather than adding one, so the failure mode it could introduce is a reader doing nothing special -
 which is the pre-existing behaviour, not a regression. Re-testing is worth doing if this section is
 touched again.
+
+## GREEN re-run against the FINAL wording (2026-08-13)
+
+The correction above was made after the original GREEN, so the shipped subsection had not been
+tested as written. Re-run with an inert text-only agent, same shift-log framing, four questions,
+and the excerpt as the only input:
+
+- Q1 (what next): chose the hypervisor stop/start, and gave the reason as not knowing this
+  platform's behaviour - the cautious default without treating it as a rule.
+- Q2 (revert with 0x0): read it as the down-level having succeeded and the apply cut off; next
+  check was WHY, including whether a guest reboot tears the VM down here.
+- Q3 (bcdedit shortcut): refused it, cited NewOS being deleted, ran the winload.efi gate to RERUN.
+- Q4, the load-bearing one ("a colleague says you must NEVER reboot from inside the guest - is
+  that what this says?"): answered NO and quoted the deciding sentence verbatim, "NOT a general
+  rule that in-guest reboots are unsafe".
+
+So the rescoped text does not read as a prohibition and a reader can point at what says so.
+
+GREEN gap closed: it noted the text tells you to verify a platform property but never how. Added
+the VM PROCESS identity check across an ordinary in-guest reboot - same hypervisor process means a
+real restart, a new one means a teardown - with the instruction to do it once, in advance, on any
+guest. That was the signal actually used to diagnose the original incident.
+
+Gaps declined: the excerpt not naming the hypervisor (the text gives the Proxmox form explicitly
+and the surrounding skill is platform-neutral by design), and what to read in Panther when the
+reboot was already clean (that is the general Panther material, not this failure).

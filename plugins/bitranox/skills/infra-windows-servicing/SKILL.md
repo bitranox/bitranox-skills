@@ -351,7 +351,11 @@ host-side check reads normal, and only the console shows the revert, as "undoing
 ("Vorgenommene Aenderungen werden rueckgaengig gemacht").
 
 On a VM, check ONE THING about your platform before the apply: does a guest-initiated reboot
-genuinely restart the guest, or does it tear the VM down? Where it tears the VM down, an in-guest
+genuinely restart the guest, or does it tear the VM down? Read the VM PROCESS identity across an
+ordinary in-guest reboot - a genuine restart keeps the same hypervisor process, a teardown returns
+a NEW one (on Proxmox VE, the PID column of `qm list`). Do it once, on any guest, well before you
+need it; it costs a reboot and it is the only signal that separates the two, since the VM is
+running afterwards either way. Where it tears the VM down, an in-guest
 `shutdown /r` cuts the apply off mid-write and produces exactly the revert above; use the
 hypervisor's clean stop plus start instead, since the boot entry lives in BCD ON DISK and survives
 that. This is a property of the platform to verify once, NOT a general rule that in-guest reboots
@@ -487,5 +491,5 @@ unmeasured.
 - Reading `cleanmgr`'s exit code. It returns 0 while silently declining the "Previous
   Installations" handler under a non-interactive session. Check the directory.
 - Hard-stopping a guest mid-update. That is how component stores get damaged in the first place.
-  A clean ACPI stop from the hypervisor is not this, and is the correct way to apply an upgrade
-  staged with `/noreboot`.
+  A clean ACPI stop is not this: the prohibition is on cutting the guest off mid-write, not on
+  stopping it at all.
