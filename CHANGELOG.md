@@ -17,6 +17,70 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.198.0] - 2026-08-13
+
+### Added
+
+- **`infra-windows-servicing` now covers the apply reboot, which is where an in-place upgrade on a
+  VM is most easily thrown away.** `setup.exe /noreboot` arms a one-shot BCD `bootsequence`
+  pointing at the staged `NewOS`, and the second stage runs only if the machine boots that entry.
+  An interrupted apply reverts the WHOLE upgrade, not just the interrupted step - after a
+  down-level that logged `[Setup360Result]=[0x0]`. That `0x0` is the diagnostic the section is
+  built around: it says the down-level SUCCEEDED, so a revert carrying it means the apply was cut
+  off and the reboot is what to investigate, not the upgrade. Nothing else announces it as a reboot
+  problem: on a VM the machine runs afterwards and every host-side check reads normal.
+
+  Where a guest-initiated reboot tears the VM down instead of restarting it, an in-guest
+  `shutdown /r` produces exactly that revert, and the hypervisor's clean stop plus start avoids it.
+  That is written as a property of the platform to verify ONCE, deliberately NOT as a rule that
+  in-guest reboots are unsafe - it was one host's temporary behaviour and was later fixed there.
+  The prohibition on a HARD stop mid-servicing stays unconditional and distinct from it, because
+  the old "do not hard-stop a guest mid-update" line was itself an argument for rebooting from
+  inside.
+
+  It also states that a rollback DELETES the staged `NewOS`, so re-arming the boot entry - the
+  tempting two-minute fix - boots into nothing. The existence check on the staged `winload.efi` is
+  named as the decision between re-arming and re-running the whole down-level, and the diagnostic
+  order under "A clean health check" now says it does not apply to this failure, since a reverted
+  upgrade did not fail there and none of those reads show anything.
+
+- **The `Windows.old` reparse-point strip must not pass through an ASCII layer, and must be
+  re-counted.** Emitting one removal per link into a `.cmd` batch mangles non-ASCII names, and on
+  a localised install those are the names that matter: measured on a German guest, 48 of 51 links
+  were removed and the 3 survivors all pointed into the live OS. A strip pass that silently skips
+  exactly the dangerous links is worse than none, because the mirror that follows assumes it
+  worked. The strip now runs in-process, reports each survivor by name, and gates the mirror on a
+  fresh enumeration rather than on the loop's own tally.
+
+- **Blast-radius verification splits into strict and tolerant counters.** A live `C:\ProgramData`
+  recursive FILE count drifts unprompted - measured 147707 to 147709 over 60 idle seconds - so
+  comparing it with strict inequality manufactures an ESCAPED verdict on a clean delete, whose
+  remedy is destroying a good machine. Four counters stay strict; that one takes `max(50, 1%)`.
+  The tolerance costs no detection because a real escape is never subtle (`ProgramData` 21 dirs to
+  18, `Users\Default` 29 entries to 0). Each row now returns a verdict rather than a number, and
+  the skill adds two cheap corroborations: a build-matched healthy peer, and sshd still serving as
+  the canary that dies within seconds of a real escape.
+
+- **Monitoring gains the failure modes that make a healthy guest look stuck.** An in-place upgrade
+  replaces `C:\Windows`, so a monitor staged under `C:\Windows\Temp` is deleted by the very event
+  it waits for, and `powershell -File <deleted>` prints a banner and exits 0 - two guests reached
+  the target build while the monitor reported an unknown build for 90 minutes. The skill now reads
+  build and armed-state cmd-natively from the registry and BCD, and notes `UBR` returns hex.
+  Alongside it: `wmic` is gone in 25H2 and returns EMPTY rather than an error, so an inventory step
+  reports a machine with no disks; a check must report "cannot read" separately from "not armed",
+  or an unreachable guest reads as a clean negative; and a wrapper's failure verdict is not the
+  guest's - one reported its worker wrote no verdict while the guest's own log had recorded success
+  two minutes earlier, because a failed READ and an absent marker were indistinguishable to it.
+
+  The monitoring section's existing "use a tolerance, never exact equality" line is now scoped to
+  stall detection explicitly, since it otherwise reads as governing the blast-radius counters,
+  four of which are strict.
+
+- **A third measured `Windows.old` delete joins the duration figures**: 58.7 min, 33.98 GB to
+  54.13 GB free, so 20.15 GB reclaimed, `robocopy` exiting `rc=2`. Three runs of one procedure now
+  span a 6x range with nothing wrong in any of them, and the existing point stands that an exit in
+  the 0-7 band says nothing about whether the run stayed inside the tree.
+
 ## [5.197.0] - 2026-08-12
 
 ### Added
