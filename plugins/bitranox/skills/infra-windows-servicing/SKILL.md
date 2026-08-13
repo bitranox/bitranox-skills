@@ -1,6 +1,6 @@
 ---
 name: infra-windows-servicing
-description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a long servicing job looks hung, or an in-place repair upgrade is being planned or run.
+description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), an in-place upgrade reverts itself on the apply reboot ("undoing changes", "Vorgenommene Aenderungen werden rueckgaengig gemacht"), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a long servicing job looks hung, or an in-place repair upgrade is being planned or run.
 ---
 
 # Windows servicing and repair: the traps
@@ -24,6 +24,11 @@ do not tell you.
 | Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                      |
 | Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                   |
 | Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size    |
+| Upgrade reverts on reboot, down-level was `0x0` | the upgrade failed, retry it      | **the apply was cut off** - `0x0` says the down-level was fine, so check the reboot |
+| Monitor reports an unknown build for hours      | the upgrade is stuck              | **the monitor was deleted** - it was staged under a path the upgrade replaces       |
+| `wmic` prints nothing at all                    | the machine has no such objects   | **`wmic` is removed in 25H2** - it returns EMPTY, not an error                      |
+| A wrapper says the job wrote no verdict         | the job failed                    | **a failed READ of the log** - ask the guest, whose log may say success             |
+| Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree    |
 
 ## A clean health check does not mean an update will install
 
@@ -44,6 +49,10 @@ DISM /Online /Cleanup-Image /ScanHealth /LogPath:C:\Temp\scan.log               
 `0x80070070` / `ERROR_DISK_FULL` in those logs is the headroom fault. `ScanHealth` comes third
 and only weakens or strengthens the corruption hypothesis - running it first is what leads to
 treating a clean result as "not corruption, so look elsewhere" and missing the space.
+
+This order is for an update that FAILED. An in-place upgrade whose down-level phase logged
+`[Setup360Result]=[0x0]` and which then reverted on the reboot did not fail here, and none of
+these three reads will show anything: see "An interrupted apply reverts the WHOLE upgrade".
 
 Two distinct faults present identically as "the update fails and rolls back". Measured across a
 17-machine fleet: two machines had a corrupt store, the rest simply had no room. A survey that
@@ -153,8 +162,16 @@ directory symlink removes the link, never its target:
 
 ```powershell
 # 1. remove every reparse point in the tree - THIS is what makes the mirror safe, not /XJ
-Get-ChildItem C:\Windows.old -Recurse -Directory -Force -Attributes ReparsePoint -EA SilentlyContinue |
-    ForEach-Object { cmd /c rd /q "`"$($_.FullName)`"" }
+$rp = @(Get-ChildItem C:\Windows.old -Recurse -Directory -Force -Attributes ReparsePoint -EA SilentlyContinue)
+foreach ($d in $rp) {
+    # recurse:$false removes the link ENTRY and never descends into the target, same as rd /q
+    try { [System.IO.Directory]::Delete($d.FullName, $false) }
+    catch { Write-Warning "LEFT: $($d.FullName) - $($_.Exception.Message)" }
+}
+
+# 1b. GATE: re-enumerate and abort if any survived. Do not trust the loop's own tally.
+$left = @(Get-ChildItem C:\Windows.old -Recurse -Directory -Force -Attributes ReparsePoint -EA SilentlyContinue)
+if ($left.Count) { $left.FullName; throw "$($left.Count) reparse point(s) remain - the mirror is NOT safe" }
 
 # 2. now the purge cannot leave the tree
 $empty = Join-Path $env:TEMP ([guid]::NewGuid())
@@ -162,6 +179,21 @@ New-Item -ItemType Directory $empty | Out-Null
 robocopy $empty C:\Windows.old /MIR /XJ /R:0 /W:0 /MT:16 /NFL /NDL /NJH /NP
 cmd /c rd /s /q C:\Windows.old               # removes the emptied shell
 ```
+
+**Do the removals in-process. Never write those paths through an ASCII layer.** Emitting one
+removal line per link into a `.cmd` batch mangles every non-ASCII name, and on a localised install
+the interesting names are exactly the non-ASCII ones. Measured on a German guest: of 51 reparse
+points 48 were removed and 3 SURVIVED - `Zubehoer` and two `Startmenue`, whose real names carry
+umlauts - and all three pointed INTO the live OS:
+
+```
+Windows.old\Program Files\Windows NT\<Accessories, localised>  ->  C:\Program Files\Windows NT\Accessories
+Windows.old\Users\<user>\<Start Menu, localised>               ->  C:\Users\<user>\AppData\Roaming\Microsoft\Windows\Start Menu
+```
+
+A strip pass that silently skips exactly the dangerous links is WORSE than no strip pass, because
+the mirror that follows assumes it worked. That is what step 1b is for: it re-counts rather than
+believing the pass, and it names each survivor instead of reporting a bare number.
 
 **Prove it did not escape, every time.** Count the link TARGETS before and after. Equal counts are
 the evidence; "the delete finished" and "robocopy exited 0-7" are not, because this failure reports
@@ -175,9 +207,36 @@ success. Run this before step 1 and again after step 2:
    Pub   = @(Get-ChildItem 'C:\Users\Public\Desktop' -Force -EA SilentlyContinue).Count }
 ```
 
-Any count lower afterwards means it escaped: restore the guest from the snapshot taken above
-(hypervisor snapshot, VSS, whatever the platform provides - take it while the guest is stopped or
+**Four of the five are STRICT; one CHURNS on its own and needs a tolerance.** A live `C:\ProgramData`
+gains and loses files with nothing touching it: measured 147707 to 147709 over 60 IDLE seconds. Compare
+that counter with strict inequality and you manufacture an ESCAPED verdict on a clean delete, and the
+remedy for ESCAPED is destroying a good machine.
+
+| Counter                 | Comparison                     | Why                                           |
+|-------------------------|--------------------------------|-----------------------------------------------|
+| `PD` ProgramData dirs   | STRICT - any drop is an escape | install points; runtime never adds or removes |
+| `Ssh` ssh key files     | STRICT                         | host keys; never churns                       |
+| `Deflt` Users\Default   | STRICT                         | template profile; Windows does not write it   |
+| `Pub` Public\Desktop    | STRICT                         | changes only on an explicit admin action      |
+| `PDf` ProgramData files | TOLERANT - allow `max(50, 1%)` | drifts unprompted on a live machine           |
+
+The tolerance costs no detection, because **an escape is never subtle**. In the real one, `PD` went
+21 dirs to 18 and `Users\Default` went 29 entries to 0. Nothing about that needs a fine threshold.
+
+Each row returns a VERDICT, not just a number. A `PDf` move inside the tolerance is NOT an escape
+and is not a reason to hesitate: say so and move on. Treating it as an amber signal to weigh is how
+a clean delete still ends up restored from a snapshot.
+
+Read a STRICT drop as escaped: restore the guest from the snapshot taken above (hypervisor
+snapshot, VSS, whatever the platform provides - take it while the guest is stopped or
 filesystem-frozen). Do not try to repair `C:\ProgramData` in place.
+
+Two cheap corroborations before you act on a verdict that expensive. Compare against a
+BUILD-MATCHED healthy peer rather than against the counter alone, so you can tell this machine's
+normal from a loss. And check the machine still serves SSH: `C:\ProgramData\ssh` is inside the
+blast radius, so sshd is the canary and it dies within seconds of a real escape. A delete whose
+structure matches a healthy peer, whose sshd is still answering, and which had zero reparse points
+before the mirror, did not escape - an escape was structurally impossible.
 
 `rd /s /q` and `Remove-Item -Recurse -Force` are safe on their own for the same reason (they
 delete a link entry without descending) and need no strip pass - use them when speed does not
@@ -206,6 +265,11 @@ expectation from unique data, and never promise the byte total as free space.
 **Time scales with FILE COUNT, not size.** Those two runs differed by 1.1x in bytes, 3.5x in file
 count, and 6.2x in elapsed time (13.3 min against 83.0 min), with no permission work in either.
 Count the files before estimating; a tree of comparable size can take six times longer.
+
+A third measured run lands between them: the mirror of an emptied tree ran 58.7 min and took free
+space from 33.98 GB to 54.13 GB, so 20.15 GB came back. `robocopy` exited `rc=2`. That is a normal
+exit in the 0-7 band and it says nothing about whether the run stayed inside the tree - read the
+counters, not the code.
 
 ## A SYSTEM task can have LESS access than an admin session
 
@@ -264,6 +328,65 @@ OS". `/dynamicupdate disable` keeps the run reproducible. On a CPU not on the su
 `HKLM\SYSTEM\Setup\MoSetup` - which is NOT the LabConfig `Bypass*Check` family and leaves TPM and
 Secure Boot enforcement intact.
 
+### An interrupted apply reverts the WHOLE upgrade
+
+`/noreboot` arms a ONE-SHOT BCD `bootsequence` pointing at
+`\$WINDOWS.~BT\NewOS\...\winload.efi`. The second stage runs only if the machine boots that entry,
+and it is interruptible: cut it off partway and Windows reverts the entire upgrade, not just the
+interrupted step.
+
+**Read the down-level result before concluding the upgrade failed.** Measured on a reverted guest:
+
+```
+Overall progress: [100%]
+Finalize: Reporting result value: [0x0]
+[Setup360Result] = [0x0]                 # and registry RollbackCount = 1, InstallAttempts = 1
+```
+
+`Setup360Result = 0x0` means the down-level SUCCEEDED. A revert carrying `0x0` therefore says the
+APPLY was cut off, so investigate how the machine rebooted rather than re-diagnosing the upgrade -
+which is exactly where the obvious reading sends you. The whole point of the grep is that nothing
+else announces this as a reboot problem: on a VM the machine is running afterwards, so every
+host-side check reads normal, and only the console shows the revert, as "undoing changes made"
+("Vorgenommene Aenderungen werden rueckgaengig gemacht").
+
+On a VM, check ONE THING about your platform before the apply: does a guest-initiated reboot
+genuinely restart the guest, or does it tear the VM down? Where it tears the VM down, an in-guest
+`shutdown /r` cuts the apply off mid-write and produces exactly the revert above; use the
+hypervisor's clean stop plus start instead, since the boot entry lives in BCD ON DISK and survives
+that. This is a property of the platform to verify once, NOT a general rule that in-guest reboots
+are unsafe - it was one host's temporary behaviour and it was later fixed there. On Proxmox VE the
+hypervisor form is:
+
+```
+qm shutdown <vmid>      # ACPI - the OS closes cleanly and flushes
+qm status <vmid>        # wait for: stopped
+qm start <vmid>         # fresh boot, honours the one-shot bootsequence
+```
+
+What no platform survives is being cut off mid-write - so **never a hard stop** (`qm stop` and its
+equivalents), unconditionally. That is the documented way component stores get damaged, and the
+store is the thing under repair.
+
+**A rollback DELETES the staged NewOS, so re-arming the boot entry boots into nothing.** Measured
+on a reverted guest: `$WINDOWS.~BT` still present (10.3 GB, 1567 files) but `$WINDOWS.~BT\NewOS`
+ABSENT, the one-shot entry consumed, build back at its original value. Re-arming with `bcdedit` is
+the tempting two-minute fix and it is a dead end. **This check is the decision, not a formality:**
+
+```
+if exist "C:\$WINDOWS.~BT\NewOS\Windows\System32\winload.efi" (echo REARMABLE) else (echo RERUN)
+```
+
+Present: re-arm and boot it. Absent: re-run the entire down-level from `setup.exe`. After a
+rollback it is always the latter.
+
+Before spending those hours again, settle WHY it reverted, because the re-run only helps if the
+reboot was the cause. If the apply reboot was guest-initiated AND you have confirmed that route
+tears the VM down on this platform, that is the cause and rebooting the other way fixes it. If the
+reboot was already a clean stop/start, or the in-guest route restarts the guest properly here, do
+not re-run blind - the revert has some other cause, and the down-level's own Panther log is where
+it is recorded, not in the reads under "A clean health check".
+
 ## Monitoring: what a quiet log means
 
 DISM's log path is **per-invocation**. A step that omits `/LogPath` falls back to the default
@@ -277,9 +400,43 @@ Watch phase markers plus worker CPU, never disk delta or log size - both go flat
 stretches during real work. Choose a log by `LastWriteTime`, never by size: size correlates with
 age, so "biggest" actively selects the stalest file. Print the chosen path with its age.
 
-Keep one non-log signal. When comparing a counter across samples use a tolerance, never exact
-equality - a value that jitters resets an exact-match stall counter every sample, so the stall
-branch can never fire.
+Keep one non-log signal. When comparing a counter across samples for STALL detection use a
+tolerance, never exact equality - a value that jitters resets an exact-match stall counter every
+sample, so the stall branch can never fire. (The blast-radius counters above are a different job
+with a different rule: four of those are strict.)
+
+**An in-place upgrade REPLACES `C:\Windows`, so it deletes whatever you staged under
+`C:\Windows\Temp`.** A monitor left there is destroyed by the exact event it exists to observe,
+and it fails silently: `powershell -File <deleted path>` prints a banner and exits 0. Measured:
+two guests both reached the target build while the monitor reported an unknown build for 90
+minutes. Stage monitoring outside `C:\Windows` entirely, or do not stage anything at all and read
+the state cmd-natively:
+
+```
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuild
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v UBR
+bcdedit /enum "{bootmgr}" | findstr /i bootsequence
+if exist "C:\$WINDOWS.~BT\NewOS\Windows\System32\winload.efi" (echo STAGED) else (echo NOSTAGE)
+```
+
+`UBR` comes back HEX: `0x230d` is 8973, `0x21cf` is 8655. Convert it, or you will compare a build
+against a number it can never equal.
+
+**Report "cannot read" separately from "not armed".** The two look identical in a boolean and only
+one of them is a result. A reboot check that collapses them makes an unreachable guest read as a
+clean negative, and then you act on a state you never observed.
+
+**A tool's verdict is not the guest's verdict.** An orchestrating script reported its upgrade
+worker "exited without writing a verdict" while the guest's own log had recorded success two
+minutes earlier: the script's read of that log came back empty and it could not tell a failed READ
+from an absent marker. When a wrapper reports failure, ask the GUEST before believing it - its own
+state log, the registry build, the boot state.
+
+**`wmic` is GONE in 25H2 and returns EMPTY rather than an error.**
+`wmic logicaldisk get DeviceID,VolumeName,Size` produces no output at all, which reads as "no
+drives" rather than "the tool is missing" - so an inventory step reports a machine with no disks
+and nothing raises. Use `fsutil fsinfo drives` (cmd-native), or `Get-Volume` / `Get-Partition` /
+`Get-Disk`.
 
 ## Durations: measure, do not quote
 
@@ -288,7 +445,9 @@ one machine and 5h18m on another on the same host**. A `Windows.old` teardown ra
 permission work that reclaimed nothing, then deleted in 11 minutes.
 
 A delete with NO permission work at all still ranged 13.3 min to 83.0 min across two guests whose
-trees differed by only 1.1x in bytes - file count drove it, not size.
+trees differed by only 1.1x in bytes - file count drove it, not size. A third measured 58.7 min
+and reclaimed 20.15 GB, landing between them; three runs of the same procedure spread over a 6x
+range with nothing wrong in any of them.
 
 Quote a reference figure and you will understate the expensive path and make the cheap
 preparatory step (survey first, repair only what is broken) look not worth running. Calibrate
@@ -309,6 +468,16 @@ unmeasured.
 - You are treating a clean `ScanHealth` as proof an update should install
 - You are quoting a `robocopy` byte total as the space a delete will free
 - You are about to delete a tree without checking for a mounted image inside it
+- An upgrade reverted and you are re-diagnosing it without grepping Panther for `Setup360Result`
+- You are applying a staged upgrade on a VM whose in-guest reboot you have not confirmed actually
+  restarts the guest rather than tearing it down
+- You are re-arming `bootsequence` after a rollback without checking `NewOS` still exists
+- Your strip pass wrote link paths through a `.cmd` file, or you did not re-count after it
+- You are calling a delete ESCAPED on a live machine's recursive `ProgramData` FILE count
+- You staged a monitor under `C:\Windows\Temp` and are waiting on it across an upgrade
+- A check reports "not armed" and you cannot tell that from "could not read the guest"
+- You are believing a wrapper's failure verdict without asking the guest
+- A `wmic` query came back empty and you read it as the machine having none
 
 ## Common mistakes
 
@@ -318,3 +487,5 @@ unmeasured.
 - Reading `cleanmgr`'s exit code. It returns 0 while silently declining the "Previous
   Installations" handler under a non-interactive session. Check the directory.
 - Hard-stopping a guest mid-update. That is how component stores get damaged in the first place.
+  A clean ACPI stop from the hypervisor is not this, and is the correct way to apply an upgrade
+  staged with `/noreboot`.
