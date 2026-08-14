@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.199.0] - 2026-08-14
+
+### Changed
+
+- **Re-issues 5.198.1 under a MINOR number, because it was classified wrongly.** That release
+  ADDED an instruction to `infra-windows-servicing` - how to test whether a guest-initiated reboot
+  restarts the guest or tears the VM down - and this project's own SemVer rule calls a
+  backward-compatible addition MINOR. It shipped as a PATCH on the reading that it closed a gap in
+  existing guidance rather than adding a capability. No content changes here: 5.198.1 already
+  carries the text, and installs that took it are already correct. The number is what was wrong,
+  and a consumed version cannot be recycled, so the correction is a fresh bump rather than a
+  rewrite.
+
 ## [5.198.1] - 2026-08-13
 
 ### Changed
