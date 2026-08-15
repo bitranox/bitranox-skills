@@ -153,6 +153,15 @@ the success line, abort-and-show on a miss).
    references/dream-passes.md (propose-first; the backup makes it safe). Never
    usage/age/size-based.
 
+   Two questions to ask of every entry reviewed, because an accumulated bad fact
+   survives longest here:
+
+   1. Does this assert a tool does NOT work, without a version or date that makes
+      it re-testable? If so, re-test it or delete it. A stale negative claim is
+      worse than a missing fact: it actively steers away from something that works.
+   2. Does this read as a procedure while describing a session that never reached a
+      working end state? If so, relabel it as unsolved.
+
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
    its origin and siblings) and normalize. Then: re-derive the manifest and diff against step 2
    (only `level` may differ, plus explicitly-decided merges/prunes/rewords); run
