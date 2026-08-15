@@ -47,6 +47,21 @@ installed copies and needs no bump.
   already marks exactly the facts that need protecting; this version gates that existing marker
   instead of adding a second, weaker one.
 
+### Changed
+
+- Documented the pin gate where the autonomous passes actually read it. The store spec
+  (`meta-self-improve/references/memory-backend.md`) described a pinned entry as merely "exempt
+  from archive/move/reword in the dream unless the user approves that specific change" - prose
+  that predates this version's enforcement. It now states precisely which path refuses (an
+  ordinary `add` on a pinned slug, before any write) and which merely preserves (`move`,
+  `relocate`, `rename` carry `pin` through unchanged and never refuse on it, so re-leveling a
+  pinned fact needs no exception), and adds the `amend-pinned` command-table row.
+  `meta-dream-tree/SKILL.md` and its shared `references/dream-core.md` carried the same
+  pre-enforcement claim in four more places (the PLACEMENT step, a Common mistakes bullet, a
+  Rationalizations row, and the routing-prompt section shared by the whole dream family) - all
+  corrected to match: placement re-levels a pinned fact like any other entry, and only its
+  content is off-limits to the dream.
+
 ## [5.202.0] - 2026-08-15
 
 ### Added

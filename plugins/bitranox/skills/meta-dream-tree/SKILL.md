@@ -113,7 +113,7 @@ the success line, abort-and-show on a miss).
    their common parent). Cross-link related entries with `[[slug]]`. Dedup runs TWICE - here,
    and again in step 8, because placement creates new overlap.
 
-5. **PLACEMENT (re-level every unpinned entry; up AND down).** Route each unpinned fact through
+5. **PLACEMENT (re-level every entry, pinned included; up AND down).** Route each fact through
    THE routing prompt in references/dream-core.md against the descriptor ladder (leaf -> anchor);
    the tier note (inline judgment at opus-class or above; switch-model-or-continue) is in the
    core too. Batch the high-confidence moves into ONE propose-diff (auto mode: apply); apply each
@@ -133,8 +133,13 @@ the success line, abort-and-show on a miss).
    the fact at the project level until a SECOND project sights it. After moving, normalize
    reference+delta
    UPWARD-ONLY: the general lives once at its altitude, lower entries cite `[[general]]` + delta.
-   Pinned entries are EXEMPT from move/reword/archive unless the user approves that specific
-   change - report them separately.
+   **A pinned fact is out of reach for an ordinary write, not for placement.** The engine REFUSES
+   an `add` targeting a pinned slug (`PinnedEntry`) before any write; the dream does not route
+   around that refusal with `amend-pinned` - that verb is for a human at the keyboard. Report a
+   pinned fact whose CONTENT you believe is wrong; do not rewrite it, and do not call
+   `amend-pinned` on its behalf. `move` carries the pin through unchanged and never refuses on it,
+   so re-leveling a pinned fact is ordinary placement work like any other entry - no exception, no
+   separate approval step.
 
 6. **Voice + firing check (maintenance).** The engine lints new hooks at add-time; here, sweep the
    whole store for residue with `memory_engine.py lint --tree "<cwd>"` (reports, tree-wide, hooks over
@@ -202,7 +207,7 @@ the success line, abort-and-show on a miss).
 
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill
-    changes, toolbox proposals (merges/flags), pinned entries left untouched. CLAUDE.md edits are
+    changes, toolbox proposals (merges/flags), pinned facts reported not rewritten. CLAUDE.md edits are
     APPLIED, so the report is the only place the user sees them: per RULE, name every file touched,
     the ANCESTOR covering home it now relies on, and the transformation (removed / rewritten in
     place); a rule left alone for want of an ancestor is listed too, never silently skipped.
@@ -238,7 +243,10 @@ tests/README-acceptance.md); the bar is all-hard + >= 5/6 judgment on two consec
 - [ ] Scope descriptors fresh: every chain level carries the template keys (or was verified fresh).
 - [ ] Capture ran BEFORE consolidation (or a verified "nothing durable" statement).
 - [ ] Backup taken + the (level, slug, title, pin) manifest recorded pre-dream.
-- [ ] Placement report: applied moves (with direction), kept UNSUREs, pinned entries untouched.
+- [ ] Placement report: applied moves (with direction; pinned entries re-level like any other),
+      kept UNSUREs.
+- [ ] No pinned entry's content rewritten this run; any pinned fact believed wrong is reported, not
+      amended via `add` or `amend-pinned`.
 - [ ] Voice/firing residue swept (or "0 offenders" verified via the lint).
 - [ ] Post-dream manifest diff clean (only `level` changed, plus explicitly-decided merges/prunes).
 - [ ] `reconcile ... --check` printed `TOTAL problems: 0`.
@@ -251,15 +259,15 @@ An ended run missing any box is not done - finish it or say plainly what was ski
 
 ## Rationalizations (pressure-tested; these do not fly)
 
-| Excuse                                                         | Reality                                                                                                                          |
-|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.          |
-| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point. |
-| "auto mode + 'stop asking' covers the pinned entry"            | The pinned exemption requires approval of THAT specific change; auto only silences CLAUDE.md/skill prompts.                      |
-| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                            |
-| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                        |
-| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.             |
-| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                |
+| Excuse                                                         | Reality                                                                                                                                                                                          |
+|----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "not-due / no store exists -> nothing to consolidate"          | not-due never suppresses capture; an absent store is the TRIGGER to create one. Two learnings uncaptured = work exists.                                                                          |
+| "Only N entries changed -> grep their keywords over CLAUDE.md" | The named prohibited shortcut. Reconciliation is rule-by-rule, BOTH directions, every dream - pre-existing overlap is the point.                                                                 |
+| "auto mode + 'stop asking' covers the pinned entry"            | Auto mode changes nothing here: the engine REFUSES an ordinary `add` on a pinned slug regardless of mode, and the dream never calls `amend-pinned` (human-only) to push a change through anyway. |
+| "I'm 90% sure, despite CONFIDENCE low"                         | The router's confidence gates the move, not your certainty. Evidence beats wording; UNSURE stays put.                                                                                            |
+| "Writing it into CLAUDE.md is faster than the engine"          | Routing into CLAUDE.md is not capture; the store is the system of record.                                                                                                                        |
+| "The store is empty/unchanged, so the passes no-op"            | Only counter-gated passes no-op on emptiness; chain-gated passes (reconciliation, dedup, placement) run EVERY dream.                                                                             |
+| "No time for the full pass - I'll note it for next dream"      | Say it out loud in the report as INCOMPLETE and flagged; never silently downgrade a pass and call the dream done.                                                                                |
 
 ## Common mistakes
 
@@ -269,8 +277,10 @@ An ended run missing any box is not done - finish it or say plainly what was ski
   projects and departments are where the dups, misplacements, and stale task-state live (a
   chain-only run leaves them untouched and scores as a half-dream).
 - Placement by wording instead of EVIDENCE, or moving a low-confidence fact.
-- Moving a pinned entry, or moving DOWN past inbound `[[refs]]` (the engine refuses; re-point
-  first).
+- Rewriting a pinned entry's content via `add` (the engine refuses, `PinnedEntry`), or reaching
+  for `amend-pinned` to push a dream-authored change through anyway (that verb is human-only; the
+  dream never calls it) - report a wrong pinned fact instead of touching it.
+- Moving DOWN past inbound `[[refs]]` without re-pointing them first (the engine refuses).
 - Deduping only BEFORE placement (placement creates the overlap; step 8 exists for that).
 - Reading a no-op off the wrong signal: chain-gated passes (CLAUDE.md reconciliation, dedup,
   placement) run EVERY dream; only counter-gated passes no-op on emptiness.
