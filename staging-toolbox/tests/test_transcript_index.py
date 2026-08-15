@@ -58,3 +58,12 @@ def test_search_returns_empty_not_error_on_no_match(tmp_path):
     db = sqlite3.connect(":memory:")
     ti.ensure_schema(db)
     assert ti.search(db, "nothingmatchesthis") == []
+
+
+def test_search_returns_empty_not_error_on_malformed_query(tmp_path):
+    # An unterminated quote is invalid FTS5 query syntax and raises
+    # sqlite3.OperationalError from the MATCH clause; search() must catch it
+    # and degrade to an empty result, not propagate the exception.
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.search(db, '"unterminated') == []

@@ -7,7 +7,14 @@
 
 The curated fact store answers "what rule applies here". This answers "what did
 we actually do about X", which does not depend on a fact having been written at
-the time. No LLM in the write path: index everything, grep it later.
+the time. No LLM in the write path: index narrated prose, grep it later.
+
+Coverage: only string message content and the "text" parts of list content are
+indexed. tool_use, tool_result and thinking blocks contribute no text and are
+NOT indexed, so a session where the work happened through tool calls with no
+narrating sentence is invisible to search. A miss means "not narrated in
+prose", not "never happened" - corroborate with the raw transcript before
+concluding something did not occur.
 
 Usage:
     transcript_index.py index
@@ -27,6 +34,11 @@ __all__ = ["ensure_schema", "index_dir", "search", "main"]
 
 DB_PATH = pathlib.Path.home() / ".claude" / "transcript-index.db"
 ROOT = pathlib.Path.home() / ".claude" / "projects"
+
+NO_MATCH_CAVEAT = (
+    "tool calls, tool results and thinking blocks are not indexed - a miss "
+    "means it was not narrated in prose, not that it never happened"
+)
 
 
 def ensure_schema(db: sqlite3.Connection) -> None:
@@ -128,12 +140,16 @@ def main(argv: list[str] | None = None) -> int:
 
     hits = search(db, args.query, args.limit)
     if args.as_json:
-        print(json.dumps({"ok": True, "command": "search", "data": hits}))
+        payload: dict[str, object] = {"ok": True, "command": "search", "data": hits}
+        if not hits:
+            payload["caveat"] = NO_MATCH_CAVEAT
+        print(json.dumps(payload))
         return 0 if hits else 1
     for h in hits:
         print(f"[{h['project']}] {h['role']}: {h['text'][:200]}")
     if not hits:
         print("no matches", file=sys.stderr)
+        print(NO_MATCH_CAVEAT, file=sys.stderr)
         return 1
     return 0
 
