@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.200.0] - 2026-08-15
+
+### Added
+
+- **`compuse-toolbox`'s `transcript_tail` can now read a whole transcript, not only its last turn.**
+  Two new modes: `--all` returns every user/assistant text turn, and `--tool NAME` returns every
+  `tool_use` block invoking that tool with its input. Each row carries the 1-based JSONL LINE it
+  came from, so a finding can be addressed directly (`sed -n '<line>p'`) instead of searched for a
+  second time; the count includes blank and unparseable lines for exactly that reason. `--json`
+  emits the skill's usual `{ok, command, skipped, data}` envelope, an unparseable line is counted
+  onto stderr rather than dropped in silence, and a mode that matched nothing exits 1 instead of
+  printing nothing and succeeding. The tail mode is untouched: with neither flag the output is
+  byte for byte what it was, pinned by a test.
+
+  The gap was measured. Reviewing a finished session needs every record, not the last one, and the
+  questions it asks ("what did the user ask across the run?", "which `Agent` dispatches went out,
+  with what input?") were answered by hand-rolling four throwaway extractors in a single session,
+  because the tail returns only the final text and a raw field dump (`jsonl_grep --field
+  message.content`) hands back block JSON rather than the text.
+
 ## [5.199.0] - 2026-08-14
 
 ### Changed
