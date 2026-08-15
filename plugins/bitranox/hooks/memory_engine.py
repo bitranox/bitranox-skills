@@ -4,20 +4,16 @@
 A fact's identity is its SLUG, unique per knowledge TREE; its body lives exactly once at
 `<anchor>/.claude-memory/facts/<slug>.md`. The always-loaded per-altitude index is a POINTER BLOCK
 inline in `<altitude>/CLAUDE.local.md`: a scope descriptor, the retrieval RECIPE, and one
-`- [Title](mem:<slug>) - hook <!-- bx:src=.. [bx:owner=human] bx:pin -->` line per fact. The model
-reads the block as cascade text and fetches bodies per the recipe; `uuid_store.resolve` is the
-programmatic resolver.
+`- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->` line per fact. The model reads the block as
+cascade text and fetches bodies per the recipe; `uuid_store.resolve` is the programmatic resolver.
 
 Every memory mutation (per-turn capture, migration, reconcile) goes through here - NEVER hand-write
 the pointer block or a central body via the Write/Edit tools (the store-edit-guard denies it; this
 module writes directly with `Path.write_text`, mtime-neutral). See `uuid_store.py` for the on-disk
 format, anchor resolution, the resolver, and the legacy-line transition rules.
 
-Provenance is a `<!-- bx:src=<comma-list> [bx:owner=human] [bx:pin] -->` comment on the pointer line;
-`source` is a SET (merged on update). `owner` defaults to `agent` and is rendered only when `human`,
-so a human-owned fact refuses an ordinary `add` (see `add_or_update_entry`'s `HumanOwned`); the only
-way through is the separate `amend-human-owned` verb, never a `--force` flag. All output is ASCII
-(` - ` separators, never an em dash).
+Provenance is a `<!-- bx:src=<comma-list> [bx:pin] -->` comment on the pointer line; `source` is a
+SET (merged on update). All output is ASCII (` - ` separators, never an em dash).
 
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
@@ -51,15 +47,13 @@ _ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + fact pointers live i
 class Entry:
     """One curated fact. Identity is `slug` (unique per TREE); the body lives centrally at
     `<anchor>/.claude-memory/facts/<slug>.md`. `source` is the provenance set; `pin` protects it
-    from eviction; `owner` ("agent" or "human") gates WRITE permission - a human-owned entry refuses
-    an ordinary `add_or_update_entry` call (see `HumanOwned`). A LEGACY entry (pre-pivot pointer)
-    still reads its body from the old sharded uuid path until the migration moves it; the engine
-    flips an entry to the current format the first time it is UPDATED (and archives the old body)."""
+    from eviction. A LEGACY entry (pre-pivot pointer) still reads its body from the old sharded
+    uuid path until the migration moves it; the engine flips an entry to the current format the
+    first time it is UPDATED (and archives the old body)."""
 
-    __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid", "legacy", "owner")
+    __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid", "legacy")
 
-    def __init__(self, slug, title, hook, body="", source=None, pin=False, uuid="", legacy=False,
-                 owner="agent"):
+    def __init__(self, slug, title, hook, body="", source=None, pin=False, uuid="", legacy=False):
         self.slug = slug
         self.title = title
         self.hook = hook or ""
@@ -68,7 +62,6 @@ class Entry:
         self.pin = bool(pin)
         self.uuid = uuid or ""
         self.legacy = bool(legacy)
-        self.owner = owner or "agent"
 
 
 class SlugCollision(ValueError):
@@ -105,31 +98,6 @@ class HookTooLong(ValueError):
                          "and keep the hook one trigger-first directive" % (self.length, self.limit))
 
 
-class HumanOwned(ValueError):
-    """Raised when an ordinary `add` targets a fact whose pointer line already carries
-    `bx:owner=human`. Ownership is a WRITE-PERMISSION partition, not a content guard: it exists so
-    an autonomous pass (the dream, reconcile) can never rewrite a fact a human has claimed. Raised
-    BEFORE any write. The only way through is the separate `amend-human-owned` verb (never a
-    `--force` flag on `add` - a flag can be reached by accident or copied by an autonomous pass; a
-    distinct verb cannot)."""
-
-    def __init__(self, slug):
-        self.slug = slug
-        super().__init__("%s is human-owned; use 'amend-human-owned --slug %s' to change it "
-                         "deliberately" % (slug, slug))
-
-
-class UnknownSlug(ValueError):
-    """Raised when `amend-human-owned` targets a slug this level has no pointer for. The verb carries
-    no `--title` (it amends, it does not create), so there is nothing to attach a first write to; use
-    `add --owner human` to create the fact instead."""
-
-    def __init__(self, slug):
-        self.slug = slug
-        super().__init__("%r has no existing entry at this level to amend; use "
-                         "'add --owner human' to create it first" % slug)
-
-
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
 
 def _anchor(proj):
@@ -159,8 +127,7 @@ def read_store(proj):
         except OSError:
             body = ""
         entries.append(Entry(slug=p.slug, title=p.title, hook=p.hook, body=body,
-                             source=p.source, pin=p.pin, uuid=p.uuid, legacy=p.legacy,
-                             owner=p.owner))
+                             source=p.source, pin=p.pin, uuid=p.uuid, legacy=p.legacy))
         bodies[p.slug] = body
     return scope, entries, bodies
 
@@ -175,8 +142,7 @@ def _commit_store(proj, scope, entries, bodies):
         if not e.legacy:                             # a legacy body stays at its old path until the
             changed |= us.put_body(str(anchor), e.slug, bodies.get(e.slug, e.body))  # migration moves it
         pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
-                                   source=e.source, pin=e.pin, uuid=e.uuid, legacy=e.legacy,
-                                   owner=e.owner))
+                                   source=e.source, pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
     try:
         text = local.read_text(encoding="utf-8")
@@ -203,19 +169,14 @@ def _framed_body(slug, hook, type_, body):
 
 
 def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin=False,
-                        scope_default="", slug=None, allow_over_cap_hook=False, owner="agent",
-                        allow_human_owned_overwrite=False):
+                        scope_default="", slug=None, allow_over_cap_hook=False):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Merges the provenance `source` set on update, ensures the level's pointer block + scope, and
     writes under a lock, mtime-neutral. Returns the slug.
 
     An over-cap hook raises `HookTooLong` BEFORE anything is written, so a refusal never half-writes
     or clobbers the entry it was updating. `allow_over_cap_hook` exists for the movers only (rehome,
-    migrate): they carry text that is ALREADY stored, and refusing there would strand the fact.
-
-    `owner` ("agent" or "human") sets the target's ownership; updating an entry already marked
-    `human` raises `HumanOwned` BEFORE any write UNLESS `allow_human_owned_overwrite` is set - the
-    escape hatch `amend_human_owned_entry` uses deliberately, and nothing else should."""
+    migrate): they carry text that is ALREADY stored, and refusing there would strand the fact."""
     slug = slug or slugify(title, type_)
     hook = (hook or "").strip()
     if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
@@ -250,11 +211,6 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 by_slug[slug] = adopted
         if slug in by_slug:
             e = by_slug[slug]
-            # A human-owned target refuses an ORDINARY add - the write-permission partition this
-            # function exists to enforce for every caller (CLI, reconcile, the dream), not just the
-            # CLI layer. The only way through is amend_human_owned_entry (allow_human_owned_overwrite).
-            if e.owner == "human" and not allow_human_owned_overwrite:
-                raise HumanOwned(slug)
             old_hook = e.hook
             e.title, e.hook = title, (hook or e.hook)
             if body:
@@ -263,7 +219,6 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 e.body = _reframe_description(e.body, e.hook)   # keep body description in sync with the pointer
             e.source |= src
             e.pin = e.pin or pin
-            e.owner = owner or "agent"
             if e.legacy:                             # first update flips a legacy entry: the body
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
                 e.legacy, e.uuid = False, ""
@@ -273,7 +228,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
-                      body=_framed_body(slug, hook, type_, body), source=src, pin=pin, owner=owner)
+                      body=_framed_body(slug, hook, type_, body), source=src, pin=pin)
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
@@ -281,22 +236,6 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
     return slug
-
-
-def amend_human_owned_entry(proj, slug, hook=None, body=None):
-    """The escape hatch for a human-owned fact: the same upsert as `add`, with the human-owned
-    refusal skipped and `owner` forced to `human`. A separate VERB (never a `--force` flag), so no
-    autonomous pass - which never calls this function - can reach it by accident or by copying an
-    example `add` invocation. Keeps the existing title (the CLI carries no `--title` to change it);
-    an empty/absent `hook` or `body` keeps the stored one, matching `add_or_update_entry`'s update
-    semantics. Raises `UnknownSlug` when `slug` names no existing entry at this level - amending
-    presumes a prior `add --owner human`."""
-    _scope, entries, _bodies = read_store(proj)
-    by_slug = {e.slug: e for e in entries}
-    if slug not in by_slug:
-        raise UnknownSlug(slug)
-    return add_or_update_entry(proj, title=by_slug[slug].title, hook=hook or "", body=body or "",
-                               slug=slug, owner="human", allow_human_owned_overwrite=True)
 
 
 def _slug_owned_elsewhere(anchor, proj, slug):
@@ -1209,16 +1148,6 @@ def main(argv=None):
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
     a.add_argument("--slug", default=None,
                    help="target an existing identity explicitly (title can then change freely)")
-    a.add_argument("--owner", choices=["human", "agent"], default="agent",
-                   help="human-owned facts refuse an ordinary add; use "
-                        "amend-human-owned to change one deliberately")
-    ah = sub.add_parser("amend-human-owned",
-                        help="deliberately change a human-owned fact (human use only; "
-                             "no autonomous pass invokes this)")
-    ah.add_argument("--proj", required=True)
-    ah.add_argument("--slug", required=True)
-    ah.add_argument("--hook", default=None)
-    ah.add_argument("--body-file", default=None)
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -1376,8 +1305,8 @@ def main(argv=None):
         try:
             slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
-                                       scope_default=args.scope, slug=args.slug, owner=args.owner)
-        except (SlugCollision, HookTooLong, EmptyBody, HumanOwned) as c:
+                                       scope_default=args.scope, slug=args.slug)
+        except (SlugCollision, HookTooLong, EmptyBody) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
@@ -1402,18 +1331,6 @@ def main(argv=None):
                   "deterministic GUARD if a rule keeps being skipped, a JIG (toolbox tool) if the "
                   "same multi-step work keeps being re-done by hand - and BOTH when it is both."
                   % (seen, seen))
-        return 0
-
-    if args.cmd == "amend-human-owned":
-        body = None
-        if args.body_file:
-            body = Path(args.body_file).read_text(encoding="utf-8")
-        try:
-            slug = amend_human_owned_entry(args.proj, slug=args.slug, hook=args.hook, body=body)
-        except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
-            print("! refused: %s" % c)
-            return 1
-        print(slug)
         return 0
     ap.print_help(sys.stderr)
     return 2

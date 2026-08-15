@@ -17,23 +17,6 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
-## [5.203.0] - 2026-08-15
-
-### Added
-
-- **A curated fact can now be marked human-owned, and an ordinary `add` refuses to overwrite one.**
-  The pointer-line provenance comment gains an optional `bx:owner=human` token (grammar: `<!--
-  bx:src=<comma-list> [bx:owner=human] [bx:pin] -->`), emitted only when human-owned so every
-  existing pointer line stays byte-identical and needs no migration - absent means agent-owned, as
-  before. `memory_engine add --owner human|agent` (default `agent`) sets it; `add_or_update_entry`
-  raises `HumanOwned` before any write when the target is already human-owned, so no caller -
-  CLI, reconcile, or the dream - can silently rewrite a human-claimed fact. The only way through is
-  the new `amend-human-owned` verb, a separate command rather than a `--force` flag, so an
-  autonomous pass copying an example `add` invocation can never reach it by accident.
-- `heal` preserves `bx:owner=human` across its parse -> render round-trip (verified: adding the
-  token without teaching `uuid_store._parse_meta` to read it back would have silently dropped
-  ownership on the next heal).
-
 ## [5.202.0] - 2026-08-15
 
 ### Added
