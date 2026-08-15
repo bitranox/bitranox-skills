@@ -69,7 +69,13 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   Git tracking is not a factor - it decides whether an edit needs a commit, never whether a rule
   reaches context.
 - **Skills / hooks (shared, published):** never silently edit; route through the upstream-PR loop.
-- **Pinned entries:** exempt from archive/move/reword without approval of that specific change.
+- **Pinned entries:** the engine REFUSES an ordinary `add` on a pinned slug (`PinnedEntry`);
+  `amend-pinned` is the deliberate way through, human-only - the dream never calls it. Report a
+  pinned fact whose content looks wrong; do not rewrite it. `move`/`relocate`/`rename` carry the
+  pin through unchanged and never refuse on it, so re-leveling a pinned fact is ordinary placement
+  work, no exception. Archiving is NOT gated by the engine (`reconcile_memory_index.py --archive`
+  does not check `pin`) - treat it as un-archivable by the dream's own policy anyway: report it,
+  never drop its pointer.
 - **Structural moves** (relocating a directory, migrating a memory slug, creating a rung): always
   PROPOSED with consequences, never applied by the dream.
 
@@ -138,8 +144,12 @@ complementary on inspection - evidence decides, not the agent's topic guess.)
 > the symptom appears; EVIDENCE, not wording, decides reach; tie or unsure -> keep + UNSURE.
 > Return: `LEVEL | CONFIDENCE high/low | WHY`.
 
-Low/UNSURE never moves. Pinned entries are EXEMPT from move/reword/archive without the user's
-approval of that specific change - report them separately. Tree-top promotion additionally passes
+Low/UNSURE never moves. A pinned fact is placed by this SAME routing prompt, up or down, like any
+other entry - `move` carries the pin through unchanged and never refuses on it. Only a pinned
+fact's CONTENT is out of reach: the engine REFUSES an ordinary `add` on a pinned slug
+(`PinnedEntry`); `amend-pinned` is the deliberate way through and is human-only - report a pinned
+fact whose content looks wrong, never rewrite it or call `amend-pinned` on its behalf. Tree-top
+promotion additionally passes
 the corroboration gate: a user-stated concrete rule promotes eagerly; a model-INFERRED generalization
 needs >= 2 DISTINCT PROJECTS. The gate is backed by a real dwell store (out of the dreamed store, so
 counting never bumps its mtime) that counts distinct projects, not sightings - a dream re-reads
