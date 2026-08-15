@@ -17,6 +17,36 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.203.0] - 2026-08-15
+
+### Added
+
+- **`bx:pin` is now a write-permission gate, not just prose.** `bx:pin` already marks the facts
+  that must survive the dream untouched (the iron rules); it was documented as exempt from
+  archive/move/reword but nothing enforced that - a plain `memory_engine add` could silently
+  overwrite a pinned fact's hook or body. `add_or_update_entry` now raises `PinnedEntry` BEFORE any
+  write when the target at that slug is already pinned, so `memory_engine add --slug <pinned>`
+  refuses (`! refused: ... is pinned; use 'amend-pinned --slug <slug>' ...`, exit 1) instead of
+  quietly rewriting it. The only way through is the new `amend-pinned --proj D --slug S [--hook H]
+  [--body-file F]` verb, a separate command rather than a `--force` flag, so an autonomous pass
+  copying an example `add` invocation can never reach it by accident; it performs the same upsert
+  with the pin check skipped and does not itself unpin the fact.
+- `move`, `relocate`, and `rename` are UNCHANGED and are NOT gated: they already thread `pin`
+  through every write untouched (verified before this change), so re-leveling a pinned fact keeps
+  working exactly as before - the gate lives only in `add_or_update_entry`'s update path, and a
+  pinned fact still refuses an ordinary `add` at its new level after a move.
+- No new token on the pointer line: `bx:pin` already round-trips correctly through parse, render,
+  and every mover, so no store migration is needed.
+
+### Removed
+
+- The `bx:owner=human` write-permission partition shipped in an earlier draft of this version is
+  reverted. Every fact in the store is written by a model, including facts recording user
+  directives, so "human-owned" only ever labeled the model's own write - it never distinguished
+  real authorship, and it also had a real defect (the movers silently stripped the marker). `pin`
+  already marks exactly the facts that need protecting; this version gates that existing marker
+  instead of adding a second, weaker one.
+
 ## [5.202.0] - 2026-08-15
 
 ### Added

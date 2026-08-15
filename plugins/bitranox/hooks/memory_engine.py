@@ -13,7 +13,11 @@ module writes directly with `Path.write_text`, mtime-neutral). See `uuid_store.p
 format, anchor resolution, the resolver, and the legacy-line transition rules.
 
 Provenance is a `<!-- bx:src=<comma-list> [bx:pin] -->` comment on the pointer line; `source` is a
-SET (merged on update). All output is ASCII (` - ` separators, never an em dash).
+SET (merged on update). `bx:pin` is a WRITE-PERMISSION gate, not just render-ordering advice: an
+ordinary `add` targeting an already-pinned slug raises `PinnedEntry` before any write (see
+`add_or_update_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
+`relocate`, `rename`) are unaffected - they carry pin through untouched, never refuse. All output is
+ASCII (` - ` separators, never an em dash).
 
 Pure standard library; cross-platform (pathlib, UTF-8, the O_EXCL lock in self_improve_signals).
 """
@@ -46,10 +50,11 @@ _ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + fact pointers live i
 
 class Entry:
     """One curated fact. Identity is `slug` (unique per TREE); the body lives centrally at
-    `<anchor>/.claude-memory/facts/<slug>.md`. `source` is the provenance set; `pin` protects it
-    from eviction. A LEGACY entry (pre-pivot pointer) still reads its body from the old sharded
-    uuid path until the migration moves it; the engine flips an entry to the current format the
-    first time it is UPDATED (and archives the old body)."""
+    `<anchor>/.claude-memory/facts/<slug>.md`. `source` is the provenance set; `pin` marks it as one
+    of the iron rules the dream must not silently archive/move/reword AND gates ordinary `add`
+    against overwriting it (see `PinnedEntry`). A LEGACY entry (pre-pivot pointer) still reads its
+    body from the old sharded uuid path until the migration moves it; the engine flips an entry to
+    the current format the first time it is UPDATED (and archives the old body)."""
 
     __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid", "legacy")
 
@@ -96,6 +101,32 @@ class HookTooLong(ValueError):
         self.limit = us.HOOK_HARD_MAX if limit is None else int(limit)
         super().__init__("hook is %d chars, over the %d-char hard cap; move the detail into the body "
                          "and keep the hook one trigger-first directive" % (self.length, self.limit))
+
+
+class PinnedEntry(ValueError):
+    """Raised when an ordinary `add` targets a fact whose pointer line already carries `bx:pin`.
+    `bx:pin` already marks exactly the facts that must not be silently touched (the iron rules); this
+    turns that existing marker into a real write-permission gate instead of prose asking a model not
+    to overwrite them. Raised BEFORE any write. The only way through is the separate `amend-pinned`
+    verb (never a `--force` flag on `add` - a flag can be reached by accident or copied from an
+    example `add` invocation; a distinct verb cannot). The movers (`move`, `relocate`, `rename`) are
+    untouched by this gate: they carry `pin` through unchanged and never refuse on it."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%s is pinned; use 'amend-pinned --slug %s' to change it deliberately"
+                         % (slug, slug))
+
+
+class UnknownSlug(ValueError):
+    """Raised when `amend-pinned` targets a slug this level has no pointer for. The verb carries no
+    `--title` (it amends, it does not create), so there is nothing to attach a first write to; use
+    `add --pin` to create the fact instead."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%r has no existing entry at this level to amend; use "
+                         "'add --pin' to create it first" % slug)
 
 
 # ---- store IO (pointer block in CLAUDE.local.md + central bodies), locked + mtime-neutral --------
@@ -169,14 +200,20 @@ def _framed_body(slug, hook, type_, body):
 
 
 def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin=False,
-                        scope_default="", slug=None, allow_over_cap_hook=False):
+                        scope_default="", slug=None, allow_over_cap_hook=False,
+                        allow_pinned_overwrite=False):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
     path). Merges the provenance `source` set on update, ensures the level's pointer block + scope, and
     writes under a lock, mtime-neutral. Returns the slug.
 
     An over-cap hook raises `HookTooLong` BEFORE anything is written, so a refusal never half-writes
     or clobbers the entry it was updating. `allow_over_cap_hook` exists for the movers only (rehome,
-    migrate): they carry text that is ALREADY stored, and refusing there would strand the fact."""
+    migrate): they carry text that is ALREADY stored, and refusing there would strand the fact.
+
+    Updating a target already marked `pin` raises `PinnedEntry` BEFORE any write UNLESS
+    `allow_pinned_overwrite` is set - the escape hatch `amend_pinned_entry` uses deliberately, and
+    nothing else should. Passing `pin=True` to newly PIN an unpinned (or new) entry is unaffected;
+    the gate only fires when the entry found at `slug` is ALREADY pinned."""
     slug = slug or slugify(title, type_)
     hook = (hook or "").strip()
     if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
@@ -211,6 +248,11 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 by_slug[slug] = adopted
         if slug in by_slug:
             e = by_slug[slug]
+            # A pinned target refuses an ORDINARY add - the write-permission gate this function
+            # exists to enforce for every caller (CLI, reconcile, the dream), not just the CLI layer.
+            # The only way through is amend_pinned_entry (allow_pinned_overwrite).
+            if e.pin and not allow_pinned_overwrite:
+                raise PinnedEntry(slug)
             old_hook = e.hook
             e.title, e.hook = title, (hook or e.hook)
             if body:
@@ -236,6 +278,21 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
         sig.bump_stores_generation()                  # bust the cross-tree dir-cache so recall sees it
     _warn_dangling_wikilinks(anchor, "%s\n%s" % (e.hook or "", e.body or ""), slug)
     return slug
+
+
+def amend_pinned_entry(proj, slug, hook=None, body=None):
+    """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
+    Keeps the existing title (the CLI carries no `--title` to change it) and the existing pin state
+    (this never unpins - `bx:pin` is untouched, only content changes); an empty/absent `hook` or
+    `body` keeps the stored one, matching `add_or_update_entry`'s update semantics. Raises
+    `UnknownSlug` when `slug` names no existing entry at this level - amending presumes a prior
+    `add --pin`."""
+    _scope, entries, _bodies = read_store(proj)
+    by_slug = {e.slug: e for e in entries}
+    if slug not in by_slug:
+        raise UnknownSlug(slug)
+    return add_or_update_entry(proj, title=by_slug[slug].title, hook=hook or "", body=body or "",
+                               slug=slug, allow_pinned_overwrite=True)
 
 
 def _slug_owned_elsewhere(anchor, proj, slug):
@@ -1144,10 +1201,19 @@ def main(argv=None):
     a.add_argument("--body", default="", help="the fact body (stored in the central sharded store)")
     a.add_argument("--body-file", default=None, help="read the body from a file (multi-line safe)")
     a.add_argument("--source", default="", help="comma-separated provenance keys")
-    a.add_argument("--pin", action="store_true", help="force-keep in the always-loaded pointer index")
+    a.add_argument("--pin", action="store_true",
+                   help="force-keep in the always-loaded pointer index; once set, an ordinary add "
+                        "refuses to overwrite this fact - use amend-pinned to change it deliberately")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
     a.add_argument("--slug", default=None,
                    help="target an existing identity explicitly (title can then change freely)")
+    ap_ = sub.add_parser("amend-pinned",
+                         help="deliberately change a pinned fact (human use only; "
+                              "no autonomous pass invokes this)")
+    ap_.add_argument("--proj", required=True)
+    ap_.add_argument("--slug", required=True)
+    ap_.add_argument("--hook", default=None)
+    ap_.add_argument("--body-file", default=None)
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -1306,7 +1372,7 @@ def main(argv=None):
             slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
                                        scope_default=args.scope, slug=args.slug)
-        except (SlugCollision, HookTooLong, EmptyBody) as c:
+        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
@@ -1331,6 +1397,18 @@ def main(argv=None):
                   "deterministic GUARD if a rule keeps being skipped, a JIG (toolbox tool) if the "
                   "same multi-step work keeps being re-done by hand - and BOTH when it is both."
                   % (seen, seen))
+        return 0
+
+    if args.cmd == "amend-pinned":
+        body = None
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        try:
+            slug = amend_pinned_entry(args.proj, slug=args.slug, hook=args.hook, body=body)
+        except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
+            print("! refused: %s" % c)
+            return 1
+        print(slug)
         return 0
     ap.print_help(sys.stderr)
     return 2
