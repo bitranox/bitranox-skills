@@ -45,6 +45,17 @@ digraph when_to_use {
 - Failures are related (fix one might fix others)
 - Need to understand full system state
 - Agents would interfere with each other
+- The per-item work is small and the list is long (batch instead, see the sizing rule below)
+
+**Size a fan-out by ITEM COUNT, not by prompt size.** A dispatch carries a large FIXED token cost
+independent of what you send it: each one re-pays the system prompt plus the whole CLAUDE.md and
+memory cascade the subagent inherits. Measured on the Agent tool 2026-08-12: 57.5k tokens for an
+inert text-only probe with ZERO tool uses, 73.4k for a general-purpose agent plus one Read. So
+budget a per-item fan-out as item count times about 60k. Sizing it from the prompt instead answers
+low by a factor large enough to make an unaffordable design read as deployable, and a short prompt
+never buys a cheap dispatch. Where the per-item work is small, batch many items into ONE dispatch
+(one agent, the whole list, one structured reply) rather than one agent per item, and keep a
+dispatch of its own for work whose own reasoning is worth more than that fixed overhead.
 
 ## The Pattern
 
