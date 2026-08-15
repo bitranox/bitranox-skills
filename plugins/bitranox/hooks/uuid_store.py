@@ -9,10 +9,10 @@ Layout:
   * ONE central body-store per tree anchor: `<anchor>/.claude-memory/facts/<slug>.md` - flat,
     human-readable, greppable. The SLUG is the fact's identity, unique per TREE.
   * A POINTER index per altitude, INLINE in that level's `CLAUDE.local.md` (plain cascade text, never
-    `@import`): `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` inside a managed fenced
-    block whose header carries the RETRIEVAL RECIPE (how to walk up and Read a body mid-reasoning -
-    the recipe is the experimentally proven retrieval channel, and it reaches Task subagents, which
-    never see the SessionStart inject).
+    `@import`): `- [Title](mem:<slug>) - hook <!-- bx:src=a,b [bx:owner=human] bx:pin -->` inside a
+    managed fenced block whose header carries the RETRIEVAL RECIPE (how to walk up and Read a body
+    mid-reasoning - the recipe is the experimentally proven retrieval channel, and it reaches Task
+    subagents, which never see the SessionStart inject).
   * The resolver derives everything from cwd (nothing absolute is baked): walk up to the anchor,
     read `facts/<slug>.md` there. Proven byte-identical across different mount prefixes.
 
@@ -144,7 +144,8 @@ def recurrence_count(body):
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope markers (same grammar the
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 
-# `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` (new) or the pre-pivot
+# `- [Title](mem:<slug>) - hook <!-- bx:src=a,b [bx:owner=human] bx:pin -->` (new; bx:owner is emitted
+# only when human - agent-owned is the default and stays unrendered) or the pre-pivot
 # `- [Title](uuid:<uuid>) - hook <!-- ... bx:slug=s -->` (legacy). The hook runs to the FIRST
 # `<!--` (a hook may legitimately contain bare `<placeholders>`, so a tempered scan is used, never
 # a plain `[^<]` class - that truncated real hooks); anything after the first meta comment is
@@ -200,9 +201,10 @@ class Pointer:
     migration moves its body - the renderer re-emits legacy lines unchanged so a heal round-trip
     can never break an unmigrated store."""
 
-    __slots__ = ("slug", "title", "hook", "source", "pin", "uuid", "legacy")
+    __slots__ = ("slug", "title", "hook", "source", "pin", "uuid", "legacy", "owner")
 
-    def __init__(self, slug="", title="", hook="", source=None, pin=False, uuid="", legacy=False):
+    def __init__(self, slug="", title="", hook="", source=None, pin=False, uuid="", legacy=False,
+                 owner="agent"):
         self.slug = slug or ""
         self.title = title or ""
         self.hook = hook or ""
@@ -210,11 +212,14 @@ class Pointer:
         self.pin = bool(pin)
         self.uuid = str(uuid or "")
         self.legacy = bool(legacy)
+        self.owner = owner or "agent"
 
     def meta_comment(self):
         parts = []
         if self.source:
             parts.append("bx:src=%s" % ",".join(sorted(self.source)))
+        if self.owner == "human":                     # agent-owned is the default: never rendered,
+            parts.append("bx:owner=human")            # so every pre-existing pointer line is unchanged
         if self.pin:
             parts.append("bx:pin")
         if self.legacy and self.slug:                # legacy lines keep their bx:slug token
@@ -250,7 +255,7 @@ def _slug_from_title(title):
 
 
 def _parse_meta(meta):
-    source, pin, slug = set(), False, ""
+    source, pin, slug, owner = set(), False, "", "agent"
     for tok in (meta or "").split():
         if tok == "bx:pin":
             pin = True
@@ -258,7 +263,9 @@ def _parse_meta(meta):
             source |= {s for s in tok[len("bx:src="):].split(",") if s}
         elif tok.startswith("bx:slug="):
             slug = tok[len("bx:slug="):]
-    return source, pin, slug
+        elif tok.startswith("bx:owner="):
+            owner = tok[len("bx:owner="):] or "agent"
+    return source, pin, slug, owner
 
 
 def render_pointer_index(scope, pointers):
@@ -289,16 +296,16 @@ def parse_pointer_index(text):
         m = _PTR_RX.match(raw)
         if not m:
             continue
-        source, pin, slug_tok = _parse_meta(m.group("meta"))
+        source, pin, slug_tok, owner = _parse_meta(m.group("meta"))
         title = m.group("title")
         hook = m.group("hook").strip()
         if m.group("scheme") == "mem":
             pointers.append(Pointer(slug=m.group("target"), title=title, hook=hook,
-                                    source=source, pin=pin))
+                                    source=source, pin=pin, owner=owner))
         else:
             pointers.append(Pointer(slug=slug_tok or _slug_from_title(title), title=title,
                                     hook=hook, source=source, pin=pin,
-                                    uuid=m.group("target"), legacy=True))
+                                    uuid=m.group("target"), legacy=True, owner=owner))
     return scope, pointers
 
 
