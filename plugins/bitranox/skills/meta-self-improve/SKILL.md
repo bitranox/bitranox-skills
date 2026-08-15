@@ -95,6 +95,23 @@ Reflect on the just-finished work. List the concrete, reusable things it surface
 each. Discard task state, anything the repo/git history already records, and anything that only
 mattered to this conversation.
 
+Also refuse two classes outright, whatever else recommends them:
+
+- **A bare negative claim about a tool** ("X is broken", "that flag is
+  unsupported"). These harden into refusals the agent cites against itself long
+  after the thing was fixed, and the store has no mechanism to notice the fix.
+  Record the WORKING alternative instead, or attach the version and date that
+  make the claim re-testable for a later reader - that improves the fact's
+  quality but does not suppress the write-time warning below, which fires on
+  every bare negative claim regardless.
+- **An unresolved failure written up as a procedure.** If the session never
+  found a working method, capture the dead ends AS dead ends, explicitly
+  labelled unsolved. Writing them up as a workflow presents untested attempts
+  as validated guidance a later session will trust and repeat.
+
+The engine warns on both at write time; the warning is advisory, and this is the
+judgement it is prompting for.
+
 ### 2. Classify each candidate
 
 | Kind                                                                                            | Home                                                                                                                                           |
