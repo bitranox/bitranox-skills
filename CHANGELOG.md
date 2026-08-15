@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.201.0] - 2026-08-15
+
+### Added
+
+- **`process-agents-dispatching-parallel` now says what a dispatch COSTS, so a fan-out can be
+  sized before it is issued.** The "When to Use" section gains the sizing rule: an Agent-tool
+  dispatch carries a large FIXED token cost independent of the prompt, because every dispatch
+  re-pays the system prompt plus the whole CLAUDE.md and memory cascade the subagent inherits.
+  Measured 2026-08-12: 57.5k tokens for an inert text-only probe with zero tool uses, 73.4k for a
+  general-purpose agent plus one Read. Budget a per-item fan-out as item count times about 60k,
+  and where the per-item work is small, batch many items into one dispatch instead of running one
+  agent per item.
+
+  The skill described how to SPLIT a fan-out and said nothing about what each split costs, so the
+  obvious reading of "dispatch one agent per independent problem domain" scaled straight into a
+  worklist of hundreds. Sizing such a design from the prompt answers low by a factor large enough
+  to make an unaffordable fan-out read as deployable.
+
 ## [5.200.0] - 2026-08-15
 
 ### Added
