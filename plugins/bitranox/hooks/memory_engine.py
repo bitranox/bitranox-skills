@@ -114,7 +114,8 @@ class PinnedEntry(ValueError):
 
     def __init__(self, slug):
         self.slug = slug
-        super().__init__("%s is pinned; use 'amend-pinned --slug %s' to change it deliberately"
+        super().__init__("%s is pinned; report it for human review instead - a human runs "
+                         "'amend-pinned --slug %s' to change it deliberately"
                          % (slug, slug))
 
 
