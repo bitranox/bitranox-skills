@@ -60,7 +60,10 @@ installed copies and needs no bump.
   pre-enforcement claim in four more places (the PLACEMENT step, a Common mistakes bullet, a
   Rationalizations row, and the routing-prompt section shared by the whole dream family) - all
   corrected to match: placement re-levels a pinned fact like any other entry, and only its
-  content is off-limits to the dream.
+  content is off-limits to the dream. A sixth site in `meta-dream-nap/SKILL.md`'s
+  Chain-internal-placement step ("Pinned entries untouched.") carried the identical overclaim and
+  contradicted the corrected routing prompt it defers to; corrected to state placement re-levels a
+  pinned fact like any other entry, content excepted.
 
 ## [5.202.0] - 2026-08-15
 

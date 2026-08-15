@@ -41,7 +41,8 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
    same slug). Do not chase sibling duplicates - out of scope, the full dream's job.
 4. **Chain-internal placement only**: route entries whose EVIDENCE is already clear through the
    routing prompt (in the core), applying only moves whose from AND to levels are ON the chain
-   (up or down). Low/UNSURE and anything involving a sibling stays put. Pinned entries untouched.
+   (up or down). Low/UNSURE and anything involving a sibling stays put. A pinned fact re-levels
+   like any other entry, pin intact; only its CONTENT is out of reach (per the core's Boundaries).
 5. **Prune the obvious**: leaked task-state and dead-content entries AT the chain's levels
    (propose-first per the removal policy in `bitranox:meta-dream-tree` -> references/dream-passes.md).
 6. **Verify + report + state the leftovers**: the core's verification contract (manifest diff,
