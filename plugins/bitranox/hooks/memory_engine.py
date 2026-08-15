@@ -280,19 +280,24 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     return slug
 
 
-def amend_pinned_entry(proj, slug, hook=None, body=None):
+def amend_pinned_entry(proj, slug, hook=None, body=None, source=None):
     """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
     Keeps the existing title (the CLI carries no `--title` to change it) and the existing pin state
     (this never unpins - `bx:pin` is untouched, only content changes); an empty/absent `hook` or
     `body` keeps the stored one, matching `add_or_update_entry`'s update semantics. Raises
     `UnknownSlug` when `slug` names no existing entry at this level - amending presumes a prior
-    `add --pin`."""
+    `add --pin`.
+
+    `source` MERGES into the stored provenance set exactly as `add` does (never replaces it): with
+    the pin gate in place this is the only remaining path that can record a new `bx:src` key or a
+    bumped recurrence on an iron rule, and a pinned fact typically carries several merged keys that
+    a replace would discard."""
     _scope, entries, _bodies = read_store(proj)
     by_slug = {e.slug: e for e in entries}
     if slug not in by_slug:
         raise UnknownSlug(slug)
     return add_or_update_entry(proj, title=by_slug[slug].title, hook=hook or "", body=body or "",
-                               slug=slug, allow_pinned_overwrite=True)
+                               source=source, slug=slug, allow_pinned_overwrite=True)
 
 
 def _slug_owned_elsewhere(anchor, proj, slug):
@@ -1184,6 +1189,24 @@ def _read_text(path):
         return ""
 
 
+def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
+    """Resolve a text argument given inline or as a file path -> (text, error_message).
+
+    The file variant exists because a hook (up to 500 chars) and a scope descriptor (multi-line)
+    are too long to type inline comfortably, and the shell workaround - `--hook "$(cat f)"` - is a
+    command substitution the shell EXECUTES, which the plugin's own guard denies. The file wins when
+    both are given, matching --body/--body-file.
+    """
+    if path:
+        try:
+            return Path(path).read_text(encoding="utf-8"), None
+        except OSError as exc:
+            return None, "! refused: cannot read %s (%s)" % (path, exc.strerror or exc)
+    if inline is None:
+        return None, "! refused: pass %s or %s" % (inline_flag, file_flag)
+    return inline, None
+
+
 # ---- CLI: the capture procedure invokes this (never hand-writes memory files) ------------------
 
 def main(argv=None):
@@ -1195,7 +1218,10 @@ def main(argv=None):
                         "when the learning is about another repo you edited (the Stop gate surfaces "
                         "the routing evidence; a cross-tree misfile can never be re-homed)")
     a.add_argument("--title", required=True)
-    a.add_argument("--hook", required=True, help="one-line hook (what makes the fact present)")
+    a.add_argument("--hook", default=None, help="one-line hook (what makes the fact present)")
+    a.add_argument("--hook-file", default=None,
+                   help="read the hook from a file - use this instead of --hook \"$(cat f)\", which "
+                        "is a shell command substitution in self-authored prose")
     a.add_argument("--type", dest="type_", default=None,
                    choices=[None, "feedback", "project", "reference", "user"])
     a.add_argument("--body", default="", help="the fact body (stored in the central sharded store)")
@@ -1213,12 +1239,22 @@ def main(argv=None):
     ap_.add_argument("--proj", required=True)
     ap_.add_argument("--slug", required=True)
     ap_.add_argument("--hook", default=None)
+    ap_.add_argument("--hook-file", default=None,
+                     help="read the hook from a file - same reason as on add: a 500-char hook via "
+                          "--hook \"$(cat f)\" is a shell command substitution the guard denies")
     ap_.add_argument("--body-file", default=None)
+    ap_.add_argument("--source", default="",
+                     help="comma-separated provenance keys, MERGED into the stored set (never "
+                          "replacing it) - with the pin gate this is the only path that can record "
+                          "a new bx:src key or a bumped recurrence on an iron rule")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
     s.add_argument("--proj", required=True, help="the altitude dir whose scope to set")
-    s.add_argument("--scope", required=True, help="the scope-descriptor text (what this level is about)")
+    s.add_argument("--scope", default=None, help="the scope-descriptor text (what this level is about)")
+    s.add_argument("--scope-file", default=None,
+                   help="read the scope descriptor from a file - a descriptor is multi-line, so this "
+                        "avoids a shell command substitution")
     m = sub.add_parser("ensure-memory-structure",
                        help="create missing CLAUDE.md/CLAUDE.local.md/pointer blocks up to the anchor")
     m.add_argument("--proj", required=True, help="the current project dir; the chain is derived from it")
@@ -1346,11 +1382,16 @@ def main(argv=None):
         return 0
 
     if args.cmd == "set-scope":
+        # Resolve BEFORE ensure_level: a refused call must not leave a level scaffolded behind it.
+        scope, err = _text_from_flag_or_file(args.scope, args.scope_file, "--scope", "--scope-file")
+        if err:
+            print(err)
+            return 1
         ensure_level(args.proj)                       # make sure the pointer block exists first
         local = sig.claude_local_md_path(args.proj)
         text = _read_text(local)
         _scope, pointers = us.parse_pointer_index(text)
-        changed = us.write_if_changed(local, us.upsert_pointer_block(text, args.scope.strip(), pointers))
+        changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope.strip(), pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))
         return 0
 
@@ -1364,26 +1405,34 @@ def main(argv=None):
         return 0
 
     if args.cmd == "add":
+        hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
+        if err:
+            print(err)
+            return 1
+        hook = hook.strip()
         body = args.body
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
         source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
-            slug = add_or_update_entry(args.proj, title=args.title, hook=args.hook, body=body,
+            slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
                                        scope_default=args.scope, slug=args.slug)
         except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
-        if us.hook_over_budget(args.hook):
+        if us.hook_over_budget(hook):
             print("~ warning: hook is %d chars (soft cap %d, advisory - fine up to the %d-char hard "
                   "cap; keep it self-sufficient, do not trim load-bearing detail to silence this)"
-                  % (len(args.hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
-        if us.hook_missing_trigger(args.hook):
+                  % (len(hook), us.HOOK_SOFT_MAX, us.HOOK_HARD_MAX))
+        if us.hook_missing_trigger(hook):
             print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
                   "('When <situation>, <directive>'), or it will not fire during reasoning")
-        for _advice in capture_constraints.advise(args.hook, body):
+        # `hook`, never `args.hook`: the two are only the same when the caller chose the inline
+        # flag, and reading the raw namespace here would silently skip every advisory on a
+        # `--hook-file` call (advise() coerces None to "", so it stays green and says nothing).
+        for _advice in capture_constraints.advise(hook, body):
             print(f"~ warning: {_advice}")
         # The recurrence count is the one durable "this was already written and did not hold"
         # signal, and this is the moment it is in hand. Naming BOTH ladders is deliberate: the
@@ -1400,11 +1449,23 @@ def main(argv=None):
         return 0
 
     if args.cmd == "amend-pinned":
+        # The hook is OPTIONAL here (a body-only or source-only amend keeps the stored hook), so
+        # neither form being present is not an error - resolve only when one of them was passed,
+        # and use the resolved local downstream, never args.hook.
+        hook = None
+        if args.hook is not None or args.hook_file:
+            hook, err = _text_from_flag_or_file(args.hook, args.hook_file, "--hook", "--hook-file")
+            if err:
+                print(err)
+                return 1
+            hook = hook.strip()
         body = None
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
+        source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
-            slug = amend_pinned_entry(args.proj, slug=args.slug, hook=args.hook, body=body)
+            slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
+                                      source=source)
         except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
             print("! refused: %s" % c)
             return 1

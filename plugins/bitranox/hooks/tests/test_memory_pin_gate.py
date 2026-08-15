@@ -95,6 +95,88 @@ def test_amend_pinned_changes_the_hook_and_the_fact_stays_pinned(proj, capsys):
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
 
 
+def test_amend_pinned_merges_a_new_source_into_the_stored_provenance_set(proj, capsys):
+    """With the gate in place, `amend-pinned` is the ONLY path left that can record provenance on
+    an iron rule (`add` refuses a pinned target). A pinned fact carries several merged `bx:src`
+    keys, so this must merge like `add` does - replacing or dropping would erase the fact's
+    history the first time a new key is recorded."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True,
+                                 source=["session-first-2026-08-01", "user-directive-original"])
+    assert _pointer(proj, slug).source == {"session-first-2026-08-01", "user-directive-original"}
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug,
+                "--source", "session-second-2026-08-15"])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    ptr = _pointer(proj, slug)
+    assert ptr.source == {"session-first-2026-08-01", "user-directive-original",
+                          "session-second-2026-08-15"}
+    assert ptr.pin is True
+    assert ptr.hook == "When testing, do the original thing."   # source-only amend keeps the hook
+
+
+def test_amend_pinned_accepts_several_comma_separated_sources(proj, capsys):
+    """`--source` splits on commas exactly as `add`'s does, so the two verbs take one syntax."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True, source=["first"])
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--source", "second, third"])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert _pointer(proj, slug).source == {"first", "second", "third"}
+
+
+def test_amend_pinned_reads_the_hook_from_a_file(tmp_path, proj, capsys):
+    """A 500-char hook cannot be typed inline behind the shell guard, so `amend-pinned` takes the
+    same `--hook-file` as `add`, resolved through the same helper."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True)
+    hf = tmp_path / "hook.txt"
+    hf.write_text("When testing, read the AMENDED hook from a file.\n", encoding="utf-8")
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--hook-file", str(hf)])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    ptr = _pointer(proj, slug)
+    assert ptr.hook == "When testing, read the AMENDED hook from a file."
+    assert ptr.pin is True
+
+
+def test_amend_pinned_refuses_an_unreadable_hook_file_before_writing(tmp_path, proj, capsys):
+    """The file form fails loud rather than silently amending with an empty hook."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True)
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug,
+                "--hook-file", str(tmp_path / "absent.txt")])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "! refused:" in out
+    assert _pointer(proj, slug).hook == "When testing, do the original thing."
+
+
+def test_amend_pinned_with_neither_hook_form_is_not_an_error(proj, capsys):
+    """Unlike `add`, the hook is optional here: a body-only amend keeps the stored hook and must
+    not trip the 'pass --hook or --hook-file' refusal that `add` raises."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True)
+    body_file = Path(proj) / "newbody.txt"
+    body_file.write_text("An amended body.\n", encoding="utf-8")
+
+    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--body-file", str(body_file)])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert "! refused:" not in out
+    assert _pointer(proj, slug).hook == "When testing, do the original thing."
+    assert "An amended body." in us.body_path(E._anchor(proj), slug).read_text(encoding="utf-8")
+
+
 def test_pinned_fact_survives_move_and_the_gate_still_refuses_at_the_destination(tmp_path, capsys):
     anchor, mid, proj = _three_levels(tmp_path)
     slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
