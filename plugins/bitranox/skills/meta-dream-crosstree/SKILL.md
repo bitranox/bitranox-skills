@@ -103,6 +103,15 @@ Create one todo per step.
    `dream_state.py should-promote <slug>` (`promote`/`hold`), `dream_state.py promoted <slug>`
    to clear after an applied promotion (home: `<plugin>/skills/meta-dream-tree/`; the counters are the
    `self_improve_signals.py` dwell store, OUT of the dreamed store so a converged re-run is a no-op).
+   **VERIFY a `promote` before acting on it: the counter keys on the RAW PROJECT STRING**, with no
+   validation that it names a real level and no normalisation. Spell a project differently from an
+   earlier run (`rpx01` where that run used the level path) and you create a SECOND key for the SAME
+   project, which the >= 2-distinct-projects gate reads as two corroborators. It does not fail
+   loudly - it returns the word you were hoping for. So open the store
+   (`~/.claude/self-improve-audit/promotion-candidates.json` maps slug -> its list of project keys),
+   confirm those keys are genuinely DIFFERENT projects, and reuse the spelling earlier runs used
+   instead of inventing one. Treat a verdict whose provenance you cannot establish as `hold`:
+   holding costs one more dream, a wrong promote costs a permanently always-loaded line.
 4b. **Misplacement audit (wrong-TREE facts).** ONLY the cross-tree modes can see this: a fact
    captured while cwd was another repo lands in the WRONG tree's store, and nothing in that tree's
    own integrity checks knows it is foreign (`meta-dream-tree` sees one tree and structurally

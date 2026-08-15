@@ -17,7 +17,7 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
-## [5.203.0] - 2026-08-15
+## [5.204.0] - 2026-08-15
 
 ### Added
 
@@ -27,10 +27,21 @@ installed copies and needs no bump.
   overwrite a pinned fact's hook or body. `add_or_update_entry` now raises `PinnedEntry` BEFORE any
   write when the target at that slug is already pinned, so `memory_engine add --slug <pinned>`
   refuses (`! refused: ... is pinned; use 'amend-pinned --slug <slug>' ...`, exit 1) instead of
-  quietly rewriting it. The only way through is the new `amend-pinned --proj D --slug S [--hook H]
-  [--body-file F]` verb, a separate command rather than a `--force` flag, so an autonomous pass
-  copying an example `add` invocation can never reach it by accident; it performs the same upsert
-  with the pin check skipped and does not itself unpin the fact.
+  quietly rewriting it. The only way through is the new `amend-pinned --proj D --slug S
+  [--hook H|--hook-file F] [--body-file F] [--source S]` verb, a separate command rather than a
+  `--force` flag, so an autonomous pass copying an example `add` invocation can never reach it by
+  accident; it performs the same upsert with the pin check skipped and does not itself unpin the
+  fact.
+- `amend-pinned` carries `--source`, MERGED into the stored provenance set exactly as `add` merges
+  it. With the gate in place this is the only path left that can record a new `bx:src` key or a
+  bumped recurrence count on a pinned fact, and the store's convention is that an iron rule
+  accumulates several keys over its life - so replacing the set, or offering no way to write it at
+  all, would have made provenance on the pinned facts unmaintainable through every shipped path.
+- `amend-pinned` also carries `--hook-file`, resolved by the same helper `add` and `set-scope` use.
+  A hook runs to 500 chars, which is why passing one inline needs a shell substitution the plugin's
+  own guard denies; `amend-pinned` would otherwise have been the one hook-writing verb without the
+  file form. The hook stays OPTIONAL on this verb (a body-only or source-only amend keeps the
+  stored hook), so passing neither form is not an error here as it is on `add`.
 - `move`, `relocate`, and `rename` are UNCHANGED and are NOT gated: they already thread `pin`
   through every write untouched (verified before this change), so re-leveling a pinned fact keeps
   working exactly as before - the gate lives only in `add_or_update_entry`'s update path, and a
@@ -65,13 +76,17 @@ installed copies and needs no bump.
   contradicted the corrected routing prompt it defers to; corrected to state placement re-levels a
   pinned fact like any other entry, content excepted.
 
-## [5.202.0] - 2026-08-15
+## [5.203.0] - 2026-08-15
 
 ### Added
 
 - `memory_engine add` now warns when a fact's hook reads as a bare negative claim about a tool, or
   when its body describes an unresolved failure. Advisory only, never a refusal, since an incident
-  record legitimately describes a broken thing.
+  record legitimately describes a broken thing. The hook advisory is computed from the RESOLVED
+  hook, so it fires identically whether the caller passed `--hook` or `--hook-file`, and a
+  CLI-level test drives the real script through both forms - `advise()` coerces an absent hook to
+  the empty string, so a call site reading the raw argument instead would have gone silent on the
+  file form with no error and no failing test.
 - `meta-self-improve` and `meta-dream-tree` state both constraints where the author and the
   reviewer read them.
 
