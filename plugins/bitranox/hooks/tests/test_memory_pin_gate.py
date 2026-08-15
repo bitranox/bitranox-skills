@@ -67,6 +67,23 @@ def test_add_refuses_a_pinned_target_and_leaves_the_original_hook_on_disk(proj, 
     assert "something ELSE" not in body
 
 
+def test_pinned_refusal_attributes_the_escape_to_a_human_not_the_reader(proj, capsys):
+    """The refusal message is the most proximate instruction an autonomous reader sees at the
+    moment it is blocked - it must not read as a hand-off to run `amend-pinned` itself. Assert on
+    the phrase carrying that meaning, not the whole sentence, so a later copy-edit does not break
+    this test for a wording change that keeps the intent."""
+    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
+                                 body="B", pin=True)
+
+    rc = E.main(["add", "--proj", proj, "--title", "Iron rule",
+                "--hook", "When testing, do something ELSE.", "--slug", slug])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "human review" in out
+    assert "amend-pinned --slug %s" % slug in out   # a human at a keyboard still needs the verb
+
+
 def test_add_still_succeeds_on_an_unpinned_target(proj, capsys):
     """Control: the gate discriminates on pin, it does not refuse every overwrite."""
     slug = E.add_or_update_entry(proj, "Ordinary fact", "When testing, do the original thing.",
