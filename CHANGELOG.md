@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.205.0] - 2026-08-16
+
+### Changed
+
+- **The pin-gate refusal no longer hands the reader its own bypass.** `PinnedEntry`'s message told
+  whoever hit it exactly how to get past the gate ("use 'amend-pinned --slug S' to change it
+  deliberately"), while four other sites in this same tree document `amend-pinned` as human-use
+  only. The message read as an instruction, and the model reading it is the one thing the gate
+  exists to stop. It now reads `"S is pinned; report it for human review instead - a human runs
+  'amend-pinned --slug S' to change it deliberately"`: the escape is attributed to a human, and an
+  autonomous reader is told to report rather than run the verb. Wording only - same exception
+  type, same raise sites, same `! refused: ...` framing the caller adds.
+
+### Added
+
+- **`add` takes `--scope-file`.** `set-scope` already had `--scope`/`--scope-file` for exactly the
+  reason `--hook`/`--hook-file` exist: a scope descriptor is multi-line, and `--scope "$(cat f)"`
+  is a shell command substitution the plugin's own guard denies. `add` had no file form at all, so
+  there was no way to set a multi-line scope on first capture. Unlike `set-scope`'s scope, `add`'s
+  is OPTIONAL - essentially every capture passes neither flag - so it is resolved with a GUARDED
+  call to the shared `_text_from_flag_or_file` helper: the strict helper only runs when
+  `--scope-file` was actually given, otherwise `args.scope` (default `""`) is used as-is and the
+  helper's "pass one or the other" refusal is never reached. The file wins when both are given,
+  matching `--body`/`--body-file` and `set-scope`'s own pair; an unreadable file is a clean
+  `! refused:` (exit 1), never a traceback.
+
 ## [5.204.0] - 2026-08-15
 
 ### Added
