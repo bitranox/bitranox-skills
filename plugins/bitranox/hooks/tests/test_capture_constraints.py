@@ -12,25 +12,25 @@ def test_bare_negative_claim_is_flagged():
     assert any("negative claim" in a for a in out), out
 
 
-def test_negative_claim_with_a_version_is_not_flagged():
+def test_negative_claim_with_a_version_is_still_flagged():
     out = cc.advise(
         "When using foo 1.2.3, know --bar does not work; fixed upstream in 1.3.0.",
         "",
     )
-    assert out == [], out
+    assert any("negative claim" in a for a in out), out
 
 
-def test_negative_claim_with_a_date_is_not_flagged():
+def test_negative_claim_with_a_date_is_still_flagged():
     out = cc.advise(
         "When using the browser tool, know it does not work (measured 2026-08-15).",
         "",
     )
-    assert out == [], out
+    assert any("negative claim" in a for a in out), out
 
 
 def test_negative_claim_with_an_unrelated_date_elsewhere_is_still_flagged():
-    # The date describes when the tool was RELEASED, not when the "broken"
-    # claim was tested - it must not excuse a claim it has nothing to do with.
+    # A date in the trigger clause (when the tool was released) does not
+    # suppress the warning on the negative claim later in the hook.
     out = cc.advise(
         "When using the browser tool released around 2026-08-01, know the "
         "search command is broken.",
@@ -40,8 +40,8 @@ def test_negative_claim_with_an_unrelated_date_elsewhere_is_still_flagged():
 
 
 def test_negative_claim_with_an_unrelated_version_elsewhere_is_still_flagged():
-    # The version scopes the PLUGIN mentioned in the trigger clause, not the
-    # export-button claim in the separate clause after the comma.
+    # A version in the trigger clause (the plugin's own version) does not
+    # suppress the warning on the negative claim later in the hook.
     out = cc.advise(
         "As of plugin 5.201.0, the old export button is broken.",
         "",
