@@ -25,6 +25,7 @@ import re
 import sys
 from pathlib import Path
 
+import capture_constraints
 import self_improve_signals as sig
 import uuid_store as us
 
@@ -1316,6 +1317,8 @@ def main(argv=None):
         if us.hook_missing_trigger(args.hook):
             print("~ warning: hook has no trigger phrase - lead with WHEN it applies "
                   "('When <situation>, <directive>'), or it will not fire during reasoning")
+        for _advice in capture_constraints.advise(args.hook, body):
+            print(f"~ warning: {_advice}")
         # The recurrence count is the one durable "this was already written and did not hold"
         # signal, and this is the moment it is in hand. Naming BOTH ladders is deliberate: the
         # body cannot say whether a repeat is a rule being skipped or work being re-done, and
