@@ -1,4 +1,4 @@
-"""Tests for `--hook-file` on `add` and `--scope-file` on `set-scope`.
+"""Tests for `--hook-file` on `add`, `--scope-file` on `set-scope`, and `--scope-file` on `add`.
 
 Only the BODY could come from a file. A hook runs to 500 chars and a scope descriptor to ~120
 words, so both were routinely passed as `--hook "$(cat f)"` - a command substitution in
@@ -8,8 +8,11 @@ heredoc writing the file in the same call dies with it and the next call fails o
 pointing at the wrong cause.
 
 The load-bearing parts: the file variant reaches the SAME validation the inline flag does (hook cap
-and trigger warnings are computed from the resolved text, not from `args.hook`), and neither flag
-is silently optional - a call passing neither is refused with a message naming both. All content
+and trigger warnings are computed from the resolved text, not from `args.hook`); for hook and for
+`set-scope`'s scope, neither flag is silently optional - a call passing neither is refused with a
+message naming both. `add`'s scope is the one exception: it is OPTIONAL there (an ordinary capture
+passes no scope flag at all), so passing neither `--scope` nor `--scope-file` must stay silent and
+succeed - never routed through the strict "pass one or the other" helper unguarded. All content
 ASCII.
 """
 
@@ -128,3 +131,62 @@ def test_a_missing_hook_file_fails_with_the_path(tmp_path, capsys):
 
     assert rc != 0
     assert "nope.txt" in capsys.readouterr().out
+
+
+def test_add_with_neither_scope_flag_still_succeeds(tmp_path, capsys):
+    """Regression lock for the trap: `add`'s scope is OPTIONAL (unlike `set-scope`'s mandatory
+    one), and `add` is called with no scope flag at all on essentially every capture. This must
+    keep passing - it fails only if `add`'s scope is later routed through `_text_from_flag_or_file`
+    the way `set-scope` needs it (erroring whenever neither flag is given)."""
+    _anchor, proj = _tree(tmp_path)
+
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK,
+                 "--body", "b", "--slug", "s-noscope"])
+
+    assert rc == 0
+    assert "! refused:" not in capsys.readouterr().out
+
+
+def test_add_reads_the_scope_from_a_file(tmp_path):
+    """--scope-file sets the level's scope descriptor from `add`, same as `set-scope` does, and
+    survives a multi-line descriptor (the reason the file form exists at all)."""
+    _anchor, proj = _tree(tmp_path)
+    sf = tmp_path / "scope.txt"
+    sf.write_text(SCOPE + "\n", encoding="utf-8")
+
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK,
+                 "--body", "b", "--slug", "s-scopefile", "--scope-file", str(sf)])
+
+    assert rc == 0
+    assert "PLACE-ELSEWHERE: b" in _scope_at(proj)
+
+
+def test_add_scope_file_unreadable_path_is_a_clean_refusal(tmp_path, capsys):
+    """An unreadable --scope-file must exit 1 with `! refused:`, never a traceback."""
+    _anchor, proj = _tree(tmp_path)
+
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK,
+                 "--body", "b", "--slug", "s-scopemissing",
+                 "--scope-file", str(tmp_path / "nope-scope.txt")])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "! refused:" in out
+    assert "nope-scope.txt" in out
+
+
+def test_add_scope_file_wins_over_inline_scope(tmp_path):
+    """Matching --body/--body-file and set-scope's own --scope/--scope-file: the file wins when
+    both are given."""
+    _anchor, proj = _tree(tmp_path)
+    sf = tmp_path / "scope.txt"
+    sf.write_text(SCOPE + "\n", encoding="utf-8")
+
+    rc = E.main(["add", "--proj", proj, "--title", "T", "--hook", HOOK,
+                 "--body", "b", "--slug", "s-scopeboth",
+                 "--scope", "WHAT: the inline one, must be ignored", "--scope-file", str(sf)])
+
+    assert rc == 0
+    scope = _scope_at(proj)
+    assert "PLACE-ELSEWHERE: b" in scope
+    assert "the inline one" not in scope
