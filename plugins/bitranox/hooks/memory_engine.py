@@ -1232,6 +1232,11 @@ def main(argv=None):
                    help="force-keep in the always-loaded pointer index; once set, an ordinary add "
                         "refuses to overwrite this fact - use amend-pinned to change it deliberately")
     a.add_argument("--scope", default="", help="scope descriptor for this level (set if absent)")
+    a.add_argument("--scope-file", default=None,
+                   help="read the scope descriptor from a file - same reason as --hook-file: a "
+                        "multi-line descriptor via --scope \"$(cat f)\" is a shell command "
+                        "substitution the guard denies. Unlike set-scope, this stays OPTIONAL: "
+                        "passing neither --scope nor --scope-file is not an error")
     a.add_argument("--slug", default=None,
                    help="target an existing identity explicitly (title can then change freely)")
     ap_ = sub.add_parser("amend-pinned",
@@ -1414,11 +1419,25 @@ def main(argv=None):
         body = args.body
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
+        # Unlike --hook/--hook-file, a scope flag on `add` is OPTIONAL - essentially every capture
+        # passes neither. So this is a GUARDED call: `_text_from_flag_or_file` only runs when
+        # --scope-file was actually given (it reads the file, or refuses cleanly if it cannot);
+        # with no --scope-file, args.scope (default "") is used as-is and the helper's "pass one or
+        # the other" refusal is never reached. Routing this unconditionally through the helper is
+        # the trap - it turns every ordinary `add` into a refusal the moment anyone tightens
+        # --scope's default to match set-scope's mandatory one.
+        scope_default = args.scope
+        if args.scope_file:
+            scope_default, err = _text_from_flag_or_file(args.scope, args.scope_file,
+                                                          "--scope", "--scope-file")
+            if err:
+                print(err)
+                return 1
         source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
             slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
                                        type_=args.type_, source=source, pin=args.pin,
-                                       scope_default=args.scope, slug=args.slug)
+                                       scope_default=scope_default, slug=args.slug)
         except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry) as c:
             print("! refused: %s" % c)
             return 1
