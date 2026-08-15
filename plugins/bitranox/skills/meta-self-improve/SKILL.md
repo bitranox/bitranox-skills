@@ -104,10 +104,10 @@ Also refuse two classes outright, whatever else recommends them:
   make the claim re-testable for a later reader - that improves the fact's
   quality but does not suppress the write-time warning below, which fires on
   every bare negative claim regardless.
-- **An unresolved failure written up as a procedure.** If the session never
-  found a working method, capture the dead ends AS dead ends, explicitly
-  labelled unsolved. Writing them up as a workflow presents untested attempts
-  as validated guidance a later session will trust and repeat.
+- **An unresolved failure.** If the session never found a working method,
+  capture the dead ends AS dead ends, explicitly labelled unsolved - an
+  unlabelled write-up presents untested attempts as validated guidance a
+  later session will trust and repeat.
 
 The engine warns on both at write time; the warning is advisory, and this is the
 judgement it is prompting for.
