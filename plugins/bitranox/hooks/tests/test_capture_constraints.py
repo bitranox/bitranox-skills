@@ -28,6 +28,27 @@ def test_negative_claim_with_a_date_is_not_flagged():
     assert out == [], out
 
 
+def test_negative_claim_with_an_unrelated_date_elsewhere_is_still_flagged():
+    # The date describes when the tool was RELEASED, not when the "broken"
+    # claim was tested - it must not excuse a claim it has nothing to do with.
+    out = cc.advise(
+        "When using the browser tool released around 2026-08-01, know the "
+        "search command is broken.",
+        "",
+    )
+    assert any("negative claim" in a for a in out), out
+
+
+def test_negative_claim_with_an_unrelated_version_elsewhere_is_still_flagged():
+    # The version scopes the PLUGIN mentioned in the trigger clause, not the
+    # export-button claim in the separate clause after the comma.
+    out = cc.advise(
+        "As of plugin 5.201.0, the old export button is broken.",
+        "",
+    )
+    assert any("negative claim" in a for a in out), out
+
+
 def test_unresolved_failure_written_as_procedure_is_flagged():
     body = "We tried A, then B, then C. None of them worked. Next session should retry."
     out = cc.advise("When X happens, do A then B then C.", body)
