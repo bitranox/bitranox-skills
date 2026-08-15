@@ -22,8 +22,8 @@ installed copies and needs no bump.
 ### Added
 
 - `memory_engine add` now warns when a fact's hook reads as a bare negative claim about a tool, or
-  when its body describes an unresolved failure while the hook reads as a procedure. Advisory only,
-  never a refusal, since an incident record legitimately describes a broken thing.
+  when its body describes an unresolved failure. Advisory only, never a refusal, since an incident
+  record legitimately describes a broken thing.
 - `meta-self-improve` and `meta-dream-tree` state both constraints where the author and the
   reviewer read them.
 

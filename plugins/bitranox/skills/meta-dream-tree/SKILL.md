@@ -159,8 +159,8 @@ the success line, abort-and-show on a miss).
    1. Does this assert a tool does NOT work, without a version or date that makes
       it re-testable? If so, re-test it or delete it. A stale negative claim is
       worse than a missing fact: it actively steers away from something that works.
-   2. Does this read as a procedure while describing a session that never reached a
-      working end state? If so, relabel it as unsolved.
+   2. Does this describe a session that never reached a working end state, without
+      labelling it unsolved? If so, relabel it as unsolved.
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
    its origin and siblings) and normalize. Then: re-derive the manifest and diff against step 2

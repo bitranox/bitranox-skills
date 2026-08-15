@@ -49,9 +49,17 @@ def test_negative_claim_with_an_unrelated_version_elsewhere_is_still_flagged():
     assert any("negative claim" in a for a in out), out
 
 
-def test_unresolved_failure_written_as_procedure_is_flagged():
+def test_unresolved_failure_in_body_is_flagged():
     body = "We tried A, then B, then C. None of them worked. Next session should retry."
     out = cc.advise("When X happens, do A then B then C.", body)
+    assert any("unresolved" in a for a in out), out
+
+
+def test_unresolved_failure_is_flagged_even_when_the_hook_is_not_a_procedure():
+    # The trigger is the BODY alone - the hook here is a plain observation, not a
+    # numbered/sequential how-to, and the advisory must still fire.
+    body = "We tried A, then B, then C. None of them worked. Next session should retry."
+    out = cc.advise("When investigating X, know that the usual suspects do not explain it.", body)
     assert any("unresolved" in a for a in out), out
 
 

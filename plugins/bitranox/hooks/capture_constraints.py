@@ -5,8 +5,8 @@ list in Hermes Agent's agent/background_review.py (read 2026-08-15):
 
 1. A bare NEGATIVE claim about a tool hardens into a refusal the agent cites
    against itself long after the thing was fixed.
-2. An UNRESOLVED failure written up as a procedure presents untested attempts
-   as validated guidance a later session trusts and repeats.
+2. An UNRESOLVED failure presents untested attempts as validated guidance a
+   later session trusts and repeats.
 
 These are ADVISORIES, never refusals: an incident record legitimately describes
 a broken thing, and refusing would make it unrecordable. Every hook whose
@@ -51,9 +51,9 @@ _NEGATIVE_ADVICE = (
     "a later reader can re-test it."
 )
 _UNRESOLVED_ADVICE = (
-    "body describes an unresolved failure while the hook reads as a procedure; "
-    "that presents untested attempts as validated guidance. Label the dead ends "
-    "as unsolved, or do not capture until a working method exists."
+    "body describes an unresolved failure; that presents untested attempts as "
+    "validated guidance. Label the dead ends as unsolved, or do not capture "
+    "until a working method exists."
 )
 
 
