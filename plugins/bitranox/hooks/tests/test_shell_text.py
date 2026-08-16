@@ -96,3 +96,60 @@ def test_both_guards_use_this_exact_function():
     import shell_prefix_selfref_guard as P
     assert G.strip_heredoc_bodies is S.strip_heredoc_bodies
     assert P.strip_heredoc_bodies is S.strip_heredoc_bodies
+
+
+# --- mask_data_regions ----------------------------------------------------------------------------
+
+
+def test_mask_consumes_the_quote_characters_too():
+    """Keeping the quotes leaves `"$MAIN"` as two bare `"` tokens, which loses the subcommand."""
+    masked = S.mask_data_regions('git -C "$MAIN" commit')
+    assert masked.split() == ["git", "-C", "QQQQQQQ", "commit"]
+
+
+def test_mask_preserves_length():
+    for command in ['git commit -m "a; b"', "echo 'x' ; ls", "n=$((1+2))", "echo ${FOO}", "a `b` c"]:
+        assert len(S.mask_data_regions(command)) == len(command)
+
+
+def test_mask_hides_a_semicolon_inside_a_double_quoted_message():
+    assert ";" not in S.mask_data_regions('git commit -m "wip; git push"')
+
+
+def test_mask_hides_a_newline_inside_a_quoted_message():
+    assert "\n" not in S.mask_data_regions("git commit -m 'line one\nline two'")
+
+
+def test_mask_handles_nested_command_substitution():
+    masked = S.mask_data_regions("x=$(echo $(date)) ; ls")
+    assert masked.endswith(" ; ls")
+    assert "(" not in masked and ")" not in masked
+
+
+def test_mask_handles_arithmetic_expansion():
+    masked = S.mask_data_regions("n=$((1+2)) ; ls")
+    assert "(" not in masked and ")" not in masked
+
+
+def test_mask_leaves_parameter_expansion_as_one_token():
+    masked = S.mask_data_regions("echo ${FOO} ; ls")
+    assert "{" not in masked and "}" not in masked
+
+
+def test_mask_turns_a_backslash_newline_into_whitespace():
+    """A line continuation must not become filler, or the tokens it joins fuse into one word."""
+    assert S.mask_data_regions("git -c a=b \\\ncommit").split() == ["git", "-c", "a=b", "commit"]
+
+
+def test_mask_blanks_comments():
+    assert ";" not in S.mask_data_regions("git commit -m x  # ; git push")
+
+
+def test_mask_survives_an_unterminated_quote():
+    assert len(S.mask_data_regions('git commit -m "oops')) == len('git commit -m "oops')
+
+
+def test_blank_unexpanded_text_still_leaves_double_quotes_alone():
+    """The two functions answer different questions and must keep treating quotes differently."""
+    assert "$?" in S.blank_unexpanded_text('echo "rc=$?"')
+    assert "$?" not in S.mask_data_regions('echo "rc=$?"')
