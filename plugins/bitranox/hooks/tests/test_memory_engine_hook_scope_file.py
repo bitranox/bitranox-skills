@@ -77,7 +77,10 @@ def test_add_refuses_when_neither_hook_flag_is_given(tmp_path, capsys):
     rc = E.main(["add", "--proj", proj, "--title", "T", "--body", "b", "--slug", "s-nohook"])
 
     assert rc != 0
-    err = capsys.readouterr().out + capsys.readouterr().err
+    # ONE readouterr(): each call DRAINS the capture, so a second call returns empty and
+    # the stream it reads is never actually checked. Read both from a single capture.
+    captured = capsys.readouterr()
+    err = captured.out + captured.err
     assert "--hook" in err and "--hook-file" in err
 
 
