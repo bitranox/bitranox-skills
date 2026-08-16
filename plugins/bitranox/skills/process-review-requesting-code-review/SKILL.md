@@ -51,27 +51,27 @@ Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md
 
 ## A gate is real only when the actor cannot satisfy it
 
-A review is one kind of verification gate, and every gate has the same failure mode: the actor whose
-work is being checked is also the thing deciding whether the check passed. Ask, of any gate you
-design or accept, what the actor would do to pass it WITHOUT doing the work. If the answer is
-"assert that it did", the gate is advice.
+A review is a gate, and every gate fails the same way: the actor whose work is checked also decides
+whether the check passed. A gate is real only when that actor is STRUCTURALLY incapable of
+satisfying it - not merely instructed not to. Ask what the actor would do to pass WITHOUT doing the
+work; if the answer is "assert that it did", the gate is advice.
 
-Shapes that do NOT gate, however they read:
+| Does not gate                                | Gates, because the actor cannot reach it       |
+|----------------------------------------------|------------------------------------------------|
+| a role name in a prompt ("act as a reviewer") | a state machine checked against an authenticated identity |
+| an LLM grading a peer, or itself              | a separate job with its own permissions        |
+| a regex over prose the agent writes           | a non-AI step returning an exit code           |
 
-- a role name in a prompt ("you are a rigorous reviewer") - it changes tone, not authority;
-- an LLM grading a peer, or itself, with no external signal to contradict either;
-- a regex over the agent's own prose, which the agent writes.
-
-Shapes that DO gate, because the actor cannot reach them:
-
-- a state machine checked against an authenticated identity;
-- a separate job with its own permissions, so passing needs a credential the actor lacks;
-- a non-AI step returning an exit code - a test suite, a linter, a type checker, a build.
+**An LLM reviewer FINDS; it does not AUTHORIZE.** Both are true at once: dispatching the reviewer
+is worth doing - fresh context and no sunk cost let it see what you cannot - and it is still not
+the gate. Keep the jobs apart. The review surfaces candidates; something with an exit code decides
+whether the work proceeds. Separateness buys better FINDING, never gating, so reading a subagent's
+verdict as permission is exactly what puts an LLM in the left-hand column.
 
 This is why the reviewer here is a SEPARATE subagent that never saw your session, and why "I already
-tested it" is in the Red Flags table below. It is also why a review's findings should be checked
-against something that can refuse: a reported fix is a claim until a command exits non-zero on the
-old code and zero on the new.
+tested it" is a Red Flag below. Apply it to the findings too - but gate on the FIX, not the
+FINDING: checking prose for a finding is the left-hand column again, whereas a reported fix is
+a claim until a command exits non-zero on the old code and zero on the new.
 
 Measured across five agent orchestrators: four shipped verification that could not refuse, and what
 separated the fifth was purely WHERE the gate lived - not effort, not code quality.
