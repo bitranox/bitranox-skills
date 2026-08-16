@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.207.0] - 2026-08-16
+
+### Added
+
+- **`process-review-requesting-code-review`: when a verification gate is real.** A review is a gate,
+  and every gate fails the same way - the actor whose work is checked also decides whether the check
+  passed. The section names the shapes that do NOT gate (a role name in a prompt, an LLM grading a
+  peer, a regex over the agent's own prose) and the three that DO, because the actor cannot reach
+  them (a state machine checked against an authenticated identity, a separate job with its own
+  permissions, a non-AI step returning an exit code). Measured across five agent orchestrators: four
+  shipped verification that could not refuse, and what separated the fifth was purely WHERE the gate
+  lived.
+
+### Fixed
+
+- **`meta-dream-tree` / dream-core: `session-review`'s output can be truncated without saying so.**
+  When the result is too large the harness persists it to a file and shows a preview; that file is a
+  VIEW of the stretch, not the stretch. Measured: the banner reported 1,958,654 unreviewed bytes and
+  the persisted file held 244,360, with nothing flagging the gap - it is well-formed JSONL that
+  parses cleanly. capture-first now says to compare the claimed byte count against what arrived, and
+  to read the source `.jsonl` over the range directly before running `session-reviewed`, which is a
+  one-way discard of the pointer to whatever was skipped. The section already forbade discharging
+  the obligation unread; it named no mechanism by which that happens silently.
+
 ## [5.206.2] - 2026-08-16
 
 ### Fixed

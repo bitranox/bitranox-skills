@@ -49,6 +49,33 @@ Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md
 
 **Before merging:** scan the push range for leaked secrets, private infrastructure, or personal data (see `bitranox:compuse-git`) - a reviewer should flag these too.
 
+## A gate is real only when the actor cannot satisfy it
+
+A review is one kind of verification gate, and every gate has the same failure mode: the actor whose
+work is being checked is also the thing deciding whether the check passed. Ask, of any gate you
+design or accept, what the actor would do to pass it WITHOUT doing the work. If the answer is
+"assert that it did", the gate is advice.
+
+Shapes that do NOT gate, however they read:
+
+- a role name in a prompt ("you are a rigorous reviewer") - it changes tone, not authority;
+- an LLM grading a peer, or itself, with no external signal to contradict either;
+- a regex over the agent's own prose, which the agent writes.
+
+Shapes that DO gate, because the actor cannot reach them:
+
+- a state machine checked against an authenticated identity;
+- a separate job with its own permissions, so passing needs a credential the actor lacks;
+- a non-AI step returning an exit code - a test suite, a linter, a type checker, a build.
+
+This is why the reviewer here is a SEPARATE subagent that never saw your session, and why "I already
+tested it" is in the Red Flags table below. It is also why a review's findings should be checked
+against something that can refuse: a reported fix is a claim until a command exits non-zero on the
+old code and zero on the new.
+
+Measured across five agent orchestrators: four shipped verification that could not refuse, and what
+separated the fifth was purely WHERE the gate lived - not effort, not code quality.
+
 ## Example
 
 ```

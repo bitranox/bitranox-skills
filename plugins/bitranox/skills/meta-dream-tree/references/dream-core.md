@@ -99,6 +99,15 @@ dream in one session costs nothing and re-analyzes nothing. When the pass is don
 `dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop
 gate will not let the session stop until this nap has run.
 
+**`session-review`'s OUTPUT can be truncated, and it does not say so.** When the result is too
+large the harness PERSISTS it to a file and shows a short preview; that file is a VIEW of the
+stretch, not the stretch. Measured: the banner reported 1,958,654 unreviewed bytes, the persisted
+file held 244,360 - an eighth - and nothing flagged the gap, because the file is well-formed JSONL
+that parses cleanly. Compare the byte count the banner CLAIMS against the size of what you actually
+received; if they differ, read the source `.jsonl` yourself over that byte range (open it, skip to
+the offset, extract the record types you need) before running `session-reviewed`. Advancing the
+watermark is a one-way discard: it destroys the only pointer to what you skipped.
+
 **The owed transcript is usually NOT this session's.** The obligation is recorded per PROJECT and
 outlives the session that compacted, so it is routinely inherited by a later session that never
 compacted at all. `session-review` therefore targets the transcript that ACTUALLY compacted while it
