@@ -591,3 +591,59 @@ def test_a_conditional_set_e_still_exempts_and_the_docstring_says_so():
     """
     assert G.chained_state_changes("false && set -e ; git commit -m x ; git push") is None
     assert G.chained_state_changes("cd /repo && set -e ; git commit -m x ; git push") is None
+
+
+# --- a repo change between the pair breaks the dependency ------------------------------------------
+
+
+def test_differing_dash_c_targets_are_different_repositories():
+    """Committing to one sub-repo then another is two pieces of work, not a chain."""
+    command = (
+        "cd /umbrella\n"
+        'git -C provmm_planning add -A && git -C provmm_planning commit -q -m "notes"\n'
+        'git -C provmm_proxmox add -A && git -C provmm_proxmox commit -q -m "code"'
+    )
+    assert G.chained_state_changes(command) is None
+
+
+def test_a_cd_between_the_two_verbs_means_a_different_tree():
+    """Locks an off-by-one: statements are the EVEN indices, separators the odd ones.
+
+    Walking the odd indices matches no statement at all, so the rule silently did half its job -
+    the `git -C` half worked and the `cd` half never fired. Measured before and after: 44 of these
+    survived, which is what exposed it.
+    """
+    command = "cd /repo-a && git commit -m x ; cd /repo-b && git commit -m y"
+    assert G.chained_state_changes(command) is None
+
+
+def test_same_tree_sequential_commits_still_block():
+    """No `cd` and no `-C`: one repo, and a failed first commit lets the second report success."""
+    assert G.chained_state_changes("git commit -m a ; git commit -m b") == ["commit", "commit"]
+
+
+def test_the_same_dash_c_target_twice_is_one_tree():
+    assert G.chained_state_changes("git -C /repo commit -m x ; git -C /repo push") == [
+        "commit",
+        "push",
+    ]
+
+
+def test_a_leading_cd_before_both_verbs_is_not_a_tree_change():
+    assert G.chained_state_changes("cd /repo\ngit commit -m x\ngit push") == ["commit", "push"]
+
+
+def test_a_cd_does_not_excuse_a_pair_of_DIFFERENT_verbs():
+    """The incident itself, in two steps - a directory change is not a repository change.
+
+    `~/wt-capsys` and `$MAIN` are a worktree and its main checkout of ONE repo, so the commit
+    failing absolutely did invalidate the push. Nothing in the text separates that from two
+    unrelated repos, so the tree reading is confined to a REPEATED verb, where both readings agree.
+    """
+    assert G.chained_state_changes('cd ~/wt && git commit -m x ; cd "$MAIN" && git push') == [
+        "commit",
+        "push",
+    ]
+    assert G.chained_state_changes(
+        'cd ~/wt && git commit -F m.txt ; cd "$MAIN" && git merge --ff-only wt'
+    ) == ["commit", "merge"]

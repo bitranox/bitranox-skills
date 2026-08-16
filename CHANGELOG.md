@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.206.1] - 2026-08-16
+
+### Fixed
+
+- **`block-git-semicolon-chain`: a repeated verb in two different trees is parallel work.**
+  Measuring the 47 real `commit`-then-`commit` blocks found 24 of them were one command committing
+  to a super-repo's separate sub-repos (`git -C provmm_planning commit ... ; git -C provmm_proxmox
+  commit ...`). Those are two pieces of work; `&&` between them is wrong advice, because the second
+  is wanted even when the first fails. A `cd` or a differing `git -C` between two occurrences of
+  the SAME verb now exempts the pair. Blocks fall from 625 to 610, and `commit`-then-`commit` from
+  47 to 23.
+
+  The limit to a REPEATED verb is the whole finding. Applied to every pair - the obvious form, and
+  the one written first - it exempted the command the guard exists for: `cd ~/wt && git commit -m x
+  ; cd "$MAIN" && git push` went silent, because a worktree and its main checkout are different
+  directories of ONE repository and no text distinguishes that from two unrelated repos. A repeated
+  verb has no such ambiguity, so the reading is confined to it.
+
 ## [5.206.0] - 2026-08-16
 
 ### Added
