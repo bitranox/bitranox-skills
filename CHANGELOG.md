@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.206.0] - 2026-08-16
+
+### Added
+
+- **`block-git-semicolon-chain` guard: state-changing git verbs joined by `;` are blocked.**
+  `;` runs the next step even after the previous one failed, and the steps that follow answer a
+  no-op with git's calmest output (`Already up to date`, `Everything up-to-date`, exit 0), so a
+  commit that never happened reads as a completed ship. The guard blocks two or more of
+  `commit`/`merge`/`push`/`tag`/`reset`/`rebase`/`revert`/`cherry-pick`/`checkout`/`switch`
+  joined across `;` or a newline, and names the fix. Exempt: a command that sets errexit
+  (`set -e`, `-euo pipefail`, `-o errexit`), and an explicit `|| true` / `|| :` before the `;`,
+  which states that step is allowed to fail.
+
+### Changed
+
+- `shell_text.blank_unexpanded_text` takes `blank_double` (default `False`, so existing callers
+  are unchanged). A guard reading statement STRUCTURE needs double-quoted text blanked too -
+  the `;` in `git commit -m "wip; git push"` is not a separator and those words are not a
+  command - while a guard looking for EXPANSIONS must leave it intact, because `$?` expands
+  there.
+
 ## [5.205.1] - 2026-08-16
 
 ### Fixed

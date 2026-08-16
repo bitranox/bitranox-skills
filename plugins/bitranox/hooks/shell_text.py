@@ -77,7 +77,7 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(out)
 
 
-def blank_unexpanded_text(command: str) -> str:
+def blank_unexpanded_text(command: str, blank_double: bool = False) -> str:
     """Blank the regions the shell will neither execute nor expand, keeping structure intact.
 
     A heredoc is not the only data region in a command. These three are just as inert, and a guard
@@ -87,9 +87,16 @@ def blank_unexpanded_text(command: str) -> str:
     - a SINGLE-quoted string, where no expansion happens at all;
     - a `#` comment, which is never executed.
 
-    A DOUBLE-quoted string is deliberately left alone: `$?` expands there, so `echo "rc=$?"` is a
+    A DOUBLE-quoted string is left alone by DEFAULT: `$?` expands there, so `echo "rc=$?"` is a
     genuine status read. That also means prose inside double quotes remains indistinguishable from
-    the real thing - the two are identical to the shell, so no scanner can separate them.
+    the real thing - the two are identical to the shell, so no scanner asking about EXPANSIONS can
+    separate them.
+
+    `blank_double=True` blanks it too, for guards asking a different question. A caller reading
+    STATEMENT STRUCTURE has no such ambiguity: whatever the shell does with `$?` inside
+    `git commit -m "wip; git push"`, that `;` is not a separator and those words are not a command.
+    Leaving the region intact there invents a statement that can never run, so the two questions
+    genuinely want opposite treatment of the same characters.
 
     Blanking to spaces rather than deleting keeps offsets, line structure and every pipe, `;` and
     `&&` outside the quotes, so callers that split on those still see the same command shape.
@@ -112,7 +119,9 @@ def blank_unexpanded_text(command: str) -> str:
                 index += 2
                 continue
             in_double = char != '"'
-            out.append(char)
+            # The closing quote and every newline stay, so structure and offsets survive; only the
+            # content between them is blanked, and only when the caller asked for it.
+            out.append(" " if blank_double and in_double and char != "\n" else char)
             index += 1
         elif char == "'":
             in_single = True
