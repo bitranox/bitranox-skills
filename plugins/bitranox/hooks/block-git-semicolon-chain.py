@@ -150,10 +150,17 @@ BLOCK_CHARS = "(){}`"
 # `git checkout master ; git checkout -b feature` branches off the wrong base when the first fails.
 PER_TARGET_VERBS = frozenset({"push", "fetch", "tag"})
 
-# A statement that moves the working directory, and the git option that names a tree explicitly.
-# Either one between two verbs means they may be operating on different repositories.
-CD_COMMAND = re.compile(r"^(?:\w+=\S+\s+)*(?:cd|pushd|popd)\b")
-DASHC_TARGET = re.compile(r"\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\S+)")
+# A statement that moves the working directory, and the git options that name a tree explicitly.
+# The trailing `(?:\s|$)` is what stops `cdrecord` and `cd-hook` reading as a directory change; a
+# bare `\b` accepts both. The optional group captures the destination, because PRESENCE of a `cd`
+# is not evidence of a MOVE - see `_directory_moves_between`.
+CD_COMMAND = re.compile(r"^\s*(?:\w+=\S+\s+)*(?:cd|pushd|popd)(?:\s+(\S+))?(?:\s|$)")
+DASHC_TARGET = re.compile(r"\bgit\s+(?:-c\s+\S+\s+)*(?:-C|--git-dir|--work-tree)\s+(\S+)")
+
+# Destinations that do not move anywhere. `cd` with no argument goes HOME, which IS a move, but
+# only from somewhere else - and a command that relied on that would not then run git in the repo
+# it just left. Treating it as no-op keeps the pair blocked, which is the safe direction.
+NON_MOVING_TARGETS = frozenset({None, "", ".", "./", "-", "$PWD", "${PWD}", "$(pwd)", "`pwd`"})
 
 # `fetch` earns its place as the FIRST half of a pair (a failed fetch leaves origin stale and the
 # `merge --ff-only` after it prints the very string this guard distrusts). As the SECOND half it is
@@ -213,7 +220,49 @@ def _is_read_only_form(verb: str, args: list[str]) -> bool:
     return False
 
 
-def _tree_may_have_changed(parts: list[str], start: int, stop: int) -> bool:
+def _normalise_path(value: str | None) -> str | None:
+    """Strip one layer of matching quotes and any trailing slash, so spellings of one path agree.
+
+    `"/repo"`, `/repo` and `/repo/` all name the same directory, and comparing them as raw strings
+    calls a repository two repositories. A SUBDIRECTORY (`/repo` vs `/repo/sub`) is deliberately
+    left alone: it may be inside the same repo or inside another one, nothing in the text says
+    which, and the guard does not block what it cannot determine.
+    """
+    if value and len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    if value and len(value) > 1:
+        value = value.rstrip("/") or "/"
+    return value
+
+
+def _directory_moves_between(raw: list[str], masked: list[str], start: int, stop: int) -> bool:
+    """True when a `cd` strictly between the two statements actually CHANGES directory.
+
+    Presence of a `cd` is not a move. Tracking the destination from the START of the command is
+    what separates them: `cd /repo && git commit ; cd /repo && git commit --amend` re-enters the
+    same directory, so the second commit amends the first one's repository - and amending a commit
+    that never happened rewrites the PREVIOUS commit and exits 0, which is this guard's whole
+    subject. A no-op `cd` on each step was overriding two shapes the tests declare must block.
+
+    Structure is read from the MASKED text (a `cd` inside a quoted string is not a command) and the
+    destination from the RAW text at the same offset, so `"$MAIN"` compares by name.
+    """
+    current: str | None = None
+    moved = False
+    for index in range(0, stop, 2):
+        if not CD_COMMAND.match(masked[index]):
+            continue
+        found = CD_COMMAND.match(raw[index])
+        target = _normalise_path(found.group(1)) if found else None
+        if target in NON_MOVING_TARGETS or target == current:
+            continue
+        current = target
+        if index > start:
+            moved = True
+    return moved
+
+
+def _tree_may_have_changed(raw: list[str], parts: list[str], start: int, stop: int) -> bool:
     """True when the two statements might not be acting on the same repository.
 
     A `cd` between them, or a differing `git -C <path>`, means the second statement works in
@@ -233,13 +282,18 @@ def _tree_may_have_changed(parts: list[str], start: int, stop: int) -> bool:
     """
     # EVEN indices are statements and odd ones are separators, so step from start + 2. Walking the
     # odd indices instead matches nothing at all, and the rule silently does half its job.
-    for index in range(start + 2, stop, 2):
-        if CD_COMMAND.match(parts[index].strip()):
-            return True
-    first, second = DASHC_TARGET.search(parts[start]), DASHC_TARGET.search(parts[stop])
-    target_a = first.group(1) if first else None
-    target_b = second.group(1) if second else None
-    return target_a != target_b and bool(target_a or target_b)
+    first, second = DASHC_TARGET.search(raw[start]), DASHC_TARGET.search(raw[stop])
+    target_a, target_b = _normalise_path(first.group(1) if first else None), _normalise_path(
+        second.group(1) if second else None
+    )
+    # An identical ABSOLUTE `-C` on both is positive proof of one repository, and it outranks any
+    # `cd` between them. Relative only resolves against the cwd, so it proves nothing. Reading this
+    # AFTER the cd scan let weak evidence beat strong evidence purely by statement order.
+    if target_a is not None and target_a == target_b and target_a.startswith(("/", "~")):
+        return False
+    if target_a != target_b:
+        return True
+    return _directory_moves_between(raw, parts, start, stop)
 
 
 def _git_verb(segment: str) -> str | None:
@@ -353,11 +407,20 @@ def chained_state_changes(command: str) -> list[str] | None:
     (merge, merge) was exempt and (merge, push) is `&&`-joined - while the `;` that lets a failed
     ff-merge run the second merge on a stale base and push it sat right there.
     """
-    text = _mask_groups(mask_data_regions(strip_heredoc_bodies(command or "")))
+    stripped = strip_heredoc_bodies(command or "")
+    text = _mask_groups(mask_data_regions(stripped))
     if _unjudgeable(text):
         return None
 
     parts = SEP_SPLIT.split(text)
+    # Both masking passes preserve LENGTH, so the same offsets index the pre-mask text exactly.
+    # The `-C` comparison needs the real path: masked, two different quoted paths of equal length
+    # become the same run of filler, so the verdict turned on how many characters a variable name
+    # had - `"$PLAN"` vs `"$PROX"` blocked while `"$PLANNING"` vs `"$PROX"` did not.
+    raw_parts, offset = [], 0
+    for part in parts:
+        raw_parts.append(stripped[offset : offset + len(part)])
+        offset += len(part)
     statements = list(range(0, len(parts), 2))
 
     errexit, active_before = 0, {}
@@ -379,7 +442,8 @@ def chained_state_changes(command: str) -> list[str] | None:
             if verb_b in NEVER_THE_SECOND_HALF:
                 continue
             if verb_a == verb_b and (
-                verb_a in PER_TARGET_VERBS or _tree_may_have_changed(parts, index_a, index_b)
+                verb_a in PER_TARGET_VERBS
+                or _tree_may_have_changed(raw_parts, parts, index_a, index_b)
             ):
                 continue                                   # parallel work, not a pipeline
             if _gap_continues_after_failure(parts, index_a + 1, index_b):

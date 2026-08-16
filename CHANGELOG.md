@@ -17,6 +17,38 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.206.2] - 2026-08-16
+
+### Fixed
+
+- **`block-git-semicolon-chain`: the tree-change exemption tested for the PRESENCE of a `cd`,
+  not for a move.** Any `cd`-shaped statement between two occurrences of one verb excused the
+  pair, so `cd /repo && git commit -F m.txt ; cd /repo && git commit --amend --no-edit` went
+  silent - and an amend after a refused commit rewrites the PREVIOUS commit and exits 0, which is
+  exactly the failure this guard exists for. A no-op `cd` also overrode two shapes the module's
+  own tests declare must block (`checkout` then `checkout -b`, and a stale-base second `merge`).
+  The destination is now tracked from the start of the command, and `cd` to the same directory,
+  to `.`, to `$PWD`, or with no argument is not a move.
+
+- **Repository identity is no longer string identity.** `/repo` and `/repo/` and `"/repo"` are one
+  directory. An identical ABSOLUTE `git -C` on both statements is positive proof of one repository
+  and now outranks any `cd` between them, which reading it second did not. A SUBDIRECTORY is
+  deliberately still treated as possibly-another-repo: nothing in the text says which, and the
+  guard does not block what it cannot determine.
+
+- **`git -C` targets are compared on the pre-mask text.** Masked, two quoted paths of equal length
+  become the same run of filler, so the verdict turned on how many characters a variable name had:
+  `git -C "$PLAN" ... ; git -C "$PROX" ...` blocked while `"$PLANNING"` versus `"$PROX"` did not.
+  Both masking passes preserve length, so the same offsets index the raw text exactly.
+
+- `--git-dir` and `--work-tree` also name a tree; `cdrecord` and `cd-hook` no longer read as a
+  directory change; a dead `bool()` clause is gone.
+
+- One test was vacuous, proven by a surviving mutation of the exact bound it named: it paired
+  `commit` with `push`, so the exemption short-circuited before the code under test ran. Six
+  behaviours that had no test now have one, and the negative cases whose absence let all of the
+  above ship - a `cd` present and the block required to REMAIN - are pinned.
+
 ## [5.206.1] - 2026-08-16
 
 ### Fixed
