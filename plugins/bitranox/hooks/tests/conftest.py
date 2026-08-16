@@ -30,6 +30,7 @@ _HOOK_MODULES = {
     "tell-sweep": "tell_sweep",
     "commit-tell-sweep": "commit_tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
+    "block-git-semicolon-chain": "block_git_semicolon_chain",
     "gated-prep-nudge": "gated_prep_nudge",
     "sed-line1-range-nudge": "sed_line1_range_nudge",
     "shell-prefix-selfref-guard": "shell_prefix_selfref_guard",
