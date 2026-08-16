@@ -630,7 +630,16 @@ def test_the_same_dash_c_target_twice_is_one_tree():
 
 
 def test_a_leading_cd_before_both_verbs_is_not_a_tree_change():
-    assert G.chained_state_changes("cd /repo\ngit commit -m x\ngit push") == ["commit", "push"]
+    """Both verbs must REPEAT, or the exemption short-circuits and this asserts nothing.
+
+    Written first with `commit` then `push`, it passed through `verb_a == verb_b` without ever
+    calling `_tree_may_have_changed` - so mutating the scan to start at index 0, the exact defect
+    the name claims to lock, left it green.
+    """
+    assert G.chained_state_changes("cd /repo\ngit commit -m x\ngit commit -m y") == [
+        "commit",
+        "commit",
+    ]
 
 
 def test_a_cd_does_not_excuse_a_pair_of_DIFFERENT_verbs():
@@ -647,3 +656,105 @@ def test_a_cd_does_not_excuse_a_pair_of_DIFFERENT_verbs():
     assert G.chained_state_changes(
         'cd ~/wt && git commit -F m.txt ; cd "$MAIN" && git merge --ff-only wt'
     ) == ["commit", "merge"]
+
+
+# --- a `cd` that does not MOVE is not a tree change ------------------------------------------------
+
+
+def test_re_entering_the_same_directory_is_not_a_move():
+    """`git commit --amend` after a refused commit rewrites the PREVIOUS commit and exits 0.
+
+    That is this guard's whole subject, and a no-op `cd` on each step was excusing it.
+    """
+    command = "cd /repo && git commit -F m.txt ; cd /repo && git commit --amend --no-edit"
+    assert G.chained_state_changes(command) == ["commit", "commit"]
+
+
+def test_non_moving_cd_targets():
+    for target in (".", "./", "$PWD", "${PWD}", "$(pwd)", ""):
+        command = "git commit -F m.txt ; cd %s ; git commit --amend --no-edit" % target
+        assert G.chained_state_changes(command) == ["commit", "commit"], target
+
+
+def test_a_no_op_cd_does_not_override_the_shapes_the_tests_require():
+    """Both of these are asserted elsewhere in this file; a `cd /repo` on each step re-admitted them."""
+    assert G.chained_state_changes(
+        "cd /repo ; git checkout master ; cd /repo ; git checkout -b feature"
+    ) == ["checkout", "checkout"]
+    assert G.chained_state_changes(
+        "cd /repo && git merge --ff-only origin/main ; cd /repo && git merge topic"
+    ) == ["merge", "merge"]
+
+
+def test_pushd_and_popd_count_as_directory_commands():
+    assert G.chained_state_changes("git commit -m a ; pushd /elsewhere ; git commit -m b") is None
+
+
+def test_an_environment_prefix_before_cd_is_skipped():
+    assert G.chained_state_changes("git commit -m a ; FOO=1 cd /elsewhere ; git commit -m b") is None
+
+
+def test_a_program_whose_name_merely_starts_with_cd_is_not_cd():
+    assert G.chained_state_changes("git commit -m a ; cdrecord -scanbus ; git commit -m b") == [
+        "commit",
+        "commit",
+    ]
+    assert G.chained_state_changes("git commit -m a ; cd-hook /x ; git commit -m b") == [
+        "commit",
+        "commit",
+    ]
+
+
+def test_the_word_cd_must_start_the_statement():
+    assert G.chained_state_changes("git commit -m a ; echo cd /x ; git commit -m b") == [
+        "commit",
+        "commit",
+    ]
+
+
+# --- repository identity, not string identity ------------------------------------------------------
+
+
+def test_dash_c_targets_are_compared_on_the_raw_text_not_the_masked_text():
+    """Masked, two quoted paths of EQUAL length become the same filler run.
+
+    The verdict then turned on how many characters a variable name had: `"$PLAN"` vs `"$PROX"`
+    blocked while `"$PLANNING"` vs `"$PROX"` did not - same command shape, same intent.
+    """
+    assert G.chained_state_changes('git -C "$PLAN" commit -m x ; git -C "$PROX" commit -m y') is None
+    assert (
+        G.chained_state_changes('git -C "$PLANNING" commit -m x ; git -C "$PROX" commit -m y')
+        is None
+    )
+
+
+def test_spellings_of_one_path_are_the_same_repository():
+    assert G.chained_state_changes(
+        "git -C /repo commit -m a ; git -C /repo/ commit --amend --no-edit"
+    ) == ["commit", "commit"]
+    assert G.chained_state_changes(
+        'git -C "/repo" commit -m a ; git -C /repo commit --amend --no-edit'
+    ) == ["commit", "commit"]
+
+
+def test_an_identical_absolute_dash_c_outranks_an_unrelated_cd():
+    """Positive proof of one repository must beat the weaker `cd` signal, whatever the order."""
+    command = "git -C /a commit -m x ; cd /b ; git -C /a commit --amend --no-edit"
+    assert G.chained_state_changes(command) == ["commit", "commit"]
+
+
+def test_a_relative_dash_c_proves_nothing_so_it_does_not_veto():
+    assert G.chained_state_changes("git -C sub commit -m x ; cd /b ; git -C sub commit -m y") is None
+
+
+def test_the_dash_c_passthrough_survives_config_options():
+    command = (
+        'git -c user.name=x -C /a commit -m x ; git -c user.name=x -C /b commit -m y'
+    )
+    assert G.chained_state_changes(command) is None
+
+
+def test_git_dir_and_work_tree_also_name_a_tree():
+    assert G.chained_state_changes(
+        "git --git-dir /a/.git commit -m x ; git --git-dir /b/.git commit -m y"
+    ) is None
