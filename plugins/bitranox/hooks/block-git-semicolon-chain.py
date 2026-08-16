@@ -12,15 +12,20 @@ ship while the working tree never moved.
 WHAT THIS GUARD REFUSES TO JUDGE
 --------------------------------
 A hook runs on a bare interpreter with no third-party packages, so there is no bash parser
-available and this reads statement structure with a regex split. That instrument cannot model
-block structure, and a guess there blocks correct work: an `if`/`else` runs exactly one branch,
-a `for ... ; do ... ; done` needs its semicolons, and a subshell's internal `;` says nothing
-about the statements around it. So when the command contains ANY block structure - a shell
-keyword, a brace group, or a subshell paren - the guard stays SILENT rather than guess.
+available and this reads statement structure with a regex split. That instrument cannot model a
+construct whose branches are alternatives or whose separators are required syntax: an `if`/`else`
+runs exactly one branch, and a `for ... ; do ... ; done` needs its semicolons. A guess there
+blocks correct work, so a command carrying a shell KEYWORD is left alone entirely.
 
-That is a deliberate accuracy-for-coverage trade. It gives up some real hits, and in exchange
-every verdict it does give is one a flat statement list can actually support. The regions it
-cannot see at all, and knowingly ignores: anything inside `eval`, `bash -c "..."`,
+A balanced brace group or subshell is different - it is self-contained, one statement seen from
+outside, so it is MASKED rather than bailed on and the statements around it stay judgeable. The
+distinction is worth the extra code: an error handler on its own line
+(`pytest ... || { tail -10 log; exit 1; }`) was silencing the guard over a plain
+`git commit` / `git push` pair further down.
+
+That is still a deliberate accuracy-for-coverage trade. It gives up some real hits, and in
+exchange every verdict it does give is one a flat statement list can actually support. The regions
+it cannot see at all, and knowingly ignores: anything inside `eval`, `bash -c "..."`,
 `ssh host '...'`, or a command substitution - it scans the LOCAL statement structure only.
 
 THE TEST A FINDING HAS TO PASS
@@ -34,8 +39,12 @@ chain moves through DIFFERENT verbs, which is the shape the incident had.
 Two further shapes are exempt because they already say "continue deliberately":
 
 - errexit active at that point in the command (`set -e`, `-euo pipefail`, `-o errexit`), which
-  makes the shell itself abort on the first failure. Tracked positionally and revocably: a
-  `set -e` AFTER the chain protects nothing, and a later `set +e` turns it back off;
+  makes the shell itself abort on the first failure. Tracked by POSITION and revocably: a
+  `set -e` AFTER the chain protects nothing, and a later `set +e` turns it back off. Position is
+  not reachability, and this does not try to be: a `set -e` in a branch that never runs
+  (`false && set -e ; ...`) still exempts. Deciding that needs evaluation, not parsing, and the
+  safe direction for a BLOCKING guard is to miss rather than to refuse `cd /repo && set -e ; ...`,
+  where the command really is protected;
 - any `||` handler immediately after the state-changing statement - `|| true`, `|| exit 1`,
   `|| die "..."`. The author wrote the failure path, so the `;` after it is intentional.
 
@@ -86,6 +95,8 @@ STATE_CHANGING = frozenset(
 # positive: `git checkout -- Makefile` restores a path and moves no branch, `git merge --abort`
 # is the cleanup you run precisely when the merge failed, and `git tag -l` only lists.
 PATH_SCOPED = frozenset({"checkout", "switch"})           # a `--` makes it a path restore
+# Flags that make ANY verb a no-op, so its failure cannot invalidate a later step.
+INERT_FLAGS = frozenset({"--help", "-h", "--dry-run"})
 ABORTABLE = frozenset({"merge", "rebase", "cherry-pick", "revert", "am"})
 TAG_READ_ONLY_FLAGS = ("-l", "--list", "-n", "-v", "--verify", "--contains", "--points-at",
                        "--sort", "--merged", "--no-merged", "--format")
@@ -100,16 +111,45 @@ GIT_VALUE_OPTS = frozenset(
 WRAPPERS = frozenset(
     {"sudo", "env", "command", "time", "nice", "ionice", "nohup", "stdbuf", "timeout", "doas"}
 )
-# Of those, the ones that take a positional value before the wrapped command.
-WRAPPER_VALUE_OPTS = frozenset({"-u", "-g", "-n", "-o", "-i", "--user", "--group"})
+# Which of a wrapper's OWN options consume a following value. Keyed per wrapper, because the same
+# letter means opposite things: `sudo -u <user>` takes one and `sudo -n` does not, `env -u <name>`
+# takes one and `env -i` does not. A single shared set gets one of every pair wrong and then skips
+# past the real command.
+WRAPPER_VALUE_OPTS = {
+    "sudo": frozenset({"-u", "-g", "-U", "-p", "-C", "-h", "-r", "-t", "--user", "--group"}),
+    "doas": frozenset({"-u", "-C"}),
+    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}),
+    "timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "ionice": frozenset({"-c", "-n", "-p", "-P"}),
+    "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
+    "command": frozenset(),
+    "time": frozenset({"-f", "--format", "-o", "--output"}),
+    "nohup": frozenset(),
+}
 
-# Block structure this guard will not judge. Keywords are matched as whole TOKENS; the brace and
-# paren characters are matched anywhere, because after masking none can survive as data.
+# Block structure this guard will not judge, because a flat split cannot model a construct whose
+# branches are alternatives or whose separators are required syntax. Keywords are matched as whole
+# TOKENS. A balanced brace group or subshell is NOT here - it is self-contained, so `_mask_groups`
+# turns it into one opaque token and the statements AROUND it stay judgeable. Only an UNBALANCED
+# leftover reaches the bail, which means the command is something this parser does not understand.
 BLOCK_KEYWORDS = frozenset(
     {"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
      "case", "esac", "select", "function"}
 )
 BLOCK_CHARS = "(){}`"
+
+# Repetition of these verbs is parallel work over independent targets - branches, remotes, repos,
+# tags - so `&&` between them is wrong advice. Repetition of any OTHER verb can be a real chain:
+# `git checkout master ; git checkout -b feature` branches off the wrong base when the first fails.
+PER_TARGET_VERBS = frozenset({"push", "fetch", "tag"})
+
+# `fetch` earns its place as the FIRST half of a pair (a failed fetch leaves origin stale and the
+# `merge --ff-only` after it prints the very string this guard distrusts). As the SECOND half it is
+# almost always post-push verification - `git push ... ; git fetch -q origin ; git rev-parse
+# origin/main` - where `&&` is wrong advice and the fetch is the confirmation this guard's own
+# message asks for.
+NEVER_THE_SECOND_HALF = frozenset({"fetch"})
 
 # Split while KEEPING the separators, because which one joined two statements is the entire
 # question. `&&` and `||` must be tried before the single `|`. A bare `&` backgrounds, which is
@@ -128,15 +168,17 @@ def _skip_wrappers(tokens: list[str], index: int) -> int:
         if "=" in token and not token.startswith("-"):
             index += 1
             continue
-        if token.rsplit("/", 1)[-1] in WRAPPERS:
+        name = token.rsplit("/", 1)[-1]
+        if name in WRAPPERS:
             index += 1
-            # A wrapper's own options, and the value of the ones that take one.
+            takes_value = WRAPPER_VALUE_OPTS.get(name, frozenset())
+            # A wrapper's own options, and the value of only the ones that take one.
             while index < len(tokens) and tokens[index].startswith("-"):
-                if tokens[index] in WRAPPER_VALUE_OPTS:
+                if tokens[index] in takes_value:
                     index += 1
                 index += 1
             # `timeout 60 git push` - a bare duration before the wrapped command.
-            if index < len(tokens) and re.fullmatch(r"[0-9]+[smhd]?", tokens[index]):
+            if name == "timeout" and index < len(tokens) and re.fullmatch(r"[0-9.]+[smhd]?", tokens[index]):
                 index += 1
             continue
         return index
@@ -145,6 +187,10 @@ def _skip_wrappers(tokens: list[str], index: int) -> int:
 
 def _is_read_only_form(verb: str, args: list[str]) -> bool:
     """True when this verb, with THESE arguments, changes nothing."""
+    if INERT_FLAGS.intersection(args):
+        return True
+    if verb == "push" and "-n" in args:                        # push's short --dry-run
+        return True
     if verb in PATH_SCOPED:
         return "--" in args
     if verb in ABORTABLE and ("--abort" in args or "--quit" in args):
@@ -205,10 +251,35 @@ def _errexit_delta(segment: str) -> int:
     return delta
 
 
+def _mask_groups(text: str, fill: str = "Q") -> str:
+    """Mask balanced `{...}` brace groups and `(...)` subshells, keeping newlines.
+
+    A group is ONE statement from the outside, so its internal `;` says nothing about the
+    statements around it - and bailing on the whole command because one exists silences the guard
+    where it still had a clear view. Measured: an error handler like
+    `pytest ... || {{ tail -10 log; exit 1; }}` on its own line was hiding a plain
+    `git commit` / `git push` pair further down.
+    """
+    out = list(text)
+    depth, start = 0, -1
+    for position, char in enumerate(text):
+        if char in "({":
+            if depth == 0:
+                start = position
+            depth += 1
+        elif char in ")}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                for index in range(start, position + 1):
+                    if out[index] != "\n":
+                        out[index] = fill
+    return "".join(out)
+
+
 def _unjudgeable(text: str) -> bool:
     """True when the command carries block structure a flat split cannot honestly model."""
     if any(char in text for char in BLOCK_CHARS):
-        return True
+        return True                                    # an UNBALANCED group survived the masking
     return any(token in BLOCK_KEYWORDS for token in text.split())
 
 
@@ -236,11 +307,13 @@ def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> boo
 def chained_state_changes(command: str) -> list[str] | None:
     """The first pair of state-changing git verbs joined across an unguarded `;`, or None.
 
-    Consecutive pairs are enough to cover every pair: any two state-changing statements are
-    separated by at least one adjacent gap, so if every adjacent gap is guarded there is no
-    unguarded one between any of them.
+    EVERY pair is examined, not just consecutive ones. Consecutive-only looked equivalent and is
+    not: an exemption skips the PAIR, so an exempted middle verb hid the gap behind it.
+    `git merge --ff-only origin/main ; git merge topic && git push` reported nothing, because
+    (merge, merge) was exempt and (merge, push) is `&&`-joined - while the `;` that lets a failed
+    ff-merge run the second merge on a stale base and push it sat right there.
     """
-    text = mask_data_regions(strip_heredoc_bodies(command or ""))
+    text = _mask_groups(mask_data_regions(strip_heredoc_bodies(command or "")))
     if _unjudgeable(text):
         return None
 
@@ -255,15 +328,20 @@ def chained_state_changes(command: str) -> list[str] | None:
     found = [(index, _git_verb(parts[index])) for index in statements]
     found = [(index, verb) for index, verb in found if verb]
 
-    for (index_a, verb_a), (index_b, verb_b) in zip(found, found[1:]):
+    for position, (index_a, verb_a) in enumerate(found):
         if active_before[index_a]:
             continue                                       # the shell aborts on failure anyway
-        if parts[index_a + 1] in ("||",):
+        # The bound matters: iterating EVERY statement (not consecutive pairs) means `index_a` can
+        # be the last one, which has no following separator.
+        if index_a + 1 < len(parts) and parts[index_a + 1] == "||":
             continue                                       # the author wrote the failure path
-        if verb_a == verb_b:
-            continue                                       # parallel work, not a pipeline
-        if _gap_continues_after_failure(parts, index_a + 1, index_b):
-            return [verb_a, verb_b]
+        for index_b, verb_b in found[position + 1 :]:
+            if verb_b in NEVER_THE_SECOND_HALF:
+                continue
+            if verb_a == verb_b and verb_a in PER_TARGET_VERBS:
+                continue                                   # parallel work, not a pipeline
+            if _gap_continues_after_failure(parts, index_a + 1, index_b):
+                return [verb_a, verb_b]
     return None
 
 

@@ -147,7 +147,8 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
 
     - single- and double-quoted strings;
     - `$(...)` command substitution and `$((...))` arithmetic, depth-counted so nesting survives;
-    - `${...}` parameter expansion, whose braces are a word, not a brace GROUP;
+    - `${...}` parameter expansion and `@{...}` revspecs, whose braces are a word, not a
+      brace GROUP - `git rev-list @{u}...HEAD` must not read as shell structure;
     - backtick substitution;
     - `#` comments (masked to spaces, since a comment genuinely ends the line).
 
@@ -171,16 +172,26 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
             out.append("  " if command[index + 1] == "\n" else fill * 2)
             index += 2
         elif char in "'\"":
-            closing = command.find(char, index + 1)
-            stop = size if closing == -1 else closing + 1  # unterminated quote runs to the end
-            out.append(fill * (stop - index))
-            index = stop
+            # Scan for the CLOSING quote rather than the next one: inside a double-quoted region
+            # `\"` is an escaped quote, and `find` would stop there, leaving the rest of a commit
+            # message to be scanned as shell. Single quotes have no escape, so only `"` looks.
+            cursor = index + 1
+            while cursor < size:
+                if char == '"' and command[cursor] == "\\" and cursor + 1 < size:
+                    cursor += 2
+                    continue
+                if command[cursor] == char:
+                    cursor += 1
+                    break
+                cursor += 1
+            out.append(fill * (cursor - index))       # unterminated quote runs to the end
+            index = cursor
         elif char == "`":
             closing = command.find("`", index + 1)
             stop = size if closing == -1 else closing + 1
             out.append(fill * (stop - index))
             index = stop
-        elif command.startswith("${", index):
+        elif command.startswith("${", index) or command.startswith("@{", index):
             closing = command.find("}", index + 2)
             stop = size if closing == -1 else closing + 1
             out.append(fill * (stop - index))
