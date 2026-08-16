@@ -38,7 +38,18 @@ installed copies and needs no bump.
   Where it cannot parse, it stays SILENT rather than guess: a hook runs on a bare interpreter with
   no bash parser available, so any command carrying block structure - a shell keyword, a brace
   group, a subshell paren - is left alone. Measured against 54,049 real commands, that is 10.9%
-  of them. The trade buys accuracy on the rest.
+  of them. The trade buys accuracy on the rest. A balanced brace group or subshell is MASKED
+  rather than bailed on, because it is one self-contained statement from the outside and the
+  statements around it stay readable - an error handler like `pytest ... || { tail -10 log; exit 1; }`
+  on its own line was otherwise silencing the guard over a plain commit/push pair further down.
+
+  Three adversarial reviews shaped it. The findings that changed behaviour, each kept as a test:
+  a newline after `&&` is a line continuation, not a separator (the first version blocked the
+  correct multi-line `&&` form with a message telling the author to use `&&`); `\"` inside a
+  double-quoted message does not close the masked region; every PAIR of verbs is examined, not
+  only consecutive ones, because an exempted middle verb hid the gap behind it; `fetch` counts
+  only as the FIRST half of a pair, since `git push ... ; git fetch -q origin` is post-push
+  verification the guard's own message asks for; and `--help`/`-h`/`--dry-run` make any verb inert.
 
 ### Changed
 
