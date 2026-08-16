@@ -36,6 +36,12 @@ or a push to each of three repos, is parallel work over independent targets, and
 actively wrong - you want the second attempted even when the first fails. A genuine dependency
 chain moves through DIFFERENT verbs, which is the shape the incident had.
 
+A repeat separated by a `cd` or a differing `git -C` is the same argument from the other side -
+the same operation done in two places. That reading is limited to a REPEAT on purpose: a directory
+change is not a repository change (a worktree and its main checkout are one repo), so applying it
+to different verbs went silent on `cd ~/wt && git commit -m x ; cd "$MAIN" && git push`, which is
+the incident itself.
+
 Two further shapes are exempt because they already say "continue deliberately":
 
 - errexit active at that point in the command (`set -e`, `-euo pipefail`, `-o errexit`), which
@@ -144,6 +150,11 @@ BLOCK_CHARS = "(){}`"
 # `git checkout master ; git checkout -b feature` branches off the wrong base when the first fails.
 PER_TARGET_VERBS = frozenset({"push", "fetch", "tag"})
 
+# A statement that moves the working directory, and the git option that names a tree explicitly.
+# Either one between two verbs means they may be operating on different repositories.
+CD_COMMAND = re.compile(r"^(?:\w+=\S+\s+)*(?:cd|pushd|popd)\b")
+DASHC_TARGET = re.compile(r"\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\S+)")
+
 # `fetch` earns its place as the FIRST half of a pair (a failed fetch leaves origin stale and the
 # `merge --ff-only` after it prints the very string this guard distrusts). As the SECOND half it is
 # almost always post-push verification - `git push ... ; git fetch -q origin ; git rev-parse
@@ -200,6 +211,35 @@ def _is_read_only_form(verb: str, args: list[str]) -> bool:
             return True                                    # bare `git tag` lists tags
         return any(a.startswith(TAG_READ_ONLY_FLAGS) for a in args)
     return False
+
+
+def _tree_may_have_changed(parts: list[str], start: int, stop: int) -> bool:
+    """True when the two statements might not be acting on the same repository.
+
+    A `cd` between them, or a differing `git -C <path>`, means the second statement works in
+    another directory. Committing to `provmm_planning` and then to `provmm_proxmox` is two pieces
+    of work, not a chain, so `&&` is wrong advice: you want the second attempted when the first
+    fails.
+
+    ONLY consulted for a REPEATED verb, and that limit is load-bearing. A directory change is not
+    a repository change: a worktree and its main checkout are different directories of the SAME
+    repo, and nothing in the text distinguishes those two cases. Applied to every pair, this
+    exempted the very command the guard was built for - `cd ~/wt && git commit -m x ;
+    cd "$MAIN" && git push` went silent, which is the incident in two steps. A repeated verb has
+    no such reading: doing the same operation in two places is parallel work either way.
+
+    Measured on real command history: it clears 24 `commit`-then-`commit` blocks across a
+    super-repo's separate sub-repos, and leaves every different-verb chain firing.
+    """
+    # EVEN indices are statements and odd ones are separators, so step from start + 2. Walking the
+    # odd indices instead matches nothing at all, and the rule silently does half its job.
+    for index in range(start + 2, stop, 2):
+        if CD_COMMAND.match(parts[index].strip()):
+            return True
+    first, second = DASHC_TARGET.search(parts[start]), DASHC_TARGET.search(parts[stop])
+    target_a = first.group(1) if first else None
+    target_b = second.group(1) if second else None
+    return target_a != target_b and bool(target_a or target_b)
 
 
 def _git_verb(segment: str) -> str | None:
@@ -338,7 +378,9 @@ def chained_state_changes(command: str) -> list[str] | None:
         for index_b, verb_b in found[position + 1 :]:
             if verb_b in NEVER_THE_SECOND_HALF:
                 continue
-            if verb_a == verb_b and verb_a in PER_TARGET_VERBS:
+            if verb_a == verb_b and (
+                verb_a in PER_TARGET_VERBS or _tree_may_have_changed(parts, index_a, index_b)
+            ):
                 continue                                   # parallel work, not a pipeline
             if _gap_continues_after_failure(parts, index_a + 1, index_b):
                 return [verb_a, verb_b]
