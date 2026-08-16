@@ -24,19 +24,30 @@ installed copies and needs no bump.
 - **`block-git-semicolon-chain` guard: state-changing git verbs joined by `;` are blocked.**
   `;` runs the next step even after the previous one failed, and the steps that follow answer a
   no-op with git's calmest output (`Already up to date`, `Everything up-to-date`, exit 0), so a
-  commit that never happened reads as a completed ship. The guard blocks two or more of
-  `commit`/`merge`/`push`/`tag`/`reset`/`rebase`/`revert`/`cherry-pick`/`checkout`/`switch`
-  joined across `;` or a newline, and names the fix. Exempt: a command that sets errexit
-  (`set -e`, `-euo pipefail`, `-o errexit`), and an explicit `|| true` / `|| :` before the `;`,
-  which states that step is allowed to fail.
+  commit that never happened reads as a completed ship. The guard blocks two or more state-changing
+  verbs joined across `;`, a newline, or `&` backgrounding, and names the fix.
+
+  It applies one test to every candidate: would `&&` be correct advice here? That rules out a
+  REPEATED verb (`git push origin main ; git push origin topic` is parallel work over independent
+  targets, where `&&` is actively wrong), the read-only FORMS of a state-changing verb
+  (`git checkout -- <path>`, `git merge --abort`, `git tag -l`), a statement whose failure path the
+  author already wrote (`|| true`, `|| exit 1`), and a command with errexit active at that point
+  (tracked positionally, so a `set -e` after the chain protects nothing and a later `set +e` takes
+  it away).
+
+  Where it cannot parse, it stays SILENT rather than guess: a hook runs on a bare interpreter with
+  no bash parser available, so any command carrying block structure - a shell keyword, a brace
+  group, a subshell paren - is left alone. Measured against 54,049 real commands, that is 10.9%
+  of them. The trade buys accuracy on the rest.
 
 ### Changed
 
-- `shell_text.blank_unexpanded_text` takes `blank_double` (default `False`, so existing callers
-  are unchanged). A guard reading statement STRUCTURE needs double-quoted text blanked too -
-  the `;` in `git commit -m "wip; git push"` is not a separator and those words are not a
-  command - while a guard looking for EXPANSIONS must leave it intact, because `$?` expands
-  there.
+- `shell_text.mask_data_regions` replaces quoted strings, `$(...)`/`$((...))`/`${...}`/backtick
+  expansions and comments with a filler character, INCLUDING their delimiters. Blanking only the
+  content leaves `"$MAIN"` as two bare `"` tokens, so a parser walking `git -C "$MAIN" commit`
+  reads the option value as `"`, loses the subcommand, and concludes the statement is not a git
+  command at all. `blank_unexpanded_text` is unchanged and still leaves double-quoted text intact,
+  because it answers the other question - whether the shell will expand something.
 
 ## [5.205.1] - 2026-08-16
 

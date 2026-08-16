@@ -77,7 +77,7 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(out)
 
 
-def blank_unexpanded_text(command: str, blank_double: bool = False) -> str:
+def blank_unexpanded_text(command: str) -> str:
     """Blank the regions the shell will neither execute nor expand, keeping structure intact.
 
     A heredoc is not the only data region in a command. These three are just as inert, and a guard
@@ -87,16 +87,12 @@ def blank_unexpanded_text(command: str, blank_double: bool = False) -> str:
     - a SINGLE-quoted string, where no expansion happens at all;
     - a `#` comment, which is never executed.
 
-    A DOUBLE-quoted string is left alone by DEFAULT: `$?` expands there, so `echo "rc=$?"` is a
+    A DOUBLE-quoted string is deliberately left alone: `$?` expands there, so `echo "rc=$?"` is a
     genuine status read. That also means prose inside double quotes remains indistinguishable from
-    the real thing - the two are identical to the shell, so no scanner asking about EXPANSIONS can
-    separate them.
+    the real thing - the two are identical to the shell, so no scanner can separate them.
 
-    `blank_double=True` blanks it too, for guards asking a different question. A caller reading
-    STATEMENT STRUCTURE has no such ambiguity: whatever the shell does with `$?` inside
-    `git commit -m "wip; git push"`, that `;` is not a separator and those words are not a command.
-    Leaving the region intact there invents a statement that can never run, so the two questions
-    genuinely want opposite treatment of the same characters.
+    A caller asking about STATEMENT STRUCTURE rather than expansions wants the opposite treatment
+    of the same characters, and `mask_data_regions` below is that function - not a flag here.
 
     Blanking to spaces rather than deleting keeps offsets, line structure and every pipe, `;` and
     `&&` outside the quotes, so callers that split on those still see the same command shape.
@@ -119,9 +115,7 @@ def blank_unexpanded_text(command: str, blank_double: bool = False) -> str:
                 index += 2
                 continue
             in_double = char != '"'
-            # The closing quote and every newline stay, so structure and offsets survive; only the
-            # content between them is blanked, and only when the caller asked for it.
-            out.append(" " if blank_double and in_double and char != "\n" else char)
+            out.append(char)
             index += 1
         elif char == "'":
             in_single = True
@@ -131,6 +125,86 @@ def blank_unexpanded_text(command: str, blank_double: bool = False) -> str:
             in_double = True
             out.append(char)
             index += 1
+        elif char == "#" and (not out or out[-1].isspace()):
+            while index < size and command[index] != "\n":
+                out.append(" ")
+                index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def mask_data_regions(command: str, fill: str = "Q") -> str:
+    """Replace every region that cannot affect STATEMENT STRUCTURE with a filler character.
+
+    `blank_unexpanded_text` above answers "will the shell expand this?" and therefore must leave
+    double-quoted text intact. A guard reading statement structure asks a different question, and
+    for it the answer is unambiguous: whatever the shell does with `$?` inside
+    `git commit -m "wip; git push"`, that `;` is not a separator and those words are not a command.
+
+    Four regions are masked, each including its own delimiters:
+
+    - single- and double-quoted strings;
+    - `$(...)` command substitution and `$((...))` arithmetic, depth-counted so nesting survives;
+    - `${...}` parameter expansion, whose braces are a word, not a brace GROUP;
+    - backtick substitution;
+    - `#` comments (masked to spaces, since a comment genuinely ends the line).
+
+    Delimiters are masked TOO, which is the difference that matters. Blanking only the content
+    leaves the quote characters behind, and `"$MAIN"` then splits into two bare `"` tokens - so a
+    parser walking `git -C "$MAIN" commit` reads the option value as `"`, loses the subcommand, and
+    silently concludes the statement is not a git command at all. Masking the whole region keeps it
+    one token, which is exactly what the shell passes.
+
+    Length is preserved so offsets still line up. Newlines INSIDE a masked region are replaced as
+    well: a newline in a quoted commit message is not a statement separator, and leaving it would
+    manufacture one.
+    """
+    out: list[str] = []
+    index, size = 0, len(command)
+    while index < size:
+        char = command[index]
+        if char == "\\" and index + 1 < size:
+            # A backslash-NEWLINE is a line continuation: it must become whitespace, not filler,
+            # or the two tokens it joins fuse into one word that no longer reads as a command.
+            out.append("  " if command[index + 1] == "\n" else fill * 2)
+            index += 2
+        elif char in "'\"":
+            closing = command.find(char, index + 1)
+            stop = size if closing == -1 else closing + 1  # unterminated quote runs to the end
+            out.append(fill * (stop - index))
+            index = stop
+        elif char == "`":
+            closing = command.find("`", index + 1)
+            stop = size if closing == -1 else closing + 1
+            out.append(fill * (stop - index))
+            index = stop
+        elif command.startswith("${", index):
+            closing = command.find("}", index + 2)
+            stop = size if closing == -1 else closing + 1
+            out.append(fill * (stop - index))
+            index = stop
+        elif command.startswith("$(", index):
+            depth, cursor = 0, index
+            while cursor < size:
+                if command.startswith("$(", cursor):
+                    depth += 1
+                    cursor += 2
+                    continue
+                if command[cursor] == "(":
+                    depth += 1                    # arithmetic `$(( ))` and nested subshells
+                    cursor += 1
+                    continue
+                if command[cursor] == ")":
+                    depth -= 1
+                    cursor += 1
+                    if depth == 0:
+                        break
+                    continue
+                cursor += 1
+            out.append(fill * (cursor - index))
+            index = cursor
         elif char == "#" and (not out or out[-1].isspace()):
             while index < size and command[index] != "\n":
                 out.append(" ")
