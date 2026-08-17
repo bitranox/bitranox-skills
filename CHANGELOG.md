@@ -41,6 +41,17 @@ installed copies and needs no bump.
   one-way discard of the pointer to whatever was skipped. The section already forbade discharging
   the obligation unread; it named no mechanism by which that happens silently.
 
+### Changed
+
+- **`devops-bmk`: synced with the bmk repo's copy for bmk 3.15.0.** bmk now accepts any canonical
+  PEP 440 project version, so the skill's `Tag vX.Y.Z` claim understated what `release` does and it
+  said nothing about pre-releases at all - an absence claim that would have steered an agent away
+  from behaviour that works. The skill now states the accepted format, the two refused shapes
+  (a non-canonical spelling, a local version) with the reason for each, and the table showing that
+  a bump FINALIZES a non-final version (`1.2.3rc1` patch-bumps to `1.2.3`) rather than stepping
+  past it. It also records that a non-final package version is deliberately not written into
+  `.claude-plugin/plugin.json`.
+
 ## [5.206.2] - 2026-08-16
 
 ### Fixed
