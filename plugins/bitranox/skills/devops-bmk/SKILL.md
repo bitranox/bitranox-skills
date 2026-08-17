@@ -166,10 +166,10 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make test-human` \| `th`               | Same, forced human-readable (verbose) output                                   |
 | `make test-all`                         | Run pytest + pyright on EVERY declared Python version in parallel (the matrix) |
 | `make testintegration` \| `ti`          | Integration tests only (`pytest -m integration`)                               |
-| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog                      |
+| `make bump-patch` / `-minor` / `-major` | Bump version in `pyproject.toml` and update the changelog (rules below)        |
 | `make commit` \| `c` `[MESSAGE...]`     | Git commit with a timestamped message                                          |
 | `make push` \| `p` `[MESSAGE...]`       | Run tests, commit, then push to the remote                                     |
-| `make release` \| `r`                   | Tag `vX.Y.Z`, push, create the GitHub release via `gh` (see the skill note below) |
+| `make release` \| `r`                   | Tag `v` + the current version, push, create the GitHub release via `gh`        |
 | `make ship` \| `sh`                     | push -> wait for CI -> release -> wait for the release workflow                |
 | `make build` \| `bld`                   | Build wheel + sdist                                                            |
 | `make clean` \| `cl`                    | Remove build artifacts and caches                                              |
@@ -178,6 +178,38 @@ forwarded (e.g. `make push fix login bug`). Most have short aliases.
 | `make ensure`                           | Install missing external tools for this OS (see section 5)                     |
 | `make custom <name> [args...]`          | Run a user-defined pipeline (section 6)                                        |
 | `make help`                             | List available targets                                                         |
+
+### What version `bump` and `release` accept, and what they produce
+
+`[project].version` may be any **canonical** PEP 440 version - `1.2.3`, `1.2.3a1`, `1.3.0b2`,
+`1.2.3rc1`, `1.2.3.dev4`, `1.2.3.post1`, `1.0`, `1.2.3.4`, `1!2.0.0`. That is what hatchling builds
+and PyPI accepts, so bmk does not narrow it to `X.Y.Z`.
+
+`release` accepts every one of those - a pre-release is NOT refused for being one - and tags `v` +
+the version string verbatim: `1.3.0b2` tags `v1.3.0b2`. Its only version check is the two shapes
+below.
+
+Two shapes are refused, each printing the fix:
+
+| Written as                         | Refused because                                                                                                                                                                                |
+|------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `v1.0.0`, `1.0.0-beta`, `1.2.3RC1` | Not canonical. `packaging` parses these but normalises them (`1.0.0`, `1.0.0b0`, `1.2.3rc1`), so the tag and the artifact hatchling uploads would disagree - and `v1.0.0` would tag `vv1.0.0`. |
+| `1.2.3+local`                      | A local version. It would tag fine and then fail in CI: PyPI rejects a local version on upload.                                                                                                |
+
+**A bump always lands on a plain three-part release, and FINALIZES a non-final version rather than
+stepping past it** - so the release an rc was rehearsing stays reachable:
+
+| current       | `bump-patch` | `bump-minor` | `bump-major` |
+|---------------|--------------|--------------|--------------|
+| `1.2.3`       | `1.2.4`      | `1.3.0`      | `2.0.0`      |
+| `1.2.3rc1`    | `1.2.3`      | `1.3.0`      | `2.0.0`      |
+| `1.3.0b2`     | `1.3.0`      | `1.3.0`      | `2.0.0`      |
+| `1.2.3.dev4`  | `1.2.3`      | `1.3.0`      | `2.0.0`      |
+| `1.2.3.post1` | `1.2.4`      | `1.3.0`      | `2.0.0`      |
+
+A post release is FINAL, which is why `1.2.3.post1` increments. The epoch survives a bump; pre,
+dev, post and local segments are dropped. bmk has no command that CREATES a pre-release - write one
+into `pyproject.toml` yourself, then bump to finalize it.
 
 **If the project ships a Claude Code skill**, two version rules apply and neither is optional.
 An install re-fetches a skill only when `.claude-plugin/plugin.json` changes version, so a release
@@ -188,6 +220,9 @@ skill - no error, nothing to notice, and the skill then documents behaviour the 
   never lower it. The plugin version can legitimately be AHEAD, because a skill ships more often
   than the package it documents; writing the package version there unconditionally would move an
   install backward to a version it already had.
+- A **non-final** package version (`1.2.0rc1`) is NOT written into `plugin.json`. Ordering it is
+  not the problem; that manifest is read by Claude Code's marketplace machinery and is only ever
+  seen carrying a plain `X.Y.Z`. The final release that follows carries the skill.
 - `release` refuses outright when `skills/` changed since the last tag and the plugin version did
   not move. That is the one case the sync cannot fix: the two versions were already equal, so there
   was nothing to raise. Bump `plugin.json` yourself and release again.
@@ -267,18 +302,19 @@ check and the audit all describe one environment.
 
 ## Troubleshooting
 
-| Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                        |
-|-------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                                                                      |
-| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                                                                         |
-| `make: command not found` (Windows)                                                 | Install a `make`: non-admin box -> `winget install --id ezwinports.make -e --scope user` (run make from Git Bash so `SHELL := /bin/bash` resolves); `choco install make` needs an elevated shell. bmk itself needs no shell.                       |
-| `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create vX.Y.Z` after. |
-| `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.     |
-| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                          |
-| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                      |
-| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                      |
-| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                                 |
-| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                        |
+| Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                                        |
+|-------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `make test` prints almost nothing                                                   | JSON mode succeeding (output shown only on failure). Use `--human` to see it.                                                                                                                                                                                      |
+| A stage fails: `<tool>` not found                                                   | Install it with `make ensure` (section 5).                                                                                                                                                                                                                         |
+| `make: command not found` (Windows)                                                 | Install a `make`: non-admin box -> `winget install --id ezwinports.make -e --scope user` (run make from Git Bash so `SHELL := /bin/bash` resolves); `choco install make` needs an elevated shell. bmk itself needs no shell.                                       |
+| `make release` runs green but no GitHub Release appears (Windows)                   | `make release` detects `gh` via `shutil.which` and SILENTLY skips the GitHub Release when `gh` is not on the INVOKING process's PATH (tag push + PyPI publish still succeed). Put gh's dir on PATH first, or run `gh release create v<version>` after.             |
+| `bmk: command not found`                                                            | uv's tool bin dir is not on your PATH. You do not need it there - inside a project use `make <target>` (the Makefile calls the absolute path); to bootstrap a new one use `uvx bmk install`. To put it on PATH anyway: `uv tool update-shell`.                     |
+| Tools resolve the wrong deps / import errors                                        | Rebuild the PROJECT's venv (that is what the gates resolve): `rm -rf .venv && make test`.                                                                                                                                                                          |
+| `make` keeps using an old bmk right after a release                                 | uv's cached index has not caught up. The Makefile already passes `--refresh-package bmk`; just re-run `make`.                                                                                                                                                      |
+| `make test` runs host-mutating `local_only` tests you want only on a throwaway host | Tag those tests `mutating` and set `[tool.scripts.test].exclude-markers = "mutating"` (section 6). `make test` running `local_only` is by design - do NOT exclude `local_only` to "match CI".                                                                      |
+| `make test` fails on a `[dev]`-only import                                          | bmk runs pytest in this project's `.venv`, synced with the `[dev]` extra. Rebuild it: `rm -rf .venv && make test`.                                                                                                                                                 |
+| `make release` refuses: version is not canonical / carries a local segment          | Not a read failure - the version WAS read. bmk accepts any canonical PEP 440 version but refuses a spelling `packaging` would normalise (`v1.0.0`, `1.0.0-beta`) or a local segment (`1.2.3+local`); the message names the canonical form to write. See section 3. |
+| Private GitHub deps fail to resolve                                                 | `git config --global url."https://<TOKEN>@github.com/<ORG>/".insteadOf "https://github.com/<ORG>/"` before install.                                                                                                                                                |
 
 ## Further reading
 
