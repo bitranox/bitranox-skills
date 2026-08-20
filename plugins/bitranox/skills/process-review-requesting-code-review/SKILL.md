@@ -56,11 +56,11 @@ whether the check passed. A gate is real only when that actor is STRUCTURALLY in
 satisfying it - not merely instructed not to. Ask what the actor would do to pass WITHOUT doing the
 work; if the answer is "assert that it did", the gate is advice.
 
-| Does not gate                                | Gates, because the actor cannot reach it       |
-|----------------------------------------------|------------------------------------------------|
+| Does not gate                                 | Gates, because the actor cannot reach it                  |
+|-----------------------------------------------|-----------------------------------------------------------|
 | a role name in a prompt ("act as a reviewer") | a state machine checked against an authenticated identity |
-| an LLM grading a peer, or itself              | a separate job with its own permissions        |
-| a regex over prose the agent writes           | a non-AI step returning an exit code           |
+| an LLM grading a peer, or itself              | a separate job with its own permissions                   |
+| a regex over prose the agent writes           | a non-AI step returning an exit code                      |
 
 **An LLM reviewer FINDS; it does not AUTHORIZE.** Both are true at once: dispatching the reviewer
 is worth doing - fresh context and no sunk cost let it see what you cannot - and it is still not
