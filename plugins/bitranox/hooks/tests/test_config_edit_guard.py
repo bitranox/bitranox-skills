@@ -106,6 +106,54 @@ def test_a_malformed_event_is_allowed(event):
     assert G.decide(event, {}) is None
 
 
+# ------------------------------------------- the update-config auto-bypass (measured, not assumed)
+#
+# update-config's own workflow says "Edit file - Use Edit tool", and driving this guard with the
+# event that step produces returned exit 2. Without this detection the guard blocks the very skill
+# the rule tells you to use, so these cases pin both directions.
+
+def _transcript(tmp_path, body: str):
+    f = tmp_path / "t.jsonl"
+    f.write_text(body, encoding="utf-8")
+    return str(f)
+
+
+def _edit_event(transcript):
+    return {"tool_name": "Edit", "transcript_path": transcript,
+            "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
+
+
+def test_an_active_update_config_skill_is_not_blocked(tmp_path):
+    t = _transcript(tmp_path, '{"type":"user","message":{"role":"user","content":"# Update Config Skill\nblah"}}\n')
+    assert G.update_config_active(t) is True
+    assert G.decide(_edit_event(t), {}) is None
+
+
+def test_merely_TALKING_about_update_config_still_blocks(tmp_path):
+    """The bare name appears in ordinary prose about the rule - 57 times in one real session."""
+    t = _transcript(tmp_path, '{"type":"assistant","message":{"content":"route it through update-config"}}\n')
+    assert G.update_config_active(t) is False
+    assert G.decide(_edit_event(t), {}) is not None
+
+
+def test_an_unreadable_transcript_fails_OPEN(tmp_path):
+    """A real event with a broken path: blocking the sanctioned path is the worse failure."""
+    assert G.update_config_active(str(tmp_path / "missing.jsonl")) is True
+
+
+def test_an_ABSENT_transcript_path_is_not_an_exemption():
+    """Every real event carries transcript_path, so a missing one must not disarm the guard."""
+    assert G.update_config_active(None) is False
+    assert G.update_config_active("") is False
+
+
+def test_only_the_TAIL_is_scanned(tmp_path, monkeypatch):
+    """A skill invoked long ago must not disarm the guard for the rest of the session."""
+    monkeypatch.setattr(G, "_TAIL_BYTES", 200)
+    t = _transcript(tmp_path, "# Update Config Skill\n" + ("x" * 5000) + "\n")
+    assert G.update_config_active(t) is False
+
+
 # ---------------------------------------------------------------- end to end
 
 def _run(payload):
@@ -118,9 +166,13 @@ def _run(payload):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
-def test_end_to_end_blocks_with_the_reason_on_stderr():
+def test_end_to_end_blocks_with_the_reason_on_stderr(tmp_path):
+    # A REAL transcript with no update-config body: "/nonexistent" would fail open by design and
+    # the assertion would then be testing the fail-open path while claiming to test the block.
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text('{"type":"user","message":{"content":"hello"}}\n', encoding="utf-8")
     rc, _out, err = _run({
-        "session_id": "t", "transcript_path": "/nonexistent", "cwd": str(HOOKS_DIR),
+        "session_id": "t", "transcript_path": str(transcript), "cwd": str(HOOKS_DIR),
         "hook_event_name": "PreToolUse", "tool_name": "Write",
         "tool_input": {"file_path": "/home/u/.claude/settings.json", "content": "{}"},
     })
