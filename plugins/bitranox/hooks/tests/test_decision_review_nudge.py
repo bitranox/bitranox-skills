@@ -400,6 +400,17 @@ def test_the_reason_carries_the_suppression_rule():
     assert "clearly right" in DRN._REASON
 
 
+def test_the_reason_carries_the_one_at_a_time_walk():
+    """The automatic entry point must describe the behaviour the skill actually has.
+
+    Without this the nudge stops the session, gets a flat list, and the points the reader most
+    needs to answer are the ones a list is worst at putting to them.
+    """
+    assert "AskUserQuestion" in DRN._REASON
+    assert "one" in DRN._REASON and "per point" in DRN._REASON
+    assert "never the next before this one is answered" in DRN._REASON
+
+
 def test_the_detector_is_the_repo_gates_own_predicate():
     """One definition, so the gate and this hook cannot disagree about what counts as concluding."""
     import repo_gate
