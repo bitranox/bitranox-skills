@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.212.4]
+
+### Changed
+
+- `devops-bmk`: corrected a stale account of how bmk keeps itself installed, and documented the
+  new locking. The skill still described `uv tool install --reinstall --force` running on every
+  `make` and claimed it implies `--refresh`; both were replaced in bmk 3.13.0 by
+  `uv tool upgrade bmk`, which is a near no-op when current and takes no `--refresh` (uv rejects
+  it). Added what bmk 3.16.0 and 3.17.0 ship: venv provisioning is serialised per venv path, and
+  the shared tool environment is no longer rebuilt under a running gate - so a caller-side
+  `flock` or coordinator mutex around `make` is no longer needed, and is worse, because it
+  serialises whole gates where bmk serialises only the provisioning.
+
 ## [5.212.3]
 
 ### Changed

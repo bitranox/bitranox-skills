@@ -51,10 +51,10 @@ installed for you (see below). `uvx bmk install` is only the bootstrap that writ
 Once a project has the Makefile (section 2), every `make` first runs
 
 ```bash
-uv tool install --reinstall --force "bmk>=<minimum>"
+uv tool upgrade bmk        # falls back to `uv tool install --reinstall --force` if damaged
 ```
 
-which installs **bmk on its own** into uv's default tool dir and runs it from there
+which keeps **bmk on its own** in uv's default tool dir and runs it from there
 (`$(uv tool dir --bin)/bmk`). Note what is *not* in that command: your project. The env holds
 bmk's toolchain and nothing of yours, which is exactly why one env can serve every repo on the
 machine - there is nothing project-specific in it to collide.
@@ -66,10 +66,27 @@ transitive making bmk itself uninstallable; and the tests running in that co-res
 pyright and pip-audit inspected your real `.venv`, so the suite and the audit described different
 environments.
 
-- The install runs on **every** `make`, deliberately. `--reinstall` re-resolves the spec, so a new
-  bmk release is picked up with nothing to remember, and it already implies `--refresh` (uv's own
-  help says so), which is why no separate `--refresh-package` is needed to see a release published
-  minutes ago. It costs a second or two per invocation. Do not gate it behind a stamp file.
+- It runs on **every** `make`, deliberately, so a new bmk release is picked up with nothing to
+  remember and no version marker to go stale. Do not gate it behind a stamp file: make would skip
+  it and the env would silently pin itself to whatever bmk it first saw.
+- It **upgrades**; it does not reinstall on the common path. `uv tool upgrade` revalidates the
+  index on every run and is a near no-op when bmk is already current. The unconditional
+  `--reinstall --force` it replaced tore the env down on every `make` - and because the env is
+  shared, that deleted the site-packages out from under a bmk still *running* in another repo.
+  `--refresh` is not needed and uv rejects it (exit 2); offline it simply answers
+  "Nothing to upgrade".
+- **The rebuild waits for the bmk processes using that env.** Every bmk holds a shared lock on
+  the tools root for its lifetime; the upgrade takes the same lock exclusively. Readers do not
+  exclude each other, so two repos still gate at the same time - only a *mutation* waits. The
+  wait is bounded: an upgrade that cannot get the lock is skipped (the next `make` takes it),
+  while a repair that cannot get it fails rather than continuing on a damaged env. Set
+  `BMK_TOOL_LOCK=0` to disable it. **You no longer need a caller-side lock** (a `flock` around
+  `make`, a coordinator mutex) to stop two repos colliding here - and a caller-side one is worse,
+  because it serialises whole gates where bmk serialises only the provisioning.
+- Two writers stay out of reach by construction: a repo whose Makefile predates this is unguarded
+  until its next `make` regenerates it, and a hand-run `uv tool install bmk` always is. So when a
+  command fails and the env turns out to have been replaced mid-run, bmk says so on stderr rather
+  than leaving an ImportError inside its own dependencies to look like a flake.
 - Right after a release there is a brief window where uv's index still reports only the previous
   version; the next `make` picks the new one up.
 
@@ -81,6 +98,14 @@ syncs it to `pyproject.toml`. pytest, pyright and pip-audit all resolve **that**
 own and never whatever venv happens to be active in your shell -- so the environment you test in,
 type-check in and audit are one and the same, and no project can quietly install its dependencies
 into an environment it does not own.
+
+**One bmk provisions a venv at a time.** The sync is serialised by an exclusive lock scoped to
+that one venv path, so a subagent's `make test` beside yours - or `test-all` beside `test` - can no
+longer reinstall packages under a running gate. Unguarded, the loser did not crash: provisioning
+degrades rather than raising, so it silently tested a different environment. `BMK_VENV_LOCK_TIMEOUT`
+(default 600s) bounds the wait and `BMK_VENV_LOCK_DIR` says where the lock files live (outside every
+repository). Because the scope is one venv path, `test-all` still provisions its versions in
+parallel.
 
 **Which Python it is built on: the newest your classifiers declare, at its latest patch.**
 
