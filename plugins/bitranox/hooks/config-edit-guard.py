@@ -92,6 +92,34 @@ def targets_config(file_path) -> bool:
     return bool(_CONFIG_PATHS.search(normalised))
 
 
+def _texts(record) -> list:
+    """Every text block of a user-role message in this record. PURE."""
+    message = record.get("message") or {}
+    if message.get("role") != "user":
+        return []
+    content = message.get("content")
+    if isinstance(content, str):
+        return [content]
+    if not isinstance(content, list):
+        return []
+    return [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+
+
+def _is_skill_body(line: str) -> bool:
+    """True when this transcript line IS the update-config skill body. PURE.
+
+    The marker must START the text, which is what separates the injected skill body from the ten
+    other places the same string appears once anyone documents this guard.
+    """
+    try:
+        record = json.loads(line)
+    except (ValueError, TypeError):
+        return False                                      # a tail read can start mid-line
+    if not isinstance(record, dict) or record.get("type") != "user":
+        return False
+    return any(text.lstrip().startswith(_UPDATE_CONFIG_MARK) for text in _texts(record))
+
+
 def update_config_active(transcript_path) -> bool:
     """True when the update-config skill body appears in the recent transcript. IMPURE (reads it).
 
@@ -113,7 +141,7 @@ def update_config_active(transcript_path) -> bool:
             tail = handle.read().decode("utf-8", errors="replace")
     except (OSError, ValueError):
         return True
-    return _UPDATE_CONFIG_MARK in tail
+    return any(_is_skill_body(line) for line in tail.splitlines())
 
 
 def decide(event, env):

@@ -123,10 +123,28 @@ def _edit_event(transcript):
             "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
 
 
+def _skill_body_line(text: str) -> str:
+    """One transcript line carrying `text` as a user-role message. Built with json.dumps.
+
+    Hand-written JSON is how the first version of this fixture passed vacuously: its `\n` became a
+    REAL newline inside a JSON string, so the line never parsed - and the substring check under test
+    never parsed either, so both were wrong in the same direction and agreed with each other.
+    """
+    return json.dumps({"type": "user",
+                       "message": {"role": "user",
+                                   "content": [{"type": "text", "text": text}]}})
+
+
 def test_an_active_update_config_skill_is_not_blocked(tmp_path):
-    t = _transcript(tmp_path, '{"type":"user","message":{"role":"user","content":"# Update Config Skill\nblah"}}\n')
+    t = _transcript(tmp_path, _skill_body_line("# Update Config Skill\n\nModify config") + "\n")
     assert G.update_config_active(t) is True
     assert G.decide(_edit_event(t), {}) is None
+
+
+def test_a_multiline_skill_body_is_recognised(tmp_path):
+    """A real body is many KB of markdown; only its first line carries the marker."""
+    body = "# Update Config Skill\n\n" + ("filler line\n" * 500)
+    assert G.update_config_active(_transcript(tmp_path, _skill_body_line(body) + "\n")) is True
 
 
 def test_merely_TALKING_about_update_config_still_blocks(tmp_path):
@@ -134,6 +152,40 @@ def test_merely_TALKING_about_update_config_still_blocks(tmp_path):
     t = _transcript(tmp_path, '{"type":"assistant","message":{"content":"route it through update-config"}}\n')
     assert G.update_config_active(t) is False
     assert G.decide(_edit_event(t), {}) is not None
+
+
+# The marker must START the text. Presence alone was the FIRST version of this check, and it was
+# wrong: in the session that built this the H1 occurred 11 times and only ONE was the skill body -
+# the rest were this guard's own source, its tests, a changelog entry and shell commands quoting
+# it, echoed back through tool output. A substring test is disarmed by documenting the guard.
+
+@pytest.mark.parametrize("line", [
+    # the guard's own source, echoed by a grep
+    '{"type":"user","message":{"role":"user","content":[{"type":"text",'
+    '"text":"54:_UPDATE_CONFIG_MARK = \\"# Update Config Skill\\""}]}}',
+    # an assistant message quoting it
+    '{"type":"assistant","message":{"role":"assistant","content":"marker is # Update Config Skill"}}',
+    # a tool result that merely contains it mid-text
+    '{"type":"user","message":{"role":"user","content":[{"type":"text",'
+    '"text":"grep output: 2 hits for # Update Config Skill"}]}}',
+])
+def test_quoting_the_marker_is_not_an_invocation(tmp_path, line):
+    t = _transcript(tmp_path, line + "\n")
+    assert G.update_config_active(t) is False
+    assert G.decide(_edit_event(t), {}) is not None
+
+
+def test_the_real_skill_body_starts_with_the_marker(tmp_path):
+    """The positive control: the shape the harness actually injects must still be recognised."""
+    t = _transcript(tmp_path, '{"type":"user","message":{"role":"user","content":[{"type":"text",'
+                              '"text":"# Update Config Skill\\n\\nModify Claude Code config"}]}}\n')
+    assert G.update_config_active(t) is True
+
+
+def test_a_partial_line_from_the_tail_read_is_survivable(tmp_path):
+    """The tail seek can land mid-line; an unparseable line is not a match and not a crash."""
+    t = _transcript(tmp_path, 'ontent":[{"type":"text","text":"# Update Config Skill"}]}}\n')
+    assert G.update_config_active(t) is False
 
 
 def test_an_unreadable_transcript_fails_OPEN(tmp_path):
