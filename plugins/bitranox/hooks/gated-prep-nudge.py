@@ -67,12 +67,19 @@ def writes_via_interpreter(command: str) -> bool:
 # WORKING TREE, and equally with the `origin/master` REF it compares against. A `git fetch` writes
 # no file at all and still invalidates the answer.
 #
-# `add` is deliberately absent: it touches the index rather than the working tree, losing it to a
-# block produces no confusing missing-input error (the retry simply re-adds), and
-# `git add ... && git commit` is the single most common idiom before a commit - nudging on it would
-# train the reader to ignore the channel, which costs more than the miss.
+# Three verbs are deliberately absent, each for its own reason:
+#
+# `add` touches the index rather than the working tree, losing it to a block produces no confusing
+# missing-input error (the retry simply re-adds), and `git add ... && git commit` is the single most
+# common idiom before a commit - nudging on it would train the reader to ignore the channel.
+#
+# `clone` and `worktree` normally write OUTSIDE the tree the gate inspects (`git clone <url> /tmp/x`,
+# `git worktree add ../wt`), so they change nothing repo-gate reads. Telling an inside-the-repo
+# target from an outside one would take real path parsing, which a nudge does not earn.
+#
+# In every case a false nudge costs more than the miss it would have prevented.
 _TREE_VERBS = ("checkout", "restore", "switch", "reset", "stash", "clean", "rm", "mv",
-               "merge", "rebase", "cherry-pick", "revert", "am", "apply", "clone", "worktree")
+               "merge", "rebase", "cherry-pick", "revert", "am", "apply")
 _REF_VERBS = ("fetch",)   # moves origin/master without touching the working tree
 _BOTH_VERBS = ("pull",)   # merges into the working tree AND moves the ref
 # Longest-first, so a short alternative can never shadow a longer one sharing its prefix.

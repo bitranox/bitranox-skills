@@ -226,10 +226,20 @@ def test_history_rewriting_verbs_are_prep_too():
                 "git cherry-pick abc123 && git push",
                 "git revert HEAD && git commit -m x",
                 "git am < patch.eml && git push",
-                "git apply fix.patch && git commit -m x",
-                "git worktree add ../wt && git commit -m x",
-                "git clone https://example.com/r.git sub && git commit -m x"):
+                "git apply fix.patch && git commit -m x"):
         assert N.notice(cmd) is not None, cmd
+
+
+def test_clone_and_worktree_are_not_prep():
+    """Both normally write OUTSIDE the tree the gate inspects.
+
+    `git clone <url> /tmp/x` and `git worktree add ../wt` change nothing repo-gate reads, so a nudge
+    there is a false positive, and this hook's own rule is that a false nudge costs more than the
+    miss. Distinguishing an inside-the-repo target would take real path parsing, which a nudge does
+    not earn. They shipped in 5.211.0 on a symmetry argument and are removed here.
+    """
+    assert N.notice("git clone https://example.com/r.git /tmp/x && git commit -m x") is None
+    assert N.notice("git worktree add ../wt && git commit -m x") is None
 
 
 def test_verbs_that_move_origin_master_are_prep_too():
