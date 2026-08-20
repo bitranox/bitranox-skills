@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.208.0]
+
+### Added
+
+- `meta-claude-hooks`: a reference for the Claude Code hook API. Covers all 31 hook events, the
+  five handler types, matcher evaluation, the stdin/stdout contract, exit-code semantics per event,
+  and the decision-control fields, across four reference files.
+- The skill checks itself against upstream. `scripts/hookdoc_stamp.py` compares
+  `code.claude.com/docs/en/hooks.md` against a committed fingerprint and reports `CURRENT`,
+  `COSMETIC`, `STRUCTURAL` or `BROKEN`, so a prose edit stays quiet while an added or removed event
+  is named. An offline coverage check asserts every stamped event is documented here, and
+  `selftest` proves the detector still distinguishes all four verdicts.
+
 ## [5.207.0] - 2026-08-16
 
 ### Added

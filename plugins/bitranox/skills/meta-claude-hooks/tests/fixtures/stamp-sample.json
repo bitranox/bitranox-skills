@@ -1,0 +1,333 @@
+{
+  "schema": 1,
+  "generated_at": "2026-01-01",
+  "generator": "scripts/hookdoc_stamp.py",
+  "normalisation": {
+    "id": "n1",
+    "rules": [
+      "crlf->lf",
+      "drop-lines-before-first-h1",
+      "rstrip-lines",
+      "collapse-3+-blank-to-2",
+      "strip-edges",
+      "single-trailing-lf"
+    ]
+  },
+  "sources": [
+    {
+      "name": "hooks-sample",
+      "url": "https://example.com/docs/en/hooks.md",
+      "tier": "api",
+      "raw_bytes": 3320,
+      "normalised_lines": 179,
+      "content_sha256": "36dd3abbc062edb3ef37768c0ff87a07345d5120b9f1021a13f8d5fa63066b96",
+      "structure_sha256": "9399dc8ac530135fe39ae76552fd06f3bc8374bc7aa6143a080febc6be25de47",
+      "max_cli_version_mentioned": null,
+      "control": {
+        "min_raw_bytes": 1660,
+        "require_headings": [
+          "## Configuration",
+          "## Hook input and output",
+          "## Hook events",
+          "## Security considerations"
+        ],
+        "min_events": 18
+      },
+      "counts": {
+        "headings": 36,
+        "events": 31,
+        "json_fields": 14,
+        "handler_types": 5,
+        "env_vars": 1,
+        "table_keys": 3
+      },
+      "fingerprint": {
+        "headings": [
+          "H2:Configuration",
+          "H2:Hook events",
+          "H2:Hook input and output",
+          "H2:Security considerations",
+          "H3:ConfigChange",
+          "H3:CwdChanged",
+          "H3:DirectoryAdded",
+          "H3:Elicitation",
+          "H3:ElicitationResult",
+          "H3:FileChanged",
+          "H3:Hook handler fields",
+          "H3:InstructionsLoaded",
+          "H3:MessageDisplay",
+          "H3:Notification",
+          "H3:PermissionDenied",
+          "H3:PermissionRequest",
+          "H3:PostCompact",
+          "H3:PostToolBatch",
+          "H3:PostToolUse",
+          "H3:PostToolUseFailure",
+          "H3:PreCompact",
+          "H3:PreToolUse",
+          "H3:SessionEnd",
+          "H3:SessionStart",
+          "H3:Setup",
+          "H3:Stop",
+          "H3:StopFailure",
+          "H3:SubagentStart",
+          "H3:SubagentStop",
+          "H3:TaskCompleted",
+          "H3:TaskCreated",
+          "H3:TeammateIdle",
+          "H3:UserPromptExpansion",
+          "H3:UserPromptSubmit",
+          "H3:WorktreeCreate",
+          "H3:WorktreeRemove"
+        ],
+        "events": [
+          "ConfigChange",
+          "CwdChanged",
+          "DirectoryAdded",
+          "Elicitation",
+          "ElicitationResult",
+          "FileChanged",
+          "InstructionsLoaded",
+          "MessageDisplay",
+          "Notification",
+          "PermissionDenied",
+          "PermissionRequest",
+          "PostCompact",
+          "PostToolBatch",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PreCompact",
+          "PreToolUse",
+          "SessionEnd",
+          "SessionStart",
+          "Setup",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "TaskCompleted",
+          "TaskCreated",
+          "TeammateIdle",
+          "UserPromptExpansion",
+          "UserPromptSubmit",
+          "WorktreeCreate",
+          "WorktreeRemove"
+        ],
+        "json_fields": [
+          "PreToolUse",
+          "additionalContext",
+          "command",
+          "continue",
+          "cwd",
+          "hook_event_name",
+          "hooks",
+          "matcher",
+          "permissionDecision",
+          "session_id",
+          "stopReason",
+          "systemMessage",
+          "type",
+          "updatedInput"
+        ],
+        "handler_types": [
+          "agent",
+          "command",
+          "http",
+          "mcp_tool",
+          "prompt"
+        ],
+        "env_vars": [
+          "CLAUDE_PROJECT_DIR"
+        ],
+        "table_keys": [
+          "if",
+          "timeout",
+          "type"
+        ]
+      },
+      "sections": [
+        {
+          "path": "## Configuration",
+          "lines": 11,
+          "sha256": "342d4b2044c1edd301cfa97388b199eca11cd8eeba3c0ee46315e140f3ca00a7"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields",
+          "lines": 13,
+          "sha256": "ad283056e8abd2308b02ffd9526298e9b135619c2629309f16a33609f4369085"
+        },
+        {
+          "path": "## Hook input and output",
+          "lines": 13,
+          "sha256": "fc91d659c8818c402510795b60eb78d255c300c840759cb719a8b02990c98a2e"
+        },
+        {
+          "path": "## Hook events",
+          "lines": 1,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "## Hook events > ### SessionStart",
+          "lines": 3,
+          "sha256": "aaa5a3e88d0d7b62a8f332391f3e8635d9f4313609d09f347e69ebf5396885de"
+        },
+        {
+          "path": "## Hook events > ### Setup",
+          "lines": 3,
+          "sha256": "c75cac1e745edf1237b6a725e41f67e975b32639615b7e699c85f71fcd4d777d"
+        },
+        {
+          "path": "## Hook events > ### InstructionsLoaded",
+          "lines": 3,
+          "sha256": "af0afeb84c282842fbed3f01c4805390bc7e242a8c6ba570a33c7820951c568e"
+        },
+        {
+          "path": "## Hook events > ### UserPromptSubmit",
+          "lines": 3,
+          "sha256": "bdd8aa4e0c111af38262f189d94a1a6350c24fd5b61dcdc5c189a947ce948664"
+        },
+        {
+          "path": "## Hook events > ### UserPromptExpansion",
+          "lines": 3,
+          "sha256": "afeadd734b70475c020a705dece6c5ef847766f136a8d88be261250a69d453f8"
+        },
+        {
+          "path": "## Hook events > ### MessageDisplay",
+          "lines": 3,
+          "sha256": "ae5af0b50665e56d726dc8ef10bc00dbc503410c1b69bbf5cbc9ec06e3d9fdd7"
+        },
+        {
+          "path": "## Hook events > ### PreToolUse",
+          "lines": 3,
+          "sha256": "087947b3a7f50644e6df6ea101d193534905d599c5c80a5a655c44093e210a15"
+        },
+        {
+          "path": "## Hook events > ### PermissionRequest",
+          "lines": 3,
+          "sha256": "6593ee2cf48128d8403ef7b864bcb93a60c61861f2f12fca71584ea811f7b567"
+        },
+        {
+          "path": "## Hook events > ### PostToolUse",
+          "lines": 3,
+          "sha256": "329b7da3f45893b5f69910b3b8fe28abf48ffd09991b59ae6d8fcb725f51a428"
+        },
+        {
+          "path": "## Hook events > ### PostToolUseFailure",
+          "lines": 3,
+          "sha256": "e351eda152242c20ccd1eb34d3981351c189f1751aff2fbc8207e24fba845ae4"
+        },
+        {
+          "path": "## Hook events > ### PostToolBatch",
+          "lines": 3,
+          "sha256": "98e59f5c5614a4610b9fc465a67af1ed410d95a4110c39102f1f10539e646f73"
+        },
+        {
+          "path": "## Hook events > ### PermissionDenied",
+          "lines": 3,
+          "sha256": "90b78fa6ad280114b3fbacbcefea3675383aa63178b0bdf3d8e30f87ea3aabf6"
+        },
+        {
+          "path": "## Hook events > ### Notification",
+          "lines": 3,
+          "sha256": "827ac5df39684f1a70aab40d26084036252a12bb8a3070c0cfe317e565b0b0f1"
+        },
+        {
+          "path": "## Hook events > ### SubagentStart",
+          "lines": 3,
+          "sha256": "0fd1882b2673764022e55aba84c137e769cbb533ea9ca00fd7889e73a5ee3e29"
+        },
+        {
+          "path": "## Hook events > ### SubagentStop",
+          "lines": 3,
+          "sha256": "61fb8fc799794efc11d99e79c9c00d613ef6a832a6906a509c5266ff01ac7eee"
+        },
+        {
+          "path": "## Hook events > ### TaskCreated",
+          "lines": 3,
+          "sha256": "0582e78b7ac6d8a0f8d8ae9620c853c75907f80a28ff4092101cafeaf825ef64"
+        },
+        {
+          "path": "## Hook events > ### TaskCompleted",
+          "lines": 3,
+          "sha256": "9c9ca23c6a9dd2dcd7a5cca4409d2ab4581c6a899b517fda584050cf570ec459"
+        },
+        {
+          "path": "## Hook events > ### Stop",
+          "lines": 3,
+          "sha256": "25d6a8b01dff2dc88bf5134b92ce621a4f88ac775b8ae66046e1a06e9d95db1c"
+        },
+        {
+          "path": "## Hook events > ### StopFailure",
+          "lines": 3,
+          "sha256": "a07193b95a0cd79b1f7788b1288158da2e1d3df7647aca7301cdc912d65b8b3f"
+        },
+        {
+          "path": "## Hook events > ### TeammateIdle",
+          "lines": 3,
+          "sha256": "974ab7a3adeaade7a6b9ebedeb6166ed6584b79a88434b156f67220029098c99"
+        },
+        {
+          "path": "## Hook events > ### ConfigChange",
+          "lines": 3,
+          "sha256": "2555095eaf49bdae98f6270e7e594ef57c8bc99663af3a673d4a9ac1c5d518d2"
+        },
+        {
+          "path": "## Hook events > ### CwdChanged",
+          "lines": 3,
+          "sha256": "ca50eb0d4600da3a75f7a10bbc109b1fa919c29fc29c04ba55e0955caec29d10"
+        },
+        {
+          "path": "## Hook events > ### DirectoryAdded",
+          "lines": 3,
+          "sha256": "34b383f82825f3e80f7f2b648914b4b5b6ab4fcdcf94fe1fdd6a55f958aa7b97"
+        },
+        {
+          "path": "## Hook events > ### FileChanged",
+          "lines": 3,
+          "sha256": "e354bd63a5939e7a15a74f4fb7b3396bf2c0b71fc206e0ec8176966feae5acb8"
+        },
+        {
+          "path": "## Hook events > ### WorktreeCreate",
+          "lines": 3,
+          "sha256": "4754d7aba65d0aa07d0d704e81766dbc6685ee8277594258d865f83416968d03"
+        },
+        {
+          "path": "## Hook events > ### WorktreeRemove",
+          "lines": 3,
+          "sha256": "f00bd48015b26657e14a51a1413c471ea75ad9e0988132b6d521f7974c20f172"
+        },
+        {
+          "path": "## Hook events > ### PreCompact",
+          "lines": 3,
+          "sha256": "dc49b6eaf3fa8a7ecef0451102777abc80121489019735e12d0874a74fa24dc1"
+        },
+        {
+          "path": "## Hook events > ### PostCompact",
+          "lines": 3,
+          "sha256": "a978ccdf55931ae9180abbd3d2eee3721f576ff1dc2e31f07a9716981bdb0a8a"
+        },
+        {
+          "path": "## Hook events > ### SessionEnd",
+          "lines": 3,
+          "sha256": "772f705f08ed4022b31e55222e8ff91929e7bacf9e71b556fa3f3381a76978c1"
+        },
+        {
+          "path": "## Hook events > ### Elicitation",
+          "lines": 3,
+          "sha256": "0b85704a885e04f4ef13ee453e22b088ddebf092d522589f198ef6fc7610ac16"
+        },
+        {
+          "path": "## Hook events > ### ElicitationResult",
+          "lines": 3,
+          "sha256": "43f80e11d39c3daff64d6730ac8af00ef8ada9158e02f71de00272d112d5fc22"
+        },
+        {
+          "path": "## Security considerations",
+          "lines": 3,
+          "sha256": "b3eb374c6c7c541acb1292eee0bb9e6bc9d8159c62ac5b154d91e0c6e5d573a5"
+        }
+      ]
+    }
+  ],
+  "coverage_gaps": []
+}
