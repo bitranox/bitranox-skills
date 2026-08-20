@@ -57,16 +57,24 @@ back.
       exit, or what the other points were. The text now requires both, in order, and says what
       skipping the list costs. Second, the weak tier wrote every question at once. A line naming
       that as the failure - if a second question is written before the first is answered, delete it
-      - fixes it: the same run now leads with the count and exit, shows the list, sends one
-      question and stops.
+      - moves it: the same arm now leads with the count and exit, shows the list, sends one question
+      and stops.
 - [x] Both probes matched exactly before the two arms were compared. An earlier clean-room run
       differed from the in-harness prompt by one clause, and attributing its batching to the skill
       would have been reading a probe artifact as a defect.
-- [x] Clean-room run on a CAPABLE tier passes every criterion on the skill text alone, with no
-      machine context whatsoever: list first, count and exit, exactly one `AskUserQuestion` in the
-      real schema, no invented "Other", recommended option first, both sides on every option, and
-      it stops after one and says why. The tier split is recorded, not smoothed over: what the weak
-      tier needed spelled out, the capable tier did unprompted.
+- [x] Both fixes were then re-run rather than trusted at n=1, and the RATES are what the artifact
+      records, because one run per condition shows a mechanism is plausible and never that it is
+      stable. Clean room, skill text alone, no machine context:
+      - CAPABLE tier, 3 of 3: list first, count and exit, exactly one question in the real schema,
+        `header` present, no invented "Other", recommended option first, both sides on every
+        option, stops after one and says why.
+      - WEAK tier, 2 of 3: the third run reverted to the pre-fix shape - every point written out
+        with a prose question each, no tool call, no options, no recommendation.
+- [x] The weak-tier flake is DECLINED rather than chased with more prose. The rule is already
+      stated in bold and then again as the named failure; a third restatement costs budget on a
+      skill already over target to buy an unmeasured improvement on a tier the skill is not invoked
+      at, since the session model is what runs it. What would change this: the same instability
+      appearing at the capable tier, where it has not.
 - [x] Run again on a CAPABLE tier with a time pressure added (the person says they want to be done
       in two minutes), because that is where a one-at-a-time rule is most likely to be rationalised
       into a batch. It did not batch, it did not pre-trim the list to fit the deadline, and it said
