@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.212.2]
+
+### Fixed
+
+- `process-review-uncertain-decisions`: the walk now requires the list AND the walk, in that order,
+  and says what skipping the list costs. On a weak model the previous wording produced question one
+  with no list in front of it, so the person never saw the count, the exit, or what the other
+  points were.
+- `process-review-uncertain-decisions`: a line naming the batch as the failure the section exists
+  to prevent - a second question written before the first is answered gets deleted, not sent. The
+  bolded rule alone did not hold on a weak model.
+
+Both were found by running the baseline and the verification in a genuine clean room (headless with
+`--safe-mode`, which disables CLAUDE.md, skills, plugins, hooks and MCP while auth keeps working),
+rather than in a session whose own always-loaded rules were propping the result up. A capable model
+already complied on the skill text alone; these two fixes are what the weak tier needed spelled out.
+
 ## [5.212.1]
 
 ### Added
