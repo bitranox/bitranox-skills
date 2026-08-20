@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.216.3]
+
+### Added
+
+- A canary test for the one coupling `config-edit-guard` cannot control: it recognises an active
+  `update-config` by that skill's H1, which is Anthropic's string. A rewording upstream would stop
+  the detection matching and silently return the guard to blocking the skill it tells you to use.
+  The test now fails loudly instead.
+
+  It is built not to become the kind of canary that gets deleted for flakiness. It SKIPS when no
+  `claude` binary is found (CI), and skips again unless a CONTROL string from elsewhere in the same
+  skill body proves the binary can show skill bodies at all - an instrument that cannot see what it
+  is looking for must report "cannot tell", never "it is gone". Only a genuine rewording fails it.
+  Verified in all four states: passes on the real binary, fails on a mutated marker, skips against a
+  binary with no skill bodies, skips with no binary at all.
+
 ## [5.216.2]
 
 ### Fixed
