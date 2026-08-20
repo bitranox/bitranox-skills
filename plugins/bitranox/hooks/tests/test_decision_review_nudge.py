@@ -400,6 +400,39 @@ def test_the_reason_carries_the_suppression_rule():
     assert "clearly right" in DRN._REASON
 
 
+# The walk rule is stated twice: here in the hook, which is injected at the end of a turn without
+# the skill being loaded, and in the skill body, which loads only on invocation. Both are needed -
+# the hook is what an agent acts on when it does not load the skill, and the skill is all there is
+# on the manual path, where no hook fires. That makes them a drift pair, and the hook is the
+# dangerous half: it fires unattended, so a stale promise there steers an agent toward behaviour
+# the skill no longer describes, which surfaces as wrong behaviour rather than a failing check.
+_WALK_TERMS = (
+    "AskUserQuestion",
+    "hardest-to-reverse",
+    "upside",
+    "downside",
+    "never the next before this one is answered",
+)
+
+
+def test_the_hook_and_the_skill_state_the_same_walk_rule():
+    """Editing either copy without the other must fail here, not in front of a user."""
+    from pathlib import Path
+
+    skill = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "process-review-uncertain-decisions"
+        / "SKILL.md"
+    )
+    assert skill.is_file(), "the skill this hook names must exist at the path the test resolves"
+    body = skill.read_text(encoding="utf-8")
+    missing_here = [t for t in _WALK_TERMS if t not in DRN._REASON]
+    missing_there = [t for t in _WALK_TERMS if t not in body]
+    assert not missing_here, "hook reason dropped: %s" % missing_here
+    assert not missing_there, "SKILL.md dropped: %s" % missing_there
+
+
 def test_the_reason_carries_the_one_at_a_time_walk():
     """The automatic entry point must describe the behaviour the skill actually has.
 
