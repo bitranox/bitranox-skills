@@ -54,10 +54,17 @@ data.checked_at
 data.cached
 data.sources[].content_sha256      (first 12 hex)
 data.sources[].structure_sha256    (first 12 hex)
+data.cli_ahead_of_docs             (true / false / null)
 ```
 
 If you cannot paste them, the check did not run: say so. Do **not** write "the skill is current" - that sentence
 is cheap to produce without looking.
+
+`cli_ahead_of_docs` is a separate signal from the verdict. The check reads your own
+`claude --version` and compares it against the newest release the stamped docs mention. When yours is
+newer, these files can be a perfect match for upstream and still predate behaviour that changed in
+your version - so the check says so and rechecks daily instead of weekly. `null` means the signal is
+unavailable (no CLI on PATH), which is not the same as "not ahead".
 
 | Verdict      | Exit | What you do                                                                                                                                               |
 |--------------|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -130,3 +137,8 @@ uv run scripts/hookdoc_stamp.py baseline --write  # refresh the baseline line ab
 After a `STRUCTURAL` verdict: update the reference files **first**, then re-stamp. `stamp` runs `coverage` before
 writing and refuses while a newly-appeared event is undocumented, so the stamp cannot quietly move ahead of the
 documentation it certifies.
+
+`coverage` has two tiers. **Blocking**: every event needs its own heading here, and every name in the
+input/output contract, every environment variable and every handler type must appear. **Advisory**: the
+per-tool example keys are reported but do not fail, because gating them would fail forever on detail that
+belongs upstream, and a gate that can never go green gets switched off.

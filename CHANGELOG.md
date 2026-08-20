@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.209.0]
+
+### Added
+
+- `meta-claude-hooks`: `references/io-contract.md` now documents what `tool_input` holds for each of
+  the 12 tools a hook can match (Bash, PowerShell, Write, Edit, Read, Glob, Grep, WebFetch,
+  WebSearch, Agent, AskUserQuestion, ExitPlanMode), the `tool_response` an Agent call returns, and
+  the Windows backslash trap that silently disables a path-matching hook.
+- `hookdoc_stamp.py check` reads the local `claude --version` and compares it against the newest
+  release the stamped docs mention. When the CLI is ahead, the docs can match the stamp exactly and
+  still predate behaviour that changed in that version, so the check reports `cli_ahead_of_docs` and
+  drops its cache window from seven days to one. `--no-cli-probe` skips it; an absent CLI reports
+  `null`, which is distinct from "not ahead".
+
+### Changed
+
+- The coverage gate is now two-tier. Names in the input/output contract are **blocking** alongside
+  events, environment variables and handler types; only per-tool example keys stay advisory.
+  Previously every JSON key was advisory, so a newly added `hookSpecificOutput` field could go
+  undocumented without failing anything.
+
 ## [5.208.0]
 
 ### Added

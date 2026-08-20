@@ -443,3 +443,130 @@ def test_module_imports_without_third_party_dependencies():
         if (line.startswith("import ") or line.startswith("from ")) and "httpx" in line
     ]
     assert module_level == [], "httpx2 must be imported lazily inside _fetch"
+
+
+# --------------------------------------------------------------------------- output-contract gate
+
+
+def test_harvest_field_takes_identifier_dotted_and_key_colon_forms():
+    got = set()
+    for span in ("systemMessage", "hookSpecificOutput.worktreePath", "retry: true", "PostToolUse", "true"):
+        H._harvest_field(span, got)
+    assert "systemMessage" in got
+    assert "worktreePath" in got, "a dotted path must yield its last segment"
+    assert "retry" in got, "a key-with-value span must yield the key"
+    assert "PostToolUse" not in got, "an event name is not a field"
+    assert "ostToolUse" not in got, "matching words mid-token would fabricate fragments"
+    assert "true" not in got, "a literal is not a field"
+
+
+def test_output_fields_are_scoped_to_the_io_section():
+    text = (
+        "# T\n\n## Hook input and output\n\nThe `systemMessage` field warns the user.\n\n"
+        "## Hook events\n\n### PreToolUse\n\nThe `old_string` field is a tool input.\n"
+    )
+    fp = H.fingerprint(H.normalise(text.encode("utf-8")))
+    assert "systemMessage" in fp["output_fields"]
+    assert "old_string" not in fp["output_fields"], "a per-tool example key is not part of the output contract"
+
+
+def test_shipped_stamp_gates_the_real_output_contract_fields():
+    api = [s for s in json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))["sources"] if s["tier"] == "api"][0]
+    gated = set(api["fingerprint"]["output_fields"])
+    for field in ("continue", "stopReason", "suppressOutput", "systemMessage", "terminalSequence",
+                  "hookSpecificOutput", "hookEventName", "permissionDecision", "permissionDecisionReason",
+                  "additionalContext", "updatedInput", "updatedToolOutput", "retry", "displayContent",
+                  "worktreePath", "decision", "reason", "behavior"):
+        assert field in gated, "%s must be gated, not merely reported" % field
+
+
+@pytest.mark.parametrize("victim", ["updatedToolOutput", "terminalSequence", "retry"])
+def test_coverage_fails_when_a_real_output_field_stops_being_documented(tmp_path, victim):
+    """The control for the gate itself.
+
+    Widening the blocking set passed on the first run, which is exactly when a gate that asserts
+    nothing looks identical to one that works.
+    """
+    stamp = json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))
+    refs = tmp_path / "references"
+    refs.mkdir()
+    for f in REFS.glob("*.md"):
+        (refs / f.name).write_text(f.read_text(encoding="utf-8").replace(victim, "zzPlaceholder"), encoding="utf-8")
+    result = H.coverage(stamp, refs)
+    assert victim in result["missing_required"]
+    assert result["complete"] is False
+
+
+def test_coverage_does_not_fail_on_an_undocumented_per_tool_example_key(tmp_path):
+    stamp = json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))
+    api = [s for s in stamp["sources"] if s["tier"] == "api"][0]
+    api["fingerprint"]["json_fields"] = sorted(set(api["fingerprint"]["json_fields"]) | {"zzNeverDocumented"})
+    result = H.coverage(stamp, REFS)
+    assert "zzNeverDocumented" in result["undocumented_advisory"]
+    assert result["complete"] is True, "an example key must be reported, not blocking"
+
+
+def test_io_contract_documents_every_per_tool_input_schema():
+    text = (REFS / "io-contract.md").read_text(encoding="utf-8")
+    for tool in ("Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep", "WebFetch",
+                 "WebSearch", "Agent", "AskUserQuestion", "ExitPlanMode"):
+        assert "`%s`" % tool in text, "tool_input schema for %s is not documented" % tool
+    for field in ("old_string", "replace_all", "output_mode", "subagent_type", "planFilePath",
+                  "run_in_background", "blocked_domains"):
+        assert field in text, "%s missing from the per-tool schemas" % field
+
+
+# --------------------------------------------------------------------------- CLI version signal
+
+
+def test_local_cli_version_parses_a_version_string():
+    assert H.local_cli_version(lambda: "2.1.240 (Claude Code)") == "2.1.240"
+
+
+def test_local_cli_version_is_none_when_the_cli_is_absent():
+    assert H.local_cli_version(lambda: None) is None
+
+
+def test_local_cli_version_is_none_when_the_output_has_no_version():
+    assert H.local_cli_version(lambda: "not a version at all") is None
+
+
+def test_cli_ahead_of_docs_compares_numerically_not_lexically():
+    assert H.cli_ahead_of_docs("2.1.240", "2.1.99") is True, "a lexical compare would call 240 older than 99"
+    assert H.cli_ahead_of_docs("2.1.100", "2.1.234") is False
+    assert H.cli_ahead_of_docs("2.1.234", "2.1.234") is False
+
+
+def test_cli_ahead_of_docs_is_unknown_rather_than_false_when_either_side_is_missing():
+    """Unknown must not read as 'not ahead': that is the same not-looked/not-changed conflation
+    the BROKEN verdict exists to prevent, applied to this signal."""
+    assert H.cli_ahead_of_docs(None, "2.1.234") is None
+    assert H.cli_ahead_of_docs("2.1.240", None) is None
+    assert H.cli_ahead_of_docs("nonsense", "2.1.234") is None
+
+
+def test_check_payload_carries_the_version_signal(capsys):
+    rc = H.main(["check", "--stamp", str(FIXTURES / "stamp-sample.json"), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample.md"), "--json"])
+    payload = json.loads(capsys.readouterr().out)["data"]
+    assert rc == 0
+    for key in ("cli_version", "docs_cover_up_to", "cli_ahead_of_docs"):
+        assert key in payload
+
+
+def test_no_cli_probe_reports_the_signal_as_unavailable(capsys):
+    H.main(["check", "--stamp", str(FIXTURES / "stamp-sample.json"), "--source", "hooks-sample",
+            "--body", str(FIXTURES / "hooks-sample.md"), "--json", "--no-cli-probe"])
+    payload = json.loads(capsys.readouterr().out)["data"]
+    assert payload["cli_version"] is None
+    assert payload["cli_ahead_of_docs"] is None
+
+
+def test_a_cli_ahead_of_the_docs_shortens_the_cache_window(tmp_path):
+    """A stamp can match upstream exactly while upstream lags a newer CLI. The seven-day window is
+    where that goes unnoticed, so it drops to a day."""
+    H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": 1000.0, "stamp_sha256": "abc"})
+    week, day = 604800.0, 86400.0
+    two_days_later = 1000.0 + 2 * day
+    assert H.read_cache(tmp_path, "abc", week, two_days_later) is not None, "the normal window still replays"
+    assert H.read_cache(tmp_path, "abc", min(week, day), two_days_later) is None, "the shortened window expires"
