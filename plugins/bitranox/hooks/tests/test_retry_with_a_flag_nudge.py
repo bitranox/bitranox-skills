@@ -51,6 +51,31 @@ def test_shape_is_none_for_nothing_runnable(command):
     assert R.shape(command) is None
 
 
+# --------------------------------------------- what the corpus replay found (regression)
+#
+# The first version fired 536 times over 181 real sessions, 216 of them in one session, and
+# essentially every hit was a pipeline tail rather than a retry. These two cases are that bug,
+# pinned: after the fix the same replay fires twice in total.
+
+def test_a_pipeline_is_one_statement_so_the_filter_is_not_the_command():
+    """`grep ... | head -60` is a grep, not a head. Splitting on `|` was the whole 536."""
+    assert R.shape("grep -n pattern f.md | head -60")[0] == "grep"
+
+
+def test_a_command_with_no_operand_has_no_retry_target():
+    """With operands empty, "same operands" is vacuously true and any two invocations match."""
+    assert R.shape("head -60") is None
+    assert R.shape("pytest") is None
+    assert R.shape("ls -la") is None
+
+
+def test_two_unrelated_pipelines_ending_in_head_do_not_match():
+    """The exact false positive: different greps whose pipeline tails differ only by a flag."""
+    failed = R.shape("grep -n alpha a.md | head")
+    pending = R.shape("grep -n beta b.md | head -60")
+    assert R.only_flags_added(pending, failed) is False
+
+
 # ---------------------------------------------------------------- only_flags_added()
 
 def test_the_same_command_with_one_more_flag_is_the_pattern():

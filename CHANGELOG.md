@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.216.0]
+
+### Changed
+
+- `config-edit-guard` now BLOCKS (exit 2) with a `BITRANOX_CONFIG_EDIT` bypass, rather than only
+  reminding. It matches its two siblings: `store-edit-guard` exempts the memory engine and
+  `skill-edit-guard` exempts the skill-writer. An iron rule behind a reminder is enforced by
+  goodwill. One asymmetry is recorded in the hook rather than left to be rediscovered: their
+  exempted writer is code in this plugin that sets the variable itself, while the sanctioned writer
+  here is a host skill this plugin does not control, so the bypass has no automatic setter.
+
+### Fixed
+
+- `retry-with-a-flag-nudge` matched pipeline TAILS instead of commands. Replayed over 181 real
+  sessions and 32948 commands it fired 536 times, 216 of them in a single session, and essentially
+  every hit was a filter rather than a retry: splitting statements on `|` turns
+  `grep ... | head -60` into the command `head` with the flag `-60` and NO operands, so any two
+  pipeline tails compare equal. A pipeline is now one statement and a command with no operands is
+  not a retry target. The same replay now fires twice in total, never more than once per session.
+
+  Shipped in 5.214.0 and reachable there, so this is a fix to a released version, not a refinement
+  of an unreleased one.
+
 ## [5.215.0]
 
 ### Added

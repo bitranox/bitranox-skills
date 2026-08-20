@@ -27,6 +27,13 @@ touching nothing else. A changed operand means a different target and is not thi
 Heredoc bodies are stripped before anything is compared, because a body is data being written and a
 script that CONTAINS a failing command is not that command.
 
+TUNED AGAINST THE REAL CORPUS, not guessed. Replayed over 181 sessions and 32948 commands, the
+first version fired 536 times - 216 in one session - and essentially every hit was a pipeline tail,
+not a retry. Two constraints came out of that and both are load-bearing: a pipeline is ONE statement
+(splitting on `|` makes `grep ... | head -60` into the command `head`), and a command with NO
+OPERANDS is not a retry target (with operands empty, "same operands" is vacuously true and any two
+invocations of a program compare equal).
+
 NON-BLOCKING. It emits `additionalContext` and exits 0 on both events. The judgement is a heuristic
 about intent, and blocking on a heuristic that cannot see why the flag was added would be wrong far
 too often - a second failing attempt is sometimes exactly the right diagnostic step.
@@ -36,11 +43,21 @@ Pure standard library, ASCII only; launched via run-python.sh so it works on Win
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sys
 from pathlib import Path
 
-from shell_text import SEP, is_shell_tool, strip_heredoc_bodies
+from shell_text import is_shell_tool, strip_heredoc_bodies
+
+# Statement separators, NOT including `|`. A pipeline is ONE statement: its last element is
+# usually a filter, and `shell_text.SEP` splits on `|` because the guards that use it ask
+# "does any segment run a forbidden command". Asking "what command is being retried" is a
+# different question, and splitting on `|` answers it wrongly - `grep ... | head -60` becomes
+# the command `head` with the flag `-60` and NO operands, so any two pipeline tails compare
+# equal. Measured over 181 real sessions before this was fixed: 536 firings, 216 of them in a
+# single session, essentially all of them pipeline tails rather than retries.
+_STATEMENT_SEP = re.compile(r"&&|\|\||[;\n]")
 
 STATE_VERSION = 1
 MAX_RECORDED = 60          # bound the state file on a marathon session
@@ -82,19 +99,26 @@ def shape(command):
     """
     if not command or not isinstance(command, str):
         return None
-    statements = [s for s in SEP.split(strip_heredoc_bodies(command)) if s.strip()]
+    statements = [s for s in _STATEMENT_SEP.split(strip_heredoc_bodies(command)) if s.strip()]
     if not statements:
         return None
+    # Within the last statement take the FIRST pipeline element: that is the command being run,
+    # where the rest of the pipeline only shapes its output.
+    head = statements[-1].split("|")[0]
     try:
-        tokens = shlex.split(statements[-1])
+        tokens = shlex.split(head)
     except ValueError:
-        tokens = statements[-1].split()
+        tokens = head.split()
     if not tokens:
         return None
     program = tokens[0].split("/")[-1]                    # basename: /usr/bin/sed and sed are one
     flags, operands = set(), []
     for token in tokens[1:]:
         (flags.add(token) if token.startswith("-") else operands.append(token))
+    # No operand means no identifiable TARGET, so "same operands" would be vacuously true and any
+    # two invocations of the program would compare equal. A retry is about a target.
+    if not operands:
+        return None
     return (program, tuple(sorted(flags)), tuple(operands))
 
 

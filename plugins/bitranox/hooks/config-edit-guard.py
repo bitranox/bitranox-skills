@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|NotebookEdit) nudge: Claude Code config JSON goes through update-config.
+"""PreToolUse(Edit|Write|NotebookEdit) guard: Claude Code config JSON goes through update-config.
 
 Hand-editing `settings.json` is the `no-hand-edit-config-json` footgun applied to the file that
 decides how the harness itself behaves: a stray comma or a key at the wrong nesting level does not
@@ -13,12 +13,18 @@ file, and its only verdict is `block` - so a guard there would block the user fr
 own configuration, with no way to tell the two cases apart. A `PreToolUse` file-tool event is the
 seam where the actor IS the agent by construction, which is the property this rule needs.
 
-NON-BLOCKING, deliberately. The sanctioned path (`update-config`) edits these same files with these
-same tools, and a hook cannot reliably tell that skill's write from a freehand one - a transcript
-scan for a recent invocation would be a guess, and guessing wrong here means blocking the very fix
-it is asking for. So it emits `additionalContext` and exits 0: the reminder arrives at the moment
-of the edit, and a legitimate write proceeds untouched. If freehand edits are ever measured to slip
-past this, the answer is to harden it into a block WITH a recognised bypass, not to reword it.
+BLOCKS, with a bypass, matching its two siblings: `store-edit-guard` exempts the memory engine via
+`BITRANOX_MEMORY_ENGINE` and `skill-edit-guard` exempts the skill-writer via
+`BITRANOX_SKILL_WRITER`. An iron rule enforced by a reminder is enforced by goodwill.
+
+The bypass differs from theirs in one way that matters and is stated here rather than discovered
+later. Their exempted writer is code in this plugin, which sets the variable itself. The sanctioned
+writer here is the host `update-config` skill, which this plugin does not control and cannot make
+set anything - so `BITRANOX_CONFIG_EDIT` has no automatic setter and a legitimate settings edit
+will hit this block and have to export it. That is the accepted cost of enforcing the rule: the
+block states the variable and why, so the exemption is a deliberate act rather than a silent one.
+The deny message therefore has to be worth reading, because it is the only thing standing between
+the reader and a habit of exporting the variable reflexively.
 
 Windows paths arrive with BACKSLASH separators even under Git Bash, so the path is normalised
 before any segment match; a `/`-anchored comparison would silently never fire there.
@@ -28,10 +34,12 @@ Pure standard library, ASCII only; launched via run-python.sh so it works on Win
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
 _TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+_BYPASS_ENV = "BITRANOX_CONFIG_EDIT"
 
 # The Claude Code configuration files this rule covers, matched on a path SEGMENT rather than
 # anchored, because `file_path` is always absolute and its prefix varies per machine and per
@@ -43,15 +51,17 @@ _CONFIG_PATHS = re.compile(
     re.IGNORECASE,
 )
 
-_MESSAGE = (
-    "This edits Claude Code configuration JSON directly. That file decides how the harness itself "
+_DENY = (
+    "Refusing a direct edit of %s. Claude Code configuration JSON decides how the harness itself "
     "behaves, and a misplaced key or comma does not fail loudly - it silently drops a hook, a "
     "permission rule or an env var, and the next symptom is a guard that stopped firing. The host "
     "`update-config` skill owns this surface: it knows the schema, the settings precedence and the "
-    "merge rules, and it is the routing this project's no-hand-edit-config-json rule asks for. "
-    "Use it for permissions, env vars and hook registration. If you are already acting as "
-    "update-config, or this is a fixture or test file that merely looks like settings.json, carry "
-    "on - this is a reminder, not a refusal."
+    "merge rules, and routing through it is what the no-hand-edit-config-json rule asks for. Use "
+    "it for permissions, env vars and hook registration.\n\n"
+    "If you are acting AS update-config, or this path is a fixture that merely looks like a "
+    "settings file, set %s=1 for that one command. Setting it because the block is in the way is "
+    "the habit this guard exists to prevent - the rule is an iron rule precisely because the "
+    "damage it prevents is silent."
 )
 
 
@@ -66,12 +76,16 @@ def targets_config(file_path) -> bool:
     return bool(_CONFIG_PATHS.search(normalised))
 
 
-def notice(event):
-    """The reminder text for this event, or None to stay silent. PURE."""
+def decide(event, env):
+    """The block reason for this event, or None to allow silently. PURE in `event` and `env`."""
     if not isinstance(event, dict) or event.get("tool_name") not in _TOOLS:
         return None
     path = (event.get("tool_input") or {}).get("file_path")
-    return _MESSAGE if targets_config(path) else None
+    if not targets_config(path):
+        return None
+    if env.get(_BYPASS_ENV):
+        return None
+    return _DENY % (path, _BYPASS_ENV)
 
 
 def main() -> int:
@@ -79,12 +93,14 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    message = notice(event)
-    if not message:
+    try:
+        reason = decide(event, os.environ)
+    except Exception:  # noqa: BLE001 - a broken guard must never wedge a turn
         return 0
-    json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                      "additionalContext": message}}, sys.stdout)
-    return 0
+    if reason is None:
+        return 0
+    sys.stderr.write("CONFIG-EDIT GUARD: " + reason + "\n")
+    return 2  # PreToolUse: exit 2 blocks the tool call and feeds stderr back to the model
 
 
 if __name__ == "__main__":

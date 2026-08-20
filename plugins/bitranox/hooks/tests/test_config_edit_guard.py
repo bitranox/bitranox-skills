@@ -1,15 +1,19 @@
 """Tests for config-edit-guard.py (PreToolUse: route Claude Code config JSON through update-config).
 
-Two things carry the weight.
+This guard BLOCKS (exit 2) with a `BITRANOX_CONFIG_EDIT` bypass, like its two siblings. Three
+things therefore have to hold and each is asserted: it blocks the real thing, the bypass actually
+releases it, and it stays silent on everything else. The bypass test is not a formality - a guard
+whose escape hatch does not work is a guard that has to be disabled wholesale the first time it is
+wrong.
 
-The WINDOWS path case, because it is the one that fails silently: `file_path` arrives with
+Beyond that, the WINDOWS path case, because it is the one that fails silently: `file_path` arrives with
 backslash separators on Windows even under Git Bash, so a guard written with forward slashes never
 matches there and the edit proceeds exactly as if the hook had found nothing to say. That case is
 asserted directly rather than left to a platform this suite mostly does not run on.
 
-The NEGATIVE cases, because a reminder that fires on any JSON would train the reader to ignore the
-channel. A file merely named `settings.json` somewhere unrelated, a package.json, a fixture path -
-all must stay silent.
+The NEGATIVE cases matter more here than they did when this only nudged: a block that fires on any
+JSON does not merely add noise, it stops work. A file merely named `settings.json` somewhere
+unrelated, a package.json, a fixture path - all must stay allowed.
 """
 
 import json
@@ -64,29 +68,42 @@ def test_an_unrelated_path_is_ignored(path):
     assert G.targets_config(path) is False
 
 
-# ---------------------------------------------------------------- notice()
+# ---------------------------------------------------------------- decide()
 
-def test_notice_fires_for_a_config_edit():
+def test_a_config_edit_is_blocked():
     event = {"tool_name": "Edit", "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
-    message = G.notice(event)
-    assert message is not None and "update-config" in message
+    reason = G.decide(event, {})
+    assert reason is not None
+    assert "update-config" in reason
+    assert G._BYPASS_ENV in reason, "the deny must name its own bypass, or it is a dead end"
+
+
+def test_the_bypass_releases_the_block():
+    """An escape hatch that does not work gets the whole guard disabled the first time it is wrong."""
+    event = {"tool_name": "Edit", "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
+    assert G.decide(event, {G._BYPASS_ENV: "1"}) is None
+
+
+def test_an_empty_bypass_value_does_not_release_the_block():
+    event = {"tool_name": "Edit", "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
+    assert G.decide(event, {G._BYPASS_ENV: ""}) is not None
 
 
 @pytest.mark.parametrize("tool", ["Read", "Bash", "Grep", "Glob"])
 def test_a_non_writing_tool_is_ignored(tool):
     """Reading settings.json is not editing it."""
     event = {"tool_name": tool, "tool_input": {"file_path": "/home/u/.claude/settings.json"}}
-    assert G.notice(event) is None
+    assert G.decide(event, {}) is None
 
 
-def test_notice_is_silent_for_an_unrelated_write():
+def test_an_unrelated_write_is_allowed():
     event = {"tool_name": "Write", "tool_input": {"file_path": "/repo/package.json"}}
-    assert G.notice(event) is None
+    assert G.decide(event, {}) is None
 
 
 @pytest.mark.parametrize("event", [None, {}, [], "x", {"tool_name": "Edit"}])
-def test_notice_is_silent_for_a_malformed_event(event):
-    assert G.notice(event) is None
+def test_a_malformed_event_is_allowed(event):
+    assert G.decide(event, {}) is None
 
 
 # ---------------------------------------------------------------- end to end
@@ -101,14 +118,14 @@ def _run(payload):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
-def test_end_to_end_emits_context_and_never_blocks():
-    rc, out, _err = _run({
+def test_end_to_end_blocks_with_the_reason_on_stderr():
+    rc, _out, err = _run({
         "session_id": "t", "transcript_path": "/nonexistent", "cwd": str(HOOKS_DIR),
         "hook_event_name": "PreToolUse", "tool_name": "Write",
         "tool_input": {"file_path": "/home/u/.claude/settings.json", "content": "{}"},
     })
-    assert rc == 0, "this is a reminder, never a refusal - it must not block the sanctioned path"
-    assert json.loads(out)["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert rc == 2, "exit 1 does NOT block a PreToolUse call - only exit 2 does"
+    assert "CONFIG-EDIT GUARD" in err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
