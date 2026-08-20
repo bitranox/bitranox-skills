@@ -6,8 +6,13 @@ writes a file (a heredoc, a redirect) and then runs a verb a gate may block, a b
 write too: the retry fails on a missing `-F` input and points at the wrong cause, which is a
 different and much more confusing failure than the one the gate meant to report.
 
-Recorded six times in this store (`feedback-repo-gate-pre-evaluates-the-pending-commit-command`).
+Recorded seven times in this store (`feedback-repo-gate-pre-evaluates-the-pending-commit-command`).
 Prose stopped working at two, so this is the escalation - a signal at the moment of the mistake.
+
+Hit 7 wrote no file at all: `git checkout -- <f> && git commit -F msg` chained a TREE-WRITING git
+command in front of the verb. That shape is sharper than the lost-input one, because the gate reads
+the tree BEFORE the restore runs, so it cannot be satisfied in one command however often it is
+retried.
 
 NON-BLOCKING by construction: it emits `additionalContext` and exits 0. Blocking here would add a
 second block to a command that may be perfectly fine, and a hook must never wedge a turn.
@@ -57,6 +62,35 @@ def writes_via_interpreter(command: str) -> bool:
     return bool(_INTERPRETER.search(text) and _WRITE_API.search(text))
 
 
+# Git subcommands that change what a gate SEES when it inspects the tree. `add` is deliberately
+# absent: it touches the index rather than the working tree, losing it to a block produces no
+# confusing missing-input error (the retry simply re-adds), and `git add ... && git commit` is the
+# single most common idiom before a commit - nudging on it would train the reader to ignore the
+# channel, which costs more than the miss.
+_TREE_WRITING_GIT = re.compile(
+    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*git\s+"
+    r"(?P<verb>checkout|restore|switch|reset|stash|clean|rm|mv)\b", re.M)
+
+
+def tree_prep_before_gate(command: str):
+    """The tree-writing git verb that PRECEDES a gated verb in this command, or None.
+
+    Scanned with heredoc bodies stripped, like the gated-verb scan: a git command is a command, so
+    prose documenting this footgun must not be able to trip it.
+
+    Order is load-bearing. A cleanup AFTER a commit is not prep for it, and nudging on that would be
+    a false positive on an ordinary sequence.
+    """
+    text = strip_heredoc_bodies(command or "")
+    gate = _GATED.search(text)
+    if not gate:
+        return None
+    for m in _TREE_WRITING_GIT.finditer(text):
+        if m.start() < gate.start():
+            return m.group("verb")
+    return None
+
+
 def written_files(command: str):
     """Files this command CREATES, in order. Heredoc openers count; the bodies are not scanned."""
     out = []
@@ -73,22 +107,33 @@ def notice(command):
     if not command or not isinstance(command, str):
         return None
     written = written_files(command)
-    if not (written or writes_via_interpreter(command)):
-        return None
-    # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents `git commit`
-    # is prose, and nudging on it is how a guard blocks its own documentation.
-    if not _GATED.search(strip_heredoc_bodies(command)):
-        return None
-    what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
-    return (
-        "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr create) in "
-        "the SAME command. A PreToolUse gate judges the whole command before any statement runs, "
-        "so if it blocks, that file is never written and the retry fails on a missing input - "
-        "pointing at the wrong cause. Write the file in its OWN earlier command, then run the "
-        "gated verb. (Recorded six times: "
-        "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
-        % what
-    )
+    if written or writes_via_interpreter(command):
+        # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents
+        # `git commit` is prose, and nudging on it is how a guard blocks its own documentation.
+        if _GATED.search(strip_heredoc_bodies(command)):
+            what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
+            return (
+                "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr "
+                "create) in the SAME command. A PreToolUse gate judges the whole command before "
+                "any statement runs, so if it blocks, that file is never written and the retry "
+                "fails on a missing input - pointing at the wrong cause. Write the file in its OWN "
+                "earlier command, then run the gated verb. (Recorded seven times: "
+                "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
+                % what
+            )
+    verb = tree_prep_before_gate(command)
+    if verb:
+        return (
+            "This command runs `git %s`, which changes the working tree, and then a gated verb "
+            "(git commit/push/tag, gh pr create) in the SAME command. A PreToolUse gate judges the "
+            "whole command before any statement runs, so it reads the tree BEFORE your `git %s` - "
+            "which means this shape can never satisfy the gate however many times you retry it, "
+            "and a block discards the prep too. Run the prep in its OWN earlier command, then the "
+            "gated verb. (Recorded seven times: "
+            "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
+            % (verb, verb)
+        )
+    return None
 
 
 def main(raw=None) -> int:
