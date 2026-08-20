@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.212.3]
+
+### Changed
+
+- `process-review-uncertain-decisions` review artifact: records the measured RATE of the two
+  5.212.2 fixes rather than a single passing run. Clean room, skill text alone: the capable tier
+  complies 3 of 3, the weak tier 2 of 3, with the third run reverting to prose questions and no
+  tool call. The weak-tier flake is declined with a reason and with what would change the decision,
+  rather than chased with a third restatement of a rule already stated twice.
+
 ## [5.212.2]
 
 ### Fixed
