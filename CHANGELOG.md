@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.211.1]
+
+### Fixed
+
+- `gated-prep-nudge.py` no longer treats `git clone` and `git worktree` as prep. They shipped in
+  5.211.0 on a symmetry argument with the other tree-writing verbs, but their normal targets are
+  outside the repo (`git clone <url> /tmp/x`, `git worktree add ../wt`), where they change nothing
+  repo-gate reads - so the nudge was a false positive in the common case. Telling an inside-the-repo
+  target from an outside one would need real path parsing, which a nudge does not earn, and a false
+  nudge costs more than the miss it prevents.
+
 ## [5.211.0]
 
 ### Changed
