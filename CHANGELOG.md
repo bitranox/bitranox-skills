@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.211.2]
+
+### Fixed
+
+- `shell_text.is_gated_command` now drops heredoc bodies before deciding whether a command is a
+  commit, a push or a PR creation. Its docstring already claimed embedded occurrences did not
+  count, but the code only anchored each statement, and a body is split on the same separators as
+  the surrounding command - so a line such as `for cmd in ("a && git commit -m x",)` inside a
+  heredoc yielded a segment beginning with a real-looking command. The whole command was then
+  treated as a commit and put through the full repo gate.
+- The effect was a guard refusing to let its own documentation be written: authoring tests and
+  reference material that NAME these shapes was blocked by the gate, with a message about version
+  bumps and failing tests that pointed nowhere near the cause. Both consumers are fixed at once,
+  since `repo-gate` and `decision-review-nudge` share the predicate.
+
 ## [5.211.1]
 
 ### Fixed

@@ -33,17 +33,24 @@ PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b"
 def is_gated_command(command):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
-    Match per statement, anchored at its start, so "git commit"/"git push" embedded in a quoted
-    string or heredoc body does not count - only an actual command does. Over-matching is not
-    harmless here: the repo gate blocks on it, and a CHANGELOG line ABOUT committing would then
-    block the commit that adds it.
+    Heredoc bodies are dropped first, then each remaining statement is matched anchored at its
+    start, so "git commit"/"git push" appearing as DATA does not count - only an actual command
+    does. Over-matching is not harmless here: the repo gate blocks on it, and a CHANGELOG line
+    ABOUT committing would then block the commit that adds it.
+
+    Anchoring alone does NOT cover a heredoc body, which is why the strip is needed and not merely
+    tidy. The body is split on the same separators as the surrounding command, so a line such as
+    `for cmd in ("git checkout -- f && git commit -m x",)` yields a segment beginning with a
+    real-looking command. Measured 2026-08-20: writing the tests for `gated-prep-nudge` was blocked
+    by the repo gate, because the test data named the very shapes under test - a guard refusing to
+    let its own documentation be written.
 
     It lives in this module rather than in the gate that first needed it because a second consumer
     now asks the same question for its own reason - a commit is the moment work concludes, which is
     when the decision-review nudge fires. Two copies of this regex set would drift, and the drift
     would be silent in both directions: a shape one recognises and the other does not.
     """
-    for seg in SEP.split(command or ""):
+    for seg in SEP.split(strip_heredoc_bodies(command or "")):
         seg = seg.strip().lstrip("(").strip()
         if COMMIT_RE.match(seg) or PR_RE.match(seg) or PUSH_RE.match(seg):
             return True
