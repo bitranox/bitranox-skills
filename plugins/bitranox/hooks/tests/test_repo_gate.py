@@ -78,6 +78,18 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_o
         ('echo "remember to git push after"', False),
         ("python3 -c \"print('git commit -m x')\"", False),
         ("sed -i s/a/b/ f; echo 'commit only your paths: git commit -- f'", False),
+        # A HEREDOC BODY is data too, and anchoring alone does not cover it: the body's own lines
+        # are split on the same separators, so `... && git commit -m x` inside a quoted Python
+        # literal yields a segment that begins with a real-looking command. Measured 2026-08-20 -
+        # writing the tests for gated-prep-nudge was blocked by the gate, because the test data
+        # named the very shapes under test.
+        ("python3 - <<'PY'\nfor cmd in (\"git checkout -- f && git commit -m x\",):\n    pass\nPY\necho done", False),
+        ("cat > doc.md <<'EOF'\nNever chain git checkout && git commit in one call.\nEOF\necho ok", False),
+        ("cat > d.md <<'EOF'\nrun git push origin master afterwards\nEOF\nls", False),
+        # ... while a real verb AFTER the body still gates, which is the whole point of keeping the
+        # opener and dropping only the body.
+        ("cat > m <<'EOF'\nsubject\nEOF\ngit commit -F m", True),
+        ("cat > m <<'EOF'\ngit commit -m 'not this one'\nEOF\ngit push origin master", True),
     ],
 )
 def test_is_gated_command(cmd, expected):
