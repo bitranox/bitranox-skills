@@ -62,14 +62,32 @@ def writes_via_interpreter(command: str) -> bool:
     return bool(_INTERPRETER.search(text) and _WRITE_API.search(text))
 
 
-# Git subcommands that change what a gate SEES when it inspects the tree. `add` is deliberately
-# absent: it touches the index rather than the working tree, losing it to a block produces no
-# confusing missing-input error (the retry simply re-adds), and `git add ... && git commit` is the
-# single most common idiom before a commit - nudging on it would train the reader to ignore the
-# channel, which costs more than the miss.
+# Git subcommands that change what a gate SEES. There are two families, because repo-gate reads
+# `git diff --name-only origin/master` PLUS `git ls-files --others`: its verdict moves with the
+# WORKING TREE, and equally with the `origin/master` REF it compares against. A `git fetch` writes
+# no file at all and still invalidates the answer.
+#
+# `add` is deliberately absent: it touches the index rather than the working tree, losing it to a
+# block produces no confusing missing-input error (the retry simply re-adds), and
+# `git add ... && git commit` is the single most common idiom before a commit - nudging on it would
+# train the reader to ignore the channel, which costs more than the miss.
+_TREE_VERBS = ("checkout", "restore", "switch", "reset", "stash", "clean", "rm", "mv",
+               "merge", "rebase", "cherry-pick", "revert", "am", "apply", "clone", "worktree")
+_REF_VERBS = ("fetch",)   # moves origin/master without touching the working tree
+_BOTH_VERBS = ("pull",)   # merges into the working tree AND moves the ref
+# Longest-first, so a short alternative can never shadow a longer one sharing its prefix.
+_PREP_VERBS = tuple(sorted(_TREE_VERBS + _REF_VERBS + _BOTH_VERBS, key=len, reverse=True))
 _TREE_WRITING_GIT = re.compile(
-    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*git\s+"
-    r"(?P<verb>checkout|restore|switch|reset|stash|clean|rm|mv)\b", re.M)
+    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*git\s+(?P<verb>" + "|".join(_PREP_VERBS) + r")\b", re.M)
+
+
+def _mechanism(verb: str) -> str:
+    """How this verb invalidates the gate's reading - named precisely, so the nudge stays credible."""
+    if verb in _BOTH_VERBS:
+        return "changes the working tree and moves `origin/master`, the ref the gate compares against"
+    if verb in _REF_VERBS:
+        return "moves `origin/master`, the ref the gate compares against"
+    return "changes the working tree"
 
 
 def tree_prep_before_gate(command: str):
@@ -124,14 +142,13 @@ def notice(command):
     verb = tree_prep_before_gate(command)
     if verb:
         return (
-            "This command runs `git %s`, which changes the working tree, and then a gated verb "
-            "(git commit/push/tag, gh pr create) in the SAME command. A PreToolUse gate judges the "
-            "whole command before any statement runs, so it reads the tree BEFORE your `git %s` - "
-            "which means this shape can never satisfy the gate however many times you retry it, "
-            "and a block discards the prep too. Run the prep in its OWN earlier command, then the "
-            "gated verb. (Recorded seven times: "
-            "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
-            % (verb, verb)
+            "This command runs `git %s`, which %s, and then a gated verb (git commit/push/tag, gh "
+            "pr create) in the SAME command. A PreToolUse gate judges the whole command before any "
+            "statement runs, so it reads its answer BEFORE your `git %s` - which means this shape "
+            "can never satisfy the gate however many times you retry it, and a block discards the "
+            "prep too. Run the prep in its OWN earlier command, then the gated verb. (Recorded "
+            "seven times: feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
+            % (verb, _mechanism(verb), verb)
         )
     return None
 
