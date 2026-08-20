@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+from shell_text import is_shell_tool
+
 _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
 
 # Bash writes markdown without declaring a path, so the fallback looks at what
@@ -126,7 +128,7 @@ def main():
     path = (event.get("tool_input") or {}).get("file_path") or ""
     if path.lower().endswith(_MD_SUFFIXES) and Path(path).is_file():
         targets = [path]
-    elif event.get("tool_name") == "Bash":
+    elif is_shell_tool(event.get("tool_name")):
         targets = _markdown_paths_from_bash(event)
     else:
         return 0  # not a markdown file -> nothing to align

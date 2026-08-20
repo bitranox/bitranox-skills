@@ -10,6 +10,9 @@ Two tiers:
   - BLOCK (exit 2): an in-place text editor (`sed -i` / `gsed -i` / `perl -i`) whose argv targets a
     `.json/.yaml/.yml/.toml/.xml` file. High precision - only fires when such a command is at a command
     position (first token of a segment), so a quoted "sed -i x.json" inside an `echo` does not trip it.
+Heredoc bodies are stripped before either tier runs: a body is text being written, not a
+command, so a document or script that merely mentions `sed -i x.json` must not be blocked.
+
   - WARN (exit 0, stderr): a `>`/`>>` redirection onto one of those files (often legitimate generation,
     so only a nudge, never a block).
 
@@ -20,6 +23,8 @@ import json
 import re
 import shlex
 import sys
+
+from shell_text import strip_heredoc_bodies
 
 STRUCTURED_EXT = (".json", ".yaml", ".yml", ".toml", ".xml")
 SEP = re.compile(r"&&|\|\||[;\n|]")
@@ -49,6 +54,12 @@ def _has_inplace(cmd, tokens):
 
 def assess(command):
     """Pure: classify a shell command. Returns (action, file, message); action in {block, warn, None}."""
+    # A heredoc body is DATA being written, not a command the shell will run. Scanning it
+    # makes this guard fire on a script or document that merely CONTAINS a `sed -i x.json`
+    # line - which is how it blocked a probe being written about this very footgun, twice.
+    # The command-position check alone does not cover it: `&&` inside a body splits into
+    # segments whose first token really is `sed`.
+    command = strip_heredoc_bodies(command or "")
     for segment in SEP.split(command):
         try:
             tokens = shlex.split(segment)

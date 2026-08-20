@@ -21,6 +21,8 @@ import json
 import re
 import sys
 
+from shell_text import is_shell_tool
+
 _MEMORY_ADD = re.compile(r"memory_engine(?:\.py)?\b[^\n]*\badd\b")
 
 # Assertions that a mechanism does not exist or does not run. Each needs a subject next to it, so
@@ -78,7 +80,7 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("tool_name") != "Bash":
+    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
     message = notice((event.get("tool_input") or {}).get("command"))
     if message:

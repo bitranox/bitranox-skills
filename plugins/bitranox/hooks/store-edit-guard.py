@@ -46,7 +46,7 @@ _MARKER_STEMS = ("BITRANOX-MEMORY-INDEX:", "BITRANOX-UUID-INDEX:")
 
 # any path segment `.claude-memory/` (live store) or `.claude-bx-selflearning/` (legacy store)
 _STORE = re.compile(r"(?:^|/)(?:\.claude-memory|\.claude-bx-selflearning)/")
-_TOOLS = {"Edit", "Write", "MultiEdit"}
+_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _BYPASS_ENV = "BITRANOX_MEMORY_ENGINE"
 
 _DENY = (

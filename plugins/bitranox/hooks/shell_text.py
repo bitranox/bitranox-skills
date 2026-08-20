@@ -23,11 +23,29 @@ import re
 # backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
 HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
+# The tools whose `tool_input.command` is a shell command string. Claude Code routes the model's
+# shell commands through the `PowerShell` tool on Windows where that tool is enabled, and on a
+# Windows box without Git Bash it registers no `Bash` tool at all. So a guard that compares
+# `tool_name` against "Bash" alone simply never runs there, while still reading - in hooks.json, in
+# its docstring, and in its own passing tests - exactly like a guard that is switched on. A hook
+# that never fires and one that fires and finds nothing are both silent.
+SHELL_TOOLS = ("Bash", "PowerShell")
+
 # Statement separators, and the three shapes that mean "a change is leaving this machine".
 SEP = re.compile(r"&&|\|\||[;\n|]")
 COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
 PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
+
+
+def is_shell_tool(tool_name) -> bool:
+    """True when `tool_name` is a tool that carries a shell command in `tool_input.command`.
+
+    Use this in place of a literal `tool_name == "Bash"` check, and pair it with a
+    `Bash|PowerShell` matcher in hooks.json - the matcher decides whether the hook runs at all, so
+    widening only one of the two leaves the guard off on the platform it was widened for.
+    """
+    return tool_name in SHELL_TOOLS
 
 
 def is_gated_command(command):

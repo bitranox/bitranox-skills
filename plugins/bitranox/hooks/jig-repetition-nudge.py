@@ -42,7 +42,7 @@ import re
 import sys
 from pathlib import Path
 
-from shell_text import HEREDOC_OPEN               # noqa: E402 - shared with the other command guards
+from shell_text import HEREDOC_OPEN, is_shell_tool  # noqa: E402 - shared with the other command guards
 
 SCRIPT_SUFFIXES = {".ps1", ".py", ".sh", ".bash", ".psm1"}
 VARIANTS_BEFORE_NUDGE = 3        # a group of three is the smallest that shows a PATTERN, not a retry
@@ -526,7 +526,7 @@ def _written_scripts(event):
     tool_input = event.get("tool_input") or {}
     if tool == "Write":
         written = [(str(tool_input.get("file_path") or ""), tool_input.get("content") or "")]
-    elif tool == "Bash":
+    elif is_shell_tool(tool):
         written = heredoc_writes(tool_input.get("command") or "")
     else:
         return []
