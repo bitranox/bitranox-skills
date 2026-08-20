@@ -20,10 +20,18 @@ back.
       stop. It is for the person reading."` Asked whether the text says to put the points one at a
       time: NONE. Asked whether it says to offer options with trade-offs and a recommendation:
       NONE.
-- [x] A behavioural arm was run as well, same weak tier, on a described work session of fourteen
-      steps holding several genuinely unsettled calls mixed with clearly-right ones, with which are
-      close calls never stated. **RED RESULT: a flat list of four points and no question put to
-      anyone.** It did not reproduce the inherited rule, so it is usable as the diff baseline.
+- [x] The behavioural arm then ran in a GENUINE clean room, not merely in-harness: headless with
+      `--safe-mode`, which disables CLAUDE.md, skills, plugins, hooks and MCP while leaving auth
+      working, so no credential handling is involved. The instrument was validated first with a
+      control probe, which came back free of the hook output that had polluted an earlier attempt.
+      Scenario: a described work session of fourteen steps holding several genuinely unsettled calls
+      mixed with clearly-right ones, with which are close calls never stated.
+      **RED RESULT: a flat list of three points, no question put to anyone, no options, no
+      recommendation.**
+- [x] The residual floor is recorded rather than claimed away. The control shows the product's OWN
+      system prompt asks for "a recommendation and the main tradeoff" on exploratory questions. No
+      clean room removes that, and every reader of this skill has it. It teaches neither
+      one-at-a-time, nor per-option trade-offs, nor the tool.
 - [x] Baseline findings recorded for the both-directions diff: a default that breaks people who
       upgrade, a mechanism replaced outright where the old one had other callers, a flaky test
       waved off, and a declined escape hatch whose stated reason contradicts itself. The settled
@@ -43,6 +51,22 @@ back.
       is restored. GREEN then satisfies every pass criterion: one `AskUserQuestion` call rather
       than a batch, every option carrying an upside AND a downside, the recommended option first
       and labelled, and the settled decisions still absent.
+- [x] GREEN re-run in the clean room too, and it found two things the in-harness runs had hidden,
+      because in-harness the machine's own rule was propping the result up. First, the weak tier
+      SKIPPED THE LIST and opened straight on question one, so the person never saw the count, the
+      exit, or what the other points were. The text now requires both, in order, and says what
+      skipping the list costs. Second, the weak tier wrote every question at once. A line naming
+      that as the failure - if a second question is written before the first is answered, delete it
+      - fixes it: the same run now leads with the count and exit, shows the list, sends one
+      question and stops.
+- [x] Both probes matched exactly before the two arms were compared. An earlier clean-room run
+      differed from the in-harness prompt by one clause, and attributing its batching to the skill
+      would have been reading a probe artifact as a defect.
+- [x] Clean-room run on a CAPABLE tier passes every criterion on the skill text alone, with no
+      machine context whatsoever: list first, count and exit, exactly one `AskUserQuestion` in the
+      real schema, no invented "Other", recommended option first, both sides on every option, and
+      it stops after one and says why. The tier split is recorded, not smoothed over: what the weak
+      tier needed spelled out, the capable tier did unprompted.
 - [x] Run again on a CAPABLE tier with a time pressure added (the person says they want to be done
       in two minutes), because that is where a one-at-a-time rule is most likely to be rationalised
       into a batch. It did not batch, it did not pre-trim the list to fit the deadline, and it said

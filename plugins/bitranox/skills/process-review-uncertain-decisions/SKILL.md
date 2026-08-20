@@ -50,19 +50,23 @@ find anything.
 
 ## Then walk them, one at a time
 
-Your answer is a list of open questions, and a list is still work for the reader. So once you have
-it, put each point on it to the person and get a decision back.
+Your answer is a list of open questions, and a list is still work for the reader. So do BOTH, in
+this order: show them the whole list, then walk it. Opening straight on the first question skips
+the list and hides how many there are and what the others were, which leaves the person answering
+in the dark about what they are in the middle of.
 
-Open with the count and the exit - "three unsettled calls, walking them one at a time, say stop
-whenever" - then ask hardest-to-reverse first, so the one that matters most gets answered even if
-it is the only one that does. Hardest-to-reverse means most expensive to undo once it has shipped,
+Between the two goes the count and the exit - "three unsettled calls, walking them one at a time,
+say stop whenever" - and then ask hardest-to-reverse first, so the one that matters most gets
+answered even if it is the only one that does. Hardest-to-reverse means most expensive to undo once it has shipped,
 not most technically permanent: a published version number can never be reused, but a default that
 breaks people who upgrade is the one somebody has to live with. When two are close, ask first the
 one whose answer changes the others.
 
 **One `AskUserQuestion` call per point, and never the next before this one is answered.** The tool
 takes up to four questions; using that is what this section forbids, because a batch hands the
-sorting straight back to the reader the way the bare list did.
+sorting straight back to the reader the way the bare list did. If you have written a second
+question before the first has an answer, that is the failure this section exists to prevent:
+delete it and send the first alone.
 
 The parts map onto the tool: `header` names the axis in a word or two; `question` says concisely
 what the decision is about; each option's `description` carries its upside AND its downside,
