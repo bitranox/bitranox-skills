@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.211.3]
+
+### Added
+
+- Regression tests pinning the MISS direction of `is_gated_command` across heredoc terminator
+  spellings: unquoted, double-quoted, `<<-` with tabs, a custom terminator word, the terminator
+  word appearing inline in the body, two heredocs in one command, and a verb reached through a
+  chain. Each must still gate. 5.211.2 made a blocking gate depend on `strip_heredoc_bodies`, so
+  over-stripping would swallow the trailing verb and the gate would silently not fire on a real
+  commit - a failure indistinguishable from a healthy guard. The unterminated-heredoc case is
+  pinned as NOT gating, since the shell treats those lines as data too.
+
 ## [5.211.2]
 
 ### Fixed
