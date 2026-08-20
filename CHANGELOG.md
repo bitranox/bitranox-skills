@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.216.2]
+
+### Fixed
+
+- The `update-config` detection added in 5.216.1 matched the marker as a bare SUBSTRING, so writing
+  ABOUT this guard disarmed it. Measured in the session that built it: the marker occurred 11 times
+  and only ONE was the real skill body - the other ten were the guard's own source, its tests, a
+  changelog entry and shell commands quoting it, echoed back through tool output. Keying on the
+  skill body's H1 rather than the bare name was necessary but not sufficient; it made the collision
+  rarer and therefore harder to notice.
+
+  The check is now STRUCTURAL: the marker must START the text of a user-role record, which is what
+  separates an injected skill body from any mention of it. Same transcript, 11 substring hits
+  collapse to 1. An unparseable line (the tail read can begin mid-line) is not a match.
+
+  The test that covered the old behaviour passed VACUOUSLY: its hand-written JSON fixture put a raw
+  newline inside a JSON string, so the line never parsed - and neither did the substring check under
+  test, so both were wrong in the same direction and agreed. Fixtures are now built with
+  `json.dumps`, and the quoting-is-not-invoking cases are pinned in both directions.
+
 ## [5.216.1]
 
 ### Fixed
