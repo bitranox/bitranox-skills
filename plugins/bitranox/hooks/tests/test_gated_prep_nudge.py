@@ -148,3 +148,68 @@ def test_an_interpreter_that_only_reads_is_not_prep():
     """The negative must stay reachable, or every python heredoc before a commit nags."""
     assert N.notice('python3 -c \'print(open("f").read())\'; git commit -m "x"') is None
     assert N.notice("python3 - <<'PY'\nprint(1)\nPY\ngit commit -m 'x'") is None
+
+
+# ---- gap found 2026-08-20: prep that changes the TREE and writes no file ------------------------
+# Hit 7. The command was `git checkout -- <file> && git commit -F msg.txt`, run to discard churn in
+# a file the gate was blocking on. It wrote nothing, so the write scan never matched - yet it is the
+# same footgun, and a sharper one: the gate reads the tree BEFORE the restore, so this shape can
+# never satisfy it in one command however many times it is retried.
+
+def test_a_working_tree_restore_before_a_commit_is_flagged():
+    """The exact command from hit 7."""
+    cmd = "git checkout -- path/to/SKILL.md && git commit -F /tmp/msg.txt -- some/dir"
+    ctx = N.notice(cmd)
+    assert ctx is not None
+    assert "checkout" in ctx
+
+
+def test_other_tree_writing_verbs_are_flagged_too():
+    for cmd in ("git stash && git commit -m x",
+                "git reset --hard HEAD~1 && git push origin master",
+                "git restore --staged f && git commit -m x",
+                "git clean -fd; git commit -m x",
+                "git switch master && git push"):
+        assert N.notice(cmd) is not None, cmd
+
+
+def test_the_message_says_the_gate_reads_the_tree_before_the_prep():
+    ctx = N.notice("git checkout -- f && git commit -m x")
+    assert "before" in ctx.lower()
+
+
+# --- and the directions it must NOT fire ---------------------------------------------------------
+
+def test_a_tree_writing_verb_AFTER_the_gated_verb_is_quiet():
+    """Order is the whole point: a cleanup after a commit is not prep for it."""
+    assert N.notice("git commit -m x && git checkout -- other/file") is None
+
+
+def test_git_add_before_a_commit_is_not_flagged():
+    """`add` is deliberately excluded.
+
+    It touches the index, not the working tree, and losing it to a block produces no confusing
+    missing-input error - the retry simply re-adds. It is also the single most common idiom before
+    a commit, and another rule in this store actively prescribes it for a new file, so nudging on
+    it would contradict guidance and train the reader to ignore the channel.
+    """
+    assert N.notice("git add -A && git commit -m x") is None
+    assert N.notice("git add path/to/new.py && git commit path/to/new.py -m x") is None
+
+
+def test_a_restore_named_only_inside_a_heredoc_body_is_quiet():
+    """The body is DATA - this file's own documentation must not trip its guard."""
+    cmd = ("cat > /tmp/doc.md <<'EOF'\n"
+           "Never chain `git checkout -- f && git commit -m x`: the gate reads the tree first.\n"
+           "EOF\n"
+           "echo done")
+    assert N.notice(cmd) is None
+
+
+def test_a_tree_writing_verb_with_no_gated_verb_is_quiet():
+    assert N.notice("git checkout -- f && git status --porcelain") is None
+    assert N.notice("git stash") is None
+
+
+def test_a_non_git_command_mentioning_checkout_is_quiet():
+    assert N.notice("echo checkout && git commit -m x") is None

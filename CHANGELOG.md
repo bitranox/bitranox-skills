@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.210.0]
+
+### Changed
+
+- `gated-prep-nudge.py` now also recognises prep that changes the working tree and writes no file.
+  A command like `git checkout -- <f> && git commit -F msg` chained a tree-writing git verb in
+  front of a gated one; the write scan never matched it, yet it is the same footgun and a sharper
+  one, because the gate reads the tree BEFORE the restore runs, so the shape can never satisfy the
+  gate however many times it is retried. Recognised verbs: `checkout`, `restore`, `switch`,
+  `reset`, `stash`, `clean`, `rm`, `mv`, and only when they precede the gated verb.
+- `git add` is deliberately excluded: it touches the index rather than the working tree, losing it
+  to a block produces no confusing missing-input error, and it is the most common idiom before a
+  commit, so nudging on it would train the reader to ignore the channel.
+
 ## [5.209.0]
 
 ### Added
