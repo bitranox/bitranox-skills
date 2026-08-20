@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.214.0]
+
+### Added
+
+- `subagent-brief` on `SubagentStart`: a subagent now starts with the two facts that decide whether
+  its output reaches anyone at all - that the harness refuses its `Write` by FILENAME (a
+  `report.md` is refused where a `notes.txt` beside it is written), and that a named or backgrounded
+  subagent's final text is delivered only by SendMessage. Both were recorded in the store as things
+  that kept happening, and neither was reachable: the one skill every session loads opens by telling
+  a dispatched subagent to skip it. `SubagentStart` did not exist when that was written down as
+  impossible. Clean-room agent types (`baseline-probe`, `probe-effort`) are excluded and the
+  exclusion fails CLOSED on an unknown probe-shaped name, because those agents exist to answer from
+  their prompt alone and their inertness bounds tools, not context.
+- `retry-with-a-flag-nudge` on `PostToolUseFailure` plus `PreToolUse`: catches the shape
+  `process-stop-repeating-failure` names outright - the next command being the last FAILED command
+  with an option bolted on. The failure event records; the pending-action event judges, because a
+  retrospective watcher cannot see a retry coming. Deliberately narrow: same program, same operands,
+  strictly more flags. A changed operand, a removed flag or a different program is ordinary
+  iteration and stays silent, and a different program is precisely what the skill asks for.
+
 ## [5.213.0]
 
 ### Fixed
