@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.216.1]
+
+### Fixed
+
+- `config-edit-guard` blocked `update-config`, the skill it tells you to use. Measured, not
+  inferred: the skill's own workflow says "Edit file - Use Edit tool", and driving the guard with
+  the event that step produces returned exit 2. The manual `BITRANOX_CONFIG_EDIT` bypass was the
+  only way through, which trains exactly the reflexive-export habit the guard exists to prevent.
+
+  The guard now detects an active `update-config` from the transcript and allows the edit. It keys
+  on the skill body's H1, never on the bare name - that name appears in ordinary prose about the
+  rule (57 times in the session that built this), so a name match would disarm the guard for anyone
+  who merely discussed it. Only a bounded tail is scanned, so a skill invoked much earlier does not
+  disarm it for the rest of the session and a multi-megabyte transcript is not re-read on every
+  file-tool call.
+
+  An ABSENT `transcript_path` is not an exemption (every real event carries one, so a missing one
+  means a synthetic event); a path that is present but unreadable fails open, because blocking the
+  sanctioned path is the worse failure.
+
 ## [5.216.0]
 
 ### Changed

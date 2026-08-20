@@ -17,14 +17,21 @@ BLOCKS, with a bypass, matching its two siblings: `store-edit-guard` exempts the
 `BITRANOX_MEMORY_ENGINE` and `skill-edit-guard` exempts the skill-writer via
 `BITRANOX_SKILL_WRITER`. An iron rule enforced by a reminder is enforced by goodwill.
 
-The bypass differs from theirs in one way that matters and is stated here rather than discovered
-later. Their exempted writer is code in this plugin, which sets the variable itself. The sanctioned
-writer here is the host `update-config` skill, which this plugin does not control and cannot make
-set anything - so `BITRANOX_CONFIG_EDIT` has no automatic setter and a legitimate settings edit
-will hit this block and have to export it. That is the accepted cost of enforcing the rule: the
-block states the variable and why, so the exemption is a deliberate act rather than a silent one.
-The deny message therefore has to be worth reading, because it is the only thing standing between
-the reader and a habit of exporting the variable reflexively.
+Their exempted writer is code in this plugin, which sets the variable itself. The sanctioned writer
+here is the host `update-config` skill, which this plugin does not control and cannot make set
+anything - so the exemption is detected instead. MEASURED, not assumed: `update-config`'s own
+workflow says "Edit file - Use Edit tool", and driving this guard with the event that step produces
+returned exit 2. Without the detection below, enforcing the rule blocks the very skill the rule
+tells you to use.
+
+The detection reads the transcript for the skill BODY, which arrives as a user-role message when a
+skill is invoked. It keys on the body's H1, never on the bare name `update-config`: that name
+appears in ordinary prose about the rule - 57 times in the session that built this - so a name
+match would disarm the guard for anyone who merely discussed it.
+
+Scoped to a bounded TAIL of the transcript rather than the whole file, for two reasons. It runs on
+every file-tool call, so it must not read a 34 MB transcript; and a skill invoked an hour ago should
+not disarm the guard for the rest of the session.
 
 Windows paths arrive with BACKSLASH separators even under Git Bash, so the path is normalised
 before any segment match; a `/`-anchored comparison would silently never fire there.
@@ -37,9 +44,18 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 _TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 _BYPASS_ENV = "BITRANOX_CONFIG_EDIT"
+
+# The H1 of the host update-config skill body. Distinctive enough that prose about the skill does
+# not match it, which the bare name would.
+_UPDATE_CONFIG_MARK = "# Update Config Skill"
+
+# How much of the transcript tail to scan. Big enough to span a skill invocation and the Read that
+# follows it before the Edit; small enough to stay a single cheap seek on a multi-megabyte file.
+_TAIL_BYTES = 1_000_000
 
 # The Claude Code configuration files this rule covers, matched on a path SEGMENT rather than
 # anchored, because `file_path` is always absolute and its prefix varies per machine and per
@@ -76,6 +92,30 @@ def targets_config(file_path) -> bool:
     return bool(_CONFIG_PATHS.search(normalised))
 
 
+def update_config_active(transcript_path) -> bool:
+    """True when the update-config skill body appears in the recent transcript. IMPURE (reads it).
+
+    An ABSENT path is not an exemption. `transcript_path` is present on every real event, so a
+    missing one means a malformed or synthetic event, and treating that as "update-config is
+    running" would let any such event disarm the guard.
+
+    A path that is present but UNREADABLE fails open, because that is a genuine IO problem on a real
+    event and blocking the sanctioned path is the failure this detection exists to prevent.
+    """
+    if not transcript_path:
+        return False
+    try:
+        path = Path(str(transcript_path))
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > _TAIL_BYTES:
+                handle.seek(size - _TAIL_BYTES)
+            tail = handle.read().decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return True
+    return _UPDATE_CONFIG_MARK in tail
+
+
 def decide(event, env):
     """The block reason for this event, or None to allow silently. PURE in `event` and `env`."""
     if not isinstance(event, dict) or event.get("tool_name") not in _TOOLS:
@@ -84,6 +124,8 @@ def decide(event, env):
     if not targets_config(path):
         return None
     if env.get(_BYPASS_ENV):
+        return None
+    if update_config_active(event.get("transcript_path")):
         return None
     return _DENY % (path, _BYPASS_ENV)
 
