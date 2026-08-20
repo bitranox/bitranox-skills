@@ -29,6 +29,63 @@ Only `SessionStart` can receive a `model` field, and it is **not guaranteed**. T
 
 `OTEL_*` exporter variables are **removed** from every subprocess Claude Code spawns, hooks included.
 
+## What `tool_input` holds, per tool
+
+Tool events carry `tool_name`, `tool_input` and `tool_use_id`. The shape of `tool_input` depends on the tool,
+and most hooks are written against one or two of these.
+
+For the file tools `Write`, `Edit` and `Read`, **`tool_input.file_path` is always absolute**. Claude Code expands
+`~` and relative paths before hooks run, so a path-matching hook cannot be bypassed by spelling the same path
+differently.
+
+> **The Windows path trap.** On Windows the path arrives with **backslash** separators, even when your hook runs
+> under Git Bash where `$PWD` looks like `/c/project`. A comparison written with forward slashes, such as a
+> `/src/` check, never matches, and the tool call proceeds exactly as if the hook had found nothing to block.
+> Normalise first - `FILE_PATH="${FILE_PATH//\\//}"` in Bash, `file_path.replace("\\", "/")` in Python - then
+> match a path **segment** like `/src/` rather than anchoring with `^`, since the path is absolute.
+
+| Tool              | `tool_input` fields                                                                                                                                                                                                               |
+|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Bash`            | `command` (string), `description` (string), `timeout` (ms; above the maximum it is reduced, not rejected), `run_in_background` (bool)                                                                                             |
+| `PowerShell`      | same four as `Bash`, with the command string in `command`                                                                                                                                                                         |
+| `Write`           | `file_path`, `content`                                                                                                                                                                                                            |
+| `Edit`            | `file_path`, `old_string`, `new_string`, `replace_all` (bool)                                                                                                                                                                     |
+| `Read`            | `file_path`, `offset` (line), `limit` (lines)                                                                                                                                                                                     |
+| `Glob`            | `pattern`, `path` (defaults to cwd)                                                                                                                                                                                               |
+| `Grep`            | `pattern`, `path`, `glob`, `output_mode` (`content` / `files_with_matches` / `count`, default `files_with_matches`), `-i` (bool), `multiline` (bool)                                                                              |
+| `WebFetch`        | `url`, `prompt`                                                                                                                                                                                                                   |
+| `WebSearch`       | `query`, `allowed_domains` (array), `blocked_domains` (array)                                                                                                                                                                     |
+| `Agent`           | `prompt`, `description`, `subagent_type`, `model`                                                                                                                                                                                 |
+| `AskUserQuestion` | `questions` (array; each has `question`, `header`, `options`, optional `multiSelect`), `answers` (object mapping question text to chosen label - Claude never sets this, supply it via `updatedInput` to answer programmatically) |
+| `ExitPlanMode`    | `plan` (Markdown), `planFilePath`, `allowedPrompts` (**deprecated**, accepted and ignored)                                                                                                                                        |
+
+**Match `Bash|PowerShell`, not `Bash` alone**, in any hook that inspects shell commands. On Windows where the
+PowerShell tool is enabled Claude routes shell commands through it, and on Windows without Git Bash the Bash tool
+is not registered at all - so a `Bash`-only matcher never fires there.
+
+`ExitPlanMode` is worth knowing about: Claude writes the plan to disk before calling the tool, so the literal
+`tool_input` from the model is typically empty and Claude Code **injects** `plan` and `planFilePath` before hooks
+see it. In `PostToolUse`, read `tool_response.plan` rather than re-reading the file.
+
+### `tool_response` from an `Agent` call
+
+A foreground `Agent` call gives `PostToolUse` the subagent's final text plus run telemetry:
+
+| Field                                  | Meaning                                                                          |
+|----------------------------------------|----------------------------------------------------------------------------------|
+| `status`                               | `completed`, or `async_launched` for a background subagent                       |
+| `agentId`                              | identifier for the run                                                           |
+| `content`                              | array of the subagent's final text blocks                                        |
+| `resolvedModel`                        | the model it **started** on, which may differ from the requested one (v2.1.174+) |
+| `modelsUsed`                           | models in order with repeats collapsed, set only on a mid-run swap (v2.1.212+)   |
+| `totalTokens`, `usage`                 | the **final API request only**, not a total across the run                       |
+| `totalDurationMs`, `totalToolUseCount` | wall-clock duration and tool-call count                                          |
+
+As of v2.1.198 subagents run in the background by default, so an omitted `run_in_background` still yields
+`async_launched`. A background launch returns immediately and carries **no usage fields** - only `status`,
+`agentId`, `description`, `prompt`, `outputFile` and `resolvedModel`. For rollups across subagents use the token
+and cost counters filtered to `query_source` `subagent`, because `totalTokens` covers one request.
+
 ## Exit codes
 
 The exit code does not act alone: Claude Code reads JSON from stdout on **every** exit code. Exit 2's block is the

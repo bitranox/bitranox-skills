@@ -21,7 +21,7 @@
       "raw_bytes": 3320,
       "normalised_lines": 179,
       "content_sha256": "36dd3abbc062edb3ef37768c0ff87a07345d5120b9f1021a13f8d5fa63066b96",
-      "structure_sha256": "9399dc8ac530135fe39ae76552fd06f3bc8374bc7aa6143a080febc6be25de47",
+      "structure_sha256": "00a091b42366d14393d1ad05e6227adeac91522416a95e1c857e152eab718f16",
       "max_cli_version_mentioned": null,
       "control": {
         "min_raw_bytes": 1660,
@@ -37,6 +37,7 @@
         "headings": 36,
         "events": 31,
         "json_fields": 14,
+        "output_fields": 9,
         "handler_types": 5,
         "env_vars": 1,
         "table_keys": 3
@@ -127,6 +128,17 @@
           "stopReason",
           "systemMessage",
           "type",
+          "updatedInput"
+        ],
+        "output_fields": [
+          "additionalContext",
+          "continue",
+          "cwd",
+          "hook_event_name",
+          "permissionDecision",
+          "session_id",
+          "stopReason",
+          "systemMessage",
           "updatedInput"
         ],
         "handler_types": [

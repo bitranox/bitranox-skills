@@ -74,12 +74,22 @@ ENV_RX = re.compile(r"\bCLAUDE_[A-Z0-9_]+\b")
 TICK_RX = re.compile(r"`([^`\n]{1,60})`")
 ROW_RX = re.compile(r"^\|\s*([^|]+?)\s*\|")
 VERSION_RX = re.compile(r"\bv(2\.\d+\.\d+)\b")
+CLI_VERSION_RX = re.compile(r"(\d+\.\d+\.\d+)")
 # JSON-Schema primitives share the "type" key with hook handler types. Counting them would let an
 # unrelated schema example flip the structural digest, which is the cry-wolf failure this design
 # exists to avoid. A genuinely new handler type is never one of these words.
 _SCHEMA_PRIMITIVES = frozenset({"object", "string", "array", "number", "boolean", "integer", "null", "result"})
 
-_FP_KEYS = ("headings", "events", "json_fields", "handler_types", "env_vars", "table_keys")
+_FP_KEYS = ("headings", "events", "json_fields", "output_fields", "handler_types", "env_vars", "table_keys")
+# The H2 whose fences and tables define the input/output contract. Names harvested inside it are the
+# ones a hook author actually writes, so they are gated; every other JSON key on the page belongs to a
+# per-tool example and is only reported.
+IO_SECTION = "Hook input and output"
+IDENT_RX = re.compile(r"^[a-z][A-Za-z0-9_]{2,}$")
+DOTTED_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
+KEYCOLON_RX = re.compile(r"^([a-z][A-Za-z0-9_]{2,})\s*:")
+# Literals and language tags read as identifiers but name no field.
+_NOT_A_FIELD = frozenset({"true", "false", "null", "json", "bash", "printf", "http"})
 
 DEFAULT_CACHE_DIR = Path.home() / ".claude" / "bitranox-hookdoc"
 
@@ -195,8 +205,11 @@ def fingerprint(text: str, tier: str = "api") -> dict[str, list[str]]:
     for kind, line, lang in _walk(text):
         if kind == "fenced":
             if lang and lang.startswith("json"):
-                acc["json_fields"].update(JSONKEY_RX.findall(line))
+                keys = JSONKEY_RX.findall(line)
+                acc["json_fields"].update(keys)
                 acc["handler_types"].update(t for t in TYPEVAL_RX.findall(line) if t not in _SCHEMA_PRIMITIVES)
+                if h2 == IO_SECTION:
+                    acc["output_fields"].update(k for k in keys if IDENT_RX.match(k) and k not in _NOT_A_FIELD)
             acc["env_vars"].update(ENV_RX.findall(line))
             continue
         m2 = H2_RX.match(line)
@@ -213,6 +226,9 @@ def fingerprint(text: str, tier: str = "api") -> dict[str, list[str]]:
         m4 = H4_RX.match(line)
         if m4:
             acc["headings"].add("H4:" + m4.group(1))
+        if h2 == IO_SECTION:
+            for span in TICK_RX.findall(line):
+                _harvest_field(span, acc["output_fields"])
         row = ROW_RX.match(line)
         if row:
             cell = row.group(1)
@@ -224,6 +240,27 @@ def fingerprint(text: str, tier: str = "api") -> dict[str, list[str]]:
     if tier == "prose":
         acc = {k: (v if k == "headings" else set()) for k, v in acc.items()}
     return {k: sorted(v) for k, v in acc.items()}
+
+
+def _harvest_field(span: str, into: set[str]) -> None:
+    """Take a contract field name out of one backticked span, or take nothing.
+
+    A field is named either as a bare identifier (`systemMessage`), as a dotted path
+    (`hookSpecificOutput.worktreePath`), or as a key with its value (`retry: true`). Matching
+    identifier-shaped WORDS anywhere in the span instead pulls fragments out of CamelCase event
+    names, which then read as undocumented fields forever.
+    """
+    span = span.strip()
+    if IDENT_RX.match(span):
+        if span not in _NOT_A_FIELD:
+            into.add(span)
+        return
+    if DOTTED_RX.match(span):
+        into.update(p for p in span.split(".") if IDENT_RX.match(p) and p not in _NOT_A_FIELD)
+        return
+    m = KEYCOLON_RX.match(span)
+    if m and m.group(1) not in _NOT_A_FIELD:
+        into.add(m.group(1))
 
 
 def structure_sha(fp: dict[str, list[str]]) -> str:
@@ -263,6 +300,60 @@ def sections(text: str) -> list[dict[str, Any]]:
             buf.append(line)
     close()
     return out
+
+
+def version_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in v.split("."))
+
+
+def _probe_claude_version() -> str | None:
+    """Ask the locally installed CLI for its version, or give up quietly."""
+    import shutil  # noqa: PLC0415 - only this probe needs them
+    import subprocess  # noqa: PLC0415
+
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    try:
+        proc = subprocess.run(
+            [exe, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout or ""
+
+
+def local_cli_version(probe: Callable[[], str | None] | None = None) -> str | None:
+    """The Claude Code version on this machine, or None when it cannot be determined.
+
+    Never raises and never blocks a verdict: an absent or unparseable CLI simply means this signal
+    is unavailable, which is different from the docs being stale.
+    """
+    text = (probe or _probe_claude_version)()
+    if not text:
+        return None
+    m = CLI_VERSION_RX.search(text)
+    return m.group(1) if m else None
+
+
+def cli_ahead_of_docs(cli: str | None, docs: str | None) -> bool | None:
+    """Is the installed CLI newer than the newest release the stamped docs mention?
+
+    This is a recheck trigger, not a staleness verdict. The stamp can match upstream exactly while
+    upstream still lags a CLI released after it was written, and that is precisely the window in
+    which a seven-day cache would keep answering CURRENT.
+    """
+    if not cli or not docs:
+        return None
+    try:
+        return version_tuple(cli) > version_tuple(docs)
+    except ValueError:
+        return None
 
 
 def max_version(text: str) -> str | None:
@@ -393,9 +484,11 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
         fp = src.get("fingerprint", {})
         if src.get("tier", "api") == "api":
             api_events.extend(fp.get("events", []))
-        for key in ("env_vars", "handler_types"):
+        for key in ("env_vars", "handler_types", "output_fields"):
             required.update(fp.get(key, []))
-        advisory.update(fp.get("json_fields", []))
+        # Everything else is a key from a per-tool example. Gating on those would fail forever on
+        # detail the skill delegates upstream, and a gate that can never go green gets switched off.
+        advisory.update(set(fp.get("json_fields", [])) - set(fp.get("output_fields", [])))
     if not api_events:
         raise ControlError("the stamp lists no events; it is empty or hand-edited")
 
@@ -416,9 +509,6 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
     missing_events = sorted(e for e in set(api_events) if e not in documented)
     phantom = sorted(h for h in documented if h in _known_event_shape(stamp) and h not in set(api_events))
     missing_required = sorted(f for f in required if not is_documented(f))
-    # json_fields is every key in every example on the page, tool_input schemas included. Requiring
-    # all of them would fail forever on detail this skill deliberately delegates upstream, and a
-    # gate that can never go green gets switched off. Report them, do not fail on them.
     missing_advisory = sorted(f for f in advisory if not is_documented(f))
     complete = not missing_events and not phantom and not missing_required
     return {
@@ -623,8 +713,19 @@ def cmd_check(args: argparse.Namespace) -> int:
     cache_dir = Path(args.cache_dir)
     now = time.time()
 
+    docs_cover = None
+    for src in stamp["sources"]:
+        v = src.get("max_cli_version_mentioned")
+        if v and src.get("tier", "api") == "api":
+            docs_cover = v if docs_cover is None else max(docs_cover, v, key=version_tuple)
+    cli = None if args.no_cli_probe else local_cli_version()
+    ahead = cli_ahead_of_docs(cli, docs_cover)
+    # The docs can match the stamp exactly and still predate the reader's CLI. That is the window a
+    # seven-day cache would sit through answering CURRENT, so shorten it rather than widen a verdict.
+    max_age = min(float(args.max_age), 86400.0) if ahead else float(args.max_age)
+
     if not args.force and not args.body:
-        cached = read_cache(cache_dir, shash, float(args.max_age), now)
+        cached = read_cache(cache_dir, shash, max_age, now)
         if cached:
             emit(args, "check", _EXIT[cached["verdict"]] == 0, cached, _human_check(cached))
             return _EXIT[cached["verdict"]]
@@ -655,6 +756,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         "cached": False,
         "stamp_sha256": shash,
         "stamp_generated_at": stamp.get("generated_at"),
+        "cli_version": cli,
+        "docs_cover_up_to": docs_cover,
+        "cli_ahead_of_docs": ahead,
         "sources": [v.as_dict() for v in verdicts],
     }
     if not args.body:
@@ -681,6 +785,14 @@ def _human_check(payload: dict[str, Any]) -> str:
         for key in ("added", "removed"):
             for field, items in (src.get(key) or {}).items():
                 lines.append("    %s %s: %s" % (key, field, ", ".join(items)))
+    if payload.get("cli_ahead_of_docs"):
+        lines.append(
+            "  note: your CLI is %s but the stamped docs mention nothing newer than v%s, so they may not"
+            % (payload.get("cli_version"), payload.get("docs_cover_up_to"))
+        )
+        lines.append("        describe behaviour changed in your version. Rechecking daily instead of weekly.")
+    elif payload.get("cli_version"):
+        lines.append("  cli %s, docs cover up to v%s" % (payload["cli_version"], payload.get("docs_cover_up_to")))
     return "\n".join(lines)
 
 
@@ -822,6 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     c.add_argument("--body", help="read the body from a local file instead of the network")
     c.add_argument("--expect", choices=[CURRENT, COSMETIC, STRUCTURAL, BROKEN])
+    c.add_argument("--no-cli-probe", action="store_true", help="skip the local claude --version probe")
     c.set_defaults(func=cmd_check)
 
     v = sub.add_parser("coverage", help="every stamped name is documented in references/")
