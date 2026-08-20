@@ -234,8 +234,11 @@ _REASON = (
     '"process-review-uncertain-decisions") and answer its question: which important decisions did '
     "you make that you are NOT confident about, what alternative did you not take, and what would "
     "settle it. Leave OUT every decision that is already clearly right - the suppression is the "
-    "point, and a list that includes the settled ones puts the sorting back on the reader. If "
-    "nothing is genuinely unsettled, say so in one line and stop."
+    "point, and a list that includes the settled ones puts the sorting back on the reader. Then "
+    "WALK the ones you did surface: one AskUserQuestion call per point, hardest-to-reverse first, "
+    "each option carrying its upside AND its downside and the recommended one first - never a "
+    "batch of questions, and never the next before this one is answered. If nothing is genuinely "
+    "unsettled, say so in one line and stop."
 )
 
 # The repeat. Non-blocking, so it rides along next to the turn's result instead of stopping it -

@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.212.0]
+
+### Added
+
+- `process-review-uncertain-decisions`: the review no longer ends at the list. Interactively it now
+  walks each surfaced point with the person - one `AskUserQuestion` call per point, hardest-to-
+  reverse first, every option carrying its upside AND its downside, and the recommended one first
+  with the reason in its description. A list of open questions is still work for the reader, and
+  the automatic entry point fires at exactly the moment nobody has the attention to redo that work.
+  The options are the alternatives not taken, so the "name the alternative and what would settle
+  it" content moves into the question rather than being dropped for a bare menu.
+- `decision-review-nudge.py`: the Stop-hook reason describes the walk as well, so the automatic
+  entry point cannot promise behaviour the skill no longer has. Pinned by a test.
+
+### Fixed
+
+- `process-review-uncertain-decisions`: "The question" now says it is put to YOURSELF and that the
+  list is your answer to it. Read as an instruction to send the question to the person and wait, a
+  weak model produced the question and then no list at all - the whole review lost.
+
 ## [5.211.3]
 
 ### Added
