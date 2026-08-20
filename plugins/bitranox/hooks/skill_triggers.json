@@ -686,6 +686,22 @@
   "registered",
   "settings.json"
  ],
+ "meta-claude-hooks": [
+  "writing",
+  "editing",
+  "debugging",
+  "reviewing",
+  "claude",
+  "code",
+  "hook",
+  "picking",
+  "event",
+  "matcher",
+  "choosing",
+  "command",
+  "http",
+  "mcp_tool"
+ ],
  "meta-collect-knowledge": [
   "pull",
   "knowledge",

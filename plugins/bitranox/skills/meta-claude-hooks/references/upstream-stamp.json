@@ -1,0 +1,1493 @@
+{
+  "schema": 1,
+  "generated_at": "2026-08-20",
+  "generator": "scripts/hookdoc_stamp.py",
+  "normalisation": {
+    "id": "n1",
+    "rules": [
+      "crlf->lf",
+      "drop-lines-before-first-h1",
+      "rstrip-lines",
+      "collapse-3+-blank-to-2",
+      "strip-edges",
+      "single-trailing-lf"
+    ]
+  },
+  "sources": [
+    {
+      "name": "hooks-reference",
+      "url": "https://code.claude.com/docs/en/hooks.md",
+      "tier": "api",
+      "raw_bytes": 277223,
+      "normalised_lines": 3483,
+      "content_sha256": "17e8aaf586b4abc39d851a450c8f2ac5a2ba437a50f8793330129cac129bd93d",
+      "structure_sha256": "f825b88b5d73904195d2ea2fbea14ed39b6e0d824c0682eaf3a0e7131bf478dc",
+      "max_cli_version_mentioned": "2.1.234",
+      "control": {
+        "min_raw_bytes": 138611,
+        "require_headings": [
+          "## Configuration",
+          "## Hook input and output",
+          "## Hook events",
+          "## Security considerations"
+        ],
+        "min_events": 18
+      },
+      "counts": {
+        "headings": 149,
+        "events": 31,
+        "json_fields": 130,
+        "handler_types": 6,
+        "env_vars": 14,
+        "table_keys": 198
+      },
+      "fingerprint": {
+        "headings": [
+          "H2:Agent-based hooks",
+          "H2:Configuration",
+          "H2:Debug hooks",
+          "H2:Hook events",
+          "H2:Hook input and output",
+          "H2:Hook lifecycle",
+          "H2:Prompt-based hooks",
+          "H2:Run hooks in the background",
+          "H2:Security considerations",
+          "H2:Windows PowerShell tool",
+          "H3:Agent hook configuration",
+          "H3:Check multiple conditions before stopping",
+          "H3:Common input fields",
+          "H3:ConfigChange",
+          "H3:Configure an async hook",
+          "H3:CwdChanged",
+          "H3:DirectoryAdded",
+          "H3:Disable or remove hooks",
+          "H3:Disclaimer",
+          "H3:Elicitation",
+          "H3:ElicitationResult",
+          "H3:Exit code output",
+          "H3:FileChanged",
+          "H3:HTTP response handling",
+          "H3:Hook handler fields",
+          "H3:Hook locations",
+          "H3:Hooks in skills and agents",
+          "H3:How a hook resolves",
+          "H3:How agent hooks work",
+          "H3:How async hooks execute",
+          "H3:How prompt-based hooks work",
+          "H3:InstructionsLoaded",
+          "H3:JSON output",
+          "H3:Limitations",
+          "H3:Matcher patterns",
+          "H3:MessageDisplay",
+          "H3:Notification",
+          "H3:PermissionDenied",
+          "H3:PermissionRequest",
+          "H3:PostCompact",
+          "H3:PostToolBatch",
+          "H3:PostToolUse",
+          "H3:PostToolUseFailure",
+          "H3:PreCompact",
+          "H3:PreToolUse",
+          "H3:Prompt hook configuration",
+          "H3:Reference scripts by path",
+          "H3:Response schema",
+          "H3:Run tests after file changes",
+          "H3:Security best practices",
+          "H3:SessionEnd",
+          "H3:SessionStart",
+          "H3:Setup",
+          "H3:Stop",
+          "H3:StopFailure",
+          "H3:SubagentStart",
+          "H3:SubagentStop",
+          "H3:TaskCompleted",
+          "H3:TaskCreated",
+          "H3:TeammateIdle",
+          "H3:The `/hooks` menu",
+          "H3:UserPromptExpansion",
+          "H3:UserPromptSubmit",
+          "H3:Workspace trust",
+          "H3:WorktreeCreate",
+          "H3:WorktreeRemove",
+          "H4:Add context for Claude",
+          "H4:Agent",
+          "H4:AskUserQuestion",
+          "H4:Bash",
+          "H4:Command hook fields",
+          "H4:Common fields",
+          "H4:ConfigChange decision control",
+          "H4:ConfigChange input",
+          "H4:CwdChanged input",
+          "H4:CwdChanged output",
+          "H4:Decision control",
+          "H4:Defer a tool call for later",
+          "H4:DirectoryAdded input",
+          "H4:Edit",
+          "H4:Elicitation input",
+          "H4:Elicitation output",
+          "H4:ElicitationResult input",
+          "H4:ElicitationResult output",
+          "H4:Emit terminal notifications",
+          "H4:Exec form and shell form",
+          "H4:Exit code 0",
+          "H4:Exit code 2",
+          "H4:Exit code 2 behavior per event",
+          "H4:ExitPlanMode",
+          "H4:FileChanged input",
+          "H4:FileChanged output",
+          "H4:Glob",
+          "H4:Grep",
+          "H4:HTTP hook fields",
+          "H4:InstructionsLoaded decision control",
+          "H4:InstructionsLoaded input",
+          "H4:MCP tool hook fields",
+          "H4:Match MCP tools",
+          "H4:MessageDisplay input",
+          "H4:MessageDisplay output",
+          "H4:Notification input",
+          "H4:Other exit codes",
+          "H4:Permission update entries",
+          "H4:PermissionDenied decision control",
+          "H4:PermissionDenied input",
+          "H4:PermissionRequest decision control",
+          "H4:PermissionRequest input",
+          "H4:Persist environment variables",
+          "H4:PostCompact input",
+          "H4:PostToolBatch decision control",
+          "H4:PostToolBatch input",
+          "H4:PostToolUse decision control",
+          "H4:PostToolUse input",
+          "H4:PostToolUseFailure decision control",
+          "H4:PostToolUseFailure input",
+          "H4:PowerShell",
+          "H4:PreCompact input",
+          "H4:PreToolUse decision control",
+          "H4:PreToolUse input",
+          "H4:Prompt and agent hook fields",
+          "H4:Read",
+          "H4:SessionEnd input",
+          "H4:SessionStart decision control",
+          "H4:SessionStart input",
+          "H4:Setup decision control",
+          "H4:Setup input",
+          "H4:Stop decision control",
+          "H4:Stop input",
+          "H4:StopFailure input",
+          "H4:SubagentStart input",
+          "H4:SubagentStop input",
+          "H4:TaskCompleted decision control",
+          "H4:TaskCompleted input",
+          "H4:TaskCreated decision control",
+          "H4:TaskCreated input",
+          "H4:TeammateIdle decision control",
+          "H4:TeammateIdle input",
+          "H4:Timeouts",
+          "H4:UserPromptExpansion decision control",
+          "H4:UserPromptExpansion input",
+          "H4:UserPromptSubmit decision control",
+          "H4:UserPromptSubmit input",
+          "H4:WebFetch",
+          "H4:WebSearch",
+          "H4:WorktreeCreate input",
+          "H4:WorktreeCreate output",
+          "H4:WorktreeRemove input",
+          "H4:Write"
+        ],
+        "events": [
+          "ConfigChange",
+          "CwdChanged",
+          "DirectoryAdded",
+          "Elicitation",
+          "ElicitationResult",
+          "FileChanged",
+          "InstructionsLoaded",
+          "MessageDisplay",
+          "Notification",
+          "PermissionDenied",
+          "PermissionRequest",
+          "PostCompact",
+          "PostToolBatch",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PreCompact",
+          "PreToolUse",
+          "SessionEnd",
+          "SessionStart",
+          "Setup",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "TaskCompleted",
+          "TaskCreated",
+          "TeammateIdle",
+          "UserPromptExpansion",
+          "UserPromptSubmit",
+          "WorktreeCreate",
+          "WorktreeRemove"
+        ],
+        "json_fields": [
+          "Authorization",
+          "ConfigChange",
+          "FileChanged",
+          "MessageDisplay",
+          "Notification",
+          "PostToolUse",
+          "PreToolUse",
+          "Stop",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "action",
+          "additionalContext",
+          "agent_id",
+          "agent_transcript_path",
+          "agent_type",
+          "allowedEnvVars",
+          "args",
+          "async",
+          "background_tasks",
+          "behavior",
+          "command",
+          "command_args",
+          "command_name",
+          "command_source",
+          "compact_summary",
+          "content",
+          "continue",
+          "custom_instructions",
+          "cwd",
+          "decision",
+          "deferred_tool_use",
+          "delta",
+          "description",
+          "destination",
+          "directory",
+          "duration_ms",
+          "elicitation_id",
+          "error",
+          "error_details",
+          "event",
+          "expansion_type",
+          "field_to_modify",
+          "filePath",
+          "file_path",
+          "final",
+          "header",
+          "headers",
+          "hookEventName",
+          "hookSpecificOutput",
+          "hook_event_name",
+          "hooks",
+          "id",
+          "if",
+          "impossible",
+          "index",
+          "input",
+          "interrupted",
+          "isImage",
+          "is_interrupt",
+          "label",
+          "last_assistant_message",
+          "load_reason",
+          "matcher",
+          "mcp_server_name",
+          "memory_type",
+          "message",
+          "message_id",
+          "mode",
+          "model",
+          "multiSelect",
+          "name",
+          "new_cwd",
+          "notification_type",
+          "ok",
+          "old_cwd",
+          "options",
+          "permissionDecision",
+          "permissionDecisionReason",
+          "permission_mode",
+          "permission_suggestions",
+          "prompt",
+          "prompt_id",
+          "properties",
+          "question",
+          "questions",
+          "reason",
+          "recurring",
+          "requested_schema",
+          "retry",
+          "ruleContent",
+          "rules",
+          "run_in_background",
+          "schedule",
+          "server",
+          "sessionTitle",
+          "session_crons",
+          "session_id",
+          "shell",
+          "source",
+          "status",
+          "stderr",
+          "stdout",
+          "stopReason",
+          "stop_hook_active",
+          "stop_reason",
+          "subtype",
+          "success",
+          "task_description",
+          "task_id",
+          "task_subject",
+          "team_name",
+          "teammate_name",
+          "timeout",
+          "title",
+          "tool",
+          "toolName",
+          "tool_calls",
+          "tool_input",
+          "tool_name",
+          "tool_response",
+          "tool_use_id",
+          "transcript_path",
+          "trigger",
+          "turn_id",
+          "type",
+          "updatedInput",
+          "updatedToolOutput",
+          "url",
+          "username",
+          "worktree_path"
+        ],
+        "handler_types": [
+          "agent",
+          "command",
+          "http",
+          "mcp_tool",
+          "prompt",
+          "shell"
+        ],
+        "env_vars": [
+          "CLAUDE_CODE_BRIDGE_SESSION_ID",
+          "CLAUDE_CODE_DEBUG_LOG_LEVEL",
+          "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS",
+          "CLAUDE_CODE_REMOTE",
+          "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
+          "CLAUDE_CODE_USE_POWERSHELL_TOOL",
+          "CLAUDE_EFFORT",
+          "CLAUDE_ENV_FILE",
+          "CLAUDE_MODEL",
+          "CLAUDE_PLUGIN_DATA",
+          "CLAUDE_PLUGIN_OPTION_",
+          "CLAUDE_PLUGIN_OPTION_WEBHOOK_URL",
+          "CLAUDE_PLUGIN_ROOT",
+          "CLAUDE_PROJECT_DIR"
+        ],
+        "table_keys": [
+          "\"\"",
+          "\"*\"",
+          ",",
+          "-",
+          "-i",
+          ".claude/settings.json",
+          ".claude/settings.local.json",
+          "Bash(git *)",
+          "Bash(git push *)",
+          "Bash(rm *)",
+          "ConfigChange",
+          "CwdChanged",
+          "DirectoryAdded",
+          "Elicitation",
+          "ElicitationResult",
+          "FileChanged",
+          "InstructionsLoaded",
+          "MessageDisplay",
+          "Notification",
+          "PermissionDenied",
+          "PermissionRequest",
+          "PostCompact",
+          "PostToolBatch",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PreCompact",
+          "PreToolUse",
+          "SessionEnd",
+          "SessionStart",
+          "Setup",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "TaskCompleted",
+          "TaskCreated",
+          "TeammateIdle",
+          "UserPromptExpansion",
+          "UserPromptSubmit",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "_",
+          "action",
+          "addDirectories",
+          "addRules",
+          "additionalContext",
+          "agentId",
+          "agent_completed",
+          "agent_id",
+          "agent_needs_input",
+          "agent_type",
+          "allowedEnvVars",
+          "allowedPrompts",
+          "allowed_domains",
+          "answers",
+          "args",
+          "async",
+          "asyncRewake",
+          "auth_success",
+          "auto",
+          "behavior",
+          "blocked_domains",
+          "bypass_permissions_disabled",
+          "clear",
+          "command",
+          "compact",
+          "content",
+          "continue",
+          "continueOnBlock",
+          "cwd",
+          "decision",
+          "delta",
+          "description",
+          "destination",
+          "directory",
+          "displayContent",
+          "duration_ms",
+          "effort",
+          "elicitation_complete",
+          "elicitation_dialog",
+          "elicitation_response",
+          "elicitation_url_dialog",
+          "error",
+          "error_details",
+          "event",
+          "file_path",
+          "final",
+          "fork",
+          "glob",
+          "globs",
+          "headers",
+          "hookSpecificOutput.additionalContext",
+          "hook_event_name",
+          "hooks/hooks.json",
+          "id",
+          "idle_prompt",
+          "if",
+          "impossible",
+          "index",
+          "init",
+          "initialUserMessage",
+          "input",
+          "interrupt",
+          "is_interrupt",
+          "last_assistant_message",
+          "limit",
+          "load_reason",
+          "localSettings",
+          "local_settings",
+          "logout",
+          "maintenance",
+          "manual",
+          "memory_type",
+          "message",
+          "message_id",
+          "model",
+          "modelsUsed",
+          "multiline",
+          "name",
+          "new_string",
+          "offset",
+          "ok",
+          "old_string",
+          "once",
+          "other",
+          "output_mode",
+          "parent_file_path",
+          "path",
+          "pattern",
+          "permissionDecision",
+          "permissionDecisionReason",
+          "permission_mode",
+          "permission_prompt",
+          "plan",
+          "planFilePath",
+          "policy_settings",
+          "projectSettings",
+          "project_settings",
+          "prompt",
+          "prompt_id",
+          "prompt_input_exit",
+          "query",
+          "questions",
+          "reason",
+          "recurring",
+          "register_repo_root",
+          "reloadSkills",
+          "removeDirectories",
+          "removeRules",
+          "replaceRules",
+          "replace_all",
+          "resolvedModel",
+          "resume",
+          "run_in_background",
+          "schedule",
+          "server",
+          "session",
+          "sessionTitle",
+          "session_id",
+          "session_title",
+          "setMode",
+          "shell",
+          "skills",
+          "slash_command",
+          "source",
+          "startup",
+          "status",
+          "statusMessage",
+          "stopReason",
+          "subagent_type",
+          "suppressOriginalPrompt",
+          "suppressOutput",
+          "systemMessage",
+          "task_description",
+          "task_id",
+          "task_subject",
+          "team_name",
+          "teammate_name",
+          "terminalSequence",
+          "timeout",
+          "tool",
+          "totalDurationMs",
+          "totalTokens",
+          "totalToolUseCount",
+          "transcript_path",
+          "trigger_file_path",
+          "turn_id",
+          "type",
+          "updatedInput",
+          "updatedMCPToolOutput",
+          "updatedPermissions",
+          "updatedToolOutput",
+          "url",
+          "usage",
+          "userSettings",
+          "user_settings",
+          "watchPaths",
+          "~/.claude/settings.json"
+        ]
+      },
+      "sections": [
+        {
+          "path": "## Hook lifecycle",
+          "lines": 53,
+          "sha256": "3f13ee07caabea3d35fdd188fbb97934dd9996c424ee211f93582e318725764f"
+        },
+        {
+          "path": "## Hook lifecycle > ### How a hook resolves",
+          "lines": 151,
+          "sha256": "96cc85724b9b56b95ba271ca63aeda71ac8474028154e03b6c060fb672b7cfad"
+        },
+        {
+          "path": "## Configuration",
+          "lines": 13,
+          "sha256": "a4334324dc78308ed5c37717590898b503f4ded772b609207decfb1628a4951d"
+        },
+        {
+          "path": "## Configuration > ### Hook locations",
+          "lines": 34,
+          "sha256": "663bafd95fed50c13e9acdb3363d705bdfb5f76add3a8a9343447dd4ed7408f5"
+        },
+        {
+          "path": "## Configuration > ### Matcher patterns",
+          "lines": 66,
+          "sha256": "35043137b2b60c1ef0d78f180775e3a30c2221c1e3b3bb7383580f276eee0f80"
+        },
+        {
+          "path": "## Configuration > ### Matcher patterns > #### Match MCP tools",
+          "lines": 46,
+          "sha256": "4329e0648031b8216837a1af085737dd1d9a69bef49f9c7a4b4cf54b07b59ff2"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields",
+          "lines": 13,
+          "sha256": "d47f43ce9528714b8c63315b7ce56c848283368dcef0cee5eef2f995af706473"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields > #### Common fields",
+          "lines": 27,
+          "sha256": "a10a3b092ec3aa7ab11254891d98887100d0b7f790ea2a238d2e219a7f9dd0fb"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields > #### Command hook fields",
+          "lines": 50,
+          "sha256": "02eb63da3d0464b24df69b5982e4428cc5f484ca1b8574512012ff9ea6c923c0"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields > #### HTTP hook fields",
+          "lines": 36,
+          "sha256": "4ddc499d49b705520b55ab6e44bb06eba5377fbd56262d4b631d75605fdc3a6e"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields > #### MCP tool hook fields",
+          "lines": 33,
+          "sha256": "9a8823d653b4c3a0b362759f861990310c469b746dc6e3e1e644126770971728"
+        },
+        {
+          "path": "## Configuration > ### Hook handler fields > #### Prompt and agent hook fields",
+          "lines": 8,
+          "sha256": "478e5813776bf45df4308f7571429b6567c173f7575a788aebb01ca8ed13555e"
+        },
+        {
+          "path": "## Configuration > ### Reference scripts by path",
+          "lines": 59,
+          "sha256": "8528a9b670507c13e4ca7f285edf2d43b8ba57d0da72812460e7752100b50ac5"
+        },
+        {
+          "path": "## Configuration > ### Hooks in skills and agents",
+          "lines": 27,
+          "sha256": "a085ceb9c578075437f63b3b1b030507f2f9918295bcc6ae4be8cf9c426e3810"
+        },
+        {
+          "path": "## Configuration > ### The `/hooks` menu",
+          "lines": 14,
+          "sha256": "96d0ac5ed5a9ef0029d38050735407b5d887a43f045664e9b3671709a03683f9"
+        },
+        {
+          "path": "## Configuration > ### Disable or remove hooks",
+          "lines": 9,
+          "sha256": "be9750a931c11e7ee55a042b67e1558c4b38bf93bdea0eea82e4441c92c0e990"
+        },
+        {
+          "path": "## Hook input and output",
+          "lines": 7,
+          "sha256": "07d405d9741bba3b46e49bcd4804ccd818c0fb386f45b091326855ad7bcd2c71"
+        },
+        {
+          "path": "## Hook input and output > ### Common input fields",
+          "lines": 43,
+          "sha256": "8324ae5b84f731ef2ae0e74fa85b8b69fc5f16c4e061ff50d6f7d30359293de6"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output",
+          "lines": 5,
+          "sha256": "4f944801940b122ea59d37c4f4cb2d70196929edc2067f23eb83fe785f00cadb"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output > #### Exit code 0",
+          "lines": 12,
+          "sha256": "f958771858eb80142ca7d3982e21befdcd9de29522cc9c87683564278775250c"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output > #### Exit code 2",
+          "lines": 21,
+          "sha256": "e0f82672255ca96d9cb2b7679d4be6f14a9e6f7d1cf602e02cffc72f6a6e3a01"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output > #### Other exit codes",
+          "lines": 17,
+          "sha256": "7d552eee365cd79a80d25db577dbe98c3b0cba8707db2c61ac0723169c3d218c"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output > #### Timeouts",
+          "lines": 6,
+          "sha256": "9fd9e2e9efb073c3dc63dda9ec77ebfff6ca6282dfcdd1bdd27e4a34bb1d02c2"
+        },
+        {
+          "path": "## Hook input and output > ### Exit code output > #### Exit code 2 behavior per event",
+          "lines": 39,
+          "sha256": "5df3771a78969de3ad625f1db5cb91f556e4ff77cdcc057d4a356de8615278c1"
+        },
+        {
+          "path": "## Hook input and output > ### HTTP response handling",
+          "lines": 12,
+          "sha256": "cf5cd33d9d3bf96d79490e7b0a2d352af4ef874dc8a12b264c3d1c5dc2e8d00c"
+        },
+        {
+          "path": "## Hook input and output > ### JSON output",
+          "lines": 31,
+          "sha256": "71918c765a03f936322a754f698841b222e6406420eb39bd034d9464df1c8c78"
+        },
+        {
+          "path": "## Hook input and output > ### JSON output > #### Emit terminal notifications",
+          "lines": 30,
+          "sha256": "052a1f2836aaf52f76599f429e733771b75599fa3a7c36b1499d594482038095"
+        },
+        {
+          "path": "## Hook input and output > ### JSON output > #### Add context for Claude",
+          "lines": 33,
+          "sha256": "54a8315c6989148664de1f334c042307e64b45e0e1c1126174385c06a8a477de"
+        },
+        {
+          "path": "## Hook input and output > ### JSON output > #### Decision control",
+          "lines": 70,
+          "sha256": "95bcc4cd55270f3c90a02b17dcfaf79d4bb6aab6fd77ae2092e2cb79b6d4bb3c"
+        },
+        {
+          "path": "## Hook events",
+          "lines": 3,
+          "sha256": "c807d3d93d7f7273b38fd0a391ab06d906dde626081b64bec8c4418b54fc713d"
+        },
+        {
+          "path": "## Hook events > ### SessionStart",
+          "lines": 17,
+          "sha256": "d62168e91356fce28d56deb7bdd087086ff2f347e6eaf35079bded7d60abcd79"
+        },
+        {
+          "path": "## Hook events > ### SessionStart > #### SessionStart input",
+          "lines": 19,
+          "sha256": "adda12fec0c5f84f5f5184c9b70cb6d881b4b5406c99ff23f9f5b51fbe2d463e"
+        },
+        {
+          "path": "## Hook events > ### SessionStart > #### SessionStart decision control",
+          "lines": 32,
+          "sha256": "1e4ca8da5d961ebbfeb97af6131f7f2505873b99c19b2c6c0347c4fd5c2d79fe"
+        },
+        {
+          "path": "## Hook events > ### SessionStart > #### Persist environment variables",
+          "lines": 36,
+          "sha256": "0fca0ae29f133414bfcbe09fe51ba760524d8d98884df79a774e764a120ff21d"
+        },
+        {
+          "path": "## Hook events > ### Setup",
+          "lines": 18,
+          "sha256": "d5a378932f4e8acd1879b14c434c1358af917cf6b3f62f88caab5118c8023004"
+        },
+        {
+          "path": "## Hook events > ### Setup > #### Setup input",
+          "lines": 11,
+          "sha256": "0aa503b0b3cc75e846cbaf054eeea3062b02e72c4a9fda7a680e81ac735af5de"
+        },
+        {
+          "path": "## Hook events > ### Setup > #### Setup decision control",
+          "lines": 18,
+          "sha256": "9b90b36038d178634f81c28e05c08a35e41d790df1002171c82ddea7556b88b9"
+        },
+        {
+          "path": "## Hook events > ### InstructionsLoaded",
+          "lines": 5,
+          "sha256": "0bcb1d07bf74e5832c043efdfd054017d6183ffe44910f86809292b5fa536662"
+        },
+        {
+          "path": "## Hook events > ### InstructionsLoaded > #### InstructionsLoaded input",
+          "lines": 22,
+          "sha256": "376822750c4ba160b9166b1ee80a55f534ca5f4f8bf364662a91efa13d53e6b9"
+        },
+        {
+          "path": "## Hook events > ### InstructionsLoaded > #### InstructionsLoaded decision control",
+          "lines": 3,
+          "sha256": "00831b104705f564be99f77ca09cde8ee7c4c7f0c787012e55ed7548da5288a9"
+        },
+        {
+          "path": "## Hook events > ### UserPromptSubmit",
+          "lines": 11,
+          "sha256": "ab79dae0f725127548db48796dcaaae1bf32a95343b53e5a54b21a4dd498dd07"
+        },
+        {
+          "path": "## Hook events > ### UserPromptSubmit > #### UserPromptSubmit input",
+          "lines": 12,
+          "sha256": "56d161eaf1496181a8e46c076f821463cad53acce24f56d91309185817ad4e64"
+        },
+        {
+          "path": "## Hook events > ### UserPromptSubmit > #### UserPromptSubmit decision control",
+          "lines": 32,
+          "sha256": "f124f37226f48d06a5e7523684b1550e347265bcd0498dd5e2e5006041b3de76"
+        },
+        {
+          "path": "## Hook events > ### UserPromptExpansion",
+          "lines": 7,
+          "sha256": "a7c964eba796489b2c432c438daa8c3e90c42cc59d709606c424d46aa6b80ce6"
+        },
+        {
+          "path": "## Hook events > ### UserPromptExpansion > #### UserPromptExpansion input",
+          "lines": 16,
+          "sha256": "1695eab483ce44acd97760c0f6977cabaf06ece46912c14076f081c63df672a5"
+        },
+        {
+          "path": "## Hook events > ### UserPromptExpansion > #### UserPromptExpansion decision control",
+          "lines": 20,
+          "sha256": "8c4db000c289c724475d62507074cc918e7808cf36781f7ac501e4cdff29203f"
+        },
+        {
+          "path": "## Hook events > ### MessageDisplay",
+          "lines": 17,
+          "sha256": "a5468f7533a53b3e2232f2220354c4aaa164b3774aac21eb5575c10b2ebb1a35"
+        },
+        {
+          "path": "## Hook events > ### MessageDisplay > #### MessageDisplay input",
+          "lines": 23,
+          "sha256": "4f4dabe740613fcf5781dbe1c2b4872acf8915d5d1a2047bf51f833515b2b191"
+        },
+        {
+          "path": "## Hook events > ### MessageDisplay > #### MessageDisplay output",
+          "lines": 79,
+          "sha256": "8c90e11ded527546e95de958ea01d1785d71f5f82ab6359679b69a0d7722830b"
+        },
+        {
+          "path": "## Hook events > ### PreToolUse",
+          "lines": 15,
+          "sha256": "28e466367f843da8f54427a84fa7c314e7c11a2c00cb824fdcca827956e02c23"
+        },
+        {
+          "path": "## Hook events > ### PreToolUse > #### PreToolUse input",
+          "lines": 179,
+          "sha256": "4104df6d412134e8637be2810663d98f1632d66dd664cd9b672c77bece0fd29e"
+        },
+        {
+          "path": "## Hook events > ### PreToolUse > #### PreToolUse decision control",
+          "lines": 40,
+          "sha256": "923b0855e35eb8ad0539f04f79758e1f855666a8bacbdc55505eecbeb5cb49b4"
+        },
+        {
+          "path": "## Hook events > ### PreToolUse > #### Defer a tool call for later",
+          "lines": 35,
+          "sha256": "c55ec12c4dd4d2b1862931738a51523c6dbd4653c6b926c436b2b29c679f7024"
+        },
+        {
+          "path": "## Hook events > ### PermissionRequest",
+          "lines": 8,
+          "sha256": "9fb2e02e99bd6f25c1940553a1fdd5e96981b4203013e7a62a5283f311d58013"
+        },
+        {
+          "path": "## Hook events > ### PermissionRequest > #### PermissionRequest input",
+          "lines": 26,
+          "sha256": "6ff4b7e37d0bf397936c027b8983467cfa665af67039f1ea6b91c8bc2cf25bf1"
+        },
+        {
+          "path": "## Hook events > ### PermissionRequest > #### PermissionRequest decision control",
+          "lines": 25,
+          "sha256": "b91e0ba60db677da4527d482468ccca59230082561a0cd2df56394cad2c331bb"
+        },
+        {
+          "path": "## Hook events > ### PermissionRequest > #### Permission update entries",
+          "lines": 27,
+          "sha256": "7703b1d2e6be1802d69e096af090011d3320e5320bbec2324c5b4ac8c6583b4a"
+        },
+        {
+          "path": "## Hook events > ### PostToolUse",
+          "lines": 10,
+          "sha256": "a68723d40d7a5ac175f2f4d9156c30532d1b8a92d8384767e64eb4a9e3e94b98"
+        },
+        {
+          "path": "## Hook events > ### PostToolUse > #### PostToolUse input",
+          "lines": 26,
+          "sha256": "96d4cae02475256977eaab6f0d7dbaf210ebe6e8a5e1bf3158369d3167ba0e94"
+        },
+        {
+          "path": "## Hook events > ### PostToolUse > #### PostToolUse decision control",
+          "lines": 32,
+          "sha256": "e4e067d0c6c5c1e9798030a482f23b7ba78feae7033e860108770ab5e3ca438b"
+        },
+        {
+          "path": "## Hook events > ### PostToolUseFailure",
+          "lines": 9,
+          "sha256": "5537ae86a0f4f4aea1ff09e92452a602f5ffb5ff225b8679a3a206a730c1f52a"
+        },
+        {
+          "path": "## Hook events > ### PostToolUseFailure > #### PostToolUseFailure input",
+          "lines": 32,
+          "sha256": "acc7211c5ca1442cb790f74c0ee4a6e9ad11e9a5403cd63b746f1386d1e92e2c"
+        },
+        {
+          "path": "## Hook events > ### PostToolUseFailure > #### PostToolUseFailure decision control",
+          "lines": 14,
+          "sha256": "488ee1e99577223f3ad231788564910ced8f74e831f448626368192022224070"
+        },
+        {
+          "path": "## Hook events > ### PostToolBatch",
+          "lines": 3,
+          "sha256": "ae409f4ceaf646da618ef771b6ceb8cbd115186376770f528734ad706dd515d1"
+        },
+        {
+          "path": "## Hook events > ### PostToolBatch > #### PostToolBatch input",
+          "lines": 31,
+          "sha256": "57ca11742e30651950d755cb4a81f7abc8e2e27caf6e23fd54474222e481a229"
+        },
+        {
+          "path": "## Hook events > ### PostToolBatch > #### PostToolBatch decision control",
+          "lines": 16,
+          "sha256": "3fb8614372c20a8af291a9db040264881d4c87ead9f3ac91c7be74f3135e7a18"
+        },
+        {
+          "path": "## Hook events > ### PermissionDenied",
+          "lines": 5,
+          "sha256": "72965c03a7f49ba9c01b5791d2ad523eddbab263f40a992b9d907de3d9aefa2f"
+        },
+        {
+          "path": "## Hook events > ### PermissionDenied > #### PermissionDenied input",
+          "lines": 22,
+          "sha256": "65928efa943179a1b1533764cc1d110ee4b32ddff6cf4a88a8b6bc87d789d0ee"
+        },
+        {
+          "path": "## Hook events > ### PermissionDenied > #### PermissionDenied decision control",
+          "lines": 14,
+          "sha256": "efed659d86966d08cdbb1bc52c56403a1587ca84d701eca282efaa21cf27cc9f"
+        },
+        {
+          "path": "## Hook events > ### Notification",
+          "lines": 62,
+          "sha256": "17e4b493898515ab03b14374760197095f23f72ce2c8e0ddf23c155f59fe4c3a"
+        },
+        {
+          "path": "## Hook events > ### Notification > #### Notification input",
+          "lines": 15,
+          "sha256": "abfc16dc09323b94f917b91c6424dc64c247e1b418c11c7d715ce347aef99ca7"
+        },
+        {
+          "path": "## Hook events > ### SubagentStart",
+          "lines": 5,
+          "sha256": "2d6599cbeddb4115fdd3766f75762e0de9a098bf8b1b60a49a926175e3bf012a"
+        },
+        {
+          "path": "## Hook events > ### SubagentStart > #### SubagentStart input",
+          "lines": 25,
+          "sha256": "8e04678822912fc1c69f1054469cb555cb7974db7ddd864bf0231e08e8b4b0a3"
+        },
+        {
+          "path": "## Hook events > ### SubagentStop",
+          "lines": 3,
+          "sha256": "021c9c5476985b80bb89249219ddf658a09ad9130738960396a547703f583a13"
+        },
+        {
+          "path": "## Hook events > ### SubagentStop > #### SubagentStop input",
+          "lines": 22,
+          "sha256": "94e4aa621ff3cfc1dcf3ba9a8ac5c31eb6bb64264a86878d95f634a1e3c1c1d3"
+        },
+        {
+          "path": "## Hook events > ### TaskCreated",
+          "lines": 5,
+          "sha256": "a318e964185ee4912af8ecf3caec60ce73b71db8f1d524bea4f8d5bdadaafea4"
+        },
+        {
+          "path": "## Hook events > ### TaskCreated > #### TaskCreated input",
+          "lines": 24,
+          "sha256": "1c0cf446acfcb20f6a0fd0795f86fe21210e7a010b8caea82e52e2af8aa46505"
+        },
+        {
+          "path": "## Hook events > ### TaskCreated > #### TaskCreated decision control",
+          "lines": 19,
+          "sha256": "80df3053a66b02d80be8ab5912c6a80bc6a662405ed26d84e44773c3a227fc81"
+        },
+        {
+          "path": "## Hook events > ### TaskCompleted",
+          "lines": 5,
+          "sha256": "81d550c655daff1399b22a269d34198d04de46263e41798df33e82b094ad2b24"
+        },
+        {
+          "path": "## Hook events > ### TaskCompleted > #### TaskCompleted input",
+          "lines": 24,
+          "sha256": "1de4d515edc6ba3de2335f897bf08e75a152669c11cb5aa83f81700cbdb4bd4b"
+        },
+        {
+          "path": "## Hook events > ### TaskCompleted > #### TaskCompleted decision control",
+          "lines": 20,
+          "sha256": "956595cba72222814a4040bb1dbf56cce240c1eefd73f90350ab8a47712b241c"
+        },
+        {
+          "path": "## Hook events > ### Stop",
+          "lines": 9,
+          "sha256": "307e83da0ef14eae426daeadaab2bbd1462a6482621360bf46ad19fa96411bad"
+        },
+        {
+          "path": "## Hook events > ### Stop > #### Stop input",
+          "lines": 59,
+          "sha256": "bf5b1f2fec6b930a8f6956d0e9b4d3399666717aea21ab9ac94ade72d1c75c0d"
+        },
+        {
+          "path": "## Hook events > ### Stop > #### Stop decision control",
+          "lines": 25,
+          "sha256": "971d7dc4719ead1de6851b6bf1a3fc0481ebabf07dee4e52811a28ac30b0f43c"
+        },
+        {
+          "path": "## Hook events > ### StopFailure",
+          "lines": 3,
+          "sha256": "2a616ea173b0b7948a28f67d8c6a0f392678e474fc60907409f29fe99df65cc8"
+        },
+        {
+          "path": "## Hook events > ### StopFailure > #### StopFailure input",
+          "lines": 21,
+          "sha256": "d903c53a36805271bd4edf7fdc197930c44d92010719da9c9b865e08830faab5"
+        },
+        {
+          "path": "## Hook events > ### TeammateIdle",
+          "lines": 5,
+          "sha256": "eb77c9e4268ef229b908c77d9d37cdddf32188cb24713b71d96743747c096414"
+        },
+        {
+          "path": "## Hook events > ### TeammateIdle > #### TeammateIdle input",
+          "lines": 18,
+          "sha256": "7ad53a9cb018e7d2459f19488e701b952ad4ef378b311e5737a6f6952cd71aa0"
+        },
+        {
+          "path": "## Hook events > ### TeammateIdle > #### TeammateIdle decision control",
+          "lines": 17,
+          "sha256": "751ce7b977b4d568cd84fd2b608017fd677d07db598ff74fa01817c84fce8bf7"
+        },
+        {
+          "path": "## Hook events > ### ConfigChange",
+          "lines": 33,
+          "sha256": "58a8112de86bffef5757350f525462fc564a6e4677e05cf3ed47c7b272b24ec3"
+        },
+        {
+          "path": "## Hook events > ### ConfigChange > #### ConfigChange input",
+          "lines": 12,
+          "sha256": "0de05eaafc5f69c44b296829917daf8c327991f05571d1480fc3ca4b83d630ef"
+        },
+        {
+          "path": "## Hook events > ### ConfigChange > #### ConfigChange decision control",
+          "lines": 17,
+          "sha256": "43dae382fa619aaa96d5ad0c604e3bafabb60b619b9c64bf94f21b48a6e1db04"
+        },
+        {
+          "path": "## Hook events > ### CwdChanged",
+          "lines": 7,
+          "sha256": "c40959dfd3836417cbcb1a2062a3c66777b00639b7eb249cfcbded3880bfcdcb"
+        },
+        {
+          "path": "## Hook events > ### CwdChanged > #### CwdChanged input",
+          "lines": 12,
+          "sha256": "9fb994b1eccd0b647408400fb4d53b2d10affa459c30f3087cc58db883e835ee"
+        },
+        {
+          "path": "## Hook events > ### CwdChanged > #### CwdChanged output",
+          "lines": 11,
+          "sha256": "1feefcd941ef8429013a786723740c00b59ac677538840bc8ac57e7e448dddb5"
+        },
+        {
+          "path": "## Hook events > ### DirectoryAdded",
+          "lines": 20,
+          "sha256": "a91c2d247b668825c58ba9999fec5f9c15b3ea4d5d6f7745d98c8255829de4a1"
+        },
+        {
+          "path": "## Hook events > ### DirectoryAdded > #### DirectoryAdded input",
+          "lines": 22,
+          "sha256": "14fa944710b108fd04bcf14219d15fb8e3ebc5e1d348ca05c2d3f9368379005f"
+        },
+        {
+          "path": "## Hook events > ### FileChanged",
+          "lines": 40,
+          "sha256": "7c18cb13036395cd5e0cbfb391f318003a78ea032123afebbe967cf637bee6f9"
+        },
+        {
+          "path": "## Hook events > ### FileChanged > #### FileChanged input",
+          "lines": 17,
+          "sha256": "1fffad035c4636da08a0fbf05d89c3bb8f2caaa01cda2f954176f0de26530336"
+        },
+        {
+          "path": "## Hook events > ### FileChanged > #### FileChanged output",
+          "lines": 11,
+          "sha256": "7072c5a9b7e1a38918e758f2b3ad892e5825d16474a743d46d7141bcf95e6450"
+        },
+        {
+          "path": "## Hook events > ### WorktreeCreate",
+          "lines": 28,
+          "sha256": "a203c2b2fbebd6b5948d497a53c3d5f7b9e49f098886d1a41ef040896521121e"
+        },
+        {
+          "path": "## Hook events > ### WorktreeCreate > #### WorktreeCreate input",
+          "lines": 11,
+          "sha256": "e66db01421b8053987c5f2ed83836900f43ef1dfd22b52d960fb0a1687aa707a"
+        },
+        {
+          "path": "## Hook events > ### WorktreeCreate > #### WorktreeCreate output",
+          "lines": 12,
+          "sha256": "d0ff519744a23877db8369321e82c47cf7f8fc0a30516557024740d85ac8cc8f"
+        },
+        {
+          "path": "## Hook events > ### WorktreeRemove",
+          "lines": 30,
+          "sha256": "6d306683e963457d963470448f579b14805b5f7be917c8bd275bbf4b90de36cf"
+        },
+        {
+          "path": "## Hook events > ### WorktreeRemove > #### WorktreeRemove input",
+          "lines": 13,
+          "sha256": "ce90cee714190e7ca01032a4fe1c7c9951d95d79cbca7e9a7d698e60641956a1"
+        },
+        {
+          "path": "## Hook events > ### PreCompact",
+          "lines": 16,
+          "sha256": "084acd5de33b4b306208f8c322cccfa81ef0ca308df18816a22ea8eb2646bf10"
+        },
+        {
+          "path": "## Hook events > ### PreCompact > #### PreCompact input",
+          "lines": 12,
+          "sha256": "79924e915f5ddff65a9f9d9d48a094706e948573fea1af68d5253532f364caa5"
+        },
+        {
+          "path": "## Hook events > ### PostCompact",
+          "lines": 10,
+          "sha256": "71b55763cf40bc0a1c3e89e1b34c60b9d515e3f781bfbd5e3073b4cd57d6e75f"
+        },
+        {
+          "path": "## Hook events > ### PostCompact > #### PostCompact input",
+          "lines": 14,
+          "sha256": "3d2b9b3068844551a920b5fba89d7749af3f5ca37d4a97a3c149eedc9ac86a3f"
+        },
+        {
+          "path": "## Hook events > ### SessionEnd",
+          "lines": 15,
+          "sha256": "d1a7303b0da88eda3d294e43f85c96b5d84a1e963ea684bfdf7128088eb879e1"
+        },
+        {
+          "path": "## Hook events > ### SessionEnd > #### SessionEnd input",
+          "lines": 17,
+          "sha256": "0c67190387da269f191f9fa7a9fe20b5e7d884502e4cc08f716b6f9d5475f886"
+        },
+        {
+          "path": "## Hook events > ### Elicitation",
+          "lines": 5,
+          "sha256": "471022163fef039b70995725905a7a2dfd199ec6b4a607467c92ca11f89dcce4"
+        },
+        {
+          "path": "## Hook events > ### Elicitation > #### Elicitation input",
+          "lines": 36,
+          "sha256": "cface047e1229210ab80938294de7ee82fca6eff83ebc4741eda0025319162bf"
+        },
+        {
+          "path": "## Hook events > ### Elicitation > #### Elicitation output",
+          "lines": 22,
+          "sha256": "398099e6175239cd9ed60c888b1c6f25fcbf7275fdcdd38b8a4d2c9ea17adab0"
+        },
+        {
+          "path": "## Hook events > ### ElicitationResult",
+          "lines": 5,
+          "sha256": "1e536163e595f04b1bacc3d9517a7cf80d79910f2e6f5a366c83d90be6843c43"
+        },
+        {
+          "path": "## Hook events > ### ElicitationResult > #### ElicitationResult input",
+          "lines": 16,
+          "sha256": "0fe6da73e8c0a960c67ec103fd15ea410cf8eda065ca08d3f3f5ea9d6e4c9da2"
+        },
+        {
+          "path": "## Hook events > ### ElicitationResult > #### ElicitationResult output",
+          "lines": 20,
+          "sha256": "307f7e4535aef5ff7981d42f3cc0be7a10f49d1e98ccf853becd38555f198ffc"
+        },
+        {
+          "path": "## Prompt-based hooks",
+          "lines": 40,
+          "sha256": "9870da93cf9a7fedb35a4c01d4e373fe23bc564e734defa2f55e88e0512ab628"
+        },
+        {
+          "path": "## Prompt-based hooks > ### How prompt-based hooks work",
+          "lines": 7,
+          "sha256": "6a47e35dba022e18f7316ebf464b3f8d6ba78884189a83843a24b22a94ec7d7e"
+        },
+        {
+          "path": "## Prompt-based hooks > ### Prompt hook configuration",
+          "lines": 28,
+          "sha256": "c3ea3c2484efc473792be6bb370b7fb57ee67f723aa57bd0c26c5eba157f1601"
+        },
+        {
+          "path": "## Prompt-based hooks > ### Response schema",
+          "lines": 29,
+          "sha256": "79171f4345b3ea1db0e8e2e00b741f4d95da19419ec366a66bc263ac4db80432"
+        },
+        {
+          "path": "## Prompt-based hooks > ### Check multiple conditions before stopping",
+          "lines": 19,
+          "sha256": "f5cb063618cb3ecfa78d863f43af3601d7ffb57de6d210f240b263cb8f994a74"
+        },
+        {
+          "path": "## Agent-based hooks",
+          "lines": 7,
+          "sha256": "1aff684e1c174788ce007e7ff0b43f7c4ee8aa4b9fb546018d306a1274c36e43"
+        },
+        {
+          "path": "## Agent-based hooks > ### How agent hooks work",
+          "lines": 10,
+          "sha256": "8746cb68d27387bc42fe139179b98a45eb7965edd3b20b15c0fd9176bbb93fd9"
+        },
+        {
+          "path": "## Agent-based hooks > ### Agent hook configuration",
+          "lines": 30,
+          "sha256": "adbfd4daad863189b9bfe3ef587e3cffb49edf20adc5d3edd2b2244c1769adc2"
+        },
+        {
+          "path": "## Run hooks in the background",
+          "lines": 3,
+          "sha256": "3a7de0cdc4eb054131d5ae538ac0c6e6811a7607705e7fb128df8f85dd4969ea"
+        },
+        {
+          "path": "## Run hooks in the background > ### Configure an async hook",
+          "lines": 30,
+          "sha256": "b3e39257230aa90ee08768917dabae56fe97828af259a665e02b86d5cfbf7d60"
+        },
+        {
+          "path": "## Run hooks in the background > ### How async hooks execute",
+          "lines": 9,
+          "sha256": "be4e2c277ef928f39c03c0cb6316d1b5acb2dc657bdfe64194b9e5f541abfabe"
+        },
+        {
+          "path": "## Run hooks in the background > ### Run tests after file changes",
+          "lines": 47,
+          "sha256": "8b1cec847313dc6ccaebf07327946fc6ed00a0fb78643a62eccb82cc71fd9c81"
+        },
+        {
+          "path": "## Run hooks in the background > ### Limitations",
+          "lines": 6,
+          "sha256": "fc0d9f4c77b1500a9475e34062e7972fb1d59ac839db0c0f258b2703741158ca"
+        },
+        {
+          "path": "## Security considerations",
+          "lines": 1,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "## Security considerations > ### Disclaimer",
+          "lines": 5,
+          "sha256": "6aac05f38bd358b8ca19a223c6b5e96859d39c9f4e2d08c1e5cd181168869ce2"
+        },
+        {
+          "path": "## Security considerations > ### Workspace trust",
+          "lines": 8,
+          "sha256": "1c72c206bfb9e4473dcf9033b10ae1f27f52bb95d82a6303f625a714de1a318f"
+        },
+        {
+          "path": "## Security considerations > ### Security best practices",
+          "lines": 9,
+          "sha256": "1069221c5122baace88228914efb9a3423e0811904ffafda7ccbec3a31e51ac8"
+        },
+        {
+          "path": "## Windows PowerShell tool",
+          "lines": 34,
+          "sha256": "c8764e747fb4357eb4f0cb0129344c8ed3c44ea3a35c99bce60a3bbcf7964e20"
+        },
+        {
+          "path": "## Debug hooks",
+          "lines": 13,
+          "sha256": "46be32787b578e55f1e63bbc62aa892b4cdc988677f4bd19a6a0dabd2085a915"
+        }
+      ]
+    },
+    {
+      "name": "hooks-guide",
+      "url": "https://code.claude.com/docs/en/hooks-guide.md",
+      "tier": "prose",
+      "raw_bytes": 71146,
+      "normalised_lines": 1033,
+      "content_sha256": "ec9b5840cf98d7f45a3fe67297e5043fca9219c472df9671a5e93fc49b41fb74",
+      "structure_sha256": "5291f41ba5126a2832f3858982e194593ecb1c1c5693e4dc7d6faef65c2d0020",
+      "max_cli_version_mentioned": "2.1.210",
+      "control": {
+        "min_raw_bytes": 35573,
+        "require_headings": [
+          "## How hooks work"
+        ],
+        "min_events": 0
+      },
+      "counts": {
+        "headings": 31,
+        "events": 0,
+        "json_fields": 0,
+        "handler_types": 0,
+        "env_vars": 0,
+        "table_keys": 0
+      },
+      "fingerprint": {
+        "headings": [
+          "H2:Agent-based hooks",
+          "H2:HTTP hooks",
+          "H2:How hooks work",
+          "H2:Learn more",
+          "H2:Limitations and troubleshooting",
+          "H2:Prompt-based hooks",
+          "H2:Set up your first hook",
+          "H2:What you can automate",
+          "H3:Audit configuration changes",
+          "H3:Auto-approve specific permission prompts",
+          "H3:Auto-format code after edits",
+          "H3:Block edits to protected files",
+          "H3:Combine results from multiple hooks",
+          "H3:Configure hook location",
+          "H3:Debug techniques",
+          "H3:Filter hooks with matchers",
+          "H3:Get notified when Claude needs input",
+          "H3:Hook JSON has no effect",
+          "H3:Hook error in output",
+          "H3:Hook not firing",
+          "H3:Hooks and permission modes",
+          "H3:Limitations",
+          "H3:Re-inject context after compaction",
+          "H3:Read input and return output",
+          "H3:Reload environment when directory or files change",
+          "H3:Stop hook hits the block cap",
+          "H3:`/hooks` shows no hooks configured",
+          "H4:Filter by tool name and arguments with the `if` field",
+          "H4:Hook input",
+          "H4:Hook output",
+          "H4:Structured JSON output"
+        ],
+        "events": [],
+        "json_fields": [],
+        "handler_types": [],
+        "env_vars": [],
+        "table_keys": []
+      },
+      "sections": [
+        {
+          "path": "## Set up your first hook",
+          "lines": 58,
+          "sha256": "a674130661923ac33a91aa6e1dd545172a12a5b429c6cf5e9126ff63db1c0dbd"
+        },
+        {
+          "path": "## What you can automate",
+          "lines": 7,
+          "sha256": "2b0046738e79303d48d3d111689da6012a532b554bde765ae4cff822e008485b"
+        },
+        {
+          "path": "## What you can automate > ### Get notified when Claude needs input",
+          "lines": 101,
+          "sha256": "ca14f578bb65b05f8bfe0ba8d7749d81a409395aa6fc1492024015a391103f75"
+        },
+        {
+          "path": "## What you can automate > ### Auto-format code after edits",
+          "lines": 31,
+          "sha256": "562aa8b0a05e0552af6ced556d1bcdd07b0041349c25828d02de4461dd4613d6"
+        },
+        {
+          "path": "## What you can automate > ### Block edits to protected files",
+          "lines": 61,
+          "sha256": "307021fe245277362d41123e65fef0354dc65cd1c90e4728dfd5712c20a11404"
+        },
+        {
+          "path": "## What you can automate > ### Re-inject context after compaction",
+          "lines": 23,
+          "sha256": "10a29b24853b7d9921381533d9635a931da24ccdc8f8d8809d03355985311a7b"
+        },
+        {
+          "path": "## What you can automate > ### Audit configuration changes",
+          "lines": 25,
+          "sha256": "85fad27e17ce0f7deced27a531e27bc03d3a0a540aaa6b5f9ee6b509d5f377bc"
+        },
+        {
+          "path": "## What you can automate > ### Reload environment when directory or files change",
+          "lines": 52,
+          "sha256": "daa2f6729b375848b12c6bd41126e8bdf84e35c59027091d605065499f03c71d"
+        },
+        {
+          "path": "## What you can automate > ### Auto-approve specific permission prompts",
+          "lines": 47,
+          "sha256": "ccc1e2151f27757612b1b6a863ed20a0e9a392475d10cd006590c9e2e0714be4"
+        },
+        {
+          "path": "## How hooks work",
+          "lines": 44,
+          "sha256": "cbc20d9bb8bc082a8271e8e31a3093104791b1ff5be7fe44eb4eac6e2847499b"
+        },
+        {
+          "path": "## How hooks work > ### Combine results from multiple hooks",
+          "lines": 29,
+          "sha256": "25226c4eabf7e27c5672b29847585e202943c3856ec977b061949952c35d7fac"
+        },
+        {
+          "path": "## How hooks work > ### Read input and return output",
+          "lines": 3,
+          "sha256": "fa738aedeacb4dabac59beee6ad8abd719b8fad5d1930f3cc90542944c0da82f"
+        },
+        {
+          "path": "## How hooks work > ### Read input and return output > #### Hook input",
+          "lines": 21,
+          "sha256": "a8885b73633371a6f70dd10ecf96ecfc33f0919934cab496e31ade6f1bbafd01"
+        },
+        {
+          "path": "## How hooks work > ### Read input and return output > #### Hook output",
+          "lines": 23,
+          "sha256": "da079c9b40d9adec1186cb4c9a9c8bca54fb90a608315f4c8f2f50b3bcf9d784"
+        },
+        {
+          "path": "## How hooks work > ### Read input and return output > #### Structured JSON output",
+          "lines": 40,
+          "sha256": "40f8b8a707cf7ad814787faa2f57ca10df15c33bb97b72f52aa074a85c18884f"
+        },
+        {
+          "path": "## How hooks work > ### Filter hooks with matchers",
+          "lines": 110,
+          "sha256": "7603aeaf3fdd803968fdd15f6d01fa41ac6e3d8942b7d30f0a670d2b73222d5e"
+        },
+        {
+          "path": "## How hooks work > ### Filter hooks with matchers > #### Filter by tool name and arguments with the `if` field",
+          "lines": 38,
+          "sha256": "a5f7e9abd4dcc8e8abcd9123ccdf9d60640b402d4aaaed0b347c02db342ddc5d"
+        },
+        {
+          "path": "## How hooks work > ### Configure hook location",
+          "lines": 19,
+          "sha256": "463581e2fc4d19af278a57a292dca6a9fb10a8ac093b7f07db312c9c8adc1aa6"
+        },
+        {
+          "path": "## Prompt-based hooks",
+          "lines": 31,
+          "sha256": "df2117099e7bbe7749b2ca463169e34a06bba58c79c409eaca8bd4beb629f79b"
+        },
+        {
+          "path": "## Agent-based hooks",
+          "lines": 31,
+          "sha256": "19b225bc5cfc161fd0a8baf87803c0f369e00ea3fa83bd17e9d98f96220ed904"
+        },
+        {
+          "path": "## HTTP hooks",
+          "lines": 32,
+          "sha256": "435fc0a1cbd85706620c03984f3f48e586f015de717b858e5a9ec04e6bcd2468"
+        },
+        {
+          "path": "## Limitations and troubleshooting",
+          "lines": 1,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Limitations",
+          "lines": 16,
+          "sha256": "17961d10bd732893156d16c0b05af7657dfbe78ea5eb80e64e49ca98a375ea7a"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Hooks and permission modes",
+          "lines": 5,
+          "sha256": "2d7a6153b2b1eb36d6de8988598a1ad909a9ad251b706f90525c40a9445d88ed"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Hook not firing",
+          "lines": 7,
+          "sha256": "6846df31c36b78ff6a6dd1ecc96d93a285a14be0361f1d1948f54e1a927240fa"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Hook error in output",
+          "lines": 11,
+          "sha256": "04242bef90b1c2b23403cd0e262b8df7ac7db9c70739650be4af88c099db1b47"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### `/hooks` shows no hooks configured",
+          "lines": 7,
+          "sha256": "4dc0d8642a384731f315382aa151fd6f7fec60286a9ca1d8c2a0a1f1e6de8ee1"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Stop hook hits the block cap",
+          "lines": 14,
+          "sha256": "c1327625cc4ed711dff86bb542640cd35e41b0aeb8c6d5523c69a81d2534eb87"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Hook JSON has no effect",
+          "lines": 17,
+          "sha256": "76ec85bdb8eb868110214e3d7441ccb7385844f73fa8a61b7afe6e26bc6fe0b4"
+        },
+        {
+          "path": "## Limitations and troubleshooting > ### Debug techniques",
+          "lines": 12,
+          "sha256": "9562fb135fee2c1aaae4902e2905b5ec98fed608ec00160dc206b3668913926c"
+        },
+        {
+          "path": "## Learn more",
+          "lines": 5,
+          "sha256": "05c796fa1c8ad7c9a9f661519105a89bac3df586956421cdc2ede4b35c5372e9"
+        }
+      ]
+    }
+  ],
+  "coverage_gaps": []
+}
