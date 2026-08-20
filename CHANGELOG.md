@@ -17,6 +17,36 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.213.0]
+
+### Fixed
+
+- Every shell-inspecting hook now matches `Bash|PowerShell` and treats the two tools alike. Claude
+  Code routes the model's shell commands through the `PowerShell` tool on Windows where that tool
+  is enabled, and registers no `Bash` tool at all on a Windows box without Git Bash - so all 21
+  guards and nudges behind a `Bash`-only matcher silently did nothing there while reading, in
+  `hooks.json` and in their own passing tests, exactly like guards that were switched on. The tool
+  set is now one shared `shell_text.SHELL_TOOLS` rather than a literal in each hook, and
+  `hooks/tests/test_hooks_json_matchers.py` fails the build if a future matcher names `Bash`
+  alone. `docs/installation.md` describes this path, which is separate from the Git Bash shim it
+  already covered.
+- `block-sed-structured-files` scanned heredoc BODIES, so it blocked a document or script that
+  merely contained a `sed -i x.json` line - it blocked two probes being written about this very
+  footgun. It now strips bodies first, like the other command-scanning guards. Anchoring at a
+  command position was not enough on its own, because `&&` inside a body splits into segments
+  whose first token really is `sed`.
+- `NotebookEdit` reached no file-tool hook, so a notebook write bypassed the tell sweep, the
+  structured-file validator, the SKILL.md guard and the memory-store guard, and left a dead
+  `NotebookEdit` branch in `recovery-retry-gate`. Added to the matchers and to the tool sets.
+- `SessionStart` now also fires on `resume` and `fork`. A resumed session ran neither
+  `session-start.py` nor `session-banner.py`, so it replayed the memory index and the dream-due
+  nudge as they stood at the ORIGINAL start rather than reading them fresh.
+
+### Changed
+
+- Merged duplicate matcher groups in `hooks.json` (18 groups to 14, same 42 handlers). Two groups
+  sharing a matcher are one group written twice; a test now rejects the repeat.
+
 ## [5.212.4]
 
 ### Changed

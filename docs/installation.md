@@ -60,6 +60,13 @@ falls back to PowerShell and the hooks are simply skipped - they never error a t
 capture gate will not nudge you and the guards will not fire. With Git for Windows installed,
 everything runs normally; you can also run any skill manually at any time.
 
+There is a second, independent Windows path worth knowing about, because it bites even when Git
+Bash is present: Claude Code routes the model's shell commands through the `PowerShell` **tool**
+where that tool is enabled, and registers no `Bash` tool at all on a Windows box without Git Bash.
+A hook whose matcher named only `Bash` would therefore never run there. Every shell-inspecting hook
+in this plugin matches `Bash|PowerShell`, and `hooks/tests/test_hooks_json_matchers.py` fails the
+build if one is ever added that does not.
+
 The shim is designed for **Git Bash** specifically. WSL and Cygwin bash are neither required nor
 supported: they mount Windows drives differently and resolve a Linux `python`, which breaks the
 native-path design. Claude Code invokes its own Git Bash, so this is normally a non-issue; if a

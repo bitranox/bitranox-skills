@@ -20,7 +20,7 @@ import json
 import re
 import sys
 
-from shell_text import strip_heredoc_bodies
+from shell_text import is_shell_tool, strip_heredoc_bodies
 
 # Below this a sleep is a settle pause, not a wait on an event.
 LONG_SLEEP_SECONDS = 60
@@ -65,7 +65,7 @@ def main() -> int:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
-    if not isinstance(event, dict) or event.get("tool_name") != "Bash":
+    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
     message = notice((event.get("tool_input") or {}).get("command"))
     if message:

@@ -27,7 +27,7 @@ import re
 import sys
 
 # Shared with the other command-scanning guards - a heredoc body is DATA, not a command.
-from shell_text import strip_heredoc_bodies
+from shell_text import is_shell_tool, strip_heredoc_bodies
 
 # Verbs a PreToolUse gate in this plugin can block. Deliberately short: a false nudge on a safe
 # command teaches the reader to ignore the channel, which costs more than the miss it prevents.
@@ -166,7 +166,7 @@ def main(raw=None) -> int:
         payload = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
     except (ValueError, TypeError):
         return 0
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+    if not isinstance(payload, dict) or not is_shell_tool(payload.get("tool_name")):
         return 0
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None

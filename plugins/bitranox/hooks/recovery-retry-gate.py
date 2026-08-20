@@ -57,7 +57,7 @@ import sys
 from pathlib import Path
 
 from overwatch_ledger import _strip_leading_cd as strip_leading_cd  # noqa: E402 - shared normaliser
-from shell_text import strip_heredoc_bodies                          # noqa: E402 - shared with the guards
+from shell_text import is_shell_tool, strip_heredoc_bodies           # noqa: E402 - shared with the guards
 
 __all__ = [
     "arm_recovery",
@@ -100,7 +100,7 @@ COMMON_ID_FLOOR = 8
 FIRE_CAP = 3                 # messages per session; one undo event can produce at most one of them
 STATE_VERSION = 1
 MAX_SEEN_IDS = 4000          # bound the state file on a marathon session
-GATED_TOOLS = ("Bash", "Write", "Edit")
+GATED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "NotebookEdit")
 
 # ----------------------------------------------------------------------------- text regions
 
@@ -174,7 +174,7 @@ _SEARCH_ARG = re.compile(
 
 def recovery_class(tool: str, tool_input: dict) -> str:
     """Which kind of undo this call performs, or "" for none. PURE."""
-    if tool != "Bash":
+    if not is_shell_tool(tool):
         return ""
     command = strip_heredoc_bodies(str((tool_input or {}).get("command") or ""))
     command = strip_comment_lines(_SEARCH_ARG.sub(" ", command))
@@ -233,7 +233,7 @@ def mentions(tool: str, tool_input: dict) -> set:
 def acting_text(tool: str, tool_input: dict) -> str:
     """The text whose destructive operations count for this call. PURE."""
     tool_input = tool_input or {}
-    if tool == "Bash":
+    if is_shell_tool(tool):
         return str(tool_input.get("command") or "")
     if tool == "Write":
         return str(tool_input.get("content") or "")

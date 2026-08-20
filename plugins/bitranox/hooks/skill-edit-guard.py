@@ -22,7 +22,7 @@ import re
 import sys
 
 _SKILL_MD = re.compile(r"(?:^|/)skills/[^/]+/SKILL\.md$")
-_TOOLS = {"Edit", "Write", "MultiEdit"}
+_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _BYPASS_ENV = "BITRANOX_SKILL_WRITER"
 
 

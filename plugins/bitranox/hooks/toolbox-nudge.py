@@ -22,7 +22,7 @@ from pathlib import Path
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the chore it watches for. Re-exported so callers and
 # tests can keep reaching it as `toolbox_nudge.strip_heredoc_bodies`.
-from shell_text import strip_heredoc_bodies  # noqa: F401
+from shell_text import is_shell_tool, strip_heredoc_bodies  # noqa: F401
 
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
@@ -64,7 +64,7 @@ def match_tool(command):
 # Tools whose call we scan, and WHERE each hides the chore. Bash puts it on the command line;
 # Write/Edit/MultiEdit put it in the NEW text being written (never old_string - that is what is
 # being removed, not authored). Anything else (Read, Grep, ...) is not a place a chore is authored.
-_SCANNED_TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
+_SCANNED_TOOLS = ("Bash", "PowerShell", "Write", "Edit", "MultiEdit")
 
 
 def extract_text(tool_name, tool_input):
@@ -73,7 +73,7 @@ def extract_text(tool_name, tool_input):
     Returns None for a tool we do not scan, so `match_tool(None)` short-circuits to no nudge.
     """
     ti = tool_input or {}
-    if tool_name == "Bash":
+    if is_shell_tool(tool_name):
         # Only the command LINES are a chore being hand-rolled. A heredoc body is content being
         # written, so scanning it nudges about prose that merely names the tool - which is how
         # documenting a footgun trips the guard that watches for it.

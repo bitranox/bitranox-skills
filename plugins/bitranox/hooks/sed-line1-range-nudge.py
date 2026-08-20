@@ -25,7 +25,7 @@ import json
 import re
 import sys
 
-from shell_text import strip_heredoc_bodies
+from shell_text import is_shell_tool, strip_heredoc_bodies
 
 # `sed`/`gsed` at a command position, then a 1,/regex/ range ending in `d`. The end pattern is
 # matched non-greedily up to an unescaped `/`, so `1,/^---$/d` and `1,/^BEGIN$/d` both hit while
@@ -65,7 +65,7 @@ def main(raw=None) -> int:
         payload = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
     except (ValueError, TypeError):
         return 0
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+    if not isinstance(payload, dict) or not is_shell_tool(payload.get("tool_name")):
         return 0
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None

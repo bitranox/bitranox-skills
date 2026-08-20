@@ -41,7 +41,7 @@ import json
 import re
 from pathlib import Path
 
-from shell_text import strip_heredoc_bodies      # noqa: E402 - shared with the other command guards
+from shell_text import is_shell_tool, strip_heredoc_bodies  # noqa: E402 - shared with the other command guards
 
 __all__ = [
     "LedgerRecord",
@@ -134,7 +134,7 @@ def normalise_target(tool: str, tool_input: dict) -> str:
         return str(tool_input.get("skill") or "")[:TARGET_WIDTH]
     if tool == "Agent":
         return "agent:" + str(tool_input.get("subagent_type") or "task")[:TARGET_WIDTH]
-    if tool != "Bash":
+    if not is_shell_tool(tool):
         return tool.lower()
 
     command = _strip_leading_cd(str(tool_input.get("command") or ""))
@@ -203,7 +203,7 @@ def recovery_marker(tool: str, tool_input: dict) -> bool:
     analysis program (`python3 - <<'PY' ... re.finditer(r'qm rollback ...') ... PY`) reads about
     rollbacks and performs none, and it self-matched here until the body was removed.
     """
-    if tool != "Bash":
+    if not is_shell_tool(tool):
         return False
     command = strip_heredoc_bodies(str((tool_input or {}).get("command") or ""))
     return bool(_RECOVERY.search(_SEARCH_ARG.sub(" ", command)))
@@ -233,7 +233,7 @@ def outcome_of(result: dict) -> str:
 def _intent(tool: str, tool_input: dict) -> str:
     """Short human string saying what this call is FOR. PURE."""
     tool_input = tool_input or {}
-    if tool == "Bash":
+    if is_shell_tool(tool):
         said = str(tool_input.get("description") or "").strip()
         if said:
             return said[:INTENT_WIDTH]
