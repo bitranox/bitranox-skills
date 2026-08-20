@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.211.0]
+
+### Changed
+
+- `gated-prep-nudge.py` recognises the full prep-verb set. 5.210.0 shipped eight verbs, which was
+  the list that got typed rather than a reasoned subset. repo-gate reads
+  `git diff --name-only origin/master` plus `git ls-files --others`, so its verdict moves with the
+  working tree AND with the `origin/master` ref, and both families now count:
+  `merge`, `rebase`, `cherry-pick`, `revert`, `am`, `apply`, `clone`, `worktree` join the
+  tree-writing group, and `fetch` and `pull` are recognised for moving the ref the gate compares
+  against - a `git fetch` writes no file at all and still invalidates the answer.
+- The message names the mechanism per verb rather than always saying "changes the working tree", so
+  a `fetch` is explained by the ref it moves and a `pull` by both.
+- `git add` remains excluded, and read-only verbs (`status`, `log`, `diff`, `rev-parse`) stay quiet;
+  both exemptions are covered by tests that a mutation proves can fail.
+
 ## [5.210.0]
 
 ### Changed

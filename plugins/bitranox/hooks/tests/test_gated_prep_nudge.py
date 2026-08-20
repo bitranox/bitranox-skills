@@ -213,3 +213,48 @@ def test_a_tree_writing_verb_with_no_gated_verb_is_quiet():
 
 def test_a_non_git_command_mentioning_checkout_is_quiet():
     assert N.notice("echo checkout && git commit -m x") is None
+
+
+# ---- completing the verb set, 2026-08-20 --------------------------------------------------------
+# The first pass shipped eight verbs, which was not a reasoned subset - it was the list that got
+# typed. The gate reads `git diff --name-only origin/master` plus `git ls-files --others`, so its
+# verdict moves with the WORKING TREE and with the `origin/master` REF. Both families qualify.
+
+def test_history_rewriting_verbs_are_prep_too():
+    for cmd in ("git merge feature && git commit -m x",
+                "git rebase master && git push --force-with-lease",
+                "git cherry-pick abc123 && git push",
+                "git revert HEAD && git commit -m x",
+                "git am < patch.eml && git push",
+                "git apply fix.patch && git commit -m x",
+                "git worktree add ../wt && git commit -m x",
+                "git clone https://example.com/r.git sub && git commit -m x"):
+        assert N.notice(cmd) is not None, cmd
+
+
+def test_verbs_that_move_origin_master_are_prep_too():
+    """`fetch` writes no file, but the gate compares against `origin/master`, which it moves.
+
+    Verified against repo-gate: `_changed_vs_origin` runs `git diff --name-only origin/master`, so
+    a fetch between the gate's read and the push changes the answer.
+    """
+    assert N.notice("git fetch origin && git push origin master") is not None
+    assert N.notice("git pull --rebase && git push") is not None
+
+
+def test_the_message_names_the_right_mechanism_for_each_family():
+    tree = N.notice("git checkout -- f && git commit -m x")
+    assert "working tree" in tree and "origin/master" not in tree
+    fetch = N.notice("git fetch && git push")
+    assert "origin/master" in fetch and "working tree" not in fetch
+    pull = N.notice("git pull && git push")
+    assert "working tree" in pull and "origin/master" in pull
+
+
+def test_a_read_only_git_verb_is_still_not_prep():
+    """The exemption direction: querying commands must stay quiet, or every sequence nags."""
+    for cmd in ("git status --porcelain && git commit -m x",
+                "git log --oneline -1 && git push",
+                "git diff --stat && git commit -m x",
+                "git rev-parse HEAD && git push"):
+        assert N.notice(cmd) is None, cmd
