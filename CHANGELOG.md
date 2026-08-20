@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.212.1]
+
+### Added
+
+- A test pinning the hook reason in `decision-review-nudge.py` and the skill body of
+  `process-review-uncertain-decisions` to the same walk rule. Both must state it: the hook is what
+  an agent acts on when it does not load the skill, and the skill is all there is on the manual
+  path, where no hook fires. That makes them a drift pair, and the hook is the dangerous half - it
+  fires unattended, so a stale promise there steers an agent toward behaviour the skill no longer
+  describes, surfacing as wrong behaviour rather than a failing check. Mutation-verified in both
+  directions: dropping the term from either file fails the test, naming which file lost it.
+
 ## [5.212.0]
 
 ### Added
