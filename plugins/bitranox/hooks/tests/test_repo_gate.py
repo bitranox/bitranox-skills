@@ -90,6 +90,19 @@ def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_o
         # opener and dropping only the body.
         ("cat > m <<'EOF'\nsubject\nEOF\ngit commit -F m", True),
         ("cat > m <<'EOF'\ngit commit -m 'not this one'\nEOF\ngit push origin master", True),
+        # The MISS direction, across terminator spellings. This predicate now decides whether a
+        # BLOCKING gate runs, so over-stripping would swallow the trailing verb and the gate would
+        # silently not fire on a real commit - the failure that looks exactly like a healthy guard.
+        ("cat > m <<EOF\nsubject\nEOF\ngit commit -F m", True),                 # unquoted
+        ('cat > m <<"EOF"\nsubject\nEOF\ngit commit -F m', True),               # double-quoted
+        ("cat > m <<-EOF\n\tsubject\n\tEOF\ngit commit -F m", True),            # dash form, tabs
+        ("cat > m <<'MSGEOF'\nsubject\nMSGEOF\ngit commit -F m", True),         # custom word
+        ("cat > m <<'EOF'\nsay EOF here\nEOF\ngit commit -F m", True),          # word inline in body
+        ("cat > a <<'EOF'\nx\nEOF\ncat > b <<'EOF'\ny\nEOF\ngit commit -F a", True),   # two bodies
+        ("cat > m <<'EOF'\nx\nEOF\nls && git commit -F m", True),               # verb after a chain
+        # An UNTERMINATED heredoc consumes the rest of the input, so the trailing line is data the
+        # shell never runs. Not gating it is the guard agreeing with the shell, not a miss.
+        ("cat > m <<'EOF'\ngit commit -F m", False),
     ],
 )
 def test_is_gated_command(cmd, expected):
