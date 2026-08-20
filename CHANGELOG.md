@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.215.0]
+
+### Added
+
+- `config-edit-guard` on `PreToolUse`: a direct `Edit`/`Write` to `settings.json`,
+  `settings.local.json`, `~/.claude.json` or `managed-settings.json` now says so and points at the
+  host `update-config` skill. That file decides how the harness behaves and a misplaced key does
+  not fail loudly - it silently drops a hook, a permission rule or an env var, and the next symptom
+  is a guard that stopped firing. Windows paths are normalised first, because `file_path` arrives
+  with backslashes even under Git Bash and a forward-slash test would never fire there.
+
+  Deliberately a reminder rather than a refusal: the sanctioned `update-config` path edits the same
+  files with the same tools, and a hook cannot tell that write from a freehand one without guessing.
+
+### Not added, and why
+
+- `ConfigChange` was the obvious event for the rule above and is the wrong one. Its input carries
+  `source` and `file_path` and NO ACTOR, so a user editing their own settings in an editor trips it
+  exactly like the agent writing the file, and `block` is its only verdict - a guard there would
+  block the user from editing their own configuration. A `PreToolUse` file-tool event is the seam
+  where the actor is the agent by construction.
+- `TaskCompleted` was to enforce that a background agent delivered its report. Its input is
+  `task_id`, `task_subject`, `task_description`, `teammate_name` and `team_name` - nothing about
+  delivery, and no subagent transcript. Enforcing it would mean blocking completion on a signal the
+  event does not carry, and the transcript it would have to be inferred from is documented as
+  written asynchronously and may lag the current turn.
+
 ## [5.214.0]
 
 ### Added

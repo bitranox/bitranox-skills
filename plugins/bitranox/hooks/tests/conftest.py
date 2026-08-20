@@ -45,6 +45,7 @@ _HOOK_MODULES = {
     "touched-paths": "touched_paths",
     "subagent-capture": "subagent_capture",
     "subagent-brief": "subagent_brief",
+    "config-edit-guard": "config_edit_guard",
     "retry-with-a-flag-nudge": "retry_with_a_flag_nudge",
     "toolbox-nudge": "toolbox_nudge",
     "skill-edit-guard": "skill_edit_guard",
