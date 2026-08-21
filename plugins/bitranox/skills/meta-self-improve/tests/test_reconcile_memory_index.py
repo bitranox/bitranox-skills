@@ -431,3 +431,50 @@ def test_check_tree_does_not_flag_a_real_body(tmp_path):
                                  type_="reference")
     assert R.check_tree(str(proj))["frame_only_bodies"] == []
     assert slug
+
+
+# --- the chain's altitude must not come from argv order ----------------------------------------
+# Altitude was read from list POSITION with no validation, so the identical store answered
+# differently depending on the order the caller happened to type the levels in.
+
+
+def _ancestor_chain(tmp_path):
+    """A real anchor/project chain: project is a DESCENDANT of anchor, with an upward ref."""
+    anchor = tmp_path / "tree"
+    project = anchor / "projects" / "thing"
+    project.mkdir(parents=True)
+    ME.add_or_update_entry(str(anchor), "Broad rule", "the tree-top rule", body="b",
+                           scope_default="anchor")
+    ME.add_or_update_entry(str(project), "Narrow fact", "defers to [[broad-rule]]", body="b",
+                           scope_default="proj")
+    return str(anchor), str(project)
+
+
+def test_an_upward_ref_is_clean_whichever_order_the_levels_are_passed(tmp_path):
+    anchor, project = _ancestor_chain(tmp_path)
+    narrow_first = R.check_references([project, anchor])
+    broad_first = R.check_references([anchor, project])
+    assert narrow_first["downward"] == [] and narrow_first["orphans"] == []
+    assert broad_first == narrow_first          # the store did not change, so neither may the verdict
+
+
+def test_a_genuine_downward_ref_is_still_caught_after_normalisation(tmp_path):
+    # The exemption must not silence the check it was built for.
+    anchor = tmp_path / "tree"
+    project = anchor / "projects" / "thing"
+    project.mkdir(parents=True)
+    ME.add_or_update_entry(str(project), "Narrow fact", "narrow", body="b", scope_default="proj")
+    ME.add_or_update_entry(str(anchor), "Broad rule", "points [[narrow-fact]] down", body="b",
+                           scope_default="anchor")
+    for order in ([project, anchor], [anchor, project]):
+        assert ("broad-rule", "narrow-fact") in R.check_references(order)["downward"]
+
+
+def test_sibling_levels_keep_the_order_they_were_given(tmp_path):
+    # Siblings are not ancestors of one another, so depth cannot order them; a stable sort must
+    # leave the caller's order intact rather than inventing an altitude.
+    lower, upper = str(tmp_path / "lower"), str(tmp_path / "upper")
+    (tmp_path / "lower").mkdir(); (tmp_path / "upper").mkdir()
+    ME.add_or_update_entry(lower, "Low fact", "narrow", body="b", scope_default="l")
+    ME.add_or_update_entry(upper, "High fact", "points [[low-fact]] down", body="b", scope_default="u")
+    assert ("high-fact", "low-fact") in R.check_references([lower, upper])["downward"]

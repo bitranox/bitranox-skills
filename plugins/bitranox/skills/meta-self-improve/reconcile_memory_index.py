@@ -186,15 +186,36 @@ def _unpassed_ancestor_levels(dirs):
     return out
 
 
+def _narrow_to_broad(dirs):
+    """Order levels narrow -> broad by ancestry DEPTH, stably.
+
+    Altitude used to come from argv POSITION with nothing checking it, so the same store answered
+    differently depending on the order the caller typed: measured, one chain reported 11 problems
+    passed anchor-first and 0 passed project-first, and every false finding had the shape the
+    storage spec explicitly permits (a project entry citing a tree-top rule). A report like that
+    invites demoting correct links to prose, and a dream driven by it would "fix" a clean store.
+
+    The levels on a chain are ancestors of one another, so depth decides the order without asking
+    the caller. The sort is STABLE, which is what keeps SIBLING levels - equal depth, not ancestors,
+    so depth cannot rank them - in the order they were given rather than inventing an altitude.
+    """
+    def depth(path):
+        try:
+            return len(Path(path).resolve().parts)
+        except OSError:
+            return len(Path(path).parts)
+    return sorted(dirs, key=lambda path: -depth(path))
+
+
 def check_references(dirs):
-    """Verify `[[ref]]` integrity across an ordered altitude chain (narrow -> broad). Returns
+    """Verify `[[ref]]` integrity across an altitude chain, in any order the caller passes. Returns
     {checked, orphans, downward}: `orphans` refs resolve nowhere in the chain; `downward` refs resolve
     only at a NARROWER altitude than the source. Both are (source_slug, ref_slug) pairs.
 
     Ancestor altitudes above `dirs` are pulled in as TARGET providers automatically, so checking a
     single project dir is correct rather than a wall of false orphans. Only the passed dirs supply
     ref SOURCES, so `checked` still counts what the caller asked about."""
-    dirs = [Path(d) for d in dirs]
+    dirs = _narrow_to_broad([Path(d) for d in dirs])
     targets = {}                                  # slug -> set of altitude positions offering it
     for pos, d in enumerate(dirs):
         for s in altitude_targets(d):
