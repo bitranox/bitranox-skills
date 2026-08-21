@@ -734,6 +734,22 @@
   "repos",
   "rule"
  ],
+ "meta-context-watcher": [
+  "session",
+  "context",
+  "large",
+  "enough",
+  "quality",
+  "degrading",
+  "compaction",
+  "close",
+  "stop",
+  "nudge",
+  "reports",
+  "handover",
+  "threshold",
+  "crossed"
+ ],
  "meta-dream-crosstree": [
   "dream",
   "crosstree",
