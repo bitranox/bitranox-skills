@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.225.1]
+
+### Fixed
+
+- `compuse-toolbox`'s description was 2124 characters against a 1024 cap, and the injected
+  available-skills listing truncates it mid-word. 597 characters never reached the router, carrying
+  the only triggers for `wtclean` and `claudemd_variance` and the closing instruction to check the
+  jigs before writing throwaway code. Rewritten to 999 characters covering the same 20 tools, with
+  every distinctive keyword retained and asserted mechanically. 79 of the other 80 skills were
+  already under the cap (median 394), so this was one field grown by accretion rather than a
+  systemic condition.
+
+  One clause changed shape as well as length: `killing a process without pgrep/pkill self-match`
+  stated the hazard as a precondition, so it could only match a user who had already noticed the
+  hazard - not the user who needs the tool. It now reads `finding or killing a process with pgrep
+  -f or pkill -f`, matching the words a user types, with the hazard left in the body where the
+  explanation belongs.
+
+  `skill_triggers.json` and `docs/skills.md` regenerated, as a description change invalidates both.
+
 ## [5.225.0]
 
 ### Added

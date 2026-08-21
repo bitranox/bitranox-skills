@@ -336,8 +336,8 @@
   "windows"
  ],
  "compuse-toolbox": [
+  "tempted",
   "hand-roll",
-  "small",
   "one-off",
   "shell",
   "python",
@@ -345,11 +345,11 @@
   "recurring",
   "computer-use",
   "chore",
-  "safely",
   "finding",
   "killing",
   "process",
-  "without"
+  "pgrep",
+  "pkill"
  ],
  "compuse-vnc": [
   "drive",
