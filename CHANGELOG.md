@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.228.0]
+
+### Added
+
+- **`infra-windows-servicing` now reads the CBS history that a grep cannot.** `C:\Windows\Logs\CBS`
+  keeps a couple of live `.log` files spanning a few days; everything older is rolled into
+  `CbsPersist_<timestamp>.cab`, and a `.cab` is an archive `Select-String` cannot open. So a scan of
+  the live logs on a machine whose update failed last week returns ZERO hits, which reads exactly
+  like a clean store - the failure mode that reports a provably-broken machine as unaffected. The
+  skill now expands the cabs first, warns never to pipe `expand.exe` into `Out-Null` (it then says
+  "extracted: 0 logs" and gives no reason), names the size gap as the tell that a zero-hit grep is a
+  missed search, and says what an empty expanded search means. A subagent given the previous text
+  reasoned correctly from the size gap and still landed on `CbsPersist_*.log`, planning to grep
+  archives - the same dead end.
+
+### Fixed
+
+- **`0xC1900200` is a LIST of blocks, and the MoSetup waiver does not cover an ABSENT TPM.** The
+  skill claimed `0xC1900200` "is cleared by" `AllowUpgradesWithUnsupportedTPMOrCPU`, which is wrong
+  whenever the guest has no TPM: the key waives an unsupported CPU and an unsupported TPM VERSION,
+  never an absent device, and setup logs `UnrecognizedCompatBlockEncountered = [TpmVersion]` when
+  that is what remains. The skill now reads the CompatData XML for the blocks that are actually set
+  (there can be several at once), states the fix as real hardware
+  (`qm set <vmid> -tpmstate0 <storage>:1,version=v2.0`), and answers the faster-second-failure trap:
+  compare the CompatData timestamp rather than assuming a cached verdict, since a FRESH one means
+  the scan re-ran and a block genuinely cleared.
+
 ## [5.227.1]
 
 ### Fixed
