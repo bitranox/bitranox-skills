@@ -145,6 +145,13 @@ tests, three config knobs, and the doc rows.
       showing itself. Claude Code's `[1m]` suffix never appears in `message.model` and is redundant.
       The result is one table and one lookup; `model_from_dispatch`, `model_from_project`,
       `window_from_evidence` and the peak tracking were all deleted.
+- [x] **The table's blind spot is DECLINED, not overlooked.** Those 1485 transcripts are one machine
+      and one account tier, so the table assumes current opus/fable/sonnet run 1M everywhere. A tier
+      that runs a 200K opus would get an unreachable 400K threshold and total silence, and the
+      misconfigured check cannot see it (166K is far under the assumed 1M). Two covers were
+      considered - detecting a compaction below the threshold, and reverting to assume-200K-until-
+      proven - and both were declined in favour of documenting the assumption, its symptom (the
+      offer never appears) and its remedy (`context_window`) in the hook and the knob table.
 - [x] An unknown family falls back to 200K, and that direction is tested: too small asks early and
       costs a decline, too large sets a threshold the session can never reach and the hook goes
       silently inert.
