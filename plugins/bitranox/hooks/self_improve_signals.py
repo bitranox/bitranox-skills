@@ -387,15 +387,23 @@ def mark_dream_done(proj, now=None):
 # Unlike the audit (a review note, consumed once at SessionStart), a pending contribution is NOT
 # consumed by being surfaced - it stands until it actually ships and something drains it.
 
+# Names its own scope on purpose: this prefix is honored ONLY by contrib_file, while ~15 other
+# per-project state files derive their name from proj_key(). A generic `key:` would read like a
+# facility every state function understands, and passing it to one that does not would silently
+# resolve it as a literal directory and write to the wrong file. `queue_key:` cannot be misread.
+QUEUE_KEY_PREFIX = "queue_key:"
+
+
 def contrib_file(proj):
     """Queue of pending upstream contributions (skill/hook changes a learning warrants).
 
-    `proj` may also be the pseudo-path `key:<hash>`, naming a queue by its own file key. The key is
-    one-way (sha1 of the path), so a queue whose project directory was deleted or renamed is
+    `proj` may also be the pseudo-path `queue_key:<hash>`, naming a queue by its own file key. The
+    key is one-way (sha1 of the path), so a queue whose project directory was deleted or renamed is
     otherwise unreachable by every verb - it cannot be listed, shipped or dropped, and the operator
-    cannot even see that it exists. `contrib_queue.py queues` prints these keys."""
-    if isinstance(proj, str) and proj.startswith("key:"):
-        return _audit_dir() / (proj[4:] + ".contrib.jsonl")
+    cannot even see that it exists. `contrib_queue.py queues` prints these keys. The prefix is
+    queue-scoped by NAME because no other per-project state file honors it."""
+    if isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX):
+        return _audit_dir() / (proj[len(QUEUE_KEY_PREFIX):] + ".contrib.jsonl")
     return _audit_dir() / (proj_key(proj) + ".contrib.jsonl")
 
 
@@ -442,7 +450,7 @@ def add_contribution(proj, record, max_items=100):
         # answer "which projects have pending contributions?" is to brute-force sha1 over the
         # filesystem (measured: a walk of 705,896 directories), and a queue whose cwd was deleted
         # resolves to nothing at all.
-        if not rec.get("proj") and not (isinstance(proj, str) and proj.startswith("key:")):
+        if not rec.get("proj") and not (isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX)):
             try:
                 rec["proj"] = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
             except (TypeError, ValueError):
