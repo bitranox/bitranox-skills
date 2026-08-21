@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.224.3]
+
+### Changed
+
+- `gated-prep-nudge` now says the footgun has been recorded EIGHT times rather than seven, and its
+  docstring records why it stays a nudge. Hit 8 was assumed to be a detection gap and was not: the
+  nudge fired correctly and named the right file, but `additionalContext` reaches the model in the
+  same turn as the tool result, so a non-blocking PreToolUse hook can only explain a block, never
+  prevent one. That leaves a `permissionDecision: deny` as the only rung above it, and replaying
+  every `Bash` tool_use command in the transcript corpus prices that rung: over 60,632 commands the
+  hook fires 569 times and only 23 of those were actually blocked, so a deny would refuse 532
+  working commands to prevent 23 confusing ones. Narrowing the deny to the tree-prep arm is worse
+  (1.5% precision), because that arm was believed to be the shape that can never satisfy the gate
+  and 67 of its 68 real firings succeeded. The escalation is closed on measurement; re-run the
+  measurement rather than the argument.
+
+- `git-wrong-repo-nudge`'s docstring now records the RECALL cost of its unreadable-destination
+  rule, which the precision figures did not cover: silencing a whole call because one landing is a
+  shell variable gives up 3 true positives across 60,606 commands, against the 113 it keeps. The
+  trade is deliberate, and it is written down so the rule is not relaxed without it.
+
 ## [5.224.2]
 
 ### Fixed

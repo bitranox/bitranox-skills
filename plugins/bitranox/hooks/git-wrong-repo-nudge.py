@@ -19,6 +19,10 @@ cwd they actually ran under:
 - **Every landing must be readable.** 1,233 cd targets in the corpus are shell variables, and others
   point at directories that no longer exist. A destination that cannot be resolved cannot be
   attributed to a repo, and a verdict built on a guessed one is invented rather than measured.
+  This one has a RECALL cost, unlike the other two, and the cost is recorded here so nobody relaxes
+  it without knowing what it buys: silencing a whole call because ONE landing is unreadable gives up
+  3 true positives across 60,606 commands, against the 113 it keeps. That trade was accepted on
+  purpose - a guessed attribution is worse than a miss, because it is wrong with confidence.
 
 Together those leave 113 firings, 0.186% of the corpus, each one landing in two distinct real work
 trees at the moment it fires.
