@@ -1017,3 +1017,30 @@ def test_a_new_fact_with_a_real_body_still_works(proj):
     """Must-not-break: the refusal is for EMPTY only."""
     slug = E.add_or_update_entry(proj, "Fine", "When x, do y.", body="something worth reading")
     assert us.body_path(Path(E._anchor(proj)), slug).is_file()
+
+
+def test_move_refusal_names_the_field_that_actually_differs(tmp_path):
+    # The refusal condition compares the (title, hook) TUPLE, so it also fires when ONLY the title
+    # differs - and then "a DIFFERENT hook" sends the reader to diff two identical hooks. Measured
+    # on the real store: two pointers with byte-identical 497-char hooks whose titles differed by a
+    # leading "The ". Name the field that actually differs.
+    anchor, mid, proj = _three_levels(tmp_path)
+    same_hook = "When several agents work together, derive the structure from the real constraints."
+    E.add_or_update_entry(proj, "Dag scheduler", same_hook, body="B", scope_default="p")
+    us.add_pointer(mid, slug="dag-scheduler", title="The Dag scheduler", hook=same_hook)
+    rep = E.move_entry(proj, mid, "dag-scheduler")
+    assert rep["moved"] is False
+    msg = rep["refused"] or ""
+    assert "TITLE" in msg, msg
+    assert "DIFFERENT hook" not in msg, msg
+
+
+def test_move_refusal_still_names_the_hook_when_the_hook_differs(tmp_path):
+    # The direction where the exemption must NOT apply: a genuinely divergent hook still reports
+    # HOOK, so narrowing the message cannot silence the case the guard was built for.
+    anchor, mid, proj = _three_levels(tmp_path)
+    E.add_or_update_entry(proj, "Fact", "thin source hook", body="B", scope_default="p")
+    us.add_pointer(mid, slug="fact", title="Fact", hook="a much richer target hook with detail")
+    rep = E.move_entry(proj, mid, "fact")
+    assert rep["moved"] is False
+    assert "HOOK" in (rep["refused"] or ""), rep["refused"]

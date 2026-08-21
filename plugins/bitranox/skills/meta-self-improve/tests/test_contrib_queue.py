@@ -226,3 +226,81 @@ def test_requeue_of_a_shipped_intent_says_shipped_not_rejected(capsys):
     Q.main(["add", "--what", "already done", "--target", "skill:x", "/p/r1"])
     out = capsys.readouterr().out
     assert "shipped" in out and "rejected" not in out    # it was delivered, not disproven
+
+
+def test_add_records_the_project_path_in_the_record(tmp_path):
+    # The queue file is named by a sha1 of the project path, which is one-way: answering "which
+    # projects have pending contributions?" otherwise means brute-forcing sha1 over the filesystem.
+    # Recording the path at add time makes the file self-describing.
+    p = tmp_path / "proj"
+    p.mkdir()
+    Q.main(["add", "--what", "a gap", "--target", "skill:foo", str(p)])
+    recs = S.read_contributions(str(p))
+    assert recs[0]["proj"] == str(p)
+
+
+def test_queues_enumerates_every_queue_with_hash_count_and_path(tmp_path, capsys):
+    live = tmp_path / "live"
+    live.mkdir()
+    Q.main(["add", "--what", "one", str(live)])
+    Q.main(["add", "--what", "two", str(live)])
+    Q.main(["add", "--what", "three", str(tmp_path / "vanished")])
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    out = capsys.readouterr().out
+    assert S.proj_key(str(live))[:8] in out
+    assert str(live) in out
+    assert "2 open" in out                      # the live queue's open count
+    assert "cwd gone" in out                    # the vanished project is reported, not hidden
+
+
+def test_queues_addresses_a_vanished_queue_by_key(tmp_path, capsys):
+    gone = tmp_path / "vanished"
+    Q.main(["add", "--what", "unreachable intent", str(gone)])
+    key = S.proj_key(str(gone))
+    capsys.readouterr()
+    # a queue whose cwd no longer exists must still be listable and closable, by its hash
+    assert Q.main(["list", "key:" + key]) == 0
+    assert "unreachable intent" in capsys.readouterr().out
+    assert Q.main(["ship", "--match", "unreachable", "--note", "landed", "key:" + key]) == 0
+    assert S.read_contributions("key:" + key) == []
+
+
+def _fake_session(home, key, cwd, sid="s1"):
+    """Plant the SessionStart record + transcript pair that names `cwd` for `key`."""
+    import json
+    tdir = home / ".claude" / "projects" / "enc"
+    tdir.mkdir(parents=True, exist_ok=True)
+    tp = tdir / (sid + ".jsonl")
+    tp.write_text(json.dumps({"type": "user", "cwd": cwd}) + "\n", encoding="utf-8")
+    adir = S.contrib_file("key:probe").parent
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / (key + ".session.json")).write_text(
+        json.dumps({"session_id": sid, "transcript_path": str(tp)}), encoding="utf-8")
+
+
+def test_queues_resolves_a_legacy_queue_from_its_session_record(tmp_path, home, capsys):
+    # Entries queued BEFORE the proj stamp carry no path. The sibling session record names the
+    # transcript, whose records carry cwd - so a legacy queue is still resolvable.
+    proj = tmp_path / "legacy"
+    proj.mkdir()
+    S.add_contribution("key:" + S.proj_key(str(proj)), {"what": "legacy intent"})  # no proj stamp
+    _fake_session(home, S.proj_key(str(proj)), str(proj))
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    assert str(proj) in capsys.readouterr().out
+
+
+def test_queues_rejects_a_session_record_whose_cwd_hashes_elsewhere(tmp_path, home, capsys):
+    # The direction where it must NOT apply: a mismatched pairing is rejected, never displayed as
+    # this queue's project - a confident wrong path is worse than "unknown".
+    proj = tmp_path / "legacy2"
+    proj.mkdir()
+    key = S.proj_key(str(proj))
+    S.add_contribution("key:" + key, {"what": "legacy intent 2"})
+    _fake_session(home, key, str(tmp_path / "some-other-project"), sid="s2")
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 0
+    out = capsys.readouterr().out
+    assert "some-other-project" not in out
+    assert "project unknown" in out
