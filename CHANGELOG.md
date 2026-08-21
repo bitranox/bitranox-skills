@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.225.0]
+
+### Added
+
+- `compuse-toolbox` gains `guard_replay`, which replays every Bash command in a Claude Code
+  transcript corpus through a guard's own predicate - with the cwd each command actually ran under -
+  and reports the firing RATE and the PRECISION as separate numbers. A guard's unit tests are
+  written from the same imagination as the guard, so they can only show it fires on the hazard
+  somebody thought of; they cannot say whether it is quiet on ordinary work, nor whether the times
+  it speaks are times worth speaking. Both have been answered wrong here after the tests were green:
+  one shipped arm fired on 7.8% of 60,517 real commands, and a later version was checked for its
+  rate alone, leaving 131 of its 344 firings with nothing to warn about.
+
+  `--sample` prints firings to read, because a percentage reports volume and never correctness.
+  The precision figure asks specifically whether a GATE refused the call, which is the right
+  question for a guard about commands that cannot succeed as written and the wrong one for a guard
+  whose hazard is a plausible-but-wrong result - that scores 0% while being useful, so a 0% is a
+  prompt to look rather than a verdict. Both the docstring and the skill say so.
+
+  Verified against the hand-rolled scripts it replaces: run at the same moment on the same corpus,
+  both instruments returned 567 fires, 22 gate-blocked and 3.88% precision, and the tool reproduces
+  the separately documented 0.186% firing rate of a second guard. One defect surfaced from that
+  comparison and is fixed with a regression test: resuming a session copies the earlier transcript
+  into a new file, so one real call sits in two files under a single tool_use id, and counting it
+  twice inflated the denominator silently.
+
 ## [5.224.4]
 
 ### Changed
