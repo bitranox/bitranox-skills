@@ -9,22 +9,30 @@ def _repo(tmp_path, name):
     return root
 
 
-def test_git_after_a_cd_into_another_repo_fires(tmp_path):
+def test_a_single_cd_into_another_repo_does_not_fire(tmp_path):
+    # Measured over 60,517 real Bash commands: firing on "cd into a different work tree, then git"
+    # fired 4,718 times - 7.8% of ALL commands. The dominant case is a session whose cwd is a parent
+    # project working in a nested sub-repo, which is routine and correct. A nudge at that rate is
+    # tuned out, so this shape is deliberately NOT guarded.
     here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
-    assert G.notice(f"cd {other} && git log --oneline -3", str(here)) is not None
+    assert G.notice(f"cd {other} && git log --oneline -3", str(here)) is None
 
 
-def test_the_notice_names_the_directory_the_git_actually_answers_from(tmp_path):
-    here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
-    msg = G.notice(f"cd {other} && git log", str(here))
-    assert str(other) in msg
+def test_a_cd_into_a_nested_sub_repo_does_not_fire(tmp_path):
+    # The measured false-positive class itself: an inner repo below the session's own directory.
+    here = _repo(tmp_path, "here")
+    inner = _repo(here, "inner")
+    assert G.notice(f"cd {inner} && git status --porcelain", str(here)) is None
 
 
-def test_the_measured_shape_a_label_naming_a_different_repo(tmp_path):
-    # cd into one repo, echo the name of another, then run git: the output reads as the echoed one.
+def test_a_label_naming_another_repo_is_not_structurally_detectable(tmp_path):
+    # The shape that motivated this hook: cd into one repo, echo the name of another, run git. It is
+    # NOT distinguishable from the 4,718 benign commands above - the hazard is in the narrative, not
+    # the structure - so the hook does not pretend to catch it. Kept as a test so nobody re-adds the
+    # single-cd arm believing it covers this.
     here, other = _repo(tmp_path, "agentdag"), _repo(tmp_path, "RESEARCH")
     cmd = f"cd {other} && echo agentdag && git log --oneline -5 && git fetch origin"
-    assert G.notice(cmd, str(here)) is not None
+    assert G.notice(cmd, str(here)) is None
 
 
 def test_a_cd_within_the_same_repo_does_not_fire(tmp_path):
@@ -66,18 +74,25 @@ def test_two_cds_in_one_call_fire_even_when_both_are_the_session_repo(tmp_path):
 
 def test_a_cd_inside_a_heredoc_body_is_not_a_cd(tmp_path):
     here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
-    cmd = f"cat <<'EOF'\ncd {other} && git log\nEOF"
+    cmd = f"cd {here} && git log && cat <<'EOF'\ncd {other} && git log\nEOF"
     assert G.notice(cmd, str(here)) is None
 
 
 def test_a_cd_inside_a_quoted_string_is_not_a_cd(tmp_path):
     here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
-    assert G.notice(f"echo 'cd {other} && git log'", str(here)) is None
+    assert G.notice(f"cd {here} && git log && echo 'cd {other} && git log'", str(here)) is None
 
 
-def test_a_relative_cd_into_a_sibling_repo_fires(tmp_path):
+def test_two_cds_name_the_directory_the_last_git_answers_from(tmp_path):
+    here = _repo(tmp_path, "here")
+    other = _repo(tmp_path, "other")
+    msg = G.notice(f"cd {here} && git log && cd {other} && git log", str(here))
+    assert msg is not None and str(other) in msg
+
+
+def test_a_single_relative_cd_does_not_fire(tmp_path):
     here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
-    assert G.notice("cd ../other && git log", str(here)) is not None
+    assert G.notice("cd ../other && git log", str(here)) is None
 
 
 def test_a_missing_cwd_fails_open(tmp_path):
