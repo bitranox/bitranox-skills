@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.224.1]
+
+### Fixed
+
+- `git-wrong-repo-nudge` (5.221.0) shipped one trigger too many, and it was noisy: firing on a
+  single `cd` into a different work tree followed by git. Replayed over 60,517 real Bash commands
+  it fired 4,718 times - 7.8% of everything - because a session whose cwd is a parent project
+  working in a NESTED sub-repo is indistinguishable from one reaching into an unrelated repo, and
+  the first is routine. A nudge at that rate is tuned out, which would have cost the trigger that
+  does work.
+
+  That arm is removed. What remains is the two-directory-changes-in-one-call shape, which fires on
+  0.57% of the same corpus and catches the real thing: one call stepping through two worktrees and
+  running git in each under separate headings.
+
+  The incident that motivated the hook - `cd RESEARCH && ... && echo agentdag && git log`, whose
+  output read as a check on a different repo - falls inside the removed 7.8%. Its hazard was the
+  LABEL disagreeing with the cd, which is narrative rather than structure, so no structural guard
+  reaches it. A test pins that, so the arm is not re-added on the belief that it covers this.
+
 ## [5.224.0]
 
 ### Added
