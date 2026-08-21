@@ -1,0 +1,265 @@
+"""Tests for context-watcher.py (Stop hook: offer a handover before the context wall).
+
+Three things carry the weight here, and each is a failure this repo has shipped before.
+
+The MEASUREMENT must include the cache legs. Almost all of a long session's context arrives as
+`cache_read_input_tokens`, so a sum that omits them reports a few hundred tokens on a session
+hundreds of thousands deep - a watcher that reads healthy while the session drowns.
+
+The BOUNDARY must be tested from both sides. A watcher that fires on everything and one that fires
+on nothing both pass a one-sided test.
+
+The MISCONFIGURED case must speak. Measuring more context than the configured window means the
+threshold can never be crossed, which is indistinguishable from a watcher that works.
+"""
+
+import json
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
+
+import context_watcher as W
+
+HOOKS_DIR = Path(__file__).resolve().parent.parent
+SCRIPT = HOOKS_DIR / "context-watcher.py"
+SHIM = HOOKS_DIR / "run-python.sh"
+
+
+def _usage_line(input_tokens=0, cache_creation=0, cache_read=0):
+    """One assistant transcript record carrying a usage block, built with json.dumps."""
+    return json.dumps({
+        "type": "assistant",
+        "message": {"role": "assistant", "usage": {
+            "input_tokens": input_tokens,
+            "cache_creation_input_tokens": cache_creation,
+            "cache_read_input_tokens": cache_read,
+            "output_tokens": 100,
+        }},
+    })
+
+
+def _transcript(tmp_path, *lines):
+    f = tmp_path / f"t-{uuid.uuid4().hex[:8]}.jsonl"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(f)
+
+
+# ---------------------------------------------------------------- context_tokens()
+
+def test_the_cache_legs_are_counted(tmp_path):
+    """Omitting them reports a trivial number on a huge session - the whole point of the sum."""
+    t = _transcript(tmp_path, _usage_line(input_tokens=2, cache_creation=1231, cache_read=710842))
+    assert W.context_tokens(t) == 712075
+
+
+def test_the_LAST_usage_record_wins(tmp_path):
+    """Context is what the most recent request carried, not the first or the biggest."""
+    t = _transcript(tmp_path, _usage_line(cache_read=900000), _usage_line(cache_read=1000))
+    assert W.context_tokens(t) == 1000
+
+
+def test_a_compaction_is_self_correcting(tmp_path):
+    """After a compact the next request's usage drops on its own; nothing has to reset state."""
+    t = _transcript(tmp_path, _usage_line(cache_read=800000), _usage_line(cache_read=12000))
+    assert W.context_tokens(t) == 12000
+
+
+def test_records_without_usage_are_skipped(tmp_path):
+    t = _transcript(tmp_path,
+                    _usage_line(cache_read=5000),
+                    json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}))
+    assert W.context_tokens(t) == 5000
+
+
+@pytest.mark.parametrize("lines", [
+    (json.dumps({"type": "user", "message": {"content": "no usage anywhere"}}),),
+    ("not json at all",),
+    ("",),
+])
+def test_no_usage_reads_as_unknown_not_zero(tmp_path, lines):
+    """None, never 0: zero would be 'under threshold' and would read as a healthy session."""
+    assert W.context_tokens(_transcript(tmp_path, *lines)) is None
+
+
+def test_an_unreadable_transcript_is_unknown(tmp_path):
+    assert W.context_tokens(str(tmp_path / "missing.jsonl")) is None
+    assert W.context_tokens(None) is None
+
+
+def test_a_partial_first_line_from_the_tail_seek_is_survivable(tmp_path):
+    """The seek lands mid-line; that fragment must be skipped, not crash the read.
+
+    The tail is sized from the content rather than hard-coded: it has to land INSIDE the fragment
+    and still contain the whole good line. Too small a tail seeks into the good line instead, and
+    `readline()` correctly discards that - which is the read working, not failing.
+    """
+    fragment = 'e":"assistant","message":{"usage":{"cache_read_input_tokens":99}}}\n'
+    good = _usage_line(cache_read=4321) + "\n"
+    t = tmp_path / "big.jsonl"
+    t.write_text(fragment + good, encoding="utf-8")
+    tail = len(good) + 5                      # inside the fragment, past the start of `good`
+    assert 0 < tail < len(fragment) + len(good)
+    assert W.context_tokens(str(t), tail_bytes=tail) == 4321
+
+
+# ---------------------------------------------------------------- threshold()
+
+def test_the_percentage_leg_bites_on_a_small_window():
+    assert W.threshold(200_000, 70, 400_000) == 140_000
+
+
+def test_the_absolute_cap_bites_on_a_large_window():
+    """70% of 1M would be 700k - twice the measured rot onset. The cap is why this leg exists."""
+    assert W.threshold(1_000_000, 70, 400_000) == 400_000
+
+
+def test_a_nonsense_config_cannot_produce_a_zero_threshold():
+    """A threshold of 0 would fire on turn one of every session, forever."""
+    assert W.threshold(0, 0, 0) == 1
+    assert W.threshold("x", 70, 400_000) is None
+
+
+# ---------------------------------------------------------------- verdict()
+
+def test_below_the_threshold_is_quiet():
+    state, _ = W.verdict(139_999, 200_000, 70, 400_000)
+    assert state == "quiet"
+
+
+def test_at_the_threshold_offers():
+    """Boundary, from the other side of the previous test - one-sided proves nothing."""
+    state, detail = W.verdict(140_000, 200_000, 70, 400_000)
+    assert state == "offer"
+    assert detail["limit"] == 140_000 and detail["tokens"] == 140_000
+
+
+def test_measuring_more_than_the_window_is_reported_not_ignored():
+    """A threshold nothing can cross looks exactly like a watcher that works."""
+    state, detail = W.verdict(563_038, 200_000, 70, 400_000)
+    assert state == "misconfigured"
+    assert detail["tokens"] == 563_038
+
+
+def test_the_same_reading_is_fine_on_a_correctly_configured_window():
+    """The control for the case above: same number, right window, ordinary offer."""
+    state, _ = W.verdict(563_038, 1_000_000, 70, 400_000)
+    assert state == "offer"
+
+
+def test_an_unknown_reading_is_quiet():
+    assert W.verdict(None, 200_000, 70, 400_000)[0] == "quiet"
+
+
+# ---------------------------------------------------------------- messages
+
+def test_the_offer_names_the_numbers_and_the_skill():
+    _s, detail = W.verdict(140_000, 200_000, 70, 400_000)
+    msg = W._offer(detail)
+    assert "140,000" in msg and "meta-context-watcher" in msg
+
+
+def test_the_misconfigured_message_says_which_knob_to_set():
+    _s, detail = W.verdict(563_038, 200_000, 70, 400_000)
+    msg = W._misconfigured(detail)
+    assert "context_window" in msg and "1000000" in msg
+
+
+# ---------------------------------------------------------------- decide()
+
+@pytest.fixture
+def session(request):
+    """A session id unique per test AND per run, with its flag removed afterwards.
+
+    The hook persists a once-per-session flag. A fixed id would make these tests pass once and fail
+    on every run after - the order-dependent shape that reads as a defect in the code under test.
+    """
+    name = f"ctxwatch-{request.node.name}-{uuid.uuid4().hex[:8]}"
+    yield name
+    try:
+        W._asked_flag(name).unlink()
+    except OSError:
+        pass
+
+
+CFG = {"nudges": True, "context_window": 200_000,
+       "context_handover_pct": 70, "context_handover_cap": 400_000}
+
+
+def _event(session, transcript, cwd):
+    return {"session_id": session, "transcript_path": transcript, "cwd": str(cwd),
+            "hook_event_name": "Stop"}
+
+
+def test_over_threshold_blocks_once_then_stays_quiet(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    event = _event(session, t, tmp_path)
+    assert W.decide(event, CFG) is not None
+    assert W.decide(event, CFG) is None, "asked twice - the once-per-session flag did not hold"
+
+
+def test_under_threshold_never_blocks(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=1000))
+    assert W.decide(_event(session, t, tmp_path), CFG) is None
+
+
+def test_nudges_off_silences_it(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    off = dict(CFG, nudges=False)
+    assert W.decide(_event(session, t, tmp_path), off) is None
+
+
+def test_an_event_without_a_session_or_transcript_is_quiet(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide({"session_id": "", "transcript_path": t, "cwd": str(tmp_path)}, CFG) is None
+    assert W.decide({"session_id": session, "transcript_path": "", "cwd": str(tmp_path)}, CFG) is None
+
+
+def test_it_yields_while_a_nap_is_owed(tmp_path, session, monkeypatch):
+    """The Stop gate already refuses to stop on that obligation; two blocks would fight."""
+    monkeypatch.setattr(W.sig, "is_nap_owed", lambda proj: True)
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide(_event(session, t, tmp_path), CFG) is None
+
+
+def test_the_nap_check_failing_does_not_wedge_the_turn(tmp_path, session, monkeypatch):
+    def boom(proj):
+        raise RuntimeError("helper gone")
+    monkeypatch.setattr(W.sig, "is_nap_owed", boom)
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+
+
+# ---------------------------------------------------------------- end to end through the shim
+
+def _run(payload):
+    proc = subprocess.run(
+        ["bash", str(SHIM), str(SCRIPT)],
+        input=payload if isinstance(payload, str) else json.dumps(payload),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_end_to_end_emits_a_stop_block(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=900_000))
+    rc, out, _err = _run(_event(session, t, tmp_path))
+    assert rc == 0, "a Stop hook signals through JSON, not through a non-zero exit"
+    payload = json.loads(out)
+    assert payload["decision"] == "block" and payload["reason"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_end_to_end_is_silent_under_threshold(tmp_path, session):
+    t = _transcript(tmp_path, _usage_line(cache_read=1000))
+    assert _run(_event(session, t, tmp_path)) == (0, "", "")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+@pytest.mark.parametrize("payload", ["", "not json", "[]", "null"])
+def test_malformed_input_fails_open(payload):
+    rc, out, _err = _run(payload)
+    assert (rc, out) == (0, "")

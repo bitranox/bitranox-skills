@@ -46,6 +46,7 @@ _HOOK_MODULES = {
     "subagent-capture": "subagent_capture",
     "subagent-brief": "subagent_brief",
     "config-edit-guard": "config_edit_guard",
+    "context-watcher": "context_watcher",
     "retry-with-a-flag-nudge": "retry_with_a_flag_nudge",
     "toolbox-nudge": "toolbox_nudge",
     "skill-edit-guard": "skill_edit_guard",
