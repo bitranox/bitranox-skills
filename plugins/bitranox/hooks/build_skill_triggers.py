@@ -3,7 +3,9 @@
 
 Descriptions are trigger-first per the CSO rule (the repo-gate lints this), so they ARE the trigger
 source: for every `skills/*/SKILL.md`, distill the frontmatter description into distinctive
-keywords and write `skill_triggers.json` next to this script. A FUTURE skill is covered by
+keywords and write `skill_triggers.json` next to this script. A description's head is prose
+about the situation and its tail holds the literal error codes, so the map takes the first
+`MAX_HEAD` in order plus up to `MAX_EXTRA` identifier-shaped tail tokens no other skill claims. A FUTURE skill is covered by
 construction: adding it and rebuilding the map (part of the release routine; the repo-gate's CSO
 lint guarantees its description is derivable) is all it takes.
 
@@ -29,17 +31,55 @@ _STOP = {
 }
 
 
-def distill(description, max_n=14):
-    """Distinctive, order-preserved keywords from a trigger-first description."""
+MAX_HEAD = 14                    # equal-length heads keep the router's raw hit COUNT comparable
+MAX_EXTRA = 10                   # appended only for tokens that cannot match an unrelated prompt
+_IDENT_RX = re.compile(r"[0-9._+-]")
+
+
+def distill(description, max_n=None):
+    """Distinctive, order-preserved keywords from a trigger-first description.
+
+    `max_n=None` returns EVERY candidate; `select` decides which ones reach the map.
+    """
     out = []
     for tok in re.findall(r"[a-z0-9][a-z0-9_.+-]{3,}", (description or "").lower()):
         tok = tok.strip(".-")
         if tok in _STOP or len(tok) < 4 or tok in out or tok.isdigit():
             continue
         out.append(tok)
-        if len(out) >= max_n:
+        if max_n is not None and len(out) >= max_n:
             break
     return out
+
+
+def distinctive(token):
+    """True for a token shaped like a technical identifier - it carries a digit or punctuation.
+
+    A description is trigger-first, so its HEAD is prose about the situation and its TAIL carries
+    the literal error codes and paths - exactly the strings someone in trouble pastes verbatim.
+    Those are safe to add beyond the head because they cannot match a prompt about anything else.
+
+    Length is NOT a usable substitute, though it looks like one. Measured over 2146 real prompts,
+    admitting any token of 9+ characters also admitted `description` (in 50 of them), `condition`
+    (33) and `interface` (33) - ordinary English that put an unrelated skill on an unrelated
+    prompt. The identifier shape admits 126 tokens across the shipped skills and NONE of them
+    reaches 20 prompts; that is the whole reason the rule is shape and not size.
+    """
+    return bool(_IDENT_RX.search(token))
+
+
+def select(tokens, doc_freq, max_head=MAX_HEAD, max_extra=MAX_EXTRA):
+    """The keywords that reach the map: the head in order, plus distinctive tokens from the tail.
+
+    `doc_freq` maps a token to how many skills' descriptions claim it. Only tokens claimed by ONE
+    skill are appended - a shared token cannot discriminate between them, and adding shared words
+    is what would let a long description out-count every other skill on an unrelated prompt.
+    """
+    head = list(tokens[:max_head])
+    seen = set(head)
+    extra = [t for t in tokens[max_head:]
+             if t not in seen and doc_freq.get(t, 0) == 1 and distinctive(t)]
+    return head + extra[:max_extra]
 
 
 def _description(skill_md):
@@ -55,14 +95,20 @@ def _description(skill_md):
 
 
 def build(skills_dir):
-    out = {}
+    candidates = {}
     for skill_md in sorted(Path(skills_dir).glob("*/SKILL.md")):
         desc = _description(skill_md)
-        if not desc:
-            continue
-        kws = distill(desc)
+        if desc:
+            candidates[skill_md.parent.name] = distill(desc)
+    doc_freq = {}
+    for toks in candidates.values():
+        for t in set(toks):
+            doc_freq[t] = doc_freq.get(t, 0) + 1
+    out = {}
+    for skill, toks in candidates.items():
+        kws = select(toks, doc_freq)
         if len(kws) >= 2:
-            out[skill_md.parent.name] = kws
+            out[skill] = kws
     return out
 
 

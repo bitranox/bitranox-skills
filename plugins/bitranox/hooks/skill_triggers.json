@@ -45,7 +45,10 @@
   "form",
   "file",
   "upload",
-  "webhook"
+  "webhook",
+  "unbounded-input",
+  "boundary-parsing",
+  "coding-python-enforce-data-architecture-strict"
  ],
  "coding-python-clean-architecture": [
   "structuring",
@@ -77,7 +80,10 @@
   "external",
   "boundary",
   "typed",
-  "dicts"
+  "dicts",
+  "input-to-output",
+  "stringly-typed",
+  "type-safe"
  ],
  "coding-python-gitignore": [
   "parsing",
@@ -93,7 +99,11 @@
   "style",
   "including",
   "shutil.copytree",
-  "filter"
+  "filter",
+  "gitignore_parser",
+  "git-compatible",
+  "memory-bounded",
+  "config.d"
  ],
  "coding-python-layered-config": [
   "building",
@@ -125,7 +135,13 @@
   "packet",
   "loss",
   "traceroute",
-  "scan"
+  "scan",
+  "ipv6",
+  "link-local",
+  "fe80",
+  "wake-on-lan",
+  "cap_net_raw",
+  "python-nmap"
  ],
  "coding-python-new-public-library": [
   "creating",
@@ -141,7 +157,9 @@
   "3.10-3.14",
   "linux",
   "macos",
-  "windows"
+  "windows",
+  "bitranox_template_py_lib",
+  "rename-project"
  ],
  "coding-python-performance-review": [
   "reviewing",
@@ -157,7 +175,9 @@
   "uncompiled",
   "regex",
   "patterns",
-  "profiling"
+  "profiling",
+  "sub-agent",
+  "code-review"
  ],
  "coding-python-pwshpy": [
   "issuing",
@@ -173,7 +193,8 @@
   "pwshpy",
   "genuinely",
   "pythonic",
-  "typed"
+  "typed",
+  "pwsh.exe"
  ],
  "coding-python-rpyc": [
   "building",
@@ -189,7 +210,9 @@
   "rpyc",
   "rpyc.connect",
   "rpyc.service",
-  "netref"
+  "netref",
+  "async_",
+  "rpyc_classic.py"
  ],
  "coding-python-send-mail": [
   "sending",
@@ -205,7 +228,12 @@
   "chunking",
   "starttls",
   "authentication",
-  "multi-host"
+  "multi-host",
+  "utf-8",
+  "btx_lib_mail",
+  "btx-lib-mail",
+  "zero-install",
+  "dot-stuffing"
  ],
  "coding-python-textual": [
   "building",
@@ -237,7 +265,10 @@
   "enums",
   "dates",
   "compression",
-  "database"
+  "database",
+  "files-edit-json",
+  "files-edit-xml",
+  "files-edit-yml"
  ],
  "coding-python-uv": [
   "writing",
@@ -253,7 +284,13 @@
   "version",
   "replacement",
   "covers",
-  "project"
+  "project",
+  "pip-tools",
+  "0.10.2",
+  "2026-02-12",
+  "python-version",
+  "06-python-versions.md",
+  "0.11.x"
  ],
  "coding-resilience": [
   "code",
@@ -269,7 +306,9 @@
   "network",
   "connection",
   "remote",
-  "service"
+  "service",
+  "self-healing",
+  "coding-python-use-modern-libraries"
  ],
  "coding-rust": [
   "writing",
@@ -285,7 +324,9 @@
   "choices",
   "type",
   "design",
-  "review"
+  "review",
+  "non-io",
+  "non-constant-time"
  ],
  "compuse-bash": [
   "running",
@@ -317,7 +358,8 @@
   "interactive",
   "flags",
   "command",
-  "fails"
+  "fails",
+  "non-executable"
  ],
  "compuse-ssh": [
   "running",
@@ -333,7 +375,8 @@
   "inline",
   "command",
   "backgrounding",
-  "windows"
+  "windows",
+  "key-based"
  ],
  "compuse-toolbox": [
   "tempted",
@@ -349,7 +392,11 @@
   "killing",
   "process",
   "pgrep",
-  "pkill"
+  "pkill",
+  "merge-conflict",
+  "utf-16",
+  "rate-capped",
+  "one-liner"
  ],
  "compuse-vnc": [
   "drive",
@@ -365,7 +412,9 @@
   "because",
   "target",
   "network",
-  "agent"
+  "agent",
+  "line-of-business",
+  "vnc-remote-control"
  ],
  "devops-bmk": [
   "installing",
@@ -381,7 +430,8 @@
   "project",
   "bootstrapping",
   "deploying",
-  "makefile"
+  "makefile",
+  "json-by-default"
  ],
  "docs-convert-markitdown": [
   "converting",
@@ -413,7 +463,12 @@
   "figure",
   "generated",
   "image",
-  "text"
+  "text",
+  "neural-network",
+  "openrouter_api_key",
+  "quality-review",
+  "docs-convert-markitdown",
+  "code-rendered"
  ],
  "docs-md-table-formatting": [
   "creating",
@@ -460,7 +515,9 @@
   "bumping",
   "version",
   "value",
-  "table"
+  "table",
+  "hand-editing",
+  "tomli_w"
  ],
  "files-edit-xml": [
   "creating",
@@ -508,7 +565,8 @@
   "implementation",
   "plan",
   "disturb",
-  "checkout"
+  "checkout",
+  "per-topic"
  ],
  "infra-chrome-remote-desktop": [
   "installing",
@@ -524,7 +582,13 @@
   "client",
   "answers",
   "valid",
-  "although"
+  "although",
+  "start-host",
+  "pam_acct_mgmt",
+  "per-connection",
+  "unix_chkpwd",
+  "single-use",
+  "chrome-remote-desktop"
  ],
  "infra-modulejail": [
   "hardening",
@@ -540,7 +604,11 @@
   "modprobe",
   "install",
   "override",
-  "reducing"
+  "reducing",
+  "request_module",
+  "module-blacklisting",
+  "out-of-band",
+  "already-jailed"
  ],
  "infra-proxmox": [
   "configuring",
@@ -556,7 +624,9 @@
   "ceph",
   "firewall",
   "user",
-  "management"
+  "management",
+  "ha-manager",
+  "9.1.2"
  ],
  "infra-proxmox-bindsnap": [
   "snapshotting",
@@ -572,7 +642,13 @@
   "button",
   "greyed",
   "clone",
-  "fails"
+  "fails",
+  "bind-mount",
+  "pve-bindsnap",
+  "bindsnap-force-running",
+  "bindsnap-unsupported",
+  "bindsnap-exclude",
+  "pve-container"
  ],
  "infra-proxmox-qemu-windows-storage": [
   "windows",
@@ -588,7 +664,11 @@
   "disk",
   "change",
   "moving",
-  "virtio-scsi"
+  "virtio-scsi",
+  "inaccessible_boot_device",
+  "0x7b",
+  "0xc0000001",
+  "read-modify-write"
  ],
  "infra-storage-check-zpools": [
   "monitoring",
@@ -604,7 +684,8 @@
   "read",
   "write",
   "checksum",
-  "errors"
+  "errors",
+  "scrub-plus-sleep"
  ],
  "infra-swap-tuning": [
   "deciding",
@@ -636,7 +717,13 @@
   "fails",
   "opaque",
   "code",
-  "0x800f0915"
+  "0x800f0915",
+  "0xc1900200",
+  "0xc190010e",
+  "0xc1420127",
+  "0x80070020",
+  "in-place",
+  "windows.old"
  ],
  "marketing-rory": [
   "working",
@@ -764,7 +851,8 @@
   "per-project",
   "dreams",
   "knowledge",
-  "trees"
+  "trees",
+  "meta-dream-global"
  ],
  "meta-dream-crosstree-deep": [
   "deep",
@@ -780,7 +868,8 @@
   "regardless",
   "anything",
   "obviously",
-  "changed"
+  "changed",
+  "convergence-checks"
  ],
  "meta-dream-nap": [
   "quick",
@@ -796,7 +885,8 @@
   "postcompact",
   "nudge",
   "points",
-  "here"
+  "here",
+  "dream-nap"
  ],
  "meta-dream-tree": [
   "sessionstart",
@@ -812,7 +902,11 @@
   "context",
   "compaction",
   "lose",
-  "detail"
+  "detail",
+  "dream-tree",
+  "per-turn",
+  "meta-self-improve",
+  "meta-dream-project"
  ],
  "meta-memory-settings": [
   "view",
@@ -828,7 +922,8 @@
   "mode",
   "turn",
   "nudges",
-  "stop"
+  "stop",
+  "machine-local"
  ],
  "meta-self-improve": [
   "turn",
@@ -844,7 +939,10 @@
   "tooling",
   "mistake",
   "wrong",
-  "command"
+  "command",
+  "over-waiting",
+  "re-derived",
+  "self-improve"
  ],
  "meta-skill-audit": [
   "auditing",
@@ -907,7 +1005,9 @@
   "logged",
   "table",
   "static",
-  "entry"
+  "entry",
+  "snort2c",
+  "hand-writing"
  ],
  "net-rotating-proxies": [
   "download",
@@ -939,7 +1039,10 @@
   "especially",
   "machine",
   "cloned",
-  "already"
+  "already",
+  "de-authenticates",
+  "100.100.100.100",
+  "quad-100"
  ],
  "process-agents-dispatching-parallel": [
   "facing",
@@ -971,7 +1074,9 @@
   "tier",
   "dispatched",
   "subagent",
-  "canonical"
+  "canonical",
+  "model-tier",
+  "subagent-driven"
  ],
  "process-debug-systematic": [
   "encountering",
@@ -1144,7 +1249,12 @@
   "real",
   "dependency",
   "edge",
-  "adversarial"
+  "adversarial",
+  "order-dependent",
+  "low-value",
+  "red-green",
+  "process-test-driven-development",
+  "coding-input-sanitization"
  ],
  "process-test-driven-development": [
   "implementing",
@@ -1168,7 +1278,13 @@
   "headers",
   "content-security-policy",
   "strict-transport-security",
-  "hsts"
+  "hsts",
+  "x-frame-options",
+  "x-content-type-options",
+  "referrer-policy",
+  "permissions-policy",
+  "http-to-https",
+  "mozilla-observatory"
  ],
  "web-frontend-pagespeed": [
   "verifying",
@@ -1184,7 +1300,12 @@
   "volume",
   "bundle",
   "refetched",
-  "navigation"
+  "navigation",
+  "cache-control",
+  "max-age",
+  "content-encoding",
+  "gzip_types",
+  "add_header"
  ],
  "web-frontend-responsive-ux": [
   "page",
@@ -1200,7 +1321,9 @@
   "content",
   "fitting",
   "vertically",
-  "phone"
+  "phone",
+  "safe-area",
+  "long-translation"
  ],
  "web-seo-crawl-indexing": [
   "changing",
@@ -1232,7 +1355,10 @@
   "remove",
   "signs",
   "ai-generated",
-  "writing"
+  "writing",
+  "ki-schreibmuster",
+  "chatgpt-stil",
+  "fazit-abschnitte"
  ],
  "write-humanize-en": [
   "editing",

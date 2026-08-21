@@ -42,6 +42,63 @@ def test_build_check_detects_stale_map(tmp_path):
     assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 1
 
 
+# ---- the 14 head keywords crowd out the strings a user in trouble types verbatim -----------------
+# A description is trigger-first, so its head is prose about the SITUATION and its tail holds the
+# literal error codes and messages. Taking the first 14 by position therefore keeps generic words
+# and drops the identifiers - measured across 80 shipped skills, `code` (shared by 14 of them)
+# reaches the map while `0xc1900200`, `windows.old` and `rueckgaengig` do not.
+
+def test_distinctive_admits_identifiers():
+    for tok in ("0xc1900200", "setup.exe", "windows.old", "in-place", "non-constant-time", "utf-8"):
+        assert B.distinctive(tok), tok
+
+
+def test_distinctive_rejects_plain_words_however_long():
+    # A length bar cannot separate these: `condition` and `description` are ordinary English and
+    # ordinary in prompts (33 and 50 of 2146), and admitting them put coding-rust on a prompt about
+    # reviewing skills. Only the identifier shape has zero such tokens.
+    for tok in ("line", "report", "main", "sleep", "itself", "denied",
+                "condition", "description", "interface", "documentation"):
+        assert not B.distinctive(tok), tok
+
+
+def test_select_keeps_the_head_in_order():
+    toks = ["kw%02d" % i for i in range(20)]
+    assert B.select(toks, {t: 1 for t in toks})[:14] == toks[:14]
+
+
+def test_select_appends_a_unique_identifier_from_the_tail():
+    toks = ["a%d" % i for i in range(14)] + ["0xc1900200"]
+    got = B.select(toks, {t: 1 for t in toks})
+    assert "0xc1900200" in got
+
+
+def test_select_does_not_append_a_plain_tail_word():
+    toks = ["a%d" % i for i in range(14)] + ["itself"]
+    assert "itself" not in B.select(toks, {t: 1 for t in toks})
+
+
+def test_select_does_not_append_a_token_another_skill_also_claims():
+    # a shared token cannot discriminate, and it is what lets one skill out-count the rest
+    toks = ["a%d" % i for i in range(14)] + ["0xc1900200"]
+    assert "0xc1900200" not in B.select(toks, {"0xc1900200": 2})
+
+
+def test_select_bounds_how_many_it_appends():
+    tail = ["0xdead%04d" % i for i in range(30)]
+    toks = ["a%d" % i for i in range(14)] + tail
+    got = B.select(toks, {t: 1 for t in toks})
+    assert len(got) == 24                       # 14 head + at most 10 appended
+
+
+def test_build_lands_a_tail_error_code_in_the_map(tmp_path):
+    _skill(tmp_path, "servicing", "Use when a Windows machine will not install a cumulative update, "
+                                  "its component store is damaged, DISM fails with an opaque code "
+                                  "and setup exits 0xc1900200 on the apply reboot")
+    m = B.build(tmp_path)
+    assert "0xc1900200" in m["servicing"]
+
+
 def test_match_needs_two_distinct_hits_word_boundary():
     triggers = {"frob": ["frobnicating", "widgets", "gasket"]}
     assert R.match("my frobnicating widgets are broken", triggers) == [("frob", 2)]
