@@ -38,6 +38,7 @@ stay queued. `--match` refuses on no match or an ambiguous one instead of guessi
 Pure standard library.
 """
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -45,6 +46,32 @@ from pathlib import Path
 # self_improve_signals is the shared state layer, in the plugin's hooks dir
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import self_improve_signals as sig  # noqa: E402
+
+
+def _resolve_from_session(qdir, key):
+    """Best-effort recovery of a legacy queue's project path from its sibling session record.
+
+    Entries queued before `add` stamped `proj` carry no path, and the filename is a one-way hash, so
+    they would read as "unknown" forever. The SessionStart record for the SAME key names a
+    transcript, and the transcript's own records carry `cwd`. The recovered path is VERIFIED by
+    re-hashing it: a stale or mismatched pairing is rejected rather than displayed, because a
+    confident wrong project is worse than admitting the path is unknown. Returns "" when unresolved.
+    """
+    try:
+        meta = json.loads((qdir / (key + ".session.json")).read_text(encoding="utf-8"))
+        transcript = Path(meta.get("transcript_path") or "")
+        with transcript.open(encoding="utf-8", errors="replace") as fh:
+            for _, line in zip(range(60), fh):
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                cwd = rec.get("cwd") if isinstance(rec, dict) else None
+                if cwd and sig.proj_key(cwd) == key:
+                    return cwd
+    except (OSError, ValueError, TypeError):
+        pass
+    return ""
 
 
 def main(argv=None):
@@ -74,6 +101,8 @@ def main(argv=None):
     rj.add_argument("proj", nargs="?", default=None)
     sl = sub.add_parser("shipped", help="show the intents that delivered, and where")
     sl.add_argument("proj", nargs="?", default=None)
+    qs = sub.add_parser("queues", help="enumerate EVERY queue on this machine (key, open count, project)")
+    qs.add_argument("proj", nargs="?", default=None)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if not args.cmd:
@@ -94,6 +123,36 @@ def main(argv=None):
             print("not queued (%s): %s" % (why, args.what))
             return 0
         print("queued: %s%s" % (args.what, " -> %s" % args.target if args.target else ""))
+        return 0
+
+    if args.cmd == "queues":
+        # The queue is addressed by cwd, and the filename is a one-way hash of it - so without this
+        # there is no way to ask which projects have pending contributions, and a queue whose cwd was
+        # deleted or renamed is invisible AND unreachable by every other verb. Entries added since
+        # the `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
+        qdir = sig.contrib_file("key:probe").parent
+        rows = []
+        for f in sorted(qdir.glob("*.contrib.jsonl")):
+            key = f.name[: -len(".contrib.jsonl")]
+            recs = sig.read_contributions("key:" + key)
+            path = next((r.get("proj") for r in recs if r.get("proj")), "")
+            if not path:
+                path = _resolve_from_session(qdir, key)
+            if not path:
+                where = "(project unknown - queued before the path was recorded)"
+            elif os.path.isdir(path):
+                where = path
+            else:
+                where = "%s  (cwd gone)" % path
+            rows.append((key, len(recs), where))
+        open_rows = [r for r in rows if r[1]]
+        if not open_rows:
+            print("no queue on this machine has an open contribution (%d queue file(s) seen)" % len(rows))
+            return 0
+        print("%d queue(s) with open contributions:" % len(open_rows))
+        for key, n, where in open_rows:
+            print("  %s  %d open  %s" % (key[:8], n, where))
+        print("address one with: contrib_queue.py list|ship|drop ... key:<full-key>|<path>")
         return 0
 
     if args.cmd == "list":

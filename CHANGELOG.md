@@ -17,6 +17,35 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.226.0]
+
+### Added
+
+- `contrib_queue.py queues` enumerates every contribution queue on the machine: key, open count,
+  and the project it belongs to. The queue file is named by a one-way sha1 of the project path, so
+  asking "which projects have pending contributions?" previously meant brute-forcing that hash over
+  the filesystem (measured on a real drain: a walk of 705,896 directories), and a queue whose
+  project directory was deleted or renamed was both invisible and unreachable by every verb.
+
+- `add` now stamps the project path INTO each record, so a queue file is self-describing and needs
+  no reverse lookup at all. Entries queued before this carry no path, so `queues` recovers those
+  from the sibling SessionStart record, which names a transcript whose records carry `cwd`. The
+  recovered path is verified by re-hashing it: a mismatched pairing is reported as unknown rather
+  than displayed, because a confident wrong project is worse than admitting the path is unknown.
+
+- Every verb accepts the pseudo-path `key:<hash>`, so a queue whose project directory no longer
+  exists can still be listed, shipped and dropped. One such row had been recorded as permanently
+  unclosable; it resolved to `KI/tmux` and was closed on the spot.
+
+### Fixed
+
+- `memory_engine move` refused a duplicate pointer with "target already points at X with a
+  DIFFERENT hook", but the condition compares the `(title, hook)` TUPLE, so it also fires when only
+  the TITLE differs. On the real store two pointers had byte-identical 497-character hooks and
+  differed by a leading "The " in the title, which sent the reader to diff two identical hooks. The
+  message now names the field that actually differs, and states that an exact hook tie keeps the
+  moving entry.
+
 ## [5.225.1]
 
 ### Fixed

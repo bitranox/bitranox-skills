@@ -607,11 +607,19 @@ def move_entry(from_level, to_level, slug, force=False):
         dst_entry = dst_by_slug.get(entry.slug)
         if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
             if not force:
+                # Name the field that ACTUALLY differs: the condition above compares the (title,
+                # hook) TUPLE, so it fires on a title-only divergence too, and a message blaming
+                # the hook then sends the reader to diff two identical hooks.
+                differing = " and ".join(
+                    part for part, differs in (("TITLE", dst_entry.title != entry.title),
+                                               ("HOOK", (dst_entry.hook or "") != (entry.hook or "")))
+                    if differs)
                 rep["refused"] = (
-                    "target already points at %r with a DIFFERENT hook (duplicate pointer); picking by "
+                    "target already points at %r with a DIFFERENT %s (duplicate pointer); picking by "
                     "move direction would discard one - dedup deliberately with `add --slug %s` at the "
-                    "surviving level, or --force to keep the LONGER hook and drop the other"
-                    % (entry.slug, entry.slug))
+                    "surviving level, or --force to keep the LONGER hook (an exact tie keeps the "
+                    "MOVING entry) and drop the other"
+                    % (entry.slug, differing, entry.slug))
                 return rep
             fields, warning = _dedup_pick(entry, dst_entry)
             dedup_warnings.append(warning)

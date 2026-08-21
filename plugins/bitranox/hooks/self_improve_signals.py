@@ -388,7 +388,14 @@ def mark_dream_done(proj, now=None):
 # consumed by being surfaced - it stands until it actually ships and something drains it.
 
 def contrib_file(proj):
-    """Queue of pending upstream contributions (skill/hook changes a learning warrants)."""
+    """Queue of pending upstream contributions (skill/hook changes a learning warrants).
+
+    `proj` may also be the pseudo-path `key:<hash>`, naming a queue by its own file key. The key is
+    one-way (sha1 of the path), so a queue whose project directory was deleted or renamed is
+    otherwise unreachable by every verb - it cannot be listed, shipped or dropped, and the operator
+    cannot even see that it exists. `contrib_queue.py queues` prints these keys."""
+    if isinstance(proj, str) and proj.startswith("key:"):
+        return _audit_dir() / (proj[4:] + ".contrib.jsonl")
     return _audit_dir() / (proj_key(proj) + ".contrib.jsonl")
 
 
@@ -431,6 +438,15 @@ def add_contribution(proj, record, max_items=100):
             return False
         rec = dict(record)
         rec.setdefault("ts", time.time())
+        # Stamp the project PATH: the filename is a one-way hash, so without this the only way to
+        # answer "which projects have pending contributions?" is to brute-force sha1 over the
+        # filesystem (measured: a walk of 705,896 directories), and a queue whose cwd was deleted
+        # resolves to nothing at all.
+        if not rec.get("proj") and not (isinstance(proj, str) and proj.startswith("key:")):
+            try:
+                rec["proj"] = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+            except (TypeError, ValueError):
+                pass
         cur.append(rec)
         if len(cur) > max_items:
             cur = cur[-max_items:]
