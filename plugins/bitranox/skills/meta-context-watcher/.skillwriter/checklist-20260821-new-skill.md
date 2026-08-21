@@ -92,10 +92,10 @@ tests, three config knobs, and the doc rows.
 - [x] Measures context from the transcript's last `message.usage` as
       `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. No hook event carries
       a token count, so this is the only exact source; transcript bytes were rejected as a proxy.
-- [x] 55 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
+- [x] 76 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
       a compaction reading, a partial line from the tail seek, no-usage reading as unknown rather
       than zero, the model-window table, project detection and its non-matches, re-ask spacing at
-      both window sizes, the `nudges` off-switch, and yielding while a nap is owed.
+      both window sizes, the dispatch ladder including a pinned dispatch being skipped, the `nudges` off-switch, and yielding while a nap is owed.
 - [x] The misconfigured-window case is reported rather than silent: measuring more context than the
       configured window means the threshold can never be crossed, which is indistinguishable from a
       working watcher. Tested with its control - the same reading against a correct window is an
@@ -122,6 +122,25 @@ tests, three config knobs, and the doc rows.
       superseded the instant a new one is written, so it is replaced wholesale rather than appended
       to or kept alongside. Two handovers, or one holding two moments, leaves the reader deciding
       which half is true.
+- [x] **Window detection is a LADDER, and rung 3 was a shipped defect.** Taking the WIDEST window
+      ever recorded for a project goes silently inert on a switch down: a 200K session assumed to be
+      1M gets a 400K threshold it can never reach (it auto-compacts near 166K), and the
+      misconfigured check cannot see it either because 166K is far under the assumed window. Fixed
+      two ways - rung 2 reads the session's OWN model exactly, and rung 3 now picks the DOMINANT
+      model by cache-read volume rather than the widest.
+- [x] **The exact current model IS detectable**, contrary to what 5.217.0 and the first revision
+      both claimed. An `Agent` dispatch carrying no `model` inherits the session's, and its result
+      reports `resolvedModel` with the `[1m]` suffix that `message.model` drops. Verified on real
+      data: unpinned resolves to `claude-opus-5[1m]`, pinned resolves to the pinned tier and is
+      skipped. Absent when a session never dispatches unpinned, which is why it heads a ladder
+      rather than standing alone. Ruled out first: the PID-keyed session file (no model key), the
+      hook environment, and the transcript's own metadata records.
+- [x] **The window is derived from the transcript alone, no configuration and no external file.**
+      `message.model` is always present and always the bare FAMILY id (this session reports
+      `claude-opus-5` while running 1M), so the family fixes the CEILING - opus/fable/sonnet/mythos
+      1M-capable, haiku 200K - and the largest context observed proves the variant: a session that
+      carried 797,830 tokens cannot be on the 200K mode. Below 200K the variant is unknown and 200K
+      is assumed, which asks early rather than going silent.
 - [x] **Reading a handover marks it STALE rather than deleting it.** Deleting loses the only record
       of where the work stood if the reading session then crashes; leaving it untouched lets the
       session after next read a passed moment as current. Amending is forbidden - a new handover
