@@ -92,10 +92,10 @@ tests, three config knobs, and the doc rows.
 - [x] Measures context from the transcript's last `message.usage` as
       `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. No hook event carries
       a token count, so this is the only exact source; transcript bytes were rejected as a proxy.
-- [x] 76 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
+- [x] 55 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
       a compaction reading, a partial line from the tail seek, no-usage reading as unknown rather
       than zero, the model-window table, project detection and its non-matches, re-ask spacing at
-      both window sizes, the dispatch ladder including a pinned dispatch being skipped, the `nudges` off-switch, and yielding while a nap is owed.
+      both window sizes, the family window table, the `nudges` off-switch, and yielding while a nap is owed.
 - [x] The misconfigured-window case is reported rather than silent: measuring more context than the
       configured window means the threshold can never be crossed, which is indistinguishable from a
       working watcher. Tested with its control - the same reading against a correct window is an
@@ -135,12 +135,19 @@ tests, three config knobs, and the doc rows.
       skipped. Absent when a session never dispatches unpinned, which is why it heads a ladder
       rather than standing alone. Ruled out first: the PID-keyed session file (no model key), the
       hook environment, and the transcript's own metadata records.
-- [x] **The window is derived from the transcript alone, no configuration and no external file.**
-      `message.model` is always present and always the bare FAMILY id (this session reports
-      `claude-opus-5` while running 1M), so the family fixes the CEILING - opus/fable/sonnet/mythos
-      1M-capable, haiku 200K - and the largest context observed proves the variant: a session that
-      carried 797,830 tokens cannot be on the 200K mode. Below 200K the variant is unknown and 200K
-      is assumed, which asks early rather than going silent.
+- [x] **The window is the model FAMILY, measured rather than inferred.** Three designs were tried
+      and discarded before measuring: widest-window-ever (silently inert on a switch down),
+      dominant-model-by-volume, and a family ceiling plus a peak-proves-the-variant rule. All of
+      them existed to work around an assumed 200K/1M split that does not exist. Scanning 1485 local
+      transcripts settled it: every non-haiku family has actually carried far more than a 200K
+      window could hold - opus-5 999,946; opus-4-8 999,911; fable-5 997,450; sonnet-5 665,313 -
+      while haiku peaked at 119,393, and the peaks stop just under 1,000,000, which is the boundary
+      showing itself. Claude Code's `[1m]` suffix never appears in `message.model` and is redundant.
+      The result is one table and one lookup; `model_from_dispatch`, `model_from_project`,
+      `window_from_evidence` and the peak tracking were all deleted.
+- [x] An unknown family falls back to 200K, and that direction is tested: too small asks early and
+      costs a decline, too large sets a threshold the session can never reach and the hook goes
+      silently inert.
 - [x] **Reading a handover marks it STALE rather than deleting it.** Deleting loses the only record
       of where the work stood if the reading session then crashes; leaving it untouched lets the
       session after next read a passed moment as current. Amending is forbidden - a new handover
