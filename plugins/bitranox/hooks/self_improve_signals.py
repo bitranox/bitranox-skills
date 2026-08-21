@@ -647,12 +647,12 @@ DEFAULT_CONFIG = {
     "cross_tree_search": True,     # per-prompt recall may scan OTHER knowledge trees (False: current tree only)
     "discovery_roots": [],         # extra roots to walk for curated stores; [] -> derive at runtime (never
                                    # ship hardcoded maintainer absolute paths in this tracked default)
-    # context-watcher. The WINDOW cannot be measured - a transcript records the model as
-    # `claude-opus-5`, never the `[1m]` suffix that tells a 1M window from a 200k one - so it is
-    # configured, and 200000 is the common case. The threshold is min(pct of window, cap): the pct
-    # leg keeps a cushion below the ~83% auto-compact point, and the cap catches a big-window
-    # session past the measured rot onset while still only 40% full.
-    "context_window": 200000,      # real context window in tokens; 1000000 on a 1M model
+    # context-watcher. The window is DETECTED from the model this project has used (~/.claude.json
+    # keeps the full id including the `[1m]` suffix, which the transcript drops), so 0 means auto.
+    # The threshold is min(pct of window, cap): the pct leg keeps a cushion below the ~83%
+    # auto-compact point, and the cap catches a big-window session past the measured rot onset
+    # while still only 40% full.
+    "context_window": 0,           # 0 = detect; set a token count only to override the detection
     "context_handover_pct": 70,    # percentage leg of the handover threshold
     "context_handover_cap": 400000,  # absolute leg, in tokens (measured context-rot onset)
 }

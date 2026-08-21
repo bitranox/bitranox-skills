@@ -153,18 +153,117 @@ def test_an_unknown_reading_is_quiet():
     assert W.verdict(None, 200_000, 70, 400_000)[0] == "quiet"
 
 
+# ------------------------------------------------- window_for_model() / detect_window()
+#
+# The window is the denominator for BOTH the threshold and the 10% re-ask spacing, so getting it
+# wrong mis-times every ask. It cannot be read from the transcript - `message.model` is the bare
+# `claude-opus-5` - but ~/.claude.json keeps the full id, suffix included.
+
+@pytest.mark.parametrize("model_id,expected", [
+    ("claude-opus-5[1m]", 1_000_000),
+    ("claude-fable-5[1m]", 1_000_000),
+    ("claude-sonnet-5[1m]", 1_000_000),
+    ("claude-opus-4-6[1m]", 1_000_000),
+    ("claude-opus-5", 200_000),               # same model, 200k mode - the suffix is the whole signal
+    ("claude-sonnet-5", 200_000),
+    ("claude-haiku-4-5-20251001", 200_000),
+    ("oss-128k-claude", 128_000),
+    ("some-future-model", 200_000),           # unknown degrades to the safe default
+    ("", 200_000),
+    (None, 200_000),
+])
+def test_window_for_model(model_id, expected):
+    assert W.window_for_model(model_id) == expected
+
+
+def test_a_1m_suffix_on_haiku_is_refused():
+    """Haiku is 200K with no 1M variant, so that id could only be a parse error - fail safe."""
+    assert W.window_for_model("claude-haiku-4-5[1m]") == 200_000
+
+
+def _claude_json(tmp_path, project_path, models):
+    f = tmp_path / "claude.json"
+    f.write_text(json.dumps({"projects": {project_path: {
+        "lastModelUsage": {m: {"inputTokens": 1} for m in models}}}}), encoding="utf-8")
+    return str(f)
+
+
+def test_detect_takes_the_LARGEST_window_among_a_project_s_models(tmp_path):
+    """Subagents run haiku and sonnet beside the main model; the biggest is the session's."""
+    cfg = _claude_json(tmp_path, "/repo", ["claude-haiku-4-5-20251001", "claude-opus-5[1m]"])
+    assert W.detect_window("/repo", config_path=cfg) == 1_000_000
+
+
+def test_detect_matches_a_subdirectory_against_its_recorded_project(tmp_path):
+    """A Stop hook can fire with cwd inside the repo, not at its root."""
+    cfg = _claude_json(tmp_path, "/repo", ["claude-opus-5[1m]"])
+    assert W.detect_window("/repo/plugins/hooks", config_path=cfg) == 1_000_000
+
+
+def test_detect_does_not_match_a_mere_prefix_of_another_path(tmp_path):
+    """`/repo-other` must not match a record for `/repo`."""
+    cfg = _claude_json(tmp_path, "/repo", ["claude-opus-5[1m]"])
+    assert W.detect_window("/repo-other", config_path=cfg) is None
+
+
+@pytest.mark.parametrize("bad", ["missing.json", None])
+def test_detect_returns_None_when_it_cannot_tell(tmp_path, bad):
+    path = str(tmp_path / bad) if bad else str(tmp_path / "nope.json")
+    assert W.detect_window("/repo", config_path=path) is None
+
+
+def test_detect_returns_None_for_an_unknown_project(tmp_path):
+    cfg = _claude_json(tmp_path, "/other", ["claude-opus-5[1m]"])
+    assert W.detect_window("/repo", config_path=cfg) is None
+
+
+# ------------------------------------------------------------------ resolve_window()
+
+def test_an_explicit_window_beats_detection(tmp_path):
+    assert W.resolve_window({"context_window": 500_000}, "/repo") == (500_000, "configured")
+
+
+def test_zero_or_missing_falls_through_to_detection_then_default():
+    assert W.resolve_window({"context_window": 0}, "/nonexistent-repo") == (200_000, "assumed")
+    assert W.resolve_window({}, "/nonexistent-repo") == (200_000, "assumed")
+
+
+# ------------------------------------------------------------------ due()
+
+def test_the_first_ask_is_the_threshold():
+    assert W.due(140_000, 140_000, 200_000, 0) is True
+
+
+def test_under_the_threshold_never_asks():
+    assert W.due(139_999, 140_000, 200_000, 0) is False
+
+
+def test_a_re_ask_waits_a_full_tenth_of_the_window():
+    """19,999 more is not enough on a 200k window; 20,000 is."""
+    assert W.due(159_999, 140_000, 200_000, 140_000) is False
+    assert W.due(160_000, 140_000, 200_000, 140_000) is True
+
+
+def test_re_ask_spacing_scales_with_the_window():
+    """On 1M the gap is 100k, so the same rise that re-asks at 200k stays silent here."""
+    assert W.due(420_000, 400_000, 1_000_000, 400_000) is False
+    assert W.due(500_000, 400_000, 1_000_000, 400_000) is True
+
+
 # ---------------------------------------------------------------- messages
 
 def test_the_offer_names_the_numbers_and_the_skill():
     _s, detail = W.verdict(140_000, 200_000, 70, 400_000)
+    detail["source"] = "detected"
     msg = W._offer(detail)
-    assert "140,000" in msg and "meta-context-watcher" in msg
+    assert "140,000" in msg and "meta-context-watcher" in msg and "detected" in msg
 
 
 def test_the_misconfigured_message_says_which_knob_to_set():
     _s, detail = W.verdict(563_038, 200_000, 70, 400_000)
+    detail["source"] = "assumed"
     msg = W._misconfigured(detail)
-    assert "context_window" in msg and "1000000" in msg
+    assert "context_window" in msg and "563,038" in msg
 
 
 # ---------------------------------------------------------------- decide()
@@ -193,11 +292,19 @@ def _event(session, transcript, cwd):
             "hook_event_name": "Stop"}
 
 
-def test_over_threshold_blocks_once_then_stays_quiet(tmp_path, session):
-    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
-    event = _event(session, t, tmp_path)
-    assert W.decide(event, CFG) is not None
-    assert W.decide(event, CFG) is None, "asked twice - the once-per-session flag did not hold"
+def test_over_threshold_blocks_then_waits_a_tenth_of_the_window(tmp_path, session):
+    """First ask at the threshold; the next only after another 10% of the window."""
+    first = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide(_event(session, first, tmp_path), CFG) is not None
+
+    # same reading, and a small rise: still inside the 20,000-token gap, so silent
+    assert W.decide(_event(session, first, tmp_path), CFG) is None
+    near = _transcript(tmp_path, _usage_line(cache_read=165_000))
+    assert W.decide(_event(session, near, tmp_path), CFG) is None
+
+    # grown a full tenth of the 200k window past the last ask -> asks again
+    far = _transcript(tmp_path, _usage_line(cache_read=170_000))
+    assert W.decide(_event(session, far, tmp_path), CFG) is not None
 
 
 def test_under_threshold_never_blocks(tmp_path, session):
