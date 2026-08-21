@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.222.0]
+
+### Added
+
+- `compuse-bash` gains a tmux row and section, for the three things a one-shot Bash call cannot do:
+  keep shell state between calls, answer a prompt a program puts up, and read a full-screen TUI.
+  Both documented traps produce output that looks like a failure while the mechanism is fine.
+  `send-keys` returns immediately - it delivers keystrokes without waiting for the program to be
+  ready or finished - so the sent command ends with `tmux wait-for -S CH` and the caller blocks on
+  `timeout N tmux wait-for CH`, a signal barrier rather than a guessed sleep. `capture-pane` pads
+  to the pane height, so a `tail` of it shows blank lines while the content sits above; filter for
+  non-empty lines instead. Session identity comes from `has-session` and
+  `list-panes -F '#{pane_current_command}'`, never `pgrep -f`, which the skill's process row
+  already warns self-matches the shell running the check.
+
 ## [5.221.1]
 
 ### Fixed
