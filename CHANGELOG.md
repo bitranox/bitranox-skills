@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.221.0]
+
+### Added
+
+- `git-wrong-repo-nudge.py`: a PreToolUse nudge for a git command that answers from ANOTHER
+  repository. A `cd` persists for the rest of a call, so every git after it reports on wherever it
+  landed, and that output is indistinguishable from the session repo's. Measured shape: a call did
+  `cd RESEARCH && ... && echo agentdag && git log && git fetch origin`; all of it ran in RESEARCH,
+  so the log printed RESEARCH's commits under an agentdag heading and read as correct. Only
+  `origin does not appear to be a git repository` exposed it, and that was luck.
+
+  Two structural shapes fire: a `cd` landing in a different git work tree than the session's with a
+  git after it, and two or more `cd` statements with a git after them. It compares REPO ROOTS rather
+  than paths, so `cd src/ && git log` inside one repo stays silent, and it is deliberately silent
+  when the cd lands in the session's own repo - that is the form the sibling `git-revparse-nudge`
+  recommends, and a guard that fires on its sibling's advice teaches nothing. Data regions are
+  masked first, so a `cd` inside a heredoc or a quoted string is text, not a statement.
+
 ## [5.220.0]
 
 ### Added
