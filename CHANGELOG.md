@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.224.2]
+
+### Fixed
+
+- `git-wrong-repo-nudge` had two further defects, both found by checking the PRECISION of its
+  firings rather than only their rate:
+
+  - It fired whenever a call contained two `cd` statements, even when every landing was inside ONE
+    work tree. 131 of its 344 firings were that case, where both gits answer about the same
+    repository and there is nothing to warn about. It now requires the landings to span more than
+    one work tree.
+  - It read unresolvable `cd` targets as literal directory names. 1,233 targets in the corpus are
+    shell variables (`cd "$wt"`), and others point at directories that no longer exist; resolving
+    those produced nonsense paths that were then compared as if they meant something. A call with
+    any unreadable destination is now silent, because a verdict built on a guessed landing is
+    invented rather than measured.
+
+  Measured over the same 60,517 commands, the hook now fires 113 times - 0.186%, down from 8.09%
+  when it first shipped - and every firing lands in two distinct, real work trees at the moment it
+  fires.
+
 ## [5.224.1]
 
 ### Fixed

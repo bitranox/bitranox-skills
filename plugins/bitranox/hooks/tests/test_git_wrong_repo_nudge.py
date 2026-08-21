@@ -64,12 +64,33 @@ def test_git_before_the_cd_does_not_fire(tmp_path):
     assert G.notice(f"git status && cd {other}", str(here)) is None
 
 
-def test_two_cds_in_one_call_fire_even_when_both_are_the_session_repo(tmp_path):
-    # One repo per call: after the second cd, every later git answers from there.
+def test_two_cds_into_DIFFERENT_repos_fire(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log && cd {two} && git log", str(here)) is not None
+
+
+def test_two_cds_inside_ONE_repo_do_not_fire(tmp_path):
+    # Measured: 131 of 344 firings had every cd landing in the same work tree, where both gits
+    # answer about the same repository and there is no wrong-repo hazard to warn about.
     here = _repo(tmp_path, "here")
     (here / "a").mkdir()
     (here / "b").mkdir()
-    assert G.notice(f"cd {here / 'a'} && git log && cd {here / 'b'} && git log", str(here)) is not None
+    assert G.notice(f"cd {here / 'a'} && git log && cd {here / 'b'} && git log", str(here)) is None
+
+
+def test_a_cd_to_a_shell_VARIABLE_does_not_fire(tmp_path):
+    # Measured: 1,233 cd targets in the corpus are variables. The destination is not knowable
+    # statically, so resolving the literal text produces a nonsense path and any verdict built on
+    # it is invented. Silence is the only honest answer.
+    here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
+    assert G.notice(f'cd {other} && git log && cd "$dir" && git log', str(here)) is None
+    assert G.notice("cd $ONE && git log && cd $TWO && git log", str(here)) is None
+
+
+def test_a_cd_to_a_directory_that_does_not_exist_does_not_fire(tmp_path):
+    # A path that is not there cannot be attributed to a repo, so the comparison is unknowable.
+    here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
+    assert G.notice(f"cd {other} && git log && cd {tmp_path / 'gone'} && git log", str(here)) is None
 
 
 def test_a_cd_inside_a_heredoc_body_is_not_a_cd(tmp_path):
@@ -83,9 +104,8 @@ def test_a_cd_inside_a_quoted_string_is_not_a_cd(tmp_path):
     assert G.notice(f"cd {here} && git log && echo 'cd {other} && git log'", str(here)) is None
 
 
-def test_two_cds_name_the_directory_the_last_git_answers_from(tmp_path):
-    here = _repo(tmp_path, "here")
-    other = _repo(tmp_path, "other")
+def test_the_notice_names_the_directory_the_last_git_answers_from(tmp_path):
+    here, other = _repo(tmp_path, "here"), _repo(tmp_path, "other")
     msg = G.notice(f"cd {here} && git log && cd {other} && git log", str(here))
     assert msg is not None and str(other) in msg
 

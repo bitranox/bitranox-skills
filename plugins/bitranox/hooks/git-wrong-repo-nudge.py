@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: two directory changes in one call, so a git answers from whichever ran last.
+"""PreToolUse(Bash) nudge: one call, two work trees, so two gits answer about different repos.
 
-A `cd` persists for the rest of the call. When a single call cd's twice and runs git after each, the
-two answers have different subjects and nothing in the output says which is which - measured in the
-wild as one call stepping through two worktrees, running `git --no-pager grep` in each under
-separate echo headings. One repo per call is the rule; this is the shape that breaks it.
+A `cd` persists for the rest of the call. When a single call cd's into two DIFFERENT work trees and
+runs git after each, the two answers have different subjects and nothing in the output says which is
+which - measured in the wild as one call stepping through two worktrees running `git --no-pager
+grep` in each under separate echo headings. One repo per call is the rule; this is the shape that
+breaks it.
 
-WHAT THIS DELIBERATELY DOES NOT GUARD, and why: the neighbouring shape - ONE cd into a different
-work tree, then git - is not distinguishable from routine work. Replayed over 60,517 real Bash
-commands it fired 4,718 times, 7.8% of everything, because a session whose cwd is a parent project
-working in a nested sub-repo looks exactly like a session reaching into an unrelated repo. The
-motivating incident (`cd RESEARCH && ... && echo agentdag && git log`, whose output read as an
-agentdag check) is in that same 7.8%: its hazard was the LABEL disagreeing with the cd, which is
-narrative, not structure. A nudge at that rate is tuned out, so the arm was removed rather than
-shipped noisy. Do not re-add it believing it covers the label case; a test pins that.
+Three conditions, each one bought with measurements over 60,517 real Bash commands replayed with the
+cwd they actually ran under:
 
-The surviving trigger fired 176 times over the same corpus - 0.29%, rare enough to mean something.
+- **Two or more cd's, not one.** Firing on a single cd into another work tree hit 4,718 commands
+  (7.8% of everything), because a session whose cwd is a parent project working in a nested sub-repo
+  is structurally identical to one reaching into an unrelated repo, and the first is routine.
+- **The landings must span more than one work tree.** Firing on any two cd's hit 344, of which 131
+  had every landing inside a single repository - both gits answering about the same thing, so there
+  was nothing to warn about.
+- **Every landing must be readable.** 1,233 cd targets in the corpus are shell variables, and others
+  point at directories that no longer exist. A destination that cannot be resolved cannot be
+  attributed to a repo, and a verdict built on a guessed one is invented rather than measured.
+
+Together those leave 113 firings, 0.186% of the corpus, each one landing in two distinct real work
+trees at the moment it fires.
+
+NOT GUARDED, deliberately: the incident that motivated this hook - `cd RESEARCH && ... && echo
+agentdag && git log`, whose output read as a check on a different repo - sits inside the removed
+7.8%. Its hazard was the LABEL disagreeing with the cd, which is narrative rather than structure, so
+no structural guard separates it from thousands of benign commands. A test pins that, so the
+single-cd arm is not re-added on the belief that it covers this.
 
 Data regions are masked before the structure is read, so a `cd` inside a heredoc or a quoted string
 is text rather than a statement - prose documenting this footgun must not trip the guard for it.
@@ -53,6 +65,28 @@ def _statements(command):
     return masked, spans
 
 
+_UNKNOWABLE = re.compile(r"[$`<>|\n*?]")          # a destination no static read can resolve
+
+
+def _repo_root(path):
+    """The work tree `path` belongs to, or None. Walks up looking for a `.git` entry.
+
+    A linked worktree carries a `.git` FILE rather than a directory, so `exists` is the right test:
+    two worktrees of one repository are two work trees here, which is what the caller is asking.
+    """
+    try:
+        current = os.path.abspath(path)
+    except (TypeError, ValueError):
+        return None
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
 def _resolve(target, base):
     """Where `cd target` lands, starting from `base`."""
     expanded = os.path.expanduser(target.strip().strip("'\""))
@@ -62,20 +96,31 @@ def _resolve(target, base):
 
 
 def notice(command, cwd):
-    """The nudge text when a second cd has moved what a later git answers about, else None."""
+    """The nudge text when a later git answers about a DIFFERENT work tree, else None.
+
+    Silent unless the call's cd targets span more than one work tree: two cd's inside a single
+    repository leave both gits answering about the same thing. Silent too when any destination is
+    unreadable - a shell variable, or a path that is not there - because a verdict built on a
+    guessed destination is invented rather than measured.
+    """
     if not command or not isinstance(command, str) or not cwd:
         return None
     masked, spans = _statements(command)
-    here, changes = str(cwd), 0
+    here, landed = str(cwd), []
     for start, end in spans:
         raw = command[start:end]
         cd_hit = _CD.match(masked[start:end])
         if cd_hit:
-            changes += 1
             target = raw[cd_hit.start("target"):cd_hit.end("target")]
+            if _UNKNOWABLE.search(target):
+                return None            # a variable or redirect: where it lands is not readable here
             here = _resolve(target, here)
+            landed.append(here)
             continue
-        if _GIT.match(masked[start:end]) and changes >= 2:
+        if not _GIT.match(masked[start:end]) or len(landed) < 2:
+            continue
+        roots = {_repo_root(path) for path in landed}
+        if None not in roots and len(roots) > 1:
             return _multi_cd_notice(here)
     return None
 
