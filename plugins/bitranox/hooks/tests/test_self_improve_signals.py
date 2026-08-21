@@ -1260,3 +1260,60 @@ def test_a_user_merely_QUOTING_the_marker_is_not_suppressed():
 def test_the_skill_body_would_otherwise_match_the_broad_user_patterns():
     """Guards the premise: without suppression this text IS a candidate, so the test can fail."""
     assert S.broad_matches("user", _SKILL_BODY)
+
+
+# --- the classification must be reversible ---------------------------------------------------
+# A dream's filler pass is a judgement over ambiguous words, so it is sometimes wrong. Without a
+# remove verb a misclassified word is suppressed from recall forever, and add_topical_words does
+# NOT undo it: the union of both lists is only consulted to decide whether to re-QUEUE a word.
+
+
+def test_remove_filler_words_undoes_a_misclassification(home):
+    S.add_filler_words(["review", "capture"], _PROJ)
+    assert "review" in S.load_filler_words(_PROJ)
+    S.remove_filler_words(["Review"], _PROJ)                              # case-insensitive, like add
+    assert "review" not in S.load_filler_words(_PROJ)
+    assert "capture" in S.load_filler_words(_PROJ)                        # only the named word goes
+
+
+def test_remove_filler_words_reports_what_it_actually_removed(home):
+    S.add_filler_words(["review"], _PROJ)
+    assert S.remove_filler_words(["review", "nevermind"], _PROJ) == ["review"]
+    assert S.remove_filler_words(["review"], _PROJ) == []                 # already gone, says so
+
+
+def test_remove_filler_words_cannot_touch_the_shipped_baseline(home):
+    baseline_word = sorted(S._read_word_json(S._filler_baseline_path()))[0]
+    assert S.remove_filler_words([baseline_word], _PROJ) == []            # reports it did NOT remove it
+    assert baseline_word in S._read_word_json(S._filler_baseline_path())  # file untouched
+    assert baseline_word in S.load_filler_words(_PROJ)                    # still suppressed, honestly
+
+
+def test_remove_filler_words_is_per_project(home):
+    S.add_filler_words(["alpha"], "/p/a")
+    S.add_filler_words(["alpha"], "/p/b")
+    S.remove_filler_words(["alpha"], "/p/a")
+    assert "alpha" not in S.load_filler_words("/p/a")
+    assert "alpha" in S.load_filler_words("/p/b")                         # B's classification stands
+
+
+def test_add_topical_words_reclassifies_out_of_filler(home):
+    S.add_filler_words(["output"], _PROJ)
+    S.add_topical_words(["output"], _PROJ)                                # reclassify, not just record
+    assert "output" in S.load_topical_words(_PROJ)
+    assert "output" not in S.load_filler_words(_PROJ)                     # the bug: it used to stay
+
+
+def test_remove_topical_words_mirrors_the_filler_verb(home):
+    S.add_topical_words(["rabbitmq"], _PROJ)
+    assert S.remove_topical_words(["RabbitMQ"], _PROJ) == ["rabbitmq"]
+    assert S.load_topical_words(_PROJ) == frozenset()
+
+
+def test_a_reclassified_word_becomes_recallable_again(home):
+    # The end-to-end point: filler is what extract_keywords drops, so reclassifying must restore it.
+    S.add_filler_words(["output"], _PROJ)
+    S.note_unknown_keywords(["output"], _PROJ)
+    assert S.load_pending_keywords(_PROJ) == frozenset()                  # suppressed while filler
+    S.add_topical_words(["output"], _PROJ)
+    assert "output" not in S.load_filler_words(_PROJ)

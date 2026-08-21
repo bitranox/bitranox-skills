@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.220.0]
+
+### Added
+
+- `self_improve_signals` gains `remove_filler_words` and `remove_topical_words`, so a word's
+  classification can be undone. The filler pass is a judgement over ambiguous words and is
+  sometimes wrong; until now a misclassified word was dropped from recall keywords permanently.
+  Both verbs return the words they ACTUALLY removed, which is how a caller learns that a word
+  suppressed by the shipped baseline cannot be un-suppressed per project rather than silently
+  believing it was.
+
+### Fixed
+
+- `add_topical_words` did not reclassify. Calling it on a word already classified as filler left
+  the word in BOTH lists and still suppressed, because the union of the two is consulted only to
+  decide whether to re-QUEUE a word, never whether to DROP one - so the topical entry had no effect
+  a reader could see, and repairing it meant hand-editing the per-project JSON state. It now
+  removes the word from the filler list as part of recording it.
+
 ## [5.219.0]
 
 ### Added

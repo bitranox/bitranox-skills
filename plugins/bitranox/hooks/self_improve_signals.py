@@ -1477,13 +1477,52 @@ def load_topical_words(proj):
     return frozenset(_read_word_json(_topical_words_path(proj)))
 
 
+def remove_filler_words(words, proj):
+    """Un-classify learned filler for `proj`. Returns the words actually removed, sorted.
+
+    The classification is a JUDGEMENT over ambiguous words, so it is sometimes wrong, and a word
+    left as filler is dropped from recall keywords forever. The return value is the point: only the
+    project's LEARNED list can be edited, so a word that is filler because the shipped BASELINE says
+    so comes back as not-removed rather than silently staying suppressed.
+    """
+    drop = {str(w).strip().lower() for w in words if str(w).strip()}
+    if not drop:
+        return []
+    p = _filler_local_path(proj)
+    current = set(_read_word_json(p))
+    removed = current & drop
+    if removed:
+        _write_word_json(p, current - removed, key="filler")
+    return sorted(removed)
+
+
+def remove_topical_words(words, proj):
+    """Un-classify learned topical words for `proj`. Returns the words actually removed, sorted."""
+    drop = {str(w).strip().lower() for w in words if str(w).strip()}
+    if not drop:
+        return []
+    p = _topical_words_path(proj)
+    current = set(_read_word_json(p))
+    removed = current & drop
+    if removed:
+        _write_word_json(p, current - removed, key="topical")
+    return sorted(removed)
+
+
 def add_topical_words(words, proj):
-    """Record classifier-confirmed topical words for THIS project so they are not re-queued."""
+    """Record classifier-confirmed topical words for THIS project so they are not re-queued.
+
+    Calling this on a word currently classified as learned filler RECLASSIFIES it: the word is
+    removed from the filler list as well. Recording it in both lists would leave it suppressed,
+    because the union of the two is consulted only to decide whether to re-QUEUE a word, never to
+    decide whether to DROP one - so the topical entry would have no effect a reader could see.
+    """
     new = {str(w).strip().lower() for w in words if str(w).strip()}
     if not new:
         return
     p = _topical_words_path(proj)
     _write_word_json(p, set(_read_word_json(p)) | new, key="topical")
+    remove_filler_words(new, proj)
 
 
 # Leaked identifiers - a tool-use ID (`toolu_...`) or a long hex agent/session ID - ride into prompt
