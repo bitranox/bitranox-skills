@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.224.0]
+
+### Added
+
+- `process-review-receiving-code-review` gains a third outcome beside accept and push back: a
+  finding whose stated TRIGGER is unreachable while the DEFECT it points at is real. It happens
+  because a reviewer reads the file in front of them and cannot see the coupling that makes the
+  code correct - the invariant lives elsewhere, maintained by someone else. Declining on the
+  unreachable trigger keeps latent fragility in the code and reads as a clean rebuttal; accepting
+  the finding as stated logs a mechanism that cannot happen, so the next reader inherits a false
+  explanation. The skill now says to SPLIT the finding: the trigger gets the ordinary treatment,
+  the defect gets asked about separately.
+
+  Before splitting, re-run the reviewer's own check with the REAL constants. An unreachable trigger
+  often has a reachable neighbour - the reviewer was looking in the right place with the wrong
+  numbers - and two independent probe runs on the same scenario both found one that the stated
+  trigger had hidden.
+
+- Step 5 of the Response Pattern names all three outcomes, so a reader following the numbered steps
+  reaches the branch instead of a section the steps never mention.
+
 ## [5.223.0]
 
 ### Changed
