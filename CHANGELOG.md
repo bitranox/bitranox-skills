@@ -42,6 +42,61 @@ installed copies and needs no bump.
   `AttributeError`, which would abort a whole-corpus scan outright. It is now counted as unusable
   like any other bad line.
 
+## [5.218.3]
+
+### Changed
+
+- The context-watcher's window table asserts that current opus, fable, sonnet and mythos run 1M for
+  every account tier. That is an assumption, not a measurement, and its failure mode is silence: a
+  tier running a 200K opus would get a threshold it can never reach and the hook would simply never
+  speak. The hook docstring, the knob table and the skill's checklist now each carry the assumption,
+  the SYMPTOM (the handover offer never appears) and the remedy (set `context_window` to a real
+  token count). No behaviour change.
+
+## [5.218.2]
+
+### Changed
+
+- The context window is the model FAMILY and nothing more. Measured over 1485 local transcripts:
+  every non-haiku family has carried far more than a 200K window could hold, while haiku peaked at
+  119,393 - so opus, fable, sonnet and mythos resolve to 1M and haiku to 200K. The `[1m]` suffix
+  never appears in `message.model` and turns out to be redundant rather than load-bearing.
+- Removed the machinery built for a 200K/1M split that does not exist: dispatch-pairing,
+  dominant-model-by-volume, peak-proves-the-variant, the family ceiling and the five-rung ladder.
+  What remains is one table, one lookup and the explicit override. An unknown family still resolves
+  to 200K, because too small asks early while too large goes silently inert.
+
+## [5.218.1]
+
+### Changed
+
+- The context-watcher derives its window from the model family plus the measurement, rather than
+  from the widest window ever recorded for a project - which went silently inert when a project
+  switched down to a smaller model.
+
+## [5.218.0]
+
+### Added
+
+- The context-watcher DETECTS the window instead of requiring a knob. `context_window` defaults to
+  0 (detect) and stays available as an override.
+- The single ask became a re-ask: the next offer waits until context has grown another tenth of the
+  window, so an early decline no longer silences the hook through the stretch it exists for, and the
+  spacing scales with window size rather than adding a second fixed number.
+
+### Changed
+
+- A handover that has been READ is marked stale, never deleted - deleting loses the only record of
+  where the work stood if the reading session then crashes. Writing a new one overwrites any
+  existing file: one handover, one moment.
+
+## [5.217.0]
+
+### Added
+
+- `meta-context-watcher`: a Stop hook that offers a handover before the context wall, with the skill
+  that writes and reads one.
+
 ## [5.216.3]
 
 ### Added
