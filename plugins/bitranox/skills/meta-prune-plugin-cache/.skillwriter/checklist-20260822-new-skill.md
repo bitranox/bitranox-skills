@@ -103,7 +103,7 @@ for the original holder. `scripts/pluginprune.py` classifies every version direc
       machine path appears (`grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|/home/|/Users/|/tmp/'` is empty).
 - [x] No external doc reference: the body is self-sufficient and sends the reader to `--help`,
       which is install-local and cannot rot.
-- [x] Body is 865 words, above the 500-word target for a technique skill. Kept: the `.in_use`
+- [x] Body is 921 words, above the 500-word target for a technique skill. Kept: the `.in_use`
       mechanism, its staleness rule and the two refusals are the whole contribution, and the
       mistakes table is built from measured baseline failures. Trimmed twice for wording, not
       for content.
@@ -143,3 +143,28 @@ behaviour changed after the first release.
       and the orphan rule reverted to keeping every sole version.
 - [x] Re-verified against the real cache after the change: the same five stale versions are
       planned, no version is kept by the sole-plus-enabled rule, 632.0 MB reclaimable.
+
+## Second follow-up from the decision review (same day, 5.232.0)
+
+- [x] PROJECT-SCOPE SETTINGS ARE NOW DISCOVERED, by user decision. The `enabledPlugins` guard read
+      only the user's two settings files, so a plugin enabled in a project's `.claude/settings.json`
+      and absent from the install record was still planned - the very gap the guard was added for.
+      The tool now also reads that pair inside every project `~/.claude.json` lists, reports which
+      files it read, and offers `--no-project-settings`; naming any `--settings` file still takes
+      over the list entirely.
+- [x] Cost measured before building, not after: 239 project entries, 136 still existing, 51
+      carrying a settings file, `~/.claude.json` parsing in 0.01s. A full real run takes 0.48s.
+      Exactly one file on the authoring machine sets `enabledPlugins`, and it is the user's own,
+      listed as a project - so the payoff here is zero and the guard is for other machines.
+- [x] TWO OF THE FIVE NEW MUTATIONS SURVIVED at first, and the tests were fixed rather than the
+      mutations dropped. Removing the stale-project skip changed nothing observable through the
+      plan, because the existence filter downstream hides it either way, so that check now asserts
+      on the discovery function where the decision is made. The dedupe assertion never saw a
+      duplicate, because the fixture could not produce one; it now lists one project under two
+      path spellings, which is what `~/.claude.json` being keyed by string actually allows. Both
+      mutations are detected after the change.
+- [x] 38 tests pass. All five discovery mutations detected: discovery removed, stale project dirs
+      not skipped, an unreadable `~/.claude.json` made fatal, the settings list not deduped, and
+      `--no-project-settings` ignored.
+- [x] Re-verified against the real cache: 51 settings files read, the plan unchanged at 632.0 MB
+      and the same five stale versions.

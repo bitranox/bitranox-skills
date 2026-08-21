@@ -32,7 +32,9 @@ Kept, with the reason stated per directory:
 * any version whose path appears in a settings file, which pins it;
 * the SOLE version of a plugin a settings file's `enabledPlugins` names, however it is set -
   disabled is not uninstalled, and its cache is still wanted. `enabledPlugins` names a plugin,
-  never a version, so it cannot choose between several;
+  never a version, so it cannot choose between several. The settings files are the user's pair
+  PLUS the same pair inside every project `~/.claude.json` lists, because a plugin enabled only
+  in a project may have no `installPath` record at all;
 * a `temp_*` directory younger than `--min-age` (default 60m), because an operation may be
   in flight.
 
@@ -238,6 +240,7 @@ class Plan:
     entries: tuple[Entry, ...]
     saw_live_lock: bool
     saw_lock_dir: bool = True
+    settings_files: tuple[Path, ...] = ()
 
     @property
     def refused(self) -> tuple[Entry, ...]:
@@ -270,6 +273,7 @@ class Plan:
             "reclaimable_bytes": self.reclaimable_bytes,
             "saw_live_lock": self.saw_live_lock,
             "saw_lock_dir": self.saw_lock_dir,
+            "settings_files": [str(path) for path in self.settings_files],
         }
 
 
@@ -356,6 +360,48 @@ def default_settings_files(cache_dir: Path) -> list[Path]:
     return [claude_dir / name for name in SETTINGS_NAMES]
 
 
+def default_claude_json(cache_dir: Path) -> Path:
+    """`~/.claude.json`, the sibling of the `~/.claude` directory the cache path already names."""
+    claude_dir = cache_dir.parent.parent
+    return claude_dir.with_name(claude_dir.name + ".json")
+
+
+def project_settings_files(claude_json: Path) -> list[Path]:
+    """`<project>/.claude/settings*.json` for every project `~/.claude.json` lists.
+
+    A plugin can be enabled per project, and such a plugin may have no `installPath` record, so
+    without this a project-scope plugin reads as an uninstalled leftover. Stale project entries
+    are ordinary - the directory is simply gone - so a missing path is skipped, not reported.
+    """
+    try:
+        payload = json.loads(claude_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    projects = payload.get("projects") if isinstance(payload, dict) else None
+    if not isinstance(projects, dict):
+        return []
+    found: list[Path] = []
+    for raw in projects:
+        project = Path(raw)
+        if not project.is_dir():
+            continue
+        found.extend((project / ".claude" / name) for name in SETTINGS_NAMES)
+    return found
+
+
+def _readable(paths: Iterable[Path]) -> list[Path]:
+    """The files that exist, each once, in the order first seen."""
+    seen: dict[str, Path] = {}
+    for path in paths:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            continue
+        if key not in seen and path.is_file():
+            seen[key] = path
+    return list(seen.values())
+
+
 def _version_dirs(cache_dir: Path, marketplaces: Sequence[str] | None) -> list[Path]:
     """Every `<marketplace>/<plugin>/<version>` directory, hidden and temp entries excluded."""
     found: list[Path] = []
@@ -385,6 +431,8 @@ def build_plan(
     min_age_seconds: float = DEFAULT_MIN_AGE_SECONDS,
     installed_plugins: str | Path | None = None,
     settings_files: Sequence[str | Path] | None = None,
+    claude_json: str | Path | None = None,
+    project_settings: bool = True,
     allow_missing_locks: bool = False,
     now: float | None = None,
 ) -> Plan:
@@ -395,10 +443,10 @@ def build_plan(
         if installed_plugins is not None
         else root.parent / INSTALLED_PLUGINS
     )
-    settings = (
+    settings = _readable(
         [Path(item).expanduser() for item in settings_files]
         if settings_files is not None
-        else default_settings_files(root)
+        else _discovered_settings(root, claude_json=claude_json, project_settings=project_settings)
     )
     installed = installed_paths(installed_file)
     explicit = {os.path.normpath(str(Path(item).expanduser())) for item in keep}
@@ -430,7 +478,18 @@ def build_plan(
         entries=tuple(entries),
         saw_live_lock=saw_live_lock,
         saw_lock_dir=saw_lock_dir,
+        settings_files=tuple(settings),
     )
+
+
+def _discovered_settings(
+    root: Path, *, claude_json: str | Path | None, project_settings: bool
+) -> list[Path]:
+    files = default_settings_files(root)
+    if not project_settings:
+        return files
+    index = Path(claude_json).expanduser() if claude_json is not None else default_claude_json(root)
+    return files + project_settings_files(index)
 
 
 def _without_the_lock_mechanism(entry: Entry) -> Entry:
@@ -655,8 +714,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--settings",
         action="append",
         metavar="FILE",
-        help="a settings file to scan for pinned version paths, repeatable"
-        " (default: ~/.claude/settings.json and settings.local.json)",
+        help="a settings file to scan for pinned version paths and enabledPlugins, repeatable."
+        " Giving any turns discovery off; the default is ~/.claude/settings.json,"
+        " settings.local.json, and the same pair inside every project ~/.claude.json lists",
+    )
+    parser.add_argument(
+        "--claude-json", help="the project index to discover project settings from"
+        " (default: ~/.claude.json)"
+    )
+    parser.add_argument(
+        "--no-project-settings",
+        action="store_true",
+        help="read only the user-level settings files, skipping every project's",
     )
     parser.add_argument(
         "--allow-missing-locks",
@@ -699,6 +768,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_age_seconds=args.min_age,
         installed_plugins=args.installed_plugins,
         settings_files=args.settings,
+        claude_json=args.claude_json,
+        project_settings=not args.no_project_settings,
         allow_missing_locks=args.allow_missing_locks,
     )
 

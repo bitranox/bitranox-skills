@@ -261,6 +261,111 @@ def test_marketplace_filter_limits_the_scan(cache: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------------
+# Project-scope settings discovery
+# --------------------------------------------------------------------------------------------
+
+
+def write_claude_json(tmp_path: Path, projects: list[Path]) -> Path:
+    """`~/.claude.json` in the shape Claude Code writes it: a `projects` map keyed by path."""
+    path = tmp_path / "claude.json"
+    path.write_text(
+        json.dumps({"projects": {str(project): {} for project in projects}}), encoding="utf-8"
+    )
+    return path
+
+
+def write_project_settings(project: Path, payload: dict[str, object]) -> Path:
+    settings = project / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(payload), encoding="utf-8")
+    return settings
+
+
+def test_a_project_settings_file_keeps_a_sole_version(cache: Path, tmp_path: Path) -> None:
+    """A plugin enabled only in a project must not be reclaimed as an uninstalled leftover."""
+    project = tmp_path / "some-project"
+    project.mkdir()
+    write_project_settings(project, {"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+    plan = plan_for(cache, claude_json=write_claude_json(tmp_path, [project]))
+    orphan = cache / "other-marketplace" / "orphan-plugin" / "3.0.0"
+    kept = {str(entry.path): entry.keep_reason for entry in plan.keep}
+    assert kept[str(orphan)] == "only version, enabled in settings.json"
+
+
+def test_a_project_path_that_no_longer_exists_yields_no_settings_paths(tmp_path: Path) -> None:
+    """Asserted on the discovery function: a stale entry must not even produce a candidate path.
+
+    Going through the plan cannot show this - the existence filter downstream hides it either
+    way - so the check has to sit where the decision is made.
+    """
+    live = tmp_path / "live-project"
+    write_project_settings(live, {"enabledPlugins": {}})
+    claude_json = write_claude_json(tmp_path, [tmp_path / "gone", live, tmp_path / "also-gone"])
+    found = P.project_settings_files(claude_json)
+    assert all(str(live) in str(path) for path in found)
+    assert found
+
+
+def test_an_unreadable_claude_json_is_not_fatal(cache: Path, tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    plan = plan_for(cache, claude_json=broken)
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.0.0") in paths(plan.prune)
+
+
+def test_explicit_settings_files_disable_discovery(cache: Path, tmp_path: Path) -> None:
+    project = tmp_path / "some-project"
+    project.mkdir()
+    write_project_settings(project, {"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+    plan = plan_for(
+        cache, settings_files=[], claude_json=write_claude_json(tmp_path, [project])
+    )
+    assert str(cache / "other-marketplace" / "orphan-plugin" / "3.0.0") in paths(plan.prune)
+
+
+def test_the_resolved_settings_files_are_reported_and_deduped(cache: Path, tmp_path: Path) -> None:
+    """The tool says which files it read, and two spellings of one project count once.
+
+    `~/.claude.json` is keyed by path STRING, so the same directory can appear under more than
+    one key and hand back the same settings file twice.
+    """
+    user_settings = tmp_path / "settings.json"
+    user_settings.write_text(json.dumps({"enabledPlugins": {}}), encoding="utf-8")
+    project = tmp_path / "some-project"
+    write_project_settings(project, {"enabledPlugins": {}})
+    claude_json = tmp_path / "claude.json"
+    claude_json.write_text(
+        json.dumps({"projects": {str(project): {}, f"{project}/.": {}}}), encoding="utf-8"
+    )
+    plan = plan_for(cache, claude_json=claude_json)
+    reported = plan.as_dict()["settings_files"]
+    assert len(reported) == len(set(reported))
+    assert str(user_settings) in reported
+    assert sum(1 for path in reported if "some-project" in path) == 1
+
+
+def test_no_project_settings_flag_skips_discovery(cache: Path, tmp_path: Path, capsys) -> None:
+    project = tmp_path / "some-project"
+    project.mkdir()
+    write_project_settings(project, {"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+    claude_json = write_claude_json(tmp_path, [project])
+    rc = P.main(
+        [
+            "--cache-dir",
+            str(cache),
+            "--claude-json",
+            str(claude_json),
+            "--no-project-settings",
+            "--json",
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    planned = {entry["path"] for entry in payload["data"]["prune"]}
+    assert str(cache / "other-marketplace" / "orphan-plugin" / "3.0.0") in planned
+
+
+# --------------------------------------------------------------------------------------------
 # The lock mechanism itself
 # --------------------------------------------------------------------------------------------
 
