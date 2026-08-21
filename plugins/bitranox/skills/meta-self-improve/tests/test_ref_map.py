@@ -118,3 +118,11 @@ def test_warnings_go_to_stderr_so_json_stays_parseable(tmp_path):
     assert code == 2
     json.loads(out)
     assert err.strip()
+
+
+def test_quoted_syntax_in_a_code_span_is_not_an_outbound_ref(tmp_path):
+    """A fact teaching TOML quotes `[[tool.importlinter.contracts]]`; that is syntax, not a ref."""
+    root = _tree(tmp_path / "t", {"": {"a": "Declare `[[tool.importlinter.contracts]]` in pyproject.\n"}})
+    code, out, _ = _run(["--root", str(root), "a"])
+    assert code == 0, out
+    assert "importlinter" not in out

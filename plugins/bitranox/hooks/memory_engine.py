@@ -389,6 +389,96 @@ def _ref_slug(raw):
     return _canon_slug(core)
 
 
+_FENCE_RX = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _blank(chars, start, end):
+    """Overwrite chars[start:end] with spaces, leaving newlines so line structure survives."""
+    for i in range(start, end):
+        if chars[i] != "\n":
+            chars[i] = " "
+
+
+def _is_fence_opener(m):
+    """CommonMark: an opener may carry an info string, but a BACKTICK fence's may hold no backtick.
+
+    Without that clause a prose line merely BEGINNING with an inline span (```text, ```bash) reads
+    as an opener, and the block it opens never closes - so the rest of the fact is blanked and every
+    real ref in it stops being reported. Measured on the live store, where the unit tests were green.
+    """
+    return not (m.group(1)[0] == "`" and "`" in m.group(2))
+
+
+def _mask_fenced_blocks(chars, text):
+    """Blank every fenced code block in place. A closer must be bare (no info string); an unclosed
+    fence runs to the end of the text."""
+    pos, fence = 0, None
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip("\n")
+        m = _FENCE_RX.match(bare)
+        if fence is None:
+            if m and _is_fence_opener(m):
+                fence = (m.group(1)[0], len(m.group(1)))
+                _blank(chars, pos, pos + len(bare))
+        else:
+            ch, width = fence
+            if m and m.group(1)[0] == ch and len(m.group(1)) >= width and not m.group(2).strip():
+                fence = None
+            _blank(chars, pos, pos + len(bare))
+        pos += len(line)
+
+
+def _mask_inline_spans(chars):
+    """Blank every inline code span in place: a run of N backticks closed by a run of exactly N.
+
+    Matching is bounded to ONE line even though CommonMark lets a span wrap. Masking too much is
+    the silent failure (a real dangling ref stops being reported), so a stray unpaired backtick
+    must not be able to swallow the rest of a body - only the rest of its own line, where it is
+    also literal text and therefore blanks nothing at all.
+    """
+    n, i = len(chars), 0
+    while i < n:
+        if chars[i] != "`":
+            i += 1
+            continue
+        start = i
+        while i < n and chars[i] == "`":
+            i += 1
+        run = i - start
+        j = i
+        while j < n and chars[j] != "\n":
+            if chars[j] != "`":
+                j += 1
+                continue
+            close = j
+            while j < n and chars[j] == "`":
+                j += 1
+            if j - close == run:
+                _blank(chars, i, close)
+                i = j
+                break
+
+
+def mask_code_regions(text):
+    """`text` with every fenced block and inline code span blanked to spaces, length-preserved.
+
+    A `[[ref]]` is a link only in PROSE. Several config formats spell a construct with double square
+    brackets - TOML's array-of-tables `[[tool.importlinter.contracts]]` is the one that reaches this
+    store - so a fact that TEACHES such a format has to quote it, and a reader that cannot tell
+    quoted syntax from a link turns that fact into a permanent orphan ref whose only escape is to
+    stop teaching the syntax.
+
+    Length is preserved so a caller can index the RAW text at the same offsets, which is how a
+    rewrite decides whether a match it found is quoted.
+    """
+    if not text:
+        return text or ""
+    chars = list(text)
+    _mask_fenced_blocks(chars, text)
+    _mask_inline_spans(chars)
+    return "".join(chars)
+
+
 def dangling_wikilinks(text, existing):
     """[(target, closest-existing-or-None)] for each `[[ref]]` in `text` whose canonical slug is NOT
     in `existing`. PURE - the write-time catch for an invented-phrase link before it becomes a
@@ -396,7 +486,7 @@ def dangling_wikilinks(text, existing):
     import difflib
     ex = {_canon_slug(s) for s in existing}
     out, seen = [], set()
-    for m in _WIKILINK_RX.finditer(text or ""):
+    for m in _WIKILINK_RX.finditer(mask_code_regions(text)):
         target = _ref_slug(m.group(1))
         if not target or target in ex or target in seen:
             continue
@@ -443,7 +533,8 @@ def inbound_ref_sources(levels, slug):
             if _canon_slug(e.slug) == qcanon:
                 continue                             # the target's own line/body does not count
             text = "%s\n%s" % (e.hook, bodies.get(e.slug, ""))
-            if any(_ref_slug(m.group(1)) == qcanon for m in _WIKILINK_RX.finditer(text)):
+            masked = mask_code_regions(text)
+            if any(_ref_slug(m.group(1)) == qcanon for m in _WIKILINK_RX.finditer(masked)):
                 out.append((str(level), e.slug))
     return out
 
@@ -916,10 +1007,14 @@ def _retarget_refs(text, canon_old, new_slug):
     target's identity, so a rename must preserve them - rewriting `[[reference:x|see here]]` into a
     bare `[[y]]` would silently edit someone else's sentence.
     """
+    masked = mask_code_regions(text or "")
+
     def repl(match):
         inner = match.group(1)
         if _ref_slug(inner) != canon_old:
             return match.group(0)
+        if masked[match.start():match.end()] != match.group(0):
+            return match.group(0)                    # quoted syntax, not a ref - not ours to edit
         head, sep, label = inner.partition("|")
         parts = head.split(":", 1)                   # mirrors _ref_slug's split, so the two agree
         prefix = parts[0] + ":" if len(parts) == 2 else ""

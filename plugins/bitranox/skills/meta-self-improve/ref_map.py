@@ -26,6 +26,11 @@ import re
 import sys
 from pathlib import Path
 
+# the engine owns ONE code-masking reader, so ref_map and --check-tree cannot disagree about
+# whether a given `[[x]]` is a reference or quoted syntax
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import memory_engine as ME  # noqa: E402
+
 POINTER_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\(mem:(?P<slug>[^)]+)\)")
 REF_RX = re.compile(r"\[\[([^\]]+)\]\]")
 _SKIP_DIRS = ("node_modules", ".git")
@@ -69,7 +74,7 @@ def read_refs(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
             text = body.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        targets = {canon(t.split(":")[-1]) for t in REF_RX.findall(text)}
+        targets = {canon(t.split(":")[-1]) for t in REF_RX.findall(ME.mask_code_regions(text))}
         targets.discard(source)
         outbound[source] = sorted(targets)
         for target in targets:
