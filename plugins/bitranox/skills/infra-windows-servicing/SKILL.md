@@ -1,6 +1,6 @@
 ---
 name: infra-windows-servicing
-description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), an in-place upgrade reverts itself on the apply reboot ("undoing changes", "Vorgenommene Aenderungen werden rueckgaengig gemacht"), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a long servicing job looks hung, or an in-place repair upgrade is being planned or run.
+description: Use when a Windows machine will not install a cumulative update, its component store is damaged, DISM or setup.exe fails with an opaque code (0x800F0915, 0xC1900200, 0xC190010E, 0xC1420127, 0x80070020), an in-place upgrade reverts itself on the apply reboot ("undoing changes", "Vorgenommene Aenderungen werden rueckgaengig gemacht"), a delete of Windows.old refuses with "Access is denied" / "Zugriff verweigert" despite takeown and icacls succeeding, a CBS log search returns nothing for an update that provably failed, a long servicing job looks hung, or an in-place repair upgrade is being planned or run.
 ---
 
 # Windows servicing and repair: the traps
@@ -15,20 +15,22 @@ do not tell you.
 
 ## The false signals
 
-| Symptom                                         | The obvious reading               | What it usually is                                                                  |
-|-------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------|
-| Update fails, `ScanHealth` clean                | not corruption, so look elsewhere | **disk headroom** - a cumulative update needs far more free space than its own size |
-| "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it |
-| Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                     |
-| Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin         |
-| Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                      |
-| Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                   |
-| Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size    |
-| Upgrade reverts on reboot, down-level was `0x0` | the upgrade failed, retry it      | **the apply was cut off** - `0x0` says the down-level was fine, so check the reboot |
-| Monitor reports an unknown build for hours      | the upgrade is stuck              | **the monitor was deleted** - it was staged under a path the upgrade replaces       |
-| `wmic` prints nothing at all                    | the machine has no such objects   | **`wmic` is removed in 25H2** - it returns EMPTY, not an error                      |
-| A wrapper says the job wrote no verdict         | the job failed                    | **a failed READ of the log** - ask the guest, whose log may say success             |
-| Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree    |
+| Symptom                                         | The obvious reading               | What it usually is                                                                        |
+|-------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------|
+| Update fails, `ScanHealth` clean                | not corruption, so look elsewhere | **disk headroom** - a cumulative update needs far more free space than its own size       |
+| "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it       |
+| Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                           |
+| Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin               |
+| Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                            |
+| Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                         |
+| Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size          |
+| Upgrade reverts on reboot, down-level was `0x0` | the upgrade failed, retry it      | **the apply was cut off** - `0x0` says the down-level was fine, so check the reboot       |
+| Monitor reports an unknown build for hours      | the upgrade is stuck              | **the monitor was deleted** - it was staged under a path the upgrade replaces             |
+| `wmic` prints nothing at all                    | the machine has no such objects   | **`wmic` is removed in 25H2** - it returns EMPTY, not an error                            |
+| A wrapper says the job wrote no verdict         | the job failed                    | **a failed READ of the log** - ask the guest, whose log may say success                   |
+| Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree          |
+| Week-old failure, `CBS.log` grep finds nothing  | no evidence, so not the store     | **the live logs cover days** - the history is in `CbsPersist_*.cab`, unreadable by a grep |
+| `0xC1900200` survives the MoSetup waiver        | the key did not take effect       | **several blocks at once** - and the key does not waive an ABSENT TPM                     |
 
 ## A clean health check does not mean an update will install
 
@@ -43,6 +45,7 @@ cumulative update needs room for the download, the expanded payload and the roll
 Get-PSDrive C | Select-Object @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}   # 1. headroom
 Get-WinEvent -FilterHashtable @{LogName='Setup'} -MaxEvents 40                  # 2. the real code
 Select-String 'C:\Windows\Logs\CBS\CBS.log' -Pattern 'Error|0x8' | Select-Object -Last 40
+#    ^ live logs only: for anything older than a couple of days, expand the cabs first
 DISM /Online /Cleanup-Image /ScanHealth /LogPath:C:\Temp\scan.log               # 3. ruling-OUT only
 ```
 
@@ -61,6 +64,40 @@ was true and off-target - the update had failed on healthy machines too.
 
 Survey before repairing, though: it is the highest-value step on a fleet. It cut that job from
 16 in-place upgrades to 2.
+
+### The CBS log you can grep covers only a few days
+
+`C:\Windows\Logs\CBS` keeps a couple of live `.log` files spanning a few days. Everything older is
+rolled into `CbsPersist_<timestamp>.cab`, and a `.cab` is an ARCHIVE - `Select-String` cannot read
+it. So on a machine whose update provably failed last week, a grep of the `.log` files returns
+ZERO hits, which reads exactly like a clean store. Expand the cabs FIRST, then search:
+
+```powershell
+New-Item -ItemType Directory C:\cbs-extract -Force | Out-Null
+Get-ChildItem C:\Windows\Logs\CBS -Filter *.cab | ForEach-Object {
+    expand.exe -F:* $_.FullName C:\cbs-extract          # never into Out-Null - see below
+}
+Select-String C:\cbs-extract\* -Pattern 'failure source:|ERROR_'
+```
+
+**Never pipe `expand.exe` into `Out-Null`.** It then reports "extracted: 0 logs" and gives no reason
+at all. Show its output and `$LASTEXITCODE`, and list a cab's contents with `expand -D <cab>` when it
+extracts nothing - discarding the output of the very tool you are diagnosing is what makes the
+failure unreadable.
+
+The size gap is the tell that a zero-hit grep is a missed search rather than a clean store: a 138 MB
+`CBS.log` inside a 1.4 GB `CBS` directory means the other 1.2 GB is history you have not read. How
+far back the live logs reach is not a fixed number of days - it follows how much servicing traffic
+the machine has generated - which is why the gap, and not a date arithmetic, is what tells you.
+
+The broader pattern is deliberate: `failure source:|ERROR_` catches the SYMBOLIC names across the
+whole expanded set, where `Error|0x8` on the live log is a numeric-code scan. If the expanded search
+is also empty, the retained cabs do not reach back to the failure - CBS history for that date is
+gone, and the `Setup` event log entry plus the Panther logs are all that is left of it.
+
+Take the SYMBOLIC error name CBS prints beside the HRESULT rather than looking the number up: the
+line reads `[HRESULT = 0x80071a2d - ERROR_TRANSACTION_NOT_ACTIVE]`, and the name is the part that
+tells you what happened.
 
 ## "Access is denied" is usually the read-only attribute
 
@@ -323,10 +360,49 @@ setup.exe /auto upgrade /quiet /eula accept /noreboot /compat ignorewarning /dyn
 
 `/eula accept` is REQUIRED with `/quiet`. Without it setup runs about 30 seconds and exits
 `0xC190010E`; the code points nowhere, while the log says "User did not accept EULA at downlevel
-OS". `/dynamicupdate disable` keeps the run reproducible. On a CPU not on the supported list,
-`0xC1900200` is cleared by the documented `AllowUpgradesWithUnsupportedTPMOrCPU` key under
-`HKLM\SYSTEM\Setup\MoSetup` - which is NOT the LabConfig `Bypass*Check` family and leaves TPM and
-Secure Boot enforcement intact.
+OS". `/dynamicupdate disable` keeps the run reproducible.
+
+### `0xC1900200` is a LIST of blocks, and the waiver does not cover an ABSENT TPM
+
+When `0xC1900200` survives the waiver, the order is: read CompatData for the blocks that are
+ACTUALLY set, fix each on its own terms, then re-read CompatData to confirm the scan re-ran. Do not
+re-run `setup.exe` between those steps hoping the key took this time.
+
+The documented `AllowUpgradesWithUnsupportedTPMOrCPU = 1` (DWORD) under `HKLM\SYSTEM\Setup\MoSetup`
+waives an unsupported CPU and an unsupported TPM **version**. It is NOT the LabConfig `Bypass*Check`
+family, and it leaves TPM and Secure Boot enforcement in the running OS alone. It is also not the
+whole answer, because `0xC1900200` is a compat hard block that can be SEVERAL blocks at once. Read
+which ones instead of assuming the one you have a fix for:
+
+```powershell
+[xml]$x = Get-Content (Get-ChildItem 'C:\$WINDOWS.~BT\Sources\Panther' -Filter 'CompatData*.xml' |
+                       Sort-Object LastWriteTime -Descending)[0].FullName
+$x.SelectNodes('//*[local-name()="HardwareItem"]') | ForEach-Object {
+    $bt = ($_.SelectSingleNode('*[local-name()="CompatibilityInfo"]')).BlockingType
+    if ($bt -and $bt -ne 'None') { "$($_.HardwareType) = $bt" }
+}
+```
+
+Measured on a PVE guest with `cpu: host` and no `tpmstate0`: two hard blocks, `CpuFms` and
+`TpmVersion`, everything else `None`. The key cleared `CpuFms` only. `TpmVersion` survived because
+the guest had **no TPM at all** (`TpmPresent = False`), and the key waives an UNSUPPORTED version,
+never an ABSENT device. Setup logs the tell:
+
+```
+UnrecognizedCompatBlockEncountered = [TpmVersion]
+```
+
+That one takes real hardware, not a registry value - on Proxmox VE, `qm set <vmid> -tpmstate0
+<storage>:1,version=v2.0`, which needs a clean shutdown first. Verify with `(Get-Tpm).TpmPresent`
+before relaunching.
+
+**A faster second failure is not a cached verdict.** The obvious reading of "same code, 43 s instead
+of 79 s" is that setup never re-ran the appraisal, or tripped an earlier gate - both send you to
+clear `$WINDOWS.~BT` and retry, which changes nothing. Compare the CompatData file's timestamp
+instead, which answers it either way: measured here it was FRESH, so the scan had genuinely re-run
+and was faster because one of the two blocks was genuinely gone. A timestamp still matching the
+PREVIOUS run is the case where setup never re-appraised, and only then is clearing `$WINDOWS.~BT`
+the right move.
 
 ### An interrupted apply reverts the WHOLE upgrade
 
@@ -470,6 +546,10 @@ unmeasured.
 - You concluded "hung" from a quiet log or flat disk without checking worker CPU
 - You are quoting a duration you did not measure on this machine
 - You are treating a clean `ScanHealth` as proof an update should install
+- A `CBS.log` grep came back empty for a failure older than a couple of days and you read that
+  as no evidence, without expanding `CbsPersist_*.cab`
+- You are re-running `setup.exe` after the MoSetup waiver without reading CompatData for which
+  blocks are ACTUALLY set, or treating a faster second failure as a cached verdict
 - You are quoting a `robocopy` byte total as the space a delete will free
 - You are about to delete a tree without checking for a mounted image inside it
 - An upgrade reverted and you are re-diagnosing it without grepping Panther for `Setup360Result`
