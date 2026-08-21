@@ -30,9 +30,20 @@ local transcripts, every non-haiku family has actually carried far more than a 2
 119,393. The peaks stopping just under 1,000,000 is the window boundary showing itself in the data.
 So the family settles it: opus, fable, sonnet and mythos are 1M; haiku is 200K.
 
-`context_window` remains an explicit override for a model this table has not met. When the measured
-context exceeds the window in use, that is reported rather than ignored - a threshold nothing can
-cross is indistinguishable from a watcher that works, and it is the one way this can fail silently.
+THE ASSUMPTION IN THAT TABLE, stated because its failure is silent. Those transcripts come from ONE
+machine and one account tier, so the table asserts that current opus, fable, sonnet and mythos run
+1M for EVERYONE. If some tier or plan runs a 200K opus, that session gets a 400K threshold it can
+never reach - it would compact near 166K - and the misconfigured check below cannot catch it either,
+because 166K is far under the 1M being assumed. The symptom is the hook simply never speaking, which
+is the symptom nobody reports.
+
+The remedy is `context_window`: setting it to a real token count overrides the table entirely. A
+deliberate trade - the alternative was to assume 200K until each session proved otherwise, which is
+correct for every tier but asks early on every genuine 1M session.
+
+When the measured context exceeds the window in use, that IS reported rather than ignored - a
+threshold nothing can cross is indistinguishable from a watcher that works. It catches an
+over-large explicit knob; it cannot catch an over-large assumption, per the paragraph above.
 
 THE THRESHOLD is min(percentage of the window, absolute cap), because the two research findings
 disagree on a big window and both are worth honouring. The percentage leg keeps a cushion below
