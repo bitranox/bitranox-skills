@@ -86,7 +86,8 @@ consolidating. `not-due` never suppresses capture; an absent store is the trigge
 routing a learning only into a CLAUDE.md is NOT capture. Verify "nothing durable" - never assume.
 
 **Read the session from DISK, not from what you remember.** Run
-`dream_state.py session-review "<cwd>"` first. Your context is not the session: a compaction clears
+`dream_state.py session-review "<cwd>" > review.txt 2>&1` first and read the file - the
+redirect is not optional, see the truncation note below. Your context is not the session: a compaction clears
 the CONTEXT while the transcript FILE survives intact, so anything you "skim from memory" after a
 compaction is the summary, and the detail is silently lost. `session-review` returns the material
 from disk: the not-yet-reviewed transcript stretch, the SUBAGENT learnings buffered this session
@@ -99,14 +100,24 @@ dream in one session costs nothing and re-analyzes nothing. When the pass is don
 `dream_state.py session-reviewed "<cwd>"` to advance the mark. If a compaction happened, the Stop
 gate will not let the session stop until this nap has run.
 
-**`session-review`'s OUTPUT can be truncated, and it does not say so.** When the result is too
-large the harness PERSISTS it to a file and shows a short preview; that file is a VIEW of the
-stretch, not the stretch. Measured: the banner reported 1,958,654 unreviewed bytes, the persisted
-file held 244,360 - an eighth - and nothing flagged the gap, because the file is well-formed JSONL
-that parses cleanly. Compare the byte count the banner CLAIMS against the size of what you actually
-received; if they differ, read the source `.jsonl` yourself over that byte range (open it, skip to
-the offset, extract the record types you need) before running `session-reviewed`. Advancing the
-watermark is a one-way discard: it destroys the only pointer to what you skipped.
+**Redirect `session-review` to a file. Its output is truncated otherwise, and it does not say
+so.** Run it as `dream_state.py session-review "<cwd>" > review.txt 2>&1` and read the file. The
+harness only truncates what it RENDERS into the transcript, never what the process writes to a
+file, so the redirect avoids the problem instead of repairing it afterwards. Measured: one run
+reported 1,590,075 unreviewed bytes in its banner and left 1,590,965 bytes on disk - banner plus
+content, the whole stretch, in one pass.
+
+Rendered inline the same call is silently cut: the harness PERSISTS the result to its own file and
+shows a short preview, and that file is a VIEW of the stretch, not the stretch. Measured twice -
+a banner reporting 1,958,654 unreviewed bytes against a persisted 244,360, an eighth; and a
+1,259,622-byte stretch against a 2KB preview. Nothing flags the gap, because what you get is
+well-formed JSONL that parses cleanly.
+
+So compare the byte count the banner CLAIMS against the size of the file you redirected into. With
+the redirect that comparison is a cheap confirmation rather than a recovery step. If you did read
+it inline and the numbers differ, read the source `.jsonl` yourself over that byte range (open it,
+skip to the offset, extract the record types you need) before running `session-reviewed`. Advancing
+the watermark is a one-way discard: it destroys the only pointer to what you skipped.
 
 **The owed transcript is usually NOT this session's.** The obligation is recorded per PROJECT and
 outlives the session that compacted, so it is routinely inherited by a later session that never

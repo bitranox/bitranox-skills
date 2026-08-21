@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.223.0]
+
+### Changed
+
+- The dream skills now REDIRECT `session-review` to a file and read the file. Its output is
+  truncated when rendered inline and says nothing about it: the harness persists the result and
+  shows a preview, and that preview is well-formed JSONL that parses cleanly, so nothing signals
+  the gap. Measured twice - a banner reporting 1,958,654 unreviewed bytes against a persisted
+  244,360, and a 1,259,622-byte stretch against a 2KB preview. Redirected, one run left 1,590,965
+  bytes on disk against a 1,590,075-byte banner claim: the whole stretch, in one pass.
+
+  The existing detect-and-reconstruct guidance was correct but started one step too late, so it is
+  kept for a reader who already ran it inline, and the banner-versus-size comparison is demoted
+  from a recovery step to a cheap confirmation. This matters because `session-reviewed` is a
+  one-way mark: advancing it discards the only pointer to whatever was cut.
+
 ## [5.222.0]
 
 ### Added

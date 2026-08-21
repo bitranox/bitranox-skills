@@ -42,7 +42,8 @@ Create one todo per step.
 0. **Capture first, reading the session from DISK** - the shared rule in
    `bitranox:meta-dream-tree` -> references/dream-core.md "Capture-first" applies here too (it is
    the shared core for EVERY consolidation skill, not just nap/tree). Run
-   `dream_state.py session-review "<cwd>"` before consolidating: your context is not the session (a
+   `dream_state.py session-review "<cwd>" > review.txt 2>&1` before consolidating, and read the
+   FILE (rendered inline it is silently truncated): your context is not the session (a
    compaction clears the context, never the transcript file), and it also surfaces the SUBAGENT
    learnings and the touched-path routing evidence you would otherwise never see. Finish with
    `dream_state.py session-reviewed "<cwd>"`. It is incremental and the watermark is shared with the
