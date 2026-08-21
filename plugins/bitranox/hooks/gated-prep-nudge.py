@@ -34,6 +34,13 @@ trip it saves is the round trip it imposes. Narrowing it to the tree arm is wors
 arm was believed to be the shape that can never satisfy the gate, and 67 of its 68 real firings
 succeeded. Re-run the measurement rather than the argument.
 
+What that closes is the DENY branch, not the question. One mechanism was never priced: making
+repo-gate LOOK AHEAD instead. Every blocked command CONTAINS the bump the gate blocks for, so a
+gate that recognised it would remove the class rather than warn about it, at no cost to the 532
+legitimate calls. It is unbuilt because a gate trusting a textual promise about what a command
+will DO is a worse failure mode than the one it fixes - prose mentioning a bump, or a bump to the
+wrong value, would pass - so it needs a design pass and its own measurement, not a prototype.
+
 The gated-verb scan runs over the command with HEREDOC BODIES STRIPPED, because a body is data: a
 guard that reads it fires on prose documenting the very footgun it guards.
 """
