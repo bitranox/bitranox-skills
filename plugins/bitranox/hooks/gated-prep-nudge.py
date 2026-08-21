@@ -6,7 +6,7 @@ writes a file (a heredoc, a redirect) and then runs a verb a gate may block, a b
 write too: the retry fails on a missing `-F` input and points at the wrong cause, which is a
 different and much more confusing failure than the one the gate meant to report.
 
-Recorded seven times in this store (`feedback-repo-gate-pre-evaluates-the-pending-commit-command`).
+Recorded eight times in this store (`feedback-repo-gate-pre-evaluates-the-pending-commit-command`).
 Prose stopped working at two, so this is the escalation - a signal at the moment of the mistake.
 
 Hit 7 wrote no file at all: `git checkout -- <f> && git commit -F msg` chained a TREE-WRITING git
@@ -16,6 +16,23 @@ retried.
 
 NON-BLOCKING by construction: it emits `additionalContext` and exits 0. Blocking here would add a
 second block to a command that may be perfectly fine, and a hook must never wedge a turn.
+
+Hit 8 tested that choice and CONFIRMED it, so do not re-open it without a new signal. The nudge
+fired correctly on that command; what it could not do is arrive first. `additionalContext` reaches
+the model in the same turn as the tool result, so a non-blocking PreToolUse hook can only ever
+EXPLAIN a block, never prevent one - which leaves a `permissionDecision: deny` as the only rung
+above this one. Replaying every `Bash` tool_use command in the transcript corpus through `notice()`
+and joining each to whether a gate actually blocked it prices that rung:
+
+    60,632 commands over 1,494 transcripts
+    whole hook   569 fires (0.94%)   23 gate-blocked   deny precision  4.0%
+    write arm    497 fires           21 gate-blocked   deny precision  4.2%
+    tree arm      68 fires            1 gate-blocked   deny precision  1.5%
+
+A deny would block 532 commands that completed fine to prevent 23 confusing ones, and the round
+trip it saves is the round trip it imposes. Narrowing it to the tree arm is worse, not better: that
+arm was believed to be the shape that can never satisfy the gate, and 67 of its 68 real firings
+succeeded. Re-run the measurement rather than the argument.
 
 The gated-verb scan runs over the command with HEREDOC BODIES STRIPPED, because a body is data: a
 guard that reads it fires on prose documenting the very footgun it guards.
@@ -142,7 +159,7 @@ def notice(command):
                 "create) in the SAME command. A PreToolUse gate judges the whole command before "
                 "any statement runs, so if it blocks, that file is never written and the retry "
                 "fails on a missing input - pointing at the wrong cause. Write the file in its OWN "
-                "earlier command, then run the gated verb. (Recorded seven times: "
+                "earlier command, then run the gated verb. (Recorded eight times: "
                 "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
                 % what
             )
@@ -154,7 +171,7 @@ def notice(command):
             "statement runs, so it reads its answer BEFORE your `git %s` - which means this shape "
             "can never satisfy the gate however many times you retry it, and a block discards the "
             "prep too. Run the prep in its OWN earlier command, then the gated verb. (Recorded "
-            "seven times: feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
+            "eight times: feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
             % (verb, _mechanism(verb), verb)
         )
     return None
