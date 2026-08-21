@@ -17,6 +17,31 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.219.0]
+
+### Added
+
+- `compuse-toolbox`'s `jsonl_grep` gains a corpus mode: `--count` tallies a dotted field's values
+  across every file under the paths given, walking the `*.jsonl` below a directory. "What values
+  does this field actually take across every transcript?" is the DIRECT instrument for questions
+  that otherwise get settled by inference, and answering it previously meant hand-rolling a walk
+  over ~1500 files, because the tool took one file and could not count. One session built three
+  designs for a value the corpus named in one command once it was finally asked.
+
+  A NEGATIVE is the dangerous result here, since "the field holds nothing" and "I never really
+  looked" print the same. So the scan reports how many files it READ and how many lines it could
+  not parse on stderr, never in the parsed stream, and exits 3 when it read none - a mistyped path
+  is a loud failure rather than a silent all-clear. Unreadable files are listed as skipped rather
+  than dropped, and each file is streamed line by line rather than loaded whole.
+
+### Fixed
+
+- `jsonl_grep` given several paths read only the first and exited 0, which is the silent truncation
+  the toolbox exists to prevent. It now reads every path given.
+- A JSONL line that parsed but was not an object (a bare array) reached `obj.get(...)` and raised
+  `AttributeError`, which would abort a whole-corpus scan outright. It is now counted as unusable
+  like any other bad line.
+
 ## [5.216.3]
 
 ### Added
