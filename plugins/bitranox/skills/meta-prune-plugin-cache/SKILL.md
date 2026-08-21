@@ -57,6 +57,11 @@ uninstalled plugin leaves behind, and nothing else reclaims it. `enabledPlugins`
 that makes that safe, and it applies only to a sole version - it names a PLUGIN, never a
 version, so honouring it per version would preserve the entire history of everything enabled.
 
+The settings files it reads are the user's pair plus the same pair inside every project
+`~/.claude.json` lists, because a plugin enabled only in a project may have no install record
+at all. The run reports which files it read; `--no-project-settings` limits it to the user's,
+and naming any `--settings` file takes over the list entirely.
+
 When locks exist but none is live it says so on stderr rather than guessing: a session whose
 version cannot be identified is worth confirming by hand, so pass that version with `--keep`.
 
