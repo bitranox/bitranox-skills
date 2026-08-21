@@ -30,7 +30,8 @@ import uuid_store as us  # noqa: E402
 
 _HOOK_MAX = 160
 _TYPE_PREFIXES = us.TYPE_PREFIXES
-_WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")
+_WIKILINK_RX = re.compile(r"\[\[([^\]]+)\]\]")   # run it over ME.mask_code_regions(text): a
+                                                 # `[[x]]` inside code is quoted syntax, not a ref
 _WARN_BYTES = 50_000             # SOFT: warn (never fail) when a level's pointer block grows past this
 _NON_ENTRY = {"claude.md", "claude.local.md"}
 
@@ -230,7 +231,7 @@ def check_references(dirs):
     orphans, downward, checked = [], [], 0
     for pos, d in enumerate(dirs):
         for label, text in altitude_sources(d):
-            for m in _WIKILINK_RX.finditer(text):
+            for m in _WIKILINK_RX.finditer(ME.mask_code_regions(text)):
                 ref = _ref_slug(m.group(1))
                 if not ref or ref == label:
                     continue
@@ -470,7 +471,8 @@ def check_tree(anchor):
             body_p = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
             if not body_p.is_file():
                 orphan_pointers.append((lvl, e.slug))
-            for m in _WIKILINK_RX.finditer(e.hook + "\n" + bodies.get(e.slug, "")):
+            cited = ME.mask_code_regions(e.hook + "\n" + bodies.get(e.slug, ""))
+            for m in _WIKILINK_RX.finditer(cited):
                 ref = _ref_slug(m.group(1))
                 if ref and ref != cslug:
                     ref_sources.append((lvl, e.slug, ref))

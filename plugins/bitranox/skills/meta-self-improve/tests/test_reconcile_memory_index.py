@@ -478,3 +478,35 @@ def test_sibling_levels_keep_the_order_they_were_given(tmp_path):
     ME.add_or_update_entry(lower, "Low fact", "narrow", body="b", scope_default="l")
     ME.add_or_update_entry(upper, "High fact", "points [[low-fact]] down", body="b", scope_default="u")
     assert ("high-fact", "low-fact") in R.check_references([lower, upper])["downward"]
+
+
+# --------------------------------------------------------------------------
+# quoted syntax is not a reference
+# --------------------------------------------------------------------------
+
+def test_check_references_ignores_a_ref_inside_a_code_span(proj):
+    # a fact teaching TOML has to quote `[[tool.importlinter.contracts]]`; read as a wikilink it is
+    # an orphan ref to a fact that can never exist, and rewording the lesson is the only escape.
+    ME.add_or_update_entry(proj, "Toml", "declare `[[tool.importlinter.contracts]]`",
+                           body="b", scope_default="lvl")
+    refs = R.check_references([proj])
+    assert refs["orphans"] == []
+
+
+def test_check_tree_ignores_a_ref_inside_a_fenced_block(tmp_path, capsys):
+    anchor, a, _b = _tree_two_projects(tmp_path)
+    body = "how to declare it:\n\n```toml\n[[tool.importlinter.contracts]]\n```\n"
+    ME.add_or_update_entry(a, "Toml", "quotes the array-of-tables syntax", body=body, scope_default="a")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOTAL tree problems: 0" in out
+
+
+def test_check_tree_still_flags_a_real_ref_beside_a_code_span(tmp_path, capsys):
+    anchor, a, _b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Citer", "quotes `[[a.b]]` and cites [[missing-base]]",
+                           body="B", scope_default="a")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1 and "orphan ref: [[missing-base]]" in out
+    assert "a.b" not in out

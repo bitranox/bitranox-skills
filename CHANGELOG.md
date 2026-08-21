@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.227.1]
+
+### Fixed
+
+- The memory store's `[[ref]]` readers no longer read quoted syntax as a reference. A fact that
+  TEACHES a config format has to quote it, and several formats spell a construct with double square
+  brackets: TOML's array-of-tables (`[[tool.importlinter.contracts]]`) is the one that reached the
+  store, a POSIX character class (`[[:space:]]`) is another. Read as a wikilink, such a fact reports
+  as an orphan ref forever and the only escape is to stop teaching the syntax, which is what
+  happened. `memory_engine.mask_code_regions()` blanks fenced blocks and inline code spans,
+  length-preserved, and is now the ONE reader every site shares: `dangling_wikilinks` (write time),
+  `inbound_ref_sources` (move safety, where a quoted mention silently REFUSED a move),
+  `_retarget_refs` (rename, which would otherwise rewrite inside a code span),
+  `reconcile_memory_index`'s `--check` and `--check-tree`, and `ref_map.py`. One reader is the
+  point: two of them disagreeing would answer the same question two ways.
+- Fence detection follows CommonMark on the info string: a backtick fence may not carry a backtick
+  in it. Without that clause a prose line that merely BEGINS with an inline code span reads as
+  an opener, the block it opens never closes, and the rest of the fact is blanked, taking every real
+  ref in it with it. Caught by replaying the live store (622 refs before, 619 after, each drop
+  inspected) while every unit test was already green.
+
 ## [5.227.0]
 
 ### Added
