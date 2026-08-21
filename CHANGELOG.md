@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.221.1]
+
+### Fixed
+
+- `reconcile_memory_index.py --check` took a level's altitude from its POSITION in the argument
+  list, with nothing validating that order, so the identical store answered differently depending
+  on how the caller happened to type the chain: measured, one chain reported 11 problems passed
+  anchor-first and 0 passed project-first. Every false finding had the shape the storage spec
+  explicitly permits - a project entry citing a tree-top rule - so the report invited demoting
+  correct links to prose, and a dream driven by it would have "fixed" a clean store.
+
+  The levels on a chain are ancestors of one another, so depth now decides the order without asking
+  the caller. The sort is stable, which keeps SIBLING levels - equal depth, so depth cannot rank
+  them - in the order they were given rather than inventing an altitude for them.
+
 ## [5.221.0]
 
 ### Added
