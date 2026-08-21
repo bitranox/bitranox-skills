@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.226.1]
+
+### Changed
+
+- The queue pseudo-path added in 5.226.0 is now `queue_key:<hash>`, not `key:<hash>`. Only
+  `contrib_file` honors the prefix, while about fifteen other per-project state files derive their
+  name from `proj_key`, so a generic `key:` read like a facility every state function understands -
+  and handing it to one that does not would silently resolve it as a literal directory and write to
+  the wrong state file. A prefix that names its own scope cannot be misread. Renamed hours after
+  5.226.0 published and before any caller could exist; the bare `key:` prefix is deliberately NOT
+  accepted as an alias, since keeping it would preserve the exact ambiguity the rename removes, and
+  a test pins that it is treated as an ordinary path.
+
 ## [5.226.0]
 
 ### Added

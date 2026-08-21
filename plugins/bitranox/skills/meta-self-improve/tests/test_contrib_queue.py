@@ -260,10 +260,10 @@ def test_queues_addresses_a_vanished_queue_by_key(tmp_path, capsys):
     key = S.proj_key(str(gone))
     capsys.readouterr()
     # a queue whose cwd no longer exists must still be listable and closable, by its hash
-    assert Q.main(["list", "key:" + key]) == 0
+    assert Q.main(["list", "queue_key:" + key]) == 0
     assert "unreachable intent" in capsys.readouterr().out
-    assert Q.main(["ship", "--match", "unreachable", "--note", "landed", "key:" + key]) == 0
-    assert S.read_contributions("key:" + key) == []
+    assert Q.main(["ship", "--match", "unreachable", "--note", "landed", "queue_key:" + key]) == 0
+    assert S.read_contributions("queue_key:" + key) == []
 
 
 def _fake_session(home, key, cwd, sid="s1"):
@@ -273,7 +273,7 @@ def _fake_session(home, key, cwd, sid="s1"):
     tdir.mkdir(parents=True, exist_ok=True)
     tp = tdir / (sid + ".jsonl")
     tp.write_text(json.dumps({"type": "user", "cwd": cwd}) + "\n", encoding="utf-8")
-    adir = S.contrib_file("key:probe").parent
+    adir = S.contrib_file(S.QUEUE_KEY_PREFIX + "probe").parent
     adir.mkdir(parents=True, exist_ok=True)
     (adir / (key + ".session.json")).write_text(
         json.dumps({"session_id": sid, "transcript_path": str(tp)}), encoding="utf-8")
@@ -284,7 +284,7 @@ def test_queues_resolves_a_legacy_queue_from_its_session_record(tmp_path, home, 
     # transcript, whose records carry cwd - so a legacy queue is still resolvable.
     proj = tmp_path / "legacy"
     proj.mkdir()
-    S.add_contribution("key:" + S.proj_key(str(proj)), {"what": "legacy intent"})  # no proj stamp
+    S.add_contribution("queue_key:" + S.proj_key(str(proj)), {"what": "legacy intent"})  # no proj stamp
     _fake_session(home, S.proj_key(str(proj)), str(proj))
     capsys.readouterr()
     assert Q.main(["queues"]) == 0
@@ -297,10 +297,22 @@ def test_queues_rejects_a_session_record_whose_cwd_hashes_elsewhere(tmp_path, ho
     proj = tmp_path / "legacy2"
     proj.mkdir()
     key = S.proj_key(str(proj))
-    S.add_contribution("key:" + key, {"what": "legacy intent 2"})
+    S.add_contribution("queue_key:" + key, {"what": "legacy intent 2"})
     _fake_session(home, key, str(tmp_path / "some-other-project"), sid="s2")
     capsys.readouterr()
     assert Q.main(["queues"]) == 0
     out = capsys.readouterr().out
     assert "some-other-project" not in out
     assert "project unknown" in out
+
+
+def test_the_bare_key_prefix_is_not_honored(tmp_path):
+    # The prefix names its own scope (`queue_key:`) precisely so it cannot read as a facility every
+    # per-project state function understands - only contrib_file honors it. A bare `key:` must
+    # therefore be treated as an ordinary path and hashed, never as a queue key.
+    gone = tmp_path / "vanished"
+    Q.main(["add", "--what", "scoped intent", str(gone)])
+    key = S.proj_key(str(gone))
+    assert S.read_contributions("queue_key:" + key)          # the real prefix reaches it
+    assert S.read_contributions("key:" + key) == []          # the bare one does not
+    assert S.contrib_file("key:" + key) != S.contrib_file("queue_key:" + key)

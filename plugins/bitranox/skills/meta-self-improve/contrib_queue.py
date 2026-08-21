@@ -130,11 +130,11 @@ def main(argv=None):
         # there is no way to ask which projects have pending contributions, and a queue whose cwd was
         # deleted or renamed is invisible AND unreachable by every other verb. Entries added since
         # the `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
-        qdir = sig.contrib_file("key:probe").parent
+        qdir = sig.contrib_file(sig.QUEUE_KEY_PREFIX + "probe").parent
         rows = []
         for f in sorted(qdir.glob("*.contrib.jsonl")):
             key = f.name[: -len(".contrib.jsonl")]
-            recs = sig.read_contributions("key:" + key)
+            recs = sig.read_contributions(sig.QUEUE_KEY_PREFIX + key)
             path = next((r.get("proj") for r in recs if r.get("proj")), "")
             if not path:
                 path = _resolve_from_session(qdir, key)
@@ -152,7 +152,7 @@ def main(argv=None):
         print("%d queue(s) with open contributions:" % len(open_rows))
         for key, n, where in open_rows:
             print("  %s  %d open  %s" % (key[:8], n, where))
-        print("address one with: contrib_queue.py list|ship|drop ... key:<full-key>|<path>")
+        print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
         return 0
 
     if args.cmd == "list":
