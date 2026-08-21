@@ -23,16 +23,20 @@ the transcript records real per-request usage, so the last record carrying `mess
 which is the context that request actually carried - a measurement, not a bytes/4 proxy. It also
 self-corrects after a compaction, because the next request's usage drops on its own.
 
-THE WINDOW is DETECTED, not configured. The transcript's `message.model` is the bare
-`claude-opus-5` with no variant, but `~/.claude.json` records per-project `lastModelUsage` keyed by
-the FULL model id - `claude-opus-5[1m]` and `claude-opus-4-6` are separate keys - so the `[1m]`
-suffix that distinguishes a 1M window from a 200k one survives there.
+THE WINDOW comes from a LADDER, because each rung is exact where the next only infers. An explicit
+`context_window` wins. Otherwise the session's own model id, WITH its variant, is read from an
+unpinned subagent dispatch. Failing that - and this rung needs nothing but the transcript - the
+model FAMILY from `message.model` fixes the ceiling (opus, fable, sonnet: 1M capable; haiku: 200K)
+and the largest context observed proves which mode is running: a session that has carried more than
+200K cannot be on the 200K variant. Below that the variant is genuinely unknown and 200K is assumed,
+which asks early rather than going silent. Last rungs: the model this project has used most, then
+200K.
 
-A project accumulates several models (subagents run haiku and sonnet), so the LARGEST window among
-them is taken. That is the safe direction and the asymmetry is the reason: assuming too small makes
-the threshold unreachable and the hook silently inert, while assuming too large only asks later,
-where auto-compact still catches the session. `context_window` remains as an explicit override for
-a machine where the detection cannot see the model.
+The direction of every fallback is the same and deliberate. Assuming too SMALL asks early, which
+costs a decline. Assuming too LARGE is silently inert - a 200K session handed a 400K threshold can
+never reach it (it auto-compacts near 166K) and the misconfigured check cannot see it either,
+because 166K is far under the assumed window. That failure is the one this hook exists to prevent,
+so no rung may guess upward without proof.
 
 THE THRESHOLD is min(percentage of the window, absolute cap), because the two research findings
 disagree on a big window and both are worth honouring. The percentage leg keeps a cushion below
@@ -98,16 +102,98 @@ def window_for_model(model_id) -> int:
     return _MODEL_WINDOWS.get(base, _DEFAULT_WINDOW)
 
 
-def detect_window(cwd, config_path=None):
-    """The largest window among the models this project has actually used, or None. IMPURE (reads).
+# Maximum window per model FAMILY, matched on the id `message.usage` always carries. Source: the
+# bundled `claude-api` skill's model table (cached 2026-06-24).
+_FAMILY_MAX = (("claude-fable", 1_000_000), ("claude-mythos", 1_000_000),
+               ("claude-opus", 1_000_000), ("claude-sonnet", 1_000_000),
+               ("claude-haiku", 200_000), ("oss-128k", 128_000))
 
-    `~/.claude.json` records `projects.<path>.lastModelUsage` keyed by the FULL model id, suffix
-    included, which is the one place the variant survives - the transcript stores the bare name.
 
-    The LARGEST is taken because a project accumulates several models: subagents run haiku and
-    sonnet alongside the main model. The asymmetry decides the tie-break - too small makes the
-    threshold unreachable and the hook silently inert, too large only asks later, where auto-compact
-    still catches the session.
+def family_max_window(model_id) -> int:
+    """The LARGEST window this model family can run. PURE.
+
+    `message.model` is always present and always the bare family id - this session reports
+    `claude-opus-5` while running 1M - so it fixes the CEILING, never the actual window. Claude Code
+    offers a 200K mode of the same family (that is why `claude-opus-4-6` and `claude-opus-4-6[1m]`
+    are separate ids), and nothing in the family name says which is running.
+    """
+    mid = str(model_id or "").lower()
+    for prefix, window in _FAMILY_MAX:
+        if mid.startswith(prefix):
+            return window
+    return _DEFAULT_WINDOW
+
+
+def window_from_evidence(model_id, peak_tokens):
+    """The window PROVEN by the family ceiling plus the largest context actually observed. PURE.
+
+    A family that cannot exceed 200K settles it outright. Otherwise the family could be running
+    either mode, and the measurement decides: a session that has carried more than a 200K window can
+    hold is provably on the large variant. Below that it is genuinely unknown, and 200K is the safe
+    assumption - too small asks early, which costs a decline, while too large is the silently-inert
+    failure where the threshold can never be reached.
+    """
+    ceiling = family_max_window(model_id)
+    if ceiling <= _DEFAULT_WINDOW:
+        return ceiling
+    try:
+        if int(peak_tokens or 0) > _DEFAULT_WINDOW:
+            return ceiling
+    except (TypeError, ValueError):
+        pass
+    return _DEFAULT_WINDOW
+
+
+def model_from_dispatch(transcript_path, tail_bytes=_TAIL_BYTES):
+    """The session's OWN model id, read from an unpinned subagent dispatch, or None. IMPURE.
+
+    This is the only EXACT source for the current model, and it is exact because of a pairing: an
+    `Agent` call whose input carries no `model` inherits the session's, and the tool result reports
+    what it actually ran as `resolvedModel` - with the `[1m]` suffix that `message.model` drops.
+    A dispatch that DID pin a model resolves to that model instead, so those are skipped; using them
+    would report a subagent's tier as the session's.
+
+    Absent when the session never dispatched an unpinned subagent, which is why this heads a ladder
+    rather than standing alone.
+    """
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as handle:
+            if size > tail_bytes:
+                handle.seek(size - tail_bytes)
+                handle.readline()
+            data = handle.read()
+    except (OSError, TypeError, ValueError):
+        return None
+    unpinned, found = set(), None
+    for raw in data.splitlines():
+        try:
+            record = json.loads(raw.strip().decode("utf-8", "replace"))
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        for block in (record.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):
+                if not (block.get("input") or {}).get("model"):
+                    unpinned.add(block.get("id"))
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in unpinned:
+                resolved = (record.get("toolUseResult") or {}).get("resolvedModel")
+                if resolved:
+                    found = resolved          # keep scanning: the LATEST unpinned one wins
+    return found
+
+
+def model_from_project(cwd, config_path=None):
+    """The model this project has used MOST, or None. IMPURE (reads ~/.claude.json).
+
+    `lastModelUsage` is keyed by the full model id - the one place the `[1m]` suffix survives - but
+    it ACCUMULATES across sessions and models, so the entry is picked by cache-read volume rather
+    than by window size. The dominant entry is the main session model by a wide margin (subagents
+    contribute orders of magnitude less), and unlike "widest window ever recorded" it follows a
+    switch to a smaller model instead of claiming the old one forever.
     """
     try:
         path = config_path or (pathlib.Path.home() / ".claude.json")
@@ -115,7 +201,6 @@ def detect_window(cwd, config_path=None):
     except (OSError, ValueError, TypeError):
         return None
     here = str(cwd or "")
-    # Exact match first, then the longest recorded ancestor - a hook can fire from a subdirectory.
     candidates = [k for k in projects if here == k or here.startswith(k.rstrip("/") + "/")]
     if not candidates:
         return None
@@ -123,7 +208,56 @@ def detect_window(cwd, config_path=None):
     used = entry.get("lastModelUsage") if isinstance(entry, dict) else None
     if not isinstance(used, dict) or not used:
         return None
-    return max(window_for_model(m) for m in used)
+
+    def volume(item):
+        stats = item[1] if isinstance(item[1], dict) else {}
+        try:
+            return int(stats.get("cacheReadInputTokens") or 0) + int(stats.get("inputTokens") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return max(used.items(), key=volume)[0]
+
+
+def read_session(transcript_path, tail_bytes=_TAIL_BYTES):
+    """(current_tokens, family_model, peak_tokens) from ONE tail read. IMPURE.
+
+    The peak matters because it is what PROVES the large variant: a session that has carried more
+    than a 200K window can hold cannot be running the 200K mode. It is taken over the tail only, so
+    it is a lower bound on the true peak - which is the safe direction, since under-reporting the
+    peak only makes the window assumption smaller and the ask earlier.
+    """
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as handle:
+            if size > tail_bytes:
+                handle.seek(size - tail_bytes)
+                handle.readline()
+            data = handle.read()
+    except (OSError, TypeError, ValueError):
+        return None, None, 0
+    current, model, peak = None, None, 0
+    for raw in data.splitlines():
+        try:
+            record = json.loads(raw.strip().decode("utf-8", "replace"))
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        message = record.get("message") or {}
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        try:
+            total = (int(usage.get("input_tokens") or 0)
+                     + int(usage.get("cache_creation_input_tokens") or 0)
+                     + int(usage.get("cache_read_input_tokens") or 0))
+        except (TypeError, ValueError):
+            continue
+        current = total                       # the LAST one wins; the loop runs forward
+        peak = max(peak, total)
+        if message.get("model"):
+            model = message["model"]
+    return current, model, peak
 
 
 def context_tokens(transcript_path, tail_bytes=_TAIL_BYTES):
@@ -333,11 +467,16 @@ def _misconfigured(detail) -> str:
     ) % {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
 
 
-def resolve_window(cfg, cwd):
-    """The window to measure against, and where it came from. IMPURE (may read the config file).
+def resolve_window(cfg, cwd, transcript=None, model=None, peak=0):
+    """(window, how it was established). IMPURE.
 
-    An explicit `context_window` always wins - it is the escape hatch for a machine where detection
-    cannot see the model. Otherwise the model this project has actually used decides it.
+    A ladder, most authoritative first, because each rung is exact where the next only infers:
+      1. an explicit `context_window` - the escape hatch, always wins;
+      2. the session's own model id WITH its variant, from an unpinned subagent dispatch - exact;
+      3. the model FAMILY (always in `message.model`) plus the largest context observed - the family
+         fixes the ceiling, the measurement proves whether the large variant is running;
+      4. the model this project has used most - right across sessions, stale right after a switch;
+      5. the 200K default.
     """
     explicit = cfg.get("context_window") or 0
     try:
@@ -345,9 +484,15 @@ def resolve_window(cfg, cwd):
             return int(explicit), "configured"
     except (TypeError, ValueError):
         pass
-    detected = detect_window(cwd)
-    if detected:
-        return detected, "detected"
+    if transcript:
+        current = model_from_dispatch(transcript)
+        if current:
+            return window_for_model(current), "detected"
+    if model:
+        return window_from_evidence(model, peak), "evidenced"
+    dominant = model_from_project(cwd)
+    if dominant:
+        return window_for_model(dominant), "inferred"
     return _DEFAULT_WINDOW, "assumed"
 
 
@@ -367,8 +512,8 @@ def decide(event, cfg):
             return None
     except Exception:                         # noqa: BLE001 - a missing helper must not wedge a turn
         pass
-    window, source = resolve_window(cfg, proj)
-    tokens = context_tokens(transcript)
+    tokens, model, peak = read_session(transcript)
+    window, source = resolve_window(cfg, proj, transcript, model, peak)
     state, detail = verdict(tokens, window,
                             cfg.get("context_handover_pct", 70),
                             cfg.get("context_handover_cap", 400000))

@@ -28,11 +28,11 @@ SCRIPT = HOOKS_DIR / "context-watcher.py"
 SHIM = HOOKS_DIR / "run-python.sh"
 
 
-def _usage_line(input_tokens=0, cache_creation=0, cache_read=0):
+def _usage_line(input_tokens=0, cache_creation=0, cache_read=0, model="claude-opus-5"):
     """One assistant transcript record carrying a usage block, built with json.dumps."""
     return json.dumps({
         "type": "assistant",
-        "message": {"role": "assistant", "usage": {
+        "message": {"role": "assistant", "model": model, "usage": {
             "input_tokens": input_tokens,
             "cache_creation_input_tokens": cache_creation,
             "cache_read_input_tokens": cache_read,
@@ -182,50 +182,171 @@ def test_a_1m_suffix_on_haiku_is_refused():
 
 
 def _claude_json(tmp_path, project_path, models):
+    """models: {model_id: cache_read_tokens} - the volume that decides which entry dominates."""
     f = tmp_path / "claude.json"
     f.write_text(json.dumps({"projects": {project_path: {
-        "lastModelUsage": {m: {"inputTokens": 1} for m in models}}}}), encoding="utf-8")
+        "lastModelUsage": {m: {"cacheReadInputTokens": v} for m, v in models.items()}}}}),
+        encoding="utf-8")
     return str(f)
 
 
-def test_detect_takes_the_LARGEST_window_among_a_project_s_models(tmp_path):
-    """Subagents run haiku and sonnet beside the main model; the biggest is the session's."""
-    cfg = _claude_json(tmp_path, "/repo", ["claude-haiku-4-5-20251001", "claude-opus-5[1m]"])
-    assert W.detect_window("/repo", config_path=cfg) == 1_000_000
+def test_project_model_is_the_DOMINANT_one_not_the_widest(tmp_path):
+    """The switch-down case: widest-ever would claim 1M forever and go silently inert.
+
+    A 200k session whose window is assumed to be 1M gets a 400k threshold it can never reach - it
+    auto-compacts around 166k - so the hook never fires AND never reports misconfigured.
+    """
+    cfg = _claude_json(tmp_path, "/repo",
+                       {"claude-opus-5[1m]": 5_000, "claude-sonnet-5": 9_000_000})
+    assert W.model_from_project("/repo", config_path=cfg) == "claude-sonnet-5"
+    assert W.window_for_model("claude-sonnet-5") == 200_000
 
 
-def test_detect_matches_a_subdirectory_against_its_recorded_project(tmp_path):
+def test_subagent_models_do_not_outvote_the_main_one(tmp_path):
+    cfg = _claude_json(tmp_path, "/repo",
+                       {"claude-haiku-4-5-20251001": 1_000, "claude-opus-5[1m]": 34_000_000})
+    assert W.model_from_project("/repo", config_path=cfg) == "claude-opus-5[1m]"
+
+
+def test_project_lookup_matches_a_subdirectory(tmp_path):
     """A Stop hook can fire with cwd inside the repo, not at its root."""
-    cfg = _claude_json(tmp_path, "/repo", ["claude-opus-5[1m]"])
-    assert W.detect_window("/repo/plugins/hooks", config_path=cfg) == 1_000_000
+    cfg = _claude_json(tmp_path, "/repo", {"claude-opus-5[1m]": 10})
+    assert W.model_from_project("/repo/plugins/hooks", config_path=cfg) == "claude-opus-5[1m]"
 
 
-def test_detect_does_not_match_a_mere_prefix_of_another_path(tmp_path):
-    """`/repo-other` must not match a record for `/repo`."""
-    cfg = _claude_json(tmp_path, "/repo", ["claude-opus-5[1m]"])
-    assert W.detect_window("/repo-other", config_path=cfg) is None
+def test_project_lookup_does_not_match_a_mere_prefix(tmp_path):
+    cfg = _claude_json(tmp_path, "/repo", {"claude-opus-5[1m]": 10})
+    assert W.model_from_project("/repo-other", config_path=cfg) is None
 
 
-@pytest.mark.parametrize("bad", ["missing.json", None])
-def test_detect_returns_None_when_it_cannot_tell(tmp_path, bad):
-    path = str(tmp_path / bad) if bad else str(tmp_path / "nope.json")
-    assert W.detect_window("/repo", config_path=path) is None
-
-
-def test_detect_returns_None_for_an_unknown_project(tmp_path):
-    cfg = _claude_json(tmp_path, "/other", ["claude-opus-5[1m]"])
-    assert W.detect_window("/repo", config_path=cfg) is None
+def test_project_lookup_returns_None_when_it_cannot_tell(tmp_path):
+    assert W.model_from_project("/repo", config_path=str(tmp_path / "nope.json")) is None
+    cfg = _claude_json(tmp_path, "/other", {"claude-opus-5[1m]": 10})
+    assert W.model_from_project("/repo", config_path=cfg) is None
 
 
 # ------------------------------------------------------------------ resolve_window()
 
-def test_an_explicit_window_beats_detection(tmp_path):
+def test_an_explicit_window_beats_every_other_rung(tmp_path):
     assert W.resolve_window({"context_window": 500_000}, "/repo") == (500_000, "configured")
 
 
-def test_zero_or_missing_falls_through_to_detection_then_default():
+def test_zero_or_missing_falls_through_to_the_default():
     assert W.resolve_window({"context_window": 0}, "/nonexistent-repo") == (200_000, "assumed")
     assert W.resolve_window({}, "/nonexistent-repo") == (200_000, "assumed")
+
+
+# ----------------------------------- family ceiling + observed peak: the standalone proof
+#
+# `message.model` is ALWAYS present and ALWAYS the bare family id - this very session reports
+# `claude-opus-5` while running 1M - so the family fixes the CEILING, never the actual window.
+# Claude Code runs a 200K mode of the same family, which is why `claude-opus-4-6` and
+# `claude-opus-4-6[1m]` are distinct ids. The measurement is what settles which mode is running.
+
+@pytest.mark.parametrize("model_id,expected", [
+    ("claude-opus-5", 1_000_000), ("claude-fable-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000), ("claude-mythos-5", 1_000_000),
+    ("claude-haiku-4-5-20251001", 200_000), ("oss-128k-claude", 128_000),
+    ("something-new", 200_000), ("", 200_000), (None, 200_000),
+])
+def test_family_max_window(model_id, expected):
+    assert W.family_max_window(model_id) == expected
+
+
+def test_a_big_family_below_200k_stays_the_SAFE_assumption():
+    """Early in a 1M session nothing proves the variant, so assume small: early asks, never silence."""
+    assert W.window_from_evidence("claude-opus-5", 50_000) == 200_000
+
+
+def test_exceeding_200k_PROVES_the_large_variant():
+    """A 200K window cannot hold 761k. This is a proof, not an inference."""
+    assert W.window_from_evidence("claude-opus-5", 761_570) == 1_000_000
+
+
+def test_a_200k_family_is_settled_by_the_ceiling_whatever_the_peak():
+    """Haiku has no 1M variant, so a huge reading cannot promote it."""
+    assert W.window_from_evidence("claude-haiku-4-5", 900_000) == 200_000
+
+
+def test_a_missing_peak_is_treated_as_unproven():
+    assert W.window_from_evidence("claude-opus-5", None) == 200_000
+    assert W.window_from_evidence("claude-opus-5", "x") == 200_000
+
+
+# ----------------------------------------------------------------- read_session()
+
+def test_read_session_returns_current_model_and_peak(tmp_path):
+    t = _transcript(tmp_path,
+                    _usage_line(cache_read=900_000),
+                    _usage_line(cache_read=12_000))
+    current, model, peak = W.read_session(t)
+    assert (current, model) == (12_000, "claude-opus-5")
+    assert peak == 900_000, "the peak must survive a compaction that dropped the current reading"
+
+
+def test_read_session_on_an_unreadable_transcript(tmp_path):
+    assert W.read_session(str(tmp_path / "missing.jsonl")) == (None, None, 0)
+
+
+def test_the_evidence_rung_needs_no_config_file_and_no_dispatch(tmp_path):
+    """Rung 3 stands alone: family from the transcript, variant from the measurement."""
+    assert W.resolve_window({}, "/nowhere", None, "claude-opus-5", 761_570) == (1_000_000, "evidenced")
+    assert W.resolve_window({}, "/nowhere", None, "claude-opus-5", 50_000) == (200_000, "evidenced")
+
+
+# ------------------------------------------- model_from_dispatch(): the EXACT current model
+#
+# An Agent call with no `model` inherits the session's, and the result reports what it ran as
+# `resolvedModel` - carrying the `[1m]` suffix that `message.model` drops. A PINNED dispatch
+# resolves to the pinned model, so reading those would report a subagent's tier as the session's.
+
+def _dispatch(tmp_path, pairs):
+    """pairs: [(pinned_model_or_None, resolved_model)] -> a transcript with those dispatches."""
+    lines = []
+    for i, (pinned, resolved) in enumerate(pairs):
+        use = {"type": "tool_use", "id": f"t{i}", "name": "Agent", "input": {"prompt": "x"}}
+        if pinned:
+            use["input"]["model"] = pinned
+        lines.append(json.dumps({"type": "assistant", "message": {"content": [use]}}))
+        lines.append(json.dumps({"type": "user",
+                                 "message": {"content": [{"type": "tool_result",
+                                                          "tool_use_id": f"t{i}"}]},
+                                 "toolUseResult": {"resolvedModel": resolved}}))
+    return _transcript(tmp_path, *lines)
+
+
+def test_an_unpinned_dispatch_reveals_the_session_model(tmp_path):
+    t = _dispatch(tmp_path, [(None, "claude-opus-5[1m]")])
+    assert W.model_from_dispatch(t) == "claude-opus-5[1m]"
+
+
+def test_a_pinned_dispatch_is_ignored(tmp_path):
+    """It resolves to the pinned tier, which says nothing about the session."""
+    t = _dispatch(tmp_path, [("sonnet", "claude-sonnet-5")])
+    assert W.model_from_dispatch(t) is None
+
+
+def test_pinned_dispatches_do_not_mask_an_unpinned_one(tmp_path):
+    t = _dispatch(tmp_path, [("sonnet", "claude-sonnet-5"), (None, "claude-opus-5[1m]"),
+                             ("haiku", "claude-haiku-4-5")])
+    assert W.model_from_dispatch(t) == "claude-opus-5[1m]"
+
+
+def test_the_LATEST_unpinned_dispatch_wins(tmp_path):
+    """The model can be switched mid-session with /model."""
+    t = _dispatch(tmp_path, [(None, "claude-opus-5[1m]"), (None, "claude-sonnet-5")])
+    assert W.model_from_dispatch(t) == "claude-sonnet-5"
+
+
+def test_no_dispatch_at_all_is_None(tmp_path):
+    assert W.model_from_dispatch(_transcript(tmp_path, _usage_line(cache_read=10))) is None
+    assert W.model_from_dispatch(None) is None
+
+
+def test_the_exact_model_outranks_the_project_inference(tmp_path):
+    """Rung 2 beats rung 3: current beats accumulated."""
+    t = _dispatch(tmp_path, [(None, "claude-sonnet-5")])
+    assert W.resolve_window({}, "/nonexistent-repo", t) == (200_000, "detected")
 
 
 # ------------------------------------------------------------------ due()
