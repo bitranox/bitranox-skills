@@ -925,6 +925,23 @@
   "stop",
   "machine-local"
  ],
+ "meta-prune-plugin-cache": [
+  "claude",
+  "grown",
+  "large",
+  "disk",
+  "filling",
+  "code",
+  "plugin",
+  "cache",
+  "holds",
+  "directory",
+  "published",
+  "version",
+  "temp_subdir_",
+  "clone",
+  "temp_git_"
+ ],
  "meta-self-improve": [
   "turn",
   "produced",
