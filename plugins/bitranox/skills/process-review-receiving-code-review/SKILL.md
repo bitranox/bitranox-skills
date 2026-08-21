@@ -26,7 +26,7 @@ WHEN receiving code review feedback:
 2. UNDERSTAND: Restate requirement in own words (or ask)
 3. VERIFY: Check against codebase reality
 4. EVALUATE: Technically sound for THIS codebase?
-5. RESPOND: Technical acknowledgment or reasoned pushback
+5. RESPOND: Acknowledge, push back with reasoning, or SPLIT the finding (see below)
 6. IMPLEMENT: One item at a time, test each
 ```
 
@@ -140,6 +140,42 @@ Push back when:
 - Involve your human partner if architectural
 
 **If you're uncomfortable pushing back out loud:** Name that tension, then tell your partner about the issue you've seen. They'll appreciate your honesty.
+
+## The third outcome: right defect, wrong trigger
+
+Accept-or-push-back is a binary, and the case it loses is common enough to name: a finding whose
+stated TRIGGER is unreachable while the DEFECT it points at is real. It happens because a reviewer
+reads the file in front of them and cannot see the coupling that makes the code correct - the
+invariant lives somewhere else, maintained by someone else.
+
+The shape: a reviewer flags a narrowing cast as overflow-prone and reaches for a trigger that
+cannot occur - a clock rate orders of magnitude below anything the hardware produces. Declining on
+that trigger is correct AND leaves the finding's real content untouched, because the cast is sound
+only while an independently maintained floor stays above what a resolution formula needs. Nothing
+in the file says so, nothing tests it, and the two are edited by different people.
+
+Before splitting it, re-run the reviewer's OWN check with the real constants. An unreachable
+trigger often has a reachable neighbour, and the reviewer was looking in the right place with the
+wrong numbers: substitute what the values actually are and see where the boundary really falls. In
+the cast example the true limit sits one step below the cap an earlier validation already allows,
+so the same failure is reachable through the current configuration rather than a changed one. Skip
+this and you decline a finding that was live.
+
+Then SPLIT it rather than voting on it:
+
+- **The trigger** gets the ordinary treatment - accept it or decline it with the reasoning.
+- **The defect** gets asked about separately: *what invariant makes this correct, is it stated
+  anywhere, and what happens when it moves?* If the answer is an unwritten coupling, the fix is to
+  write it down - an assertion, a test that fails when the floor drops, or a comment naming the
+  other file.
+
+Neither half of the binary reaches that. Declining on the unreachable trigger keeps latent
+fragility in the code and reads as a clean rebuttal; accepting the finding as stated logs a
+mechanism that cannot happen, so the next reader inherits a false explanation of why the change
+was made.
+
+The tell that you are in this case: the trigger is easy to refute and refuting it feels
+disproportionately satisfying. That is the moment to ask what the reviewer was looking at.
 
 ## Acknowledging Correct Feedback
 
