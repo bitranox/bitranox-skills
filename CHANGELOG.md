@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.227.0]
+
+### Added
+
+- `frontmatter_problems` now reports a SKILL.md whose front matter never closes. The failure shape
+  is a closing `---` glued onto the end of the last value (`...ship an OVM change.---`) instead of
+  standing on its own line. Every front-matter reader in `harness_checks.py` splits on a bare `---`
+  substring, so all of them recover the right name and description from such a file - which is
+  exactly why nothing caught it: the malformed file reads as perfectly well-formed to every check
+  we had, right up until a loader that wants the delimiter on its own line refuses it. Found by
+  running `meta-audit-local-skills-and-hooks` over a real tree, where `audit_local.py check`
+  reported the target clean while four of its skills were malformed. New helper
+  `frontmatter_unterminated`, five tests including one that pins the lenient-parser behaviour that
+  hid the defect.
+
 ## [5.226.1]
 
 ### Changed
