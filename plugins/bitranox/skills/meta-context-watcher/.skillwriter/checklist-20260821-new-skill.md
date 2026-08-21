@@ -18,7 +18,12 @@ tests, three config knobs, and the doc rows.
 - [x] Threshold researched rather than guessed: Claude Code auto-compacts at about 83% of the
       window and that ceiling only lowers; measured context-rot onset is about 300-400k tokens on a
       1M window and about 50k on a 200k one. Those two disagree on a big window, which is why the
-      threshold is `min(pct of window, absolute cap)` rather than either alone.
+      threshold is `min(pct of window, absolute cap)` rather than either alone. The 400k cap is one
+      published finding read SECOND-HAND from a summary, and both the hook docstring and the knob
+      documentation say so rather than presenting it as measured here.
+- [x] Model windows taken from the bundled `claude-api` skill's table rather than inferred: Fable 5,
+      Opus 5/4.8/4.7/4.6, Sonnet 5/4.6 offer a 1M variant; Haiku 4.5 is 200K with NO 1M variant, so
+      the capability set is an allowlist and a `[1m]` suffix on haiku is refused.
 
 ## RED
 
@@ -76,11 +81,10 @@ tests, three config knobs, and the doc rows.
 - [x] No session narrative or private provenance in the skill or this artifact.
 - [x] No machine-specific address, host or path: `grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|/home/|/Users/|/tmp/'`
       over the SKILL.md is clean.
-- [x] Token budget: **642 words, over the 500-word target and recorded rather than gamed.** The
-      overage is the RED-derived rationalization table plus the two sections this repo's
-      conventions require of a hook-paired skill (`When it fires on its own`, `Not the same as its
-      neighbours`). One trim pass already removed the restated one-rule elaboration and the
-      duplicated procedure step; further cutting would remove a RED counter.
+- [x] Token budget: see the final figure under "Revisions" below - over the 500-word target, and
+      recorded rather than gamed. The overage is the RED-derived rationalization table plus the
+      sections this repo's conventions require of a hook-paired skill (`When it fires on its own`,
+      `Not the same as its neighbours`).
 - [x] No supporting files, so no routing table is required.
 
 ## The paired hook
@@ -88,17 +92,43 @@ tests, three config knobs, and the doc rows.
 - [x] Measures context from the transcript's last `message.usage` as
       `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. No hook event carries
       a token count, so this is the only exact source; transcript bytes were rejected as a proxy.
-- [x] 31 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
+- [x] 55 tests, covering both sides of the threshold boundary, the cache-legs sum, last-record-wins,
       a compaction reading, a partial line from the tail seek, no-usage reading as unknown rather
-      than zero, once-per-session, the `nudges` off-switch, and yielding while a nap is owed.
+      than zero, the model-window table, project detection and its non-matches, re-ask spacing at
+      both window sizes, the `nudges` off-switch, and yielding while a nap is owed.
 - [x] The misconfigured-window case is reported rather than silent: measuring more context than the
       configured window means the threshold can never be crossed, which is indistinguishable from a
       working watcher. Tested with its control - the same reading against a correct window is an
       ordinary offer.
-- [x] Verified against this session's real transcript, both config states: 661,622 tokens read
-      `misconfigured` against the 200k default and `offer` against a 1M window.
+- [x] Verified against this session's real transcript at several points as it grew (563k, 661k,
+      761k): `misconfigured` against a wrong 200k window, `offer` against the detected 1M one.
 - [x] Registered in `hooks.json` on the existing `Stop` group and in `hooks/tests/conftest.py`
-      `_HOOK_MODULES`; full suite green at 1801 tests.
+      `_HOOK_MODULES`; full suite green at 1825 tests.
+
+## Revisions from the decision review (same change)
+
+- [x] **Re-asks replace the single ask.** Once-per-session meant a decline at 40% silenced the hook
+      through the stretch it exists for. The next ask now waits until context has grown another
+      tenth of the WINDOW, so the spacing scales with window size; tested from both sides at 200k
+      and 1M.
+- [x] **The window is DETECTED, not configured.** `~/.claude.json` records per-project
+      `lastModelUsage` keyed by the full model id, and that is the one place the `[1m]` suffix
+      survives - the transcript stores the bare `claude-opus-5`. The largest window among a
+      project's models is taken, because subagents contribute haiku and sonnet entries and the
+      asymmetry favours over-estimating. `context_window` defaults to 0 (detect) and remains an
+      override. Verified live: resolves `(1000000, "detected")` here with no knob set, turning what
+      was a misconfiguration complaint into a real offer.
+- [x] **Writing OVERWRITES any existing handover.** One file, one moment: a stale handover is
+      superseded the instant a new one is written, so it is replaced wholesale rather than appended
+      to or kept alongside. Two handovers, or one holding two moments, leaves the reader deciding
+      which half is true.
+- [x] **Reading a handover marks it STALE rather than deleting it.** Deleting loses the only record
+      of where the work stood if the reading session then crashes; leaving it untouched lets the
+      session after next read a passed moment as current. Amending is forbidden - a new handover
+      replaces the file.
+- [x] Skill re-checked after the additions: **811 words**, still over the 500 target and still
+      recorded rather than gamed. Two trim passes removed the restated one-rule elaboration, a
+      duplicated procedure step, and the long-form reading section.
 
 ## Deployment
 

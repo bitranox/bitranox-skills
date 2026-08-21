@@ -20,7 +20,7 @@ thing dies with this session: what you were part-way through, and why you chose 
 ## What belongs in it
 
 - **In flight** - what is part-done, how far it got, and what state it is in right now.
-- **Committed, or not** - say it outright. Uncommitted work can vanish; the reader cannot guess.
+- **Committed, or not** - uncommitted work can vanish; the reader cannot guess which they got.
 - **Decided, and why** - choices a reader would otherwise reopen, with the reason that settled them.
 - **Deliberately not done** - so it is not mistaken for an oversight and redone.
 - **The exact next action** - the command or edit to start with, not a direction of travel.
@@ -42,21 +42,43 @@ thing dies with this session: what you were part-way through, and why you chose 
 
 1. **Capture learnings first** with `bitranox:meta-self-improve`, so durable facts reach the store
    rather than dying in a file that is about to be superseded.
-2. **Write `handover.md` at the repo root.** It is session scaffolding, so it MUST be gitignored -
-   add it if it is not, the same way `EXECUTION-USER-REVIEW.md` is.
-3. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
-4. **Tell the user to type `/clear`.** You cannot run it - built-in slash commands are not invocable
+2. **Write `handover.md` at the repo root, OVERWRITING whatever is there.** A stale handover from an
+   earlier session is superseded the moment you write yours - replace it wholesale, never append to
+   it and never keep both. There is exactly one `handover.md`, and it describes one moment; two of
+   them, or one with two moments in it, leaves the reader deciding which half is true. It is session
+   scaffolding, so it MUST be gitignored - add it if it is not, the same way
+   `EXECUTION-USER-REVIEW.md` is.
+3. **End the file with its own expiry instruction:**
+
+   > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
+   > delete it - if this session ends badly it is the only record of where things stood.
+
+4. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
+5. **Tell the user to type `/clear`.** You cannot run it - built-in slash commands are not invocable
    by the model - so say so plainly rather than implying the session clears itself.
+
+## When you are the one READING a handover
+
+Absorb it, then **mark it STALE in place**. Both alternatives fail: left untouched, the session
+after next reads a passed moment as current; deleted, the record is gone the instant it is read, so
+a crash mid-task leaves nothing saying where the work stood.
+
+Never amend a stale handover to update it - write a NEW one and replace the file. An edited handover
+holds two moments with no way to tell them apart.
 
 ## When it fires on its own
 
-A `Stop` hook measures context from the transcript's last recorded usage and blocks ONCE per session
-when it crosses `min(context_handover_pct` of `context_window`, `context_handover_cap)`. Declining is
-fine; it will not ask again that session.
+A `Stop` hook measures context from the transcript's last recorded usage - the real per-request
+figure, not an estimate - and blocks when it crosses
+`min(context_handover_pct` of the window, `context_handover_cap)`.
 
-If it reports measuring MORE context than the window, `context_window` is wrong - set it to your real
-window via `bitranox:meta-memory-settings`. That is reported rather than ignored because a threshold
-nothing can reach looks exactly like a watcher that works.
+The window is detected from the model this project has used, so nothing needs configuring. Declining
+is not permanent: the next ask waits until context has grown another tenth of the window, because a
+decline at 40% is "not yet" while 90% is a different question.
+
+If it ever reports measuring MORE context than the window, the detection failed - set
+`context_window` explicitly via `bitranox:meta-memory-settings`. That is reported rather than
+ignored because a threshold nothing can reach looks exactly like a watcher that works.
 
 ## Not the same as its neighbours
 
