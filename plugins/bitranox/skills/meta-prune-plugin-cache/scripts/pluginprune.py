@@ -30,13 +30,20 @@ Kept, with the reason stated per directory:
   session resolves to);
 * any version with a LIVE `.in_use` lock (a session running right now, this one included);
 * any version whose path appears in a settings file, which pins it;
-* the only version of a plugin that has just one - single-version plugins are not the
-  accumulation, and deleting the sole copy forces a re-fetch for nothing;
+* the SOLE version of a plugin a settings file's `enabledPlugins` names, however it is set -
+  disabled is not uninstalled, and its cache is still wanted. `enabledPlugins` names a plugin,
+  never a version, so it cannot choose between several;
 * a `temp_*` directory younger than `--min-age` (default 60m), because an operation may be
   in flight.
 
-Refusals, because this runs on machines whose layout is not yours: a symlinked directory, a
-path that resolves outside the cache, and the cache directory itself are refused outright.
+A plugin nothing references at all is prunable even as the only version: that is what an
+uninstalled plugin leaves behind, and no other pass reclaims it.
+
+Refusals, because this runs on machines whose layout is not yours: a symlinked directory, a path
+that resolves outside the cache, and the cache directory itself are refused outright. So is every
+version directory when NOT ONE of them carries an `.in_use` directory - an idle machine leaves
+that directory behind empty, so its total absence means the mechanism was renamed or dropped and
+every version would silently read as unused. `--allow-missing-locks` overrides that.
 
 Run:
   `uv run scripts/pluginprune.py`                        # the plan, with sizes
@@ -230,6 +237,7 @@ class Plan:
     cache_dir: Path
     entries: tuple[Entry, ...]
     saw_live_lock: bool
+    saw_lock_dir: bool = True
 
     @property
     def refused(self) -> tuple[Entry, ...]:
@@ -261,6 +269,7 @@ class Plan:
             "refused": [entry.as_dict() for entry in self.refused],
             "reclaimable_bytes": self.reclaimable_bytes,
             "saw_live_lock": self.saw_live_lock,
+            "saw_lock_dir": self.saw_lock_dir,
         }
 
 
@@ -324,6 +333,23 @@ def pinning_settings(path: Path, settings_files: Iterable[Path]) -> str | None:
     return None
 
 
+def enabling_settings(marketplace: str, plugin: str, settings_files: Iterable[Path]) -> str | None:
+    """The settings file whose `enabledPlugins` names this plugin, however it is set.
+
+    A `false` entry means disabled, not uninstalled, so its cache is still wanted.
+    """
+    key = f"{plugin}@{marketplace}"
+    for settings in settings_files:
+        try:
+            payload = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        enabled = payload.get("enabledPlugins") if isinstance(payload, dict) else None
+        if isinstance(enabled, dict) and key in enabled:
+            return settings.name
+    return None
+
+
 def default_settings_files(cache_dir: Path) -> list[Path]:
     """`~/.claude/settings*.json` derived from the cache path, not from the environment."""
     claude_dir = cache_dir.parent.parent
@@ -359,6 +385,7 @@ def build_plan(
     min_age_seconds: float = DEFAULT_MIN_AGE_SECONDS,
     installed_plugins: str | Path | None = None,
     settings_files: Sequence[str | Path] | None = None,
+    allow_missing_locks: bool = False,
     now: float | None = None,
 ) -> Plan:
     """Classify every cache directory into prune / keep / refused, with a reason for each."""
@@ -379,51 +406,83 @@ def build_plan(
 
     entries: list[Entry] = []
     saw_live_lock = False
+    saw_lock_dir = False
     for version_dir in _version_dirs(root, marketplaces):
-        sole = len(_child_dirs(version_dir.parent)) == 1
+        saw_lock_dir = saw_lock_dir or (version_dir / LOCK_DIR).is_dir()
         holder = live_lock_holder(version_dir)
         saw_live_lock = saw_live_lock or holder is not None
         entries.append(
             _version_entry(
                 version_dir,
                 root=root,
-                sole=sole,
                 holder=holder,
                 installed=installed,
                 explicit=explicit,
                 settings=settings,
             )
         )
+    if entries and not saw_lock_dir and not allow_missing_locks:
+        entries = [_without_the_lock_mechanism(entry) for entry in entries]
     if marketplaces is None:
         entries.extend(_temp_entries(root, min_age_seconds=min_age_seconds, now=moment))
-    return Plan(cache_dir=root, entries=tuple(entries), saw_live_lock=saw_live_lock)
+    return Plan(
+        cache_dir=root,
+        entries=tuple(entries),
+        saw_live_lock=saw_live_lock,
+        saw_lock_dir=saw_lock_dir,
+    )
+
+
+def _without_the_lock_mechanism(entry: Entry) -> Entry:
+    """Refuse a version directory nothing else keeps, because nothing can now prove it is free.
+
+    Not one version directory carries an `.in_use` directory. On a machine that has run a
+    lock-aware Claude Code at all, at least one does - an idle machine leaves the directory
+    behind EMPTY - so the absence means the mechanism was renamed or dropped, and every version
+    would silently read as unused, the running session's included.
+    """
+    if entry.refusal is not None or entry.keep_reason is not None:
+        return entry
+    return Entry(
+        **{
+            **entry.__dict__,
+            "refusal": "no .in_use lock directory anywhere: the lock mechanism is absent or has"
+            " changed, so no version can be shown free (override with --allow-missing-locks)",
+        }
+    )
 
 
 def _version_entry(
     version_dir: Path,
     *,
     root: Path,
-    sole: bool,
     holder: str | None,
     installed: set[str],
     explicit: set[str],
     settings: Sequence[Path],
 ) -> Entry:
+    marketplace = version_dir.parent.parent.name
+    plugin = version_dir.parent.name
     refusal = refusal_for(version_dir, base=root)
     entry = Entry(
         path=version_dir,
         kind=KIND_VERSION,
         size_bytes=0 if refusal else directory_size(version_dir),
         refusal=refusal,
-        marketplace=version_dir.parent.parent.name,
-        plugin=version_dir.parent.name,
+        marketplace=marketplace,
+        plugin=plugin,
         version=version_dir.name,
     )
     if refusal is not None:
         return entry
-    pinned = pinning_settings(version_dir, settings)
     reason = _keep_reason(
-        version_dir, sole=sole, holder=holder, installed=installed, explicit=explicit, pinned=pinned
+        version_dir,
+        sole=len(_child_dirs(version_dir.parent)) == 1,
+        holder=holder,
+        installed=installed,
+        explicit=explicit,
+        pinned=pinning_settings(version_dir, settings),
+        enabled=enabling_settings(marketplace, plugin, settings),
     )
     return Entry(**{**entry.__dict__, "keep_reason": reason})
 
@@ -436,8 +495,17 @@ def _keep_reason(
     installed: set[str],
     explicit: set[str],
     pinned: str | None,
+    enabled: str | None,
 ) -> str | None:
-    """The first reason that applies, most specific first, or None when nothing keeps it."""
+    """The first reason that applies, most specific first, or None when nothing keeps it.
+
+    A plugin nothing references is prunable even when it is the only version: that is what an
+    uninstalled plugin looks like, and no other pass reclaims it. `enabled` is the guard that
+    makes that safe, and it applies ONLY to a sole version. `enabledPlugins` names a PLUGIN, not
+    a version, so it says "this plugin is still wanted" and nothing about which of its versions
+    to keep - honouring it per version would preserve the entire history of every enabled
+    plugin, which is the whole accumulation.
+    """
     normalised = os.path.normpath(str(version_dir))
     if holder is not None:
         return holder
@@ -447,8 +515,8 @@ def _keep_reason(
         return "installed"
     if pinned is not None:
         return f"pinned in {pinned}"
-    if sole:
-        return "only version"
+    if sole and enabled is not None:
+        return f"only version, enabled in {enabled}"
     return None
 
 
@@ -591,6 +659,12 @@ def _build_parser() -> argparse.ArgumentParser:
         " (default: ~/.claude/settings.json and settings.local.json)",
     )
     parser.add_argument(
+        "--allow-missing-locks",
+        action="store_true",
+        help="prune even when NO version directory has an .in_use directory, which means the"
+        " lock mechanism is absent or has changed and no version can be shown free",
+    )
+    parser.add_argument(
         "--apply", action="store_true", help="actually remove (default is a dry run)"
     )
     parser.add_argument("--json", action="store_true", help="machine-readable envelope")
@@ -625,9 +699,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_age_seconds=args.min_age,
         installed_plugins=args.installed_plugins,
         settings_files=args.settings,
+        allow_missing_locks=args.allow_missing_locks,
     )
 
-    if not plan.saw_live_lock and plan.prune:
+    if plan.saw_lock_dir and not plan.saw_live_lock and plan.prune:
         # No live lock anywhere means the running session's own version cannot be identified
         # from the cache, so name the one thing that resolves it rather than guessing.
         print(

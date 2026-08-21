@@ -78,18 +78,28 @@ def make_temp_dir(cache: Path, name: str, *, age_seconds: float) -> Path:
 
 @pytest.fixture()
 def cache(tmp_path: Path) -> Path:
-    """A `~/.claude/plugins/cache` shaped tree: three versions, a solo plugin, temp leftovers."""
+    """A `~/.claude/plugins/cache` shaped tree.
+
+    Three versions of one plugin, a solo plugin the install record names, a solo plugin it does
+    not, and temp leftovers. The installed version carries an EMPTY `.in_use` directory, which is
+    what an idle machine looks like once a lock-aware Claude Code has loaded it.
+    """
     plugins = tmp_path / "plugins"
     root = plugins / "cache"
     for version in ("1.0.0", "1.1.0", "1.2.0"):
         make_version(root, "own-marketplace", "own-plugin", version)
+    (root / "own-marketplace" / "own-plugin" / "1.2.0" / ".in_use").mkdir()
     make_version(root, "other-marketplace", "solo-plugin", "2.0.0")
+    make_version(root, "other-marketplace", "orphan-plugin", "3.0.0")
     make_temp_dir(root, "temp_subdir_1_abc.clone", age_seconds=7200)
     make_temp_dir(root, "temp_git_2_def", age_seconds=7200)
     make_temp_dir(root, "temp_subdir_3_ghi.clone", age_seconds=5)
     write_installed(
         plugins,
-        {"own-plugin@own-marketplace": root / "own-marketplace" / "own-plugin" / "1.2.0"},
+        {
+            "own-plugin@own-marketplace": root / "own-marketplace" / "own-plugin" / "1.2.0",
+            "solo-plugin@other-marketplace": root / "other-marketplace" / "solo-plugin" / "2.0.0",
+        },
     )
     return root
 
@@ -138,6 +148,7 @@ def test_stale_versions_are_planned_and_the_installed_one_is_kept(cache: Path) -
     assert paths(plan.prune) == {
         str(cache / "own-marketplace" / "own-plugin" / "1.0.0"),
         str(cache / "own-marketplace" / "own-plugin" / "1.1.0"),
+        str(cache / "other-marketplace" / "orphan-plugin" / "3.0.0"),
         str(cache / "temp_subdir_1_abc.clone"),
         str(cache / "temp_git_2_def"),
     }
@@ -145,12 +156,31 @@ def test_stale_versions_are_planned_and_the_installed_one_is_kept(cache: Path) -
     assert kept[str(cache / "own-marketplace" / "own-plugin" / "1.2.0")] == "installed"
 
 
-def test_a_plugin_with_one_version_is_never_pruned(cache: Path) -> None:
+def test_a_sole_version_the_install_record_names_is_kept(cache: Path) -> None:
     plan = plan_for(cache)
     solo = cache / "other-marketplace" / "solo-plugin" / "2.0.0"
     kept = {str(entry.path): entry.keep_reason for entry in plan.keep}
-    assert kept[str(solo)] == "only version"
+    assert kept[str(solo)] == "installed"
     assert str(solo) not in paths(plan.prune)
+
+
+def test_a_sole_version_no_record_mentions_is_planned(cache: Path) -> None:
+    """An uninstalled plugin leaves its cache directory behind; nothing else will reclaim it."""
+    orphan = cache / "other-marketplace" / "orphan-plugin" / "3.0.0"
+    assert str(orphan) in paths(plan_for(cache).prune)
+
+
+def test_a_sole_version_enabled_in_a_settings_file_is_kept(cache: Path, tmp_path: Path) -> None:
+    """enabledPlugins names plugin@marketplace, so a disabled-not-uninstalled plugin survives."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"enabledPlugins": {"orphan-plugin@other-marketplace": False}}),
+        encoding="utf-8",
+    )
+    plan = plan_for(cache, settings_files=[settings])
+    orphan = cache / "other-marketplace" / "orphan-plugin" / "3.0.0"
+    kept = {str(entry.path): entry.keep_reason for entry in plan.keep}
+    assert kept[str(orphan)] == f"only version, enabled in {settings.name}"
 
 
 def test_a_live_in_use_lock_keeps_a_version(cache: Path) -> None:
@@ -207,10 +237,66 @@ def test_a_version_pinned_by_a_settings_file_is_kept(cache: Path, tmp_path: Path
     assert str(pinned) not in paths(plan.prune)
 
 
+def test_enabled_in_settings_does_not_keep_every_version_of_a_plugin(
+    cache: Path, tmp_path: Path
+) -> None:
+    """enabledPlugins names a PLUGIN, not a version, so it cannot decide between versions.
+
+    Left unscoped it keeps the whole history of every enabled plugin, which is the entire
+    accumulation this tool exists to reclaim.
+    """
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"enabledPlugins": {"own-plugin@own-marketplace": True}}), encoding="utf-8"
+    )
+    plan = plan_for(cache, settings_files=[settings])
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.0.0") in paths(plan.prune)
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.1.0") in paths(plan.prune)
+
+
 def test_marketplace_filter_limits_the_scan(cache: Path) -> None:
     plan = plan_for(cache, marketplaces=["own-marketplace"])
     assert all("other-marketplace" not in path for path in paths(plan.prune))
     assert all("temp_" not in Path(path).name for path in paths(plan.prune))
+
+
+# --------------------------------------------------------------------------------------------
+# The lock mechanism itself
+# --------------------------------------------------------------------------------------------
+
+
+def test_no_in_use_directory_anywhere_refuses_the_version_dirs(cache: Path) -> None:
+    """A renamed or dropped lock mechanism must not read as "every version is free"."""
+    for lock_dir in cache.glob("*/*/*/.in_use"):
+        lock_dir.rmdir()
+    plan = plan_for(cache)
+    assert plan.prune  # the temp leftovers do not depend on locks
+    assert all(entry.kind == P.KIND_TEMP for entry in plan.prune)
+    refused = {str(entry.path): entry.refusal for entry in plan.refused}
+    assert refused
+    assert all("lock" in reason for reason in refused.values())
+
+
+def test_an_empty_in_use_directory_is_an_idle_machine_not_a_missing_mechanism(cache: Path) -> None:
+    plan = plan_for(cache)
+    assert plan.refused == ()
+    assert any(entry.kind == P.KIND_VERSION for entry in plan.prune)
+
+
+def test_allow_missing_locks_overrides_the_refusal(cache: Path) -> None:
+    for lock_dir in cache.glob("*/*/*/.in_use"):
+        lock_dir.rmdir()
+    plan = plan_for(cache, allow_missing_locks=True)
+    assert plan.refused == ()
+    assert any(entry.kind == P.KIND_VERSION for entry in plan.prune)
+
+
+def test_a_missing_mechanism_exits_one_and_names_the_override(cache: Path, capsys) -> None:
+    for lock_dir in cache.glob("*/*/*/.in_use"):
+        lock_dir.rmdir()
+    rc = P.main(["--cache-dir", str(cache)])
+    assert rc == 1
+    assert "--allow-missing-locks" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------------------------

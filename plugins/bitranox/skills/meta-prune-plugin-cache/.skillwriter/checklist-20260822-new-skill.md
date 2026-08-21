@@ -103,12 +103,43 @@ for the original holder. `scripts/pluginprune.py` classifies every version direc
       machine path appears (`grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|/home/|/Users/|/tmp/'` is empty).
 - [x] No external doc reference: the body is self-sufficient and sends the reader to `--help`,
       which is install-local and cannot rot.
-- [x] Body is 735 words, above the 500-word target for a technique skill. Kept: the `.in_use`
-      mechanism and its staleness rule are the whole contribution, and the mistakes table is
-      built from measured baseline failures. Trimmed twice for wording, not for content.
+- [x] Body is 865 words, above the 500-word target for a technique skill. Kept: the `.in_use`
+      mechanism, its staleness rule and the two refusals are the whole contribution, and the
+      mistakes table is built from measured baseline failures. Trimmed twice for wording, not
+      for content.
 - [x] Security review of the change: no credentials, no private hosts or addresses, no `eval`,
       no `shell=True`, no untrusted input. The only destructive call is `shutil.rmtree`, reached
       only for a path that passed the symlink, filesystem-root, cache-root and containment
       refusals and carries no live lock.
 - [x] Derived artifacts regenerated: `docs/skills.md`, `hooks/skill_triggers.json`, and the two
       skill counts in `README.md`. `repo-gate.py --ci` passes.
+
+## Follow-up from the decision review (same day, 5.231.0)
+
+Two shipped defaults were surfaced as unsettled and both were decided by the user, so the
+behaviour changed after the first release.
+
+- [x] MISSING MECHANISM IS NOW A REFUSAL, not a warning. `.in_use` is undocumented, so a future
+      Claude Code that renames or drops it would have made every version read as free, the
+      running session's included. The two cases are distinguishable on disk and the tool now
+      separates them: `.in_use` directories present but empty is an idle machine and proceeds;
+      not one version directory carrying an `.in_use` directory at all is refused, exit non-zero,
+      with `--allow-missing-locks` as the deliberate override.
+- [x] A SOLE VERSION NOTHING REFERENCES IS NOW PLANNED. Previously a plugin's only version was
+      kept unconditionally, so uninstalling a plugin reclaimed nothing, ever. The risk taken is
+      that an install scope the tool cannot read would lose its only copy. Measured before
+      changing it: on the authoring machine all 17 plugin directories carry an `installPath`
+      record, every one at user scope, and none is missed - so the new rule plans nothing new
+      there. `enabledPlugins` in a settings file is wired in as a second guard for the case that
+      measurement cannot rule out on other machines.
+- [x] THE `enabledPlugins` GUARD WAS WRONG ON ITS FIRST WRITING, and the real cache caught it,
+      not the fixtures. `enabledPlugins` names a PLUGIN, never a version, so honouring it per
+      version kept every stale version of every enabled plugin - the entire accumulation the tool
+      exists to reclaim. The dry run over the real 1.4 GB cache showed the version list drop to
+      empty, which is what exposed it; a fixture with one enabled multi-version plugin now fails
+      if it is ever unscoped again. It applies to a sole version only.
+- [x] 32 tests pass. 4 further mutations, one per new guard, all detected: the missing-mechanism
+      guard removed, the same guard fired unconditionally, the `enabledPlugins` guard removed,
+      and the orphan rule reverted to keeping every sole version.
+- [x] Re-verified against the real cache after the change: the same five stale versions are
+      planned, no version is kept by the sole-plus-enabled rule, 632.0 MB reclaimable.

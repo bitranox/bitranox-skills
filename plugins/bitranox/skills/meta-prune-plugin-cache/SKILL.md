@@ -47,21 +47,31 @@ uv run scripts/pluginprune.py --json      # {ok, command, data, skipped}; 0 fine
 Run `--help` for the rest (`--marketplace`, `--keep`, `--min-age`, `--settings`).
 
 It keeps a version with a live lock, the `installPath` from `installed_plugins.json` (what a
-fresh session resolves to), anything a settings file pins, anything `--keep` names, and a
-plugin's only version. It reads each `temp_*` leftover's own mtime and keeps any younger than
-`--min-age` (60m), so no separate age check is needed. It refuses symlinks and paths outside
-the cache.
+fresh session resolves to), anything a settings file pins, anything `--keep` names, and the
+sole version of a plugin a settings file's `enabledPlugins` lists. It reads each `temp_*`
+leftover's own mtime and keeps any younger than `--min-age` (60m), so no separate age check is
+needed. It refuses symlinks and paths outside the cache.
 
-When no live lock exists anywhere it says so on stderr rather than guessing, because a session
-whose version cannot be identified is the one case worth confirming by hand: pass that version
-with `--keep`.
+A plugin nothing references at all is planned even as the only version: that is what an
+uninstalled plugin leaves behind, and nothing else reclaims it. `enabledPlugins` is the guard
+that makes that safe, and it applies only to a sole version - it names a PLUGIN, never a
+version, so honouring it per version would preserve the entire history of everything enabled.
+
+When locks exist but none is live it says so on stderr rather than guessing: a session whose
+version cannot be identified is worth confirming by hand, so pass that version with `--keep`.
+
+When NOT ONE version directory has an `.in_use` directory at all, it refuses them and exits
+non-zero. An idle machine leaves that directory behind EMPTY, so its total absence means the
+mechanism was renamed or dropped, and every version would otherwise read as unused - the
+running session's included. `--allow-missing-locks` overrides it once you know why.
 
 ## Where the space actually is
 
-Count version directories PER PLUGIN, never sort by size. A plugin with one version is
-footprint, not waste. Apply that test per plugin, not per marketplace - a marketplace can be
-mixed - though in practice only the one you publish to accumulates, and the one you merely
-consume is routinely the biggest directory while yielding nothing.
+Count version directories PER PLUGIN, never sort by size. A plugin with one version that
+something still references is footprint, not waste. Apply that test per plugin, not per
+marketplace - a marketplace can be mixed - though in practice only the one you publish to
+accumulates, and the one you merely consume is routinely the biggest directory while yielding
+nothing but its uninstalled leftovers.
 
 A long-running session pins every version it has loaded, not just its current one, so with
 several old sessions open most of the cache is legitimately in use. The yield rises once they
@@ -73,7 +83,7 @@ end; that is not a reason to override a live lock.
 |-----------------------------------------------------|------------------------------------------------------------------------------|
 | Keeping only the newest version                     | The running session may sit on an older one it loaded before the last update |
 | `lsof` / `pgrep` to find the session's version      | Finds nothing, so a live version reads as free                               |
-| Deleting the biggest marketplace directory          | Single-version plugins are footprint, not waste; frees nothing reusable      |
+| Deleting the biggest marketplace directory          | Referenced single-version plugins are footprint, not waste                   |
 | Looking for `temp_*` inside a marketplace directory | They sit at the cache ROOT, one level up                                     |
 | `rm -rf` straight from a glob                       | No plan, no reasons, no refusals, and no way to check before it runs         |
 
