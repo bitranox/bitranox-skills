@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.224.4]
+
+### Changed
+
+- `gated-prep-nudge`'s closure now says what it does NOT close. 5.224.3 priced the one escalation
+  rung it had considered, a `permissionDecision: deny`, and told the next reader to re-run the
+  measurement rather than repeat the argument - which reads as closing the whole question when only
+  that branch was measured. A second mechanism was never priced: making repo-gate LOOK AHEAD, since
+  every command it blocks for a missing bump CONTAINS that bump. Recognising it would remove the
+  class outright at no cost to the 532 legitimate calls, which neither the nudge nor a deny can do.
+  It stays unbuilt, because a gate that trusts a textual promise about what a command will DO is a
+  worse failure mode than the one it fixes, and it is now named in the docstring so the closure does
+  not steer anyone away from it.
+
 ## [5.224.3]
 
 ### Changed
