@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.229.0]
+
+### Added
+
+- **The skill router's trigger map now carries the strings a user in trouble pastes verbatim.**
+  `build_skill_triggers.py` took the first 14 keywords of each description by POSITION, and a
+  trigger-first description spends its head on prose about the situation and its tail on the
+  literal error codes - so `infra-windows-servicing` reached the map with `code` (a word 14 other
+  skills also claim) while `0xc1900200`, `0xc190010e`, `0x80070020` and `windows.old` did not. A
+  prompt quoting the actual exit code nudged NOTHING. The map now keeps the 14-token head and
+  APPENDS up to 10 tail tokens that are shaped like identifiers and claimed by no other skill.
+
+  The head stays capped and equal-length on purpose: `skill-router.py` ranks by RAW distinct-hit
+  count with no normalisation for list length, so a longer list of ordinary words would let one
+  skill out-count every other on unrelated prompts. Only tokens that cannot match an unrelated
+  prompt are safe to append, which is why the rule is shape and not size.
+
+  Measured over 2146 real typed prompts: 39 fires gained, 21 lost, 16 more prompts nudged. Every
+  loss sampled was a displacement in the right direction - "check the Task 13 implementer result"
+  now nudges `process-agents-subagent-driven-development` where it used to nudge `compuse-bash`.
+
+  A length bar was tried first and rejected on the evidence: admitting any 9+ character token also
+  admitted `description` (in 50 of those prompts), `condition` (33) and `interface` (33), which put
+  `coding-rust` on a prompt about reviewing skills. The identifier shape admits 126 tokens across
+  the shipped skills and none of them reaches 20 prompts.
+
 ## [5.228.0]
 
 ### Added
