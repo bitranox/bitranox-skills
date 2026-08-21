@@ -611,6 +611,23 @@ def shipped_descriptions(skills_dir):
 
 # --- front matter parity ----------------------------------------------------------------------
 
+def frontmatter_unterminated(path):
+    """True when a SKILL.md opens a front-matter block that never closes on a line of its own.
+
+    The failure shape is a closing `---` glued to the end of the last value
+    (`...ship an OVM change.---`). Every reader in this module splits on a bare `---` substring,
+    so they all recover the right value and no other check here notices - the file reads as
+    perfectly fine until a loader that wants the delimiter on its own line refuses it.
+    """
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    if not lines or lines[0].strip() != "---":
+        return False  # no front matter at all is a different problem, reported by the callers
+    return not any(line.strip() == "---" for line in lines[1:])
+
+
 def frontmatter_problems(skills_dir):
     """Per-skill front-matter failures: a name that disagrees with its dir, plus the CSO rules."""
     skills_dir = Path(skills_dir)
@@ -622,6 +639,9 @@ def frontmatter_problems(skills_dir):
         if not md.is_file():
             continue
         label = skill.name
+        if frontmatter_unterminated(md):
+            problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
+                            "end of a value instead of standing on its own line." % label)
         name = frontmatter_name(md)
         if name is None:
             problems.append("%s: SKILL.md has no `name:` in its front matter." % label)

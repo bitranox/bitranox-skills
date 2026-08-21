@@ -571,6 +571,39 @@ def test_frontmatter_problems_is_quiet_for_a_good_skill(tmp_path):
     assert hc.frontmatter_problems(skills) == []
 
 
+# The closing `---` glued onto the last value still parses under this module's own lenient
+# readers, so without a dedicated check every other assertion here passes on a broken file.
+_GLUED = "---\nname: demo\ndescription: Use when parsing gitignore files and filtering paths.---\n"
+
+
+def test_frontmatter_unterminated_spots_a_glued_closing_delimiter(tmp_path):
+    md = _skill_md(tmp_path, _GLUED)
+    assert hc.frontmatter_unterminated(md) is True
+
+
+def test_frontmatter_unterminated_accepts_a_delimiter_on_its_own_line(tmp_path):
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing paths.\n---\n\nbody\n")
+    assert hc.frontmatter_unterminated(md) is False
+
+
+def test_frontmatter_unterminated_ignores_a_file_with_no_front_matter(tmp_path):
+    md = _skill_md(tmp_path, "# just a heading\n")
+    assert hc.frontmatter_unterminated(md) is False
+
+
+def test_frontmatter_problems_flags_a_front_matter_that_never_closes(tmp_path):
+    skills = _skills(tmp_path / "p")
+    (skills / "demo" / "SKILL.md").write_text(_GLUED, encoding="utf-8")
+    assert any("never closes" in p for p in hc.frontmatter_problems(skills))
+
+
+def test_a_glued_delimiter_still_reads_fine_through_the_lenient_parsers(tmp_path):
+    """The reason the check is needed: every other reader recovers the value regardless."""
+    md = _skill_md(tmp_path, _GLUED)
+    assert hc.frontmatter_name(md) == "demo"
+    assert hc.frontmatter_description(md).endswith("filtering paths.")
+
+
 # --- graveyards ---------------------------------------------------------------------------------
 
 def test_graveyard_leaves_a_sanctioned_backup_alone(tmp_path):
