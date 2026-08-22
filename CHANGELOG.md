@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.235.1]
+
+### Fixed
+
+- **The "price it" section and the guard it generalises now reference each other, and a test keeps
+  them that way.** 5.235.0 put the method in `meta-claude-hooks` and left the measured figures in
+  `hooks/gated-prep-nudge.py`, so no number exists twice - but neither artifact named the other, so
+  the coupling existed only in the head of whoever made the split. Each now points at the other by
+  name, and `hooks/tests/test_gated_prep_nudge.py` asserts both pointers resolve, so retiring or
+  renaming either side fails the suite instead of leaving a stale pointer behind. Three tests, both
+  RED-verified by mutation, plus a control that fails loudly if either file moves rather than
+  letting the pointer assertions pass vacuously.
+
 ## [5.235.0]
 
 ### Added
