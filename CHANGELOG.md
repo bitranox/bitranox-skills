@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.236.0]
+
+### Added
+
+- **`compuse-toolbox` gains `ci_wait`: wait out every GitHub Actions run for ONE commit, and say
+  whether they passed.** A hand-rolled CI poll fails the same way every time, and the half that
+  keeps winning is silent: a short sha matches nothing through `gh run list --commit`, and
+  filtering client-side on `headSha` does not sidestep that but RELOCATES it, because the filtered
+  list is simply empty and an "are they all terminal?" test over an empty list is vacuous - the
+  loop then spins to its deadline printing progress. `ci_wait` refuses a sha that is not 40 hex
+  characters BEFORE it polls, so the rule is enforced by the thing doing the work; requires EVERY
+  run for the sha terminal, since a run reads `queued` while any one of its jobs is; and treats an
+  empty match as a verdict rather than a keep-waiting, with its own grace period (a DURATION, not a
+  poll count) for a just-pushed commit that has no runs yet. Exit 0 passed, 1 did not, 2 could not
+  tell.
+
 ## [5.235.1]
 
 ### Fixed
