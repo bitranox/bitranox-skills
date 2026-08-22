@@ -40,11 +40,16 @@ jobs:
             python-version: "3.13"
             experimental: true
     steps:
-      # The gate fails any tracked .py/.sh/.json containing CRLF. A Windows runner checking out
-      # under core.autocrlf=true rewrites every one of them on the way in, so the whole tree
-      # would trip that check before a single test ran.
+      # The gate fails any tracked .py/.sh/.json containing CRLF, so a Windows checkout must not
+      # rewrite them on the way in. BOTH settings are required and they stop different things:
+      # autocrlf=false disables the implicit conversion, while .gitattributes marks files text
+      # EXPLICITLY (`* text=auto`), and an explicit text attribute is still converted to core.eol
+      # - which defaults to "native", i.e. CRLF on Windows. Setting only autocrlf leaves that
+      # second path live, which is how githooks/pre-push still arrived with CRLF.
       - name: Keep line endings as committed
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
 
       - uses: actions/checkout@v4
 

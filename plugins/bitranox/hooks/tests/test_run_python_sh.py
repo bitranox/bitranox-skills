@@ -1,5 +1,6 @@
 """Tests for run-python.sh: the fail-open (hook) vs fail-loud (strict) degrade paths."""
 
+import sys
 import os
 import subprocess
 from pathlib import Path
@@ -7,6 +8,13 @@ from pathlib import Path
 import pytest
 
 SHIM = Path(__file__).resolve().parents[1] / "run-python.sh"
+
+# Every test here launches the shim through bare "bash". On a Windows runner that
+# resolves to the WSL stub in System32 rather than Git Bash: with no WSL installed it
+# prints a UTF-16 "install from the Store" message and exits 1, so these measure the
+# stub, not the shim. The shim itself is Git Bash only by design (see its header).
+pytestmark = pytest.mark.skipif(sys.platform == "win32",
+                               reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 
 
 def _run(args, strict=False):

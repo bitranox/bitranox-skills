@@ -104,7 +104,7 @@ _has_tests = hc.has_tests
 
 
 def check_tests_exist(root):
-    missing = [str(p.relative_to(root)) for p in hc.packages_missing_tests(_packages(root))]
+    missing = [p.relative_to(root).as_posix() for p in hc.packages_missing_tests(_packages(root))]
     if missing:
         return ["These packages ship .py but have no tests/test_*.py:"] + [f"  {m}" for m in missing]
     return []
@@ -123,7 +123,7 @@ def check_json_valid(root):
         try:
             json.loads(t.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
-            bad.append(f"  {t.relative_to(root)}: {exc}")
+            bad.append(f"  {t.relative_to(root).as_posix()}: {exc}")
     return ["Invalid JSON:"] + bad if bad else []
 
 
@@ -855,7 +855,7 @@ def unlisted_mirrors(root, public):
                 continue
             name = catalog.get(_description(twin))
             if name:
-                found.append((name, str(twin.parent.relative_to(public))))
+                found.append((name, twin.parent.relative_to(public).as_posix()))
     return found
 
 

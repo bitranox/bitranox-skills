@@ -397,6 +397,20 @@ def _names_replacement(text, own_name):
     return bool({m.group(0) for m in _SCRIPT_NAME_RX.finditer(text)} - {own_name})
 
 
+def is_executable(path, posix=None):
+    """True if the file carries a POSIX executable bit.
+
+    Windows has no such bit, and os.access(X_OK) there returns True for ANY existing file. Asked
+    bare, it reports every retired shim as "still executable" - a finding that is always true and
+    never informative - and it makes the `elif not live.exists()` branch in graveyard_entries()
+    unreachable, silently retiring a real check. Where the concept does not exist, say False.
+    """
+    on_posix = (os.name == "posix") if posix is None else posix
+    if not on_posix:
+        return False
+    return os.access(path, os.X_OK)
+
+
 def shim_problems(path, registered=(), home=None):
     """What is wrong with a retired shim, empty when it is a well-formed tombstone.
 
@@ -405,7 +419,7 @@ def shim_problems(path, registered=(), home=None):
     path = Path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
     problems = []
-    if os.access(path, os.X_OK):
+    if is_executable(path):
         problems.append("still executable - a retired file should not be runnable")
     if not _NONZERO_EXIT_RX.search(text):
         problems.append("does not exit non-zero - a caller would read it as success")
@@ -672,7 +686,7 @@ def graveyard_entries(root):
         if not path.is_file():
             continue
         live = path.parent / path.name.split(".orig-")[0]
-        if os.access(path, os.X_OK):
+        if is_executable(path):
             found.append((path, "retired backup is still executable"))
         elif not live.exists():
             found.append((path, "backs up %s, which no longer exists" % live.name))

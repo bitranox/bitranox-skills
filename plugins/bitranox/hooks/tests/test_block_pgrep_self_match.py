@@ -116,6 +116,8 @@ def test_malformed_stdin_passes(monkeypatch):
     assert B.main() == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_subprocess_block_via_shim():
     cmd = 'pkill -f "[m]yproc"; echo "myproc gone"'
     res = subprocess.run(

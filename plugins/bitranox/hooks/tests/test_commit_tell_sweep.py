@@ -8,6 +8,7 @@ import io
 import json
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 import commit_tell_sweep as C
@@ -59,6 +60,8 @@ def test_non_git_command_ignored(monkeypatch):
     assert _run(monkeypatch, 'grep -m 5 "%s" file' % EM_DASH) == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_message_file_scanned(monkeypatch, tmp_path):
     f = tmp_path / "msg.txt"
     f.write_text("Subject %s tell\n" % EM_DASH, encoding="utf-8")
@@ -74,6 +77,8 @@ def test_unbalanced_quotes_safe(monkeypatch):
     assert _run(monkeypatch, 'git commit -m "oops') == 0    # shlex fails -> fail-open
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_shim_smoke(tmp_path):
     payload = json.dumps({"tool_input": {"command": 'git commit -m "bad %s dash"' % EM_DASH}})
     r = subprocess.run(["bash", str(SHIM), str(SCRIPT)], input=payload, capture_output=True, text=True)

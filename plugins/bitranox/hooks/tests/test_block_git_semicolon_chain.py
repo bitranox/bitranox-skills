@@ -16,6 +16,7 @@ import io
 import json
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 import block_git_semicolon_chain as G
@@ -404,6 +405,8 @@ def test_main_survives_a_missing_command_field(monkeypatch):
     assert G.main() == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_subprocess_through_the_shim_blocks():
     payload = json.dumps({"tool_input": {"command": "git commit -m x ; git push"}})
     proc = subprocess.run(
@@ -418,6 +421,8 @@ def test_subprocess_through_the_shim_blocks():
     assert "&&" in proc.stderr
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_subprocess_through_the_shim_allows_the_and_form():
     payload = json.dumps({"tool_input": {"command": "git commit -m x && git push"}})
     proc = subprocess.run(
