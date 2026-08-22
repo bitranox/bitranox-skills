@@ -65,16 +65,23 @@ write path to the store. Fail-loud: success prints an explicit line, refusals pr
 | Subcommand                                                                                                                               | Success line                                 |
 |------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
 | `add --proj <cwd> --title T --hook H [--type feedback\|project\|reference\|user] [--body\|--body-file] [--source ..] [--pin] [--slug s]` | the fact's slug                              |
+| `amend-pinned --proj <cwd> --slug s [--title T] [--hook H] [--body-file f] [--source ..]`                                                | the fact's slug                              |
 | `move --slug s --from-level <dir> --to-level <dir> [--force]`                                                                            | `moved <slug>: <from> -> <to> (<direction>)` |
+| `relocate --slug s --from-level <dir> --to-level <dir> [--force]`                                                                        | `relocated <slug>: <from> -> <to> (...)`     |
+| `rename --level <dir> --slug s --to-slug s2`                                                                                             | `renamed <slug> -> <slug2> at <dir>`         |
+| `retitle --level <dir> --slug s --to-title T`                                                                                            | `retitled <slug> -> '<title>' at <dir>`      |
 | `heal --proj <cwd>`                                                                                                                      | `healed N file(s) across M level(s)`         |
 | `set-scope --proj <level> --scope "..."`                                                                                                 | `scope updated: <file>`                      |
 | `ensure-memory-structure --proj <cwd>`                                                                                                   | `created N file(s) up the chain`             |
+| `lint --tree <dir>`                                                                                                                      | `TOTAL over-cap hooks: N \| ...`             |
 | `tree-top --proj <dir> [--json]`                                                                                                         | `top: ...` / `store: ...`                    |
 | `ensure-all-trees [--apply]`                                                                                                             | per-tree report (dry-run without `--apply`)  |
 
 `add` upserts: the same `--slug` updates the fact in place (provenance merged, pin kept). It also
 lints the hook - a warning appears when the hook exceeds the soft length cap or has no trigger
-phrase ("lead with WHEN it applies").
+phrase ("lead with WHEN it applies"). `add` REQUIRES a hook, so it is not the way to correct a
+title: `retitle` changes the pointer's link text alone, and `amend-pinned --title` is the one route
+to a pinned fact's title, which `retitle` refuses by design.
 
 **Consistency audit**:
 `python3 <plugin>/skills/meta-self-improve/reconcile_memory_index.py --check <dirs...>` (a level

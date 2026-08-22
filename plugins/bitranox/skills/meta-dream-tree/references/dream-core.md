@@ -73,7 +73,8 @@ Read the mode first (`dream_state.py mode`; knobs in `~/.claude/.bitranox-memory
   `amend-pinned` is the deliberate way through, human-only - the dream never calls it. Report a
   pinned fact whose content looks wrong; do not rewrite it. `move`/`relocate`/`rename` carry the
   pin through unchanged and never refuse on it, so re-leveling a pinned fact is ordinary placement
-  work, no exception. Archiving is NOT gated by the engine (`reconcile_memory_index.py --archive`
+  work, no exception. `retitle` is the exception: it REFUSES a pinned fact and names
+  `amend-pinned --title`, so a pinned fact's stale title is reported, never fixed in passing. Archiving is NOT gated by the engine (`reconcile_memory_index.py --archive`
   does not check `pin`) - treat it as un-archivable by the dream's own policy anyway: report it,
   never drop its pointer.
 - **Structural moves** (relocating a directory, migrating a memory slug, creating a rung): always

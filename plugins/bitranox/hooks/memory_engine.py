@@ -281,13 +281,16 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     return slug
 
 
-def amend_pinned_entry(proj, slug, hook=None, body=None, source=None):
+def amend_pinned_entry(proj, slug, hook=None, body=None, source=None, title=None):
     """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
-    Keeps the existing title (the CLI carries no `--title` to change it) and the existing pin state
-    (this never unpins - `bx:pin` is untouched, only content changes); an empty/absent `hook` or
-    `body` keeps the stored one, matching `add_or_update_entry`'s update semantics. Raises
-    `UnknownSlug` when `slug` names no existing entry at this level - amending presumes a prior
-    `add --pin`.
+    Keeps the existing pin state (this never unpins - `bx:pin` is untouched, only content changes);
+    an empty/absent `title`, `hook` or `body` keeps the stored one, matching `add_or_update_entry`'s
+    update semantics. Raises `UnknownSlug` when `slug` names no existing entry at this level -
+    amending presumes a prior `add --pin`.
+
+    `title` is here because a pinned fact's title is the most-read text in the store and this is the
+    only route to it: `retitle_entry` refuses a pinned fact by design, so that the pin gate keeps
+    exactly one deliberate way through. It is normalised the same way a retitle normalises it.
 
     `source` MERGES into the stored provenance set exactly as `add` does (never replaces it): with
     the pin gate in place this is the only remaining path that can record a new `bx:src` key or a
@@ -297,7 +300,9 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, source=None):
     by_slug = {e.slug: e for e in entries}
     if slug not in by_slug:
         raise UnknownSlug(slug)
-    return add_or_update_entry(proj, title=by_slug[slug].title, hook=hook or "", body=body or "",
+    wanted = _normalised_title(title)
+    return add_or_update_entry(proj, title=wanted or by_slug[slug].title,
+                               hook=hook or "", body=body or "",
                                source=source, slug=slug, allow_pinned_overwrite=True)
 
 
@@ -1177,6 +1182,95 @@ def rename_entry(level, slug, to_slug):
     return rep
 
 
+def _normalised_title(raw):
+    """One line, single-spaced. A newline in a title would SPLIT the pointer line, so the parser
+    would see a fact whose link text ends mid-sentence and a stray prose line after it - the fact
+    orphaned on the next round trip. `_ptr_safe_title` already neutralises `[`/`]` at render time;
+    whitespace is the part it does not cover."""
+    return " ".join((raw or "").split())
+
+
+def retitle_entry(level, slug, to_title):
+    """Change one fact's TITLE in place, touching nothing else.
+
+    The title is the link text of an always-loaded pointer line, so it is the first thing a session
+    reads and the cheapest thing to skim - a stale one steers behaviour even while the hook below it
+    is correct. It was also the one field with no correction path: `add` demands a hook on every
+    call, so a title fix meant re-supplying the stored 500-char text and risking a drift in what
+    actually fires, and `rename` changes the slug and never the title.
+
+    Same slug, same body, same hook: only the label changes. The body is not opened at all - a title
+    is stored ONLY in the pointer line (`_framed_body` writes `name:` and `description:`, never a
+    title), so there is nothing else to keep in sync.
+
+    A PINNED fact is refused here and goes through `amend_pinned_entry` instead, which is the single
+    deliberate route through the pin gate. Returns
+    {"slug","to_title","level","retitled","levels","refused","warnings"}.
+    """
+    rep = {"slug": slug, "to_title": to_title, "level": str(level), "retitled": False,
+           "levels": [], "refused": None, "warnings": []}
+    lvl = Path(level).resolve()
+    anchor = us.resolve_anchor(str(lvl))
+    if anchor is None:
+        rep["refused"] = "no anchor for this level"
+        return rep
+
+    title = _normalised_title(to_title)
+    if not title:
+        rep["refused"] = "the new title is empty"
+        return rep
+    rep["to_title"] = title
+
+    _scope, entries, _bodies = read_store(str(lvl))
+    entry = next((e for e in entries if e.slug == slug), None)
+    if entry is None:
+        rep["refused"] = "slug %r not found at this level" % slug
+        return rep
+    if entry.legacy:
+        # A legacy `uuid:` line with no `bx:slug=` token has its slug DERIVED from the title
+        # (`_slug_from_title`), so retitling one silently changes the fact's identity. `rename`
+        # refuses legacy entries for the same reason.
+        rep["refused"] = "entry is an unmigrated legacy pointer - run migrate_to_slug_store.py first"
+        return rep
+    if entry.pin:
+        rep["refused"] = ("fact is pinned - use `amend-pinned --proj %s --slug %s --title ...`, "
+                          "the one deliberate path through the pin gate" % (level, slug))
+        return rep
+    if entry.title == title:
+        rep["refused"] = "the new title is the same as the old one"
+        return rep
+
+    us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
+                   source=entry.source, pin=entry.pin)
+    rep["levels"].append(str(lvl))
+
+    # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
+    # pointers on the old title is not neutral: `move_entry` and `relocate_entry` both refuse when
+    # duplicate pointers disagree on (title, hook), so a level-local retitle arms a DIFFERENT TITLE
+    # refusal for whoever moves the fact next. Retitle them too and surface the duplicate.
+    for other in curated_levels_under(anchor):
+        if Path(other).resolve() == lvl:
+            continue
+        _s, oentries, _b = read_store(str(other))
+        dup = next((e for e in oentries if e.slug == slug), None)
+        if dup is None:
+            continue
+        if dup.legacy:
+            # add_pointer would flip it to the current format, which strands it unless a
+            # slug-named body already exists. Leave it for the migration and say so.
+            rep["warnings"].append("slug was ALSO pointed at from %s as an unmigrated legacy "
+                                   "pointer - left alone; migrate it, then retitle there" % other)
+            continue
+        us.add_pointer(str(other), slug=slug, title=title, hook=dup.hook,
+                       source=dup.source, pin=dup.pin)
+        rep["levels"].append(str(other))
+        rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
+                               "retitled there too, dedup it deliberately" % other)
+
+    rep["retitled"] = True
+    return rep
+
+
 def _other_levels_pointing_in(anchor, slug):
     """True when any curated level under `anchor` still carries a pointer for `slug`."""
     for lvl in curated_levels_under(anchor):
@@ -1347,6 +1441,9 @@ def main(argv=None):
                               "no autonomous pass invokes this)")
     ap_.add_argument("--proj", required=True)
     ap_.add_argument("--slug", required=True)
+    ap_.add_argument("--title", default=None,
+                     help="the new title - the only route to a PINNED fact's title, since retitle "
+                          "refuses one by design; omit it to keep the stored title")
     ap_.add_argument("--hook", default=None)
     ap_.add_argument("--hook-file", default=None,
                      help="read the hook from a file - same reason as on add: a 500-char hook via "
@@ -1408,6 +1505,15 @@ def main(argv=None):
     rn.add_argument("--slug", required=True, help="the current slug")
     rn.add_argument("--to-slug", required=True, dest="to_slug",
                     help="the new slug (normalised to canonical form)")
+
+    rt = sub.add_parser("retitle",
+                        help="change one fact's TITLE in place - the pointer's link text - leaving "
+                             "its slug, hook and body untouched")
+    rt.add_argument("--level", required=True,
+                    help="the level whose pointer block carries the fact")
+    rt.add_argument("--slug", required=True, help="the fact to retitle")
+    rt.add_argument("--to-title", required=True, dest="to_title",
+                    help="the new title (whitespace collapsed to one line)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.cmd == "tree-top":
@@ -1481,6 +1587,18 @@ def main(argv=None):
         print("renamed %s -> %s at %s" % (rep["slug"], rep["to_slug"], rep["level"]))
         for lvl, citer, where in rep["refs_rewritten"]:
             print("    ref repointed: %s (%s) [%s]" % (citer, where, lvl))
+        return 0
+
+    if args.cmd == "retitle":
+        rep = retitle_entry(args.level, args.slug, args.to_title)
+        if rep["refused"]:
+            print("! refused: %s" % rep["refused"])
+            return 1
+        for w in rep["warnings"]:
+            print("~ warning: %s" % w)
+        print("retitled %s -> %r at %s" % (rep["slug"], rep["to_title"], rep["level"]))
+        for lvl in rep["levels"][1:]:
+            print("    also retitled at: %s" % lvl)
         return 0
 
     if args.cmd == "ensure-memory-structure":
@@ -1588,7 +1706,7 @@ def main(argv=None):
         source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
-                                      source=source)
+                                      source=source, title=args.title)
         except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
             print("! refused: %s" % c)
             return 1

@@ -9,7 +9,8 @@ Two protected surfaces:
      edit that touches the fenced region, a write that changes/deletes it, or an edit/write that
      injects fence markers by hand.
 
-The write path is `memory_engine.py` (via `run-python.sh`): add / heal / set-scope / move. It
+The write path is `memory_engine.py` (via `run-python.sh`): add / amend-pinned / heal / set-scope /
+move / relocate / rename / retitle. It
 upserts by slug, enforces tree-unique slugs, renders the block canonically (recipe + pinned-first),
 takes a lock, and is mtime-neutral. A hand-write bypasses all of that AND makes the PostToolUse
 hooks churn the file every turn. The standing "engine, never a hand-write" rule is advisory prose
@@ -52,7 +53,8 @@ _BYPASS_ENV = "BITRANOX_MEMORY_ENGINE"
 _DENY = (
     "The memory store is written ONLY by the engine (hooks/memory_engine.py via run-python.sh): "
     "capture with `add --proj <dir> --title ... --hook ... --body-file ...`, repair with `heal`, "
-    "re-level with `move`, rename a wrong slug with `rename`, set a descriptor with `set-scope`. "
+    "re-level with `move`, rename a wrong slug with `rename`, fix a stale title with "
+    "`retitle`, set a descriptor with `set-scope`. "
     "Hand-editing %s bypasses the lock, "
     "the canonical render, and tree-unique slug enforcement, and makes the PostToolUse hooks churn "
     "the file. For a deliberate hand-repair session, relaunch with %s=1 set at session start "
