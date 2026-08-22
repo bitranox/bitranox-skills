@@ -1,11 +1,24 @@
 """Tests for gather_scan.py (cross-tree gather stage-1: keyword grep). All content ASCII."""
 
+import os
 from pathlib import Path
 
 import pytest
 
 import gather_scan as G
 import self_improve_signals as sig
+
+
+def fwd(text):
+    """Path text with forward slashes, so an assertion describes SHAPE, not the host's separator.
+
+    gather_scan returns and prints NATIVE paths, which is right for whoever reads them. But an
+    assertion spelled "/-p-other/" then means two different things per platform: on Windows the
+    positive ones simply failed, and - worse - the NEGATIVE ones ("/-p-self/" not in out) passed
+    VACUOUSLY, because a shape that can never appear can never be found missing. Normalising the
+    text under test keeps one spelling honest on both.
+    """
+    return str(text).replace(os.sep, "/")
 
 
 def test_extract_keywords_drops_stopwords_and_dedups():
@@ -152,7 +165,7 @@ def test_discover_excludes_self_includes_others_and_global(home, tmp_path):
     files = [str(f) for f in G.discover_files(str(self_proj))]
     self_native = str(sig.memory_dir(str(self_proj)).resolve())
     assert not any(self_native in f for f in files)        # current project's own memory excluded
-    assert any("/-p-other/" in f for f in files)           # other trees included
+    assert any("/-p-other/" in fwd(f) for f in files)           # other trees included
     assert any(str(g / "facts" / "r.md") == f for f in files)          # flat body included
     assert any(str(g / "facts" / "ab" / "ab12.md") == f for f in files)  # sharded body included
     assert not any(".archive" in f for f in files)                      # archive excluded
@@ -165,8 +178,8 @@ def test_main_reports_candidates_from_other_tree(home, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "CANDIDATES:" in out
-    assert "/-p-other/" in out          # found the other tree's note
-    assert "/-p-self/" not in out       # not the current project's own
+    assert "/-p-other/" in fwd(out)     # found the other tree's note
+    assert "/-p-self/" not in fwd(out)  # not the current project's own
 
 
 def test_discover_curated_finds_slug_stores_excludes_backups_and_archive(tmp_path, monkeypatch):
@@ -183,7 +196,7 @@ def test_discover_curated_finds_slug_stores_excludes_backups_and_archive(tmp_pat
     (bak / "stale.md").write_text("stale", encoding="utf-8")
 
     got = G.discover_curated(str(cur), str(cur))
-    assert any(p.endswith("/.claude-memory/facts/fleet-ssh.md") for p in got)   # slug body surfaced
+    assert any(fwd(p).endswith("/.claude-memory/facts/fleet-ssh.md") for p in got)   # slug body surfaced
     assert not any(".archive" in p for p in got)                                # archive never scanned
     assert not any(".bak-" in p for p in got)                                   # backups ignored
 
@@ -197,7 +210,7 @@ def test_gather_cli_adds_mcp_candidates_when_enabled(tmp_path, monkeypatch, caps
     monkeypatch.setattr(mcp_search, "search", lambda topic, **k: ["notes/relevant"])
     G.main(["--topic", "zorblax frobnicator", "--self", str(cur)])
     out = capsys.readouterr().out
-    assert "MCP\tnotes/relevant" in out and "MCP-CANDIDATES: 1" in out
+    assert "MCP\tnotes/relevant" in fwd(out) and "MCP-CANDIDATES: 1" in out
 
 
 def test_gather_cli_no_mcp_when_disabled(tmp_path, monkeypatch, capsys):
@@ -216,7 +229,7 @@ def test_find_curated_stores_also_collects_central_uuid_store_bodies(tmp_path, m
     facts.mkdir(parents=True)
     (facts / "abcd1234-0000-5000-8000-000000000000.md").write_text("central uuid body text", encoding="utf-8")
     got = G._find_curated_stores(str(ws))
-    assert any(p.endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
+    assert any(fwd(p).endswith("/facts/ab/abcd1234-0000-5000-8000-000000000000.md") for p in got)
 
 
 def _home_root(tmp_path, monkeypatch):
@@ -242,9 +255,9 @@ def test_find_curated_stores_reglobs_fresh_facts_after_dir_cache(tmp_path, monke
     # a fact dreamed AFTER the dir-walk is cached must still surface (facts are globbed fresh)
     root = _home_root(tmp_path, monkeypatch)
     _seed_store(root, "projA", "one.md")
-    assert any(p.endswith("/facts/one.md") for p in G._find_curated_stores(str(root)))
+    assert any(fwd(p).endswith("/facts/one.md") for p in G._find_curated_stores(str(root)))
     (root / "projA" / ".claude-memory" / "facts" / "two.md").write_text("second", encoding="utf-8")
-    assert any(p.endswith("/facts/two.md") for p in G._find_curated_stores(str(root)))
+    assert any(fwd(p).endswith("/facts/two.md") for p in G._find_curated_stores(str(root)))
 
 
 def test_curated_store_dirs_caches_walk_within_ttl(tmp_path, monkeypatch):

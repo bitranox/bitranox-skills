@@ -91,7 +91,11 @@ def resolve_key(user: str, candidates=None, home: str | None = None) -> str | No
     """
     home = home if home is not None else os.path.expanduser("~")
     for template in (candidates if candidates is not None else key_candidates()):
-        path = template.format(user=user, home=home)
+        # normpath because the templates spell their separator "/" so one string works
+        # everywhere; without it a Windows home yields "C:\Users\me/.ssh/key" - functional,
+        # since both ssh and Path accept it, but it is what the tool then PRINTS and returns,
+        # so every caller comparing it against a native path sees two different strings.
+        path = os.path.normpath(template.format(user=user, home=home))
         if os.access(path, os.R_OK) and Path(path).is_file():
             return path
     return None
@@ -265,7 +269,7 @@ def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str
     home = home if home is not None else os.path.expanduser("~")
     known_hosts = args.known_hosts
     if args.trust_changing_host_keys and not known_hosts:
-        known_hosts = DEFAULT_FLEET_KNOWN_HOSTS.format(home=home)
+        known_hosts = os.path.normpath(DEFAULT_FLEET_KNOWN_HOSTS.format(home=home))
 
     def key_for(host: str | None, stated: str | None) -> str | None:
         if args.key:

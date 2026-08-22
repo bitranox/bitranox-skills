@@ -224,6 +224,50 @@ def test_keep_names_an_extra_version(cache: Path) -> None:
     assert str(target) not in paths(plan.prune)
 
 
+def test_a_pin_is_found_even_though_json_escapes_the_backslashes(tmp_path: Path) -> None:
+    r"""pinning_settings searches the settings file's RAW TEXT, and JSON escapes a backslash.
+    On Windows the stored command reads "C:\\dir\\1.0.0" while str(path) is "C:\dir\1.0.0", so
+    the pin was never seen and the version was planned for DELETION - the failure direction
+    that cannot be undone.
+
+    Portable RED: a directory name containing a backslash reproduces the same escaping on
+    POSIX, so this fails on both platforms without the fix rather than only on Windows.
+    """
+    pinned = tmp_path / "cache" / "mkt" / "plug" / "1.0.0"
+    pinned.mkdir(parents=True)
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"hooks": {"Stop": [{"command": "bash %s/hooks/x.sh" % pinned}]}}),
+        encoding="utf-8",
+    )
+    assert P.pinning_settings(pinned, [settings]) == settings.name
+
+    if os.name != "nt":
+        # A backslash IS a path separator on Windows, so a name holding one cannot exist there.
+        # On POSIX it can, and it reproduces the same JSON escaping the Windows path shape
+        # causes - which is what makes this half fail without the fix on THIS platform too,
+        # rather than leaving the fix provable only on the other one.
+        escaped_name = tmp_path / "has\\backslash"
+        escaped_name.mkdir()
+        other = tmp_path / "settings2.json"
+        other.write_text(
+            json.dumps({"hooks": {"Stop": [{"command": "bash %s/x.sh" % escaped_name}]}}),
+            encoding="utf-8")
+        assert P.pinning_settings(escaped_name, [other]) == other.name
+
+
+def test_pinning_settings_says_no_when_nothing_names_the_path(tmp_path: Path) -> None:
+    """The direction it must NOT fire: a settings file naming a DIFFERENT version is not a pin,
+    or every version would be kept and the tool would reclaim nothing."""
+    pinned = tmp_path / "cache" / "mkt" / "plug" / "1.0.0"
+    pinned.mkdir(parents=True)
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"command": "bash %s/x.sh"
+                                                       % (pinned.parent / "9.9.9")}]}}),
+                        encoding="utf-8")
+    assert P.pinning_settings(pinned, [settings]) is None
+
+
 def test_a_version_pinned_by_a_settings_file_is_kept(cache: Path, tmp_path: Path) -> None:
     pinned = cache / "own-marketplace" / "own-plugin" / "1.0.0"
     settings = tmp_path / "settings.json"

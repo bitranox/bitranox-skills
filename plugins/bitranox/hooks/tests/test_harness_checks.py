@@ -319,6 +319,29 @@ def test_hook_registrations_is_empty_for_a_settings_file_without_hooks(tmp_path)
     assert hc.hook_registrations(path) == []
 
 
+def test_command_paths_finds_a_windows_absolute_path(tmp_path):
+    r"""The audit was DEAD on Windows: _PATHISH only matched a leading '/', so a registration
+    naming C:\dir\hook.sh yielded no paths at all and registration_problems reported zero
+    problems - a silent pass on the platform being audited. Both drive shapes and UNC count,
+    and the backslash form must survive tokenising (POSIX shlex ate the separators).
+    """
+    assert hc.command_paths(r"bash C:\dir\hook.sh", windows=True) == [r"C:\dir\hook.sh"]
+    assert hc.command_paths("bash C:/dir/hook.sh", windows=True) == ["C:/dir/hook.sh"]
+    assert hc.command_paths(r"bash \\srv\share\hook.sh", windows=True) == [r"\\srv\share\hook.sh"]
+
+
+def test_command_paths_ignores_a_windows_path_shape_on_posix(tmp_path):
+    """The direction the rule must NOT apply: on POSIX a bare 'C:\\dir' is not a path, and
+    treating it as one would invent findings out of ordinary arguments."""
+    assert hc.command_paths(r"bash C:\dir\hook.sh", windows=False) == []
+
+
+def test_command_paths_still_reads_posix_paths_when_windows(tmp_path):
+    """A Windows machine still runs these commands through Git Bash, so the POSIX shapes must
+    keep matching there rather than being traded away for the new ones."""
+    assert hc.command_paths("bash /opt/x/hook.sh", windows=True) == ["/opt/x/hook.sh"]
+
+
 def test_registration_problems_flags_a_missing_target(tmp_path):
     path = _settings(tmp_path, "bash %s/gone.sh" % tmp_path)
     problems = hc.registration_problems(path, home=tmp_path)

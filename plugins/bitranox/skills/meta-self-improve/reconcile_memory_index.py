@@ -362,9 +362,24 @@ def find_dangling_bodies(anchor):
     return sorted(body_slugs - pointed)
 
 
-# An absolute POSIX path mentioned in a fact body. Deliberately conservative: a path is only
-# evidence of subject when it is absolute and long enough to resolve to a tree.
-_ABS_PATH_RX = re.compile(r"(/[\w.@+-]+(?:/[\w.@+-]+){2,})")
+# An absolute path mentioned in a fact body. Deliberately conservative: a path is only evidence
+# of subject when it is absolute and long enough to resolve to a tree.
+#
+# All three shapes, not just the POSIX one: a body captured on Windows names "C:\dir\repo\x.py"
+# or a UNC share, neither of which starts with '/', so the detector matched NOTHING there and
+# find_misplaced returned [] for every store - reported as "TOTAL misplaced: 0", which reads as
+# a clean tree rather than as a check that cannot fire.
+#
+# The drive alternative is written FIRST on purpose: "C:/dir/repo/x.py" also contains the POSIX
+# shape "/dir/repo/x.py", and matching that substring would resolve a DIFFERENT path than the
+# one the body names. Leaving the Windows shapes enabled on POSIX too costs nothing - a path
+# that does not resolve to an anchor is skipped a few lines below - and keeps this testable
+# from either platform.
+_ABS_PATH_RX = re.compile(
+    r"([A-Za-z]:[\\/][\w.@+-]+(?:[\\/][\w.@+-]+){1,}"      # C:\dir\repo\x.py  /  C:/dir/repo/x.py
+    r"|\\\\[\w.@+-]+(?:\\[\w.@+-]+){2,}"                    # \\server\share\repo\x.py
+    r"|/[\w.@+-]+(?:/[\w.@+-]+){2,})"                       # /dir/repo/x.py
+)
 
 
 def find_misplaced(anchor):

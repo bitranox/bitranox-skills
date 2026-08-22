@@ -332,6 +332,34 @@ def git_worktree_status(
     return STATUS_DIRTY if (proc.stdout or "").strip() else STATUS_CLEAN
 
 
+def _git_run_dir(worktree: Path, timeout: float) -> Path:
+    """A directory to run git FROM that is not the one about to be deleted.
+
+    The main checkout, found through the worktree's own common git dir. Falls back to the
+    worktree itself when that cannot be resolved, which keeps the previous behaviour rather
+    than inventing a path - a wrong -C would turn a removable worktree into an error.
+    """
+    for extra in (["--path-format=absolute"], []):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(worktree), "rev-parse", *extra, "--git-common-dir"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=timeout, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return worktree
+        common = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not common:
+            continue
+        common_path = Path(common)
+        if not common_path.is_absolute():
+            common_path = Path(worktree) / common_path
+        candidate = common_path.parent
+        if candidate.is_dir():
+            return candidate
+    return worktree
+
+
 def git_worktree_remove(
     worktree: Path,
     *,
@@ -342,8 +370,16 @@ def git_worktree_remove(
 
     Keyed on the exit code, never on the message: git's own refusal text is localised, so the
     string that comes back depends on the machine's language.
+
+    Git is run from the MAIN checkout, never `-C <worktree>`. Running it from inside the
+    directory being deleted is fine on POSIX but not on Windows, where a process's current
+    directory is locked open: git deleted the contents, then failed to drop the directory with
+    "Permission denied" and left the worktree half-removed. It looked like an open-handle quirk
+    of the platform, so the sibling end-to-end test was skipped there - but the same removal run
+    from the main checkout succeeds on Windows, so the tool was simply asking git to saw off the
+    branch it was sitting on.
     """
-    argv = ["git", "-C", str(worktree), "worktree", "remove", str(worktree)]
+    argv = ["git", "-C", str(_git_run_dir(worktree, timeout)), "worktree", "remove", str(worktree)]
     if force:
         argv.append("--force")
     try:

@@ -33,15 +33,57 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
 _NAME_WIDTH = 56                                                # keeps one report line readable
+
+# NOT "/tmp/gate.log": on Windows that string is DRIVE-RELATIVE, not absolute - Path turns it
+# into `\tmp\gate.log`, so the log silently lands on whichever drive happens to be current
+# and the "log: ..." line printed at the end names a path the user cannot open.
+DEFAULT_LOG = str(Path(tempfile.gettempdir()) / "gate.log")
+
+
+def split_command(spec: str) -> list[str]:
+    r"""Split one shell-quoted command string into argv, without eating Windows paths.
+
+    shlex's POSIX mode treats a backslash as an ESCAPE, so on Windows it silently destroyed
+    every path in a gate: `C:\Program Files\Py\python.exe -c "print(1)"` split into
+    ['C:Program', 'FilesPypython.exe', ...], the gate ran a binary that does not exist and
+    reported rc=127 - a FALSE RED for a command that passes, which is precisely the
+    misattribution this whole tool exists to prevent, produced by the tool itself.
+
+    On Windows the fix is to stop processing escapes: quoting (both ' and ") keeps working,
+    while a backslash stays the literal path separator it is there. A space still separates
+    arguments on both platforms, so a path containing one must be quoted - exactly as the
+    user's own shell already requires. POSIX keeps standard shlex behaviour, where a
+    backslash genuinely IS an escape and callers rely on it.
+    """
+    if os.name != "nt":
+        return shlex.split(spec)
+    lexer = shlex.shlex(spec, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        # The one shape escape-off cannot read: the C runtime's own `"a\"b"` convention for an
+        # embedded quote, where dropping escapes leaves the quotes unbalanced. Fall back to the
+        # lexer that tolerates it and strip one wrapping pair. Kept identical to diffbehave.py
+        # and hooks/harness_checks.py, which hit the same quirk.
+        out = []
+        for token in shlex.split(spec, posix=False):
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+                token = token[1:-1]
+            out.append(token)
+        return out
 
 
 def derived_name(argv: list[str]) -> str:
@@ -86,7 +128,7 @@ def gate_spec(spec: str):
         # command prefix that merely happens to contain its own '=' assignment further along
         if head and not head.startswith("-") and "/" not in head and not any(c.isspace() for c in head):
             name, spec = head, tail
-    argv = shlex.split(spec)
+    argv = split_command(spec)
     if not argv:
         raise ValueError(f"empty gate: {spec!r}")
     return (name[:_NAME_WIDTH] if name else derived_name(argv)), argv
@@ -232,7 +274,8 @@ def main(argv=None) -> int:
                         "overrides any 'name=' prefix on that gate and is the only way to give "
                         "a label with spaces). A lone positional gate may be labeled too. An "
                         "empty or blank label is a usage error, not a silently ignored one")
-    p.add_argument("--log", default="/tmp/gate.log", help="append all gate output here [/tmp/gate.log]")
+    p.add_argument("--log", default=DEFAULT_LOG,
+                   help=f"append all gate output here [{DEFAULT_LOG}]")
     p.add_argument("--summary", default="", help="regex; matching output lines are shown per gate")
     p.add_argument("--then", default="", help="run ONLY if every gate passed")
     # NOT argparse.REMAINDER: it swallows every option that follows the first positional, so

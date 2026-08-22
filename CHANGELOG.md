@@ -17,6 +17,69 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.241.0]
+
+### Fixed
+
+Windows portability, found by grinding the `windows-latest` CI cell to green. Every failure was
+triaged as either a POSIX-only subject (skip, with the reason stating why) or a portability bug
+in shipped code (fixed). Roughly half were bugs, and four of them made a check answer "clean"
+on Windows while being unable to fire at all.
+
+- `compuse-toolbox/gate.py` POSIX-shlex-split every `--gate` string, so on Windows a backslash
+  was read as an ESCAPE and every path lost its separators:
+  `C:\Program Files\Py\python.exe` became `C:Program` + `FilesPypython.exe`. The gate then ran
+  a binary that does not exist and reported `rc=127` - a FALSE RED for a command that passes,
+  which is the exact misattribution the tool exists to prevent. Splitting now leaves backslashes
+  alone on Windows. `diffbehave.py` had already fixed this one way and `harness_checks.py` had
+  not fixed it at all; all three now use the same splitter, which also keeps `--opt="a b"` in one
+  token (the earlier non-POSIX approach split it) and degrades instead of raising on the C
+  runtime's `"a\"b"` quoting.
+- `gate.py`'s `--log` defaulted to `/tmp/gate.log`, which is not an absolute path on Windows -
+  `Path` reads it as `\tmp\gate.log`, so the log landed on whichever drive happened to be
+  current and the `log:` line named a path the user could not open. It now defaults to the
+  platform temp dir.
+- `hooks/harness_checks.py` recognised only POSIX-absolute paths in a registered hook command, so
+  `command_paths` matched NOTHING on Windows and `registration_problems` reported zero problems
+  for any registration naming a Windows path. The hook-registration audit was silently passing on
+  the platform it was auditing. Drive-letter and UNC paths are now recognised, and the check is
+  exercised for both platforms from either one. `meta-audit-local-skills-and-hooks` shares the
+  function and was equally blind.
+- `compuse-toolbox/grep_all.py` reported `0 of them are gitignored` on every Windows run - the
+  count IS the finding, so the tool answered "nothing hidden" precisely when it could not tell.
+  Two independent causes: newline-delimited text stdin goes through subprocess's text wrapper,
+  which turns `\n` into `\r\n`, so git read `path\r` and matched nothing; and without `-z` git
+  quotes a Windows path back as `"C:\\Users\\..."`, which would not have parsed either. The
+  call is now NUL-delimited and fed bytes.
+- `meta-self-improve/reconcile_memory_index.py`'s misplacement detector matched only POSIX
+  absolute paths in a fact body, so on Windows it found no evidence in any store and every audit
+  printed `TOTAL misplaced: 0` - a check that could not fire, reading as a clean tree. Its two
+  "ignores" tests passed vacuously for the same reason.
+- `meta-prune-plugin-cache/pluginprune.py` searched a settings file's raw text for a path, but a
+  settings file is JSON and JSON escapes backslashes, so on Windows a pinned version was never
+  recognised as pinned. This function's false negative is a DELETION, so it failed in the
+  direction that cannot be undone.
+- `git-worktrees/wtclean.py` ran `git -C <worktree> worktree remove <worktree>` - git's own
+  working directory inside the directory being deleted. POSIX allows that; Windows locks a
+  process's current directory, so the removal failed with "Permission denied" and left the
+  worktree half-removed. Git now runs from the main checkout. A sibling test had been skipped on
+  Windows blaming platform "open handles"; that diagnosis was wrong - the same removal run from
+  the main checkout succeeds there - so the skip was hiding a defect and is gone.
+- `compuse-toolbox/fleet_ssh.py` formatted its key and known-hosts templates with a hardcoded
+  `/`, returning `C:\Users\me/.ssh/key`. Functional, since ssh and `Path` both accept it, but it
+  is what the tool prints and returns, so a caller comparing it against a native path saw two
+  spellings of one file.
+
+### Changed
+
+- Tests that spelled a POSIX separator in a path assertion now compare shape rather than the
+  host's separator. Several were NEGATIVE assertions (`"/-p-self/" not in out`), which on Windows
+  could never match and so passed vacuously.
+- `test_gate.py` no longer reaches for `true`, `false`, `env` or `touch` as throwaway gate
+  commands. None exists on Windows; they came from Git-for-Windows' `usr/bin`, which is on the CI
+  runner's PATH but not on a plain Windows install, so those tests passed on CI while failing on a
+  real user's machine - the environment, not the subject, decided the verdict.
+
 ## [5.240.0]
 
 ### Fixed
