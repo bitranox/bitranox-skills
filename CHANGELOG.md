@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.235.0]
+
+### Added
+
+- **`meta-claude-hooks` gains "Before you escalate a nudge to a block, price it".** The same
+  escalation has now been proposed twice for one guard on recurrence count alone, and the
+  measurement said no both times. The reasoning that produces those proposals is generic, so the
+  counter belongs in the hook-authoring skill: measure firing rate AND precision by replaying the
+  real transcript corpus with `guard_replay.py`, run a control arm first, price the variant you are
+  actually proposing rather than the whole hook, and state what your rule cannot classify before
+  quoting a number.
+
+- **`process-test-design` names the correct undo for a mutation.** Its defense-in-depth bullet tells
+  the reader to disable a whole defense stack in one mutation and said nothing about restoring it;
+  it now carries the one-clause rule (copy aside first, never `git checkout -- <file>`). The
+  rationale stays single-sourced in `process-review-enhance-code-quality`.
+
+### Fixed
+
+- **CHANGELOG entries for 5.230.0 through 5.233.0, backfilled from their commits.** Four shipped
+  versions had no entry, including a new skill and two rounds of guard changes, so a reader of this
+  file could not learn they happened.
+
 ## [5.234.1]
 
 ### Fixed
@@ -91,6 +114,88 @@ installed copies and needs no bump.
   `reportUnknownArgumentType` when passed). The mutation-restore entry nominated
   `process-test-driven-development`, which never prescribes mutation at all (`grep -n mutat` over
   that skill returns nothing), so the rule went to the skill that does.
+
+## [5.233.0]
+
+### Added
+
+- **`memory_engine retitle`, and a `--title` for `amend-pinned`.** A fact's title is the link text
+  of an always-loaded pointer line, so it is the first thing a session reads, and it was the one
+  field with no correction path: `add` demands the 500-character hook on every call (risking a
+  transcription drift in the text that actually fires), `rename` changes the slug and never the
+  title, and `amend-pinned` deliberately kept the stored title, so a pinned iron rule had no path
+  at all. `retitle --level D --slug S --to-title T` changes that one field, refusing an unknown
+  slug, an empty title, a no-op, and a pinned fact (naming `amend-pinned --title` in the refusal so
+  the pin gate keeps exactly one deliberate way through). It refuses a legacy `uuid:` pointer,
+  whose slug is DERIVED from its title, and normalises the title to one line, because a newline
+  would split the pointer line and orphan the fact. It retitles every other level pointing at the
+  slug, since `move` and `relocate` refuse when duplicate pointers disagree on (title, hook).
+  18 tests over real trees plus an end-to-end run; eight mutations, one per guard, all detected.
+
+### Fixed
+
+- **`docs/reference.md` and the store-edit guard's docstring were stale**, neither listing
+  `relocate`, `rename`, `amend-pinned` or `lint`. Both corrected.
+
+## [5.232.0]
+
+### Fixed
+
+- **`meta-prune-plugin-cache`'s uninstalled-plugin guard read only the user's two settings files.**
+  A plugin enabled in a project's `.claude/settings.json` and absent from `installed_plugins.json`
+  was still planned for removal, which is the exact gap the guard exists to close. `pluginprune.py`
+  now also reads that pair inside every project `~/.claude.json` lists, reports which files it read,
+  and offers `--no-project-settings`; naming any `--settings` file still takes over the list. Cost
+  measured before building: 239 project entries, 136 still existing, 51 carrying a settings file,
+  the index parsing in 0.01s and a full run in 0.48s. 38 tests; all five discovery mutations
+  detected, and where two survived at first the TESTS were fixed rather than the mutations dropped.
+
+## [5.231.0]
+
+### Changed
+
+- **`meta-prune-plugin-cache` refuses to run when the lock mechanism is gone.** The `.in_use` lock
+  format is undocumented, so a future Claude Code that renamed or dropped it would have left every
+  version reading as free, the running session's included. The two cases are distinguishable on
+  disk: an idle machine leaves the `.in_use` directory behind EMPTY, so directories present but
+  empty still proceed, while not one version directory carrying an `.in_use` directory at all is
+  now refused with a non-zero exit. `--allow-missing-locks` is the deliberate override.
+
+- **A plugin's only version is no longer kept unconditionally**, so uninstalling a plugin now
+  reclaims its cache. A sole version that no install record, lock, pin or `--keep` names is planned;
+  `enabledPlugins` in a settings file is wired in as a second guard. 32 tests, four further
+  mutations all detected.
+
+### Fixed
+
+- **The `enabledPlugins` guard was wrong on its first writing, and the real cache caught it rather
+  than the fixtures:** `enabledPlugins` names a PLUGIN, never a version, so honouring it per version
+  kept every stale version of everything enabled - which is the entire accumulation. It applies to a
+  sole version only, and a fixture now fails if it is ever unscoped again.
+
+## [5.230.0]
+
+### Added
+
+- **New skill `meta-prune-plugin-cache`, and `scripts/pluginprune.py`.** The plugin cache keeps a
+  full copy per version and drops none, so a marketplace you publish to grows by a whole plugin on
+  every release, with abandoned `temp_subdir_*.clone` and `temp_git_*` clones piling up at the cache
+  root beside it. The load-bearing question is which versions a live session still holds, and the
+  cache answers it itself: every version directory carries `.in_use/<pid>` locks holding
+  `{"pid":N,"procStart":"<start time>"}`, with `procStart` cross-checked against the running process
+  so a reused pid cannot pass for the original holder. Verified on a machine with four live
+  sessions that `lsof` over the whole cache returns nothing, because hooks are launched per
+  invocation and hold no file open between calls - so an open-file search reads a version in active
+  use as free.
+
+  The tool classifies every version directory and every `temp_*` leftover in one pass with a reason
+  per line, dry run by default. `--apply` acts only on the printed plan and never re-scans, but
+  re-checks each directory's lock immediately before removing it, so a session that starts between
+  the plan and the apply keeps its version. It keeps the `installPath` from
+  `installed_plugins.json`, anything a settings file pins, anything `--keep` names, and refuses
+  symlinks and paths outside the cache. 25 tests over real directory trees with no monkeypatching:
+  the liveness detector runs against the test process as a known positive, a reaped subprocess as a
+  known negative, and a live pid whose recorded start time disagrees. Seven mutations all detected.
 
 ## [5.229.0]
 

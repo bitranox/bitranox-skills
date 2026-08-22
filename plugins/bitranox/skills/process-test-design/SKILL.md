@@ -254,7 +254,7 @@ and passes on a compatible-looking but wrong encoding.
 - **"It passes on my machine / re-run it."** Flakiness is a defect - fix order/timing/clock, do not retry.
 - **Testing the happy path only.** The bugs live in the edge battery above.
 - **Chasing 100% coverage** with assertion-free or impl-mirroring tests. Delete those; they hide rot.
-- **Single-layer mutation stays green (defense in depth).** Disabling ONE validation check can leave its test green because a LATER check rejects the same bad input, so the test looks like coverage it lacks. Mutate the single layer first; if it stays green, find which later check absorbed it - the test is asserting a contract no single mutation can break, so prove it by disabling the whole defense stack in ONE mutation.
+- **Single-layer mutation stays green (defense in depth).** Disabling ONE validation check can leave its test green because a LATER check rejects the same bad input, so the test looks like coverage it lacks. Mutate the single layer first; if it stays green, find which later check absorbed it - the test is asserting a contract no single mutation can break, so prove it by disabling the whole defense stack in ONE mutation. Copy the file aside before mutating and restore from that copy, never `git checkout -- <file>` - it restores from the index or HEAD and so discards the uncommitted work you are testing.
 
 ## Cross-references
 

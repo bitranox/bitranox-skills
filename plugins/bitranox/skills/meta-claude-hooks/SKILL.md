@@ -115,6 +115,41 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
 - **A guard judges the whole pending command.** A `PreToolUse` Bash hook sees the entire command string and the
   state as it was before any of it ran.
 
+## Before you escalate a nudge to a block, price it
+
+A guard that only warns is easy to escalate on the argument that it demonstrably does not bind: the
+recurrence count sits right there and every new hit reads as more evidence. That count is not the
+number that decides it. What decides whether a block is an improvement is its PRECISION - of the
+commands it would block, how many were going to be blocked or fail anyway.
+
+Measure it by replaying real history instead of reasoning about it. `guard_replay.py` (home:
+`skills/compuse-toolbox/scripts/`) takes your predicate and every recorded Bash call in the
+transcript corpus and reports the firing rate AND the precision, joining each firing to whether a
+gate actually blocked that command:
+
+```bash
+uv run <plugin>/skills/compuse-toolbox/scripts/guard_replay.py \
+  --module path/to/your-hook.py --func notice --root ~/.claude/projects
+```
+
+Three things make the number trustworthy:
+
+- **Run a control arm first.** Replay the guard UNCHANGED and require it to reproduce whatever
+  figures are already recorded for it. If it does not, the harness is wired wrong and no number
+  from any variant means anything.
+- **Price the variant you are actually proposing, not the whole hook.** A narrowing that sounds
+  obviously safer can score WORSE than the thing it narrows, and the arm you meant to downgrade can
+  turn out to have the HIGHER precision - which inverts the proposal rather than trimming it.
+- **Say what your rule cannot classify, before quoting a number.** A predicate declared
+  `(command, cwd)` receives the recorded cwd, so a rule about paths can be measured rather than
+  guessed; but any shape it cannot decide (an interpreter write exposes no filename) is silently
+  outside whatever you measured.
+
+Unit tests prove a guard fires on the shapes you listed. Only a replay tells you whether it is
+QUIET on everything else - and a block that is not quiet gets routed around, which leaves you worse
+off than the nudge you started with. Record the measurement next to the guard so the next author
+inherits the answer instead of re-running the argument.
+
 ## Related skills
 
 | For                                                                  | Use                                          |
