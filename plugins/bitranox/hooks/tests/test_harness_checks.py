@@ -12,6 +12,7 @@ import shutil
 import sys
 import subprocess
 import types
+from pathlib import Path
 
 import pytest
 
@@ -717,6 +718,44 @@ def test_discover_shipped_surfaces_a_tool_repo_skills_dir(tmp_path):
 def test_discover_shipped_ignores_a_local_project_skills_dir(tmp_path):
     _skills(tmp_path / "work" / "orchard" / ".claude", "orchard-build")
     assert hc.discover_shipped([tmp_path / "work"], home=tmp_path / "home") == []
+
+
+def test_a_bare_error_path_is_resolved_against_the_target_dir(tmp_path):
+    """pytest renders `ERROR <path>` relative to its own ROOTDIR, not to this process's cwd, and
+    when it makes the target dir the rootdir the rendering is a BARE filename. That resolved
+    against the cwd, did not exist there, and was handed back as a bare relative name - the
+    exact "only resolves from one directory" defect this resolution exists to remove.
+
+    Driven through the injected `run` seam with pytest's real output shape, so it reproduces the
+    CI rendering deterministically on every platform instead of only where pytest happens to
+    choose that rootdir.
+    """
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    broken = tests / "test_broken.py"
+    broken.write_text("import a_module_that_is_not_installed\n", encoding="utf-8")
+    run = _fake_pytest_run(types.SimpleNamespace(
+        returncode=2,
+        stdout="ERROR test_broken.py\n",
+        stderr="E   ModuleNotFoundError: No module named 'a_module_that_is_not_installed'\n",
+    ))
+    problems = hc.uncollectable_tests(tests, run=run)
+    assert problems, "expected a collection failure to report"
+    path = problems[0][0]
+    assert os.path.isabs(path) and os.path.exists(path), path
+    assert Path(path) == broken
+
+
+def test_an_unresolvable_error_token_is_left_alone(tmp_path):
+    """The direction it must NOT fire: a token that is not a real file (a nodeid, an odd
+    rendering) stays verbatim rather than being turned into an invented absolute path."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_x.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    run = _fake_pytest_run(types.SimpleNamespace(
+        returncode=2, stdout="ERROR not/a/real/file.py::thing\n", stderr="E   Boom\n"))
+    problems = hc.uncollectable_tests(tests, run=run)
+    assert problems[0][0] == "not/a/real/file.py::thing"
 
 
 def test_uncollectable_tests_reports_a_path_that_actually_resolves(tmp_path):
