@@ -93,7 +93,10 @@ def resolve_slug(slug, max_candidates=8):
     character decodable. Returns a de-duplicated list of absolute dir paths (realpath), capped.
     """
     if is_truncated_slug(slug):
-        return []  # the tail is a hash; decoding it would resolve to a confidently wrong directory
+        # The tail is a hash, so the walk cannot succeed - measured: the pre-change DFS also
+        # returned [] here, because the hash tokens match no real child. Refusing up front
+        # states the limitation instead of rediscovering it by failing.
+        return []
     base_root, tokens = slug_root_and_tokens(slug)
     if base_root is None or not tokens:
         return []
