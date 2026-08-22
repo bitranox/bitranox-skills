@@ -40,6 +40,8 @@ import json
 import os
 import re
 import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
 import sys
 from pathlib import Path
 
@@ -468,30 +470,100 @@ def check_test_dependencies(root, is_installed=None):
     ]
 
 
-def check_pytest(root, paths):
-    target = [str(p) for p in paths if p.exists()]
-    if not target:
-        return []
-    # import-mode=importlib keys modules by full path rather than basename. check_duplicate_basenames
-    # above is what actually FORBIDS a collision; this flag only stops a stray one from silently
-    # substituting a module during the run, and it also covers the benign per-directory conftest.py.
-    # examples/ and demos/ are documentation, not convention tests - exempt from tests-exist, so
-    # exempt from the run too.
-    cmd = [
+# A run that collects nothing exits 5 and used to be treated as success, so a broken glob, a
+# renamed directory or a conftest import error reported "all checks passed" having run no tests
+# at all. The count floor catches the partial version of the same failure, which never reaches
+# zero and so is invisible to the exit code alone.
+# The whole-repo suite passed 3099 on every interpreter measured. The floor sits just under
+# that: high enough that losing a whole skill's tests trips it, low enough that pruning a few
+# genuinely dead tests does not. Lower it deliberately, in the same change that removes tests.
+PYTEST_FLOOR = 3000
+
+_PYTEST_PASSED_RX = re.compile(r"(\d+) passed")
+_PYTEST_SUMMARY_RX = re.compile(r"^\d+ (passed|failed).*", re.MULTILINE)
+
+
+def pytest_argv(root, paths):
+    """The exact pytest command the gate runs, so CI can invoke it without duplicating flags.
+
+    import-mode=importlib keys modules by full path rather than basename. check_duplicate_basenames
+    is what actually FORBIDS a collision; this flag only stops a stray one from silently
+    substituting a module during the run, and it also covers the benign per-directory conftest.py.
+    examples/ and demos/ are documentation, not convention tests - exempt from tests-exist, so
+    exempt from the run too.
+    """
+    return [
         sys.executable, "-m", "pytest", "-q",
         "--import-mode=importlib", "-p", "no:cacheprovider",
         "--ignore-glob=*/examples/*", "--ignore-glob=*/demos/*",
-        *target,
+        *[str(p) for p in paths],
     ]
+
+
+def junit_total(path):
+    """Total tests recorded in a pytest junit report, or None if it cannot be read.
+
+    The count comes from the report rather than from scraped stdout because --pytest-only
+    streams pytest straight to the CI log (that is the point of it), so there is no captured
+    text to parse.
+    """
     try:
-        out = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True)
+        root = ET.parse(str(path)).getroot()
+    except (OSError, ET.ParseError):
+        return None
+    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+    total = 0
+    for suite in suites:
+        try:
+            total += int(suite.get("tests", 0))
+        except (TypeError, ValueError):
+            return None
+    return total
+
+
+def floor_problems(report, floor):
+    """Fail closed: an unknown count is not evidence the floor was met."""
+    if not floor:
+        return []
+    total = junit_total(report)
+    if total is None:
+        return ["Could not read the pytest junit report at %s - test count unverified." % report,
+                "  An unknown count fails closed; it is not evidence the suite ran."]
+    if total < floor:
+        return ["pytest collected only %d tests, expected at least %d." % (total, floor),
+                "  A partial collection never reaches zero, so the exit code cannot see it.",
+                "  If the suite legitimately shrank, lower the floor in the same change."]
+    return []
+
+
+def check_pytest(root, paths, floor=0):
+    target = [p for p in paths if p.exists()]
+    if not target:
+        return []  # hook mode pointed at a tests dir that is absent: the one legitimate empty case
+    cmd = pytest_argv(root, target)
+    try:
+        # encoding is explicit because text=True alone decodes with the machine locale codec,
+        # which is cp1252 on a German Windows and corrupts any non-ASCII test output.
+        out = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
+                             encoding="utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
         return [f"Could not run pytest: {exc}"]
-    if out.returncode == 5:  # no tests collected
-        return []
+    report = out.stdout or out.stderr or ""
+    if out.returncode == 5:
+        return ["pytest collected no tests - the suite did not run.",
+                "  An empty run is a defect, not a pass: check the target paths and conftest imports."]
     if out.returncode != 0:
-        tail = (out.stdout or out.stderr).strip().splitlines()[-15:]
+        tail = report.strip().splitlines()[-15:]
         return ["pytest failed:"] + [f"  {ln}" for ln in tail]
+    hit = _PYTEST_PASSED_RX.search(report)
+    passed = int(hit.group(1)) if hit else 0
+    if floor and passed < floor:
+        return [f"pytest collected only {passed} tests, expected at least {floor}.",
+                "  A partial collection never reaches zero, so the exit code cannot see it.",
+                "  If the suite legitimately shrank, lower the floor in the same change."]
+    summary = _PYTEST_SUMMARY_RX.search(report)
+    if summary:  # the gate used to discard this, leaving CI with no evidence any test ran
+        print("  pytest: " + summary.group(0).strip())
     return []
 
 
@@ -787,7 +859,7 @@ def unlisted_mirrors(root, public):
     return found
 
 
-def run_checks(root, ci, full_pytest=None):
+def run_checks(root, ci, full_pytest=None, run_pytest=True, floor=0):
     """`ci` picks the CHECK SET (CI omits the maintainer-only ones); `full_pytest` picks the pytest
     SCOPE and defaults to `ci`. They are separate axes because a pre-push is BOTH: the maintainer
     (so version-bump, skill-review and mirrors apply) and the last gate before CI (so it runs the
@@ -816,11 +888,13 @@ def run_checks(root, ci, full_pytest=None):
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway
     # would report the SAME problem a second time as a failed assertion in an unrelated test,
     # and that second message is the one a reader acts on.
+    if not run_pytest:
+        return failures  # CI runs the suite as its own step so GitHub renders the results
     missing_deps = check_test_dependencies(root)
     failures += missing_deps
     if not missing_deps:
         pytest_paths = [root] if full_pytest else [root / "plugins" / "bitranox" / "hooks" / "tests"]
-        failures += check_pytest(root, pytest_paths)
+        failures += check_pytest(root, pytest_paths, floor=floor if full_pytest else 0)
     return failures
 
 
@@ -893,6 +967,7 @@ def main():
     ci = "--ci" in args
     mirrors = "--mirrors" in args
     pre_push = "--pre-push" in args
+    run_pytest = "--no-pytest" not in args
 
     if "--print-test-deps" in args:
         # The pre-push hook builds its `uv run --with ...` line from this, so the dependency set
@@ -902,6 +977,31 @@ def main():
         if root is None:
             return 1
         print("\n".join(ci_test_dependencies(root)))
+        return 0
+
+    if "--pytest-only" in args:
+        # The CI test step. It runs the suite WITHOUT capturing, so pytest's own output lands in
+        # the CI log live - the gate used to swallow it, leaving a green run with no evidence any
+        # test had run. The count is then read from the junit report and held to the floor.
+        root = repo_root()
+        if root is None:
+            return 1
+        # The report goes to a temp dir, never the repo root: a stray junit.xml there would
+        # dirty the working tree and could be committed by a pathspec-less `git add`.
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "junit.xml"
+            cmd = pytest_argv(root, [root]) + ["--junitxml=" + str(report)]
+            rc = subprocess.run(cmd, cwd=str(root)).returncode
+            problems = floor_problems(report, PYTEST_FLOOR) if rc == 0 else []
+        if rc == 5:
+            print("repo-gate: pytest collected no tests - the suite did not run.", file=sys.stderr)
+            return 1
+        if rc != 0:
+            return rc
+        if problems:
+            for line in problems:
+                print(line, file=sys.stderr)
+            return 1
         return 0
 
     if "--mirror-of" in args:
@@ -945,7 +1045,8 @@ def main():
     # not go through the parse above - that read fails and returns 0, passing the gate by accident
     # on the one caller that fires when git runs OUTSIDE Claude Code (a terminal, an IDE, a
     # script). That blind spot is how a stale generated catalog shipped twice.
-    failures = run_checks(root, ci, full_pytest=ci or pre_push)
+    failures = run_checks(root, ci, full_pytest=ci or pre_push,
+                          run_pytest=run_pytest, floor=PYTEST_FLOOR)
 
     if not failures:
         if ci or pre_push:

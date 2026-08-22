@@ -182,7 +182,7 @@ def test_version_bump_enforced_in_hook_mode_only(tmp_path, monkeypatch):
     # version-bump is a maintainer pre-commit concern, never a CI/PR gate.
     make_repo(tmp_path)
     monkeypatch.setattr(RG, "check_version_bumped", lambda root: ["VERSION_SENTINEL"])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     assert "VERSION_SENTINEL" in RG.run_checks(tmp_path, ci=False)
     assert "VERSION_SENTINEL" not in RG.run_checks(tmp_path, ci=True)
 
@@ -215,7 +215,7 @@ def test_main_hook_ignores_non_commit_command(tmp_path, monkeypatch):
 def test_main_hook_blocks_commit_on_violation(tmp_path, monkeypatch, capsys):
     make_repo(tmp_path, bad_skill=True)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])  # don't run real pytest
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])  # don't run real pytest
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
     assert RG.main() == 2
     assert "blocked" in capsys.readouterr().err
@@ -224,7 +224,7 @@ def test_main_hook_blocks_commit_on_violation(tmp_path, monkeypatch, capsys):
 def test_main_hook_allows_clean_commit(tmp_path, monkeypatch):
     make_repo(tmp_path, good_skill=True)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": "git commit -m x"}})))
     assert RG.main() == 0
 
@@ -233,7 +233,7 @@ def test_main_hook_blocks_push_on_violation(tmp_path, monkeypatch, capsys):
     # a push is gated too: it is the moment the change reaches CI, so a violation must block it
     make_repo(tmp_path, bad_skill=True)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     monkeypatch.setattr(sys, "stdin",
                         io.StringIO(json.dumps({"tool_input": {"command": "git push origin master"}})))
     assert RG.main() == 2
@@ -246,7 +246,7 @@ def test_pre_push_mode_needs_no_stdin_event(tmp_path, monkeypatch):
     # one caller that fires outside Claude Code.
     make_repo(tmp_path, bad_skill=True)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
     monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/master abc refs/heads/master def\n"))
     assert RG.main() == 1                       # a hook exit code, not the PreToolUse 2
@@ -255,7 +255,7 @@ def test_pre_push_mode_needs_no_stdin_event(tmp_path, monkeypatch):
 def test_pre_push_mode_passes_a_clean_tree(tmp_path, monkeypatch):
     make_repo(tmp_path, good_skill=True)
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     assert RG.main() == 0
@@ -267,7 +267,7 @@ def test_pre_push_runs_pytest_over_the_whole_repo(tmp_path, monkeypatch):
     make_repo(tmp_path, good_skill=True)
     seen = []
     monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: seen.append(list(paths)) or [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: seen.append(list(paths)) or [])
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     RG.main()
@@ -278,7 +278,7 @@ def test_pre_push_keeps_the_maintainer_only_checks(tmp_path, monkeypatch):
     # version-bump is skipped in CI (a contributor must not be forced to bump) but a pre-push IS
     # the maintainer, and a missing bump is exactly what makes a shipped change reach nobody.
     monkeypatch.setattr(RG, "check_version_bumped", lambda root: ["VERSION_SENTINEL"])
-    monkeypatch.setattr(RG, "check_pytest", lambda root, paths: [])
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
     assert "VERSION_SENTINEL" in RG.run_checks(tmp_path, ci=False, full_pytest=True)
 
 
@@ -1009,3 +1009,109 @@ def test_the_real_workflow_names_the_dependencies_this_gate_relies_on():
     root = Path(__file__).resolve().parents[3].parent
     names = RG.ci_test_dependencies(root)
     assert "pytest" in names and "lxml" in names
+
+
+# --------------------------------------------------------------------------
+# check_pytest: the run must be fail-CLOSED
+#
+# Every other test in this file patches check_pytest out, so its own behaviour
+# was never exercised - which is how the zero-collection fail-open below shipped.
+# These drive the real function against real pytest runs in tmp_path.
+# --------------------------------------------------------------------------
+
+
+def test_a_passing_suite_is_reported_as_no_failures(tmp_path):
+    tests = tmp_path / "tests"
+    write(tests / "test_ok.py", "def test_ok():\n    assert True\n")
+    assert RG.check_pytest(tmp_path, [tests]) == []
+
+
+def test_a_failing_suite_is_reported(tmp_path):
+    tests = tmp_path / "tests"
+    write(tests / "test_bad.py", "def test_bad():\n    assert False\n")
+    problems = RG.check_pytest(tmp_path, [tests])
+    assert problems and "pytest failed:" in problems[0]
+
+
+def test_a_path_that_does_not_exist_is_not_an_empty_run(tmp_path):
+    """The one legitimate empty case: hook mode points at a tests dir that is absent."""
+    assert RG.check_pytest(tmp_path, [tmp_path / "nope"]) == []
+
+
+def test_a_test_dir_that_collects_nothing_is_a_failure(tmp_path):
+    """pytest exits 5 on zero collected. Treating that as success means a broken
+    glob, a renamed dir or a conftest import error reads as 'all checks passed'
+    while nothing ran at all."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "not_a_test.py").write_text("x = 1\n", encoding="utf-8")
+    problems = RG.check_pytest(tmp_path, [tests])
+    assert problems, "zero collected tests must be reported, not silently passed"
+    assert any("no tests" in p.lower() for p in problems)
+
+
+def test_collecting_under_the_floor_is_a_failure(tmp_path):
+    """A partial collapse never reaches zero, so the rc-5 check alone cannot see it."""
+    tests = tmp_path / "tests"
+    write(tests / "test_one.py", "def test_one():\n    assert True\n")
+    problems = RG.check_pytest(tmp_path, [tests], floor=500)
+    assert problems, "a collected count under the floor must be reported"
+    assert any("floor" in p.lower() or "expected at least" in p.lower() for p in problems)
+
+
+# --------------------------------------------------------------------------
+# --pytest-only: the CI test step. Streams pytest to the log (so a run is
+# visible) and counts from the junit XML rather than from scraped stdout.
+# --------------------------------------------------------------------------
+
+
+def _junit(tmp_path, tests, failures=0, errors=0):
+    xml = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<testsuites><testsuite name="pytest" errors="%d" failures="%d" tests="%d">'
+        "</testsuite></testsuites>" % (errors, failures, tests)
+    )
+    path = tmp_path / "junit.xml"
+    path.write_text(xml, encoding="utf-8")
+    return path
+
+
+def test_junit_total_reads_the_test_count(tmp_path):
+    assert RG.junit_total(_junit(tmp_path, tests=3122)) == 3122
+
+
+def test_junit_total_returns_none_when_the_report_is_missing(tmp_path):
+    assert RG.junit_total(tmp_path / "absent.xml") is None
+
+
+def test_junit_total_returns_none_on_a_corrupt_report(tmp_path):
+    path = tmp_path / "junit.xml"
+    path.write_text("<testsuites", encoding="utf-8")
+    assert RG.junit_total(path) is None
+
+
+def test_floor_problems_accepts_a_count_at_or_above_the_floor(tmp_path):
+    assert RG.floor_problems(_junit(tmp_path, tests=3000), floor=3000) == []
+
+
+def test_floor_problems_rejects_a_count_under_the_floor(tmp_path):
+    problems = RG.floor_problems(_junit(tmp_path, tests=12), floor=3000)
+    assert problems and "12" in problems[0]
+
+
+def test_floor_problems_rejects_an_unreadable_report(tmp_path):
+    """A missing report means the count is unknown - that must not read as 'above the floor'."""
+    problems = RG.floor_problems(tmp_path / "absent.xml", floor=3000)
+    assert problems, "an unknown count must fail closed, not pass"
+
+
+def test_the_real_ci_workflow_still_declares_the_dependency_set():
+    """ci_test_dependencies() scrapes `pip install` lines out of the real ci.yml, and the
+    pre-push hook builds its `uv run --with ...` line from the result. A workflow edit that
+    leaves zero or duplicate `pip install` lines silently empties or doubles that list, and
+    nothing else would notice: the preflight just stops preflighting."""
+    root = Path(__file__).resolve().parents[4]
+    assert (root / ".github" / "workflows" / "ci.yml").exists(), root
+    deps = RG.ci_test_dependencies(root)
+    assert deps == ["pytest", "PyYAML", "lxml", "defusedxml", "ruamel.yaml", "httpx2"], deps
+    assert len(deps) == len(set(deps)), "duplicated pip install lines double the dependency set"

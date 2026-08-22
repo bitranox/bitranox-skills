@@ -106,10 +106,15 @@ def create_session(start=None):
     return session
 
 
-def main(argv=None):
-    """Run the bootstrap. Print session.json's path and contents; return exit code."""
-    if not python_version_ok():
-        got = ".".join(str(p) for p in sys.version_info[:3])
+def main(argv=None, version_info=None):
+    """Run the bootstrap. Print session.json's path and contents; return exit code.
+
+    `version_info` is the same injection seam python_version_ok() offers, so the rest of
+    main() can be tested on any interpreter. Without it these tests could only run on 3.13+,
+    which is precisely the versions the CI matrix added.
+    """
+    if not python_version_ok(version_info):
+        got = ".".join(str(p) for p in (version_info or sys.version_info)[:3])
         want = ".".join(str(p) for p in MIN_PYTHON)
         print(
             f"ERROR: Python {want}+ required, but running {got} "

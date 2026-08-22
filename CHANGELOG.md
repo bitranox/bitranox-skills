@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.237.0]
+
+### Fixed
+
+- `repo-gate.py` no longer passes a test run that never happened. `check_pytest()` treated
+  pytest's exit code 5 (zero tests collected) as success, so a broken glob, a renamed directory
+  or a conftest import error would have reported `all checks passed` having run nothing. Zero
+  collection is now a failure, and a collected count under `PYTEST_FLOOR` is too, which catches
+  the partial version of the same fault that never reaches zero.
+- `check_pytest()` also stopped discarding pytest's output on success. A green CI run printed a
+  single line and left no evidence any test had run.
+- `subprocess.run()` in `check_pytest()` now passes an explicit `encoding`; `text=True` alone
+  decodes with the machine locale codec, which corrupts non-ASCII output on a Windows runner.
+- `setup_env.main()` gained the `version_info` injection seam `python_version_ok()` already
+  had, so its tests no longer require the interpreter to be 3.13+. This also makes the version
+  gate itself reachable from a test for the first time.
+
+### Added
+
+- `repo-gate.py --pytest-only`: the CI test step. Streams pytest to the log rather than
+  capturing it, then reads the count from a junit report and holds it to the floor.
+- `repo-gate.py --no-pytest`: run the convention checks without the suite, so CI can report
+  the two independently.
+
 ## [5.236.0]
 
 ### Added
