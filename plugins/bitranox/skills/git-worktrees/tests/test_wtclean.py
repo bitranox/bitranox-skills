@@ -436,6 +436,8 @@ def test_a_directory_that_is_not_a_worktree_reads_unknown(tmp_path):
 
 
 @needs_git
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows holds open handles on files inside a git worktree, so the removal this exercises fails with a permission error unrelated to the code under test')
 def test_a_real_worktree_is_removed_end_to_end(tmp_path):
     _main, worktree, _git = make_repo_with_worktree(tmp_path)
     cache = make_cache(tmp_path, "wt-topic-target")

@@ -1,4 +1,6 @@
 """Tests for jsonl_grep.py - filter a JSONL stream by type/role, extract a field or regex. ASCII."""
+import sys
+import pytest
 import json
 
 import jsonl_grep as J
@@ -92,6 +94,8 @@ def test_scan_applies_the_same_filters_as_a_single_file_read(tmp_path):
     assert res.counts == {"opus": 1}
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no POSIX mode bits: chmod(0o000) leaves the file readable, so an unreadable candidate cannot be created')
 def test_scan_counts_an_unreadable_file_as_skipped(tmp_path):
     _write(tmp_path, "good.jsonl", [{"type": "assistant", "message": {"model": "opus"}}])
     bad = tmp_path / "bad.jsonl"

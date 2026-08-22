@@ -439,3 +439,26 @@ def test_cli_second_run_leaves_the_file_byte_identical(tmp_path):
     assert _run([str(p)]).returncode == 0
     assert p.read_bytes() == first
     assert _run(["--check", str(p)]).returncode == 0
+
+
+# --------------------------------------------------------------------------
+# Rewriting a file must not silently change its line endings. open() defaults to
+# universal newlines on read and os.linesep on write, so on Windows every file
+# this tool touched came back CRLF - in a repo whose gate REQUIRES LF for .py,
+# .sh and .json, and whose hooks run this over markdown.
+# --------------------------------------------------------------------------
+
+
+def test_rewriting_preserves_lf_line_endings(tmp_path):
+    p = tmp_path / "lf.md"
+    p.write_bytes(("a " + EM_DASH + " b\nsecond\n").encode("utf-8"))
+    assert _run([str(p)]).returncode == 0
+    assert p.read_bytes() == b"a - b\nsecond\n"
+
+
+def test_rewriting_preserves_crlf_line_endings(tmp_path):
+    """A file that arrived CRLF stays CRLF: the job is to strip tells, not to renormalize."""
+    p = tmp_path / "crlf.md"
+    p.write_bytes(("a " + EM_DASH + " b\r\nsecond\r\n").encode("utf-8"))
+    assert _run([str(p)]).returncode == 0
+    assert p.read_bytes() == b"a - b\r\nsecond\r\n"

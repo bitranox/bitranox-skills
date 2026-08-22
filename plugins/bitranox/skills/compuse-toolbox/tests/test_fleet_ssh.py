@@ -1,4 +1,5 @@
 """Tests for fleet_ssh.py - one option set, one resolved key, no interactive prompt. ASCII only."""
+import sys
 import io
 import os
 
@@ -147,6 +148,8 @@ def test_identities_only_is_set_when_a_key_is_given_and_not_otherwise():
 
 # ---- trap 3: a key can exist and be unreadable --------------------------------------------------
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no POSIX mode bits: chmod(0o000) leaves the file readable, so an unreadable candidate cannot be created')
 def test_resolve_key_skips_an_existing_but_unreadable_candidate(tmp_path):
     """An unreadable key yields `Permission denied` with EMPTY stdout, and the cause then surfaces
     far downstream as "the command returned nothing"."""

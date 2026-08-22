@@ -156,7 +156,10 @@ def _main(argv):
 
     rc = 0
     for path in args:
-        with open(path, encoding="utf-8") as fh:
+        # newline="" on BOTH sides so line endings round-trip untouched. The defaults translate
+        # on read and rewrite as os.linesep, so this tool silently converted every file it
+        # rewrote to the platform ending - CRLF on Windows, in a repo whose gate requires LF.
+        with open(path, encoding="utf-8", newline="") as fh:
             data = fh.read()
         out = normalize(data)
         if out == data:
@@ -165,7 +168,7 @@ def _main(argv):
             sys.stderr.write("typographic tells found: %s\n" % path)
             rc = 1
         else:
-            with open(path, "w", encoding="utf-8") as fh:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
                 fh.write(out)
     return rc
 
