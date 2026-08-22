@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.237.1]
+
+### Fixed
+
+- `migrate_memory.is_excluded()` failed to exclude the system temp directory on macOS. It
+  compared a RESOLVED path against the literal prefix `/tmp`, but macOS resolves `/tmp` to
+  `/private/tmp`, so the comparison never fired and the transient root the function exists to
+  protect went entirely unexcluded. The exclusion roots are now resolved themselves, which
+  also covers the Windows temp root. Found by the new macOS CI cell.
+- `test_own_pid_reads_a_number` asserted a `/proc` read succeeds, which only Linux can satisfy.
+  It now asserts the graceful degradation its own test class is named for on platforms without
+  `/proc`, rather than being skipped there and covering nothing.
+
 ## [5.237.0]
 
 ### Fixed
