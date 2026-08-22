@@ -66,9 +66,22 @@ def audit_file(proj):
 _DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often than this
 
 
+def project_slug(proj):
+    """Claude Code's ~/.claude/projects directory name for a project cwd.
+
+    Transcribed from the CLI binary (2.1.240):
+        h1r(e) = e.replace(/[^a-zA-Z0-9]/g, "-")
+    EVERY non-alphanumeric collapses to "-", not just "/". Replacing only "/" agrees for a plain
+    path and then silently points at a directory Claude never wrote as soon as a component holds
+    a ".", "_" or a space. Past 200 characters Claude truncates and appends a hash, which is not
+    reproduced here - see is_truncated_slug in migrate_memory for that case.
+    """
+    return re.sub(r"[^a-zA-Z0-9]", "-", proj)
+
+
 def memory_dir(proj):
-    """The native Auto-memory dir for a project cwd (Claude Code sanitizes '/' to '-')."""
-    return Path.home() / ".claude" / "projects" / proj.replace("/", "-") / "memory"
+    """The native Auto-memory dir for a project cwd."""
+    return Path.home() / ".claude" / "projects" / project_slug(proj) / "memory"
 
 
 # ---- curated store relocation: <proj>/.claude-bx-selflearning (the new per-project home) ----
