@@ -34,6 +34,27 @@ trip it saves is the round trip it imposes. Narrowing it to the tree arm is wors
 arm was believed to be the shape that can never satisfy the gate, and 67 of its 68 real firings
 succeeded. Re-run the measurement rather than the argument.
 
+Hit 9 proposed the obvious refinement - keep the deny but make it TARGET-AWARE, denying a write
+into the repo tree while a write into the session scratchpad stays a nudge, on the reasoning that
+the scratchpad case is recoverable and a blanket deny would over-fire on it. Measured on the same
+corpus (1551 transcripts, 63,217 commands, control arm first to prove the harness reproduces the
+numbers above):
+
+    whole hook (control)              604 fires (0.955%)   25 blocked   precision 4.14%
+    repo-tree write -> DENY           198 fires (0.313%)    8 blocked   precision 4.04%
+    complement, would stay a nudge    326 fires             15 blocked  precision 4.60%
+
+The split does not help, and it is INVERTED against its own premise: the writes it calls
+recoverable-so-keep-nudging are MORE likely to be a real block (4.60%) than the ones it would
+escalate to a hard deny (4.04%). A deny on that arm blocks 187 commands that completed fine to
+prevent 8. The scratchpad/repo distinction simply does not track whether the gate fires, so it
+cannot make a deny safe. The DENY branch stays closed on this evidence too.
+
+Note for anyone re-testing it: an interpreter write (`open(f, "w")`, `write_text`) exposes no
+filename, so a target-aware rule cannot classify that arm at all - and that is precisely the shape
+used to compose a commit message, the job that gets lost. Any future target-aware proposal has to
+say what it does there before its numbers mean anything.
+
 What that closes is the DENY branch, not the question. One mechanism was never priced: making
 repo-gate LOOK AHEAD instead. Every blocked command CONTAINS the bump the gate blocks for, so a
 gate that recognised it would remove the class rather than warn about it, at no cost to the 532
@@ -141,12 +162,18 @@ def tree_prep_before_gate(command: str):
 
 
 def written_files(command: str):
-    """Files this command CREATES, in order. Heredoc openers count; the bodies are not scanned."""
+    """Files this command CREATES, in order. Heredoc openers count; the bodies are not scanned.
+
+    A `/dev/` target is not a file this command creates: `>/dev/null` discards output rather than
+    producing an input for a later statement, so losing it to a block costs nothing and there is
+    nothing to warn about. Counting it fired on the very common `cmd >/dev/null && git push`
+    shape - 7 of 604 real firings in the transcript corpus, every one of them a false nudge.
+    """
     out = []
     for rx in (_HEREDOC_TO_FILE, _REDIRECT_TO_FILE):
         for m in rx.finditer(command or ""):
             f = m.group("f")
-            if f and f not in out:
+            if f and f not in out and not f.strip("'\"").startswith("/dev/"):
                 out.append(f)
     return out
 
