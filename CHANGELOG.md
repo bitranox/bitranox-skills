@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.234.1]
+
+### Fixed
+
+- **`gated-prep-nudge` counted `>/dev/null` as a file write.** `written_files()` matched any
+  `printf`/`echo`/`tee` redirect, so `echo done >/dev/null && git commit -F msg` nudged about a
+  file that was never created and could not be lost. 7 of 604 real firings in the transcript
+  corpus were this shape, every one a false nudge. `/dev/` targets are now skipped.
+
+### Changed
+
+- **The target-aware DENY proposed for `gated-prep-nudge` is priced and declined, in the hook's own
+  docstring.** The docstring already closed the blanket-deny branch at ~4% precision and asked that
+  any successor be measured rather than argued. The proposal was to deny a write into the repo tree
+  while a write into the session scratchpad stays a nudge. Replayed over 1551 transcripts and
+  63,217 commands, control arm first to confirm the harness reproduces the published numbers:
+
+      whole hook (control)              604 fires (0.955%)   25 blocked   precision 4.14%
+      repo-tree write -> DENY           198 fires (0.313%)    8 blocked   precision 4.04%
+      complement, would stay a nudge    326 fires            15 blocked   precision 4.60%
+
+  The split does not improve precision and is inverted against its own premise: the writes it calls
+  recoverable are MORE likely to be a real block than the ones it would hard-deny. Recorded so the
+  next reader does not re-run the argument, together with the note that an interpreter write
+  (`open(f, "w")`) exposes no filename, so a target-aware rule cannot classify that arm at all.
+
 ## [5.234.0]
 
 ### Added

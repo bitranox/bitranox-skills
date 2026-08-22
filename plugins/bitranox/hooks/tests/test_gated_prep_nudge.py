@@ -268,3 +268,32 @@ def test_a_read_only_git_verb_is_still_not_prep():
                 "git diff --stat && git commit -m x",
                 "git rev-parse HEAD && git push"):
         assert N.notice(cmd) is None, cmd
+
+
+def test_a_dev_null_redirect_is_not_prep():
+    """`>/dev/null` discards output; it creates no input for the gated verb to lose.
+
+    The redirect scan only recognises a write after `printf`/`echo`/`tee`, so the command here
+    must use one of those - `pytest -q >/dev/null && git commit` never reaches this logic at all
+    and would assert nothing.
+    """
+    assert N.notice('echo done >/dev/null && git commit -F msg.txt') is None
+
+
+def test_dev_null_is_not_reported_as_a_written_file():
+    assert N.written_files('echo hi >/dev/null') == []
+
+
+def test_a_real_write_beside_a_dev_null_redirect_still_fires():
+    """Control: the /dev/ skip must not blind the check to a genuine co-located write."""
+    text = N.notice(
+        'pytest -q >/dev/null 2>&1; printf "msg" > commitmsg.txt; git commit -F commitmsg.txt')
+    assert text is not None
+    assert "commitmsg.txt" in text
+
+
+def test_the_dev_skip_does_not_swallow_a_similarly_named_real_path():
+    """Control: only the /dev/ directory is exempt, not a path that merely starts with those letters."""
+    assert N.written_files('printf x > devnotes.txt') == ["devnotes.txt"]
+    assert N.written_files('printf x > /development/notes.txt') == [
+        "/development/notes.txt"]
