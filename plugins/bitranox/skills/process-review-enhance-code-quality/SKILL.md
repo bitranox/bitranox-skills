@@ -359,6 +359,12 @@ the exit codes were "inconsistent" without observing that a failure reported suc
     NAMED; only the mutation tells you what it HOLDS. Where the code defends in layers, a
     single-layer mutation gets absorbed and reads green, so mutate the whole stack before you
     believe it (`bitranox:process-review-verification-before-completion`).
+    **Copy the file aside before mutating it, and restore from that copy.** The reflex undo,
+    `git checkout -- <file>`, restores from the index or HEAD, so it discards every UNCOMMITTED
+    change in that file - which, mid-review, is the work you are reviewing. The loss is silent in
+    the direction that looks like success: the suite goes green because the mutation is gone, and
+    the file drops out of `git status`, which reads as clean. Git is a correct restore only for
+    work already committed.
   - **Drift is a finding in either direction.** Where the code and a documented rule disagree, one
     of the two is wrong and neither is self-evidently the one to change. Report the disagreement
     and let the user pick; never quietly rewrite the rule to match the code, and never read the

@@ -17,6 +17,55 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.234.0]
+
+### Added
+
+- **Seven queued contributions shipped into the skills that own them.** Each was checked against
+  every shipped skill rather than the target its queue entry nominated, and each claim was measured
+  against the real tool rather than taken from the entry.
+
+  - `compuse-git`: `git merge-tree --write-tree <base> <branch>` answers "will this stale branch
+    still merge cleanly" with NO ref, index or working-tree change, printing the merged tree sha;
+    `git grep <tree-sha>` then inspects it, because a conflict-free merge can still be semantically
+    wrong. Verified on git 2.53.0 - a clean merge exits 0 and leaves HEAD, `show-ref` and
+    `status --porcelain` byte-identical, and a conflicting merge exits 1 naming the conflicted path.
+  - `compuse-git`: `git checkout -- <file>` restores from the index or HEAD, so it discards every
+    uncommitted change in that file, not only the experimental edit being undone.
+  - `compuse-bash`: in Claude Code's bash, `grep` is a shell function whose exit status is wrong
+    when `-q` and `-v` are combined. Measured with controls - `grep -qv PATTERN file` exits 1 where
+    `/usr/bin/grep` exits 0, while `-q` alone, `-v` alone and the all-lines-match case all agree.
+    It silently inverts the terminal test of a wait loop.
+  - `git-worktrees`: the recognition signal for a shared build cache. The compiler links the OTHER
+    worktree's crate and emits phantom errors naming real symbols, so it reads as a defect in the
+    code in front of you; grepping your own worktree for the name the compiler SUGGESTS returns
+    zero hits.
+  - `process-review-enhance-code-quality`: copy a file aside before mutating it to prove the suite
+    goes red, and restore from that copy.
+  - `process-debug-systematic`: both A/B arms must run from the same path, or the difference
+    measured is the relocation rather than the change.
+  - `coding-python-enforce-data-architecture-strict`: ruff `FBT` and pyright strict collide on a
+    lambda passed where a keyword-only callable `Protocol` is expected; the fix is a typed nested
+    `def`, not a suppression.
+
+### Fixed
+
+- **`files-edit-yml` promised something `ruamel.yaml` does not do.** The Library section said it
+  "round-trips and preserves comments, key order, and formatting". The third is false out of the
+  box: a plain `YAML()` load-and-dump dedents block sequences and rewrites an explicit `key: null`
+  to a bare `key:`. Worse, the skill's own verification step (re-load and assert the keys) PASSES on
+  a fully reflowed file, so nothing in the documented procedure caught it. The claim is corrected,
+  the worked pattern now pins `yaml.indent(...)` and a `None` representer, and the procedure gains
+  a diff-before-committing step.
+
+- **Two queue entries were wrong about their own subject; the shipped text states what was
+  measured.** The lambda entry claimed 3 pyright errors and named the argument-position rule codes
+  for an assignment-position example - measurement gives 2 errors in both positions
+  (`reportUnknownLambdaType` plus `reportUnknownVariableType` when assigned,
+  `reportUnknownArgumentType` when passed). The mutation-restore entry nominated
+  `process-test-driven-development`, which never prescribes mutation at all (`grep -n mutat` over
+  that skill returns nothing), so the rule went to the skill that does.
+
 ## [5.229.0]
 
 ### Added

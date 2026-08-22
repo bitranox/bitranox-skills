@@ -15,8 +15,10 @@ verifies it.
 
 ## Library
 
-- **`ruamel.yaml`** - preferred for editing an EXISTING file: it round-trips and preserves comments,
-  key order, and formatting (YAML 1.2). `pip install ruamel.yaml`.
+- **`ruamel.yaml`** - preferred for editing an EXISTING file: it round-trips and preserves comments
+  and key order (YAML 1.2). It does NOT preserve LAYOUT out of the box - see "Round-tripping keeps
+  comments, not layout" below, and pin the two settings there before you dump.
+  `pip install ruamel.yaml`.
 - **`PyYAML`** (`import yaml`) - fine for generating a NEW file or when comments do not matter;
   `yaml.safe_load` / `yaml.safe_dump`. Note: it drops comments and reorders, so do not use it to
   round-trip a hand-commented config.
@@ -36,6 +38,11 @@ from pathlib import Path
 
 yaml = YAML()                      # round-trip mode: keeps comments + order
 yaml.preserve_quotes = True
+yaml.indent(mapping=2, sequence=4, offset=2)   # MATCH the file; the default dedents block sequences
+yaml.representer.add_representer(                # keep an explicit `key: null`, not a bare `key:`
+    type(None),
+    lambda dumper, _: dumper.represent_scalar("tag:yaml.org,2002:null", "null"),
+)
 path = Path("traefik/dynamic/services.yml")
 
 data = yaml.load(path)             # parse existing file into Python objects
@@ -57,12 +64,35 @@ assert "media" in check["http"]["routers"], "router not written"
 For a quick syntax check of any YAML file without editing:
 `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('ok')" file.yml`
 
+## Round-tripping keeps comments, not layout
+
+The round-trip loader preserves comments and key order, but a plain `YAML()` load-and-dump still
+REFLOWS the document. Two defaults do it, and both are silent:
+
+- **Block sequences get dedented.** The default indent does not match most hand-written files, so
+  every list in the document shifts. Measured: a two-key edit to a 238-line commented file
+  produced a 120-line diff.
+- **An explicit `key: null` is rewritten to a bare `key:`.** Equal to a parser, not to a reviewer,
+  who now has to adjudicate that for every occurrence.
+
+Neither is caught by the re-load check above: the keys are all present and the file parses, so the
+`assert` passes on a fully reflowed document. Pin both settings (shown in the pattern), then DIFF
+before committing and require the diff to show only what you meant to change:
+
+```bash
+git diff -- path/to/file.yml    # a reflow shows as dozens of untouched lines rewritten
+```
+
+A diff far larger than your edit, on a file you loaded with an unpinned `YAML()`, is the reflow.
+
 ## Common mistakes
 
-| Mistake                                              | Do instead                                              |
-|------------------------------------------------------|---------------------------------------------------------|
-| Hand-typing YAML and hoping the indentation is right | Build the dict/list in Python, `dump` it                |
-| `sed`/regex to change a value or add a key           | `load` -> edit the object -> `dump`                     |
-| PyYAML to round-trip a commented config              | Use `ruamel.yaml` (PyYAML deletes comments, reorders)   |
-| Committing/deploying without re-loading              | Re-`load` after dump and assert the expected keys exist |
-| Tabs for indentation                                 | Library emits spaces; never indent YAML with tabs       |
+| Mistake                                              | Do instead                                                                      |
+|------------------------------------------------------|---------------------------------------------------------------------------------|
+| Hand-typing YAML and hoping the indentation is right | Build the dict/list in Python, `dump` it                                        |
+| `sed`/regex to change a value or add a key           | `load` -> edit the object -> `dump`                                             |
+| PyYAML to round-trip a commented config              | Use `ruamel.yaml` (PyYAML deletes comments, reorders)                           |
+| Committing/deploying without re-loading              | Re-`load` after dump and assert the expected keys exist                         |
+| Trusting ruamel to preserve the file's layout        | Pin `yaml.indent(...)` AND a `None` representer first                           |
+| Treating the re-load assert as the whole check       | It proves the file PARSES; only the diff proves you changed only what you meant |
+| Tabs for indentation                                 | Library emits spaces; never indent YAML with tabs                               |
