@@ -165,6 +165,13 @@ You MUST complete each phase before proceeding to the next.
    - Make the SMALLEST possible change to test hypothesis
    - One variable at a time
    - Don't fix multiple things at once
+   - **Run both arms from the SAME path.** Comparing an old version against a new one by copying
+     one of them to a scratch directory moves a SECOND variable: a program that derives anything
+     from `__file__` or the working directory behaves differently when relocated, so the
+     difference you measure is the relocation rather than the change. The artifact of a relocated
+     arm tends to be the more flattering result, which is what makes it survive review. Swap the
+     versions IN PLACE (stash, checkout, or a symlink the program resolves identically) and keep
+     every path the same across arms.
 
 3. **Verify Before Continuing**
    - Did it work? Yes → Phase 4

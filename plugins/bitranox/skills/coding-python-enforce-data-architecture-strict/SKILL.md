@@ -427,8 +427,38 @@ Casting the FUNCTION, or `from rich_click import option`, still evaluates the pa
 member access and stays flagged; only casting the MODULE onto a typed Protocol moves the access to
 a typed surface.
 
+Second worked example - a lambda cannot satisfy a keyword-only `Protocol`. Two house defaults
+collide and the diagnostic blames the wrong one. Ruff's `FBT` forbids a boolean POSITIONAL
+argument, so a callable `Protocol` grows a keyword-only parameter; a lambda used where that
+`Protocol` is expected then fails pyright strict, because a lambda parameter takes no annotation
+and pyright will not back-infer one from the `Protocol`. Always `reportUnknownLambdaType` on the
+parameter, plus one more that depends on where the lambda sits: `reportUnknownVariableType` when
+it is assigned, `reportUnknownArgumentType` when it is passed as an argument. Both errors name the
+LAMBDA, so it reads as a pyright quirk rather than a consequence of the `Protocol` change:
+
+```python
+class Formatter(Protocol):
+    def __call__(self, value: str, *, verbose: bool) -> str: ...
+
+
+# 2 errors: reportUnknownVariableType + reportUnknownLambdaType ("verbose" is unknown)
+render: Formatter = lambda value, *, verbose: value.upper() if verbose else value
+
+
+def render(value: str, *, verbose: bool) -> str:      # same body, fully typed, 0 errors
+    return value.upper() if verbose else value
+```
+
+The fix is the typed nested `def`, not a suppression: it annotates what the lambda syntactically
+cannot. A `def` is available anywhere a lambda is, including inside another function.
+
 Rationalizations that do not fly here:
 
+- "The lambda is a one-liner and the `Protocol` already states the types, so a
+  `# pyright: ignore[reportUnknownLambdaType]` is proportionate" - the `Protocol` types the
+  PARAMETER the callable is assigned to, never the lambda's own parameters, which is why the
+  checker cannot see them; the ignore suppresses a real gap rather than closing it, and the `def`
+  is the same number of lines.
 - "Just a per-file `reportUnknownMemberType = false` (or scattered `# pyright: ignore`) for the CLI
   glue, plus a ticket" - a per-file rule-off blinds every future line in that file to real
   unknown-type bugs, and the ticket has no forcing function; the facade is written ONCE and every
