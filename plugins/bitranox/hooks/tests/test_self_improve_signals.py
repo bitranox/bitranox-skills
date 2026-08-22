@@ -1322,3 +1322,26 @@ def test_a_reclassified_word_becomes_recallable_again(home):
     assert S.load_pending_keywords(_PROJ) == frozenset()                  # suppressed while filler
     S.add_topical_words(["output"], _PROJ)
     assert "output" not in S.load_filler_words(_PROJ)
+
+
+# --------------------------------------------------------------------------
+# The projects-dir encoder, transcribed from the Claude Code CLI binary (2.1.240):
+#     h1r(e) = e.replace(/[^a-zA-Z0-9]/g, "-")
+# memory_dir replaced only "/", which agrees for a plain path but points at a
+# directory Claude never wrote as soon as a component holds "." or "_".
+# --------------------------------------------------------------------------
+
+
+def test_memory_dir_encodes_every_non_alphanumeric():
+    got = S.memory_dir("/home/bob/my.proj_v2").parent.name
+    assert got == "-home-bob-my-proj-v2", got
+
+
+def test_memory_dir_matches_a_plain_path_as_before():
+    """The paths that already worked must keep resolving to the same directory."""
+    got = S.memory_dir("/media/srv-main-softdev/projects").parent.name
+    assert got == "-media-srv-main-softdev-projects", got
+
+
+def test_memory_dir_encodes_a_space():
+    assert S.memory_dir("/home/bob/a proj").parent.name == "-home-bob-a-proj"

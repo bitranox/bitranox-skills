@@ -6,6 +6,7 @@ carrying a dead reference. Both times the miss looked exactly like success.
 """
 import io
 import json
+from pathlib import PurePath
 import subprocess
 
 import grep_all
@@ -63,7 +64,9 @@ def test_json_envelope_lists_each_match_with_its_ignored_flag(tmp_path):
     assert code == 0
     payload = json.loads(out)
     assert payload["ok"] is True and payload["command"] == "grep-all"
-    flags = {m["path"].split("/")[-1]: m["gitignored"] for m in payload["data"]["matches"]}
+    # PurePath().name, not split("/"): the envelope carries real local paths, which are
+    # backslash-separated on Windows, so splitting on "/" returns the whole path as the key.
+    flags = {PurePath(m["path"]).name: m["gitignored"] for m in payload["data"]["matches"]}
     assert flags["tracked.md"] is False
     assert flags["secret.md"] is True
     assert payload["data"]["ignored_matches"] == 1

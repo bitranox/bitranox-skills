@@ -9,9 +9,14 @@ import self_improve_signals as sig
 
 
 def _encode_slug(path):
-    """Claude's slug encoding: leading '/', and each '/', '.', '_' -> '-'."""
-    s = str(path)
-    return "-" + s[1:].replace("/", "-").replace(".", "-").replace("_", "-")
+    """Claude's slug encoding, transcribed from the CLI binary (2.1.240):
+        h1r(e) = e.replace(/[^a-zA-Z0-9]/g, "-")
+    EVERY non-alphanumeric collapses to "-". The old version here replaced only "/", "." and
+    "_", which happened to agree on all 239 real project paths on this machine but diverges the
+    moment a component holds a space, "+" or "@" - and on Windows, where it mangled the drive
+    letter into "-:" and the fixtures then failed at mkdir."""
+    import re as _re
+    return _re.sub(r"[^a-zA-Z0-9]", "-", str(path))
 
 
 @pytest.fixture
@@ -46,8 +51,6 @@ def _native_store(home, slug, topics):
 
 # ---- slug resolution ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_resolve_slug_slash_dot_underscore(env):
     tmp_path, _ = env
     proj = tmp_path / "grp" / "my.proj_dir"      # exercises '/', '.', and '_' all encoded to '-'
@@ -76,8 +79,6 @@ def test_read_native_entries(env):
 
 # ---- migrate_store: dry-run, apply, idempotent, parked -----------------------------------------
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_dry_run_writes_nothing(env):
     tmp_path, home = env
     proj = tmp_path / "repoA"
@@ -89,8 +90,6 @@ def test_migrate_dry_run_writes_nothing(env):
     assert not sig.claude_memory_dir(str(proj)).exists()   # nothing written on dry-run
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_apply_writes_curated_store_and_receipt(env):
     tmp_path, home = env
     proj = tmp_path / "repoB"
@@ -111,8 +110,6 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     assert any(M._backups_dir().glob("*/native")) if M._backups_dir().exists() else True
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_apply_idempotent(env):
     tmp_path, home = env
     proj = tmp_path / "repoC"
@@ -133,8 +130,6 @@ def test_migrate_parked_when_unresolved(env):
     assert (M._parked_dir() / slug / "memory" / "a.md").is_file()   # parked copy, nothing lost
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_main_dry_run_reports(env, capsys):
     tmp_path, home = env
     proj = tmp_path / "repoD"
@@ -207,3 +202,65 @@ def test_every_exclude_root_is_already_resolved():
     from pathlib import Path
     for root in M._EXCLUDE_PREFIXES:
         assert root == str(Path(root).resolve()), root
+
+
+# --------------------------------------------------------------------------
+# Slug decoding, against the encoder Claude Code actually uses. Transcribed
+# from the CLI binary (2.1.240):
+#     h1r(e) = e.replace(/[^a-zA-Z0-9]/g, "-")
+#     qY(e)  = h1r(e).length <= 200 ? h1r(e) : h1r(e).slice(0,200) + "-" + hash(e)
+# so EVERY non-alphanumeric collapses to "-", not just "/", "." and "_".
+# --------------------------------------------------------------------------
+
+
+def _encode(path):
+    """The real encoder, for building fixtures that match what Claude would write."""
+    import re as _re
+    return _re.sub(r"[^a-zA-Z0-9]", "-", str(path))
+
+
+def test_slug_root_splits_a_posix_slug():
+    root, tokens = M.slug_root_and_tokens("-home-bob-proj")
+    assert root == "/" and tokens == ["home", "bob", "proj"]
+
+
+def test_slug_root_splits_a_windows_drive_slug():
+    """C:\\Users\\bob and C:/Users/bob both encode to C--Users-bob: ':' and both slashes
+    all become '-', so the drive form needs no platform detection to recognise."""
+    root, tokens = M.slug_root_and_tokens("C--Users-bob-proj")
+    assert root == "C:\\" and tokens == ["Users", "bob", "proj"]
+
+
+def test_slug_root_rejects_a_slug_that_is_neither():
+    assert M.slug_root_and_tokens("home-bob") == (None, [])
+
+
+def test_resolve_slug_decodes_a_component_holding_a_space(tmp_path):
+    """The old decoder only tried '.', '-' and '_' as separators, so any other punctuation
+    was undecodable - a path with a space resolved to nothing at all."""
+    proj = tmp_path / "grp" / "my proj"
+    proj.mkdir(parents=True)
+    got = M.resolve_slug(_encode(proj))
+    assert str(proj.resolve()) in got, got
+
+
+def test_resolve_slug_decodes_a_component_holding_a_plus(tmp_path):
+    proj = tmp_path / "grp" / "c++lib"
+    proj.mkdir(parents=True)
+    got = M.resolve_slug(_encode(proj))
+    assert str(proj.resolve()) in got, got
+
+
+def test_resolve_slug_still_decodes_dot_and_underscore(tmp_path):
+    """The separators the old decoder did handle must keep working."""
+    proj = tmp_path / "grp" / "my.proj_dir"
+    proj.mkdir(parents=True)
+    got = M.resolve_slug(_encode(proj))
+    assert str(proj.resolve()) in got, got
+
+
+def test_a_truncated_slug_is_reported_not_silently_mis_resolved():
+    """Past 200 characters Claude truncates and appends a hash, so the tail is unrecoverable.
+    Decoding that as if it were complete would resolve to the wrong directory."""
+    assert M.is_truncated_slug("-" + "a" * 199 + "-deadbeefcafe") is True
+    assert M.is_truncated_slug("-home-bob-proj") is False

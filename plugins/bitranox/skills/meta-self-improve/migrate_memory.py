@@ -21,6 +21,7 @@ Pure standard library; ASCII output.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -54,15 +55,47 @@ def _children(d):
         return set()
 
 
+# Claude Code encodes a project path into its ~/.claude/projects directory name with
+#     h1r(e) = e.replace(/[^a-zA-Z0-9]/g, "-")
+#     qY(e)  = h1r(e).length <= 200 ? h1r(e) : h1r(e).slice(0, 200) + "-" + hash(e)
+# (transcribed from the CLI binary, 2.1.240). EVERY non-alphanumeric collapses to "-", not just
+# "/", "." and "_" as this decoder used to assume - so a component holding a space, "+" or "@"
+# was undecodable. A Windows path needs no special case beyond its root: ":" and both slashes
+# are non-alphanumeric, so C:\Users\bob and C:/Users/bob both encode to "C--Users-bob".
+SLUG_MAX = 200
+_DRIVE_SLUG_RX = re.compile(r"^([A-Za-z])--(.*)$")
+
+
+def slug_root_and_tokens(slug):
+    """Split a project slug into the filesystem root it starts from and its "-" separated tokens.
+
+    Returns (None, []) for a slug that encodes neither an absolute POSIX path nor a drive path.
+    """
+    drive = _DRIVE_SLUG_RX.match(slug)
+    if drive:
+        return drive.group(1).upper() + ":\\", [t for t in drive.group(2).split("-")]
+    if slug.startswith("-"):
+        return "/", slug[1:].split("-")
+    return None, []
+
+
+def is_truncated_slug(slug):
+    """True if the slug hit the 200-character cap, so its tail is a hash and cannot be decoded."""
+    return len(slug) > SLUG_MAX
+
+
 def resolve_slug(slug, max_candidates=8):
-    """Every existing directory a `<slug>` could decode to. The slug starts with `-` (leading `/`);
-    each subsequent `-` is `/` (descend), `.`, or literal `-`. DFS with filesystem pruning: a `/`
-    only descends into a real child; a `.`/`-` continuation only survives if a child STARTS with the
-    partial component. Returns a de-duplicated list of absolute dir paths (realpath), capped."""
-    if not slug.startswith("-"):
-        return []
-    tokens = slug[1:].split("-")
-    if not tokens:
+    """Every existing directory a `<slug>` could decode to.
+
+    DFS with filesystem pruning: a "/" only descends into a real child, and a continuation only
+    survives if a child STARTS with the partial component. The separators tried at each step are
+    read off the real children rather than guessed, which is what makes any non-alphanumeric
+    character decodable. Returns a de-duplicated list of absolute dir paths (realpath), capped.
+    """
+    if is_truncated_slug(slug):
+        return []  # the tail is a hash; decoding it would resolve to a confidently wrong directory
+    base_root, tokens = slug_root_and_tokens(slug)
+    if base_root is None or not tokens:
         return []
     out = []
 
@@ -80,14 +113,18 @@ def resolve_slug(slug, max_candidates=8):
         # option "/": `comp` is a complete child -> descend, start a new component with `tok`
         if comp in kids and os.path.isdir(os.path.join(base, comp)):
             dfs(idx + 1, os.path.join(base, comp), tok)
-        # options "." / "-" / "_": extend the component (Claude encodes `/`, `.`, `_` all to `-`, and a
-        # literal `-` stays `-`, so a slug `-` is any of the four); prune unless a child matches the prefix
-        for sep in (".", "-", "_"):
+        # extend the component: the encoder turned SOME non-alphanumeric into this "-", so read the
+        # real candidates off the children instead of guessing a fixed set. Only a separator that
+        # actually occurs at this position in a real child is tried, which keeps the fan-out small
+        # while making a space, "+", "@" or any other punctuation decodable.
+        seps = {k[len(comp)] for k in kids
+                if len(k) > len(comp) and k.startswith(comp) and not k[len(comp)].isalnum()}
+        for sep in sorted(seps):
             new_comp = comp + sep + tok
             if any(k.startswith(new_comp) for k in kids):
                 dfs(idx + 1, base, new_comp)
 
-    dfs(1, "/", tokens[0])
+    dfs(1, base_root, tokens[0])
     seen, uniq = set(), []
     for p in out:
         if p not in seen:

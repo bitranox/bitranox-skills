@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.240.0]
+
+### Fixed
+
+- The project-slug decoder did not match the encoder Claude Code actually uses. Transcribed from
+  the CLI binary (2.1.240), that encoder is `path.replace(/[^a-zA-Z0-9]/g, "-")`: EVERY
+  non-alphanumeric collapses to `-`, not just `/`, `.` and `_` as the decoder assumed and its
+  docstring stated. A project directory holding a space, a `+` or an `@` was therefore
+  undecodable. `resolve_slug` now reads the candidate separators off the real children instead
+  of guessing a fixed set, so any punctuation decodes.
+- `self_improve_signals.memory_dir()` encoded with `replace("/", "-")` alone, so for any project
+  path containing a `.`, `_` or space it pointed at a directory Claude never wrote. It goes
+  through the transcribed encoder now, exposed as `project_slug()`.
+- A slug past the 200-character cap is now refused rather than decoded. Claude truncates at that
+  point and appends a hash, so the tail is unrecoverable and decoding it resolves to a
+  confidently wrong directory.
+
+### Added
+
+- Windows project slugs resolve. `C:\Users\bob` and `C:/Users/bob` both encode to
+  `C--Users-bob` (the colon and both slashes are all non-alphanumeric), so the decoder needs
+  only to recognise the drive root - no platform detection. The five dashkey tests skipped on
+  Windows in 5.237.3 are unskipped.
+
 ## [5.239.0]
 
 ### Changed
