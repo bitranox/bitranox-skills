@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -108,7 +109,21 @@ def resolve_one(slug):
 
 
 # roots that resolve but are NOT real projects to seed a curated store into (transient / the home dir)
-_EXCLUDE_PREFIXES = ("/tmp",)
+# The literal "/tmp" is not enough. On macOS /tmp is a symlink to /private/tmp, so a resolved
+# path never starts with it and the transient root went entirely unexcluded there; on Windows the
+# temp root is not /tmp at all. Resolve the candidates so the comparison is against what
+# Path.resolve() actually returns on this platform.
+def _exclude_roots():
+    roots = set()
+    for candidate in ("/tmp", tempfile.gettempdir()):
+        try:
+            roots.add(str(Path(candidate).resolve()))
+        except OSError:
+            continue
+    return tuple(sorted(roots))
+
+
+_EXCLUDE_PREFIXES = _exclude_roots()
 
 
 def is_excluded(path):
@@ -122,7 +137,8 @@ def is_excluded(path):
         return False
     if p == str(Path.home().resolve()):
         return True
-    return any(p == pref or p.startswith(pref + "/") for pref in _EXCLUDE_PREFIXES)
+    return any(p == pref or p.startswith(pref + os.sep) or p.startswith(pref + "/")
+               for pref in _EXCLUDE_PREFIXES)
 
 
 # ---- reading a native store --------------------------------------------------------------------

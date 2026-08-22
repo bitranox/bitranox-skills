@@ -176,3 +176,23 @@ def test_migrate_redirect_forces_target(env):
     assert rep["redirected"] and rep["placed"] == 1 and not rep["parked"]
     _, entries, _ = ME.read_store(str(target))
     assert entries and entries[0].source == {"project-a"}
+
+
+def test_the_platform_temp_root_is_excluded_however_it_resolves():
+    """The literal "/tmp" prefix was not enough: on macOS /tmp is a symlink to /private/tmp, so
+    a resolved path never matched it and the transient root went entirely unexcluded there -
+    exactly the case is_excluded() exists to catch. Windows has no /tmp at all."""
+    import tempfile
+    from pathlib import Path
+    tmp_root = tempfile.gettempdir()
+    assert M.is_excluded(tmp_root) is True
+    assert M.is_excluded(str(Path(tmp_root).resolve())) is True
+    assert M.is_excluded(str(Path(tmp_root).resolve() / "some" / "proj")) is True
+
+
+def test_every_exclude_root_is_already_resolved():
+    """A root stored unresolved can never match a resolved path, which is how the macOS gap
+    stayed invisible: the comparison simply never fired."""
+    from pathlib import Path
+    for root in M._EXCLUDE_PREFIXES:
+        assert root == str(Path(root).resolve()), root

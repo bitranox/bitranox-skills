@@ -121,10 +121,17 @@ class TestReadersDegradeInsteadOfThrowing:
         # pid 0 is never a readable /proc entry for a user process
         assert pc.read_pid_cpu_seconds(0) is None
 
-    def test_own_pid_reads_a_number(self):
+    def test_own_pid_reads_a_number_on_linux_and_degrades_elsewhere(self):
+        """read_pid_cpu_seconds parses /proc, which only Linux has. The contract this class is
+        named for is that it DEGRADES rather than throwing, so assert the degradation on the
+        platforms without /proc instead of skipping and covering nothing there."""
         import os
+        import sys
         v = pc.read_pid_cpu_seconds(os.getpid())
-        assert v is not None and v >= 0.0
+        if sys.platform.startswith("linux"):
+            assert v is not None and v >= 0.0
+        else:
+            assert v is None
 
 
 class TestBuildPushArgs:
