@@ -30,9 +30,12 @@ installed copies and needs no bump.
 - `self_improve_signals.memory_dir()` encoded with `replace("/", "-")` alone, so for any project
   path containing a `.`, `_` or space it pointed at a directory Claude never wrote. It goes
   through the transcribed encoder now, exposed as `project_slug()`.
-- A slug past the 200-character cap is now refused rather than decoded. Claude truncates at that
-  point and appends a hash, so the tail is unrecoverable and decoding it resolves to a
-  confidently wrong directory.
+- A slug past the 200-character cap is refused explicitly instead of being walked. Claude
+  truncates there and appends a hash, so the tail is unrecoverable. This does NOT change the
+  outcome: the DFS already returned nothing for such a slug, because the hash tokens match no
+  real directory. It makes the limitation explicit and skips a pointless walk. (The 5.240.0
+  commit message claimed it prevented resolving to a wrong directory - that was asserted, not
+  measured, and a check against the pre-change algorithm showed both return an empty list.)
 
 ### Added
 
