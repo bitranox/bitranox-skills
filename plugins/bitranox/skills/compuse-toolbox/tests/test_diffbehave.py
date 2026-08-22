@@ -191,6 +191,24 @@ def test_split_command_treats_backslash_as_an_escape_on_posix():
     assert argv == ["echo", "a b"], argv
 
 
+def test_split_command_keeps_an_embedded_quoted_value_in_one_token_on_windows():
+    r"""The earlier non-POSIX fix stripped quotes only when they WRAPPED the whole token, so
+    `--opt="a b"` came apart into '--opt="a' + 'b"' and the option reached the child broken.
+    Escape-off reads the quoting properly while still leaving backslashes alone."""
+    argv = D._split_command(r'py.exe --opt="a b" tail', windows=True)
+    assert argv == ["py.exe", "--opt=a b", "tail"]
+
+
+def test_split_command_survives_the_c_runtime_quote_escape_on_windows():
+    r"""Escape-off cannot read the C runtime's `"a\"b"` - with escapes off the quotes look
+    unbalanced and the lexer RAISES. Neither mode reconstructs `a"b` (that needs full
+    CommandLineToArgvW semantics), so the contract here is only that the splitter DEGRADES
+    instead of throwing: a caller gets tokens it can run or report, never a traceback out of
+    an argument-parsing helper."""
+    argv = D._split_command(r'cmd "a\"b" x', windows=True)
+    assert argv[0] == "cmd" and argv[-1] == "x"
+
+
 def test_split_command_handles_a_quoted_path_with_spaces_on_windows():
     argv = D._split_command(r'"C:\Program Files\py.exe" --version', windows=True)
     assert argv == [r"C:\Program Files\py.exe", "--version"], argv

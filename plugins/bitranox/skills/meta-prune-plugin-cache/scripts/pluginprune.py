@@ -325,8 +325,17 @@ def installed_paths(installed_plugins: Path) -> set[str]:
 
 
 def pinning_settings(path: Path, settings_files: Iterable[Path]) -> str | None:
-    """The settings file that names this exact directory, or None when nothing pins it."""
-    needles = {str(path), path.as_posix()}
+    r"""The settings file that names this exact directory, or None when nothing pins it.
+
+    Three spellings, because the search is over the file's RAW TEXT (deliberately - a path can
+    sit anywhere in it, including in a file that is not valid JSON) and a settings file is JSON,
+    which ESCAPES a backslash. On Windows the stored text reads "C:\\Users\\..." while
+    str(path) is "C:\Users\...", so neither the native nor the posix spelling was ever found and
+    a pinned version looked unpinned - this function's false negative is a DELETION, so it fails
+    in the expensive direction. On POSIX the escaped form equals the native one and the set
+    collapses to the previous two.
+    """
+    needles = {str(path), path.as_posix(), json.dumps(str(path))[1:-1]}
     for settings in settings_files:
         try:
             text = settings.read_text(encoding="utf-8", errors="replace")

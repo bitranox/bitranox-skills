@@ -54,28 +54,41 @@ def walk(paths, glob=None):
 
 
 def gitignored(files):
-    """The subset git would consider ignored, as a set. Empty when nothing is a repo."""
+    r"""The subset git would consider ignored, as a set. Empty when nothing is a repo.
+
+    NUL-delimited and fed BYTES, for two separate reasons that both produced a silent "0 of
+    them are gitignored" on Windows - the precise false-clean answer this tool exists to
+    prevent, since the count IS the finding:
+
+      * newline-delimited text stdin goes through subprocess's text wrapper, which translates
+        "\n" to os.linesep. Git then reads "path\r", matches nothing and exits 1. Measured: the
+        same call answers correctly on POSIX, so the bug is invisible to a POSIX-only run.
+      * without -z, git QUOTES a path it considers unusual - a Windows path comes back as
+        "C:\\Users\\..." with the backslashes doubled - so even a corrected stdin would then
+        parse into a path that matches nothing.
+    """
     ignored, by_root = set(), {}
     for f in files:
         try:
             root = subprocess.run(["git", "-C", str(f.parent), "rev-parse", "--show-toplevel"],
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=30)
         except (OSError, subprocess.SubprocessError):
             continue
         if root.returncode != 0:
             continue
         by_root.setdefault(root.stdout.strip(), []).append(f)
     for root, group in by_root.items():
+        payload = "".join("%s\0" % f for f in group).encode("utf-8", "surrogateescape")
         try:
             # check-ignore exits 1 when NOTHING is ignored, which is not an error here.
-            res = subprocess.run(["git", "-C", root, "check-ignore", "--stdin"],
-                                 input="\n".join(str(f) for f in group),
-                                 capture_output=True, text=True, timeout=120)
+            res = subprocess.run(["git", "-C", root, "check-ignore", "-z", "--stdin"],
+                                 input=payload, capture_output=True, timeout=120)
         except (OSError, subprocess.SubprocessError):
             continue
-        for line in res.stdout.splitlines():
-            if line.strip():
-                ignored.add(Path(line.strip()))
+        for raw in res.stdout.decode("utf-8", "replace").split("\0"):
+            if raw.strip():
+                ignored.add(Path(raw))
     return ignored
 
 

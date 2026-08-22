@@ -1,4 +1,4 @@
 {
-  "collected": 3162,
+  "collected": 3178,
   "note": "Whole-repo collected count. The gate fails if a run collects more than PYTEST_SLACK below this. Update it in the same change that legitimately removes tests."
 }

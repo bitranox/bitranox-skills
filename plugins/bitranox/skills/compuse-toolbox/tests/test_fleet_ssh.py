@@ -47,6 +47,20 @@ def test_a_local_to_local_copy_gains_no_user():
     assert host is None, "a local copy has no host to heal"
 
 
+def test_the_resolved_key_is_a_native_path(tmp_path):
+    r"""The candidates are templates spelling their separator "/", so a Windows home produced
+    "C:\Users\me/.ssh/key". Both ssh and Path accept that, so nothing failed - but it is the
+    string the tool RETURNS and prints into the command line, so a caller holding the same key
+    as a native path compares two spellings of one file and concludes they differ."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    key = home / ".ssh" / "root@anyhost_nopass.key"
+    key.write_text("k", encoding="utf-8")
+    resolved = F.resolve_key("root", home=str(home))
+    assert resolved == os.path.join(str(home), ".ssh", "root@anyhost_nopass.key")
+    assert resolved == str(key)
+
+
 def test_the_key_and_the_login_are_the_same_identity(tmp_path):
     """Resolving one user's key and logging in as another is the failure this pairs against."""
     home = tmp_path / "home"
@@ -192,7 +206,9 @@ def test_strict_checking_is_the_default_and_no_known_hosts_is_overridden():
 def test_trusting_a_reimaged_fleet_is_opt_in_and_uses_a_separate_known_hosts():
     line, _host, known_hosts = plan(["--trust-changing-host-keys", "--key", "/k", "h", "uptime"])
     assert "StrictHostKeyChecking=no" in line
-    assert known_hosts.endswith("/.ssh/known_hosts_fleet")
+    # separator-agnostic: the path is native now, so spelling one separator asserts the host's
+    # OS rather than where the fleet known_hosts file goes
+    assert known_hosts.replace(os.sep, "/").endswith("/.ssh/known_hosts_fleet")
     assert f"UserKnownHostsFile={known_hosts}" in line
 
 

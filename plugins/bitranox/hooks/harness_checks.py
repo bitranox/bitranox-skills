@@ -300,7 +300,47 @@ def discover_candidates(roots, home=None, personal=True):
 # path yields a hook that silently never fires, which reads exactly like a hook that fires and
 # finds nothing.
 
-_PATHISH = re.compile(r"^(/|~/|\$HOME/|\$\{HOME\}/)")
+# POSIX-absolute plus the two shapes an absolute path takes on Windows: a drive letter
+# ("C:\...", "C:/...") and a UNC share ("\\server\share"). Without the Windows shapes,
+# command_paths matched NOTHING there, so registration_problems reported zero problems for
+# any registration naming a Windows path - the audit silently passed on the platform it was
+# supposed to be auditing, which reads as approval rather than as a broken check.
+_PATHISH_POSIX = re.compile(r"^(/|~/|\$HOME/|\$\{HOME\}/)")
+_PATHISH_WINDOWS = re.compile(r"^([A-Za-z]:[\\/]|\\\\[^\\])")
+
+
+def _is_pathish(token, windows):
+    """True when the token unambiguously names a file path on the platform in question."""
+    return bool(_PATHISH_POSIX.match(token) or (windows and _PATHISH_WINDOWS.match(token)))
+
+
+def split_command_line(command, windows=None):
+    r"""Split a command string into tokens without eating the separators out of Windows paths.
+
+    shlex's POSIX mode treats a backslash as an ESCAPE, so "bash C:\dir\hook.sh" tokenised to
+    "C:dirhook.sh" - a path that cannot exist, silently dropped by the pathish test, leaving
+    the caller with nothing to check. Escape-off keeps quoting working while a backslash stays
+    the separator it is on Windows.
+
+    The fallback covers the one shape escape-off cannot read: the C runtime's own `"a\"b"`
+    convention for an embedded quote, where dropping escapes leaves the quotes unbalanced and
+    the lexer raises. Kept identical to diffbehave.py and gate.py, which hit the same quirk.
+    """
+    on_windows = (os.name == "nt") if windows is None else windows
+    if not on_windows:
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        out = []
+        for token in shlex.split(command, posix=False):
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+                token = token[1:-1]
+            out.append(token)
+        return out
 
 
 def _expand(token, home):
@@ -329,16 +369,21 @@ def hook_registrations(settings_path):
     return out
 
 
-def command_paths(command, home=None):
+def command_paths(command, home=None, windows=None):
     """The file paths a shell command names. Only unambiguous ones - a token that still holds an
-    unresolved ${VAR} is skipped rather than guessed at."""
+    unresolved ${VAR} is skipped rather than guessed at.
+
+    `windows` overrides the platform detection so both shapes stay testable from either OS;
+    leave it None outside tests.
+    """
     try:
-        tokens = shlex.split(command)
+        tokens = split_command_line(command, windows)
     except ValueError:
         tokens = command.split()
+    on_windows = (os.name == "nt") if windows is None else windows
     found = []
     for token in tokens:
-        if not _PATHISH.match(token):
+        if not _is_pathish(token, on_windows):
             continue
         expanded = _expand(token, home)
         if "$" in expanded:
@@ -347,11 +392,11 @@ def command_paths(command, home=None):
     return found
 
 
-def registration_problems(settings_path, home=None):
+def registration_problems(settings_path, home=None, windows=None):
     """Registered commands whose target file is missing, as (event, command, missing path)."""
     problems = []
     for event, _matcher, command in hook_registrations(settings_path):
-        for path in command_paths(command, home):
+        for path in command_paths(command, home, windows):
             if not Path(path).exists():
                 problems.append((event, command, path))
     return problems

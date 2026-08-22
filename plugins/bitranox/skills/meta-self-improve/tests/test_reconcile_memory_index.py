@@ -361,6 +361,34 @@ def _two_trees(tmp_path):
     return out
 
 
+def test_the_body_path_detector_reads_all_three_absolute_shapes():
+    r"""The detector's evidence is a body's absolute paths. It matched only the POSIX shape, so
+    on Windows - where a captured body names C:\dir\repo\x.py - it found none and every store
+    audited as "TOTAL misplaced: 0": not a clean tree, a check that could not fire. The two
+    ignores-tests below passed vacuously for the same reason.
+
+    Unit level on purpose: an end-to-end Windows case cannot be built on POSIX, because the
+    anchor has to resolve to a real directory.
+    """
+    rx = R._ABS_PATH_RX
+    assert rx.findall(r"Edit C:\Users\bob\work\beta\service.py now") == [r"C:\Users\bob\work\beta\service.py"]
+    assert rx.findall("Edit C:/Users/bob/work/beta/service.py") == ["C:/Users/bob/work/beta/service.py"]
+    assert rx.findall(r"See \\srv\share\repo\x.py") == [r"\\srv\share\repo\x.py"]
+    assert rx.findall("Edit /home/bob/work/beta/service.py") == ["/home/bob/work/beta/service.py"]
+
+
+def test_a_drive_path_is_read_whole_not_as_the_posix_shape_inside_it():
+    """C:/dir/repo/x.py CONTAINS /dir/repo/x.py. Matching the inner substring would resolve a
+    different path than the body names, so the drive alternative has to win."""
+    assert R._ABS_PATH_RX.findall("see C:/dir/repo/x.py") == ["C:/dir/repo/x.py"]
+
+
+def test_the_body_path_detector_ignores_ordinary_prose():
+    """The direction it must NOT fire: prose and short relative mentions are not evidence."""
+    assert R._ABS_PATH_RX.findall("No paths here at all.") == []
+    assert R._ABS_PATH_RX.findall("run make in src/lib") == []
+
+
 def test_check_misplaced_flags_a_fact_whose_body_points_at_another_tree(tmp_path, capsys):
     top_a, proj_a, top_b, proj_b = _two_trees(tmp_path)
     # captured while cwd=alpha, but every path in it is about the beta tree

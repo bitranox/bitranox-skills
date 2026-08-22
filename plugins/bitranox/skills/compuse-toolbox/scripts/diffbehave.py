@@ -88,18 +88,29 @@ def _split_command(command: str, windows: bool | None = None) -> list[str]:
     shlex.split defaults to POSIX mode, where a backslash ESCAPES the next character. On Windows
     that silently eats the separators in a program path: "C:\\tools\\py.exe" becomes
     "C:toolspy.exe", the command cannot start, and BOTH sides of a comparison then fail the same
-    way - so diffbehave reported AGREE for a command that never ran. Non-POSIX mode keeps the
-    backslashes but leaves the quotes attached to the token, so strip one matching pair.
+    way - so diffbehave reported AGREE for a command that never ran.
+
+    Turning escape processing off keeps quoting working while a backslash stays a separator.
+    Non-POSIX mode was the earlier fix; it leaves quotes attached to the token, so `--opt="a b"`
+    came apart into '--opt="a' + 'b"'. It survives only as the fallback for the C runtime's
+    `"a\\"b"` convention, which escape-off reads as an unbalanced quote. gate.py and
+    hooks/harness_checks.py carry the same pair for the same reason.
     """
     on_windows = (os.name == "nt") if windows is None else windows
     if not on_windows:
         return shlex.split(command)
-    out = []
-    for token in shlex.split(command, posix=False):
-        if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-            token = token[1:-1]
-        out.append(token)
-    return out
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        out = []
+        for token in shlex.split(command, posix=False):
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+                token = token[1:-1]
+            out.append(token)
+        return out
 
 
 def _run_one(command: str, case: Case, timeout: float) -> Run:

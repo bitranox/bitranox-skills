@@ -436,9 +436,11 @@ def test_a_directory_that_is_not_a_worktree_reads_unknown(tmp_path):
 
 
 @needs_git
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason='Windows holds open handles on files inside a git worktree, so the removal this exercises fails with a permission error unrelated to the code under test')
 def test_a_real_worktree_is_removed_end_to_end(tmp_path):
+    # Was skipped on Windows as an open-handle quirk of the platform. That diagnosis was wrong:
+    # git removes a worktree there without complaint, and the permission error came from
+    # git_worktree_remove running git with -C pointing INTO the directory being deleted, which
+    # Windows locks. The skip was hiding a defect in shipped code, so it is gone.
     _main, worktree, _git = make_repo_with_worktree(tmp_path)
     cache = make_cache(tmp_path, "wt-topic-target")
     plan = W.build_plan("topic", base=tmp_path, worktree=worktree)

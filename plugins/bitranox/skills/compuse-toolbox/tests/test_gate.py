@@ -1,10 +1,44 @@
 """A gate runner must report the REAL exit status, never the status of a pipe element."""
 
+import os
+import shlex
 import sys
 
 import pytest
 
 import gate
+
+# The suite used to reach for `true`, `false`, `env` and `touch` as throwaway gate commands.
+# None of them exists on Windows - they came from Git-for-Windows' usr/bin, which is on the
+# CI runner's PATH but not on a plain Windows install, so those tests passed on CI while
+# failing on a real user's machine: the environment, not the subject, decided the verdict.
+# These stand-ins run the interpreter already running the suite, so they exist everywhere.
+OK_ARGV = [sys.executable, "-c", ""]
+FAIL_ARGV = [sys.executable, "-c", "raise SystemExit(1)"]
+
+# ...and the same two as ONE shell-quoted string, for the --gate route. shlex.quote is what
+# makes this safe on Windows, where the interpreter path holds backslashes and usually a
+# space; gate.split_command parses either quoting style back to the same argv.
+OK = f'{shlex.quote(sys.executable)} -c ""'
+FAIL = f'''{shlex.quote(sys.executable)} -c "raise SystemExit(1)"'''
+
+
+def write_exit_zero_script(path_without_suffix):
+    """Create a directly-executable do-nothing script, named with a SPACE, and return its path.
+
+    A `#!/bin/sh` file is not executable on Windows (WinError 193: not a valid Win32
+    application), but the subject under test - that a lone `--` positional is never re-split -
+    matters MOST there, since a path with a space in it is the norm on Windows rather than the
+    exception. So the script's form follows the platform while the test's subject does not.
+    """
+    if os.name == "nt":
+        script = path_without_suffix.with_suffix(".cmd")
+        script.write_text("@exit /b 0\r\n", encoding="utf-8")
+        return script
+    script = path_without_suffix.with_suffix(".sh")
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
 
 
 def test_a_failing_gate_is_failed_even_when_its_output_looks_successful(tmp_path):
@@ -102,6 +136,15 @@ def test_a_multiword_head_before_equals_is_never_treated_as_a_label(tmp_path):
     assert name != "env -u VIRTUAL_ENV BMK_PYTHON_CMD"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the SUBJECT is a real POSIX `env` binary applying VAR=value itself with no shell; "
+           "Windows has no such program, so there is nothing to run the assignment through. "
+           "The portable half of this - that gate_spec never carves a label out of a command "
+           "carrying its own '=' - is asserted on argv shape by "
+           "test_a_multiword_head_before_equals_is_never_treated_as_a_label, which runs "
+           "everywhere.",
+)
 def test_an_env_wrapped_assignment_actually_runs_and_sees_its_value(tmp_path):
     """End-to-end proof, not just argv shape: run the mis-split-prone form through a real
     `env` binary (no shell) and confirm the assignment reaches the child process untouched -
@@ -116,6 +159,46 @@ def test_an_env_wrapped_assignment_actually_runs_and_sees_its_value(tmp_path):
     name, argv = gate.gate_spec(spec)
     rep = gate.run_gates([(name, argv)], log)
     assert rep.ok is True, log.read_text(encoding="utf-8")
+
+
+def test_a_gate_string_naming_the_real_interpreter_actually_runs_it(tmp_path):
+    r"""The realistic Windows case, and the one that was broken: an interpreter path holds
+    backslashes and usually a space (C:\Program Files\...). gate_spec shlex-split it in POSIX
+    mode, where a backslash is an ESCAPE, so the path came apart into 'C:Program' +
+    'FilesPythonpython.exe', the gate ran a binary that does not exist and reported rc=127 -
+    a FALSE RED for a command that passes, which is the misattribution this tool exists to
+    prevent. Portable on purpose: on POSIX it is a plain regression guard.
+    """
+    log = tmp_path / "g.log"
+    name, argv = gate.gate_spec(OK)
+    assert argv[0] == sys.executable, "the interpreter path did not survive splitting"
+    rep = gate.run_gates([(name, argv)], log)
+    assert rep.ok is True, log.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="describes how a backslash is read ON Windows, "
+                                            "where it is a path separator and not an escape")
+def test_on_windows_a_backslash_is_a_path_separator_not_an_escape():
+    r"""The unquoted form a Windows user actually types. Nobody doubles a backslash there, so
+    escape processing must be off or every bare path silently loses its separators."""
+    assert gate.split_command(r"C:\Tools\py.exe -c print(1)") == [r"C:\Tools\py.exe", "-c", "print(1)"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="asserts the POSIX escape semantics callers rely "
+                                            "on there, which Windows deliberately does not share")
+def test_on_posix_a_backslash_still_escapes():
+    """The Windows fix must not quietly change POSIX behaviour: a backslash-escaped space
+    still joins one argument here."""
+    assert gate.split_command(r"esc\ aped x") == ["esc aped", "x"]
+
+
+def test_the_default_log_path_is_absolute(tmp_path):
+    r"""'/tmp/gate.log' is DRIVE-RELATIVE on Windows, not absolute: Path reads it as
+    \tmp\gate.log, so the log landed on whichever drive happened to be current and the
+    'log: ...' line named a path the user could not open. The default must be a real
+    absolute path on every platform."""
+    from pathlib import Path as _P
+    assert _P(gate.DEFAULT_LOG).is_absolute()
 
 
 def test_a_flag_looking_head_is_never_split_into_a_label(tmp_path):
@@ -150,7 +233,7 @@ class TestFollowUpAndArgParsing:
         """
         a, b = tmp_path / "a", tmp_path / "b"
         rc = gate.main([
-            "--gate", "true", "--log", str(tmp_path / "g.log"),
+            "--gate", OK, "--log", str(tmp_path / "g.log"),
             "--then", f"echo one > {a} && echo two > {b}",
         ])
         assert rc == 0
@@ -164,7 +247,7 @@ class TestFollowUpAndArgParsing:
     def test_a_red_gate_still_blocks_a_compound_follow_up(self, tmp_path):
         a = tmp_path / "a"
         rc = gate.main([
-            "--gate", "false", "--log", str(tmp_path / "g.log"),
+            "--gate", FAIL, "--log", str(tmp_path / "g.log"),
             "--then", f"touch {a} && touch {a}-2",
         ])
         assert rc == 1
@@ -182,12 +265,12 @@ class TestFollowUpAndArgParsing:
         spawned a RECURSIVE pytest run and the suite hung instead of failing.
         """
         marker = tmp_path / "ran"
-        rc = gate.main(["false", "--then", f"touch {marker}", "--log", str(tmp_path / "g.log")])
+        rc = gate.main([FAIL, "--then", f"touch {marker}", "--log", str(tmp_path / "g.log")])
         assert rc == 1
         assert not marker.exists(), "--then was swallowed into the gate instead of parsed"
 
     def test_a_single_bare_positional_is_still_accepted_as_a_gate(self, tmp_path):
-        rc = gate.main(["true", "--log", str(tmp_path / "g.log")])
+        rc = gate.main([OK, "--log", str(tmp_path / "g.log")])
         assert rc == 0
 
     def test_a_dashdash_positional_gate_is_named_by_its_command_not_by_argv0(self, tmp_path, capsys):
@@ -196,14 +279,23 @@ class TestFollowUpAndArgParsing:
         the wrapper, not the thing under test. gate_spec's docstring rejects naming by argv[0]
         for exactly this reason and the single-string route already obeys it; the two routes
         must derive the name the same way, or the module's own first Run: example lies."""
-        rc = gate.main([
-            "--log", str(tmp_path / "g.log"),
-            "--", "env", "-u", "VIRTUAL_ENV", sys.executable, "-c", "print('ok')",
-        ])
+        argv = [*OK_ARGV, "a-trailing-token"]
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--", *argv])
         assert rc == 0
         out = capsys.readouterr().out
-        assert "[PASS] env (rc=" not in out, "the gate was named after its wrapper"
-        assert "[PASS] env -u VIRTUAL_ENV" in out
+        # The end-to-end half asserts only that main labels the gate through derived_name.
+        # It deliberately does NOT assert "argv[0] is absent": derived_name truncates at
+        # _NAME_WIDTH, and on a machine where the interpreter path happens to be that long the
+        # truncated name IS argv[0], so such an assertion would turn on the length of a path
+        # rather than on the rule. The rule itself is pinned deterministically below.
+        assert f"[PASS] {gate.derived_name(argv)} (rc=" in out
+
+    def test_the_derived_name_is_the_whole_command_never_argv0(self):
+        """The rule the report line depends on, pinned where no path length can reach it:
+        `-- env -u VIRTUAL_ENV make --version` reported "[FAIL] env (rc=2)", naming the wrapper
+        instead of the thing under test."""
+        assert gate.derived_name(["env", "-u", "VIRTUAL_ENV", "make"]) == "env -u VIRTUAL_ENV make"
+        assert gate.derived_name(["env", "-u", "VIRTUAL_ENV", "make"]) != "env"
 
     def test_a_dashdash_positional_token_holding_a_space_is_not_re_split(self, tmp_path, capsys):
         """Review finding (2026-07-28, round 4): `-- <cmd ...>` positionals are already real argv
@@ -211,9 +303,7 @@ class TestFollowUpAndArgParsing:
         (`-- '/path/my gate.sh'`) came apart into '/path/my' + 'gate.sh' and ran as '/path' -
         `[FAIL] /path (rc=127)`, a FALSE RED for a script that exits 0. That is the
         misattribution this whole tool exists to prevent, produced by the tool itself."""
-        script = tmp_path / "my gate.sh"
-        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        script.chmod(0o755)
+        script = write_exit_zero_script(tmp_path / "my gate")
         rc = gate.main(["--log", str(tmp_path / "g.log"), "--", str(script)])
         assert rc == 0, capsys.readouterr().out
         assert "[PASS]" in capsys.readouterr().out
@@ -222,9 +312,7 @@ class TestFollowUpAndArgParsing:
         """The finding's sharpest form: the SAME script passed or failed depending on whether a
         second, unrelated token followed it, because one positional took the shlex route and two
         took the argv route. A verdict must never turn on an argument the gate ignores."""
-        script = tmp_path / "my gate.sh"
-        script.write_text('#!/bin/sh\nexit 0\n', encoding="utf-8")
-        script.chmod(0o755)
+        script = write_exit_zero_script(tmp_path / "my gate")
         alone = gate.main(["--log", str(tmp_path / "g.log"), "--", str(script)])
         capsys.readouterr()
         with_arg = gate.main(["--log", str(tmp_path / "g.log"), "--", str(script), "ignored-arg"])
@@ -242,7 +330,7 @@ class TestFollowUpAndArgParsing:
     def test_a_dashdash_positional_gate_can_still_be_named_explicitly(self, tmp_path, capsys):
         """The derived name is only the default; --name still wins for the positional route."""
         rc = gate.main(["--name", "unit tests", "--log", str(tmp_path / "g.log"),
-                        "--", "env", "true"])
+                        "--", *OK_ARGV])
         assert rc == 0
         assert "[PASS] unit tests" in capsys.readouterr().out
 
@@ -274,8 +362,8 @@ class TestExplicitNameOption:
     def test_name_option_pairs_positionally_with_multiple_gates(self, tmp_path, capsys):
         log = tmp_path / "g.log"
         rc = gate.main([
-            "--gate", "true", "--name", "first gate",
-            "--gate", "true", "--name", "second gate",
+            "--gate", OK, "--name", "first gate",
+            "--gate", OK, "--name", "second gate",
             "--log", str(log),
         ])
         assert rc == 0
@@ -294,7 +382,7 @@ class TestExplicitNameOption:
         """
         with pytest.raises(SystemExit) as exc:
             gate.main([
-                "--gate", "true", "--name", "one", "--name", "two",
+                "--gate", OK, "--name", "one", "--name", "two",
                 "--log", str(tmp_path / "g.log"),
             ])
         assert exc.value.code == 2
@@ -308,28 +396,28 @@ class TestExplicitNameOption:
         Mislabeling a result is precisely the failure mode this tool exists to prevent.
         """
         rc = gate.main([
-            "--gate", "true",
-            "--gate", "false", "--name", "smoke",
+            "--gate", OK,
+            "--gate", FAIL, "--name", "smoke",
             "--log", str(tmp_path / "g.log"),
         ])
         assert rc == 1                                     # the second gate is red
         out = capsys.readouterr().out
         assert "[FAIL] smoke" in out, "the name belongs to the gate it was written after"
         assert "[PASS] smoke" not in out, "the name landed on the wrong gate"
-        assert "[PASS] true" in out, "the unnamed gate keeps its derived name"
+        assert f"[PASS] {gate.gate_spec(OK)[0]}" in out, "the unnamed gate keeps its derived name"
 
     def test_fewer_names_than_gates_leaves_the_later_gates_with_their_derived_name(self, tmp_path, capsys):
         """A name is optional per gate; the gates after the last named one are not shifted or
         left blank, they simply keep the name derived from their command."""
         rc = gate.main([
-            "--gate", "true", "--name", "first gate",
-            "--gate", "true",
+            "--gate", OK, "--name", "first gate",
+            "--gate", OK,
             "--log", str(tmp_path / "g.log"),
         ])
         assert rc == 0
         out = capsys.readouterr().out
         assert "[PASS] first gate" in out
-        assert "[PASS] true" in out
+        assert f"[PASS] {gate.gate_spec(OK)[0]}" in out
 
     def test_a_name_written_before_any_gate_is_a_usage_error_with_an_accurate_message(self, tmp_path, capsys):
         """Written order is the whole rule, so a --name with no --gate in front of it has
@@ -337,7 +425,7 @@ class TestExplicitNameOption:
         wrong description of this mistake)."""
         with pytest.raises(SystemExit) as exc:
             gate.main([
-                "--name", "orphan", "--gate", "true",
+                "--name", "orphan", "--gate", OK,
                 "--log", str(tmp_path / "g.log"),
             ])
         assert exc.value.code == 2
@@ -350,18 +438,18 @@ class TestExplicitNameOption:
         more names than gates, although a gate WAS given - the positional form was simply not
         counted. With exactly one gate and one name there is nothing to pair ambiguously, so
         the name applies."""
-        rc = gate.main(["--name", "unit tests", "--log", str(tmp_path / "g.log"), "--", "true"])
+        rc = gate.main(["--name", "unit tests", "--log", str(tmp_path / "g.log"), "--", *OK_ARGV])
         assert rc == 0
         assert "[PASS] unit tests" in capsys.readouterr().out
 
     def test_a_single_quoted_positional_gate_can_be_labeled_by_a_name(self, tmp_path, capsys):
-        rc = gate.main(["--name", "unit tests", "--log", str(tmp_path / "g.log"), "true"])
+        rc = gate.main(["--name", "unit tests", "--log", str(tmp_path / "g.log"), OK])
         assert rc == 0
         assert "[PASS] unit tests" in capsys.readouterr().out
 
     def test_two_names_for_one_positional_gate_is_still_a_usage_error(self, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
-            gate.main(["--name", "one", "--name", "two", "--log", str(tmp_path / "g.log"), "true"])
+            gate.main(["--name", "one", "--name", "two", "--log", str(tmp_path / "g.log"), OK])
         assert exc.value.code == 2
         assert "more --name than --gate" in capsys.readouterr().err
 
@@ -369,8 +457,8 @@ class TestExplicitNameOption:
         """The one shape that IS ambiguous: with both a --gate and a positional gate present, a
         leading --name could plausibly mean either, so it is refused rather than guessed."""
         with pytest.raises(SystemExit) as exc:
-            gate.main(["--name", "which one", "--gate", "true",
-                       "--log", str(tmp_path / "g.log"), "--", "true"])
+            gate.main(["--name", "which one", "--gate", OK,
+                       "--log", str(tmp_path / "g.log"), "--", *OK_ARGV])
         assert exc.value.code == 2
         assert "AFTER" in capsys.readouterr().err
 
@@ -382,7 +470,7 @@ class TestExplicitNameOption:
         mistake the user did not make. An empty label can never be useful, so it is refused at
         the point it is written, with a message that says so."""
         with pytest.raises(SystemExit) as exc:
-            gate.main(["--gate", "true", "--name", "", "--log", str(tmp_path / "g.log")])
+            gate.main(["--gate", OK, "--name", "", "--log", str(tmp_path / "g.log")])
         assert exc.value.code == 2
         err = capsys.readouterr().err
         assert "empty" in err
@@ -390,14 +478,14 @@ class TestExplicitNameOption:
 
     def test_an_empty_name_followed_by_a_real_one_reports_the_empty_name_not_a_count(self, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
-            gate.main(["--gate", "true", "--name", "", "--name", "y", "--log", str(tmp_path / "g.log")])
+            gate.main(["--gate", OK, "--name", "", "--name", "y", "--log", str(tmp_path / "g.log")])
         assert exc.value.code == 2
         assert "empty" in capsys.readouterr().err
 
     def test_a_whitespace_only_name_is_rejected_too(self, tmp_path, capsys):
         """A blank label prints as a nameless gate, which is the same unreadable report."""
         with pytest.raises(SystemExit) as exc:
-            gate.main(["--gate", "true", "--name", "   ", "--log", str(tmp_path / "g.log")])
+            gate.main(["--gate", OK, "--name", "   ", "--log", str(tmp_path / "g.log")])
         assert exc.value.code == 2
         assert "empty" in capsys.readouterr().err
 
