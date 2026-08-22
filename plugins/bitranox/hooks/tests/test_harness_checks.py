@@ -9,6 +9,7 @@ selection gets eyeballed.
 import json
 import os
 import shutil
+import sys
 import subprocess
 import types
 
@@ -374,6 +375,8 @@ def test_a_well_formed_shim_has_no_problems(tmp_path):
     assert hc.shim_problems(path) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no executable bit and os.access(X_OK) answers True for any existing file, so setting one and expecting a finding cannot be expressed there')
 def test_shim_problems_flags_an_executable_tombstone(tmp_path):
     path = tmp_path / "s.py"
     path.write_text(GOOD_SHIM, encoding="utf-8")
@@ -615,6 +618,8 @@ def test_graveyard_leaves_a_sanctioned_backup_alone(tmp_path):
     assert hc.graveyard_entries(tmp_path) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no executable bit and os.access(X_OK) answers True for any existing file, so setting one and expecting a finding cannot be expressed there')
 def test_graveyard_flags_an_executable_backup(tmp_path):
     (tmp_path / "hook.py").write_text("print(1)\n", encoding="utf-8")
     backup = tmp_path / "hook.py.orig-20260801"
@@ -716,6 +721,8 @@ def test_uncollectable_tests_reports_a_path_that_actually_resolves(tmp_path):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no executable bit and os.access(X_OK) answers True for any existing file, so setting one and expecting a finding cannot be expressed there')
 def test_is_executable_reports_the_bit_on_posix(tmp_path):
     f = tmp_path / "shim.sh"
     f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
@@ -723,6 +730,8 @@ def test_is_executable_reports_the_bit_on_posix(tmp_path):
     assert hc.is_executable(f, posix=True) is True
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no executable bit and os.access(X_OK) answers True for any existing file, so setting one and expecting a finding cannot be expressed there')
 def test_is_executable_is_false_for_a_plain_file_on_posix(tmp_path):
     f = tmp_path / "plain.sh"
     f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
