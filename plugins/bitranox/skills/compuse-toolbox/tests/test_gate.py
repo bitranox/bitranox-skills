@@ -2,6 +2,7 @@
 
 import os
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -16,11 +17,22 @@ import gate
 OK_ARGV = [sys.executable, "-c", ""]
 FAIL_ARGV = [sys.executable, "-c", "raise SystemExit(1)"]
 
-# ...and the same two as ONE shell-quoted string, for the --gate route. shlex.quote is what
-# makes this safe on Windows, where the interpreter path holds backslashes and usually a
-# space; gate.split_command parses either quoting style back to the same argv.
-OK = f'{shlex.quote(sys.executable)} -c ""'
-FAIL = f'''{shlex.quote(sys.executable)} -c "raise SystemExit(1)"'''
+def quoted(*argv):
+    """One command string that gate's splitter parses back to exactly `argv`, on either platform.
+
+    NOT shlex.quote on Windows. It single-quotes, and a Windows command line has no such thing:
+    CommandLineToArgvW reads a single quote as an ordinary character, so the path would arrive
+    with quotes glued on and split at its spaces anyway. list2cmdline is that parser's inverse,
+    which is exactly what this needs to be.
+    """
+    if os.name == "nt":
+        return subprocess.list2cmdline(list(argv))
+    return " ".join(shlex.quote(a) for a in argv)
+
+
+# ...and the same two as ONE shell-quoted string, for the --gate route.
+OK = quoted(sys.executable, "-c", "")
+FAIL = quoted(sys.executable, "-c", "raise SystemExit(1)")
 
 
 def write_exit_zero_script(path_without_suffix):

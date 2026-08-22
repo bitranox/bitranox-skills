@@ -82,35 +82,57 @@ def verdict(a: Run, b: Run) -> str:
     return "AGREE" if same else "DIFFER"
 
 
-def _split_command(command: str, windows: bool | None = None) -> list[str]:
-    """Split a command string into argv, honouring the platform's quoting rules.
+def _windows_argv(command):
+    r"""Windows argv via CommandLineToArgvW - the C runtime's OWN command-line parser.
 
-    shlex.split defaults to POSIX mode, where a backslash ESCAPES the next character. On Windows
-    that silently eats the separators in a program path: "C:\\tools\\py.exe" becomes
-    "C:toolspy.exe", the command cannot start, and BOTH sides of a comparison then fail the same
-    way - so diffbehave reported AGREE for a command that never ran.
+    This is the function every Windows program uses to read its own command line, so a command
+    string is split here exactly as the program it names would split it. ctypes is stdlib, which
+    matters: a hook runs on a bare interpreter with no venv and no third-party import available.
 
-    Turning escape processing off keeps quoting working while a backslash stays a separator.
-    Non-POSIX mode was the earlier fix; it leaves quotes attached to the token, so `--opt="a b"`
-    came apart into '--opt="a' + 'b"'. It survives only as the fallback for the C runtime's
-    `"a\\"b"` convention, which escape-off reads as an unbalanced quote. gate.py and
-    hooks/harness_checks.py carry the same pair for the same reason.
+    `ctypes.wintypes` does not import on POSIX at all, so the import has to be function-local.
     """
-    on_windows = (os.name == "nt") if windows is None else windows
-    if not on_windows:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True)
-    lexer.whitespace_split = True
-    lexer.escape = ""
+    if not command.strip():
+        # CommandLineToArgvW("") does NOT return an empty list - it returns the path of the
+        # CURRENT executable, so an empty spec would silently become a gate on python itself.
+        return []
+    import ctypes                       # noqa: PLC0415 - Windows-only; wintypes cannot import on POSIX
+    from ctypes import wintypes         # noqa: PLC0415 - same
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command, ctypes.byref(count))
+    if not argv:
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
-        return list(lexer)
-    except ValueError:
-        out = []
-        for token in shlex.split(command, posix=False):
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-                token = token[1:-1]
-            out.append(token)
-        return out
+        return [argv[i] for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(argv)
+
+
+def _split_command(command: str) -> list[str]:
+    r"""Split one shell-quoted command string into argv, by the platform's own rules.
+
+    POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
+    names would split it.
+
+    shlex's POSIX mode was the bug. It treats a backslash as an ESCAPE, so on Windows it
+    destroyed every path in a command: `C:\Program Files\Py\python.exe` became `C:Program` +
+    `FilesPypython.exe`, and the caller then ran a binary that does not exist. Approximating the
+    rules with shlex-minus-escape-processing fixed the common shapes but still mis-read the C
+    runtime's own `"a\"b"` quoting, so the real parser is called instead: it removes the class of
+    problem rather than the instances of it.
+
+    Kept identical in gate.py, diffbehave.py and hooks/harness_checks.py.
+    """
+    if os.name != "nt":
+        return shlex.split(command)
+    return _windows_argv(command)
 
 
 def _run_one(command: str, case: Case, timeout: float) -> Run:

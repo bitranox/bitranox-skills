@@ -1,8 +1,11 @@
 """Tests for diffbehave.py - do two implementations BEHAVE the same on the same inputs?"""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 import diffbehave as D
 
@@ -178,37 +181,49 @@ def test_case_file_jsonl_row_carries_name_stdin_and_args(tmp_path):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="the split is CommandLineToArgvW, a real Windows API - it cannot be "
+                           "asked for Windows behaviour from POSIX")
 def test_split_command_keeps_backslashes_on_windows():
-    argv = D._split_command(r'C:\tools\py.exe -c "import sys"', windows=True)
+    argv = D._split_command(r'C:\tools\py.exe -c "import sys"')
     assert argv[0] == r"C:\tools\py.exe", argv
     assert argv[1] == "-c"
     assert argv[2] == "import sys", "surrounding quotes must not survive into argv"
 
 
+@pytest.mark.skipif(os.name == "nt",
+                    reason="asserts the POSIX escape semantics callers rely on there, which the "
+                           "Windows command-line parser deliberately does not share")
 def test_split_command_treats_backslash_as_an_escape_on_posix():
     """The POSIX behaviour must be preserved, not traded away for the Windows fix."""
-    argv = D._split_command(r"echo a\ b", windows=False)
+    argv = D._split_command(r"echo a\ b")
     assert argv == ["echo", "a b"], argv
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="the split is CommandLineToArgvW, a real Windows API - it cannot be "
+                           "asked for Windows behaviour from POSIX")
 def test_split_command_keeps_an_embedded_quoted_value_in_one_token_on_windows():
     r"""The earlier non-POSIX fix stripped quotes only when they WRAPPED the whole token, so
     `--opt="a b"` came apart into '--opt="a' + 'b"' and the option reached the child broken.
     Escape-off reads the quoting properly while still leaving backslashes alone."""
-    argv = D._split_command(r'py.exe --opt="a b" tail', windows=True)
+    argv = D._split_command(r'py.exe --opt="a b" tail')
     assert argv == ["py.exe", "--opt=a b", "tail"]
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="the split is CommandLineToArgvW, a real Windows API - it cannot be "
+                           "asked for Windows behaviour from POSIX")
 def test_split_command_survives_the_c_runtime_quote_escape_on_windows():
-    r"""Escape-off cannot read the C runtime's `"a\"b"` - with escapes off the quotes look
-    unbalanced and the lexer RAISES. Neither mode reconstructs `a"b` (that needs full
-    CommandLineToArgvW semantics), so the contract here is only that the splitter DEGRADES
-    instead of throwing: a caller gets tokens it can run or report, never a traceback out of
-    an argument-parsing helper."""
-    argv = D._split_command(r'cmd "a\"b" x', windows=True)
-    assert argv[0] == "cmd" and argv[-1] == "x"
+    r"""The shape neither shlex mode could read: escape-off saw unbalanced quotes and RAISED,
+    non-POSIX mode left the quotes attached. CommandLineToArgvW is the parser that defines this
+    convention, so it reconstructs the argument exactly rather than degrading."""
+    assert D._split_command(r'cmd "a\"b" x') == ["cmd", 'a"b', "x"]
 
 
+@pytest.mark.skipif(os.name != "nt",
+                    reason="the split is CommandLineToArgvW, a real Windows API - it cannot be "
+                           "asked for Windows behaviour from POSIX")
 def test_split_command_handles_a_quoted_path_with_spaces_on_windows():
-    argv = D._split_command(r'"C:\Program Files\py.exe" --version', windows=True)
+    argv = D._split_command(r'"C:\Program Files\py.exe" --version')
     assert argv == [r"C:\Program Files\py.exe", "--version"], argv

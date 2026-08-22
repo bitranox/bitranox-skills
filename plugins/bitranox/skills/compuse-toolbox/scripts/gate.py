@@ -51,39 +51,57 @@ _NAME_WIDTH = 56                                                # keeps one repo
 DEFAULT_LOG = str(Path(tempfile.gettempdir()) / "gate.log")
 
 
+def _windows_argv(command):
+    r"""Windows argv via CommandLineToArgvW - the C runtime's OWN command-line parser.
+
+    This is the function every Windows program uses to read its own command line, so a command
+    string is split here exactly as the program it names would split it. ctypes is stdlib, which
+    matters: a hook runs on a bare interpreter with no venv and no third-party import available.
+
+    `ctypes.wintypes` does not import on POSIX at all, so the import has to be function-local.
+    """
+    if not command.strip():
+        # CommandLineToArgvW("") does NOT return an empty list - it returns the path of the
+        # CURRENT executable, so an empty spec would silently become a gate on python itself.
+        return []
+    import ctypes                       # noqa: PLC0415 - Windows-only; wintypes cannot import on POSIX
+    from ctypes import wintypes         # noqa: PLC0415 - same
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command, ctypes.byref(count))
+    if not argv:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return [argv[i] for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(argv)
+
+
 def split_command(spec: str) -> list[str]:
-    r"""Split one shell-quoted command string into argv, without eating Windows paths.
+    r"""Split one shell-quoted command string into argv, by the platform's own rules.
 
-    shlex's POSIX mode treats a backslash as an ESCAPE, so on Windows it silently destroyed
-    every path in a gate: `C:\Program Files\Py\python.exe -c "print(1)"` split into
-    ['C:Program', 'FilesPypython.exe', ...], the gate ran a binary that does not exist and
-    reported rc=127 - a FALSE RED for a command that passes, which is precisely the
-    misattribution this whole tool exists to prevent, produced by the tool itself.
+    POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
+    names would split it.
 
-    On Windows the fix is to stop processing escapes: quoting (both ' and ") keeps working,
-    while a backslash stays the literal path separator it is there. A space still separates
-    arguments on both platforms, so a path containing one must be quoted - exactly as the
-    user's own shell already requires. POSIX keeps standard shlex behaviour, where a
-    backslash genuinely IS an escape and callers rely on it.
+    shlex's POSIX mode was the bug. It treats a backslash as an ESCAPE, so on Windows it
+    destroyed every path in a command: `C:\Program Files\Py\python.exe` became `C:Program` +
+    `FilesPypython.exe`, and the caller then ran a binary that does not exist. Approximating the
+    rules with shlex-minus-escape-processing fixed the common shapes but still mis-read the C
+    runtime's own `"a\"b"` quoting, so the real parser is called instead: it removes the class of
+    problem rather than the instances of it.
+
+    Kept identical in gate.py, diffbehave.py and hooks/harness_checks.py.
     """
     if os.name != "nt":
         return shlex.split(spec)
-    lexer = shlex.shlex(spec, posix=True)
-    lexer.whitespace_split = True
-    lexer.escape = ""
-    try:
-        return list(lexer)
-    except ValueError:
-        # The one shape escape-off cannot read: the C runtime's own `"a\"b"` convention for an
-        # embedded quote, where dropping escapes leaves the quotes unbalanced. Fall back to the
-        # lexer that tolerates it and strip one wrapping pair. Kept identical to diffbehave.py
-        # and hooks/harness_checks.py, which hit the same quirk.
-        out = []
-        for token in shlex.split(spec, posix=False):
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-                token = token[1:-1]
-            out.append(token)
-        return out
+    return _windows_argv(spec)
 
 
 def derived_name(argv: list[str]) -> str:

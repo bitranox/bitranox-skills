@@ -320,27 +320,40 @@ def test_hook_registrations_is_empty_for_a_settings_file_without_hooks(tmp_path)
     assert hc.hook_registrations(path) == []
 
 
-def test_command_paths_finds_a_windows_absolute_path(tmp_path):
-    r"""The audit was DEAD on Windows: _PATHISH only matched a leading '/', so a registration
+def test_the_pathish_test_accepts_every_windows_absolute_shape():
+    r"""The audit was DEAD on Windows: the rule matched only a leading '/', so a registration
     naming C:\dir\hook.sh yielded no paths at all and registration_problems reported zero
-    problems - a silent pass on the platform being audited. Both drive shapes and UNC count,
-    and the backslash form must survive tokenising (POSIX shlex ate the separators).
+    problems - a silent pass on the platform being audited. Both drive spellings and UNC count.
+
+    Asked of the regex directly, which is pure logic and so answerable for either platform from
+    either one; the SPLIT half is a real Windows API and is exercised on Windows below.
     """
-    assert hc.command_paths(r"bash C:\dir\hook.sh", windows=True) == [r"C:\dir\hook.sh"]
-    assert hc.command_paths("bash C:/dir/hook.sh", windows=True) == ["C:/dir/hook.sh"]
-    assert hc.command_paths(r"bash \\srv\share\hook.sh", windows=True) == [r"\\srv\share\hook.sh"]
+    assert hc._is_pathish(r"C:\dir\hook.sh", windows=True)
+    assert hc._is_pathish("C:/dir/hook.sh", windows=True)
+    assert hc._is_pathish(r"\\srv\share\hook.sh", windows=True)
 
 
-def test_command_paths_ignores_a_windows_path_shape_on_posix(tmp_path):
+def test_the_pathish_test_rejects_a_windows_shape_on_posix():
     """The direction the rule must NOT apply: on POSIX a bare 'C:\\dir' is not a path, and
     treating it as one would invent findings out of ordinary arguments."""
-    assert hc.command_paths(r"bash C:\dir\hook.sh", windows=False) == []
+    assert not hc._is_pathish(r"C:\dir\hook.sh", windows=False)
 
 
-def test_command_paths_still_reads_posix_paths_when_windows(tmp_path):
+def test_the_pathish_test_still_accepts_posix_shapes_on_windows():
     """A Windows machine still runs these commands through Git Bash, so the POSIX shapes must
     keep matching there rather than being traded away for the new ones."""
-    assert hc.command_paths("bash /opt/x/hook.sh", windows=True) == ["/opt/x/hook.sh"]
+    assert hc._is_pathish("/opt/x/hook.sh", windows=True)
+
+
+@pytest.mark.skipif(os.name != "nt",
+                    reason="the split is CommandLineToArgvW, a real Windows API - it cannot be "
+                           "asked for Windows behaviour from POSIX, and re-implementing it in "
+                           "Python to make it askable is exactly the approximation this replaced")
+def test_command_paths_finds_a_windows_absolute_path():
+    r"""End-to-end on Windows: the backslash form must survive tokenising too. POSIX shlex ate
+    the separators, so even a correct pathish test saw nothing to match."""
+    assert hc.command_paths(r"bash C:\dir\hook.sh") == [r"C:\dir\hook.sh"]
+    assert hc.command_paths(r"bash \\srv\share\hook.sh") == [r"\\srv\share\hook.sh"]
 
 
 def test_registration_problems_flags_a_missing_target(tmp_path):
@@ -366,6 +379,16 @@ def test_command_paths_ignores_a_quoted_non_path_argument():
     command = ("jq -e '.error // .tool_result.error' > /dev/null 2>&1 "
                "&& paplay /usr/share/sounds/claude/error.wav || true")
     assert hc.command_paths(command) == ["/dev/null", "/usr/share/sounds/claude/error.wav"]
+
+
+def test_a_bare_double_slash_is_not_a_path():
+    """`//` reaches command_paths as its own token out of any shell pipeline - `jq '.a // .b'`
+    is the real hook that produced it - and the old rule accepted anything starting with '/',
+    so an operator was reported as a file. It also made the jq pipeline parse differently under
+    the two platforms' splitters for no reason but this."""
+    assert not hc._is_pathish("//", windows=False)
+    assert not hc._is_pathish("/", windows=False)
+    assert hc._is_pathish("/dev/null", windows=False)
 
 
 def test_command_paths_skips_an_unresolved_variable():

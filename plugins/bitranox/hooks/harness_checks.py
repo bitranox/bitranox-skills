@@ -305,42 +305,72 @@ def discover_candidates(roots, home=None, personal=True):
 # command_paths matched NOTHING there, so registration_problems reported zero problems for
 # any registration naming a Windows path - the audit silently passed on the platform it was
 # supposed to be auditing, which reads as approval rather than as a broken check.
-_PATHISH_POSIX = re.compile(r"^(/|~/|\$HOME/|\$\{HOME\}/)")
+# A leading '/' must be followed by a real name character. A bare "//" is not a path, and it
+# reaches here as its own token out of any shell pipeline ("jq '.a // .b'"), where counting it
+# invents a finding out of an operator.
+_PATHISH_POSIX = re.compile(r"^(/[\w.@+-]|~/|\$HOME/|\$\{HOME\}/)")
 _PATHISH_WINDOWS = re.compile(r"^([A-Za-z]:[\\/]|\\\\[^\\])")
 
 
-def _is_pathish(token, windows):
-    """True when the token unambiguously names a file path on the platform in question."""
-    return bool(_PATHISH_POSIX.match(token) or (windows and _PATHISH_WINDOWS.match(token)))
+def _is_pathish(token, windows=None):
+    """True when the token unambiguously names a file path on the platform in question.
 
-
-def split_command_line(command, windows=None):
-    r"""Split a command string into tokens without eating the separators out of Windows paths.
-
-    shlex's POSIX mode treats a backslash as an ESCAPE, so "bash C:\dir\hook.sh" tokenised to
-    "C:dirhook.sh" - a path that cannot exist, silently dropped by the pathish test, leaving
-    the caller with nothing to check. Escape-off keeps quoting working while a backslash stays
-    the separator it is on Windows.
-
-    The fallback covers the one shape escape-off cannot read: the C runtime's own `"a\"b"`
-    convention for an embedded quote, where dropping escapes leaves the quotes unbalanced and
-    the lexer raises. Kept identical to diffbehave.py and gate.py, which hit the same quirk.
-    """
+    `windows` overrides the platform so both shapes stay askable from either OS; leave it None
+    outside tests."""
     on_windows = (os.name == "nt") if windows is None else windows
-    if not on_windows:
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True)
-    lexer.whitespace_split = True
-    lexer.escape = ""
+    return bool(_PATHISH_POSIX.match(token) or (on_windows and _PATHISH_WINDOWS.match(token)))
+
+
+def _windows_argv(command):
+    r"""Windows argv via CommandLineToArgvW - the C runtime's OWN command-line parser.
+
+    This is the function every Windows program uses to read its own command line, so a command
+    string is split here exactly as the program it names would split it. ctypes is stdlib, which
+    matters: a hook runs on a bare interpreter with no venv and no third-party import available.
+
+    `ctypes.wintypes` does not import on POSIX at all, so the import has to be function-local.
+    """
+    if not command.strip():
+        # CommandLineToArgvW("") does NOT return an empty list - it returns the path of the
+        # CURRENT executable, so an empty command would silently become a path to python itself.
+        return []
+    import ctypes                       # noqa: PLC0415 - Windows-only; wintypes cannot import on POSIX
+    from ctypes import wintypes         # noqa: PLC0415 - same
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command, ctypes.byref(count))
+    if not argv:
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
-        return list(lexer)
-    except ValueError:
-        out = []
-        for token in shlex.split(command, posix=False):
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-                token = token[1:-1]
-            out.append(token)
-        return out
+        return [argv[i] for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(argv)
+
+
+def split_command_line(command):
+    r"""Split a command string into argv, by the platform's own rules.
+
+    POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
+    names would split it.
+
+    shlex's POSIX mode was the bug. It treats a backslash as an ESCAPE, so "bash C:\dir\hook.sh"
+    tokenised to "C:dirhook.sh" - a path that cannot exist, silently dropped by the pathish test,
+    leaving the caller with nothing to check. Approximating the rules with shlex-minus-escapes
+    fixed the common shapes but still mis-read the C runtime's own `"a\"b"` quoting, so the real
+    parser is called instead: it removes the class of problem rather than the instances.
+
+    Kept identical in gate.py and diffbehave.py.
+    """
+    if os.name != "nt":
+        return shlex.split(command)
+    return _windows_argv(command)
 
 
 def _expand(token, home):
@@ -369,18 +399,18 @@ def hook_registrations(settings_path):
     return out
 
 
-def command_paths(command, home=None, windows=None):
+def command_paths(command, home=None):
     """The file paths a shell command names. Only unambiguous ones - a token that still holds an
     unresolved ${VAR} is skipped rather than guessed at.
 
-    `windows` overrides the platform detection so both shapes stay testable from either OS;
-    leave it None outside tests.
+    The split is the platform's own now, so it cannot be asked about the other one; `_is_pathish`
+    still can, and is where the per-platform shapes are tested from either OS.
     """
     try:
-        tokens = split_command_line(command, windows)
-    except ValueError:
+        tokens = split_command_line(command)
+    except (ValueError, OSError):
         tokens = command.split()
-    on_windows = (os.name == "nt") if windows is None else windows
+    on_windows = os.name == "nt"
     found = []
     for token in tokens:
         if not _is_pathish(token, on_windows):
@@ -392,11 +422,11 @@ def command_paths(command, home=None, windows=None):
     return found
 
 
-def registration_problems(settings_path, home=None, windows=None):
+def registration_problems(settings_path, home=None):
     """Registered commands whose target file is missing, as (event, command, missing path)."""
     problems = []
     for event, _matcher, command in hook_registrations(settings_path):
-        for path in command_paths(command, home, windows):
+        for path in command_paths(command, home):
             if not Path(path).exists():
                 problems.append((event, command, path))
     return problems

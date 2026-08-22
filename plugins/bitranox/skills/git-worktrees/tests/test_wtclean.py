@@ -451,6 +451,48 @@ def test_a_real_worktree_is_removed_end_to_end(tmp_path):
 
 
 @needs_git
+def test_the_run_dir_is_the_main_checkout_and_carries_no_warning(tmp_path):
+    """The whole point of the helper: git must not run from the directory being deleted, which
+    Windows locks. A resolvable worktree returns the MAIN checkout and warns about nothing."""
+    main, worktree, _git = make_repo_with_worktree(tmp_path)
+    run_dir, warning = W._git_run_dir(worktree, 30)
+    assert warning is None
+    assert run_dir.resolve() == main.resolve()
+    assert run_dir.resolve() != worktree.resolve()
+
+
+def test_an_unresolvable_run_dir_falls_back_but_says_so(tmp_path):
+    """The fallback keeps working where it always worked (POSIX), but must never be silent: on
+    Windows it is exactly the bug this helper exists to avoid, and a check that quietly reverts
+    to broken while still reading as working is the failure mode the whole change was about."""
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    run_dir, warning = W._git_run_dir(plain, 30)
+    assert run_dir == plain
+    assert warning and "main checkout" in warning
+
+
+@needs_git
+def test_a_removal_failure_names_the_degraded_run_dir(tmp_path):
+    """The warning has to reach the caller, or reporting it changes nothing. It is attached on
+    the FAILURE path only, where it separates "git refused" from "we asked git to delete the
+    directory it was standing in"."""
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    error = W.git_worktree_remove(plain, force=False)
+    assert error is not None
+    assert "git ran from the worktree itself" in error
+
+
+@needs_git
+def test_a_successful_removal_carries_no_warning_text(tmp_path):
+    """The direction it must NOT fire: a clean removal returns None, not a warning-decorated
+    success."""
+    _main, worktree, _git = make_repo_with_worktree(tmp_path, topic="quiet")
+    assert W.git_worktree_remove(worktree, force=True) is None
+
+
+@needs_git
 def test_git_refuses_a_dirty_worktree_even_when_our_own_check_is_bypassed(tmp_path):
     """Defense in depth: git's own refusal is the second layer, keyed on the exit code."""
     _main, worktree, _git = make_repo_with_worktree(tmp_path)

@@ -17,6 +17,35 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.241.2]
+
+### Changed
+
+- The Windows command splitter now calls **CommandLineToArgvW**, the C runtime's own
+  command-line parser, instead of approximating its rules with shlex. Same three scripts
+  (`gate.py`, `diffbehave.py`, `hooks/harness_checks.py`), one shared implementation. The
+  approximation handled every common shape but still mis-read the C runtime's own `"a\"b"`
+  quoting; calling the real parser removes the class of problem rather than its instances, and
+  a command string is now split exactly as the program it names would split it. `ctypes` is
+  stdlib, so a hook running on a bare interpreter keeps working.
+
+  One consequence worth knowing: a SINGLE-quoted argument is no longer treated as quoted on
+  Windows. That is correct - a Windows command line has no single-quoting, and
+  `CommandLineToArgvW` reads `'` as an ordinary character - but it differs from what the
+  approximation did. `subprocess.list2cmdline` is that parser's inverse and is the right way to
+  build a command string for it.
+
+- `wtclean`'s run-dir resolution no longer falls back SILENTLY. When the main checkout cannot be
+  located, git still runs from the worktree - correct on POSIX, and on Windows the very bug the
+  helper exists to avoid - so the fallback is now reported and named in the failure message. A
+  check that quietly reverts to broken while still reading as working is the failure mode this
+  whole release is about; reproducing it inside the fix would have been worse than the original.
+
+### Fixed
+
+- `_is_pathish` counted a bare `//` as a path, so any shell pipeline containing one (`jq
+  '.a // .b'` - a real registered hook) had an operator reported as a file.
+
 ## [5.241.1]
 
 ### Fixed

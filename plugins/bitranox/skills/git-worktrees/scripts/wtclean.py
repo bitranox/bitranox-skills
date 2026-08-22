@@ -332,12 +332,18 @@ def git_worktree_status(
     return STATUS_DIRTY if (proc.stdout or "").strip() else STATUS_CLEAN
 
 
-def _git_run_dir(worktree: Path, timeout: float) -> Path:
-    """A directory to run git FROM that is not the one about to be deleted.
+def _git_run_dir(worktree: Path, timeout: float) -> tuple[Path, str | None]:
+    """(directory to run git FROM, warning) - never the directory about to be deleted.
 
-    The main checkout, found through the worktree's own common git dir. Falls back to the
-    worktree itself when that cannot be resolved, which keeps the previous behaviour rather
-    than inventing a path - a wrong -C would turn a removable worktree into an error.
+    The main checkout, found through the worktree's own common git dir.
+
+    When that cannot be resolved this falls back to the worktree itself, which is the pre-fix
+    behaviour: correct on POSIX, and on Windows the very bug this helper exists to avoid, since
+    the OS locks a process's current directory. So the fallback is REPORTED rather than taken
+    silently - a check that quietly reverts to broken and still reads as working is the failure
+    mode this whole change was about, and reproducing it inside the fix would be worse than the
+    original. The caller decides what to do with the warning; refusing outright is not right
+    either, because the fallback path works perfectly on the platform that never had the bug.
     """
     for extra in (["--path-format=absolute"], []):
         try:
@@ -346,8 +352,8 @@ def _git_run_dir(worktree: Path, timeout: float) -> Path:
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=timeout, check=False,
             )
-        except (OSError, subprocess.SubprocessError):
-            return worktree
+        except (OSError, subprocess.SubprocessError) as exc:
+            return worktree, "could not locate the main checkout (%s)" % exc
         common = (proc.stdout or "").strip()
         if proc.returncode != 0 or not common:
             continue
@@ -356,8 +362,8 @@ def _git_run_dir(worktree: Path, timeout: float) -> Path:
             common_path = Path(worktree) / common_path
         candidate = common_path.parent
         if candidate.is_dir():
-            return candidate
-    return worktree
+            return candidate, None
+    return worktree, "could not locate the main checkout from this worktree"
 
 
 def git_worktree_remove(
@@ -379,7 +385,8 @@ def git_worktree_remove(
     from the main checkout succeeds on Windows, so the tool was simply asking git to saw off the
     branch it was sitting on.
     """
-    argv = ["git", "-C", str(_git_run_dir(worktree, timeout)), "worktree", "remove", str(worktree)]
+    run_dir, run_dir_warning = _git_run_dir(worktree, timeout)
+    argv = ["git", "-C", str(run_dir), "worktree", "remove", str(worktree)]
     if force:
         argv.append("--force")
     try:
@@ -398,7 +405,12 @@ def git_worktree_remove(
         return str(exc)
     if proc.returncode == 0:
         return None
-    return (proc.stderr or "").strip() or f"git worktree remove failed (exit {proc.returncode})"
+    detail = (proc.stderr or "").strip() or f"git worktree remove failed (exit {proc.returncode})"
+    if run_dir_warning:
+        # Name the degraded run-dir on the failure path only: on Windows this is the difference
+        # between "git refused" and "we asked git to delete the directory it was standing in".
+        detail = "%s [%s, so git ran from the worktree itself]" % (detail, run_dir_warning)
+    return detail
 
 
 def build_plan(
