@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.241.1]
+
+### Fixed
+
+- `uncollectable_tests` reported a collection failure at a path the reader could not open.
+  pytest renders `ERROR <path>` relative to its own ROOTDIR, not to the calling process's cwd,
+  and when it makes the target dir the rootdir that rendering is a BARE filename. Absolutising
+  it against the cwd missed, so the bare relative name was handed back - the exact "only
+  resolves from one directory" defect the resolution exists to remove, just reached by the other
+  of pytest's two renderings. The target dir is now tried as a base before the cwd. Surfaced by
+  the windows-latest cell, where the runner picks that rootdir; the regression test drives
+  pytest's output shape through the injected `run` seam, so it holds on every platform rather
+  than only where pytest happens to render it that way.
+
 ## [5.241.0]
 
 ### Fixed

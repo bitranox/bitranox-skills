@@ -578,7 +578,8 @@ def _collect_via_uv_fallback(tests_dir, run, resolve_uv):
 
 def _parse_collection_failure(text, tests_dir):
     """A real, target-attributable collection failure, as (path, message, unmeasured=False)."""
-    out = [(_resolve_reported_path(line[len("ERROR "):].strip()), _first_error_line(text), False)
+    out = [(_resolve_reported_path(line[len("ERROR "):].strip(), tests_dir),
+            _first_error_line(text), False)
            for line in text.splitlines() if line.startswith("ERROR ")]
     if out:
         return out
@@ -589,15 +590,28 @@ def _parse_collection_failure(text, tests_dir):
     return [(str(tests_dir), _first_error_line(text) or "collection failed", False)]
 
 
-def _resolve_reported_path(token):
+def _resolve_reported_path(token, tests_dir=None):
     """pytest's `ERROR <path>` rendered as an absolute path when it resolves.
 
-    pytest prints that path relative to its invocation dir, so a tests dir far from the cwd
-    comes back as a `../../../../..` chain that only resolves from one directory. Absolutise it
-    when it points at a real file; leave anything else (a nodeid, an odd rendering) untouched
-    rather than inventing a path."""
-    candidate = os.path.abspath(token)
-    return candidate if os.path.exists(candidate) else token
+    pytest prints that path relative to its own ROOTDIR, which is not this process's cwd. Two
+    renderings both occur and only one used to survive: a `../../../../..` chain (when rootdir
+    sits near the cwd) absolutised correctly, but a BARE `test_x.py` (when pytest makes the
+    target dir itself the rootdir, which is what a Windows CI runner produced) resolved against
+    the cwd, did not exist there, and was handed back as a bare relative name - the very
+    "only resolves from one directory" defect this function exists to remove.
+
+    So the target dir is tried as a base before the cwd. Anything that still does not point at a
+    real file (a nodeid, an odd rendering) is left untouched rather than turned into an invented
+    path."""
+    bases = []
+    if tests_dir is not None:
+        bases += [str(tests_dir), str(Path(tests_dir).parent)]
+    bases.append(os.getcwd())
+    for base in bases:
+        candidate = os.path.abspath(os.path.join(base, token))
+        if os.path.exists(candidate):
+            return candidate
+    return token
 
 
 def _first_error_line(text):
