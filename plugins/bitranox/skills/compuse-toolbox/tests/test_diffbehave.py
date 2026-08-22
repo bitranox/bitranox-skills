@@ -166,3 +166,28 @@ def test_case_file_jsonl_row_carries_name_stdin_and_args(tmp_path):
     payload = json.loads(r.stdout)
     assert payload["data"]["results"][0]["name"] == "greet"
     assert payload["data"]["results"][0]["verdict"] == "AGREE"
+
+
+# --------------------------------------------------------------------------
+# Command splitting is platform-sensitive. shlex.split defaults to POSIX mode,
+# where a backslash ESCAPES the next character - so a Windows program path is
+# silently stripped of its separators and the command cannot start.
+# --------------------------------------------------------------------------
+
+
+def test_split_command_keeps_backslashes_on_windows():
+    argv = D._split_command(r'C:\tools\py.exe -c "import sys"', windows=True)
+    assert argv[0] == r"C:\tools\py.exe", argv
+    assert argv[1] == "-c"
+    assert argv[2] == "import sys", "surrounding quotes must not survive into argv"
+
+
+def test_split_command_treats_backslash_as_an_escape_on_posix():
+    """The POSIX behaviour must be preserved, not traded away for the Windows fix."""
+    argv = D._split_command(r"echo a\ b", windows=False)
+    assert argv == ["echo", "a b"], argv
+
+
+def test_split_command_handles_a_quoted_path_with_spaces_on_windows():
+    argv = D._split_command(r'"C:\Program Files\py.exe" --version', windows=True)
+    assert argv == [r"C:\Program Files\py.exe", "--version"], argv

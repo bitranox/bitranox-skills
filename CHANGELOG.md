@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.238.0]
+
+### Fixed
+
+- `diffbehave` could not run any command with a Windows program path. It split the command with
+  `shlex.split()`, whose default POSIX mode treats a backslash as an ESCAPE, so
+  `C:\tools\py.exe` became `C:toolspy.exe` and the command never started. Because BOTH sides
+  failed identically, the jig then reported AGREE for a comparison that never ran - the worst
+  possible answer from a tool whose whole job is telling you whether two things behave the
+  same. Splitting is platform-aware now, with the POSIX escape behaviour kept intact.
+- `strip_typographic_tells` rewrote every file it touched to the platform line ending, because
+  `open()` translates on read and writes `os.linesep`. On Windows that turned LF into CRLF in a
+  repo whose gate REQUIRES LF for `.py`, `.sh` and `.json`, and whose hooks run this over
+  markdown. Both handles now use `newline=""`, so endings round-trip untouched in either
+  direction.
+
+### Changed
+
+- Tests that need POSIX mode bits (`chmod(0o000)` to make a file unreadable) or that remove a
+  git worktree now skip on Windows, where the mode bits do not exist and open handles block the
+  removal.
+
 ## [5.237.3]
 
 ### Fixed

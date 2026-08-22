@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -81,6 +82,26 @@ def verdict(a: Run, b: Run) -> str:
     return "AGREE" if same else "DIFFER"
 
 
+def _split_command(command: str, windows: bool | None = None) -> list[str]:
+    """Split a command string into argv, honouring the platform's quoting rules.
+
+    shlex.split defaults to POSIX mode, where a backslash ESCAPES the next character. On Windows
+    that silently eats the separators in a program path: "C:\\tools\\py.exe" becomes
+    "C:toolspy.exe", the command cannot start, and BOTH sides of a comparison then fail the same
+    way - so diffbehave reported AGREE for a command that never ran. Non-POSIX mode keeps the
+    backslashes but leaves the quotes attached to the token, so strip one matching pair.
+    """
+    on_windows = (os.name == "nt") if windows is None else windows
+    if not on_windows:
+        return shlex.split(command)
+    out = []
+    for token in shlex.split(command, posix=False):
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+            token = token[1:-1]
+        out.append(token)
+    return out
+
+
 def _run_one(command: str, case: Case, timeout: float) -> Run:
     """Execute one side. A command that cannot start is a RESULT, never an exception.
 
@@ -88,7 +109,7 @@ def _run_one(command: str, case: Case, timeout: float) -> Run:
     machine's locale codec, which fails differently per platform - stdout can come back None on
     Windows, and POSIX raises past a handler that only catches OSError.
     """
-    argv = shlex.split(command) + list(case.args)
+    argv = _split_command(command) + list(case.args)
     try:
         proc = subprocess.run(argv, input=case.stdin, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=timeout, check=False)
