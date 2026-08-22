@@ -1054,9 +1054,9 @@ def test_collecting_under_the_floor_is_a_failure(tmp_path):
     """A partial collapse never reaches zero, so the rc-5 check alone cannot see it."""
     tests = tmp_path / "tests"
     write(tests / "test_one.py", "def test_one():\n    assert True\n")
-    problems = RG.check_pytest(tmp_path, [tests], floor=500)
+    problems = RG.check_pytest(tmp_path, [tests], baseline=500)
     assert problems, "a collected count under the floor must be reported"
-    assert any("floor" in p.lower() or "expected at least" in p.lower() for p in problems)
+    assert any("floor" in p.lower() or "baseline" in p.lower() for p in problems)
 
 
 # --------------------------------------------------------------------------
@@ -1091,17 +1091,17 @@ def test_junit_total_returns_none_on_a_corrupt_report(tmp_path):
 
 
 def test_floor_problems_accepts_a_count_at_or_above_the_floor(tmp_path):
-    assert RG.floor_problems(_junit(tmp_path, tests=3000), floor=3000) == []
+    assert RG.floor_problems(_junit(tmp_path, tests=3000), baseline=3000) == []
 
 
 def test_floor_problems_rejects_a_count_under_the_floor(tmp_path):
-    problems = RG.floor_problems(_junit(tmp_path, tests=12), floor=3000)
+    problems = RG.floor_problems(_junit(tmp_path, tests=12), baseline=3000)
     assert problems and "12" in problems[0]
 
 
 def test_floor_problems_rejects_an_unreadable_report(tmp_path):
     """A missing report means the count is unknown - that must not read as 'above the floor'."""
-    problems = RG.floor_problems(tmp_path / "absent.xml", floor=3000)
+    problems = RG.floor_problems(tmp_path / "absent.xml", baseline=3000)
     assert problems, "an unknown count must fail closed, not pass"
 
 
@@ -1115,3 +1115,37 @@ def test_the_real_ci_workflow_still_declares_the_dependency_set():
     deps = RG.ci_test_dependencies(root)
     assert deps == ["pytest", "PyYAML", "lxml", "defusedxml", "ruamel.yaml", "httpx2"], deps
     assert len(deps) == len(set(deps)), "duplicated pip install lines double the dependency set"
+
+
+# --------------------------------------------------------------------------
+# The floor is derived from a checked-in baseline, not a hardcoded constant,
+# and it is measured on COLLECTED tests rather than passed ones: skips are
+# platform-dependent (Windows and macOS legitimately skip POSIX-only tests),
+# so a floor on "passed" would drift by platform rather than by real coverage.
+# --------------------------------------------------------------------------
+
+
+def test_baseline_is_checked_in_and_matches_the_real_suite():
+    root = Path(__file__).resolve().parents[4]
+    baseline = RG.expected_collected(root)
+    assert baseline > 3000, baseline
+
+
+def test_floor_from_baseline_allows_a_small_dip(tmp_path):
+    """Marking a handful of tests POSIX-only must not trip the gate."""
+    assert RG.floor_problems(_junit(tmp_path, tests=2980), baseline=3000) == []
+
+
+def test_floor_from_baseline_rejects_a_real_collapse(tmp_path):
+    problems = RG.floor_problems(_junit(tmp_path, tests=2000), baseline=3000)
+    assert problems and "2000" in problems[0]
+
+
+def test_floor_names_the_baseline_to_update(tmp_path):
+    """A gate that blocks must say how to unblock it deliberately."""
+    problems = RG.floor_problems(_junit(tmp_path, tests=10), baseline=3000)
+    assert any("baseline" in p.lower() for p in problems)
+
+
+def test_a_grown_suite_is_never_a_failure(tmp_path):
+    assert RG.floor_problems(_junit(tmp_path, tests=9999), baseline=3000) == []

@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.239.0]
+
+### Changed
+
+- The pytest count gate no longer uses a hardcoded floor. It derives one from a checked-in
+  baseline (`plugins/bitranox/hooks/pytest_baseline.json`) with `PYTEST_SLACK` of tolerance, so
+  marking a few tests POSIX-only does not block while losing a whole skill's tests still does.
+  A hardcoded constant decays: the suite grows, the constant does not, and it protects
+  proportionally less with every commit.
+
+### Fixed
+
+- The two count checks disagreed about what they measured. `--pytest-only` counted COLLECTED
+  tests from the junit report while the local gate scraped `"N passed"` from stdout - a number
+  that drops on Windows and macOS purely because those platforms skip the POSIX-only tests, so
+  the floor moved with the platform rather than with real coverage. Both paths now read the
+  collected count from junit.
+
 ## [5.238.1]
 
 ### Fixed
