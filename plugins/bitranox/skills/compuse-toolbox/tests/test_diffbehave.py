@@ -99,7 +99,10 @@ def test_a_command_that_fails_to_start_is_a_result_not_a_crash():
 
 def test_non_ascii_output_round_trips_through_utf8_capture():
     """A locale-default decode fails differently per platform; utf-8 capture must be explicit."""
-    accented = _py("import sys;sys.stdout.write('caf\\u00e9')")
+    # Write BYTES: a bare sys.stdout.write encodes with the child's stdout encoding, which is
+    # cp1252 on Windows, so the test would be measuring the child's locale rather than whether
+    # diffbehave decodes its capture as utf-8 - which is what it claims to check.
+    accented = _py("import sys;sys.stdout.buffer.write('caf\\u00e9'.encode('utf-8'))")
     results = D.compare(accented, accented, [D.Case(name="c", stdin="")])
     assert results[0].verdict == "AGREE"
     assert results[0].a.stdout.strip() == "caf\u00e9"

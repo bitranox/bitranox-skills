@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.238.1]
+
+### Fixed
+
+- Two tests measured the platform instead of the behaviour they name. The `find_claude_md_dirs`
+  pruning test compared produced paths with `str()` against forward-slash literals, so on
+  Windows it was asserting about the separator; it uses `as_posix()` now. The `diffbehave`
+  non-ASCII test had its child call `sys.stdout.write`, which encodes with the child's stdout
+  encoding (cp1252 on Windows), so it measured the child's locale rather than whether
+  `diffbehave` decodes its capture as utf-8 - the thing it claims to check. The child writes
+  utf-8 bytes now.
+
+### Changed
+
+- The `proj_key` stability pin skips on Windows: the pinned literal is the key for a POSIX
+  absolute path, and `/opt/project-x` is not absolute there, so normalizing it legitimately
+  produces a different key.
+
 ## [5.238.0]
 
 ### Fixed

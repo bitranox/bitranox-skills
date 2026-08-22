@@ -3,6 +3,7 @@
 All content is ASCII.
 """
 
+import sys
 import json
 import os
 import time
@@ -988,7 +989,9 @@ def test_find_claude_md_dirs_prunes_vendor_hidden_backup_and_store_dirs(tmp_path
         (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     (home / ".claude" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     got = S.find_claude_md_dirs([str(work), str(home)])
-    assert {str(p.relative_to(work)) for p in got if work in p.parents or p == work} == {"a", "a/nested", "b"}
+    # as_posix, not str: the expected set is written with forward slashes, and str() yields
+    # backslashes on Windows, so the comparison would be about the separator, not the pruning.
+    assert {p.relative_to(work).as_posix() for p in got if work in p.parents or p == work} == {"a", "a/nested", "b"}
     assert not any(".claude" in str(p) for p in got)
 
 
@@ -1173,6 +1176,8 @@ def test_altitude_chain_handles_a_relative_path(tmp_path, monkeypatch):
 
 # ---- proj_key must not depend on how the path was SPELLED -----------------------------------------
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the pinned literal is the key for a POSIX absolute path; '/opt/project-x' is not an absolute path on Windows, so normalizing it legitimately yields a different key")
 def test_proj_key_is_stable_for_an_already_absolute_path():
     """PIN: an absolute, normalized path keeps its historical key.
 
