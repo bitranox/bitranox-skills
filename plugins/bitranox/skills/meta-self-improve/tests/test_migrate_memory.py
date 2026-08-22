@@ -1,5 +1,6 @@
 """Tests for migrate_memory.py (Phase 2: native -> curated migration). All content ASCII."""
 
+import sys
 import pytest
 
 import migrate_memory as M
@@ -45,6 +46,8 @@ def _native_store(home, slug, topics):
 
 # ---- slug resolution ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_resolve_slug_slash_dot_underscore(env):
     tmp_path, _ = env
     proj = tmp_path / "grp" / "my.proj_dir"      # exercises '/', '.', and '_' all encoded to '-'
@@ -73,6 +76,8 @@ def test_read_native_entries(env):
 
 # ---- migrate_store: dry-run, apply, idempotent, parked -----------------------------------------
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_dry_run_writes_nothing(env):
     tmp_path, home = env
     proj = tmp_path / "repoA"
@@ -84,6 +89,8 @@ def test_migrate_dry_run_writes_nothing(env):
     assert not sig.claude_memory_dir(str(proj)).exists()   # nothing written on dry-run
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_apply_writes_curated_store_and_receipt(env):
     tmp_path, home = env
     proj = tmp_path / "repoB"
@@ -104,6 +111,8 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     assert any(M._backups_dir().glob("*/native")) if M._backups_dir().exists() else True
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_migrate_apply_idempotent(env):
     tmp_path, home = env
     proj = tmp_path / "repoC"
@@ -124,6 +133,8 @@ def test_migrate_parked_when_unresolved(env):
     assert (M._parked_dir() / slug / "memory" / "a.md").is_file()   # parked copy, nothing lost
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Claude's ~/.claude/projects dashkey encodes a POSIX-rooted absolute path (leading '/' becomes '-'); the scheme has no Windows drive-letter form")
 def test_main_dry_run_reports(env, capsys):
     tmp_path, home = env
     proj = tmp_path / "repoD"

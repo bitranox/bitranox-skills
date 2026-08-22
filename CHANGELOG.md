@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.237.3]
+
+### Fixed
+
+- Test fixtures that assert on BYTE offsets or byte-identical content wrote their content with
+  `Path.write_text()`, whose text mode turns `\n` into CRLF on Windows. That shifted every
+  offset and broke the comparisons, while the real artifacts they stand in for (a Claude
+  transcript, a markdown file) are LF. They now write bytes, or pass `newline=""`.
+
+### Changed
+
+- The tests that set a POSIX executable bit and expect a finding now skip on Windows, where the
+  bit does not exist and `os.access(X_OK)` answers True for any file, so the case cannot be
+  expressed. The `is_executable()` unit tests that force `posix=True` skip there for the same
+  reason: on Windows that flag asks a question the OS cannot answer honestly.
+- The tests driving Claude's `~/.claude/projects` dashkey now skip on Windows. That encoding is
+  POSIX-rooted by construction (a leading `/` becomes `-`), so on a drive-lettered path it
+  produced `-:\Users\...` and the fixtures failed at `mkdir`. The scheme has no Windows form.
+
 ## [5.237.2]
 
 ### Fixed

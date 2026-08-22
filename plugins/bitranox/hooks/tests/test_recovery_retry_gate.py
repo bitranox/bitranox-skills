@@ -278,17 +278,17 @@ def test_split_pending_keeps_everything_when_the_call_is_not_written_yet():
 
 def test_reading_the_tail_leaves_a_partial_line_for_the_next_call(tmp_path):
     transcript = tmp_path / "t.jsonl"
-    transcript.write_text('{"a": 1}\n{"b": 2', encoding="utf-8")
+    transcript.write_bytes(b'{"a": 1}\n{"b": 2')
     chunk, offset = gate._read_new_lines(str(transcript), 0)
     assert chunk == '{"a": 1}\n' and offset == 9
-    transcript.write_text('{"a": 1}\n{"b": 2}\n', encoding="utf-8")
+    transcript.write_bytes(b'{"a": 1}\n{"b": 2}\n')
     chunk, offset = gate._read_new_lines(str(transcript), offset)
     assert chunk == '{"b": 2}\n'
 
 
 def test_a_truncated_transcript_restarts_the_read(tmp_path):
     transcript = tmp_path / "t.jsonl"
-    transcript.write_text('{"a": 1}\n', encoding="utf-8")
+    transcript.write_bytes(b'{"a": 1}\n')
     chunk, offset = gate._read_new_lines(str(transcript), 10 ** 6)
     assert chunk == '{"a": 1}\n' and offset == 9
 
@@ -327,7 +327,7 @@ class Session:
         self.home = tmp_path / "home"
         self.home.mkdir(parents=True, exist_ok=True)
         self.transcript = tmp_path / (name + ".jsonl")
-        self.transcript.write_text("", encoding="utf-8")
+        self.transcript.write_bytes(b"")
         self.name = name
 
     def call(self, tool, tool_input, written=True):

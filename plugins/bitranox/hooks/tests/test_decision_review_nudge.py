@@ -54,7 +54,10 @@ def transcript(tmp_path, *lines, name="t.jsonl", trailing_partial=False):
     if trailing_partial:
         text += '{"type": "assistant", "message": {"content": [{"type": "too'
     p = tmp_path / name
-    p.write_text(text, encoding="utf-8")
+    # newline="" keeps the \n we wrote as a literal \n. Text mode translates it to CRLF on
+    # Windows, which shifts every byte offset and breaks a byte-identical comparison, while
+    # the real artifact this stands in for (a Claude transcript, a markdown file) is LF.
+    p.write_text(text, encoding="utf-8", newline="")
     return str(p)
 
 
