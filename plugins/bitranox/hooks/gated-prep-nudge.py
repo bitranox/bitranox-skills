@@ -62,6 +62,14 @@ legitimate calls. It is unbuilt because a gate trusting a textual promise about 
 will DO is a worse failure mode than the one it fixes - prose mentioning a bump, or a bump to the
 wrong value, would pass - so it needs a design pass and its own measurement, not a prototype.
 
+The GENERAL rule these two closures are instances of lives in the `bitranox:meta-claude-hooks`
+skill, under "Before you escalate a nudge to a block, price it": measure firing rate and precision
+by replaying the real corpus, run a control arm first, price the variant actually proposed, and say
+what the rule cannot classify. The figures stay HERE and the method stays THERE - no number appears
+in both, so they cannot disagree - but they move TOGETHER: a third escalation proposal should update
+both, and `tests/test_gated_prep_nudge.py` asserts each still points at the other so a rename fails
+the suite instead of rotting quietly.
+
 The gated-verb scan runs over the command with HEREDOC BODIES STRIPPED, because a body is data: a
 guard that reads it fires on prose documenting the very footgun it guards.
 """

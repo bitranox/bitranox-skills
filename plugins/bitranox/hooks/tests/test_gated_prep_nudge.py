@@ -5,6 +5,7 @@ heredoc that wrote the commit message too. The retry then fails on a missing `-F
 at the wrong cause. Recorded six times; this hook is the escalation from prose to a signal.
 """
 import json
+import pathlib
 
 import gated_prep_nudge as N
 
@@ -297,3 +298,41 @@ def test_the_dev_skip_does_not_swallow_a_similarly_named_real_path():
     assert N.written_files('printf x > devnotes.txt') == ["devnotes.txt"]
     assert N.written_files('printf x > /development/notes.txt') == [
         "/development/notes.txt"]
+
+
+# --- the guard and its skill section must move together ------------------------------------------
+#
+# The figures for both declined escalations live in this hook's docstring; the general method lives
+# in the meta-claude-hooks skill. No number appears in both, so they cannot disagree - but a rename
+# or a deletion on either side turns the other's pointer into a lie, silently. These assert the
+# reciprocal pointers still resolve.
+
+def _repo_paths():
+    """(guard source, skill source) as text, located relative to this test file."""
+    here = pathlib.Path(__file__).resolve()
+    hooks_dir = here.parent.parent
+    guard = hooks_dir / "gated-prep-nudge.py"
+    skill = hooks_dir.parent / "skills" / "meta-claude-hooks" / "SKILL.md"
+    return guard, skill
+
+
+def test_both_files_are_where_this_test_thinks_they_are():
+    """Control: a missing path must fail loudly here, not make the pointer checks vacuous."""
+    guard, skill = _repo_paths()
+    assert guard.is_file(), f"guard not found at {guard}"
+    assert skill.is_file(), f"skill not found at {skill}"
+    # and each really is the document we mean, so a renamed-but-present file cannot pass
+    assert "gated-verb" in guard.read_text(encoding="utf-8")
+    assert "## Before you escalate a nudge to a block, price it" in skill.read_text(encoding="utf-8")
+
+
+def test_the_guard_points_at_the_skill_that_carries_the_method():
+    guard, _ = _repo_paths()
+    text = guard.read_text(encoding="utf-8")
+    assert "meta-claude-hooks" in text
+    assert "Before you escalate a nudge to a block, price it" in text
+
+
+def test_the_skill_points_back_at_this_guard_as_its_worked_example():
+    _, skill = _repo_paths()
+    assert "gated-prep-nudge.py" in skill.read_text(encoding="utf-8")

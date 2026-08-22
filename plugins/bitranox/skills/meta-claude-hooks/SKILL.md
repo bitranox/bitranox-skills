@@ -150,6 +150,14 @@ QUIET on everything else - and a block that is not quiet gets routed around, whi
 off than the nudge you started with. Record the measurement next to the guard so the next author
 inherits the answer instead of re-running the argument.
 
+**The worked example is this plugin's own `hooks/gated-prep-nudge.py`.** Its docstring carries the
+figures for both escalations proposed against it - a blanket deny and a target-aware one - and this
+section carries the method. That split is deliberate: no number appears in both places, so they
+cannot disagree. It also means the two move TOGETHER. If you revisit that guard, update its
+docstring AND this section, and if you retire either, the reciprocal pointer in the other becomes a
+lie; `hooks/tests/test_gated_prep_nudge.py` asserts both pointers still resolve, so a rename fails
+the suite rather than rotting quietly.
+
 ## Related skills
 
 | For                                                                  | Use                                          |
