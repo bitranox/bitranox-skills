@@ -222,11 +222,15 @@ def _run_via_shim(payload):
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_subprocess_valid_exit_0(tmp_path):
     fp = write(tmp_path, "good.json", '{"a": 1}')
     assert _run_via_shim({"tool_input": {"file_path": fp}}).returncode == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_subprocess_invalid_exit_2(tmp_path):
     fp = write(tmp_path, "bad.json", '{"a": 1,}')
     res = _run_via_shim({"tool_input": {"file_path": fp}})

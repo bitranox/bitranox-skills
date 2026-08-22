@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.237.2]
+
+### Fixed
+
+- `harness_checks` asked `os.access(path, os.X_OK)` directly. Windows has no executable bit and
+  answers True for any existing file there, so every retired shim was reported "still
+  executable" - and in `graveyard_entries()` that arm is an `if` whose `elif not live.exists()`
+  branch then became unreachable, silently retiring a real check. Both sites now go through
+  `is_executable()`, which returns False where the concept does not exist.
+- `repo-gate` built repo-relative identifiers with `str()`, which yields backslashes on Windows,
+  so reported paths and the mirror manifest comparison stopped matching. They are `as_posix()`
+  now: a path used as an identifier is canonical, not OS-native.
+- The Windows CI cell checked out CRLF despite `core.autocrlf=false`. `.gitattributes` marks
+  files text EXPLICITLY (`* text=auto`), and an explicit text attribute is still converted to
+  `core.eol`, which defaults to CRLF on Windows. The workflow now pins `core.eol=lf` too.
+
+### Changed
+
+- The tests that drive `run-python.sh` through bare `bash` now skip on Windows, matching the
+  17 that already did. On a Windows runner `bash` resolves to the WSL stub in System32, which
+  with no WSL installed prints a UTF-16 message and exits 1 - so those tests measured the stub
+  rather than the shim, which is Git Bash only by design.
+
 ## [5.237.1]
 
 ### Fixed

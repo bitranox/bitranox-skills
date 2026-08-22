@@ -8,6 +8,7 @@ import io
 import json
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 import git_footgun_guard as G
@@ -119,6 +120,8 @@ def test_main_bad_payload_is_safe(monkeypatch):
     assert G.main() == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_shim_smoke():
     payload = json.dumps({"tool_input": {"command": "git rev-parse --short A B"}})
     r = subprocess.run(

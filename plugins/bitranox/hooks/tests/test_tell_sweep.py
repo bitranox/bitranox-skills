@@ -9,6 +9,7 @@ import io
 import json
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 import tell_sweep as T
@@ -79,6 +80,8 @@ def test_bad_payload_is_safe(monkeypatch):
     assert T.main() == 0
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
 def test_shim_smoke(tmp_path):
     f = tmp_path / "a.md"
     f.write_text("A real %s dash.\n" % EM_DASH, encoding="utf-8")

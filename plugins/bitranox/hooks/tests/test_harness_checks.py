@@ -706,3 +706,34 @@ def test_uncollectable_tests_reports_a_path_that_actually_resolves(tmp_path):
     path = problems[0][0]
     assert not path.startswith(".."), path
     assert os.path.isabs(path) and os.path.exists(path), path
+
+
+# --------------------------------------------------------------------------
+# The POSIX executable bit does not exist on Windows, where os.access(X_OK)
+# returns True for ANY existing file. A bare os.access there reports every
+# retired shim as "still executable" and, worse, makes the `elif not
+# live.exists()` branch beneath it unreachable - a check silently lost.
+# --------------------------------------------------------------------------
+
+
+def test_is_executable_reports_the_bit_on_posix(tmp_path):
+    f = tmp_path / "shim.sh"
+    f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    f.chmod(0o755)
+    assert hc.is_executable(f, posix=True) is True
+
+
+def test_is_executable_is_false_for_a_plain_file_on_posix(tmp_path):
+    f = tmp_path / "plain.sh"
+    f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    f.chmod(0o644)
+    assert hc.is_executable(f, posix=True) is False
+
+
+def test_is_executable_is_false_off_posix_even_for_an_executable_file(tmp_path):
+    """Windows has no executable bit; os.access(X_OK) there answers True for any file that
+    exists, so asking it produces a finding that is always true and never informative."""
+    f = tmp_path / "shim.sh"
+    f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    f.chmod(0o755)
+    assert hc.is_executable(f, posix=False) is False
