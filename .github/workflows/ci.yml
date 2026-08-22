@@ -1,35 +1,80 @@
 name: ci
 
-# Reporting check (not a required/merge-blocking status): runs the repo gate, which in
-# CI enforces tests-exist + pytest-passes + valid-JSON + LF endings. Version-bump is NOT
-# checked here - bumping is a merge/release decision owned by the maintainer, not something
-# a contributor's PR must satisfy (the local pre-commit hook enforces it at push time).
-# Direct additive pushes to master stay free (see CLAUDE.md); this just surfaces red/green.
+# Reporting check (not a required/merge-blocking status). Two steps, deliberately split:
+#
+#   1. tests - runs the suite via `repo-gate.py --pytest-only`, which streams pytest straight
+#      to this log. It used to run inside the gate, which CAPTURED the output and discarded it
+#      on success, so a green run printed one line and left no evidence any test had run. The
+#      same mode fails closed on an empty or under-floor collection: pytest exits 5 when it
+#      collects nothing, and that used to be treated as success.
+#   2. gate - the convention checks (tests-exist, valid JSON, LF endings, skills index). They
+#      are platform- and version-independent, so they run once rather than on every cell.
+#
+# Version-bump is NOT checked here - bumping is a merge/release decision owned by the
+# maintainer, not something a contributor's PR must satisfy (the local pre-push hook enforces
+# it). Direct additive pushes to master stay free (see CLAUDE.md); this just surfaces red/green.
 on:
   push:
     branches: [master]
   pull_request:
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
+  tests:
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    # Windows and macOS are new cells and are known to have POSIX-only tests still to triage,
+    # so they report without blocking. Drop continue-on-error once they are green.
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # 3.11 is the supported minimum. Shipped scripts declare their own floors in PEP 723
+        # headers; every one of them sits inside this range, so the matrix verifies them.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+            experimental: true
+          - os: macos-latest
+            python-version: "3.13"
+            experimental: true
     steps:
+      # The gate fails any tracked .py/.sh/.json containing CRLF. A Windows runner checking out
+      # under core.autocrlf=true rewrites every one of them on the way in, so the whole tree
+      # would trip that check before a single test ran.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # need origin/master so the version-bump check can diff against it
 
       - uses: actions/setup-python@v7
         with:
-          # 3.13+ required: python-performance-review/setup_env.py (and its tests) gate on it.
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        # The convention test suite (examples/ and demos/ are excluded by the gate) needs
-        # these. markitdown is intentionally omitted: its tests pytest.importorskip and so
-        # skip cleanly, keeping CI lean.
+        # repo-gate.py parses THIS line (ci_test_dependencies) so the dependency set is declared
+        # in exactly one place; the pre-push hook builds its `uv run --with ...` from it. Keep it
+        # a single literal `pip install <packages>` line. markitdown is intentionally omitted:
+        # its tests pytest.importorskip and so skip cleanly, keeping CI lean.
         run: |
           python -m pip install --upgrade pip
           pip install pytest PyYAML lxml defusedxml ruamel.yaml httpx2
 
-      - name: Run repo gate (tests-exist, pytest, version-bump, json, LF)
-        run: python plugins/bitranox/hooks/repo-gate.py --ci
+      - name: Run tests
+        run: python plugins/bitranox/hooks/repo-gate.py --pytest-only
+
+  gate:
+    name: gate (conventions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # some checks diff against origin/master
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Run repo gate (tests-exist, json, LF, skills index)
+        run: python plugins/bitranox/hooks/repo-gate.py --ci --no-pytest

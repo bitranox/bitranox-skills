@@ -94,7 +94,7 @@ def test_main_returns_zero_in_project(tmp_path, monkeypatch, capsys):
     proj.mkdir()
     (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
     monkeypatch.chdir(proj)
-    rc = se.main()
+    rc = se.main(version_info=(3, 13, 0))
     out = capsys.readouterr().out
     assert rc == 0
     assert "Session file:" in out
@@ -104,7 +104,21 @@ def test_main_returns_one_without_project(tmp_path, monkeypatch, capsys):
     bare = tmp_path / "bare"
     bare.mkdir()
     monkeypatch.chdir(bare)
-    rc = se.main()
+    rc = se.main(version_info=(3, 13, 0))
     err = capsys.readouterr().err
     assert rc == 1
     assert "pyproject.toml" in err
+
+
+def test_main_refuses_an_interpreter_below_the_minimum(tmp_path, monkeypatch, capsys):
+    """The version gate itself, which only became reachable in a test once main() grew the
+    same version_info seam python_version_ok() already had."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    monkeypatch.chdir(proj)
+    rc = se.main(version_info=(3, 12, 9))
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "3.13+ required" in err
+    assert "3.12.9" in err
