@@ -226,3 +226,40 @@ class TestShaIsKnownLocally:
                 p.returncode, p.stdout, p.stderr = 1, "", "fatal: Kein gueltiges Objekt\n"
             return p
         assert ci_wait.sha_is_known_locally("a" * 40, run=german) is False
+
+
+class TestAnUnknownShaWarnsButStillPolls:
+    """git not holding the sha is evidence, not proof - `gh` decides whether runs exist.
+
+    Refusing here would break a legitimate wait: a sha you never fetched (a colleague's push, a sha
+    read off a notification, a shallow clone) is not in this checkout and its runs are real. The
+    warning has to reach stderr, never stdout, so a --json consumer's stream stays parseable.
+    """
+
+    def test_it_does_not_refuse_and_the_warning_goes_to_stderr(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: False)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
+
+        rc = ci_wait.main(["--sha", "a" * 40])
+        out, err = capsys.readouterr()
+
+        assert rc == 0, "an unfetched sha whose runs are green must not be refused"
+        assert "warning:" in err and "not a commit in this repository" in err
+        assert "warning:" not in out, "the warning must not pollute the parsed stream"
+
+    def test_a_green_run_is_still_reported_green(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: False)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
+
+        ci_wait.main(["--sha", "a" * 40])
+
+        assert "success" in capsys.readouterr().out
+
+    def test_a_sha_git_does_know_produces_no_warning(self, monkeypatch, capsys):
+        """The control: the warning must be absent when there is nothing to warn about."""
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
+
+        ci_wait.main(["--sha", "a" * 40])
+
+        assert "warning:" not in capsys.readouterr().err

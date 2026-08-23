@@ -265,17 +265,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         sha = require_full_sha(args.sha)
     except BadSha as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json)
-    # Only when the sha is meant to be THIS repo's: with --repo the runs belong to another
-    # repository, which the local checkout has no business knowing about.
+    # WARN, never refuse. git not holding the sha is strong evidence of a caller bug, but it is not
+    # proof: watching a sha you have not fetched (someone else's push, a sha from a notification, a
+    # shallow clone) is legitimate, and `gh` is the authority on whether runs exist - not this
+    # checkout. Refusing here would turn those into a hard error that reads as "no such commit".
+    # Only asked when the sha is meant to be THIS repo's: with --repo the runs belong elsewhere.
     if args.repo is None and sha_is_known_locally(sha) is False:
-        return _emit(
-            Verdict(
-                "error",
-                f"{sha} is not a commit in this repository, so no run can ever match it and the "
-                f"wait would report 'no runs' as though they were merely late. Derive the sha in "
-                f"the same command (`--sha $(git rev-parse HEAD)`), never by completing a short one.",
-            ),
-            as_json=args.json,
+        print(
+            f"warning: {sha} is not a commit in this repository. If you did not fetch it, that is "
+            f"expected; if you completed it from a short one, it will match no run and this wait "
+            f"will end in 'no-runs'. Derive it in the same command: --sha $(git rev-parse HEAD).",
+            file=sys.stderr,
         )
     polls = max(1, int(args.timeout // max(args.interval, 1.0)))
     try:

@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.244.1]
+
+### Changed
+
+- **`ci_wait.py` WARNS about a sha this repository does not hold, instead of refusing it.** 5.244.0
+  exited 2, which is right for the case it was built for (`--sha $(git rev-parse HEAD)`) and wrong
+  for a legitimate one: watching a sha you never fetched - someone else's push, a sha read off a
+  notification, a shallow clone - is not a caller bug, and `gh` is the authority on whether runs
+  exist, not the local checkout. The diagnostic that motivated the change is kept in full; only its
+  severity drops. The warning goes to stderr so a `--json` consumer's stream stays parseable.
+
 ## [5.244.0]
 
 ### Fixed
