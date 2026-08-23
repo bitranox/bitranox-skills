@@ -261,6 +261,36 @@ On `--continue` or `--resume`, Claude Code **replays the saved text** for past t
 hook, so timestamps and commit SHAs go stale. `SessionStart` does run again, with `source` set to `resume` (or
 `fork` with `--fork-session`).
 
+### `classifierContext`
+
+`PostToolUse` only, and it does **not** go to Claude. It sends a short note about what this call
+returned to the **auto mode** classifier, which never receives tool results itself. Requires Claude
+Code v2.1.236 or later.
+
+```json
+{"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                        "classifierContext": "This query ran against staging, not production."}}
+```
+
+How much weight it carries depends on where the hook is configured. From settings files, plugins,
+skills and agent frontmatter the classifier treats it as unverified application-provided context: it
+never establishes user intent, and a claim that you approved something is checked against your own
+messages. Only an in-process Agent SDK callback returning it live can relay a user statement as
+intent, and even then it cannot lift a block your own message could not.
+
+Four delivery limits:
+
+- **2,000 characters** per tool call, shared across every hook that annotates it, then truncated.
+- **Synchronous responses only** - a hook running in the background is ignored, because its answer
+  arrives after the result is recorded.
+- **Recorded calls only** - the classifier's transcript omits read-only lookups such as file reads
+  and searches, and a note attached to one of those is discarded.
+- **With a rewrite**, return both fields together; the note is dropped if the rewrite is rejected or
+  replaced by another hook's.
+
+Do not copy untrusted tool output into it: the classifier reads it as coming from the host
+application, not from the tool.
+
 ### Decision control, per event
 
 | Events                                                                                                                                                | Pattern                           | Key fields                                                                                                        |
@@ -287,6 +317,7 @@ The only value for a top-level `decision` is `"block"`. To allow, omit it or exi
 | `PreToolUse`        | `updatedInput` directly under `hookSpecificOutput`, replacing the tool's arguments |
 | `PermissionRequest` | `updatedInput` **inside** the `decision` object                                    |
 | `PostToolUse`       | `updatedToolOutput`, replacing the tool's result                                   |
+| `PostToolUse`       | `classifierContext`, a note for the auto mode classifier rather than for Claude    |
 | `UserPromptSubmit`  | cannot replace the prompt; only injects `additionalContext` alongside it           |
 
 For redaction, intercept `PreToolUse` on the way out and `PostToolUse` on the way back.

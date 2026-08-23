@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.242.1]
+
+### Fixed
+
+- `meta-claude-hooks` reference was STRUCTURAL against upstream: `classifierContext` (PostToolUse,
+  Claude Code v2.1.236+) was undocumented. It sends a note to the auto mode classifier rather than
+  to Claude, and carries its own trust and delivery limits, so a reader working from the old
+  reference would have reached for `additionalContext` and quietly addressed the wrong audience.
+  Reference re-stamped and the SKILL.md baseline refreshed; `selftest` still returns COSMETIC,
+  STRUCTURAL and BROKEN correctly, so the detector is not a rubber stamp.
+
 ## [5.242.0]
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-08-20",
+  "generated_at": "2026-08-23",
   "generator": "scripts/hookdoc_stamp.py",
   "normalisation": {
     "id": "n1",
@@ -18,11 +18,11 @@
       "name": "hooks-reference",
       "url": "https://code.claude.com/docs/en/hooks.md",
       "tier": "api",
-      "raw_bytes": 277223,
-      "normalised_lines": 3483,
-      "content_sha256": "17e8aaf586b4abc39d851a450c8f2ac5a2ba437a50f8793330129cac129bd93d",
-      "structure_sha256": "5239a8d39c044b8fe1e4c9adbbf93b26b05bd27a54bb8957dac8553bb46e7da0",
-      "max_cli_version_mentioned": "2.1.234",
+      "raw_bytes": 283488,
+      "normalised_lines": 3522,
+      "content_sha256": "70c05a3733e6c2ade940b6b5fe525327e0560826359347e40248d0235fbf99ce",
+      "structure_sha256": "a4909f00a213a0dfddbd54252df95ffb1132ac6d2b987eaef27f8850c791f98c",
+      "max_cli_version_mentioned": "2.1.236",
       "control": {
         "min_raw_bytes": 138611,
         "require_headings": [
@@ -34,13 +34,13 @@
         "min_events": 18
       },
       "counts": {
-        "headings": 149,
+        "headings": 150,
         "events": 31,
-        "json_fields": 130,
+        "json_fields": 131,
         "output_fields": 48,
         "handler_types": 6,
         "env_vars": 14,
-        "table_keys": 198
+        "table_keys": 199
       },
       "fingerprint": {
         "headings": [
@@ -112,6 +112,7 @@
           "H3:WorktreeRemove",
           "H4:Add context for Claude",
           "H4:Agent",
+          "H4:Annotate a result for the auto mode classifier",
           "H4:AskUserQuestion",
           "H4:Bash",
           "H4:Command hook fields",
@@ -248,6 +249,7 @@
           "async",
           "background_tasks",
           "behavior",
+          "classifierContext",
           "command",
           "command_args",
           "command_name",
@@ -497,6 +499,7 @@
           "behavior",
           "blocked_domains",
           "bypass_permissions_disabled",
+          "classifierContext",
           "clear",
           "command",
           "compact",
@@ -653,7 +656,7 @@
         {
           "path": "## Configuration > ### Hook locations",
           "lines": 34,
-          "sha256": "663bafd95fed50c13e9acdb3363d705bdfb5f76add3a8a9343447dd4ed7408f5"
+          "sha256": "325ec716d2b50aec654a5f89142d8619311101b00d5fb706c77ec52bb67cf368"
         },
         {
           "path": "## Configuration > ### Matcher patterns",
@@ -697,8 +700,8 @@
         },
         {
           "path": "## Configuration > ### Reference scripts by path",
-          "lines": 59,
-          "sha256": "8528a9b670507c13e4ca7f285edf2d43b8ba57d0da72812460e7752100b50ac5"
+          "lines": 66,
+          "sha256": "1f04651180fbcd683ae319e9b7a5126df6b20fccd777ee56ee302e06b6f08369"
         },
         {
           "path": "## Configuration > ### Hooks in skills and agents",
@@ -898,7 +901,7 @@
         {
           "path": "## Hook events > ### PreToolUse > #### Defer a tool call for later",
           "lines": 35,
-          "sha256": "c55ec12c4dd4d2b1862931738a51523c6dbd4653c6b926c436b2b29c679f7024"
+          "sha256": "fa0b4d396b8518faf828e86b3ff500af00d289501bb8266eb28eb6c5960f1555"
         },
         {
           "path": "## Hook events > ### PermissionRequest",
@@ -932,8 +935,13 @@
         },
         {
           "path": "## Hook events > ### PostToolUse > #### PostToolUse decision control",
-          "lines": 32,
-          "sha256": "e4e067d0c6c5c1e9798030a482f23b7ba78feae7033e860108770ab5e3ca438b"
+          "lines": 33,
+          "sha256": "a4468c794acc028e9c846308d8e36f801b69f33e305c114bdecf9a37db622f21"
+        },
+        {
+          "path": "## Hook events > ### PostToolUse > #### Annotate a result for the auto mode classifier",
+          "lines": 28,
+          "sha256": "af6a66a6947fd1d4e7621e80c838dfdff0435dc7a83fd7bc111c33b71a209bcf"
         },
         {
           "path": "## Hook events > ### PostToolUseFailure",
@@ -1008,7 +1016,7 @@
         {
           "path": "## Hook events > ### SubagentStop > #### SubagentStop input",
           "lines": 22,
-          "sha256": "94e4aa621ff3cfc1dcf3ba9a8ac5c31eb6bb64264a86878d95f634a1e3c1c1d3"
+          "sha256": "9d34514630d4516833fcda64f6487113ec84adcf2288c28422c05359eb7096f5"
         },
         {
           "path": "## Hook events > ### TaskCreated",
@@ -1048,7 +1056,7 @@
         {
           "path": "## Hook events > ### Stop > #### Stop input",
           "lines": 59,
-          "sha256": "bf5b1f2fec6b930a8f6956d0e9b4d3399666717aea21ab9ac94ade72d1c75c0d"
+          "sha256": "a79de4cac65e06967a61a9635c316cae773e49157d52e29b844a8fecb6fed122"
         },
         {
           "path": "## Hook events > ### Stop > #### Stop decision control",
@@ -1083,7 +1091,7 @@
         {
           "path": "## Hook events > ### ConfigChange",
           "lines": 33,
-          "sha256": "58a8112de86bffef5757350f525462fc564a6e4677e05cf3ed47c7b272b24ec3"
+          "sha256": "8e3c0d2ed41fc908db07cdd17760381c9f3bf77670ebc04840737d837e631fa5"
         },
         {
           "path": "## Hook events > ### ConfigChange > #### ConfigChange input",
@@ -1093,7 +1101,7 @@
         {
           "path": "## Hook events > ### ConfigChange > #### ConfigChange decision control",
           "lines": 17,
-          "sha256": "43dae382fa619aaa96d5ad0c604e3bafabb60b619b9c64bf94f21b48a6e1db04"
+          "sha256": "ab436dd6ec038a3b270004662a2a1e79a067e3850cd43b36dca15d18c0037a07"
         },
         {
           "path": "## Hook events > ### CwdChanged",
