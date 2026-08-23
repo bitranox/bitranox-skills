@@ -90,7 +90,7 @@ def _windows_argv(command):
 
 
 def split_command(spec: str) -> list[str]:
-    r"""Split one DOUBLE-quoted command string into argv, by the platform's own rules.
+    r"""Split one quoted command string into argv, by the platform's own rules.
 
     POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
     names would split it.

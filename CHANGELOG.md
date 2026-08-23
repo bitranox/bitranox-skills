@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.241.4]
+
+### Fixed
+
+- `split_command`'s own docstring in `gate.py` and `diffbehave.py` called its input a
+  "DOUBLE-quoted command string". On POSIX the splitter is shlex, which honours single quotes,
+  so that over-constrained the function on one of its two platforms - the same class of
+  inaccuracy 5.241.3 set out to remove, pointing the other way. The summary line now says
+  "quoted". The portability advice (use double quotes everywhere, because a Windows command line
+  has no single-quoting at all) stays in `gate.py`'s module docstring and in both CLIs' `--help`,
+  where it is addressed to the caller choosing the quoting rather than describing the function.
+
 ## [5.241.3]
 
 ### Fixed
