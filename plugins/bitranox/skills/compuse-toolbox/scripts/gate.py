@@ -13,9 +13,14 @@ Each gate runs via subprocess with NO shell and NO pipe, so `returncode` is the 
 Output goes to a log; summary lines are grepped from that log AFTERWARDS, never from a pipe
 that could mask the status.
 
-A gate is given either as one shell-quoted string (`--gate '<cmd ...>'`, or a lone positional),
-which is shlex-split, or after `--`, where the tokens are ALREADY real argv and are taken
-verbatim - a `name=` prefix is only read on the shell-quoted form.
+A gate is given either as one quoted string (`--gate "<cmd ...>"`, or a lone positional), which
+is split into argv by the platform's own rules, or after `--`, where the tokens are ALREADY real
+argv and are taken verbatim - a `name=` prefix is only read on the quoted form.
+
+Quote that string with DOUBLE quotes, on every platform. Splitting is shlex on POSIX and
+CommandLineToArgvW on Windows, and a Windows command line has no single-quoting at all: a single
+quote arrives as an ordinary character glued to the argument, which then splits at its spaces
+anyway. So `--gate 'pytest -q'` is ONE gate on POSIX and two broken arguments on Windows.
 
 A gate is labeled by the `--name` written AFTER it (or a single-word `name=command` prefix);
 written order is the pairing, so a name can never land on a gate the user did not name. A
@@ -85,7 +90,7 @@ def _windows_argv(command):
 
 
 def split_command(spec: str) -> list[str]:
-    r"""Split one shell-quoted command string into argv, by the platform's own rules.
+    r"""Split one DOUBLE-quoted command string into argv, by the platform's own rules.
 
     POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
     names would split it.
@@ -110,7 +115,8 @@ def derived_name(argv: list[str]) -> str:
     Deliberately not argv[0] - see gate_spec for why that produced reports like "[PASS] env".
     Both routes into a gate (a single --gate/positional string and `-- <cmd ...>`) derive their
     name here, so the same command cannot be labeled two different ways depending on how it was
-    written. The two routes differ only in SPLITTING: a quoted string is shlex-split, while
+    written. The two routes differ only in SPLITTING: a quoted string goes through
+    split_command (shlex on POSIX, CommandLineToArgvW on Windows), while
     tokens after `--` are taken verbatim (the shell already split them, and re-splitting a lone
     one tore a path with a space in half - see main).
     """
@@ -282,7 +288,9 @@ def main(argv=None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(description="run gates, keep their real exit status")
     p.add_argument("--gate", action=_WrittenOrder, default=None,
-                   help="a gate as one shell-quoted string (repeatable); split with shlex, run "
+                   help="a gate as one DOUBLE-quoted string (repeatable), split into argv by "
+                        "the platform's rules (shlex on POSIX, CommandLineToArgvW on Windows, "
+                        "which has no single-quoting at all) and run "
                         "without a shell. Optionally prefix it 'name=command' to label it, but "
                         "only when name is a SINGLE WORD (no space, no leading '-', no '/') - "
                         "anything else is left as part of the command untouched. For a label "
@@ -319,13 +327,14 @@ def main(argv=None) -> int:
             # correctly - both routes derive the name through derived_name for that reason.
             positional = (derived_name(args.rest), list(args.rest))
         else:
-            # A lone positional written WITHOUT `--` is the whole gate as one shell-quoted
-            # string, so it gets shlex-split and can carry a name= prefix, exactly like --gate.
+            # A lone positional written WITHOUT `--` is the whole gate as one quoted
+            # string, so it goes through split_command and can carry a name= prefix, exactly
+            # like --gate.
             positional = gate_spec(args.rest[0])
 
     written = getattr(args, "written", None) or []
     if not any(option == "gate" for option, _ in written) and positional is None:
-        p.error("no gate given: use --gate '<cmd>' or -- <cmd ...>")
+        p.error('no gate given: use --gate "<cmd>" or -- <cmd ...>')
     try:
         pairs, leading = pair_names_with_gates(written, positional is not None)
     except ValueError as exc:

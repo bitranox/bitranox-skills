@@ -116,7 +116,7 @@ def _windows_argv(command):
 
 
 def _split_command(command: str) -> list[str]:
-    r"""Split one shell-quoted command string into argv, by the platform's own rules.
+    r"""Split one DOUBLE-quoted command string into argv, by the platform's own rules.
 
     POSIX: shlex. Windows: CommandLineToArgvW, so the string is split exactly as the program it
     names would split it.
@@ -210,7 +210,9 @@ def _load_cases(args) -> list[Case]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Run two commands on the same inputs and diff what they did.")
-    ap.add_argument("--a", required=True, help="the first command (shell-quoted, no shell used)")
+    ap.add_argument("--a", required=True,
+                    help="the first command (DOUBLE-quoted, split by the platform's rules, "
+                         "no shell used)")
     ap.add_argument("--b", required=True, help="the second command")
     ap.add_argument("--case", action="append", help="an input fed to stdin (repeatable)")
     ap.add_argument("--case-file", help="JSONL: one {name, stdin, args} per line, or raw lines")

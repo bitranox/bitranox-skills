@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.241.3]
+
+### Fixed
+
+- `gate.py` and `diffbehave.py` described their command argument as a "shell-quoted string"
+  split "with shlex". That is only true on POSIX. Both now say DOUBLE-quoted and name the real
+  splitter per platform, and `gate.py`'s module docstring states the consequence: a Windows
+  command line has no single-quoting at all, so a single quote arrives as an ordinary character
+  glued to the argument. `--gate 'pytest -q'` is therefore ONE gate on POSIX and two broken
+  arguments on Windows. The usage examples and the "no gate given" error now show double quotes,
+  which are correct on both platforms. Documentation only; splitting behaviour is unchanged
+  since 5.241.2.
+
 ## [5.241.2]
 
 ### Changed
