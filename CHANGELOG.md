@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.242.0]
+
+### Added
+
+- Post-push CI watch, in two halves. `ci-watch-nudge.py` (PostToolUse) records a push once it has
+  demonstrably LANDED and names the sha now building plus the `ci_wait.py` command to watch it;
+  `ci-watch-gate.py` (Stop) refuses to end a turn whose push was never checked. Prose alone was
+  measured at 57% on this project's own history (123 pushes over 160 transcripts, 53 unwatched),
+  which is why the deterministic half exists.
+- `BITRANOX_CI_WATCH=1` bypasses both halves. Documented in `docs/reference.md`.
+
+### Notes
+
+- The landed-test is local and needs no network: after a successful push `HEAD` and `@{u}` agree.
+  The usual shape here is `git push 2>&1 | tail -3`, a pipeline that exits 0 whatever git did, so
+  neither the exit code nor the output is evidence.
+- `git -C <dir> push` is resolved against the named repo rather than the shell's cwd. The corpus
+  replay surfaced that shape; resolving it from cwd asked the wrong repository and answered
+  confidently.
+- The Stop gate is a one-shot block per continuation chain, not a loop. `stop_hook_active` releases
+  it, which is what keeps a session whose CI genuinely cannot be reached from being wedged.
+
 ## [5.241.4]
 
 ### Fixed

@@ -18,6 +18,8 @@ if str(HOOKS_DIR) not in sys.path:
 
 # filename stem -> import alias used by the test modules
 _HOOK_MODULES = {
+    "ci-watch-nudge": "ci_watch_nudge",
+    "ci-watch-gate": "ci_watch_gate",
     "validate-structured-files": "validate_structured_files",
     "block-pgrep-self-match": "block_pgrep_self_match",
     "block-partial-typecheck": "block_partial_typecheck",
