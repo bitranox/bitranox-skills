@@ -29,6 +29,8 @@ from pathlib import Path
 
 __all__ = [
     "MAX_AGE_SECONDS",
+    "MAX_BLOCKS",
+    "bump_blocks",
     "session_key",
     "clear_session",
     "clear_sha",
@@ -39,6 +41,11 @@ __all__ = [
 
 # Beyond this, CI has finished and a block is noise rather than a save.
 MAX_AGE_SECONDS = 4 * 60 * 60
+
+# How many times one push may block a stop before the gate gives up and says so. A block that
+# can never be escaped wedges a session whose CI genuinely cannot be reached; one that is
+# released on the first attempt is not a gate. This bounds the pressure instead of removing it.
+MAX_BLOCKS = 3
 
 
 
@@ -102,6 +109,20 @@ def clear_session(project_dir: str, session: str) -> None:
     """Drop every pending sha for this session - CI was watched without naming a sha."""
     path = state_path(project_dir)
     _save(path, [e for e in _load(path) if e.get("session") != session])
+
+
+
+def bump_blocks(project_dir: str, sha: str) -> int:
+    """Count one block against this sha and return the new total."""
+    path = state_path(project_dir)
+    entries = _load(path)
+    total = 0
+    for entry in entries:
+        if entry.get("sha") == sha:
+            total = int(entry.get("blocks") or 0) + 1
+            entry["blocks"] = total
+    _save(path, entries)
+    return total
 
 
 def pending_for(project_dir: str, session: str, now: float | None = None) -> list[dict]:

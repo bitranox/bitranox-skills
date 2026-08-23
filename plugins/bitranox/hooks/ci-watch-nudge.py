@@ -50,6 +50,12 @@ _WATCHING = re.compile(r"ci_wait\.py|ci_triage\.py|\bgh\s+run\s+(?:watch|list|vi
 
 _CI_WAIT = Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox" / "scripts" / "ci_wait.py"
 
+# Pushing tags in bulk, versus naming refs explicitly. A tag push builds the TAG ref, which is a
+# different run from its branch's - and at release time it is the run that matters most.
+_BULK_TAGS = re.compile(r"--tags\b|--follow-tags\b")
+# Everything after `push`, so the refspecs can be read off it. Options are dropped, not guessed at.
+_AFTER_PUSH = re.compile(r"\bpush\b(?P<rest>[^\n;|&]*)")
+
 
 # `git -C <dir> push` is the shape the corpus is full of, and its repo is NOT the call's cwd.
 _DASH_C = re.compile(r"\bgit\b(?:\s+-c[= ]\S+)*\s+-C[= ]\s*(\S+)")
@@ -112,6 +118,47 @@ def _has_workflows(cwd: str) -> bool:
         return False
 
 
+def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
+    """(sha, display) for a ref name, tags before branches. None when it does not resolve."""
+    for prefix, kind in (("refs/tags/", "tag"), ("refs/heads/", "branch")):
+        sha = _git(["rev-parse", "--verify", "-q", prefix + name + "^{commit}"], repo)
+        if sha and re.fullmatch(r"[0-9a-f]{40}", sha):
+            return sha, ("%s %s" % (kind, name))
+    return None
+
+
+def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
+    """What this push actually built: (sha, display), or None to fall back to the branch test.
+
+    A refspec is read from the text after `push`; a `src:dst` pair is resolved by its SOURCE, which
+    is the object being sent. Bulk `--tags` names no ref, so the newest local tag by creation date
+    stands in - the tag just cut is the one whose run is wanted.
+    """
+    rest = _AFTER_PUSH.search(mask_data_regions(command))
+    if not rest:
+        return None
+    span = rest.span("rest")
+    words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
+    # The first bare word is the remote; the rest are refspecs.
+    for spec in words[1:]:
+        if any(ch in spec for ch in _UNRESOLVABLE):
+            return None
+        source = spec.split(":", 1)[0].replace("refs/tags/", "").replace("refs/heads/", "")
+        found = _resolve_ref(repo, source) if source and source != "HEAD" else None
+        if found:
+            return found
+    if _BULK_TAGS.search(mask_data_regions(command)):
+        # In `for-each-ref` the LAST --sort key is the PRIMARY one (measured, not assumed), so
+        # this reads as: newest by creation date, ties broken by version order. Creation date
+        # alone is not enough - tags cut in the same second tie, and the fallback is plain
+        # alphabetical, where v10.0.0 sorts between v1.0.0 and v2.0.0.
+        newest = _git(["for-each-ref", "--sort=-v:refname", "--sort=-creatordate", "--count=1",
+                       "--format=%(refname:short)", "refs/tags"], repo)
+        if newest:
+            return _resolve_ref(repo, newest)
+    return None
+
+
 def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
     """The (text, sha, branch, repo) to record for this command, or None if it is not a landed push.
 
@@ -129,11 +176,16 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
     repo = _repo_dir(command, cwd) if cwd else None
     if not repo or not _has_workflows(repo):
         return None
-    sha = _landed_sha(repo)
-    if not sha:
-        return None
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "HEAD"
-    text = ("CI is now running for the push you just made: %s on %s.\n"
+    pushed = _pushed_ref(command, repo)
+    if pushed:
+        sha, branch = pushed
+    else:
+        # No ref named, so this is the ordinary `git push`: the branch landed-test applies.
+        sha = _landed_sha(repo)
+        if not sha:
+            return None
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo) or "HEAD"
+    text = ("CI is now running for the push you just made: %s (%s).\n"
             "Watch it before moving on - this repo's CI blocks on every cell:\n"
             "    uv run %s --sha %s\n"
             "Exit 0 every run passed, 1 something failed, 2 could not tell."

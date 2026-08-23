@@ -3,9 +3,22 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import ci_watch_gate as hook
 import ci_watch_state as state
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def opted_in(tmp_path, monkeypatch):
+    """Most tests here are about blocking, which requires the opt-in marker to exist."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    hook.sentinel_path().touch()
+    return home
 
 
 def _event(cwd, session="sess-1", stop_hook_active=False):
@@ -90,3 +103,52 @@ def test_malformed_input_never_raises(capsys):
 def test_verdict_is_none_for_an_entry_with_no_sha():
     assert hook.verdict([{"at": time.time()}]) is None
     assert hook.verdict([]) is None
+
+
+def test_without_the_opt_in_marker_it_never_blocks(tmp_path, capsys):
+    """The shipped default: the blocking half waits to be asked for."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+    hook.sentinel_path().unlink()
+    assert hook.enabled() is False
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""
+    # Same entry, marker restored: it must speak, or this proves nothing about the marker.
+    hook.sentinel_path().touch()
+    assert hook.main(_event(tmp_path)) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+
+
+def test_it_blocks_up_to_the_cap_then_releases_loudly(tmp_path, capsys):
+    """Bounded repeat: pressure that cannot become a wedge."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40, branch="master")
+    for n in range(state.MAX_BLOCKS):
+        assert hook.main(_event(tmp_path)) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["decision"] == "block", "attempt %d should still block" % (n + 1)
+    # One past the cap: it gives up, says so, and stops blocking.
+    assert hook.main(_event(tmp_path)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "decision" not in payload
+    assert "released" in payload["hookSpecificOutput"]["additionalContext"]
+    # And it stays quiet afterwards rather than starting over.
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_the_last_reminder_says_it_is_the_last(tmp_path, capsys):
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+    for _ in range(state.MAX_BLOCKS - 1):
+        hook.main(_event(tmp_path))
+        capsys.readouterr()
+    hook.main(_event(tmp_path))
+    assert "last reminder" in json.loads(capsys.readouterr().out)["reason"]
+
+
+def test_watching_the_ci_stops_the_countdown(tmp_path, capsys):
+    """Clearing the record must reset the pressure, not leave a spent counter behind."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+    hook.main(_event(tmp_path))
+    capsys.readouterr()
+    state.clear_sha(str(tmp_path), "a" * 40)
+    assert hook.main(_event(tmp_path)) == 0
+    assert capsys.readouterr().out == ""

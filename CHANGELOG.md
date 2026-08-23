@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.243.0]
+
+### Changed
+
+- **The CI-watch Stop gate is now OPT-IN.** It blocks only when `~/.claude/.bitranox-ci-watch-gate`
+  exists. The PostToolUse nudge stays on by default: it only injects context, whereas blocking a
+  turn on a repo someone was deliberately not watching is a surprise that gets a plugin removed
+  rather than configured.
+- **The gate now repeats, bounded.** It blocks up to `MAX_BLOCKS` (3) times for one push, then
+  releases and says so rather than going quiet. A single block was too easy to step past; an
+  unbounded one wedges a session whose CI genuinely cannot be reached, and the documented escape
+  lives in the LAUNCH environment where someone caught mid-session cannot set it.
+
+### Fixed
+
+- **A tag push is now watched as the tag.** Previously `git push origin v1.2.3` matched, `@{u}`
+  already agreed from the earlier branch push, and it recorded the BRANCH sha - pointing at runs
+  that were often already finished while the release run went unwatched. The pushed refspec is now
+  resolved (tags before branches, a `src:dst` pair by its source), and bulk `--tags` falls back to
+  the newest local tag.
+- Bulk `--tags` sorts with `--sort=-v:refname --sort=-creatordate`, in that order, because
+  `for-each-ref` treats the LAST key as PRIMARY. Measured, not assumed: the natural-reading order
+  sorts by version and picks an old `v10.0.0` over a freshly cut `v2.0.0`. Creation date alone also
+  fails, since same-second tags tie and fall back to alphabetical, where `v10.0.0` sorts between
+  `v1.0.0` and `v2.0.0`.
+
 ## [5.242.1]
 
 ### Fixed

@@ -190,3 +190,76 @@ def test_watching_clears_a_record_made_by_a_dash_c_push(tmp_path, capsys):
     assert state.pending_for(str(tmp_path), "sess-1") != []
     assert hook.main(_event("gh run watch 5", tmp_path)) == 0
     assert state.pending_for(str(tmp_path), "sess-1") == []
+
+
+# --- pushed-ref resolution: a tag builds a DIFFERENT run than its branch --------------------
+
+def _tag(repo, name):
+    _git(repo, "tag", "-a", name, "-m", name)
+    return subprocess.run(["git", "rev-parse", name + "^{commit}"], cwd=str(repo),
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_an_explicit_tag_push_is_recorded_as_the_tag(repo, capsys):
+    """At release time the tag's run is the one that matters, not its branch's."""
+    tag_sha = _tag(repo, "v1.2.3")
+    assert hook.main(_event("git push origin v1.2.3", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "tag v1.2.3" in text
+    assert tag_sha[:12] in text
+
+
+def test_a_bulk_tags_push_uses_the_newest_tag(repo, capsys):
+    _tag(repo, "v1.0.0")
+    newest = _tag(repo, "v2.0.0")
+    assert hook.main(_event("git push --tags", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "tag v2.0.0" in text
+    assert newest[:12] in text
+
+
+def test_an_explicit_branch_push_still_resolves_the_branch(repo, capsys):
+    assert hook.main(_event("git push origin master", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "branch master" in text
+
+
+def test_a_plain_push_still_uses_the_landed_test(repo, capsys):
+    """No refspec named, so the branch landed-test applies exactly as before."""
+    assert hook.main(_event("git push", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "master" in text
+
+
+def test_a_refspec_pair_resolves_by_its_source(repo, capsys):
+    tag_sha = _tag(repo, "v3.0.0")
+    assert hook.main(_event("git push origin v3.0.0:refs/tags/v3.0.0", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert tag_sha[:12] in text
+
+
+def test_a_refspec_that_does_not_resolve_falls_back_to_the_branch(repo, capsys):
+    """An unknown ref must not silently record nothing - the ordinary push test still applies."""
+    assert hook.main(_event("git push origin no-such-ref", repo)) == 0
+    assert capsys.readouterr().out != ""
+
+
+def test_bulk_tags_prefers_the_newest_by_time_not_the_highest_version(repo, capsys):
+    """The discriminating case: an OLD high version beside a NEW low one.
+
+    `for-each-ref` treats the LAST --sort key as primary, so the key order that reads naturally
+    (creatordate first) actually sorts by version and would pick v10.0.0 here.
+    """
+    import os
+    env = dict(os.environ)
+    env["GIT_COMMITTER_DATE"] = env["GIT_AUTHOR_DATE"] = "2020-01-01T00:00:00"
+    subprocess.run(["git", "tag", "-a", "v10.0.0", "-m", "old"], cwd=str(repo),
+                   check=True, capture_output=True, env=env)
+    env["GIT_COMMITTER_DATE"] = env["GIT_AUTHOR_DATE"] = "2026-01-01T00:00:00"
+    subprocess.run(["git", "tag", "-a", "v2.0.0", "-m", "new"], cwd=str(repo),
+                   check=True, capture_output=True, env=env)
+
+    assert hook.main(_event("git push --tags", repo)) == 0
+    text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    assert "tag v2.0.0" in text, "picked the highest version instead of the newest tag"
+    assert "v10.0.0" not in text

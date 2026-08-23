@@ -29,13 +29,30 @@ from pathlib import Path
 
 import ci_watch_state as state
 
-__all__ = ["main", "verdict"]
+__all__ = ["enabled", "main", "sentinel_path", "verdict"]
 
 _BYPASS_ENV = "BITRANOX_CI_WATCH"
+# OPT-IN. The nudge ships on because it only injects context; blocking someone's turn on a repo
+# they were deliberately not watching is a surprise that gets a plugin removed rather than
+# configured, so the blocking half waits to be asked for.
+_OPT_IN_NAME = ".bitranox-ci-watch-gate"
 _CI_WAIT = Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox" / "scripts" / "ci_wait.py"
 
 
-def verdict(pending: list[dict]) -> str | None:
+def sentinel_path() -> Path:
+    """Where the opt-in marker lives. Resolved per call so HOME stays a real seam for tests."""
+    return Path.home() / ".claude" / _OPT_IN_NAME
+
+
+def enabled() -> bool:
+    """Is the blocking half switched on for this machine?"""
+    try:
+        return sentinel_path().exists()
+    except (OSError, RuntimeError):
+        return False
+
+
+def verdict(pending: list[dict], attempt: int = 1) -> str | None:
     """The block reason for these pending entries, or None when there is nothing to say."""
     if not pending:
         return None
@@ -44,15 +61,19 @@ def verdict(pending: list[dict]) -> str | None:
     if not sha:
         return None
     branch = str(newest.get("branch") or "HEAD")
+    left = state.MAX_BLOCKS - attempt
+    remaining = ("\nThis is the last reminder for this push; the gate releases after it."
+                 if left <= 0 else
+                 "\n%d further reminder(s) for this push before the gate releases." % left)
     extra = ("" if len(pending) == 1
              else "\n(%d pushes this session are still unchecked; this is the newest.)" % len(pending))
     return ("You pushed %s on %s and have not checked whether CI passed.%s\n\n"
             "A push is not the end of the change - watch the run and fix what it reports:\n"
             "    uv run %s --sha %s\n\n"
             "Exit 0 every run passed, 1 at least one did not, 2 could not tell. If it reds, fix it\n"
-            "on this branch rather than leaving it for the next session to find.\n"
+            "on this branch rather than leaving it for the next session to find.%s\n"
             "Set BITRANOX_CI_WATCH=1 to bypass this gate."
-            % (sha[:12], branch, extra, _CI_WAIT, sha))
+            % (sha[:12], branch, extra, _CI_WAIT, sha, remaining))
 
 
 def main(raw: str | None = None) -> int:
@@ -66,7 +87,7 @@ def main(raw: str | None = None) -> int:
     # A Stop hook already caused this continuation; blocking again is how a session gets wedged.
     if event.get("stop_hook_active"):
         return 0
-    if os.environ.get(_BYPASS_ENV):
+    if os.environ.get(_BYPASS_ENV) or not enabled():
         return 0
 
     key = state.session_key(event)
@@ -75,7 +96,22 @@ def main(raw: str | None = None) -> int:
         return 0
 
     try:
-        reason = verdict(state.pending_for(key, session))
+        pending = state.pending_for(key, session)
+        if not pending:
+            return 0
+        newest = max(pending, key=lambda e: float(e.get("at") or 0))
+        sha = str(newest.get("sha") or "")
+        attempt = state.bump_blocks(key, sha) if sha else 1
+        if attempt > state.MAX_BLOCKS:
+            # Give up LOUDLY rather than silently: a gate that just stops speaking reads as broken.
+            state.clear_sha(key, sha)
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "Stop",
+                "additionalContext": ("CI for %s was never checked and the watch gate has now "
+                                      "released it after %d reminders. It will not ask again."
+                                      % (sha[:12], state.MAX_BLOCKS))}}))
+            return 0
+        reason = verdict(pending, attempt)
     except Exception:  # noqa: BLE001 - a gate that crashes must not wedge a turn
         return 0
     if not reason:
