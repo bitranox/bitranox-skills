@@ -316,3 +316,29 @@ def test_the_bare_key_prefix_is_not_honored(tmp_path):
     assert S.read_contributions("queue_key:" + key)          # the real prefix reaches it
     assert S.read_contributions("key:" + key) == []          # the bare one does not
     assert S.contrib_file("key:" + key) != S.contrib_file("queue_key:" + key)
+
+
+def test_queues_prints_the_key_the_verbs_actually_accept(capsys):
+    """`queues` told you to use `queue_key:<full-key>` while printing only the first 8 characters.
+
+    Copying what it printed selected nothing, and the verbs answered "no pending upstream
+    contributions" - the same words an empty queue produces - so the operator concluded the work
+    was already shipped. The listing must print the key that works.
+    """
+    Q.main(["add", "--what", "w", "--target", "skill:x", "--why", "y", "/p/deep"])
+    key = S.proj_key("/p/deep")
+
+    Q.main(["queues"])
+    out = capsys.readouterr().out
+
+    assert key in out, "queues printed a key that no verb accepts"
+    assert Q.main(["list", S.QUEUE_KEY_PREFIX + key]) == 0
+
+
+def test_an_unknown_queue_key_is_refused_not_reported_as_empty(capsys):
+    """A no-match must not wear the same words as an empty queue."""
+    rc = Q.main(["list", S.QUEUE_KEY_PREFIX + "0123456789abcdef"])
+    out = capsys.readouterr().out
+
+    assert rc == 2, "an unknown queue key exited 0 as though the queue were merely empty"
+    assert "no such queue" in out.lower()

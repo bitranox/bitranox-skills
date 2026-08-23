@@ -24,10 +24,24 @@ import self_improve_gate as G
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
-    """Send the gate's per-project state file into an isolated temp dir."""
+    """Send the gate's per-project state file AND its HOME-relative writes into a temp dir.
+
+    Two different roots need redirecting, and isolating one hides that the other is still live:
+
+    * `tempfile.gettempdir()` - the per-project "already blocked for this message" state file.
+    * `Path.home()` - `record_session_meta()` writes `~/.claude/self-improve-audit/<key>.session.json`
+      on every gate run. Left unpatched, that lands in the DEVELOPER's real home: 24 files per
+      full-suite run, and 23,583 had accumulated there, each naming a `/tmp/pytest-of-*` transcript
+      that no longer exists. `Path.home()` reads `HOME` on POSIX and `USERPROFILE` on Windows, so
+      both are set - patching only HOME would leave this suite leaking on the Windows CI cell.
+    """
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(state_dir))
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     return state_dir
 
 
@@ -406,3 +420,19 @@ def test_gate_still_blocks_when_the_ASSISTANT_admits_a_miss_under_a_skill_body(t
     tp = make_transcript(tmp_path, user=body, asst="you're right, my mistake - I read the stale log")
     run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path)})
     assert decision_of(capsys) == "block"
+
+
+def test_the_gate_writes_its_session_file_under_the_isolated_home(tmp_path, monkeypatch, capsys):
+    """The gate records session meta under `Path.home()`; the fixture must redirect that.
+
+    Isolating `tempfile.gettempdir()` alone is not isolation: `record_session_meta` resolves its
+    path from the HOME directory, so an unpatched HOME sends one file per run into the real
+    `~/.claude/self-improve-audit/`. Measured before this was wired: 24 files per full-suite run,
+    and 23,583 accumulated on the developer's machine, every one naming a `/tmp/pytest-of-*`
+    transcript that no longer exists.
+    """
+    tp = make_transcript(tmp_path, user="no, that is wrong")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path), "session_id": "s1"})
+
+    written = list((tmp_path / "home" / ".claude" / "self-improve-audit").glob("*.session.json"))
+    assert written, "the gate wrote no session file inside the isolated HOME - HOME is not redirected"

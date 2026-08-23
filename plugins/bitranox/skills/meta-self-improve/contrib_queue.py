@@ -110,6 +110,15 @@ def main(argv=None):
         return 2
     proj = args.proj or os.getcwd()
 
+    # A queue_key naming no queue file must REFUSE. Falling through would run the verb against an
+    # absent queue, and every verb reports that as "no pending upstream contributions" - the exact
+    # words an empty queue produces - so a mistyped or truncated key reads as "already shipped".
+    if isinstance(proj, str) and proj.startswith(sig.QUEUE_KEY_PREFIX) and args.cmd != "add":
+        if not sig.contrib_file(proj).exists():
+            print("no such queue: %s - run `contrib_queue.py queues` for the keys that exist "
+                  "(pass the WHOLE key, not a prefix)" % proj)
+            return 2
+
     if args.cmd == "add":
         queued = sig.add_contribution(proj, {"what": args.what, "target": args.target,
                                              "why": args.why, "source": args.source})
@@ -151,7 +160,10 @@ def main(argv=None):
             return 0
         print("%d queue(s) with open contributions:" % len(open_rows))
         for key, n, where in open_rows:
-            print("  %s  %d open  %s" % (key[:8], n, where))
+            # The WHOLE key, not a prefix: the next line tells the operator to pass
+            # queue_key:<full-key>, and a truncated one selects nothing while every verb
+            # answers "no pending upstream contributions" - indistinguishable from done.
+            print("  %s  %d open  %s" % (key, n, where))
         print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
         return 0
 

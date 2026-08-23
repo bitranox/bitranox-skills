@@ -17,6 +17,31 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.244.0]
+
+### Fixed
+
+- **The test suite wrote into the developer's real home.** `test_self_improve_gate.py` isolated
+  `tempfile.gettempdir()` but not `Path.home()`, so every gate run recorded a session file in the
+  real `~/.claude/self-improve-audit/`: 24 per full-suite run, and 23,583 had accumulated, each
+  naming a `/tmp/pytest-of-*` transcript that no longer exists. The fixture now redirects `HOME`
+  and `USERPROFILE` (the latter is what `Path.home()` reads on Windows, so patching only `HOME`
+  would have left the Windows cell leaking). Measured after the fix: 0 files escape.
+- **`contrib_queue.py queues` printed a key no verb accepts.** It showed the first 8 characters
+  while telling the operator to pass `queue_key:<full-key>`, and addressing a queue with the
+  truncated key reported "no pending upstream contributions" - the same words an empty queue
+  produces, so shippable work read as already shipped. It now prints the whole key, and an
+  unknown `queue_key:` is refused with exit 2 instead of being reported as empty.
+
+### Added
+
+- **`ci_wait.py` now refuses a sha this repository does not hold.** The format guard closed the
+  SHORT-sha trap; a 40-hex sha that was completed, transcribed or invented still reached `gh`,
+  matched nothing, and produced `no-runs` - indistinguishable from a just-pushed commit whose runs
+  have not appeared. `sha_is_known_locally()` asks git first (keyed on exit codes, never on git's
+  localized message), and returns `None` rather than `False` when it cannot tell - outside a work
+  tree, or with `--repo` naming another repository, where the local checkout has no such standing.
+
 ## [5.243.0]
 
 ### Changed

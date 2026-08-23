@@ -87,6 +87,44 @@ def require_full_sha(sha: str) -> str:
     return candidate
 
 
+def sha_is_known_locally(sha: str, *, run: Callable[..., object] = subprocess.run) -> bool | None:
+    """Does the local repository hold ``sha`` as a commit? ``None`` when it cannot tell.
+
+    The format guard above closes the SHORT-sha trap. It cannot close the neighbouring one: a
+    sha that is 40 hex characters and simply never existed - completed from an abbreviated
+    display, transcribed, or invented. That sha reaches `gh`, matches nothing, and the wait
+    reports ``no-runs``, which is the SAME answer a freshly pushed commit gives before its runs
+    appear. Asking git first separates the two, locally and instantly.
+
+    Args:
+        sha: A full sha, already through `require_full_sha`.
+        run: Injected process runner, so the check is testable without a repository.
+
+    Returns:
+        ``True`` if this repository holds the commit, ``False`` if it demonstrably does not,
+        and ``None`` when the question cannot be answered here - no git on PATH, or not inside
+        a work tree. ``None`` is deliberately distinct from ``False``: "I cannot tell" must
+        never be reported as "that commit does not exist".
+    """
+    def _rc(argv: list[str]) -> object | None:
+        try:
+            return run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        except OSError:
+            return None
+
+    inside = _rc(["git", "rev-parse", "--is-inside-work-tree"])
+    # Keyed on the exit code plus that one stdout token, never on git's message: git localises
+    # its errors, so an English-text match silently stops working on a non-English machine.
+    if inside is None or getattr(inside, "returncode", 1) != 0:
+        return None
+    if (getattr(inside, "stdout", "") or "").strip() != "true":
+        return None
+    proc = _rc(["git", "cat-file", "-e", f"{sha}^{{commit}}"])
+    if proc is None:
+        return None
+    return getattr(proc, "returncode", 1) == 0
+
+
 def verdict(runs: Sequence[dict[str, object]]) -> Verdict:
     """Classify one poll's run list. PURE.
 
@@ -227,6 +265,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         sha = require_full_sha(args.sha)
     except BadSha as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json)
+    # Only when the sha is meant to be THIS repo's: with --repo the runs belong to another
+    # repository, which the local checkout has no business knowing about.
+    if args.repo is None and sha_is_known_locally(sha) is False:
+        return _emit(
+            Verdict(
+                "error",
+                f"{sha} is not a commit in this repository, so no run can ever match it and the "
+                f"wait would report 'no runs' as though they were merely late. Derive the sha in "
+                f"the same command (`--sha $(git rev-parse HEAD)`), never by completing a short one.",
+            ),
+            as_json=args.json,
+        )
     polls = max(1, int(args.timeout // max(args.interval, 1.0)))
     try:
         result = wait_for(

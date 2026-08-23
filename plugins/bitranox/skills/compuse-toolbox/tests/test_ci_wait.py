@@ -174,3 +174,55 @@ class TestGhRuns:
 
         with pytest.raises(ci_wait.GhFailed):
             ci_wait.gh_runs("a" * 40)
+
+
+class TestShaIsKnownLocally:
+    """A 40-hex sha can still be one nobody ever committed.
+
+    The format guard closes the SHORT-sha trap; it says nothing about a sha that was completed,
+    transcribed or invented. Such a sha reaches `gh`, matches no run, and the wait reports
+    `no-runs` - the same words a just-pushed commit produces before its runs appear. The caller
+    then cannot tell "wait a moment longer" from "you asked about a commit that does not exist".
+    """
+
+    @staticmethod
+    def _git(inside=True, known=True):
+        """A fake `git` runner. Keyed on the ARGV, and answering by EXIT CODE only."""
+        def run(argv, **kwargs):
+            class P:
+                pass
+            p = P()
+            if "rev-parse" in argv:
+                p.returncode, p.stdout, p.stderr = (0, "true\n", "") if inside else (128, "", "fatal\n")
+            else:
+                p.returncode, p.stdout, p.stderr = (0, "", "") if known else (1, "", "")
+            return p
+        return run
+
+    def test_a_sha_the_repo_holds_is_known(self):
+        assert ci_wait.sha_is_known_locally("a" * 40, run=self._git(known=True)) is True
+
+    def test_a_sha_the_repo_does_not_hold_is_not_known(self):
+        assert ci_wait.sha_is_known_locally("a" * 40, run=self._git(known=False)) is False
+
+    def test_outside_a_git_repo_it_declines_to_answer(self):
+        """None, never False: 'I cannot tell' must not read as 'that commit does not exist'."""
+        assert ci_wait.sha_is_known_locally("a" * 40, run=self._git(inside=False)) is None
+
+    def test_no_git_on_path_declines_to_answer(self):
+        def boom(argv, **kwargs):
+            raise OSError("no git")
+        assert ci_wait.sha_is_known_locally("a" * 40, run=boom) is None
+
+    def test_the_verdict_is_keyed_on_exit_code_not_on_git_s_message(self):
+        """git localises its messages, so matching English text fails on a German machine."""
+        def german(argv, **kwargs):
+            class P:
+                pass
+            p = P()
+            if "rev-parse" in argv:
+                p.returncode, p.stdout, p.stderr = 0, "true\n", ""
+            else:
+                p.returncode, p.stdout, p.stderr = 1, "", "fatal: Kein gueltiges Objekt\n"
+            return p
+        assert ci_wait.sha_is_known_locally("a" * 40, run=german) is False
