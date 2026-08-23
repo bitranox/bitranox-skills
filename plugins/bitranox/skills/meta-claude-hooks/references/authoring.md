@@ -97,8 +97,9 @@ Assert on **both** the exit code and the parsed stdout. Then check the pieces th
 
 ## Traps worth knowing before you write one
 
-**Exit 1 does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`.
-`WorktreeCreate` is the only event where any non-zero exit blocks.
+**Exit 1 does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`, which
+blocks on the events listed in the exit-code-2 table in [io-contract.md](io-contract.md). `WorktreeCreate` is the
+sole exception in the other direction: there, *any* non-zero exit aborts creation, not only 2.
 
 **Exit-0 stderr never reaches Claude.** It goes to the debug log. To get a message to Claude, use
 `hookSpecificOutput.additionalContext`, or exit 2 on `PostToolUse`/`PostToolUseFailure`.
@@ -127,7 +128,54 @@ permission system for a hard allow or deny.
 See `bitranox:process-agents-subagent-driven-development`.
 
 **A retrospective hook cannot prevent anything.** If the point is to stop an action, hook the pending action
-(`PreToolUse`), not the aftermath.
+(`PreToolUse`), not the aftermath. Running the retrospective one more often, or widening the stretch it inspects,
+does not fix this: the gap is between the action and the next tick, so periodicity is the defect and window size
+is not a dial on it. There is no "every N turns" event either: a periodic supervisor is a `Stop` or `PostToolUse`
+hook reading back over the transcript, so it reaches its verdict after the destructive call has already run,
+while a `PreToolUse` arm judging the same command reaches it before.
+
+**A hook that crashed looks exactly like a hook that allowed.** Fail-open is the right default, because a hook
+must never wedge a turn, but it means an internal error (a bad path, a missing library, a payload shape you did
+not model) exits 0 and the action proceeds, and exit-0 stderr reaches only the debug log. So a bug in a guard
+presents as approval rather than as a failure, and the guard reads as working right up until you check. Test the
+error paths as deliberately as the matching ones: feed it malformed JSON, empty stdin, and an input shape it does
+not model, and assert the verdict you intend rather than merely that nothing raised.
+
+## Your handler runs with no dependency provisioning
+
+Claude Code spawns the handler as a plain subprocess. Nothing creates or activates a virtualenv for it, and
+inline script metadata (PEP 723) is honoured only by a runner such as `uv run`, never by a bare
+`python3 my_hook.py`. The interpreter that runs your hook therefore has whatever its own site-packages happen to
+hold on that machine, which on a user's machine is usually nothing you installed. Combined with fail-open, a
+missing library does not announce itself: the import raises, the hook exits 0, and the gate is off.
+
+Two ways out, in order of preference:
+
+1. **Write the hook against the standard library.** Reading JSON, matching text and deciding is stdlib work.
+   Reach for a library only when the format genuinely needs a parser.
+2. **Import it lazily, guarded, and degrade to SKIPPED - never to a pass.**
+
+```python
+def validate_xml(text: str):
+    try:
+        from lxml import etree                                  # preferred parser
+    except ImportError:
+        try:
+            from defusedxml.ElementTree import fromstring       # hardened stdlib fallback
+        except ImportError:
+            return None                                         # SKIPPED, not "valid"
+        return _check(fromstring, text)
+    return _check(etree.fromstring, text)
+```
+
+The `None` carries more weight than the import does. A hook that reads "the library is missing" as "the input is
+fine" becomes a silent no-op on exactly the machines that lack it, and its tests stay green everywhere because
+the author's machine has the library. Assert the skip path explicitly, in an environment that really lacks the
+dependency.
+
+A third option exists and is usually the wrong trade: make the command `uv run --script my_hook.py` and let PEP
+723 metadata resolve the dependencies. That makes `uv` a hard prerequisite for your hook to run at all, and pays
+a resolve step per invocation - cached, but not free, and on `PreToolUse` it is every tool call.
 
 ## Security
 

@@ -221,11 +221,23 @@ def frontmatter_name(path):
     return match.group(1).strip() if match else None
 
 
+#: Claude Code's documented cap on a skill's front-matter `description`. Going over is not
+#: refused: the injected available-skills listing truncates the field mid-word, so the triggers
+#: past the cut are invisible to the router while the SKILL.md still reads complete. Nothing
+#: warns, which is why this is a gate rather than a rule someone remembers.
+DESCRIPTION_CAP = 1024
+
+
 def cso_failures_for(label, description):
     """Why `description` fails the CSO rules, at most one message, empty when it passes.
 
     One message rather than all of them: the first failure is the one to fix, and a description
     that is not trigger-first has not earned a keyword count yet."""
+    if len(description) > DESCRIPTION_CAP:
+        return ["%s: description is %d characters, over the %d cap - the injected "
+                "available-skills listing truncates the tail silently, so those triggers never "
+                "reach the router. Rewrite it shorter; appending or inserting only moves which "
+                "trigger is lost." % (label, len(description), DESCRIPTION_CAP)]
     if description[:1] in (">", "|", '"', "'"):
         return ["%s: description must be a single-line plain YAML scalar - no "
                 "'>-'/'|' block scalar and no wrapping quotes (the style marker leaks "

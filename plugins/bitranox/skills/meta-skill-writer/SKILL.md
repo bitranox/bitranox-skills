@@ -207,6 +207,24 @@ Fixed topic: Core API - Client, Session, request(), Streaming, Connection, Retry
 **Frontmatter (YAML):**
 - Only two fields supported: `name` and `description` (custom fields are stripped by Claude Code)
 - Caps are PER FIELD, not combined: `name` 64 characters, `description` 1024
+- **Over the cap is not refused, it is silently truncated.** No warning, no error, and nothing in the
+  file to see: the SKILL.md still reads perfectly while the injected available-skills listing cuts
+  the description mid-word and ends it with an ellipsis, so every trigger past the cut is invisible
+  to the router. The skill then behaves as if its newest triggers were never written - documented,
+  tested, listed in its own table, and never suggested.
+  - **Measure the field, do not eyeball it:** extract the frontmatter `description` and take `len()`.
+    This repo's commit gate measures it too and fails over the cap, so the rule is mechanical rather
+    than remembered.
+  - **The observed cut falls LATER than 1024, not earlier.** A 1060-character description was
+    delivered whole; a 2124-character one lost its last 597 characters. So nothing under the
+    documented cap is at risk, and the reason to stay under it is that the real boundary is a
+    harness detail that can move - not that your 900-character description is in danger. Do not
+    probe for the knife; the 500-character target below is the margin worth aiming at.
+  - **A bloated description is a REWRITE, not an append.** An appended trigger lands in the dead
+    tail, and inserting one early only pushes a different one out.
+  - To see where a live session actually cut, ask a running agent to quote its own available-skills
+    entry for that skill verbatim, and diff it against the field in the file. The listing is
+    injected into the system prompt, so it cannot be read off disk.
 - `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
 - `description`: Third-person, describes ONLY when to use (NOT what it does)
   - Start with "Use when..." to focus on triggering conditions
@@ -1177,6 +1195,8 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 **GREEN Phase - Write Minimal Skill:**
 - [ ] Name uses only letters, numbers, hyphens (no parentheses/special chars)
 - [ ] YAML frontmatter with only name and description (`name` <= 64 chars, `description` <= 1024)
+- [ ] Description length MEASURED with `len()`, not eyeballed - over the cap is truncated silently,
+      not refused, and the lost triggers never reach the router
 - [ ] Description starts with "Use when..." and includes specific triggers/symptoms
 - [ ] Description does NOT summarize workflow (triggers only - see CSO section)
 - [ ] Description written in third person

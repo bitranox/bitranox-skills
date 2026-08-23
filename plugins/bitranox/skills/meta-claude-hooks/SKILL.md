@@ -85,7 +85,7 @@ Use the Read tool to load the file identified as relevant for full details.
 | **All 31 events** - SessionStart, Setup, InstructionsLoaded, UserPromptSubmit, UserPromptExpansion, MessageDisplay, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, PostToolBatch, PermissionDenied, Notification, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, Stop, StopFailure, TeammateIdle, ConfigChange, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreCompact, PostCompact, SessionEnd, Elicitation, ElicitationResult | `references/events.md`        |
 | **Configuration** - hook locations and precedence, matcher patterns and the exact-match vs regex rule, MCP tool matchers, the five handler types, common fields, `if` and Bash pattern matching, exec form vs shell form, HTTP and MCP tool and prompt fields, path placeholders, hooks in skill and subagent frontmatter, `/hooks`, `disableAllHooks`                                                                                                                                  | `references/configuration.md` |
 | **I/O contract** - common input fields, exit codes 0/2/other, timeouts, exit-code-2-per-event table, HTTP response handling, JSON output, `continue`, `stopReason`, `systemMessage`, `terminalSequence`, `additionalContext`, decision control per event, `updatedInput` and `updatedToolOutput`                                                                                                                                                                                        | `references/io-contract.md`   |
-| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, security and workspace trust, Windows PowerShell, environment variables                                                                                                                                                                                                                   | `references/authoring.md`     |
+| **Authoring** - which handler types each event supports, prompt and agent response schema and `continueOnBlock`, async and `asyncRewake`, testing a hook from stdin, `claude --debug`, traps, no dependency provisioning and the lazy-import degrade, security and workspace trust, Windows PowerShell, environment variables                                                                                                                                                           | `references/authoring.md`     |
 
 Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.md> (reference) and
 <https://code.claude.com/docs/en/hooks-guide.md> (guide). Both serve raw markdown.
@@ -105,13 +105,15 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
 
 ## The five that bite hardest
 
-- **`exit 1` does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`.
-  `WorktreeCreate` is the only event where any non-zero exit blocks.
+- **`exit 1` does not block.** It is a non-blocking error and the action proceeds. Policy hooks use `exit 2`,
+  which blocks on the events in the exit-code-2 table. `WorktreeCreate` is the sole exception in the other
+  direction: there, *any* non-zero exit aborts creation, not only 2.
 - **Exit-0 stderr never reaches Claude.** It goes to the debug log. Use `hookSpecificOutput.additionalContext`.
 - **Silence is not approval.** A `PreToolUse` hook that exits 0 with no output has expressed no opinion; the call
   continues through the normal permission flow.
-- **A hook that never fires looks exactly like one that fires and finds nothing.** Both are silent. On the first
-  run of a policy hook, look for `Failed with non-blocking status code: ... No such file or directory`.
+- **A hook that never fires looks exactly like one that fires and finds nothing - and like one that crashed.**
+  All three are silent, and fail-open turns a guard's bug into an approval. On the first run of a policy hook,
+  look for `Failed with non-blocking status code: ... No such file or directory`.
 - **A guard judges the whole pending command.** A `PreToolUse` Bash hook sees the entire command string and the
   state as it was before any of it ran.
 

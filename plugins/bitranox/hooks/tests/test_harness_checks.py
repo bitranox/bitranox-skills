@@ -300,6 +300,37 @@ def test_cso_failures_for_accepts_a_good_description():
     assert hc.cso_failures_for("skills/demo", good) == []
 
 
+def _padded(length):
+    """A well-formed description of exactly `length` characters - only its LENGTH is at issue."""
+    head = "Use when parsing gitignore files, filtering paths, or reaching for pathspec "
+    return (head + "x" * length)[:length]
+
+
+def test_cso_failures_for_rejects_a_description_over_the_cap():
+    """Over the cap is the silent failure: the router never sees the tail, so the gate must."""
+    fails = hc.cso_failures_for("skills/demo", _padded(hc.DESCRIPTION_CAP + 1))
+    assert len(fails) == 1
+    assert "over the 1024 cap" in fails[0]
+    assert str(hc.DESCRIPTION_CAP + 1) in fails[0]
+
+
+def test_cso_failures_for_accepts_a_description_exactly_at_the_cap():
+    """The boundary case in the direction that must NOT fire - a cap is not an off-by-one."""
+    assert hc.cso_failures_for("skills/demo", _padded(hc.DESCRIPTION_CAP)) == []
+
+
+def test_every_shipped_skill_description_is_within_the_cap():
+    """The rule is worth nothing while a shipped skill violates it: the gate only sees CHANGED
+    skills, so an over-cap description that nobody edits again would never be reported."""
+    skills = Path(__file__).resolve().parents[2] / "skills"
+    over = []
+    for skill_md in sorted(skills.glob("*/SKILL.md")):
+        desc = hc.frontmatter_description(skill_md)
+        if desc is not None and len(desc) > hc.DESCRIPTION_CAP:
+            over.append("%s (%d)" % (skill_md.parent.name, len(desc)))
+    assert not over, "descriptions over the %d cap: %s" % (hc.DESCRIPTION_CAP, ", ".join(over))
+
+
 # --- hook registrations -----------------------------------------------------------------------
 
 def _settings(tmp_path, command, event="PreToolUse"):
