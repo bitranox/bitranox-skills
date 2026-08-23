@@ -22,9 +22,6 @@ jobs:
   tests:
     name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    # Windows and macOS are new cells and are known to have POSIX-only tests still to triage,
-    # so they report without blocking. Drop continue-on-error once they are green.
-    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,10 +32,8 @@ jobs:
         include:
           - os: windows-latest
             python-version: "3.13"
-            experimental: true
           - os: macos-latest
             python-version: "3.13"
-            experimental: true
     steps:
       # The gate fails any tracked .py/.sh/.json containing CRLF, so a Windows checkout must not
       # rewrite them on the way in. BOTH settings are required and they stop different things:
