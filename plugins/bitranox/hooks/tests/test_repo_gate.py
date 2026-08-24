@@ -559,6 +559,17 @@ def test_skill_review_rejects_unchecked_boxes(tmp_path):
     assert fails and "unchecked" in fails[0]
 
 
+def test_frontmatter_gate_sweeps_skills_the_change_never_touched(tmp_path):
+    """Changed-only would reproduce the blind spot this check exists to close: the defects that
+    prompted it survived precisely because nothing ever swept the whole set."""
+    make_repo(tmp_path)
+    _skill(tmp_path, "iota", "Use when hitting a recurring chore: finding a process and paths")
+    fails = RG.check_frontmatter(tmp_path)            # the real entry point, no changed-list
+    assert any("iota" in f for f in fails)
+    # ... and narrowing deliberately still works, for a caller that wants only its own paths.
+    assert RG.frontmatter_failures(tmp_path, []) == []
+
+
 def test_frontmatter_gate_blocks_a_colon_that_breaks_the_yaml(tmp_path):
     """The commit gate must see what `cso_failures` cannot: the CSO rules read a description
     the regex recovered, so an invalid block passes them while a parser rejects the file."""

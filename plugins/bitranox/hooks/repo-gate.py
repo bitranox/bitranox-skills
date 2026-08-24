@@ -633,6 +633,9 @@ def check_skill_review(root):
 
 _frontmatter_description = hc.frontmatter_description
 
+#: Where this plugin keeps its skills, relative to the repo root.
+_SKILLS_DIR = "plugins/bitranox/skills"
+
 
 def cso_failures(root, changed):
     """A changed skill description must be a single-line plain YAML scalar, trigger-first
@@ -651,31 +654,35 @@ def cso_failures(root, changed):
     return fails
 
 
-def frontmatter_failures(root, changed):
-    """A changed SKILL.md must have front matter a parser accepts and only ONE of them.
+def frontmatter_failures(root, changed=None):
+    """EVERY shipped SKILL.md must have front matter a parser accepts, and only ONE of them.
 
     `cso_failures` above cannot reach this: it lints the description that `frontmatter_description`
     already recovered, and that reader is a regex over the first `---` split, so it recovers a
     value from a block no YAML parser would accept and from a file carrying a second block. Those
     checks lived only in `frontmatter_problems`, whose sole caller audits LOCAL unshipped skills -
-    so the marketplace's own commits were never gated by them."""
+    so the marketplace's own commits were never gated by them.
+
+    Unlike its neighbours this sweeps the WHOLE skills dir rather than the changed paths, and
+    `changed` is accepted only so a caller can narrow it deliberately. Changed-only would rebuild
+    the blind spot the check exists to close: the descriptions that prompted it survived because
+    nothing ever swept the full set, and a defect can arrive in an untouched file through a merge,
+    a mirror sync, or an edit made outside the hook. The sweep costs milliseconds over 81 files."""
+    if changed is None:
+        return hc.frontmatter_problems(root / _SKILLS_DIR)
     fails = []
     for p in changed:
         m = _SKILL_MD_RX.match(p)
         if not m:
             continue
         md = root / p
-        if not md.is_file():
-            continue
-        fails.extend(hc.frontmatter_file_problems(md, "skills/%s" % m.group(1)))
+        if md.is_file():
+            fails.extend(hc.frontmatter_file_problems(md, "skills/%s" % m.group(1)))
     return fails
 
 
 def check_frontmatter(root):
-    changed = _changed_vs_origin(root)
-    if changed is None:
-        return []
-    return frontmatter_failures(root, changed)
+    return frontmatter_failures(root)
 
 
 def check_cso(root):
