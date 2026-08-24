@@ -253,6 +253,29 @@ def test_the_misconfigured_message_says_which_knob_to_set():
     detail["source"] = "assumed"
     msg = W._misconfigured(detail)
     assert "context_window" in msg and "563,038" in msg
+    # The window is DERIVED from the model, so the message must lead with that and offer the knob
+    # only as the fallback. Asserting the knob alone passed against the pre-detection wording, which
+    # told the reader to set it outright - and that stale text shipped live for 28 versions behind a
+    # duplicate definition of this function.
+    assert "derived from the model" in msg
+
+
+def test_no_top_level_name_is_defined_twice():
+    """A second copy of a function silently wins over the first, and every gate stays green.
+
+    5.218.0 added an updated copy of six functions ABOVE the originals instead of replacing them.
+    Python keeps the LAST definition, so the update was dead and the older `_misconfigured` text
+    kept firing. Nothing caught it: the copies parse, import and pass their own assertions.
+    """
+    import ast
+    from collections import Counter
+
+    module = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    defined = Counter(
+        node.name for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
+    assert [name for name, seen in defined.items() if seen > 1] == []
 
 
 # ---------------------------------------------------------------- decide()
