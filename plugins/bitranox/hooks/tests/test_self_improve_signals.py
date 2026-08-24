@@ -837,6 +837,43 @@ def test_note_unknown_keywords_drops_leaked_identifiers(home):
     S.clear_pending_keywords(_PROJ)
 
 
+def test_note_unknown_keywords_drops_task_id_shape(home):
+    # Claude Code's background task_id ("b" plus 8 base36 chars, e.g. "beu19dgux") is a machine id,
+    # never a search term - drop it, while a real word starting with "b" still queues.
+    S.note_unknown_keywords(["beu19dgux", "b02j3wfk7", "bitranox", "bootstrap"], _PROJ)
+    pending = S.load_pending_keywords(_PROJ)
+    assert "bitranox" in pending and "bootstrap" in pending
+    assert "beu19dgux" not in pending and "b02j3wfk7" not in pending
+    S.clear_pending_keywords(_PROJ)
+
+
+def test_note_unknown_keywords_drops_dates_uuids_num_units_and_short_hex(home):
+    S.note_unknown_keywords(
+        ["2026-08-21", "5f611971-acf5-4f13-9ae6-843bf2976631", "100gb", "30s",
+         "eb7439a4", "proxmox"], _PROJ)
+    assert S.load_pending_keywords(_PROJ) == frozenset({"proxmox"})
+    S.clear_pending_keywords(_PROJ)
+
+
+def test_shape_junk_allowlist_protects_a_known_hex_lookalike_term(home):
+    # "ed25519" is seven characters all valid in [0-9a-f], so the structural hex-fragment check
+    # alone would misclassify a real, searched-for SSH key type as machine-id junk.
+    assert S._is_shape_junk("ed25519") is False
+    S.note_unknown_keywords(["ed25519"], _PROJ)
+    assert "ed25519" in S.load_pending_keywords(_PROJ)
+    S.clear_pending_keywords(_PROJ)
+
+
+def test_load_pending_keywords_self_heals_junk_written_before_the_filter_existed(home):
+    # A queue file can already hold junk queued before _is_shape_junk existed; reading it must
+    # filter that junk out without a one-off migration.
+    f = S._recall_pending_path(_PROJ)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("1440\n404\nproxmox\nb02j3wfk7\n", encoding="utf-8")
+    assert S.load_pending_keywords(_PROJ) == frozenset({"proxmox"})
+    S.clear_pending_keywords(_PROJ)
+
+
 # ---- curated-store relocation, version gate, and cross-platform lock (Phase 1) --------------------
 
 def test_curated_paths():

@@ -1566,6 +1566,39 @@ def add_topical_words(words, proj):
 # text (e.g. inside a <task-notification>), so the recall tokenizer would queue them as "keywords".
 # They are junk that pollutes the dream's filler-classification pass; drop them at the queue chokepoint.
 _LEAKED_ID_RX = re.compile(r"^(?:toolu_[0-9a-z]+|[0-9a-f]{16,})$")
+_SHAPE_JUNK_ALLOWLIST = frozenset({"ed25519"})
+_UUID_RX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TASK_ID_RX = re.compile(r"^b[0-9a-z]{8}$")
+_HEXFRAG_RX = re.compile(r"^[0-9a-f]{6,15}$")
+_PURE_DIGITS_RX = re.compile(r"^\d+$")
+_NUM_UNIT_RX = re.compile(
+    r"^\d+(?:gb|mb|kb|tb|pb|ghz|mhz|khz|hz|ms|ns|us|sec|secs|min|mins|hrs|hr|px|pt|em|rem|"
+    r"cm|mm|km|kg|lb|lbs|ft|yr|yrs|mo|wk|pct|deg|k|m|s|x)$"
+)
+
+
+def _is_shape_junk(tok):
+    """True for a machine-token shape that is never a real recall search term.
+
+    A Claude Code background task id (the `task_id` field, shaped `b` plus 8 base36 chars), a hex
+    fragment, an ISO date, a uuid and a digit+unit size all ride into prompt text and would
+    otherwise be queued for the dream to classify one project at a time, which cannot keep up.
+    Checked structurally rather than against a dictionary, so a real term can collide with a junk
+    shape - `ed25519` is seven valid hex characters. Add a confirmed collision to the allowlist
+    rather than loosening a regex; requiring a digit in the hex-fragment shape already excludes the
+    all-hex-letter English words (facade, decade, deadbeef) at no cost to the drop count."""
+    if tok in _SHAPE_JUNK_ALLOWLIST:
+        return False
+    if _LEAKED_ID_RX.match(tok):
+        return True
+    if _UUID_RX.match(tok) or _DATE_RX.match(tok) or _PURE_DIGITS_RX.match(tok):
+        return True
+    if _NUM_UNIT_RX.match(tok):
+        return True
+    if _TASK_ID_RX.match(tok) and any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok[1:]):
+        return True
+    return bool(_HEXFRAG_RX.match(tok) and any(c.isdigit() for c in tok))
 
 
 def note_unknown_keywords(words, proj):
@@ -1575,7 +1608,7 @@ def note_unknown_keywords(words, proj):
     known = load_filler_words(proj) | load_topical_words(proj)
     cur = load_pending_keywords(proj)
     lowered = {str(w).strip().lower() for w in words if str(w).strip()}
-    add = {w for w in lowered if not _LEAKED_ID_RX.match(w)} - known - cur
+    add = {w for w in lowered if not _is_shape_junk(w)} - known - cur
     if not add:
         return
     f = _recall_pending_path(proj)
@@ -1591,10 +1624,10 @@ def note_unknown_keywords(words, proj):
 def load_pending_keywords(proj):
     """The project's queued-but-unclassified recall keywords (for the dream classifier)."""
     try:
-        return frozenset(w.strip().lower() for w in _recall_pending_path(proj).read_text(
-            encoding="utf-8").splitlines() if w.strip())
+        lines = _recall_pending_path(proj).read_text(encoding="utf-8").splitlines()
     except OSError:
         return frozenset()
+    return frozenset(w for w in (tok.strip().lower() for tok in lines) if w and not _is_shape_junk(w))
 
 
 def clear_pending_keywords(proj):

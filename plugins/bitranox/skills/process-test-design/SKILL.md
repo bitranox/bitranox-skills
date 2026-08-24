@@ -204,6 +204,13 @@ so a stale waiver cannot re-hide a fix.
 The same doubt applies to any gate: validate it against a KNOWN-BAD input once, so you have seen it
 go red. Otherwise "green for months" is equally consistent with "it stopped gating months ago".
 
+**An exemption or scope limit added to a guard, filter, or validator needs the same proof, run in
+the untouched direction.** Add a test where the trigger is present but the exemption must NOT
+apply, asserting the verdict stays unchanged - not only a test proving the exemption fires where it
+should. Then keep the case the guard was built to catch as a permanent test, re-run after every
+exemption added later: two narrow-looking exemptions added in the same change can each pass alone
+and still add up to silencing the guard on its own motivating case.
+
 Four mechanics worth stating because they silently defeat a test that looks right:
 
 - **`from m import X` binds a COPY at import time.** `monkeypatch.setattr(m, "X", v)` mutates `m`'s
@@ -229,6 +236,17 @@ Four mechanics worth stating because they silently defeat a test that looks righ
 Prove a codec/serializer swap by SEMANTIC equivalence - decode the new output with the OLD decoder
 and compare the values - not by byte-equality, which fails on harmless ordering or padding changes
 and passes on a compatible-looking but wrong encoding.
+
+**A check built on a lenient parser can only see what that parser exposes.** A validator that reads
+structured input through a forgiving reader - a bare `text.split("---", 2)[1]`, an unanchored regex,
+a try/except that swallows a parse error - inherits every malformation that reader tolerates. A
+second, smuggled copy of the block further down the file lands wherever the split throws its
+unexamined remainder, so a check that only asserts on the fields it extracted reports the file clean
+while never looking at what the parser silently dropped. Before trusting such a check, enumerate
+concretely what its own parser forgives (a duplicated block, a glued-on closing delimiter, a
+duplicate key a dict-based loader overwrites), then verify each one STRUCTURALLY against the raw
+text - a delimiter count, a line scan - rather than through the same parser, which by construction
+cannot see what it already swallowed.
 
 ## Quick checklist
 

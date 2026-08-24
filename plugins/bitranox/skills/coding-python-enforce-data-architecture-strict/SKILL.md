@@ -63,6 +63,49 @@ on 3.11+, which orphans every previously-written state entry and re-fires every 
 Pin the wire form with a test that asserts the exact string, and run the whole declared version
 range - a single-interpreter green cannot see this.
 
+### A bare `BaseModel` field serializes as `{}`
+
+Pydantic serializes a field by its DECLARED type, not the runtime value it holds. A field annotated
+as the bare `BaseModel` base class has no fields of its own, so `.model_dump()` and
+`.model_dump_json()` silently emit `{}` for it no matter which real subclass instance you put there
+- a type checker sees a fully-annotated field and passes, and a test that asserts only the OUTER
+envelope keys exist stays green too, so nothing catches it short of reading the actual value:
+
+```python
+from pydantic import BaseModel, SerializeAsAny
+
+class Payload(BaseModel):
+    name: str
+    count: int
+
+class Envelope(BaseModel):
+    kind: str
+    payload: BaseModel  # BAD: declared type has no fields to dump
+
+env = Envelope(kind="a", payload=Payload(name="widget", count=3))
+env.model_dump()  # {'kind': 'a', 'payload': {}}  <- silently empty
+```
+
+Two fixes, and they are not interchangeable:
+
+- **`SerializeAsAny[BaseModel]`** keeps the field typed for as long as the object lives - use it
+  when the envelope is a live object other code still reads before the final dump. It tells
+  Pydantic to serialize the RUNTIME type polymorphically: `env.model_dump()` now gives
+  `{'kind': 'a', 'payload': {'name': 'widget', 'count': 3}}`.
+- **Export at the boundary** - keep the field a plain mapping and call `.model_dump()` on the
+  payload yourself in the function that emits the envelope - is the better default when the
+  envelope exists only to be dumped (a CLI's `{ok, command, data, skipped}` response, an API
+  reply). That is Rule 5's "one dump at output, nothing in between" applied to the payload too,
+  and it needs no extra annotation.
+
+Do not widen either fix into `SerializeAsAny[BaseModel] | dict` expecting a permissive fallback: a
+raw dict validates against the bare `BaseModel` arm (an empty base model accepts any mapping), and
+the instance you get back has no working serializer, so `.model_dump()` raises `TypeError:
+'MockValSer' object is not an instance of 'SchemaSerializer'` instead of degrading gracefully. Type
+the field for the concrete subclasses you actually expect, and diff the emitted JSON against a
+pre-change baseline whichever fix you take - the wire format is the only thing that shows an empty
+payload.
+
 ### Anti-Patterns to Eliminate
 
 ```python
