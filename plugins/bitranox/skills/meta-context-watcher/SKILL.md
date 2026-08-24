@@ -54,8 +54,14 @@ thing dies with this session: what you were part-way through, and why you chose 
    > delete it - if this session ends badly it is the only record of where things stood.
 
 4. **Re-read it as the next session.** Any line the repo could have told them is a line to cut.
-5. **Tell the user to type `/clear`.** You cannot run it - built-in slash commands are not invocable
-   by the model - so say so plainly rather than implying the session clears itself.
+5. **STOP. The handover is the LAST thing you do in this session.** Writing it ends the session's
+   work. Do NOT start a new task, resume the one you were part-way through, or "just finish" the
+   small thing first - not even the next action you have just written into the file. Every edit made
+   after the handover is work the handover does not describe, so the next session inherits a file
+   that is already wrong about the state it exists to report, which is worse than no handover at all.
+   If the user asks for something new, write the handover, stop, and let them re-ask after the clear.
+6. **Tell the user to type `/clear`, then wait.** You cannot run it - built-in slash commands are not
+   invocable by the model - so say so plainly rather than implying the session clears itself.
 
 ## When you are the one READING a handover
 
