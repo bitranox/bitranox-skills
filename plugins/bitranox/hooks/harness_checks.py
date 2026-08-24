@@ -850,42 +850,106 @@ def frontmatter_scalar_colon(path):
     return None
 
 
+def _load_yaml():
+    """PyYAML, ruamel as a fallback, or None when neither is installed.
+
+    A seam rather than a bare import so the no-library path is testable: nothing provisions a
+    hook's dependencies, so "no parser" is a real runtime state, not a hypothetical."""
+    try:
+        import yaml                                   # noqa: PLC0415 - optional dependency
+        return yaml.safe_load
+    except ImportError:
+        pass
+    try:
+        from ruamel.yaml import YAML                  # noqa: PLC0415 - optional dependency
+    except ImportError:
+        return None
+    return YAML(typ="safe").load
+
+
+def frontmatter_yaml_error(path):
+    """What a real YAML parser rejects about the front-matter block, or None.
+
+    The stdlib checks above are shaped for the malformations that have actually occurred here;
+    a parser catches the ones nobody predicted (an unclosed flow sequence, a bad indicator).
+    It returns None BOTH when the block is valid and when no parser is installed - a hook gets
+    a bare interpreter, so the deep pass has to degrade to the stdlib rules rather than raise.
+    CI installs PyYAML, so the two run at deliberately different depths, in favour of catching
+    more where a library is available.
+
+    It does NOT catch a duplicate key: YAML permits one and the parsers here keep the last
+    silently, so `frontmatter_problems` cannot see that through this route."""
+    load = _load_yaml()
+    if load is None:
+        return None
+    try:
+        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    closes = [i for i in _bare_delimiters(lines) if i > 0]
+    if not closes:
+        return None
+    try:
+        parsed = load("\n".join(lines[1:closes[0]]))
+    except Exception as exc:                          # noqa: BLE001 - any parser complaint counts
+        return str(exc).splitlines()[0].strip()
+    if not isinstance(parsed, dict):
+        return "front matter is %s, not a mapping" % type(parsed).__name__
+    return None
+
+
+def frontmatter_file_problems(md, label, expect_name=None):
+    """Front-matter failures for ONE SKILL.md, as a list of messages.
+
+    Split out from `frontmatter_problems` so the commit gate can run the same checks over the
+    files a change touches. Two callers, one implementation: a second copy would drift, and the
+    half that drifted would be the one nobody runs."""
+    problems = []
+    if frontmatter_unterminated(md):
+        problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
+                        "end of a value instead of standing on its own line." % label)
+    second = frontmatter_second_block(md)
+    if second is not None:
+        problems.append("%s: SKILL.md carries a second front matter at line %d - every "
+                        "reader stops at the first closing delimiter, so those keys ship "
+                        "unexamined." % (label, second))
+    broken = frontmatter_yaml_error(md)
+    if broken is not None:
+        problems.append("%s: the YAML parser rejects the front matter - %s. (Skipped when no "
+                        "YAML library is installed, so the stdlib checks stay the floor.)"
+                        % (label, broken))
+    colon = frontmatter_scalar_colon(md)
+    if colon is not None:
+        problems.append("%s: front-matter `%s:` holds a `: ` (or ends with `:`) in a plain "
+                        "scalar, so the block is not valid YAML - reword it with ` - `. The "
+                        "regex readers here recover the value and notice nothing."
+                        % (label, colon))
+    name = frontmatter_name(md)
+    if name is None:
+        problems.append("%s: SKILL.md has no `name:` in its front matter." % label)
+    elif expect_name is not None and name != expect_name:
+        problems.append("%s: front-matter name is %r but the directory is %r - the router "
+                        "keys on one and the loader on the other." % (label, name, expect_name))
+    description = frontmatter_description(md)
+    if description is None:
+        problems.append("%s: SKILL.md has no `description:` - nothing can route to it." % label)
+    else:
+        problems.extend(cso_failures_for(label, description))
+    return problems
+
+
 def frontmatter_problems(skills_dir):
-    """Per-skill front-matter failures: a name that disagrees with its dir, plus the CSO rules."""
+    """Per-skill front-matter failures across a whole skills dir."""
     skills_dir = Path(skills_dir)
     if not skills_dir.is_dir():
         return []
     problems = []
     for skill in sorted(d for d in skills_dir.iterdir() if d.is_dir()):
         md = skill / "SKILL.md"
-        if not md.is_file():
-            continue
-        label = skill.name
-        if frontmatter_unterminated(md):
-            problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
-                            "end of a value instead of standing on its own line." % label)
-        second = frontmatter_second_block(md)
-        if second is not None:
-            problems.append("%s: SKILL.md carries a second front matter at line %d - every "
-                            "reader stops at the first closing delimiter, so those keys ship "
-                            "unexamined." % (label, second))
-        colon = frontmatter_scalar_colon(md)
-        if colon is not None:
-            problems.append("%s: front-matter `%s:` holds a `: ` (or ends with `:`) in a plain "
-                            "scalar, so the block is not valid YAML - reword it with ` - `. The "
-                            "regex readers here recover the value and notice nothing."
-                            % (label, colon))
-        name = frontmatter_name(md)
-        if name is None:
-            problems.append("%s: SKILL.md has no `name:` in its front matter." % label)
-        elif name != skill.name:
-            problems.append("%s: front-matter name is %r but the directory is %r - the router "
-                            "keys on one and the loader on the other." % (label, name, skill.name))
-        description = frontmatter_description(md)
-        if description is None:
-            problems.append("%s: SKILL.md has no `description:` - nothing can route to it." % label)
-        else:
-            problems.extend(cso_failures_for(label, description))
+        if md.is_file():
+            problems.extend(frontmatter_file_problems(md, skill.name, expect_name=skill.name))
     return problems
 
 

@@ -651,6 +651,33 @@ def cso_failures(root, changed):
     return fails
 
 
+def frontmatter_failures(root, changed):
+    """A changed SKILL.md must have front matter a parser accepts and only ONE of them.
+
+    `cso_failures` above cannot reach this: it lints the description that `frontmatter_description`
+    already recovered, and that reader is a regex over the first `---` split, so it recovers a
+    value from a block no YAML parser would accept and from a file carrying a second block. Those
+    checks lived only in `frontmatter_problems`, whose sole caller audits LOCAL unshipped skills -
+    so the marketplace's own commits were never gated by them."""
+    fails = []
+    for p in changed:
+        m = _SKILL_MD_RX.match(p)
+        if not m:
+            continue
+        md = root / p
+        if not md.is_file():
+            continue
+        fails.extend(hc.frontmatter_file_problems(md, "skills/%s" % m.group(1)))
+    return fails
+
+
+def check_frontmatter(root):
+    changed = _changed_vs_origin(root)
+    if changed is None:
+        return []
+    return frontmatter_failures(root, changed)
+
+
 def check_cso(root):
     changed = _changed_vs_origin(root)
     if changed is None:
@@ -891,6 +918,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     failures += check_attribution(root)
     failures += check_skill_naming(root)
     failures += check_cso(root)
+    failures += check_frontmatter(root)
     failures += check_secrets(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the

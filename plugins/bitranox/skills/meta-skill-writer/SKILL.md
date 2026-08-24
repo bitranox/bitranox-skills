@@ -772,6 +772,30 @@ Edit skill without testing? Same violation.
 - Don't "adapt" while running tests
 - Delete means delete
 
+Every item on that list is a JUDGEMENT - "this one is small enough to skip". The list forbids the
+judgement, not the existence of a carve-out, and there is exactly one carve-out, decided by a proof
+you can run rather than by how the change feels:
+
+**One named exception, defined by a mechanical proof rather than by judgement: a SYNTAX-ONLY
+FRONT-MATTER REPAIR.** A change that makes the front matter parse while altering nothing a reader
+or the router sees is tested by a parser and the derived artifacts, not by a pressure scenario.
+There is no behaviour to watch an agent get wrong, so a RED run has nothing to fail on - the RED
+step exists to show what agents naturally do before there is teaching content, and a syntax repair
+adds none.
+
+It applies ONLY when all three hold, and the review artifact must state each one - three
+conditions that were true but never written down do not count, because the artifact is
+where the proof lives:
+
+- a real parser REJECTS the front matter before the change and ACCEPTS it after;
+- the derived trigger artifact regenerates BYTE-IDENTICAL, so no routing keyword moved;
+- the diff touches the front matter only - no body line, no `name:`, no trigger added or removed.
+
+Fail any one of the three and the Iron Law applies unchanged. The byte-identical regeneration IS
+the test; "the change is obviously inert" is not, and neither is a unit test you wrote yourself.
+Rewording a description to say something DIFFERENT is never this exception, however small the edit
+looks - that changes what the router matches, which is behaviour.
+
 **REQUIRED BACKGROUND:** The bitranox:process-test-driven-development skill explains why this matters. Same principles apply to documentation.
 
 ## Testing All Skill Types

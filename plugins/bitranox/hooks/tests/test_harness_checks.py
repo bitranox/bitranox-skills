@@ -8,6 +8,7 @@ selection gets eyeballed.
 
 import json
 import os
+import importlib.util
 import shutil
 import sys
 import subprocess
@@ -769,6 +770,50 @@ def test_a_breaking_colon_still_reads_fine_through_the_lenient_parsers(tmp_path)
     md = _skill_md(tmp_path, _COLON)
     assert hc.frontmatter_name(md) == "demo"
     assert hc.frontmatter_description(md).startswith("Use when hitting")
+
+
+# A real parser catches malformations the stdlib rules above were never shaped for. It is
+# OPTIONAL by design: a hook gets a bare interpreter, so a missing library must degrade to the
+# stdlib checks rather than raise. CI installs PyYAML, so there the deeper pass always runs.
+needs_yaml = pytest.mark.skipif(importlib.util.find_spec("yaml") is None,
+                                reason="PyYAML not installed")
+
+
+@needs_yaml
+def test_frontmatter_yaml_error_reports_a_block_the_parser_rejects(tmp_path):
+    md = _skill_md(tmp_path, _COLON)
+    assert "mapping values" in (hc.frontmatter_yaml_error(md) or "")
+
+
+@needs_yaml
+def test_frontmatter_yaml_error_is_quiet_for_a_valid_block(tmp_path):
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing paths.\n---\n")
+    assert hc.frontmatter_yaml_error(md) is None
+
+
+#: Invalid YAML with no colon problem anywhere - an unclosed flow sequence. This is the case
+#: that justifies the parser: the stdlib colon rule is silent on it by construction.
+_UNCLOSED = "---\nname: demo\ndescription: [Use when parsing gitignore paths.\n---\n"
+
+
+@needs_yaml
+def test_frontmatter_yaml_error_catches_what_the_colon_rule_cannot_see(tmp_path):
+    md = _skill_md(tmp_path, _UNCLOSED)
+    assert hc.frontmatter_yaml_error(md) is not None
+    assert hc.frontmatter_scalar_colon(md) is None      # the stdlib rule genuinely cannot
+
+
+def test_frontmatter_yaml_error_degrades_to_none_without_a_library(tmp_path, monkeypatch):
+    """No YAML library must mean SKIPPED, never a crash and never a false pass elsewhere."""
+    monkeypatch.setattr(hc, "_load_yaml", lambda: None)
+    assert hc.frontmatter_yaml_error(_skill_md(tmp_path, _COLON)) is None
+
+
+@needs_yaml
+def test_frontmatter_problems_flags_a_block_the_parser_rejects(tmp_path):
+    skills = _skills(tmp_path / "p")
+    (skills / "demo" / "SKILL.md").write_text(_UNCLOSED, encoding="utf-8")
+    assert any("the YAML parser rejects" in p for p in hc.frontmatter_problems(skills))
 
 
 # --- graveyards ---------------------------------------------------------------------------------
