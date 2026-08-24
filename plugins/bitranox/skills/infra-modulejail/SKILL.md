@@ -1,6 +1,6 @@
 ---
 name: infra-modulejail
-description: Use when hardening a Linux host by preventing the kernel from loading modules it does not need - kernel-module allowlist or blacklist, modprobe install override, reducing request_module/autoload attack surface, CIS module-blacklisting - especially on a remote or relocating host with no console and no out-of-band power, where a wrong module list can leave it unbootable and unreachable. Also use when a module silently refuses to load on an already-jailed host: modprobe exits 0 having loaded nothing, lsmod stays empty, a systemd unit fails with "Dependency failed", or journalctl shows "blocked: <module>".
+description: Use when hardening a Linux host by preventing the kernel from loading modules it does not need - kernel-module allowlist or blacklist, modprobe install override, reducing request_module/autoload attack surface, CIS module-blacklisting - especially on a remote or relocating host with no console and no out-of-band power, where a wrong module list can leave it unbootable and unreachable. Also use when a module silently refuses to load on an already-jailed host - modprobe exits 0 having loaded nothing, lsmod stays empty, a systemd unit fails with "Dependency failed", or journalctl logs the module as "blocked".
 ---
 
 # infra-modulejail

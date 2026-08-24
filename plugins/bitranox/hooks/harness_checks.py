@@ -743,6 +743,113 @@ def frontmatter_unterminated(path):
     return not any(line.strip() == "---" for line in lines[1:])
 
 
+#: A fenced code block opener/closer. Skills that DOCUMENT front matter show one in a fence,
+#: so a scan that cannot see fences reads the example as a real second block.
+_FENCE_RX = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _fenced_lines(lines):
+    """Indices of lines inside a fenced code block, by the CommonMark rules.
+
+    Two rules carry the weight: a BACKTICK fence's info string may hold no backtick, and a
+    closer must be bare and at least as long as its opener. Skipping either makes a prose line
+    that opens with an inline code span read as a fence, and everything after it disappears."""
+    inside, char, width, start = set(), None, 0, None
+    for index, line in enumerate(lines):
+        match = _FENCE_RX.match(line)
+        if char is None:
+            if match is None:
+                continue
+            fence, info = match.group(1), match.group(2)
+            if fence[0] == "`" and "`" in info:
+                continue
+            char, width, start = fence[0], len(fence), index
+        elif match is not None:
+            fence, info = match.group(1), match.group(2)
+            if fence[0] == char and len(fence) >= width and not info.strip():
+                inside.update(range(start, index + 1))
+                char, start = None, None
+    if char is not None:                      # an unclosed fence runs to EOF
+        inside.update(range(start, len(lines)))
+    return inside
+
+
+def _bare_delimiters(lines):
+    """Indices of `---` lines that stand alone outside any code fence."""
+    fenced = _fenced_lines(lines)
+    return [i for i, line in enumerate(lines)
+            if i not in fenced and line.strip() == "---" and not line.startswith("    ")]
+
+
+def _top_level_keys(lines):
+    """`key` names that begin a line, in order, with the index each was found at."""
+    found = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)", line)
+        if match:
+            found.append((match.group(1), index))
+    return found
+
+
+#: The keys that make a `---`-delimited region a front matter rather than a horizontal rule.
+FRONTMATTER_KEYS = frozenset({"name", "description"})
+
+
+def frontmatter_second_block(path):
+    """The 1-based line of a second front-matter-shaped block, or None.
+
+    Every other reader in this module splits on the FIRST bare `---`, so anything past the
+    closing delimiter is an unexamined remainder: a smuggled block with a divergent description
+    passes all of them. A bare `---` in the body is an ordinary horizontal rule though, so a
+    delimiter alone proves nothing - what makes a later region a second FRONT MATTER is that it
+    carries front-matter keys."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    closes = [i for i in _bare_delimiters(lines) if i > 0]
+    if len(closes) < 2:
+        return None
+    for position, opener in enumerate(closes[1:], start=1):
+        end = closes[position + 1] if position + 1 < len(closes) else len(lines)
+        keys = {name for name, _ in _top_level_keys(lines[opener + 1:end])}
+        if FRONTMATTER_KEYS & keys:
+            return opener + 1
+    return None
+
+
+def frontmatter_scalar_colon(path):
+    """The front-matter key whose plain scalar holds a YAML-breaking colon, or None.
+
+    A `: ` inside an unquoted value makes YAML read a nested mapping, and a trailing `:` does
+    the same, so the whole block stops being valid YAML. Nothing here notices: every reader
+    above is a regex that recovers the value regardless, which is why three shipped skills
+    carried one. Quoted and block scalars are exempt - the colon is inside the quoting - and
+    the CSO rules reject those styles separately."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    closes = [i for i in _bare_delimiters(lines) if i > 0]
+    if not closes:
+        return None
+    block = lines[1:closes[0]]
+    keys = _top_level_keys(block)
+    for position, (name, index) in enumerate(keys):
+        value = block[index].split(":", 1)[1].strip()
+        if not value or value[0] in (">", "|", '"', "'"):
+            continue          # a nested mapping, or a quoting style the CSO rules own
+        end = keys[position + 1][1] if position + 1 < len(keys) else len(block)
+        folded = " ".join(" ".join([value, *block[index + 1:end]]).split())
+        if ": " in folded or folded.endswith(":"):
+            return name
+    return None
+
+
 def frontmatter_problems(skills_dir):
     """Per-skill front-matter failures: a name that disagrees with its dir, plus the CSO rules."""
     skills_dir = Path(skills_dir)
@@ -757,6 +864,17 @@ def frontmatter_problems(skills_dir):
         if frontmatter_unterminated(md):
             problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
                             "end of a value instead of standing on its own line." % label)
+        second = frontmatter_second_block(md)
+        if second is not None:
+            problems.append("%s: SKILL.md carries a second front matter at line %d - every "
+                            "reader stops at the first closing delimiter, so those keys ship "
+                            "unexamined." % (label, second))
+        colon = frontmatter_scalar_colon(md)
+        if colon is not None:
+            problems.append("%s: front-matter `%s:` holds a `: ` (or ends with `:`) in a plain "
+                            "scalar, so the block is not valid YAML - reword it with ` - `. The "
+                            "regex readers here recover the value and notice nothing."
+                            % (label, colon))
         name = frontmatter_name(md)
         if name is None:
             problems.append("%s: SKILL.md has no `name:` in its front matter." % label)

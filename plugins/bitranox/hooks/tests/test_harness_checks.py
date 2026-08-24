@@ -685,6 +685,92 @@ def test_a_glued_delimiter_still_reads_fine_through_the_lenient_parsers(tmp_path
     assert hc.frontmatter_description(md).endswith("filtering paths.")
 
 
+# A second front-matter-shaped block is invisible to every reader in this module: they all
+# split on the FIRST bare delimiter, so the smuggled keys past it are an unexamined remainder.
+_SMUGGLED = (
+    "---\nname: demo\ndescription: Use when parsing gitignore files and filtering paths.\n---\n"
+    "\n# demo\n\nBody.\n\n---\nname: other\ndescription: A divergent description.\n---\n\ntail\n")
+
+
+def test_frontmatter_second_block_spots_a_smuggled_block(tmp_path):
+    md = _skill_md(tmp_path, _SMUGGLED)
+    assert hc.frontmatter_second_block(md) == 10
+
+
+def test_frontmatter_second_block_ignores_a_horizontal_rule(tmp_path):
+    """A bare `---` in the body is ordinary Markdown, not a second block."""
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing paths.\n---\n"
+                             "\n# demo\n\nBefore.\n\n---\n\nAfter.\n")
+    assert hc.frontmatter_second_block(md) is None
+
+
+def test_frontmatter_second_block_ignores_a_rule_pair_wrapping_prose(tmp_path):
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing paths.\n---\n"
+                             "\n---\n\nJust prose, no keys.\n\n---\n\ntail\n")
+    assert hc.frontmatter_second_block(md) is None
+
+
+def test_frontmatter_second_block_ignores_delimiters_inside_a_code_fence(tmp_path):
+    """A skill that DOCUMENTS front matter shows one in a fence; that is not a second block."""
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing paths.\n---\n"
+                             "\n```yaml\n---\nname: example\ndescription: shown, not real\n---\n```\n")
+    assert hc.frontmatter_second_block(md) is None
+
+
+def test_frontmatter_problems_flags_a_second_block(tmp_path):
+    skills = _skills(tmp_path / "p")
+    (skills / "demo" / "SKILL.md").write_text(_SMUGGLED, encoding="utf-8")
+    assert any("second front matter" in p for p in hc.frontmatter_problems(skills))
+
+
+def test_a_second_block_still_reads_fine_through_the_lenient_parsers(tmp_path):
+    """The reason the check is needed: every other reader returns the FIRST block's values."""
+    md = _skill_md(tmp_path, _SMUGGLED)
+    assert hc.frontmatter_name(md) == "demo"
+    assert hc.frontmatter_description(md).endswith("filtering paths.")
+    assert hc.frontmatter_unterminated(md) is False
+
+
+# An unquoted `: ` makes a plain YAML scalar parse as a nested mapping, so the whole block is
+# invalid - while this module's regex readers recover the value and notice nothing.
+_COLON = ("---\nname: demo\ndescription: Use when hitting a recurring chore: finding a process "
+          "and filtering paths.\n---\n")
+
+
+def test_frontmatter_scalar_colon_spots_an_unquoted_colon_space(tmp_path):
+    md = _skill_md(tmp_path, _COLON)
+    assert hc.frontmatter_scalar_colon(md) == "description"
+
+
+def test_frontmatter_scalar_colon_allows_a_colon_with_no_space(tmp_path):
+    """`http://x` and `a:b` are legal in a plain scalar - only `: ` starts a mapping."""
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when reading http://example.com "
+                             "and a:b pairs while filtering paths.\n---\n")
+    assert hc.frontmatter_scalar_colon(md) is None
+
+
+def test_frontmatter_scalar_colon_flags_a_trailing_colon(tmp_path):
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when filtering paths:\n---\n")
+    assert hc.frontmatter_scalar_colon(md) == "description"
+
+
+def test_frontmatter_scalar_colon_is_quiet_for_a_clean_value(tmp_path):
+    md = _skill_md(tmp_path, "---\nname: demo\ndescription: Use when parsing gitignore paths.\n---\n")
+    assert hc.frontmatter_scalar_colon(md) is None
+
+
+def test_frontmatter_problems_flags_a_colon_that_breaks_the_yaml(tmp_path):
+    skills = _skills(tmp_path / "p")
+    (skills / "demo" / "SKILL.md").write_text(_COLON, encoding="utf-8")
+    assert any("valid YAML" in p for p in hc.frontmatter_problems(skills))
+
+
+def test_a_breaking_colon_still_reads_fine_through_the_lenient_parsers(tmp_path):
+    md = _skill_md(tmp_path, _COLON)
+    assert hc.frontmatter_name(md) == "demo"
+    assert hc.frontmatter_description(md).startswith("Use when hitting")
+
+
 # --- graveyards ---------------------------------------------------------------------------------
 
 def test_graveyard_leaves_a_sanctioned_backup_alone(tmp_path):
