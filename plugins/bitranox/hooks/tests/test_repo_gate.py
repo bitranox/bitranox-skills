@@ -566,8 +566,6 @@ def test_frontmatter_gate_sweeps_skills_the_change_never_touched(tmp_path):
     _skill(tmp_path, "iota", "Use when hitting a recurring chore: finding a process and paths")
     fails = RG.check_frontmatter(tmp_path)            # the real entry point, no changed-list
     assert any("iota" in f for f in fails)
-    # ... and narrowing deliberately still works, for a caller that wants only its own paths.
-    assert RG.frontmatter_failures(tmp_path, []) == []
 
 
 def test_frontmatter_gate_blocks_a_colon_that_breaks_the_yaml(tmp_path):
@@ -577,7 +575,7 @@ def test_frontmatter_gate_blocks_a_colon_that_breaks_the_yaml(tmp_path):
     _skill(tmp_path, "zeta", "Use when hitting a recurring chore: finding a process and paths")
     changed = ["plugins/bitranox/skills/zeta/SKILL.md"]
     assert RG.cso_failures(tmp_path, changed) == []          # the old gate is blind to it
-    fails = RG.frontmatter_failures(tmp_path, changed)
+    fails = RG.frontmatter_failures(tmp_path)
     # Both routes fire: the parser rejects the block, and the stdlib colon rule names the key.
     assert any("the YAML parser rejects" in f for f in fails)
     assert any("not valid YAML" in f for f in fails)
@@ -590,19 +588,19 @@ def test_frontmatter_gate_blocks_a_second_front_matter(tmp_path):
     md.write_text(md.read_text(encoding="utf-8")
                   + "\n---\nname: smuggled\ndescription: A divergent description.\n---\n",
                   encoding="utf-8")
-    fails = RG.frontmatter_failures(tmp_path, ["plugins/bitranox/skills/eta/SKILL.md"])
+    fails = RG.frontmatter_failures(tmp_path)
     assert fails and "second front matter" in fails[0]
 
 
 def test_frontmatter_gate_is_quiet_for_a_good_skill(tmp_path):
     make_repo(tmp_path)
     _skill(tmp_path, "theta", "Use when gadget builds fail with linker errors on windows runners")
-    assert RG.frontmatter_failures(tmp_path, ["plugins/bitranox/skills/theta/SKILL.md"]) == []
+    assert RG.frontmatter_failures(tmp_path) == []
 
 
-def test_frontmatter_gate_ignores_paths_that_are_not_skills(tmp_path):
+def test_frontmatter_gate_is_quiet_when_the_repo_ships_no_skills(tmp_path):
     make_repo(tmp_path)
-    assert RG.frontmatter_failures(tmp_path, ["docs/skills.md", "README.md"]) == []
+    assert RG.frontmatter_failures(tmp_path) == []
 
 
 def test_cso_lint_requires_trigger_first_description(tmp_path):

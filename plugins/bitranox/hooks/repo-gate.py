@@ -655,7 +655,7 @@ def cso_failures(root, changed):
     return fails
 
 
-def frontmatter_failures(root, changed=None):
+def frontmatter_failures(root):
     """EVERY shipped SKILL.md must have front matter a parser accepts, and only ONE of them.
 
     `cso_failures` above cannot reach this: it lints the description that `frontmatter_description`
@@ -664,22 +664,12 @@ def frontmatter_failures(root, changed=None):
     checks lived only in `frontmatter_problems`, whose sole caller audits LOCAL unshipped skills -
     so the marketplace's own commits were never gated by them.
 
-    Unlike its neighbours this sweeps the WHOLE skills dir rather than the changed paths, and
-    `changed` is accepted only so a caller can narrow it deliberately. Changed-only would rebuild
-    the blind spot the check exists to close: the descriptions that prompted it survived because
-    nothing ever swept the full set, and a defect can arrive in an untouched file through a merge,
-    a mirror sync, or an edit made outside the hook. The sweep costs milliseconds over 81 files."""
-    if changed is None:
-        return hc.frontmatter_problems(root / _SKILLS_DIR)
-    fails = []
-    for p in changed:
-        m = _SKILL_MD_RX.match(p)
-        if not m:
-            continue
-        md = root / p
-        if md.is_file():
-            fails.extend(hc.frontmatter_file_problems(md, "skills/%s" % m.group(1)))
-    return fails
+    Unlike its neighbours this sweeps the WHOLE skills dir rather than the changed paths. Changed-
+    only would rebuild the blind spot the check exists to close: the descriptions that prompted it
+    survived because nothing ever swept the full set, and a defect can arrive in an untouched file
+    through a merge, a mirror sync, or an edit made outside the hook. The sweep costs milliseconds
+    over 81 files."""
+    return hc.frontmatter_problems(root / _SKILLS_DIR)
 
 
 def check_frontmatter(root):
