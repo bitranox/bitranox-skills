@@ -585,7 +585,10 @@ def _check_pytest_run(root, target, report, baseline):
 
 # ---- skill review artifact + CSO description lint (skill-usage enforcement) ---------------------
 
-_SKILL_MD_RX = re.compile(r"^plugins/bitranox/skills/([^/]+)/SKILL\.md$")
+#: Where this plugin keeps its skills, relative to the repo root. Derived from once, so a
+#: relocation cannot leave one check looking in the old place.
+_SKILLS_DIR = "plugins/bitranox/skills"
+_SKILL_MD_RX = re.compile(r"^%s/([^/]+)/SKILL\.md$" % re.escape(_SKILLS_DIR))
 _CSO_STOP = hc.CSO_STOP
 
 
@@ -606,7 +609,7 @@ def skill_review_failures(root, changed):
     fails = []
     names = sorted({m.group(1) for p in changed for m in [_SKILL_MD_RX.match(p)] if m})
     for name in names:
-        prefix = "plugins/bitranox/skills/%s/.skillwriter/" % name
+        prefix = "%s/%s/.skillwriter/" % (_SKILLS_DIR, name)
         arts = [p for p in changed if p.startswith(prefix) and p.endswith(".md")]
         if not arts:
             fails.append("skills/%s/SKILL.md changed without an updated .skillwriter/checklist-*.md "
@@ -633,8 +636,6 @@ def check_skill_review(root):
 
 _frontmatter_description = hc.frontmatter_description
 
-#: Where this plugin keeps its skills, relative to the repo root.
-_SKILLS_DIR = "plugins/bitranox/skills"
 
 
 def cso_failures(root, changed):
