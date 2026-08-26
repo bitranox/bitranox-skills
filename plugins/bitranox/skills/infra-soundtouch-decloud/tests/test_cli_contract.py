@@ -155,3 +155,72 @@ def test_restore_requires_confirm_but_check_does_not() -> None:
     common = ["--ip", "192.0.2.31", "--template", "t.json", "--service", "http://192.0.2.10:8000"]
     assert P.build_parser().parse_args(["restore", *common]).confirm is False
     assert not hasattr(P.build_parser().parse_args(["check", *common]), "confirm")
+
+
+def test_enable_ssh_on_an_unpaired_speaker_refuses_with_an_envelope(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The one precondition the command cannot work without, and the only path that exits 2.
+
+    access-and-rooting.md promises a refusal rather than a silent no-op here, because the injection
+    rides a value an unpaired speaker never reads. Both network edges are substituted: a speaker
+    with SSH already open returns early, and a reachable one is what makes this path unreachable.
+    """
+    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr(O, "account_uuid", lambda _ip: "")
+    rc = O.main(["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000",
+                 "enable-ssh", "--confirm"])
+    body = _envelope(capsys)
+    assert rc == 2 and body["ok"] is False
+    assert "account" in str(body["data"]).lower()
+
+
+def _accepted(_ip: str, commands: list[str]) -> list[dict[str, object]]:
+    """Every telnet command answered and reached its prompt, which is the interesting case."""
+    return [{"cmd": c, "reply": "Setting Bose Server URLs\n->", "complete": True} for c in commands]
+
+
+def _stub_speaker(monkeypatch: pytest.MonkeyPatch, answers: list[bool]) -> None:
+    monkeypatch.setattr(O, "account_uuid", lambda _ip: "4376872")
+    monkeypatch.setattr(O, "telnet_run", _accepted)
+    monkeypatch.setattr(O, "wait_up", lambda *_a, **_k: 1.0)
+    monkeypatch.setattr(O.time, "sleep", lambda _s: None)
+    replies = iter(answers)
+    monkeypatch.setattr(O, "port_open", lambda *_a, **_k: next(replies))
+
+
+ENABLE = ["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000", "enable-ssh", "--confirm"]
+
+
+def test_enable_ssh_waits_for_sshd_instead_of_taking_one_reading(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Readiness is per-port and sshd comes up after the API port, so one check reads slow as no."""
+    _stub_speaker(monkeypatch, [False, False, False, True])  # first answer is the already-open guard
+    rc = O.main(ENABLE)
+    body = _envelope(capsys)
+    assert rc == 0 and body["ok"] is True and body["data"]["ssh_open"] is True
+
+
+def test_a_stored_write_pending_a_reboot_is_a_question_not_a_failure(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Measured on an ST20 27.0.6: the write is stored and only fires once a boot makes it runtime.
+
+    Reporting that as a plain no sent the reader to --full-config, which reboots for a different
+    reason and hides which of the two changes did the work.
+    """
+    _stub_speaker(monkeypatch, [False, False])
+    monkeypatch.setattr(O, "SSH_WAIT_STORED", 0.0)
+    rc = O.main(ENABLE)
+    body = _envelope(capsys)
+    assert rc == 2 and body["ok"] is False
+    assert "reboot" in str(body["data"]["next"]).lower()
+
+
+def test_the_full_form_reboots_itself_so_a_closed_port_is_a_definite_no(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The fuller form already rebooted, so there is no later boot left to wait for."""
+    _stub_speaker(monkeypatch, [False, False])
+    monkeypatch.setattr(O, "SSH_WAIT_FULL", 0.0)
+    rc = O.main([*ENABLE, "--full-config"])
+    body = _envelope(capsys)
+    assert rc == 1 and body["ok"] is False
+    assert "serial" in str(body["data"]["next"]).lower()

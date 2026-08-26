@@ -60,25 +60,38 @@ The firmware passes the URL value to a shell, so a suffix appended to it runs on
 ;touch /tmp/remote_services;/etc/init.d/sshd start
 ```
 
-The **default form** writes that through the persistence layer alone and needs no reboot. It is the
-field-confirmed one, reported working on the Wireless Link Adapter and the CineMate 520 `lisa`
-variant:
+The **default form** writes that through the persistence layer alone. It is the field-confirmed
+one, reported working on the Wireless Link Adapter and the CineMate 520 `lisa` variant:
 
 ```
 envswitch boseurls set "http://<service-host>:8000;touch /tmp/remote_services;/etc/init.d/sshd start" "http://<service-host>:8000/updates/soundtouch"
 ```
 
-If that value persists - `getpdo` shows it - but port 22 stays refused, the speaker needs the
-fuller form, which also puts the injection on the runtime `sys configuration` key and reboots. Both
-differences appear to matter:
+**The injection fires when the speaker READS the value, and on some units that is only at the next
+boot.** Measured on a SoundTouch 20 on 27.0.6.46330: the command replied OK, port 22 stayed refused,
+and `state` showed all four URLs clean - because `envswitch boseurls set` writes the STORED
+configuration while `state` reads `getpdo CurrentSystemConfiguration`, which is the RUNTIME one.
+They are two different values until a boot copies one onto the other, so `getpdo` cannot confirm
+this write before a reboot. After one, the runtime `margeServerUrl` carried the injection,
+`/tmp/remote_services` existed and `sshd` was running.
+
+A refused port 22 straight after the write is therefore not a failure and not grounds for the fuller
+form. `enable-ssh` reports it as a question left unanswered (exit 2) and tells you to run
+`reboot --confirm` and look again.
+
+Only if port 22 is still refused after that reboot does the speaker need the fuller form, which also
+puts the injection on the runtime `sys configuration` key and reboots by itself. Both differences
+appear to matter:
 
 ```bash
 uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
     --service http://<service-host>:8000 enable-ssh --full-config --confirm
-``` It is reported on the SoundTouch Portable (Series I) and some
-CineMate 520 units, and upstream records the automation of it as candidate behaviour still awaiting
-confirmation on hardware. Some ST10 and CineMate 520 units never start `sshd` over telnet at all and
-need the serial or U-Boot route, which is outside this skill.
+```
+
+It is reported on the SoundTouch Portable (Series I) and some CineMate 520 units, and upstream
+records the automation of it as candidate behaviour still awaiting confirmation on hardware. Some
+ST10 and CineMate 520 units never start `sshd` over telnet at all and need the serial or U-Boot
+route, which is outside this skill.
 
 Pauses between the commands are unnecessary. A controlled A/B across three variants found identical
 outcomes at zero and five second gaps, which retracted an earlier theory that the gap mattered.

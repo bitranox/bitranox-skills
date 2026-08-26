@@ -32,7 +32,15 @@ except ModuleNotFoundError:  # pragma: no cover - direct execution from another 
                                  http_get, injected_values, parse_sources, parse_urls, port_open,
                                  telnet_run)
 
-__all__ = ["build_parser", "migration_verdict", "account_uuid", "wait_down", "wait_up", "main"]
+__all__ = ["build_parser", "migration_verdict", "account_uuid", "wait_down", "wait_up",
+           "wait_port", "main"]
+
+# How long to keep asking for port 22 after the injection is written. The default form
+# only stores the value, so a unit that fires it at the next boot cannot answer inside any
+# window; the short wait is for the units that fire on their next read cycle. The full
+# form reboots itself, and sshd comes up well after the API port.
+SSH_WAIT_STORED = 30.0
+SSH_WAIT_FULL = 150.0
 
 
 def account_uuid(ip: str) -> str:
@@ -73,6 +81,20 @@ def wait_up(ip: str, limit: float = 180.0) -> float | None:
     start = time.monotonic()
     while time.monotonic() - start < limit:
         if port_open(ip, API_PORT, timeout=2):
+            return round(time.monotonic() - start, 1)
+        time.sleep(3)
+    return None
+
+
+def wait_port(ip: str, port: int, limit: float) -> float | None:
+    """How long until this port accepts, or None inside the limit.
+
+    Polled rather than read once because readiness is per-port: sshd starts after the API port
+    answers, so a single immediate reading reports a slow start as a refusal.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < limit:
+        if port_open(ip, port, timeout=2):
             return round(time.monotonic() - start, 1)
         time.sleep(3)
     return None
@@ -119,9 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    def emit(ok: bool, data: dict[str, object]) -> int:
+    def emit(ok: bool, data: dict[str, object], code: int = 1) -> int:
+        """One JSON envelope on every path. 1 is a definite no, 2 is a question left unanswered."""
         print(json.dumps({"ok": ok, "command": args.cmd, "data": data}, indent=2))
-        return 0 if ok else 1
+        return 0 if ok else code
 
     try:
         if args.cmd == "state":
@@ -166,18 +189,33 @@ def main(argv: list[str] | None = None) -> int:
                                             "live configuration value, which migrate must clean up "
                                             "afterwards."})
             replies = telnet_run(args.ip, commands)
-            opened = wait_up(args.ip) is not None and port_open(args.ip, SSH_PORT)
-            return emit(opened, {
-                "telnet": replies,
-                "truncated_replies": [r["cmd"] for r in replies if not r["complete"]],
-                "ssh_open": opened,
-                "next": ("Now run `migrate --confirm` to rewrite the four URLs WITHOUT the injected "
-                         "shell text, then persist the marker, or SSH is gone at the next reboot "
-                         "and the account URL keeps shell commands in it."
-                         if opened else
-                         "Port 22 did not open. If getpdo shows the value persisted, try "
-                         "--full-config; some units never start sshd over telnet at all."),
-            })
+            limit = SSH_WAIT_FULL if args.full_config else SSH_WAIT_STORED
+            opened = (wait_up(args.ip) is not None
+                      and wait_port(args.ip, SSH_PORT, limit) is not None)
+            report = {"telnet": replies,
+                      "truncated_replies": [r["cmd"] for r in replies if not r["complete"]],
+                      "ssh_open": opened}
+            if opened:
+                return emit(True, {**report,
+                                   "next": "Now run `migrate --confirm` to rewrite the four URLs "
+                                           "WITHOUT the injected shell text, then persist the "
+                                           "marker, or SSH is gone at the next reboot and the "
+                                           "account URL keeps shell commands in it."})
+            if args.full_config:
+                return emit(False, {**report,
+                                    "next": "Port 22 is still refused after the full form's own "
+                                            "reboot. Some units never start sshd over telnet at "
+                                            "all and need the serial or U-Boot route, which is "
+                                            "outside this skill."})
+            return emit(False, {**report,
+                                "next": "The injection is STORED but not live yet, which is not a "
+                                        "failure. `envswitch boseurls set` writes the stored "
+                                        "configuration, and the shell text runs when the speaker "
+                                        "reads that value as its RUNTIME margeServerUrl - measured "
+                                        "on an ST20 on 27.0.6, at the next boot, and `state` "
+                                        "cannot show it before then. Run `reboot --confirm`, then "
+                                        "check port 22 again. Escalate to --full-config only if it "
+                                        "is still refused after that reboot."}, code=2)
 
         if args.cmd == "reboot":
             if not args.confirm:

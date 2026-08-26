@@ -17,6 +17,52 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.253.0]
+
+### Fixed
+
+- **`enable-ssh` crashed instead of refusing a speaker with no account bound.** The refusal path
+  passed `code=2` to a local `emit` that, alone among the four scripts, had no `code` parameter, so
+  the one precondition the command cannot work without raised `TypeError` and printed no envelope
+  at all. That path had no test; it has one now.
+
+### Changed
+
+- **A stored injection is reported as a question (exit 2), not a failure.** Measured on a
+  SoundTouch 20 on 27.0.6.46330: `envswitch boseurls set` replied OK, port 22 stayed refused, and
+  a reboot then opened it with the injected `margeServerUrl` live, `/tmp/remote_services` present
+  and `sshd` running. The old verdict called that a definite no and sent the reader to
+  `--full-config`, which reboots for a different reason and hides which change did the work.
+- **`enable-ssh` polls for port 22 instead of reading it once.** `sshd` comes up after the API
+  port, so a single immediate reading reports a slow start as a refusal. New `wait_port` helper,
+  30 s after the stored write and 150 s after the full form's own reboot.
+
+### Documented
+
+- `references/access-and-rooting.md`: the default form fires when the speaker READS the value, and
+  on some units that is only at the next boot. Its verification step could not pass in that window
+  either, because `envswitch` writes the STORED configuration while `state` reads
+  `getpdo CurrentSystemConfiguration`, the RUNTIME one. Escalating to `--full-config` now comes
+  after a reboot, not instead of it. Also closed a code fence that ran into the next sentence.
+
+## [5.252.0]
+
+### Changed
+
+- `infra-soundtouch-decloud`: every domain claim checked against a clone of the AfterTouch
+  repository and against the procedures tested on real speakers here. Dropped the stereo-pair
+  bricking warning (AfterTouch restores SoundTouch 10 pairing), the USB stick route, and a firmware
+  boundary at 26.x that appears nowhere upstream. Corrected the reboot endpoint, the account id
+  rule, host networking versus Docker Desktop, and the per-port reboot timings.
+
+## [5.251.0]
+
+### Added
+
+- **`infra-soundtouch-decloud`**: walks an owner through replacing the shut-down Bose SoundTouch
+  cloud with a self-hosted service, restoring internet radio and presets. Five scripts and 69
+  tests. Reads run unattended; anything that changes a speaker needs a yes first.
+
 ## [5.250.2]
 
 ### Added
