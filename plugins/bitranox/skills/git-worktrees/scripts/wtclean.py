@@ -32,6 +32,9 @@ bill of health.
 
 Refusals, because this runs on machines whose layout is not yours:
 
+* A bare topic that matches MORE THAN ONE candidate is refused, naming each - precedence would
+  pick one silently, and a delete has no undo. Passing the path outright IS the answer, so an
+  explicit path is never ambiguous and no flag overrides the refusal.
 * A topic name that is a PATH rather than a bare name is refused outright, never normalised - a
   normalised traversal still deletes. Checked against both POSIX and Windows path rules, so a
   Windows-shaped escape is refused on Linux too.
@@ -500,8 +503,19 @@ def build_plan(
         if candidate.exists() or candidate.is_symlink():
             targets.append(CacheTarget(candidate, directory_size(candidate), refusal_for(candidate)))
 
+    matched = [c for c in candidates if c.exists() or c.is_symlink()]
     if not checkout.exists() and not checkout.is_symlink():
         status, refusal = STATUS_ABSENT, None
+    elif len(matched) > 1:
+        # A bare topic that names two real directories is a QUESTION. Precedence decides which one
+        # the plan reports, but a delete has no undo, so answering it silently is the one mistake
+        # that cannot be taken back. Only a bare name can reach this: naming a path IS the answer.
+        listed = ", ".join(str(path) for path in matched)
+        refusal = (
+            f"matches more than one worktree ({listed})"
+            " - name the one you mean instead of the bare topic"
+        )
+        status = STATUS_UNKNOWN
     else:
         # Same guards the cache targets get - a worktree argument that is a symlink, a filesystem
         # root, or the home directory is refused before git is asked anything about it.
@@ -632,8 +646,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "run that matches nothing says which paths it checked. A bare name finds the "
             "worktree at <base>/<prefix><topic> first, then in the working directory at "
             ".worktrees/<topic>, worktrees/<topic> and .claude/worktrees/<topic>; pass "
-            "its path outright for any other layout. Symlinked targets, and worktrees "
-            "holding uncommitted or untracked work, are refused."
+            "its path outright for any other layout - which is also how you answer a bare topic "
+            "that matches more than one candidate, since that is refused rather than resolved "
+            "by precedence. Symlinked targets, and worktrees holding uncommitted or untracked "
+            "work, are refused."
         ),
     )
     parser.add_argument("topic", help="the topic name, or the path of the worktree")

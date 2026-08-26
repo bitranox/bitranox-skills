@@ -87,3 +87,25 @@ Undecided gaps remaining: none.
 - [x] `tests/test_wtclean.py`: 13 new tests. Suite 75 passed; repo gate at CI parity green.
 - [x] `SKILL.md` Step 4 and the tool's own module docstring and `--help` epilog carry the same
       description of the search, so a reader who never opens the skill still gets it.
+
+## Addendum - refuse on ambiguity (5.250.0)
+
+The decision review put the base-first precedence rule to the user, who chose refusal over
+documented precedence. Precedence answers a question the caller did not know was being asked, and
+the answer deletes a directory.
+
+- [x] RED: `test_a_bare_name_matching_two_candidates_is_refused` and
+      `test_no_flag_overrides_an_ambiguous_topic` fail before the change; the two controls
+      (`test_one_candidate_is_not_ambiguous`, `test_an_explicit_path_is_never_ambiguous`) pass
+      before AND after, which is what stops the refusal firing on the ordinary case.
+- [x] Mutation-verified: widening the trigger to `len(matched) > 99` fails exactly the 3 tests
+      asserting the refusal and none of the 77 others.
+- [x] The exemption is tested in the direction it must NOT apply: an explicit path is the
+      disambiguation, so it is never refused for being ambiguous.
+- [x] No flag overrides it. `--discard-uncommitted` is an answer to "is this work disposable",
+      not to "which of these did you mean", and the refusal is checked before the overridable
+      statuses so the flag cannot reach it.
+- [x] The same description reaches a reader through all three surfaces a reader might use: Step 4,
+      the module docstring's refusal list, and the `--help` epilog. Verified by running `--help`.
+- [x] Version reasoning recorded in the changelog: MINOR, because a bare name had exactly one
+      candidate before 5.249.0, so no previously-working invocation changes behaviour.

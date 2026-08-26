@@ -180,9 +180,11 @@ Two consequences worth knowing before you trust a bare name:
   repository root, so running it from a subdirectory checks paths that do not exist and leaves
   `<base>` as the only real candidate. Run it from the directory that holds `.worktrees/` or
   `.claude/worktrees/`.
-- **The first candidate that exists wins**, so a stale `<base>/wt-<topic>` shadows the real
-  project-local checkout. A plan that found one names it on its `would remove` line; read that
-  path before `--apply` rather than trusting that the topic was unambiguous.
+- **A bare topic matching more than one candidate is REFUSED**, naming each one, and no flag
+  overrides it - `--discard-uncommitted` answers "delete it anyway", not "pick one for me".
+  A stale `<base>/wt-<topic>` beside a real project-local checkout is a question, and this is
+  a delete with no undo, so answer it by passing the path you mean. When exactly one matches,
+  the plan names it on its `would remove` line.
 
 A search that finds nothing names every path it tried, which is the half that was missing when a
 bare name reaching only `<base>` reported `nothing to remove` for a 513 MB checkout sitting in

@@ -693,3 +693,82 @@ def test_a_missing_bare_name_is_still_told_to_pass_a_path(tmp_path):
     result = run_cli("topic", cwd=tmp_path, home=tmp_path)
     assert "no worktree found at" in result.stderr
     assert "instead of the bare name" in result.stderr
+
+
+# ---------------------------------------------------------------------------------------------
+# Ambiguity: two candidates is a question, not a silent pick
+# ---------------------------------------------------------------------------------------------
+
+
+def test_a_bare_name_matching_two_candidates_is_refused(tmp_path):
+    """There is no undo, so a topic that names two real directories has to be a question.
+
+    Base-first precedence is still what the plan reports, but silently deleting the base one when
+    the caller meant the project-local one is the mistake this refuses to make for them.
+    """
+    (tmp_path / "wt-topic").mkdir()
+    (tmp_path / "project" / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert plan.worktree_refusal is not None
+    assert "more than one" in plan.worktree_refusal
+
+
+def test_one_candidate_is_not_ambiguous(tmp_path):
+    """The control: a refusal that fires on a single match would make the tool useless."""
+    (tmp_path / "project" / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert plan.worktree_refusal is None
+    assert plan.worktree_status == W.STATUS_CLEAN
+
+
+def test_an_explicit_path_is_never_ambiguous(tmp_path):
+    """Naming the worktree outright IS the disambiguation, so it must not be refused for it."""
+    (tmp_path / "wt-topic").mkdir()
+    checkout = tmp_path / "project" / ".claude" / "worktrees" / "topic"
+    checkout.mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        worktree=checkout,
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert plan.worktree_refusal is None
+    assert str(plan.worktree) == str(checkout)
+
+
+def test_no_flag_overrides_an_ambiguous_topic(tmp_path):
+    """--discard-uncommitted answers "delete it anyway", not "pick one for me"."""
+    (tmp_path / "wt-topic").mkdir()
+    (tmp_path / "project" / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert W.worktree_refusal(plan, discard_uncommitted=True) is not None
+
+
+def test_the_cli_names_both_candidates_and_removes_neither(tmp_path):
+    """End to end: exit 1, both paths named, and both still on disk afterwards."""
+    project = tmp_path / "project"
+    base_wt = tmp_path / "wt-topic"
+    base_wt.mkdir()
+    local_wt = project / ".claude" / "worktrees" / "topic"
+    local_wt.mkdir(parents=True)
+    result = run_cli("topic", "--apply", cwd=project, home=tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert str(base_wt) in result.stderr
+    assert str(local_wt) in result.stderr
+    assert base_wt.exists() and local_wt.exists()

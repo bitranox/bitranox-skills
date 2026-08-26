@@ -17,6 +17,23 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.250.0]
+
+### Changed
+
+- **A bare topic that matches more than one worktree candidate is now REFUSED rather than resolved
+  by precedence.** 5.249.0 gave a bare name four candidates and took the first that exists, which
+  means a stale `<base>/wt-<topic>` beside a real project-local checkout silently decided which
+  513 MB directory got deleted, with the resolved path on one line of output as the only warning.
+  For a delete with no undo that is a question, not a precedence problem: the run now names every
+  candidate that matched and exits 1. Passing the path outright is the answer, so an explicit path
+  is never ambiguous, and no flag overrides the refusal - `--discard-uncommitted` answers "delete
+  it anyway", not "pick one for me".
+
+  This is a MINOR rather than a MAJOR bump because the situation it refuses could not arise before
+  5.249.0: a bare name had exactly one candidate then, so no invocation that worked previously
+  changes behaviour.
+
 ## [5.249.0]
 
 ### Fixed
