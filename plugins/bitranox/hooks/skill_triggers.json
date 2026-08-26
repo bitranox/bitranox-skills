@@ -670,6 +670,23 @@
   "0xc0000001",
   "read-modify-write"
  ],
+ "infra-soundtouch-decloud": [
+  "bose",
+  "soundtouch",
+  "speakers",
+  "lost",
+  "internet",
+  "radio",
+  "presets",
+  "shut",
+  "down",
+  "cloud",
+  "setting",
+  "self-hosted",
+  "replacement",
+  "service",
+  "streaming.bose.com"
+ ],
  "infra-storage-check-zpools": [
   "monitoring",
   "pool",
