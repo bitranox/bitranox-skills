@@ -40,7 +40,7 @@ If that fails, ask which system the machine runs and walk them through it:
 | System                | What to tell them                                                        |
 |-----------------------|---------------------------------------------------------------------------|
 | Windows or macOS      | Install Docker Desktop from docker.com, then start it and re-run the check |
-| Ubuntu, Debian, Raspberry Pi OS | `curl -fsSL https://get.docker.com | sh`, then `sudo usermod -aG docker $USER` and log out and back in |
+| Ubuntu, Debian, Raspberry Pi OS | `curl -fsSL https://get.docker.com \| sh`, then `sudo usermod -aG docker $USER` and log out and back in |
 | Fedora, RHEL          | `sudo dnf install docker docker-compose-plugin` then `sudo systemctl enable --now docker` |
 | Synology, QNAP        | Install the Container Manager or Container Station package from the vendor's package centre |
 
@@ -50,10 +50,18 @@ and back in.
 
 ## Phase 4: the container
 
+Let the script write it, so the file and the guide cannot drift apart:
+
+```bash
+uv run scripts/soundtouch_service.py render --host <service-host> --out docker-compose.yml
+```
+
+It refuses a loopback address, and produces this:
+
 ```yaml
 services:
   soundtouch-service:
-    image: ghcr.io/gesellix/bose-soundtouch:${SOUNDTOUCH_VERSION:-latest}
+    image: ghcr.io/gesellix/bose-soundtouch:latest
     container_name: soundtouch-service
     restart: unless-stopped
     network_mode: host
@@ -61,16 +69,17 @@ services:
       PORT: 8000
       HTTPS_PORT: 8443
       DATA_DIR: /app/data
-      SERVER_URL: http://${SOUNDTOUCH_HOSTNAME}:8000
-      HTTPS_SERVER_URL: https://${SOUNDTOUCH_HOSTNAME}:8443
+      SERVER_URL: http://192.0.2.10:8000
+      HTTPS_SERVER_URL: https://192.0.2.10:8443
       RECORD_INTERACTIONS: "true"
       DISCOVERY_INTERVAL: 5m
     volumes:
       - /opt/soundtouch/data:/app/data
 ```
 
-`SOUNDTOUCH_HOSTNAME` is the pinned address from phase 2, for example `192.0.2.10`. Keep it in an
-env file beside the compose file so changing it later needs no edit to the compose file itself.
+`192.0.2.10` stands for the pinned address from phase 2. It appears here AND in every speaker's
+configuration, so if it ever changes, re-render this file and migrate the speakers again. That is
+the reason phase 2 pins it.
 
 **`network_mode: host` is mandatory and is the single most common way this setup fails.** Discovery
 happens over SSDP and mDNS, which are multicast, and Docker's bridge network does not forward
@@ -83,17 +92,12 @@ so a leftover block reads as though it applies and does nothing.
 **`SERVER_URL` must not be `localhost` or `127.0.0.1`.** It is the address the SPEAKERS are told to
 call back to. Pointing it at loopback tells every speaker to call itself.
 
-Start it and confirm it answers:
-
-Put both files in a directory of the owner's choosing. Any path works; `/opt/soundtouch` is only a
-convention. Create it first, and create the compose file with whatever editor they are comfortable
-with, or by pasting into a heredoc:
+Put the file in a directory of the owner's choosing. Any path works; `/opt/soundtouch` is only a
+convention. Create it first, then render the file into it:
 
 ```bash
 mkdir -p /opt/soundtouch/data && cd /opt/soundtouch
-cat > docker-compose.yml <<'EOF'
-... paste the compose file here ...
-EOF
+uv run <skill>/scripts/soundtouch_service.py render --host <service-host> --out docker-compose.yml
 ```
 
 Then start it and confirm it answers:

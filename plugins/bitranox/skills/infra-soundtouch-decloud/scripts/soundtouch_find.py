@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct execution from another 
                                  http_get, parse_presets, parse_sources, parse_urls, port_open,
                                  telnet_run)
 
-__all__ = ["classify", "describe_state", "speaker_state", "main"]
+__all__ = ["build_parser", "classify", "describe_state", "speaker_state", "main"]
 
 
 def classify(state: dict[str, object]) -> str:
@@ -103,11 +103,17 @@ def _discover(service: str) -> list[dict[str, object]]:
     return [d for d in found if isinstance(d, dict)]
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface, separate from main so the documented usage lines can be parsed in a test."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--service", help="AfterTouch base URL, to discover speakers")
     parser.add_argument("--ip", action="append", default=[], help="check this speaker directly")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if not args.service and not args.ip:
         parser.error("give --service to discover, or --ip to check one speaker")

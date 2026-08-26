@@ -3,6 +3,8 @@
 
     uv run scripts/soundtouch_service.py check-docker
     uv run scripts/soundtouch_service.py render --host 192.0.2.10 --out docker-compose.yml
+
+Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
     uv run scripts/soundtouch_service.py health --service http://192.0.2.10:8000
 """
 
@@ -23,18 +25,37 @@ except ModuleNotFoundError:  # pragma: no cover - direct execution from another 
 
 LOOPBACK_HINT = "must be an address the SPEAKERS can reach, never localhost or 127.0.0.1"
 
+_DESKTOP = "Install Docker Desktop from docker.com, start it, then run the check again."
+_DEB = ("Run: curl -fsSL https://get.docker.com | sh    then: sudo usermod -aG docker $USER "
+        "and log out and back in.")
+_RPM = "Run: sudo dnf install docker docker-compose-plugin    then: sudo systemctl enable --now docker"
+_NAS = ("Install the Container Manager (Synology) or Container Station (QNAP) package from the "
+        "vendor's package centre, then run the check again.")
+
+# Keyed by what an owner actually answers when asked what the machine runs, not by packaging
+# family: "ubuntu" and "raspberry pi os" are the two commonest answers, and both used to fall
+# through to "which system is this?" while the guide listed them as supported.
 INSTALL_HINTS = {
-    "windows": "Install Docker Desktop from docker.com, start it, then run the check again.",
-    "macos": "Install Docker Desktop from docker.com, start it, then run the check again.",
-    "debian": "Run: curl -fsSL https://get.docker.com | sh    then: sudo usermod -aG docker $USER "
-              "and log out and back in.",
-    "fedora": "Run: sudo dnf install docker docker-compose-plugin    then: "
-              "sudo systemctl enable --now docker",
-    "nas": "Install the Container Manager (Synology) or Container Station (QNAP) package from the "
-           "vendor's package centre, then run the check again.",
+    "windows": _DESKTOP,
+    "macos": _DESKTOP,
+    "mac": _DESKTOP,
+    "debian": _DEB,
+    "ubuntu": _DEB,
+    "raspberry pi os": _DEB,
+    "raspbian": _DEB,
+    "linux mint": _DEB,
+    "pop os": _DEB,
+    "fedora": _RPM,
+    "rhel": _RPM,
+    "centos": _RPM,
+    "rocky": _RPM,
+    "almalinux": _RPM,
+    "synology": _NAS,
+    "qnap": _NAS,
+    "nas": _NAS,
 }
 
-__all__ = ["install_hint", "render_compose", "validate_host", "docker_report", "main"]
+__all__ = ["build_parser", "install_hint", "render_compose", "validate_host", "docker_report", "main"]
 
 
 def install_hint(system: str) -> str:
@@ -112,12 +133,19 @@ def docker_report() -> dict[str, object]:
     return report
 
 
-def _emit(command: str, ok: bool, data: dict[str, object]) -> int:
+def _emit(command: str, ok: bool, data: dict[str, object], code: int = 1) -> int:
+    """One JSON envelope on every path, including failure.
+
+    `code` separates the two ways of not being ok: 1 is a definite NO that the walkthrough knows
+    how to act on (Docker is not installed yet), 2 is an error that stopped the question being
+    answered at all (the service could not be reached, the address was refused).
+    """
     print(json.dumps({"ok": ok, "command": command, "data": data}, indent=2))
-    return 0 if ok else 1
+    return 0 if ok else code
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface, separate from main so the documented usage lines can be parsed in a test."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -125,12 +153,20 @@ def main(argv: list[str] | None = None) -> int:
     p_render = sub.add_parser("render", help="write the compose file")
     p_render.add_argument("--host", required=True, help="address the speakers will call back to")
     p_render.add_argument("--version", default="latest")
-    p_render.add_argument("--out", default="-")
+    p_render.add_argument("--data-dir", default="/opt/soundtouch/data",
+                          help="host directory holding the service's data")
+    p_render.add_argument("--out", default="",
+                          help="write the compose file here; without it the text comes back in "
+                               "the JSON envelope")
     p_health = sub.add_parser("health", help="is the service answering")
     p_health.add_argument("--service", required=True)
     p_hint = sub.add_parser("install-hint", help="how to install Docker on one platform")
     p_hint.add_argument("system")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     if args.cmd == "check-docker":
         rep = docker_report()
@@ -145,24 +181,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "render":
         try:
-            text = render_compose(args.host, args.version)
+            text = render_compose(args.host, args.version, args.data_dir)
         except ValueError as exc:
-            return _emit("render", False, {"error": str(exc)})
-        if args.out == "-":
-            print(text)
-            return 0
-        with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        return _emit("render", True, {"path": args.out, "host": args.host})
+            return _emit("render", False, {"error": str(exc)}, code=2)
+        if not args.out:
+            return _emit("render", True, {"host": args.host, "compose": text})
+        try:
+            with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        except OSError as exc:
+            return _emit("render", False, {"error": str(exc)}, code=2)
+        return _emit("render", True, {"path": args.out, "host": args.host, "compose": text})
 
     try:
         body = http_get(f"{args.service.rstrip('/')}/api/setup/devices")
     except SpeakerError as exc:
-        return _emit("health", False, {"error": str(exc)})
+        return _emit("health", False, {"error": str(exc)}, code=2)
     try:
         devices = json.loads(body)
     except json.JSONDecodeError:
-        return _emit("health", False, {"error": "the service answered but not with JSON"})
+        return _emit("health", False, {"error": "the service answered but not with JSON"}, code=2)
     return _emit("health", True, {"devices": len(devices),
                                   "names": [d.get("name") for d in devices if isinstance(d, dict)]})
 

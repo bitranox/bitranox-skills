@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import socket
+import time
 import urllib.parse
 import urllib.request
 
@@ -28,8 +29,9 @@ PLAYBACK_PATH = "/custom/v1/playback/"
 
 __all__ = [
     "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
-    "build_url_commands", "playback_location", "decode_playback_location", "missing_presets",
-    "parse_presets", "port_open", "telnet_run", "http_get", "SpeakerError",
+    "build_url_commands", "playback_location", "decode_playback_location", "slots_to_write",
+    "missing_streams", "parse_presets", "parse_preset_slots", "port_open", "telnet_run", "http_get",
+    "SpeakerError",
 ]
 
 
@@ -150,14 +152,41 @@ def parse_presets(raw: str) -> list[str]:
     return out
 
 
-def missing_presets(raw: str, wanted: list[dict[str, str]]) -> list[str]:
-    """Which wanted streams the speaker does NOT currently hold.
+def parse_preset_slots(raw: str) -> dict[int, str]:
+    """Which BUTTON currently holds which location.
 
-    Compares by DECODED stream, not by count. Counting says six presets are present when one of them
-    now points at a station the owner replaced, so a changed template would never be applied.
+    The speaker returns `<preset id="N">` wrapping each ContentItem, so the button number is on the
+    outer tag. Reading only the locations loses it, and then a station sitting on the wrong button
+    cannot be told apart from one that is correct.
     """
-    have = {decode_playback_location(loc) for loc in parse_presets(raw)}
-    return [p["location"] for p in wanted if p["location"] not in have]
+    slots: dict[int, str] = {}
+    for chunk in raw.split("<preset ")[1:]:
+        if 'id="' not in chunk or 'location="' not in chunk:
+            continue
+        try:
+            button = int(chunk.split('id="', 1)[1].split('"', 1)[0])
+        except ValueError:
+            continue
+        slots[button] = chunk.split('location="', 1)[1].split('"', 1)[0]
+    return slots
+
+
+def slots_to_write(raw: str, wanted: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The template entries whose BUTTON does not already hold their stream.
+
+    Two readings this rules out. Counting says six presets are present when one of them now points
+    at a station the owner replaced. And comparing streams alone says nothing is missing when the
+    right station sits on the wrong button, so a corrected template would never be applied - the
+    button is part of what the owner asked for, not incidental.
+    """
+    slots = parse_preset_slots(raw)
+    return [p for p in wanted
+            if decode_playback_location(slots.get(int(p["buttonNumber"]), "")) != p["location"]]
+
+
+def missing_streams(raw: str, wanted: list[dict[str, str]]) -> list[str]:
+    """Just the stream URLs from slots_to_write, for reporting."""
+    return [p["location"] for p in slots_to_write(raw, wanted)]
 
 
 def port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
@@ -174,39 +203,46 @@ def port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
-def _read_to_prompt(sock: socket.socket, timeout: float = 10.0) -> str:
-    """Read until the `->` prompt, which every command ends with.
+def _read_to_prompt(sock: socket.socket, timeout: float = 10.0) -> tuple[str, bool]:
+    """Read until the `->` prompt. Returns the text and whether the prompt actually arrived.
 
     Waiting for OK would hang: `envswitch boseurls set` replies `Setting Bose Server URLs to ...`
     and never says OK, while every command does end at the prompt.
+
+    The flag matters because a timeout returns whatever arrived so far. Reported as an ordinary
+    reply, a truncated read is indistinguishable from a complete one, so a command that never
+    finished reads as one that succeeded.
     """
-    import time
     sock.settimeout(timeout)
     buf = b""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             chunk = sock.recv(4096)
-        except (TimeoutError, socket.timeout):
+        except TimeoutError:
             break
         if not chunk:
             break
         buf += chunk
         if buf.rstrip().endswith(PROMPT):
-            break
-    return buf.decode("utf-8", "replace")
+            return buf.decode("utf-8", "replace"), True
+    return buf.decode("utf-8", "replace"), False
 
 
-def telnet_run(ip: str, commands: list[str], settle: float = 0.2) -> list[dict[str, str]]:
-    """Send commands to the diagnostic port in order and collect each reply."""
-    import time
-    out: list[dict[str, str]] = []
+def telnet_run(ip: str, commands: list[str], settle: float = 0.2) -> list[dict[str, object]]:
+    """Send commands to the diagnostic port in order and collect each reply.
+
+    Each entry carries `complete`: False means the `->` prompt never arrived and the reply is
+    whatever had been received when the read timed out.
+    """
+    out: list[dict[str, object]] = []
     try:
         with socket.create_connection((ip, TELNET_PORT), timeout=10) as sock:
             _read_to_prompt(sock, timeout=6)
             for cmd in commands:
                 sock.sendall(cmd.encode() + b"\r\n")
-                out.append({"cmd": cmd, "reply": _read_to_prompt(sock).strip()})
+                reply, complete = _read_to_prompt(sock)
+                out.append({"cmd": cmd, "reply": reply.strip(), "complete": complete})
                 time.sleep(settle)
     except OSError as exc:
         raise SpeakerError(f"diagnostic port {TELNET_PORT} on {ip}: {exc}") from exc

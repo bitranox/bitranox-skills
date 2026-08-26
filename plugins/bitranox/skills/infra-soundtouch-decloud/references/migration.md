@@ -65,7 +65,7 @@ any `;` in a value, which means an injection was never cleaned up.
 | Way                                     | Needs        |
 |-----------------------------------------|--------------|
 | `POST /api/setup/reboot/<deviceId>`     | SSH open     |
-| `printf 'sys reboot\r\n' | nc <speaker-ip> 17000` | telnet only |
+| `printf 'sys reboot\r\n' \| nc <speaker-ip> 17000` | telnet only |
 | Unplug it                                | nothing      |
 
 The HTTP endpoint answers 500 on a speaker without SSH, without saying why. That looks like a broken

@@ -72,7 +72,7 @@ file per speaker, named by device id:
 
 ```json
 {
-  "deviceId": "0000005E005300",
+  "deviceId": "00005E005300",
   "name": "Example Speaker",
   "presets": [
     {
@@ -90,9 +90,17 @@ The `location` here is the PLAIN stream URL. The script builds the playback-adap
 writes, so the service moving to another address never means editing these files.
 
 ```bash
-uv run scripts/soundtouch_presets.py check                     # reports, never writes
-uv run scripts/soundtouch_presets.py restore --confirm         # writes what is missing
+# reports, never writes
+uv run scripts/soundtouch_presets.py check --ip <speaker-ip> \
+    --template <speaker>.json --service http://<service-host>:8000
+
+# writes the buttons that are wrong
+uv run scripts/soundtouch_presets.py restore --ip <speaker-ip> \
+    --template <speaker>.json --service http://<service-host>:8000 --confirm
 ```
+
+`check` reports which BUTTONS are wrong, not just which streams are absent. The right station on
+the wrong button is still wrong, and comparing streams alone calls that correct.
 
 ### Putting it on a timer
 

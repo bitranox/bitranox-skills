@@ -2,10 +2,13 @@
 """Back up, check and restore a speaker's presets.
 
     uv run scripts/soundtouch_presets.py backup  --ip 192.0.2.31 --outdir ./backup
-    uv run scripts/soundtouch_presets.py check   --ip 192.0.2.31 --template speaker.json --service http://192.0.2.10:8000
-    uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json --service http://192.0.2.10:8000 --confirm
+    uv run scripts/soundtouch_presets.py check   --ip 192.0.2.31 --template speaker.json \
+                                                 --service http://192.0.2.10:8000
+    uv run scripts/soundtouch_presets.py restore --ip 192.0.2.31 --template speaker.json \
+                                                 --service http://192.0.2.10:8000 --confirm
 
 Nothing is written without --confirm.
+Every subcommand prints a JSON envelope: exit 0 yes, 1 no, 2 error.
 """
 
 from __future__ import annotations
@@ -18,16 +21,16 @@ import time
 import urllib.request
 
 try:
-    from soundtouch_core import (API_PORT, SpeakerError, http_get, missing_presets, parse_sources,
-                                 playback_location)
+    from soundtouch_core import (API_PORT, SpeakerError, http_get, parse_sources,
+                                 playback_location, slots_to_write)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from soundtouch_core import (API_PORT, SpeakerError, http_get, missing_presets, parse_sources,
-                                 playback_location)
+    from soundtouch_core import (API_PORT, SpeakerError, http_get, parse_sources,
+                                 playback_location, slots_to_write)
 
 REQUIRED_FIELDS = ("buttonNumber", "name", "location")
 
-__all__ = ["load_template", "radio_ready", "preset_xml", "main"]
+__all__ = ["build_parser", "load_template", "radio_ready", "preset_xml", "main"]
 
 
 def load_template(path: str) -> dict[str, object]:
@@ -86,7 +89,8 @@ def _store(ip: str, service: str, entry: dict[str, object]) -> None:
         pass
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface, separate from main so the documented usage lines can be parsed in a test."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -101,11 +105,16 @@ def main(argv: list[str] | None = None) -> int:
         if name == "restore":
             p.add_argument("--confirm", action="store_true",
                            help="required: without it nothing is written")
-    args = parser.parse_args(argv)
+    return parser
 
-    def emit(ok: bool, data: dict[str, object]) -> int:
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    def emit(ok: bool, data: dict[str, object], code: int = 1) -> int:
+        """One JSON envelope on every path. 1 is a definite no, 2 is a question left unanswered."""
         print(json.dumps({"ok": ok, "command": args.cmd, "data": data}, indent=2))
-        return 0 if ok else 1
+        return 0 if ok else code
 
     if args.cmd == "backup":
         out = pathlib.Path(args.outdir)
@@ -122,43 +131,45 @@ def main(argv: list[str] | None = None) -> int:
             path.write_text(body, encoding="utf-8")
             saved[endpoint] = str(path)
         ok = isinstance(saved.get("presets"), str) and not str(saved["presets"]).startswith("FAILED")
-        return emit(ok, {"saved": saved})
+        return emit(ok, {"saved": saved}, code=2)
 
     try:
         template = load_template(args.template)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return emit(False, {"error": str(exc)})
+        return emit(False, {"error": str(exc)}, code=2)
     try:
         current = http_get(f"http://{args.ip}:{API_PORT}/presets")
     except SpeakerError as exc:
-        return emit(False, {"error": str(exc)})
+        return emit(False, {"error": str(exc)}, code=2)
 
     presets = list(template["presets"])  # type: ignore[arg-type]
-    missing = missing_presets(current, presets)  # type: ignore[arg-type]
+    todo = slots_to_write(current, presets)  # type: ignore[arg-type]
 
     if args.cmd == "check":
-        return emit(not missing, {"wanted": len(presets), "missing": len(missing),
-                                  "missing_streams": missing})
+        return emit(not todo, {"wanted": len(presets), "missing": len(todo),
+                               "missing_streams": [p["location"] for p in todo],
+                               "buttons": [p["buttonNumber"] for p in todo]})
 
-    if not missing:
+    if not todo:
         return emit(True, {"wrote": 0, "note": "already correct"})
     if not radio_ready(args.ip):
         return emit(False, {"error": "the radio source is not mounted yet, so a write would be "
                                      "silently undone. Wait about 80 seconds after a restart."})
     if not args.confirm:
-        return emit(False, {"would_write": len(missing), "missing_streams": missing,
+        return emit(False, {"would_write": len(todo),
+                            "missing_streams": [p["location"] for p in todo],
+                            "buttons": [p["buttonNumber"] for p in todo],
                             "note": "re-run with --confirm to write these"})
     wrote = []
-    for entry in sorted(presets, key=lambda p: p["buttonNumber"]):  # type: ignore[index]
-        if entry["location"] in missing:
-            try:
-                _store(args.ip, args.service, entry)  # type: ignore[arg-type]
-                wrote.append(entry["name"])
-            except OSError as exc:
-                return emit(False, {"wrote": wrote, "error": f"{entry['name']}: {exc}"})
-            time.sleep(0.5)
-    after = missing_presets(http_get(f"http://{args.ip}:{API_PORT}/presets"), presets)  # type: ignore[arg-type]
-    return emit(not after, {"wrote": wrote, "still_missing": after})
+    for entry in sorted(todo, key=lambda p: p["buttonNumber"]):
+        try:
+            _store(args.ip, args.service, entry)  # type: ignore[arg-type]
+            wrote.append(entry["name"])
+        except OSError as exc:
+            return emit(False, {"wrote": wrote, "error": f"{entry['name']}: {exc}"}, code=2)
+        time.sleep(0.5)
+    after = slots_to_write(http_get(f"http://{args.ip}:{API_PORT}/presets"), presets)  # type: ignore[arg-type]
+    return emit(not after, {"wrote": wrote, "still_missing": [p["location"] for p in after]})
 
 
 if __name__ == "__main__":

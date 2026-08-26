@@ -4,7 +4,8 @@
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 state
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 --service http://192.0.2.10:8000 migrate --confirm
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 reboot --confirm
-    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 play --preset 1 --expect "Example Radio"
+    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 play --preset 1 \
+                                         --expect "Example Radio" --confirm
 
 Nothing that changes the speaker runs without --confirm.
 """
@@ -27,7 +28,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct execution from another 
                                  cloud_leftovers, http_get, injected_values, parse_sources,
                                  parse_urls, port_open, telnet_run)
 
-__all__ = ["migration_verdict", "wait_down", "wait_up", "main"]
+__all__ = ["build_parser", "migration_verdict", "wait_down", "wait_up", "main"]
 
 
 def migration_verdict(urls: dict[str, str]) -> dict[str, object]:
@@ -74,7 +75,8 @@ def _key(ip: str, name: str) -> None:
         time.sleep(0.4)
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface, separate from main so the documented usage lines can be parsed in a test."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ip", required=True)
@@ -88,11 +90,17 @@ def main(argv: list[str] | None = None) -> int:
     p_reb.add_argument("--sources-wait", type=float, default=240.0)
     p_play = sub.add_parser("play", help="play a preset and prove it really played")
     p_play.add_argument("--preset", type=int, default=1)
-    p_play.add_argument("--expect", default="",
-                        help="station name that must appear; without it an already-playing "
-                             "speaker passes trivially and proves nothing")
+    p_play.add_argument("--expect", required=True,
+                        help="station name that must appear. Required: without it an "
+                             "already-playing speaker passes trivially and proves nothing")
     p_play.add_argument("--wait", type=float, default=60.0)
-    args = parser.parse_args(argv)
+    p_play.add_argument("--confirm", action="store_true",
+                        help="required: this starts audio on the speaker, at its current volume")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     def emit(ok: bool, data: dict[str, object]) -> int:
         print(json.dumps({"ok": ok, "command": args.cmd, "data": data}, indent=2))
@@ -100,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.cmd == "state":
-            urls = parse_urls(telnet_run(args.ip, ["getpdo CurrentSystemConfiguration"])[0]["reply"])
+            urls = parse_urls(
+                str(telnet_run(args.ip, ["getpdo CurrentSystemConfiguration"])[0]["reply"]))
             data = migration_verdict(urls)
             data["sources"] = parse_sources(http_get(f"http://{args.ip}:{API_PORT}/sources"))
             return emit(bool(data["ok"]), data)
@@ -114,9 +123,13 @@ def main(argv: list[str] | None = None) -> int:
                                             "afterwards for the radio sources to mount."})
             replies = telnet_run(args.ip, build_url_commands(args.service))
             verdict = migration_verdict(parse_urls(
-                telnet_run(args.ip, ["getpdo CurrentSystemConfiguration"])[0]["reply"]))
+                str(telnet_run(args.ip, ["getpdo CurrentSystemConfiguration"])[0]["reply"])))
             verdict["telnet"] = replies
-            return emit(bool(verdict["ok"]), verdict)
+            verdict["truncated_replies"] = [r["cmd"] for r in replies if not r["complete"]]
+            verdict["next"] = ("This is the LIVE configuration. Only a reboot shows what was "
+                               "persisted, and the radio sources do not mount until then: run "
+                               "`reboot --confirm` next, then check `state` again.")
+            return emit(bool(verdict["ok"]) and not verdict["truncated_replies"], verdict)
 
         if args.cmd == "reboot":
             if not args.confirm:
@@ -142,6 +155,10 @@ def main(argv: list[str] | None = None) -> int:
             return emit(bool(ready) and all(v == "READY" for v in ready.values()),
                         {"down_after_s": down, "up_after_s": up, "sources": ready})
 
+        if not args.confirm:
+            return emit(False, {"note": f"re-run with --confirm; this presses PRESET_{args.preset}"
+                                        " and starts audio at the speaker's current volume. "
+                                        "Turn the volume down first."})
         _key(args.ip, f"PRESET_{args.preset}")
         states: list[str] = []
         item = "-"
@@ -157,12 +174,11 @@ def main(argv: list[str] | None = None) -> int:
             step = f"{item}/{status}"
             if not states or states[-1] != step:
                 states.append(step)
-            if status == "PLAY_STATE" and (not args.expect or args.expect.lower() in item.lower()):
+            if status == "PLAY_STATE" and args.expect.lower() in item.lower():
                 break
             time.sleep(2)
-        ok = bool(states) and states[-1].endswith("PLAY_STATE")
-        if args.expect:
-            ok = ok and args.expect.lower() in item.lower()
+        ok = (bool(states) and states[-1].endswith("PLAY_STATE")
+              and args.expect.lower() in item.lower())
         return emit(ok, {"preset": args.preset, "expect": args.expect, "itemName": item,
                          "states": states})
     except SpeakerError as exc:

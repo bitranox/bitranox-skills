@@ -128,22 +128,84 @@ def test_decode_ignores_a_raw_stream_url():
     assert C.decode_playback_location("https://radio.example.com/stream") == ""
 
 
-def test_missing_presets_compares_by_stream_not_by_count():
-    """Six presets present, one pointing at a station the owner replaced, must read as missing."""
+SERVICE = "http://192.0.2.10:8000"
+
+
+def _speaker_presets(*slots: tuple[int, str]) -> str:
+    """The shape /presets really returns: each ContentItem inside a <preset id="N"> wrapper."""
+    return "<presets>" + "".join(
+        f'<preset id="{button}"><ContentItem '
+        f'location="{C.playback_location(SERVICE, stream, "S")}" /></preset>'
+        for button, stream in slots) + "</presets>"
+
+
+def test_slots_to_write_compares_by_stream_not_by_count():
+    """A slot pointing at a station the owner replaced must read as needing a write."""
     wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
               {"buttonNumber": 2, "name": "B", "location": "https://b.example.com/s"}]
-    have = ('<ContentItem location="' + C.playback_location("http://192.0.2.10:8000",
-                                                            "https://a.example.com/s", "A") + '" />'
-            '<ContentItem location="' + C.playback_location("http://192.0.2.10:8000",
-                                                            "https://old.example.com/s", "Old") + '" />')
-    assert C.missing_presets(have, wanted) == ["https://b.example.com/s"]
+    have = _speaker_presets((1, "https://a.example.com/s"), (2, "https://old.example.com/s"))
+    assert C.missing_streams(have, wanted) == ["https://b.example.com/s"]
 
 
-def test_missing_presets_empty_when_all_present():
+def test_slots_to_write_is_empty_when_every_button_is_right():
     wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
-    have = '<ContentItem location="' + C.playback_location("http://192.0.2.10:8000",
-                                                           "https://a.example.com/s", "A") + '" />'
-    assert C.missing_presets(have, wanted) == []
+    assert C.slots_to_write(_speaker_presets((1, "https://a.example.com/s")), wanted) == []
+
+
+def test_the_right_station_on_the_wrong_button_still_needs_writing():
+    """Comparing streams alone calls this correct, so the button has to be part of the key."""
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"}]
+    have = _speaker_presets((3, "https://a.example.com/s"))
+    assert C.missing_streams(have, wanted) == ["https://a.example.com/s"]
+
+
+def test_two_buttons_may_hold_the_same_station():
+    """A duplicate is a legitimate template, and each slot is judged on its own."""
+    wanted = [{"buttonNumber": 1, "name": "A", "location": "https://a.example.com/s"},
+              {"buttonNumber": 2, "name": "A", "location": "https://a.example.com/s"}]
+    have = _speaker_presets((1, "https://a.example.com/s"))
+    assert C.missing_streams(have, wanted) == ["https://a.example.com/s"]
+
+
+def test_parse_preset_slots_keys_by_button():
+    slots = C.parse_preset_slots(_speaker_presets((1, "https://a.example.com/s"),
+                                                  (4, "https://b.example.com/s")))
+    assert sorted(slots) == [1, 4]
+
+
+def test_parse_preset_slots_skips_a_slot_with_no_location():
+    """An empty button is absent, never a slot holding the empty string."""
+    assert C.parse_preset_slots('<preset id="2"></preset>') == {}
+
+
+class _FakeSocket:
+    """A socket that hands back a fixed script of chunks, then times out.
+
+    _read_to_prompt takes the socket, so this substitutes at a real seam rather than patching the
+    module's internals.
+    """
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = list(chunks)
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, _size: int) -> bytes:
+        if not self._chunks:
+            raise TimeoutError
+        return self._chunks.pop(0)
+
+
+def test_a_reply_ending_at_the_prompt_is_complete():
+    text, complete = C._read_to_prompt(_FakeSocket(b"margeServerUrl {\n", b"}\n-> "), timeout=1)
+    assert complete is True and "margeServerUrl" in text
+
+
+def test_a_reply_that_never_reaches_the_prompt_is_marked_incomplete():
+    """The text still comes back, so only the flag separates a truncated read from a finished one."""
+    text, complete = C._read_to_prompt(_FakeSocket(b"margeServerUrl {\n"), timeout=1)
+    assert complete is False and "margeServerUrl" in text
 
 
 def test_parse_presets_reads_every_location():
