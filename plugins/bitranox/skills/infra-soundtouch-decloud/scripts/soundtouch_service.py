@@ -55,7 +55,8 @@ INSTALL_HINTS = {
     "nas": _NAS,
 }
 
-__all__ = ["build_parser", "install_hint", "render_compose", "validate_host", "docker_report", "main"]
+__all__ = ["build_parser", "install_hint", "render_compose", "validate_host", "docker_report",
+           "main", "DEFAULT_MGMT_PASSWORD"]
 
 
 def install_hint(system: str) -> str:
@@ -86,29 +87,43 @@ def validate_host(host: str) -> tuple[bool, str]:
     return True, "ok"
 
 
-def render_compose(host: str, version: str = "latest", data_dir: str = "/opt/soundtouch/data") -> str:
-    """The compose file, with host networking and no ports block.
+DEFAULT_MGMT_PASSWORD = "change_me!"  # what upstream ships, and publishes in its own docs
 
-    Host networking is mandatory: discovery is SSDP and mDNS multicast, which Docker's bridge does
-    not forward into a container, so on a bridge the service answers HTTP and finds no speakers at
-    all. A ports block is invalid alongside it and Docker only warns, so a leftover one reads as
-    though it applies and does nothing.
+
+def render_compose(host: str, version: str = "latest", data_dir: str = "/opt/soundtouch/data",
+                   *, network: str = "host", mgmt_password: str = DEFAULT_MGMT_PASSWORD) -> str:
+    """The compose file, in either networking mode.
+
+    `host` networking is what makes automatic discovery work: it is SSDP and mDNS multicast, which
+    Docker's bridge does not forward into a container, so on a bridge the service answers HTTP and
+    finds no speakers by itself. It is LINUX ONLY - on Docker Desktop for Windows and macOS it does
+    not behave the same way, and the supported route there is published ports plus adding each
+    speaker by IP address. Choosing it by platform rather than declaring one mode mandatory is the
+    difference between a setup that works and one that looks installed.
+
+    The two modes are mutually exclusive: a `ports:` block alongside `network_mode: host` is
+    invalid, Docker only warns, and the leftover block reads as though it applies.
     """
+    if network not in ("host", "ports"):
+        raise ValueError(f"network must be 'host' or 'ports', got {network!r}")
     ok, why = validate_host(host)
     if not ok:
         raise ValueError(why)
+    net = ("    network_mode: host\n" if network == "host"
+           else '    ports:\n      - "8000:8000"\n      - "8443:8443"\n')
     return f"""services:
   soundtouch-service:
     image: ghcr.io/gesellix/bose-soundtouch:{version}
     container_name: soundtouch-service
     restart: unless-stopped
-    network_mode: host
-    environment:
+{net}    environment:
       PORT: 8000
       HTTPS_PORT: 8443
       DATA_DIR: /app/data
       SERVER_URL: http://{host}:8000
       HTTPS_SERVER_URL: https://{host}:8443
+      MGMT_USERNAME: admin
+      MGMT_PASSWORD: {mgmt_password}
       RECORD_INTERACTIONS: "true"
       DISCOVERY_INTERVAL: 5m
     volumes:
@@ -155,6 +170,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--version", default="latest")
     p_render.add_argument("--data-dir", default="/opt/soundtouch/data",
                           help="host directory holding the service's data")
+    p_render.add_argument("--network", choices=("host", "ports"), default="host",
+                          help="host networking discovers speakers by itself but is Linux only; "
+                               "use ports on Docker Desktop and add speakers by IP")
+    p_render.add_argument("--mgmt-password", default=DEFAULT_MGMT_PASSWORD,
+                          help="Management API password; the default is published upstream")
     p_render.add_argument("--out", default="",
                           help="write the compose file here; without it the text comes back in "
                                "the JSON envelope")
@@ -181,17 +201,29 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "render":
         try:
-            text = render_compose(args.host, args.version, args.data_dir)
+            text = render_compose(args.host, args.version, args.data_dir,
+                                  network=args.network, mgmt_password=args.mgmt_password)
         except ValueError as exc:
             return _emit("render", False, {"error": str(exc)}, code=2)
+        warnings: list[str] = []
+        if args.mgmt_password == DEFAULT_MGMT_PASSWORD:
+            warnings.append("MGMT_PASSWORD is the default that upstream publishes in its own "
+                            "documentation. Anyone who can reach this machine can drive the "
+                            "Management API until it is changed with --mgmt-password.")
+        if args.network == "host":
+            warnings.append("network_mode: host is Linux only. On Docker Desktop for Windows or "
+                            "macOS use --network ports and add each speaker by IP address.")
+        data: dict[str, object] = {"host": args.host, "network": args.network,
+                                   "compose": text, "warnings": warnings}
         if not args.out:
-            return _emit("render", True, {"host": args.host, "compose": text})
+            return _emit("render", True, data)
         try:
             with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(text)
         except OSError as exc:
             return _emit("render", False, {"error": str(exc)}, code=2)
-        return _emit("render", True, {"path": args.out, "host": args.host, "compose": text})
+        data["path"] = args.out
+        return _emit("render", True, data)
 
     try:
         body = http_get(f"{args.service.rstrip('/')}/api/setup/devices")

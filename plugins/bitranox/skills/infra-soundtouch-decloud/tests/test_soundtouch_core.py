@@ -25,7 +25,7 @@ CurrentSystemConfiguration {
 
 # /sources entries are self-closing and carry no text label.
 SOURCES = (
-    '<?xml version="1.0" encoding="UTF-8" ?><sources deviceID="0000005E005300">'
+    '<?xml version="1.0" encoding="UTF-8" ?><sources deviceID="00005E005300">'
     '<sourceItem source="TUNEIN" status="READY" isLocal="false" multiroomallowed="true" />'
     '<sourceItem source="LOCAL_INTERNET_RADIO" status="READY" isLocal="false" />'
     '<sourceItem source="BLUETOOTH" status="UNAVAILABLE" isLocal="true" />'
@@ -220,3 +220,36 @@ def test_http_get_refuses_a_non_http_scheme():
         assert "non-http" in str(exc)
     else:
         raise AssertionError("file: URL was not refused")
+
+
+def test_the_default_enable_ssh_form_is_persistence_only():
+    """The field-confirmed form writes through envswitch alone and needs no reboot."""
+    cmds = C.build_enable_ssh_commands("http://192.0.2.10:8000")
+    assert len(cmds) == 1
+    assert cmds[0].startswith("envswitch boseurls set")
+    assert C.SSH_INJECT in cmds[0]
+
+
+def test_the_full_config_form_also_rides_the_runtime_key_and_reboots():
+    """Those two differences are what upstream reports as mattering on the devices that need it."""
+    cmds = C.build_enable_ssh_commands("http://192.0.2.10:8000", full_config=True)
+    marge = [c for c in cmds if c.startswith("sys configuration margeServerUrl")][0]
+    assert C.SSH_INJECT in marge
+    assert any(c.startswith("envswitch boseurls set") and C.SSH_INJECT in c for c in cmds)
+    assert cmds[-1] == "sys reboot"
+
+
+def test_the_injection_never_lands_on_the_other_url_fields():
+    """Shell text on bmxRegistryUrl or statsServerUrl would persist with nothing to clean it up."""
+    cmds = C.build_enable_ssh_commands("http://192.0.2.10:8000", full_config=True)
+    for field in ("bmxRegistryUrl", "statsServerUrl", "swUpdateUrl"):
+        line = [c for c in cmds if c.startswith(f"sys configuration {field}")][0]
+        assert C.SSH_INJECT not in line
+
+
+def test_enable_ssh_and_migrate_disagree_about_the_marge_url_by_exactly_the_injection():
+    """migrate is what cleans up after enable-ssh, so the two must differ only by the suffix."""
+    clean = [c for c in C.build_url_commands("http://192.0.2.10:8000")
+             if c.startswith("envswitch boseurls set")][0]
+    dirty = C.build_enable_ssh_commands("http://192.0.2.10:8000")[0]
+    assert dirty.replace(C.SSH_INJECT, "") == clean

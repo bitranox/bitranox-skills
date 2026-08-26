@@ -34,7 +34,9 @@ The safe way is to let the service do it:
 curl -X POST "http://<service-host>:8000/api/setup/migrate/<deviceId>?method=telnet&target_url=http://<service-host>:8000"
 ```
 
-Use `method=telnet`, not `method=xml`. The xml method does not reliably write all four fields.
+Use `method=telnet`. The xml method needs SSH open, and telnet is what this skill has tested. If a
+speaker ends up with its runtime and persisted layers disagreeing after an in-place migration,
+re-running with telnet is the documented fix.
 
 Pauses between the commands are unnecessary: the whole sequence sent back to back lands as
 completely as one spaced over seconds. When automating, wait for the `->` prompt and NOT for the
@@ -62,14 +64,17 @@ any `;` in a value, which means an injection was never cleaned up.
 
 ## Reboot, then wait
 
-| Way                                     | Needs        |
-|-----------------------------------------|--------------|
-| `POST /api/setup/reboot/<deviceId>`     | SSH open     |
-| `printf 'sys reboot\r\n' \| nc <speaker-ip> 17000` | telnet only |
-| Unplug it                                | nothing      |
+| Way                                                        | Needs       |
+|------------------------------------------------------------|-------------|
+| `uv run scripts/soundtouch_onboard.py --ip <ip> reboot --confirm` | telnet only |
+| `POST /api/setup/reboot/<deviceId>?method=telnet`           | telnet only |
+| `POST /api/setup/reboot/<deviceId>`                         | SSH open    |
+| Unplug it                                                   | nothing     |
 
-The HTTP endpoint answers 500 on a speaker without SSH, without saying why. That looks like a broken
-service and is not one.
+**The HTTP endpoint takes a method, and defaults to SSH.** Called bare on a speaker without SSH it
+answers 500 without saying why, which reads as a broken service. Adding `?method=telnet` makes it
+send `sys reboot` over the diagnostic port instead, so no speaker needs rooting just to be
+restarted.
 
 Do not trust the reply that it is rebooting. Confirm port 8090 actually drops, then comes back.
 A wait that only checks for "back up" reports success instantly when the reboot never happened.
@@ -99,15 +104,26 @@ that was factory reset does not. Ask the service which accounts it already knows
 
 ```bash
 curl -s  "http://<service-host>:8000/api/setup/account-id-suggestions/<deviceId>"
-curl -X POST "http://<service-host>:8000/api/setup/pair-account/<deviceId>?account_id=<seven-digits>"
+curl -X POST "http://<service-host>:8000/api/setup/pair-account/<deviceId>?account_id=<account-id>"
 ```
 
-The account id is a QUERY parameter and is exactly seven digits; in the body it returns 400. Use
-this endpoint rather than the speaker's own `setMargeAccount`, which fails against an incomplete
-service and sets nothing.
+The account id is a QUERY parameter; in the body it returns 400. It does NOT have to be seven
+digits. Seven digits is what the service GENERATES, so that is what most accounts look like, but the
+endpoint accepts any path-safe identifier - which matters because a speaker can arrive carrying
+something else entirely, and a seven-digit rule would reject it and drop the device.
+
+Prefer this endpoint over the speaker's own `setMargeAccount`: on newer firmware that returns 404,
+on some units the handler wedges, and it returns 502 when the speaker never had an account. The
+firmware also wants a full acknowledged pass through its pairing exchange rather than that call on
+its own.
 
 Never call `POST /setMargeAccount` with an empty body to test. It has been observed returning 200
-while silently clearing the account, which unbinds a working speaker.
+while silently clearing the account and unbinding a working speaker. A later retry on the same
+device returned 400 and changed nothing, so this is state-dependent: not a rule you can rely on in
+either direction, and a good reason not to probe with it.
 
-All the speakers in a home may share one account, as they did with Bose. Presets are stored per
-device inside the account, so one speaker cannot overwrite another's.
+**Think before putting every speaker on one account.** They may share one, as they did with Bose,
+and presets are stored per device inside it. But a shared account is the condition that the
+reboot-time preset wipe correlates with, and a setup using a distinct account id per speaker has not
+reproduced it. If presets keep vanishing on one speaker in a multi-speaker home, that is the first
+thing to change. See `presets.md`.

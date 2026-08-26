@@ -3,7 +3,7 @@ import json
 import pytest
 import soundtouch_presets as P
 
-GOOD = {"deviceId": "0000005E005300", "name": "Example Speaker",
+GOOD = {"deviceId": "00005E005300", "name": "Example Speaker",
         "presets": [{"buttonNumber": 1, "name": "Example Radio",
                      "location": "https://radio.example.com/stream",
                      "contentItemType": "stationurl", "source": "LOCAL_INTERNET_RADIO"}]}

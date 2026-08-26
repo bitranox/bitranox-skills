@@ -3,6 +3,8 @@
 
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 state
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 --service http://192.0.2.10:8000 migrate --confirm
+    uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 \
+                                         --service http://192.0.2.10:8000 enable-ssh --confirm
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 reboot --confirm
     uv run scripts/soundtouch_onboard.py --ip 192.0.2.31 play --preset 1 \
                                          --expect "Example Radio" --confirm
@@ -19,16 +21,26 @@ import time
 import urllib.request
 
 try:
-    from soundtouch_core import (API_PORT, URL_FIELDS, SpeakerError, build_url_commands,
-                                 cloud_leftovers, http_get, injected_values, parse_sources,
-                                 parse_urls, port_open, telnet_run)
+    from soundtouch_core import (API_PORT, SSH_PORT, URL_FIELDS, SpeakerError,
+                                 build_enable_ssh_commands, build_url_commands, cloud_leftovers,
+                                 http_get, injected_values, parse_sources, parse_urls, port_open,
+                                 telnet_run)
 except ModuleNotFoundError:  # pragma: no cover - direct execution from another directory
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-    from soundtouch_core import (API_PORT, URL_FIELDS, SpeakerError, build_url_commands,
-                                 cloud_leftovers, http_get, injected_values, parse_sources,
-                                 parse_urls, port_open, telnet_run)
+    from soundtouch_core import (API_PORT, SSH_PORT, URL_FIELDS, SpeakerError,
+                                 build_enable_ssh_commands, build_url_commands, cloud_leftovers,
+                                 http_get, injected_values, parse_sources, parse_urls, port_open,
+                                 telnet_run)
 
-__all__ = ["build_parser", "migration_verdict", "wait_down", "wait_up", "main"]
+__all__ = ["build_parser", "migration_verdict", "account_uuid", "wait_down", "wait_up", "main"]
+
+
+def account_uuid(ip: str) -> str:
+    """The speaker's bound account, or "" - the precondition for the SSH injection."""
+    info = http_get(f"http://{ip}:{API_PORT}/info")
+    if "<margeAccountUUID>" not in info:
+        return ""
+    return info.split("<margeAccountUUID>", 1)[1].split("</", 1)[0].strip()
 
 
 def migration_verdict(urls: dict[str, str]) -> dict[str, object]:
@@ -88,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_reb = sub.add_parser("reboot", help="restart and wait for the radio sources")
     p_reb.add_argument("--confirm", action="store_true")
     p_reb.add_argument("--sources-wait", type=float, default=240.0)
+    p_ssh = sub.add_parser("enable-ssh", help="open SSH over the diagnostic port")
+    p_ssh.add_argument("--confirm", action="store_true")
+    p_ssh.add_argument("--full-config", action="store_true",
+                       help="the longer form, plus a reboot: only for a speaker where the default "
+                            "form persists but port 22 stays refused")
     p_play = sub.add_parser("play", help="play a preset and prove it really played")
     p_play.add_argument("--preset", type=int, default=1)
     p_play.add_argument("--expect", required=True,
@@ -130,6 +147,37 @@ def main(argv: list[str] | None = None) -> int:
                                "persisted, and the radio sources do not mount until then: run "
                                "`reboot --confirm` next, then check `state` again.")
             return emit(bool(verdict["ok"]) and not verdict["truncated_replies"], verdict)
+
+        if args.cmd == "enable-ssh":
+            if not args.service:
+                return emit(False, {"error": "--service is required for enable-ssh"})
+            if port_open(args.ip, SSH_PORT):
+                return emit(True, {"note": "port 22 is already open; nothing to do"})
+            bound = account_uuid(args.ip)
+            if not bound:
+                return emit(False, {"error": "this speaker has no account bound, so it never reads "
+                                             "margeServerUrl and the injection would do nothing at "
+                                             "all - silently. Bind an account first (see "
+                                             "migration.md), then run this again."}, code=2)
+            commands = build_enable_ssh_commands(args.service, full_config=args.full_config)
+            if not args.confirm:
+                return emit(False, {"would_run": commands, "account": bound,
+                                    "note": "re-run with --confirm. This writes shell text into a "
+                                            "live configuration value, which migrate must clean up "
+                                            "afterwards."})
+            replies = telnet_run(args.ip, commands)
+            opened = wait_up(args.ip) is not None and port_open(args.ip, SSH_PORT)
+            return emit(opened, {
+                "telnet": replies,
+                "truncated_replies": [r["cmd"] for r in replies if not r["complete"]],
+                "ssh_open": opened,
+                "next": ("Now run `migrate --confirm` to rewrite the four URLs WITHOUT the injected "
+                         "shell text, then persist the marker, or SSH is gone at the next reboot "
+                         "and the account URL keeps shell commands in it."
+                         if opened else
+                         "Port 22 did not open. If getpdo shows the value persisted, try "
+                         "--full-config; some units never start sshd over telnet at all."),
+            })
 
         if args.cmd == "reboot":
             if not args.confirm:

@@ -5,11 +5,17 @@ description: Use when Bose SoundTouch speakers lost internet radio and presets a
 
 # Bose SoundTouch without the Bose cloud
 
-Bose shut the SoundTouch cloud down. The speakers keep AUX, Bluetooth and Alexa; internet radio,
-presets and browsing are dead until they are pointed at a replacement service you run yourself.
+Bose shut the SoundTouch cloud down. The speakers keep Bluetooth, AUX and AirPlay, and multiroom
+zones still work; internet radio, presets, browsing and Alexa voice commands are dead. Radio and
+presets come back once the speakers are pointed at a replacement service you run yourself.
 
 This skill walks an owner through that end to end. Assume the owner is NOT technical: ask, do not
 instruct, and ask for the physical things only they can do.
+
+Work through the scripts in `scripts/`. They are what this skill tests and what it uses. AfterTouch
+also ships a `soundtouch-cli` covering similar ground; `references/access-and-rooting.md` says where
+it goes further, and `references/troubleshooting.md` says where to read upstream when a symptom is
+not covered here.
 
 ## The two rules that decide the outcome
 
@@ -18,10 +24,10 @@ Rooting a speaker, rewriting its service URLs, rebooting it and writing presets 
 plain words and need a yes first. Say what will change and what it will look like afterwards.
 
 **Order is load-bearing.** Back up the presets BEFORE migrating. A speaker asks its account for
-presets about two seconds after boot but does not mount the radio source until roughly seventy
-seconds later, so presets arriving in that window are discarded and the speaker then pushes its
-now-empty set back, overwriting the copy on the service. Migrating first can therefore destroy the
-only copy of the presets.
+presets shortly after boot but does not mount the radio source until roughly seventy seconds later,
+so presets arriving in that window are discarded and its own list comes back empty. The service's
+stored copy survives that, but a migration is a different matter and has emptied an account's
+presets, so the backup is what stands between the owner and losing them.
 
 ## The walkthrough
 
@@ -35,15 +41,20 @@ Ask one question at a time. Prefer multiple choice. Check in after each phase.
 | 4     | Start the container with host networking, verify it answers                 | service-setup.md     |
 | 5     | Find the speakers; ask the owner to wake any that do not answer             | service-setup.md     |
 | 6     | Back up every speaker BEFORE any change                                     | presets.md           |
-| 7     | Enable telnet/SSH access where the procedure needs it, and make it persist  | access-and-rooting.md|
+| 7     | Open SSH over the diagnostic port IF something needs it, and make it persist | access-and-rooting.md|
 | 8     | Rewrite the four service URLs, verify nothing cloud is left                 | migration.md         |
 | 9     | Wait for the radio sources; bind the account if they never mount            | migration.md         |
 | 10    | Write the presets and keep them across reboots                              | presets.md           |
 | 11    | Acceptance: hear two different stations, reboot, check they came back       | presets.md           |
 
-**Phase 1 warning, before anything else.** If two speakers are configured as a STEREO PAIR, break
-the pair first. De-clouding a paired speaker risks bricking it, and this is reported for the ST10 in
-particular. Ask explicitly: "are any two of your speakers set up as a left/right stereo pair?"
+**Phase 1, before anything else: ask what you are working with.** Ask whether any two speakers are
+a left/right STEREO PAIR, and whether any unit is a Lifestyle or CineMate console rather than a
+SoundTouch speaker. Both change what happens later, and neither is visible from the network.
+
+A stereo pair does NOT need to be broken up. The SoundTouch 10 is the only model that supports one,
+the shutdown broke it, and AfterTouch restores it through `soundtouch-cli`. Ask so you know the two
+halves belong together and can expect them to be re-paired at the end, not so you can dismantle
+them.
 
 ## Reference files
 
@@ -52,7 +63,7 @@ Use the Read tool to load the file for the phase you are in. Do not answer from 
 | Topic                                                                                     | File                   |
 |-------------------------------------------------------------------------------------------|------------------------|
 | Docker check and install per OS, compose file, host networking, env, discovery, waking a speaker | references/service-setup.md |
-| Diagnostic port 17000, the rooting methods per firmware, making SSH survive a reboot      | references/access-and-rooting.md |
+| Diagnostic port 17000, opening SSH over it and its precondition, making it survive a reboot | references/access-and-rooting.md |
 | The four service URLs, the write order, verification, binding an account                  | references/migration.md |
 | Preset location format, the boot wipe, restore loop, backup, the JSON template            | references/presets.md  |
 | Symptom to cause, the diagnostic one-liners, how long each step takes, upstream docs       | references/troubleshooting.md |
@@ -66,7 +77,7 @@ Anything that CHANGES a speaker requires `--confirm`, so the read half is always
 |-------------------------|-----------------------------------------------------------------------|
 | `soundtouch_service.py` | Check Docker, write and validate the compose file, check service health |
 | `soundtouch_find.py`    | Discover speakers and report what state each is in                    |
-| `soundtouch_onboard.py` | Back up, open access, migrate the URLs, reboot, prove a preset plays  |
+| `soundtouch_onboard.py` | Open SSH, migrate the URLs, reboot, prove a preset really played     |
 | `soundtouch_presets.py` | Back up, template, restore and check presets                          |
 
 ## When it does not work
@@ -94,7 +105,7 @@ issue rather than something they did wrong.
 | Migrating before backing up the presets                 | The speaker's empty set overwrites the service copy; presets are gone |
 | Rewriting only the account URL                          | Presets sync and nothing ever plays                                  |
 | Writing the persisting command before the others        | Every value reverts at the next reboot although each replied OK      |
-| Skipping the flash marker after opening SSH             | Access is gone at the next boot and looks like it never worked       |
+| Skipping the persistent marker after opening SSH        | Access is gone at the next boot and looks like it never worked       |
 | Putting the raw stream URL in a preset                  | Accepted at write time, never plays                                  |
 | Letting the service's address come from plain DHCP      | Every speaker breaks at once, weeks later, when the lease changes    |
-| Declaring failure 30 seconds after a reboot             | Radio sources need roughly 80 seconds; presets need 2 to 3 more minutes |
+| Declaring failure 30 seconds after a reboot             | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging |

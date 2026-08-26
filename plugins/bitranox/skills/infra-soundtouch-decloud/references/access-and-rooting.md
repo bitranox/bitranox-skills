@@ -1,17 +1,18 @@
 # Getting access to a speaker
 
-Two ways in, and they are not equivalent.
+Everything here is done over the network, with the scripts in this skill. There is no USB step.
 
-**Port 17000 is the diagnostic port.** It is open on a stock speaker, needs no credentials, and
-speaks a small command language ending each reply with a `->` prompt. Everything the migration needs
-can be done here. Most owners never need more than this.
+**Port 17000 is the diagnostic port.** It needs no credentials and speaks a small command language
+ending each reply with a `->` prompt. Everything the migration needs can be done here, and most
+owners never need more.
+
+It is open on most models, but not a guarantee: some hardened firmware builds do not expose it, and
+on a vanilla ST10 running 27.0.6 a probe found `envswitch` itself missing from the command table
+while other units on the same firmware family accept it. Treat a missing `envswitch` as a
+recoverable preflight result, not a broken speaker, and say so rather than retrying.
 
 **Port 22 is SSH, and is closed on a stock speaker.** It is only needed for the service endpoints
-that act on the speaker directly, such as rebooting it through the service. Opening it is called
-rooting, and it is optional. Do not root a speaker to satisfy a checklist.
-
-Ask before opening SSH, and say why it is wanted. If the owner would rather not, say so plainly:
-the migration works over the diagnostic port alone.
+that act on the speaker directly. Opening it is optional. Do not do it to satisfy a checklist.
 
 ## Check what is already open
 
@@ -23,72 +24,78 @@ Never probe a port with the `echo > /dev/tcp/host/port` shell redirect. It is a 
 under `sh` (which is dash on Debian and Ubuntu, and is what `docker exec` and `ssh host 'cmd'` often
 give you) it fails for every port, so a wide-open port reports as closed and nothing says why.
 
-## Opening SSH, by firmware
-
-| Firmware        | Method that works                                             |
-|-----------------|----------------------------------------------------------------|
-| Before 26.x     | `remote_services on` over port 17000                           |
-| 26.x and later  | That command is rejected; use the USB stick                    |
-| 27.x            | USB stick; the injection below only if no stick can be plugged in |
-| Will not boot   | Boot from a prepared stick, for recovery                       |
-
-### The USB stick, preferred
-
-A FAT-formatted stick with an EMPTY file named `remote_services` (no extension) in its root. Plug it
-into the speaker's USB port. The speaker's mount script sees the file and enables SSH and telnet
-immediately, with no reboot. The stick can be removed afterwards.
-
-Ask the owner whether they can plug a stick in. It is the safest method by a wide margin, and it is
-the one to offer first. On macOS the hidden metadata has to be removed first or the speaker ignores
-the file:
+## Opening SSH
 
 ```bash
-mdutil -i off /Volumes/USB && rm -rf /Volumes/USB/.fseventsd /Volumes/USB/.Spotlight-V100
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
+    --service http://<service-host>:8000 enable-ssh --confirm
 ```
 
-Some speakers only accept the stick while on Ethernet rather than WiFi.
+It checks the precondition below first, refuses if it is not met, reports what it would run without
+`--confirm`, and tells you the next step afterwards. Run `migrate --confirm` after it, always: the
+method leaves shell text in a live configuration value and only the migration takes it out.
 
-### The injection, last resort on 27.x
+### The precondition that makes it silently do nothing
 
-On firmware 27.x with no way to reach the USB port, SSH can be opened by appending shell text to the
-account URL, which this firmware passes to a shell. It is more invasive than the stick because it
-puts shell text into a live configuration value, so it needs the owner's agreement and it must be
-cleaned up in the same sitting.
+A genuinely unpaired speaker - factory reset, empty `margeAccountUUID` - **does not poll
+`margeServerUrl` at all.** Pointing a reset device's marge URL at a listener recorded zero requests
+over ten minutes. The method works by riding a value the speaker reads, so on an unpaired device
+there is no read cycle for it to fire on: nothing happens, and nothing says so.
 
-Send over port 17000, in this order:
+`enable-ssh` refuses in that case rather than appearing to succeed. Bind an account first, per the
+account section of `migration.md`, then run it again.
+
+### What it actually sends, and the two forms
+
+The firmware passes the URL value to a shell, so a suffix appended to it runs on the speaker:
 
 ```
-sys configuration margeServerUrl "http://<service-host>:8000;touch /tmp/remote_services;/etc/init.d/sshd start"
-sys configuration bmxRegistryUrl "http://<service-host>:8000/bmx/registry/v1/services"
-sys configuration statsServerUrl "http://<service-host>:8000"
-sys configuration swUpdateUrl    "http://<service-host>:8000/updates/soundtouch"
+;touch /tmp/remote_services;/etc/init.d/sshd start
+```
+
+The **default form** writes that through the persistence layer alone and needs no reboot. It is the
+field-confirmed one, reported working on the Wireless Link Adapter and the CineMate 520 `lisa`
+variant:
+
+```
 envswitch boseurls set "http://<service-host>:8000;touch /tmp/remote_services;/etc/init.d/sshd start" "http://<service-host>:8000/updates/soundtouch"
-sys reboot
 ```
 
-Two follow-ups are mandatory, not optional:
+If that value persists - `getpdo` shows it - but port 22 stays refused, the speaker needs
+`--full-config`, which also puts the injection on the runtime `sys configuration` key and reboots.
+Both differences appear to matter. It is reported on the SoundTouch Portable (Series I) and some
+CineMate 520 units, and upstream records the automation of it as candidate behaviour still awaiting
+confirmation on hardware. Some ST10 and CineMate 520 units never start `sshd` over telnet at all and
+need the serial or U-Boot route, which is outside this skill.
 
-1. Rewrite all four URLs WITHOUT the appended text (see migration.md), or the account URL keeps
-   shell commands in it permanently.
-2. Write the flash marker below, or SSH is gone at the next reboot.
+Pauses between the commands are unnecessary. A controlled A/B across three variants found identical
+outcomes at zero and five second gaps, which retracted an earlier theory that the gap mattered.
 
-## The flash marker, without which nothing sticks
+### Older firmware
 
-Both the stick and the injection only leave the marker in `/tmp`, which is cleared on every boot. On
-the speaker itself:
+`remote_services on` over port 17000 was the old way in. It was **removed in firmware 7.x** and is
+absent through the 8.x-14.x era as well, so on anything recent it is a dead path rather than a first
+thing to try. Firmware 27.x is what this migration targets, and `sys configuration` and `envswitch`
+are confirmed working there on ST10, ST20, ST300, Wave III and Wave IV.
+
+## Making it survive a reboot
+
+The method only leaves the marker in `/tmp`, which is cleared on every boot. Skipping this fails
+SILENTLY: everything works until the next power cut, and then the speaker looks as though the whole
+procedure never happened.
+
+On the speaker, the root filesystem may need remounting first, and `/etc` is the preferred location:
 
 ```sh
+(touch /etc/remote_services 2>/dev/null || (mount -o remount,rw / && touch /etc/remote_services))
 touch /mnt/nv/remote_services
 ```
 
-`/mnt/nv` is a separate flash volume that survives reboots. Skipping this fails SILENTLY: everything
-works until the next power cut, and then the speaker looks as though the whole procedure never
-happened.
-
-Prove it took, by rebooting and checking that the `/tmp` marker is gone while the flash one remains:
+Prove it took by rebooting and checking that the `/tmp` marker is gone while a persistent one
+remains:
 
 ```sh
-for f in /mnt/nv/remote_services /etc/remote_services /tmp/remote_services; do
+for f in /etc/remote_services /mnt/nv/remote_services /tmp/remote_services; do
     [ -e "$f" ] && echo "YES $f" || echo "no  $f"
 done
 ```
@@ -103,9 +110,19 @@ The firmware only offers old host key algorithms, so a current SSH client refuse
 ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@<speaker-ip>
 ```
 
-User `root`, no password. Tell the owner this plainly: the speaker has no password and anyone on
-their network can log into it once SSH is open. That is a reason to leave SSH closed unless it is
-needed.
+User `root`, no password. Tell the owner plainly: anyone on their network can log into the speaker
+as root once SSH is open. That is the reason to leave it closed unless something needs it, and the
+reason to close it again when the work is done - remove the persisted markers and reboot.
 
-A factory reset does NOT close it again. Reset clears the account, the presets, the four URLs and
-the name, but the flash marker, SSH and telnet all survive.
+A factory reset does NOT close it. Reset clears the account, the presets, the four URLs and the
+name, but the persisted markers survive and SSH and telnet stay open. Recovery from a reset is
+re-migrate, re-pair, rename and restore presets, with no need to re-run the SSH-enable method.
+
+## The upstream CLI
+
+AfterTouch also ships `soundtouch-cli`, which covers similar ground (`setup enable-ssh`,
+`setup migrate`, `setup remote-services`, `setup inspect`, `preset store`, `account pair`) and has
+options this skill does not wrap, notably `--authorized-key` to install a key instead of relying on
+the empty-password login, and `--close-17000` to firewall off the diagnostic port. Worth knowing it
+exists, and worth reading when a device does something the scripts here do not cover. The procedures
+in this skill are the ones tested here, and are what its scripts implement.

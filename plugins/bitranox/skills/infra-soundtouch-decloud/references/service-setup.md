@@ -29,6 +29,10 @@ If they cannot find it, the router's client list shows the same MAC beside the m
 
 ## Phase 3: Docker
 
+Docker is the easiest route, not the only one. AfterTouch also ships pre-built binaries, installs
+with `go install`, has its own Raspberry Pi and systemd deployment guides, and can run ON one of the
+speakers. If the owner already has a way to run a service, do not make Docker a gate.
+
 Check first, and only offer to install if it is missing:
 
 ```bash
@@ -79,18 +83,41 @@ services:
 
 `192.0.2.10` stands for the pinned address from phase 2. It appears here AND in every speaker's
 configuration, so if it ever changes, re-render this file and migrate the speakers again. That is
-the reason phase 2 pins it.
+the reason phase 2 pins it. It is also why a speaker cannot simply be told a new address from the
+service's own settings: a speaker only learns one at migrate time.
 
-**`network_mode: host` is mandatory and is the single most common way this setup fails.** Discovery
-happens over SSDP and mDNS, which are multicast, and Docker's bridge network does not forward
-multicast into a container. On a bridge the service starts, answers HTTP and finds no speakers at
-all, so it looks correctly installed and is useless.
+**Which networking mode depends on the operating system, and getting it wrong is the commonest way
+this setup disappoints.** Automatic discovery is SSDP and mDNS, which are multicast, and Docker's
+bridge does not forward multicast into a container.
 
-**Never add a `ports:` block.** It is invalid together with host networking and Docker only warns,
-so a leftover block reads as though it applies and does nothing.
+| Host                          | Mode                       | What it means                                       |
+|-------------------------------|----------------------------|-----------------------------------------------------|
+| Linux (Pi, NAS, server, LXC)  | `--network host` (default) | The service finds the speakers by itself            |
+| Docker Desktop, Windows/macOS | `--network ports`          | Host networking does not behave the same way there; publish the ports and add each speaker by IP |
+
+On a bridge the service still works. It answers, it serves the account, it migrates and it plays.
+What it cannot do is find the speakers on its own, so they are added by address instead:
+
+```bash
+uv run scripts/soundtouch_service.py render --host <service-host> --network ports --out docker-compose.yml
+curl -X POST "http://<service-host>:8000/api/setup/devices"   # add a speaker by IP
+```
+
+**Never mix the two.** A `ports:` block alongside `network_mode: host` is invalid, Docker only
+warns, and the leftover block reads as though it applies.
 
 **`SERVER_URL` must not be `localhost` or `127.0.0.1`.** It is the address the SPEAKERS are told to
-call back to. Pointing it at loopback tells every speaker to call itself.
+call back to. Pointing it at loopback tells every speaker to call itself. The single exception is
+running AfterTouch on the speaker itself, where they really are the same machine.
+
+**Change `MGMT_PASSWORD`.** The default that ships is published in upstream's own documentation, so
+leaving it means anyone who can reach the machine can drive the Management API. `render` warns when
+it is left alone; `--mgmt-password` sets it.
+
+**Pinning a version: the image tag carries no `v`.** Releases and git tags are `v0.122.1`; the image
+on ghcr is `0.122.1`. A pin to `v0.122.1` cannot be resolved, and because the running container is
+unaffected, that only surfaces at the next restart. Check a pin before relying on it:
+`docker pull ghcr.io/gesellix/bose-soundtouch:<version>`.
 
 Put the file in a directory of the owner's choosing. Any path works; `/opt/soundtouch` is only a
 convention. Create it first, then render the file into it:
@@ -104,7 +131,7 @@ Then start it and confirm it answers:
 
 ```bash
 docker compose up -d
-curl -s -o /dev/null -w '%{http_code}\n' http://<service-host>:8000/
+curl -s -o /dev/null -w '%{http_code}\n' http://<service-host>:8000/health
 ```
 
 A `200` means the service is up. If `docker compose` reports a permission error on Linux, the owner
@@ -112,7 +139,11 @@ is not yet in the `docker` group: either log out and back in, or use `sudo docke
 Do not leave them guessing which.
 
 The admin interface is at `http://<service-host>:8000/admin`, and its health tab is the first place
-to look when something is wrong later, not the last.
+to look when something is wrong later, not the last. It does not only report: its QuickFixes act,
+including one that pushes the service's stored presets back onto a speaker without a reboot.
+
+If the owner sets a Management API password, note that the `/api/setup/*` calls in this skill sit
+behind it and will start answering 401 without explaining why.
 
 ## Phase 5: finding the speakers
 

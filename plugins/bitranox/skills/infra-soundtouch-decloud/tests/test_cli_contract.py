@@ -142,7 +142,7 @@ def test_play_cannot_be_run_without_an_expected_station() -> None:
     assert exit_info.value.code == 2
 
 
-@pytest.mark.parametrize("cmd", ["migrate", "reboot"])
+@pytest.mark.parametrize("cmd", ["migrate", "reboot", "enable-ssh"])
 def test_the_changing_subcommands_all_require_confirm(cmd: str) -> None:
     args = O.build_parser().parse_args(["--ip", "192.0.2.31", "--service", "http://192.0.2.10:8000",
                                         cmd])

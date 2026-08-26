@@ -27,9 +27,14 @@ CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
 RADIO_SOURCES = ("TUNEIN", "LOCAL_INTERNET_RADIO", "RADIO_BROWSER")
 PLAYBACK_PATH = "/custom/v1/playback/"
 
+# The firmware passes this configuration value to a shell, so a suffix appended to it runs on the
+# speaker the next time the value is read. That read is the whole mechanism: see
+# build_enable_ssh_commands for why an unpaired speaker never executes it.
+SSH_INJECT = ";touch /tmp/remote_services;/etc/init.d/sshd start"
+
 __all__ = [
     "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
-    "build_url_commands", "playback_location", "decode_playback_location", "slots_to_write",
+    "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "playback_location", "decode_playback_location", "slots_to_write",
     "missing_streams", "parse_presets", "parse_preset_slots", "port_open", "telnet_run", "http_get",
     "SpeakerError",
 ]
@@ -116,6 +121,34 @@ def build_url_commands(service: str, *, inject: str = "") -> list[str]:
         f'sys configuration statsServerUrl "{wanted["statsServerUrl"]}"',
         f'sys configuration swUpdateUrl "{wanted["swUpdateUrl"]}"',
         f'envswitch boseurls set "{marge}" "{wanted["swUpdateUrl"]}"',
+    ]
+
+
+def build_enable_ssh_commands(service: str, *, full_config: bool = False) -> list[str]:
+    """The telnet sequence that opens SSH on a speaker that has never had it.
+
+    Two forms, and the order to try them in. The DEFAULT writes the injection through the
+    persistence layer alone, which is the field-confirmed form and needs no reboot. `full_config`
+    also puts it on the runtime `sys configuration` key and reboots, which is what devices need
+    when the value demonstrably persists but sshd never comes up.
+
+    Neither form does anything on an unpaired speaker. A factory-reset device with an empty
+    margeAccountUUID does not read margeServerUrl at all, so the injection has no read cycle to
+    fire on and fails silently. Check the account before running either.
+    """
+    wanted = service_urls(service)
+    marge = wanted["margeServerUrl"] + SSH_INJECT
+    envswitch = f'envswitch boseurls set "{marge}" "{wanted["swUpdateUrl"]}"'
+    if not full_config:
+        return [envswitch]
+    return [
+        f'sys configuration bmxRegistryUrl "{wanted["bmxRegistryUrl"]}"',
+        f'sys configuration statsServerUrl "{wanted["statsServerUrl"]}"',
+        f'sys configuration margeServerUrl "{marge}"',
+        f'sys configuration swUpdateUrl "{wanted["swUpdateUrl"]}"',
+        envswitch,
+        "getpdo CurrentSystemConfiguration",
+        "sys reboot",
     ]
 
 
