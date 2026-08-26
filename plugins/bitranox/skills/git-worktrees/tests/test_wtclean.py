@@ -815,3 +815,37 @@ def test_the_cli_removes_no_cache_under_an_ambiguous_topic(tmp_path):
     result = run_cli("topic", "--apply", cwd=project, home=tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
     assert cache.exists(), "an unresolvable name must not delete a cache derived from it"
+
+
+def test_the_dry_run_promises_nothing_it_will_refuse_for_ambiguity(tmp_path):
+    """The plan-and-apply agreement, pinned for the topic-level refusal specifically.
+
+    The existing agreement test covers a DIRTY worktree, where the refusal is per-target. Ambiguity
+    is the only refusal decided at TOPIC level and the only one that widens to the caches, so it
+    reaches a different branch in both functions and needs its own case.
+    """
+    (tmp_path / "wt-topic").mkdir()
+    (tmp_path / "project" / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    make_cache(tmp_path, "wt-topic-target")
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    predicted = W.blocked_reasons(plan)
+    actual = W.apply_plan(plan, git_remove=lambda *_a, **_k: pytest.fail("git must not be called"))
+    assert predicted == actual
+    assert (tmp_path / "wt-topic-target").exists()
+
+
+def test_an_ambiguous_dry_run_offers_nothing_for_removal(tmp_path):
+    """Stdout must not carry a `would remove` line for something the run has already refused."""
+    project = tmp_path / "project"
+    (tmp_path / "wt-topic").mkdir()
+    (project / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    make_cache(tmp_path, "wt-topic-target")
+    result = run_cli("topic", cwd=project, home=tmp_path)
+    assert result.returncode == 1
+    assert "would remove" not in result.stdout
+    assert "REFUSED" in result.stderr

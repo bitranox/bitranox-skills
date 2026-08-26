@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.250.2]
+
+### Added
+
+- Two tests pinning the plan-and-apply agreement for the AMBIGUITY refusal specifically. The
+  existing agreement test covers a dirty worktree, whose refusal is per-target; ambiguity is the
+  only refusal decided at topic level and the only one that widens to the caches, so it reaches a
+  different branch in both functions. Verified non-vacuous: mutating the apply-side branch alone
+  fails the agreement test, which is exactly the divergence class it exists for.
+
 ## [5.250.1]
 
 ### Fixed
