@@ -24,13 +24,20 @@ CLI = str(Path(__file__).resolve().parent.parent / "scripts" / "wtclean.py")
 CLI_TIMEOUT = 60
 
 
-def run_cli(*args):
+def run_cli(*args, cwd=None, home=None):
     """Spawn the CLI the way a caller would, with an explicit timeout and encoding.
 
     sys.executable, never a bare "python3": the name does not resolve on every platform. An
     explicit encoding, because without one the capture decodes with the machine's locale codec
     and fails differently per platform (stdout can come back None on Windows).
+
+    `cwd` and `home` are here because the tool resolves a bare name against both, and a test that
+    let either default would be reading the machine the suite happens to run on. HOME and
+    USERPROFILE are both set: Path.home() reads the first on POSIX and the second on Windows.
     """
+    env = None
+    if home is not None:
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
     return subprocess.run(
         [sys.executable, CLI, *args],
         capture_output=True,
@@ -39,6 +46,8 @@ def run_cli(*args):
         errors="replace",
         timeout=CLI_TIMEOUT,
         check=False,
+        cwd=None if cwd is None else str(cwd),
+        env=env,
     )
 
 
@@ -49,7 +58,7 @@ def make_cache(base: Path, name: str, payload: bytes = b"0" * 4096) -> Path:
     return directory
 
 
-def make_repo_with_worktree(root: Path, topic: str = "topic"):
+def make_repo_with_worktree(root: Path, topic: str = "topic", worktree_path: Path | None = None):
     """A real git repo plus a real linked worktree - the thing the tool actually operates on."""
     main = root / "main"
     main.mkdir()
@@ -71,7 +80,7 @@ def make_repo_with_worktree(root: Path, topic: str = "topic"):
     git("init", "-q", "-b", "main")
     git("-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q",
         "--allow-empty", "-m", "init")
-    worktree = root / f"wt-{topic}"
+    worktree = worktree_path if worktree_path is not None else root / f"wt-{topic}"
     git("worktree", "add", "-q", str(worktree), "-b", topic)
     return main, worktree, git
 
@@ -546,3 +555,141 @@ def test_apply_deletes_for_real_through_the_cli(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "removed" in result.stdout
     assert not cache.exists()
+
+
+# ---------------------------------------------------------------------------------------------
+# Finding the worktree: a bare name must reach the layouts that actually create one
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("layout", [".worktrees", "worktrees", ".claude/worktrees"])
+def test_a_bare_name_finds_a_project_local_worktree(tmp_path, layout):
+    """The base convention is one project's habit; these three are how worktrees get created.
+
+    Step 1b of the skill creates <LOCATION>/<branch> and the native worktree tool creates
+    .claude/worktrees/<topic>. A bare name that only ever resolved against --base reported
+    "nothing to remove" for a worktree sitting right there.
+    """
+    checkout = tmp_path / "project" / layout / "topic"
+    checkout.mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert str(plan.worktree) == str(checkout)
+    assert plan.worktree_status == W.STATUS_CLEAN
+
+
+def test_the_base_convention_still_wins_when_both_exist(tmp_path):
+    """Changing which of two real worktrees gets deleted would be a regression, not a fix."""
+    (tmp_path / "wt-topic").mkdir()
+    (tmp_path / "project" / ".worktrees" / "topic").mkdir(parents=True)
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    assert str(plan.worktree) == str(tmp_path / "wt-topic")
+
+
+def test_no_project_means_no_project_local_candidates(tmp_path):
+    """The library default stays base-only, so an existing caller's target cannot move."""
+    (tmp_path / ".worktrees" / "topic").mkdir(parents=True)
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN)
+    assert str(plan.worktree) == str(tmp_path / "wt-topic")
+    assert plan.worktree_status == W.STATUS_ABSENT
+    assert [str(p) for p in plan.worktree_candidates] == [str(tmp_path / "wt-topic")]
+
+
+def test_the_candidates_are_reported_even_when_one_matched(tmp_path):
+    """The plan has to say where it looked, or a match cannot be told from a lucky guess."""
+    (tmp_path / "wt-topic").mkdir()
+    plan = W.build_plan(
+        "topic", base=tmp_path, project=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN
+    )
+    checked = [str(p) for p in plan.worktree_candidates]
+    assert str(tmp_path / "wt-topic") in checked
+    assert str(tmp_path / ".claude" / "worktrees" / "topic") in checked
+
+
+def test_an_absent_worktree_still_reports_the_base_candidate(tmp_path):
+    """With nothing on disk the reported path stays the convention, not the last candidate."""
+    plan = W.build_plan(
+        "topic", base=tmp_path, project=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN
+    )
+    assert str(plan.worktree) == str(tmp_path / "wt-topic")
+    assert plan.worktree_status == W.STATUS_ABSENT
+
+
+def test_the_run_says_which_worktree_paths_it_checked_when_none_matched(tmp_path):
+    """Silence about the worktree half is what made a 513 MB checkout read as nothing to remove."""
+    project = tmp_path / "project"
+    project.mkdir()
+    result = run_cli("topic", cwd=project, home=tmp_path)
+    assert "no worktree found at" in result.stderr
+    assert str(tmp_path / "wt-topic") in result.stderr
+    assert str(project / ".claude" / "worktrees" / "topic") in result.stderr
+
+
+@needs_git
+def test_a_real_project_local_worktree_is_planned_for_removal(tmp_path):
+    """The end-to-end shape the fix exists for, on a real worktree rather than a stand-in.
+
+    A plain directory would be refused here as unreadable-by-git, which is correct behaviour but
+    would leave the found-and-planned path untested.
+    """
+    project = tmp_path / "project"
+    checkout = project / ".worktrees" / "topic"
+    _main, _worktree, _git = make_repo_with_worktree(tmp_path, worktree_path=checkout)
+    result = run_cli("topic", cwd=project, home=tmp_path)
+    assert "no worktree found at" not in result.stderr
+    assert str(checkout) in result.stdout
+    assert "would remove" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert checkout.exists(), "a dry run must not delete it"
+
+
+def test_an_explicit_base_does_not_reach_into_the_project(tmp_path):
+    """The direction the widening must NOT apply: a named --base is an instruction, not a hint.
+
+    Explicit preference beats observed filesystem state, so a run told where to look must not
+    delete something it found somewhere else.
+    """
+    project = tmp_path / "project"
+    (project / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    result = run_cli("topic", "--base", str(elsewhere), "--json", cwd=project, home=tmp_path)
+    payload = json.loads(result.stdout)
+    assert payload["data"]["worktree"] == str(elsewhere / "wt-topic")
+    assert payload["data"]["worktree_status"] == W.STATUS_ABSENT
+    assert payload["data"]["worktree_candidates"] == [str(elsewhere / "wt-topic")]
+
+
+def test_the_json_envelope_carries_the_worktree_paths_checked(tmp_path):
+    """A machine caller has to be able to see the search, not just its verdict."""
+    project = tmp_path / "project"
+    project.mkdir()
+    result = run_cli("topic", "--json", cwd=project, home=tmp_path)
+    payload = json.loads(result.stdout)
+    checked = payload["data"]["worktree_candidates"]
+    assert str(tmp_path / "wt-topic") in checked
+    assert str(project / ".claude" / "worktrees" / "topic") in checked
+
+
+def test_a_missing_explicit_path_is_not_told_to_pass_a_path(tmp_path):
+    """The advice has to fit what was actually given, or it reads as not having been understood."""
+    result = run_cli(str(tmp_path / "no" / "such" / "tree"), home=tmp_path)
+    assert "no worktree found at" in result.stderr
+    assert str(tmp_path / "no" / "such" / "tree") in result.stderr
+    assert "instead of the bare name" not in result.stderr
+
+
+def test_a_missing_bare_name_is_still_told_to_pass_a_path(tmp_path):
+    """The control: the advice that fits a bare name must survive the branch above."""
+    result = run_cli("topic", cwd=tmp_path, home=tmp_path)
+    assert "no worktree found at" in result.stderr
+    assert "instead of the bare name" in result.stderr

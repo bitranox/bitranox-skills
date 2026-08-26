@@ -21,6 +21,15 @@ lives, so this tool derives candidates as `<base>/<prefix><topic>-<suffix>`, def
 the convention matches nothing, the run says which paths it checked instead of quietly reporting
 an empty plan.
 
+THE WORKTREE ITSELF IS FOUND THE SAME WAY. A bare topic resolves to the first of
+`<base>/<prefix><topic>`, then `.worktrees/<topic>`, `worktrees/<topic>` and
+`.claude/worktrees/<topic>` under the working directory, that exists; naming `--base`
+confines the search to that base, because an explicit location is an instruction about where
+to look rather than a starting point. Any other layout is reached by passing the worktree
+path outright instead of the bare name. A search that finds nothing says which paths it
+checked, for the same reason the cache search does: silence about a miss reads as a clean
+bill of health.
+
 Refusals, because this runs on machines whose layout is not yours:
 
 * A topic name that is a PATH rather than a bare name is refused outright, never normalised - a
@@ -78,11 +87,18 @@ __all__ = [
     "topic_name",
     "unsafe_argument_reason",
     "unsafe_topic_reason",
+    "worktree_dirs",
     "worktree_refusal",
 ]
 
 DEFAULT_PREFIX = "wt-"
 DEFAULT_CACHE_SUFFIXES = ("target", "clippy")
+# Where a worktree gets created when it is not the <base>/<prefix><topic> convention: the two
+# project-local directories this skill's own Step 1b uses, and the one the native worktree tool
+# uses. Searched in this order, after the base convention, so an existing caller's target cannot
+# move; a bare name that reached only the base convention reported "nothing to remove" for a
+# worktree that was sitting in one of these.
+PROJECT_WORKTREE_DIRS = (".worktrees", "worktrees", ".claude/worktrees")
 
 # A git call that has not answered by now is not going to; a delete tool must never hang its
 # caller waiting for one.
@@ -271,6 +287,9 @@ class Plan:
     worktree_status: str
     worktree_refusal: str | None
     caches: tuple[CacheTarget, ...]
+    # Every path the search looked at, in the order it looked. Carried on the plan rather than
+    # recomputed by the reporter, so what is reported cannot drift from what was searched.
+    worktree_candidates: tuple[Path, ...] = ()
 
     @property
     def total_bytes(self) -> int:
@@ -284,6 +303,7 @@ class Plan:
             "worktree": str(self.worktree),
             "worktree_status": self.worktree_status,
             "worktree_refusal": self.worktree_refusal,
+            "worktree_candidates": [str(path) for path in self.worktree_candidates],
             "caches": [target.as_dict() for target in self.caches],
             "total_bytes": self.total_bytes,
         }
@@ -301,6 +321,32 @@ def cache_dirs(
         return []
     root = Path(base) if base is not None else Path.home()
     return [root / f"{prefix}{topic}-{suffix}" for suffix in suffixes]
+
+
+def worktree_dirs(
+    topic: str,
+    *,
+    base: str | Path | None = None,
+    prefix: str = DEFAULT_PREFIX,
+    project: str | Path | None = None,
+) -> list[Path]:
+    """Where a bare topic name might have a worktree, in search order.
+
+    The base convention comes first so a caller whose worktree lives there keeps the exact target
+    it had before. `project` is opt-in and is withheld when the caller named `--base`: an explicit
+    location is an instruction about where to look, and a delete tool must not answer it by
+    removing something it found somewhere else.
+    """
+    if unsafe_topic_reason(topic) is not None:
+        return []
+    root = Path(base) if base is not None else Path.home()
+    candidates = [root / f"{prefix}{topic}"]
+    if project is not None:
+        candidates += [
+            Path(project).joinpath(*layout.split("/"), topic)
+            for layout in PROJECT_WORKTREE_DIRS
+        ]
+    return candidates
 
 
 def git_worktree_status(
@@ -421,6 +467,7 @@ def build_plan(
     suffixes: Sequence[str] = DEFAULT_CACHE_SUFFIXES,
     explicit_caches: Sequence[str | Path] = (),
     worktree: str | Path | None = None,
+    project: str | Path | None = None,
     status_probe: Callable[[Path], str] = git_worktree_status,
 ) -> Plan:
     """What would be removed, with sizes and per-target refusals.
@@ -428,9 +475,19 @@ def build_plan(
     Only paths that EXIST are listed: naming absent paths reads as work still to do and buries
     the real entries. `status_probe` is injected so the worktree state can be supplied by the
     caller (and by tests) instead of always costing a git call.
+
+    A bare topic resolves to the first candidate that exists; when none do, the reported path
+    stays the base convention, because that is the one the caller can act on.
     """
     root = Path(base) if base is not None else Path.home()
-    checkout = Path(worktree) if worktree is not None else root / f"{prefix}{topic}"
+    if worktree is not None:
+        candidates = [Path(worktree)]
+    else:
+        candidates = worktree_dirs(topic, base=root, prefix=prefix, project=project)
+    checkout = next(
+        (c for c in candidates if c.exists() or c.is_symlink()),
+        candidates[0] if candidates else root / f"{prefix}{topic}",
+    )
 
     targets: list[CacheTarget] = []
     for candidate in cache_dirs(topic, base=root, prefix=prefix, suffixes=suffixes):
@@ -460,6 +517,7 @@ def build_plan(
         worktree_status=status,
         worktree_refusal=refusal,
         caches=tuple(targets),
+        worktree_candidates=tuple(candidates),
     )
 
 
@@ -571,15 +629,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "build cache lives. The default candidates are <base>/<prefix><topic>-<suffix>, i.e. "
             "~/wt-<topic>-target and ~/wt-<topic>-clippy. If yours live elsewhere, pass "
             "--cache-dir (exact paths, repeatable) or adjust --base/--prefix/--cache-suffix; a "
-            "run that matches nothing says which paths it checked. Symlinked targets, and "
-            "worktrees holding uncommitted or untracked work, are refused."
+            "run that matches nothing says which paths it checked. A bare name finds the "
+            "worktree at <base>/<prefix><topic> first, then in the working directory at "
+            ".worktrees/<topic>, worktrees/<topic> and .claude/worktrees/<topic>; pass "
+            "its path outright for any other layout. Symlinked targets, and worktrees "
+            "holding uncommitted or untracked work, are refused."
         ),
     )
     parser.add_argument("topic", help="the topic name, or the path of the worktree")
     parser.add_argument(
         "--base",
         help="directory holding the caches, and the worktree when a bare name is given"
-        " (default: your home directory)",
+        " (default: your home directory). Naming it also confines the worktree search to"
+        " it, instead of also looking in the project-local worktree directories",
     )
     parser.add_argument(
         "--prefix", default=DEFAULT_PREFIX, help=f"worktree name prefix (default: {DEFAULT_PREFIX})"
@@ -674,12 +736,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         suffixes=suffixes,
         explicit_caches=args.cache_dir,
         worktree=Path(given).expanduser() if looks_like_a_path(given) else None,
+        # Withheld when --base was named, so an explicit location stays an instruction rather
+        # than a starting point. Otherwise the working directory is where a project-local
+        # worktree would be, and searching it is the whole point of the candidate list.
+        project=None if args.base else Path.cwd(),
     )
     if not plan.caches and not args.cache_dir:
         warn(
             f"no cache directory matched the convention {plan.convention} - if yours live"
             " elsewhere pass --cache-dir, or adjust --base/--prefix/--cache-suffix"
         )
+    if plan.worktree_status == STATUS_ABSENT and not args.skip_worktree:
+        # Symmetric to the cache warning above, and for the same reason: a search that says
+        # nothing about where it looked reports a miss as a clean bill of health.
+        checked = ", ".join(str(path) for path in plan.worktree_candidates)
+        # The advice has to fit what was given: telling someone who passed a path to pass a path
+        # reads as not having been understood, and sends them looking for a syntax error.
+        hint = (
+            "check the path"
+            if looks_like_a_path(given)
+            else "pass its path instead of the bare name, or adjust --base/--prefix"
+        )
+        warn(f"no worktree found at {checked} - if yours is elsewhere {hint}")
 
     remove_worktree = not args.skip_worktree
     blocked = blocked_reasons(

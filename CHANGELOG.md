@@ -17,6 +17,42 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.249.0]
+
+### Fixed
+
+- **`wtclean.py` finds a worktree that is not at `<base>/wt-<topic>`.** A bare topic name resolved
+  against `--base` alone, so the two project-local layouts this skill's own Step 1b creates
+  (`.worktrees/<topic>`, `worktrees/<topic>`) and the one the native worktree tool creates
+  (`.claude/worktrees/<topic>`) were never reached. Measured on a real repo: `wtclean.py kernel-m3`
+  printed `nothing to remove` while a clean 513 MB checkout sat in `.claude/worktrees/kernel-m3`.
+  A bare name now takes the first candidate that exists, base convention first so no existing
+  caller's target moves. Naming `--base` still confines the search to that base, because an
+  explicit location is an instruction about where to look and not a starting point.
+- **A worktree search that finds nothing says where it looked.** The cache half of the tool has
+  always named the paths it checked; the worktree half said nothing at all, so a miss was
+  indistinguishable from a clean bill of health. That silence is what let the case above read as
+  success.
+
+### Added
+
+- `worktree_dirs()` and `Plan.worktree_candidates`, so the search is inspectable rather than
+  implied. `worktree_candidates` is in the `--json` envelope under `data`.
+
+### Changed
+
+- **The skill's refusal list said a path argument is refused, and the tool does not refuse one.**
+  A path with no parent reference names the worktree directly, which is what the section's own
+  third example does, so the bullet contradicted the example three lines above it. It now states
+  the real rule: a parent reference anywhere in the argument is refused, and it is the topic
+  DERIVED from the argument that has to be a bare name.
+- Two properties of the wider search are stated rather than left to be inferred: the project-local
+  candidates are relative to the working directory, not the repository root, and the first
+  candidate that exists wins, so a stale `<base>/wt-<topic>` shadows a real project-local checkout.
+- The refusal list says when it is evaluated - at plan time, so the dry run prints `REFUSED` rather
+  than leaving it for `--apply`, which can additionally print `FAILED` for a removal that only
+  attempting it can discover.
+
 ## [5.244.1]
 
 ### Changed

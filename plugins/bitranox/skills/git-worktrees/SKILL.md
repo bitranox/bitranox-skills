@@ -167,7 +167,31 @@ with `<base>` your home directory. If yours live somewhere else, name them with 
 (repeatable) or adjust `--base` / `--prefix` / `--cache-suffix`. A run that matches nothing says
 which paths it checked rather than reporting an empty plan as though you had no caches.
 
-What it refuses, because a delete is not undoable:
+**The worktree is found the same way, and the search is wider than the cache one.** A bare
+topic resolves to the first of these that exists: `<base>/wt-<topic>`, then `.worktrees/<topic>`,
+`worktrees/<topic>` and `.claude/worktrees/<topic>` under the directory you run it from, which
+covers both layouts Step 1b creates and the one the native worktree tool creates. Naming
+`--base` confines the search to that base. Any other layout is reached by passing the worktree
+path outright (`wtclean.py .config/wt/my-feature`) instead of the bare name.
+
+Two consequences worth knowing before you trust a bare name:
+
+- **The three project-local candidates are relative to the directory you run from**, not to the
+  repository root, so running it from a subdirectory checks paths that do not exist and leaves
+  `<base>` as the only real candidate. Run it from the directory that holds `.worktrees/` or
+  `.claude/worktrees/`.
+- **The first candidate that exists wins**, so a stale `<base>/wt-<topic>` shadows the real
+  project-local checkout. A plan that found one names it on its `would remove` line; read that
+  path before `--apply` rather than trusting that the topic was unambiguous.
+
+A search that finds nothing names every path it tried, which is the half that was missing when a
+bare name reaching only `<base>` reported `nothing to remove` for a 513 MB checkout sitting in
+`.claude/worktrees/`.
+
+What it refuses, because a delete is not undoable. Every refusal below is decided at PLAN time,
+so the dry run lists them as `REFUSED` rather than leaving them for `--apply` to discover. An
+`--apply` can still report a `FAILED` on top of those - a removal that git or the filesystem
+rejects is not knowable until it is attempted:
 
 - **It is a dry run until `--apply`**, and `--apply` removes exactly what the plan listed - it
   does not re-scan, so a directory created after you read the plan is not swept up with it.
@@ -176,8 +200,13 @@ What it refuses, because a delete is not undoable:
 - **A target that is a symbolic link** is refused: removing through a link can destroy data
   outside the directory you named. On Windows this does not cover a directory JUNCTION, which is
   not reported as a symbolic link; the "resolves outside the base" refusal is what covers that.
-- **A topic that is a path rather than a bare name** is refused outright, never normalised - the
-  basename of `../../etc` is the innocent-looking name `etc`.
+- **A parent reference anywhere in the argument** (`../../etc`, `wt-a/../../etc`) is refused
+  outright, never normalised - taking the basename first would turn `../../etc` into the
+  innocent-looking name `etc`. A path WITHOUT a parent reference is not refused: it names the
+  worktree directly (relative to where you run from, like any path you type), which is what
+  the third example above does. What has to be a bare name is the TOPIC, and the topic is the
+  argument's last path segment with the prefix stripped - it is what the cache candidates are
+  built from, so `.worktrees/wt-my-feature` still looks for `<base>/wt-my-feature-target`.
 
 Exit codes: 0 = nothing blocked, 1 = something was refused or could not be removed, 2 = usage
 error. `--json` emits the machine-readable envelope; warnings go to stderr.
