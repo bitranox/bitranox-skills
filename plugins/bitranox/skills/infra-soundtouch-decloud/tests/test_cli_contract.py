@@ -24,7 +24,9 @@ SCRIPTS = {"soundtouch_find.py": F, "soundtouch_service.py": S,
 REFERENCES = Path(__file__).resolve().parent.parent / "references"
 
 
-INVOCATION = re.compile(r"(?:\S*/)?(soundtouch_\w+\.py)((?:(?!\s*[`|]).)*)")
+# Stops at a backtick (end of a code span), a pipe (a table cell boundary) and a shell comment,
+# all three of which end the command rather than belonging to it.
+INVOCATION = re.compile(r"(?:\S*/)?(soundtouch_\w+\.py)((?:(?!\s*[`|]|\s+#).)*)")
 
 
 def _usage_lines(text: str) -> list[tuple[str, list[str]]]:

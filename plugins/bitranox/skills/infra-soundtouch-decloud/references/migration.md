@@ -102,10 +102,24 @@ curl -s http://<speaker-ip>:8090/info | grep -o '<margeAccountUUID>[^<]*'
 Empty is the cause. A speaker that was registered to the Bose cloud brings its account with it; one
 that was factory reset does not. Ask the service which accounts it already knows, then bind:
 
+`<deviceId>` is the speaker's Ethernet MAC in upper case with no separators. Read it from the
+service's own device list, or from the speaker, rather than typing it out:
+
+```bash
+curl -s "http://<service-host>:8000/api/setup/devices"      # what the service knows
+uv run scripts/soundtouch_find.py --ip <speaker-ip>          # or ask the speaker
+```
+
 ```bash
 curl -s  "http://<service-host>:8000/api/setup/account-id-suggestions/<deviceId>"
 curl -X POST "http://<service-host>:8000/api/setup/pair-account/<deviceId>?account_id=<account-id>"
 ```
+
+The service does the pairing by talking to the SPEAKER: it resolves the device id to an address and
+tries the speaker's own HTTP call first, falling back to telnet. So the speaker has to be known to
+the service and reachable from it, but it does NOT need to be pointing at the service yet. That is
+why pairing works before migration, and why it fails with a 404 when the service has never seen the
+device: add it by address first.
 
 The account id is a QUERY parameter; in the body it returns 400. It does NOT have to be seven
 digits. Seven digits is what the service GENERATES, so that is what most accounts look like, but the

@@ -32,8 +32,15 @@ uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
 ```
 
 It checks the precondition below first, refuses if it is not met, reports what it would run without
-`--confirm`, and tells you the next step afterwards. Run `migrate --confirm` after it, always: the
-method leaves shell text in a live configuration value and only the migration takes it out.
+`--confirm`, and tells you the next step afterwards.
+
+Then run the migration, always. The method leaves shell text in a live configuration value and only
+this takes it out:
+
+```bash
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
+    --service http://<service-host>:8000 migrate --confirm
+```
 
 ### The precondition that makes it silently do nothing
 
@@ -61,9 +68,14 @@ variant:
 envswitch boseurls set "http://<service-host>:8000;touch /tmp/remote_services;/etc/init.d/sshd start" "http://<service-host>:8000/updates/soundtouch"
 ```
 
-If that value persists - `getpdo` shows it - but port 22 stays refused, the speaker needs
-`--full-config`, which also puts the injection on the runtime `sys configuration` key and reboots.
-Both differences appear to matter. It is reported on the SoundTouch Portable (Series I) and some
+If that value persists - `getpdo` shows it - but port 22 stays refused, the speaker needs the
+fuller form, which also puts the injection on the runtime `sys configuration` key and reboots. Both
+differences appear to matter:
+
+```bash
+uv run scripts/soundtouch_onboard.py --ip <speaker-ip> \
+    --service http://<service-host>:8000 enable-ssh --full-config --confirm
+``` It is reported on the SoundTouch Portable (Series I) and some
 CineMate 520 units, and upstream records the automation of it as candidate behaviour still awaiting
 confirmation on hardware. Some ST10 and CineMate 520 units never start `sshd` over telnet at all and
 need the serial or U-Boot route, which is outside this skill.
