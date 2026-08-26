@@ -772,3 +772,46 @@ def test_the_cli_names_both_candidates_and_removes_neither(tmp_path):
     assert str(base_wt) in result.stderr
     assert str(local_wt) in result.stderr
     assert base_wt.exists() and local_wt.exists()
+
+
+def test_an_ambiguous_topic_blocks_the_caches_too(tmp_path):
+    """The caches are derived from the SAME name the tool just said it could not resolve.
+
+    Two checkouts sharing a topic share cache candidates, so removing them under an ambiguous
+    topic destroys the other checkout's cache on the strength of a name that was refused.
+    """
+    (tmp_path / "wt-topic").mkdir()
+    (tmp_path / "project" / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    make_cache(tmp_path, "wt-topic-target")
+    plan = W.build_plan(
+        "topic",
+        base=tmp_path,
+        project=tmp_path / "project",
+        status_probe=lambda _p: W.STATUS_CLEAN,
+    )
+    blocked = [str(item.path) for item in W.blocked_reasons(plan)]
+    assert str(tmp_path / "wt-topic-target") in blocked
+
+
+def test_a_dirty_worktree_still_lets_the_caches_go(tmp_path):
+    """The control: only AMBIGUITY widens to the caches, not every worktree refusal.
+
+    A dirty checkout is a resolved one, so its caches are unambiguously the right caches.
+    """
+    (tmp_path / "wt-topic").mkdir()
+    make_cache(tmp_path, "wt-topic-target")
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_DIRTY)
+    blocked = [str(item.path) for item in W.blocked_reasons(plan)]
+    assert str(tmp_path / "wt-topic") in blocked
+    assert str(tmp_path / "wt-topic-target") not in blocked
+
+
+def test_the_cli_removes_no_cache_under_an_ambiguous_topic(tmp_path):
+    """End to end: --apply leaves the cache on disk and exits 1."""
+    project = tmp_path / "project"
+    (tmp_path / "wt-topic").mkdir()
+    (project / ".claude" / "worktrees" / "topic").mkdir(parents=True)
+    cache = make_cache(tmp_path, "wt-topic-target")
+    result = run_cli("topic", "--apply", cwd=project, home=tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert cache.exists(), "an unresolvable name must not delete a cache derived from it"

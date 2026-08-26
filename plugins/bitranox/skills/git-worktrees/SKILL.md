@@ -182,6 +182,10 @@ Two consequences worth knowing before you trust a bare name:
   `.claude/worktrees/`.
 - **A bare topic matching more than one candidate is REFUSED**, naming each one, and no flag
   overrides it - `--discard-uncommitted` answers "delete it anyway", not "pick one for me".
+  The refusal covers the CACHES too, unlike every other worktree refusal: cache candidates are
+  built from the topic alone, so two checkouts sharing a name share them, and a run that could
+  not resolve the name must not delete anything derived from it. A dirty or symlinked worktree
+  is a RESOLVED one, so its caches are unambiguously its own and still go.
   A stale `<base>/wt-<topic>` beside a real project-local checkout is a question, and this is
   a delete with no undo, so answer it by passing the path you mean. When exactly one matches,
   the plan names it on its `would remove` line.

@@ -34,7 +34,9 @@ Refusals, because this runs on machines whose layout is not yours:
 
 * A bare topic that matches MORE THAN ONE candidate is refused, naming each - precedence would
   pick one silently, and a delete has no undo. Passing the path outright IS the answer, so an
-  explicit path is never ambiguous and no flag overrides the refusal.
+  explicit path is never ambiguous and no flag overrides the refusal. This one refusal covers
+  the CACHES as well, because they are derived from the same unresolved topic; every other
+  worktree refusal leaves the caches removable, their worktree having been resolved.
 * A topic name that is a PATH rather than a bare name is refused outright, never normalised - a
   normalised traversal still deletes. Checked against both POSIX and Windows path rules, so a
   Windows-shaped escape is refused on Linux too.
@@ -293,6 +295,9 @@ class Plan:
     # Every path the search looked at, in the order it looked. Carried on the plan rather than
     # recomputed by the reporter, so what is reported cannot drift from what was searched.
     worktree_candidates: tuple[Path, ...] = ()
+    # The TOPIC could not be resolved to one worktree. Held as a flag rather than recovered by
+    # matching the refusal text, so rewording a message can never change what gets deleted.
+    topic_ambiguous: bool = False
 
     @property
     def total_bytes(self) -> int:
@@ -504,6 +509,7 @@ def build_plan(
             targets.append(CacheTarget(candidate, directory_size(candidate), refusal_for(candidate)))
 
     matched = [c for c in candidates if c.exists() or c.is_symlink()]
+    ambiguous = False
     if not checkout.exists() and not checkout.is_symlink():
         status, refusal = STATUS_ABSENT, None
     elif len(matched) > 1:
@@ -516,6 +522,7 @@ def build_plan(
             " - name the one you mean instead of the bare topic"
         )
         status = STATUS_UNKNOWN
+        ambiguous = True
     else:
         # Same guards the cache targets get - a worktree argument that is a symlink, a filesystem
         # root, or the home directory is refused before git is asked anything about it.
@@ -532,6 +539,7 @@ def build_plan(
         worktree_refusal=refusal,
         caches=tuple(targets),
         worktree_candidates=tuple(candidates),
+        topic_ambiguous=ambiguous,
     )
 
 
@@ -575,6 +583,13 @@ def blocked_reasons(
         plan, discard_uncommitted=discard_uncommitted, remove_worktree=remove_worktree
     )
     blocked = [Refusal(str(plan.worktree), reason)] if reason is not None else []
+    if plan.topic_ambiguous:
+        # The caches are derived from the SAME name that could not be resolved, and two checkouts
+        # sharing a topic share cache candidates - so removing them would destroy the other
+        # checkout's cache on the strength of a name this run has already refused. Unlike a dirty
+        # or symlinked worktree, which is a RESOLVED one whose caches are unambiguously its own.
+        why = "derived from a topic that matches more than one worktree"
+        return blocked + [Refusal(str(target.path), why) for target in plan.caches]
     blocked += [Refusal(str(t.path), t.refusal) for t in plan.caches if t.refusal is not None]
     return blocked
 
@@ -607,6 +622,13 @@ def apply_plan(
         error = git_remove(plan.worktree, force=discard_uncommitted)
         if error:
             failures.append(Refusal(str(plan.worktree), error))
+
+    if plan.topic_ambiguous:
+        # The plan refused every cache for this topic, so the apply must refuse them too. A plan
+        # and an apply that disagree is the one failure this tool exists to prevent.
+        return blocked_reasons(
+            plan, discard_uncommitted=discard_uncommitted, remove_worktree=remove_worktree
+        )
 
     for target in plan.caches:
         if target.refusal is not None:

@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.250.1]
+
+### Fixed
+
+- **An ambiguous topic no longer deletes the caches it could not attribute.** 5.250.0 refused the
+  worktree but let `--apply` remove `wt-<topic>-target` / `-clippy` anyway, by analogy with the
+  dirty-worktree path. The analogy is wrong: a dirty checkout is a RESOLVED one whose caches are
+  unambiguously its own, while an ambiguous topic is a name the run has just declared unresolvable,
+  and cache candidates are built from the topic alone, so two checkouts sharing a name share them.
+  The refusal now covers the whole run.
+- `apply_plan` consults `blocked_reasons` for the cache half instead of only checking each target's
+  own refusal, so the plan and the apply cannot disagree about what a topic-level refusal covers.
+  The end-to-end test caught this after the unit-level one already passed.
+
 ## [5.250.0]
 
 ### Changed

@@ -109,3 +109,26 @@ the answer deletes a directory.
       the module docstring's refusal list, and the `--help` epilog. Verified by running `--help`.
 - [x] Version reasoning recorded in the changelog: MINOR, because a bare name had exactly one
       candidate before 5.249.0, so no previously-working invocation changes behaviour.
+
+## Addendum 2 - the ambiguity refusal covers the caches (5.250.1)
+
+A follow-up decision review surfaced that 5.250.0 refused the worktree and still let `--apply`
+remove the caches. That was decided by analogy with the dirty-worktree path, and the analogy does
+not hold: a dirty checkout is RESOLVED, so its caches are unambiguously its own, while an ambiguous
+topic is a name the run has just declared unresolvable, and cache candidates are built from the
+topic alone.
+
+- [x] RED: `test_an_ambiguous_topic_blocks_the_caches_too` and
+      `test_the_cli_removes_no_cache_under_an_ambiguous_topic` fail before the change.
+- [x] The control for the direction it must NOT apply is
+      `test_a_dirty_worktree_still_lets_the_caches_go`, which passes before AND after - only
+      ambiguity widens to the caches, not every worktree refusal.
+- [x] The unit-level fix passed while the end-to-end test still failed, because `apply_plan`
+      checked each cache target's own refusal rather than consulting `blocked_reasons`. That is the
+      plan-and-apply divergence this tool exists to prevent, and only the e2e arm caught it. Both
+      layers now route through one function.
+- [x] Mutation-verified across the WHOLE defense stack, not one layer: with both `topic_ambiguous`
+      branches forced false, exactly the 2 asserting tests fail and the other 81 pass. A
+      single-layer mutation would have been absorbed by the other layer and read as a passing test.
+- [x] Decided by a FLAG on the plan, not by matching the refusal message text, so rewording a
+      message can never change what gets deleted.
