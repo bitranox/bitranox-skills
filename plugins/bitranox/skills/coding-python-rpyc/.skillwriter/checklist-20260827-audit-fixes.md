@@ -54,3 +54,15 @@ inherited context can fake. Each item below names the command and its output.
       measured output or an upstream URL.
 - [x] Typographic tell scan clean over every changed file, with an em-dash control proving the
       scanner reports a positive.
+
+## Decision review, same date
+
+- [x] ONE convention for vendored corrections: correct IN PLACE, and log the divergence here. The
+      first pass left `install.md` carrying upstream's wording with a note beside it while
+      `docs/servers.md` was corrected directly. Two conventions in one skill leave the next author
+      to guess, so `install.md` now states the measured dependency directly like the rest.
+- [x] Both `index.md` images REMOVED rather than re-pointed. A blog logo and a screenshot carry no
+      instruction to a reader consuming this as text, so an upstream branch-tip URL spent link-rot
+      risk on decoration. The screenshot's one informative claim - that server-side `stdout` prints
+      on the SERVER's console - is now prose, which cannot 404. `index.md` holds no remote image
+      references at all.

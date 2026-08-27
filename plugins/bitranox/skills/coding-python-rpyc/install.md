@@ -48,11 +48,6 @@ Patches are accepted through github [pull requests](https://docs.github.com/en/p
 
 ## Dependencies
 
-The core of RPyC has no external dependencies, so you can use it out of the box for "simple" use. However, RPyC integrates with some other projects to provide more features, and if you wish to use any of those, you must install them:
-
-> [!NOTE]
-> The "no external dependencies" sentence is upstream text from an older release. rpyc 6.x
-> declares an unconditional `Requires-Dist: plumbum`, so `pip install rpyc` always pulls plumbum
-> in as well. Only the entries listed below are genuinely optional.
+RPyC 6.x declares exactly one unconditional dependency, `plumbum`, so `pip install rpyc` always installs that too. Beyond it, RPyC integrates with some other projects to provide more features, and if you wish to use any of those, you must install them as well:
 
 - [PyWin32](https://sourceforge.net/projects/pywin32/files/pywin32/) - Required for `PipeStream` on Windows

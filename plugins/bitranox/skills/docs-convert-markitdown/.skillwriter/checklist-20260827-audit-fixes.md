@@ -54,3 +54,28 @@ been for: the API as documented does not error, it silently does nothing.
 - [x] No session narrative or private provenance; no machine paths.
 - [x] Typographic tell scan clean over every changed file, with an em-dash control proving the
       scanner reports a positive.
+
+## Decision review, same date
+
+- [x] The `OCR` trigger is RESTORED to the description, with the correction attached. Removing it
+      made the description true and the skill unreachable for the exact query it now answers best:
+      someone asking how to OCR a scanned document needs to arrive here and learn markitdown does
+      not, and what to use instead. A description selects for TRIGGERS; the accuracy lives in the
+      body, which states it in 8 places. The description now carries `OCR`, `tesseract` and
+      `scanned` as matchable terms while saying plainly that no local OCR exists.
+- [x] Description re-measured after the restore: 351 characters, well under the 1024 cap.
+- [x] The restore was VERIFIED against the derived trigger artifact, not assumed. The first attempt
+      put the OCR clause in a second sentence, where it reached the available-skills listing but
+      NOT the per-prompt router: `build_skill_triggers.distill` drops tokens under 4 characters, so
+      `ocr` can never be a trigger token at all, and `MAX_HEAD` caps the head at 14, which the
+      format list already filled. The clause is now front-loaded so `scanned` and `tesseract` are
+      real router tokens.
+- [x] Trade recorded: the head holds 14 tokens, so admitting `scanned` and `tesseract` cost `epub`,
+      `youtube` and `urls` their slots. They remain in the description TEXT, which is what the
+      listing channel injects; only the router loses them. Accepted because an OCR-shaped query is
+      a far more likely arrival path here than a YouTube one, and because a skill whose description
+      the listing budget drops has the router as its only channel.
+- [x] The reworded description first shipped a `: ` inside the plain scalar (`for LLM use: PDF`),
+      which the repo-gate rejected: that is not valid YAML, and the regex front-matter readers
+      recover the value anyway so nothing downstream would have noticed. Reworded with ` - ` and
+      re-parsed with a real YAML loader, not a regex.

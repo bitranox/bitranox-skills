@@ -1,6 +1,6 @@
 ---
 name: docs-convert-markitdown
-description: Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images (EXIF metadata and AI descriptions), audio (transcription), HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs.
+description: Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images, scanned pages, tesseract or OCR needs, audio transcription, HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs. markitdown runs no local OCR and installing tesseract does not change that, so this names what to reach for instead.
 ---
 
 # MarkItDown - File to Markdown Conversion

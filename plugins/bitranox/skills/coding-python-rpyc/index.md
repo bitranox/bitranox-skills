@@ -1,11 +1,3 @@
-<div style="float:right; margin:1em 0em 1em 1em; padding: 0em 1em 1em 1em;">
-<a href="http://tomerfiliba.com" target="_blank">
-<img style="display: block; margin-left: auto; margin-right: auto" alt="Tomer Filiba"
-src="https://raw.githubusercontent.com/tomerfiliba-org/rpyc/master/docs/_static/fish-text-black.png" title="Tomer's Blog"/>
-<span style="color:transparent;position: absolute;font-size:5px;width: 0px;height: 0px;">Tomer Filiba</span></a>
-<br/>
-</div>
-
 # RPyC - Transparent, Symmetric Distributed Computing
 
 <div class="admonition note">
@@ -20,10 +12,8 @@ Please use the [github issues](https://github.com/tomerfiliba/rpyc/issues) to as
 
 **RPyC** (pronounced as *are-pie-see*), or *Remote Python Call*, is a **transparent** [python](https://www.python.org/) library for **symmetrical** [remote procedure calls](https://en.wikipedia.org/wiki/Remote_procedure_calls), [clustering](https://en.wikipedia.org/wiki/Clustering) and [distributed-computing](http://en.wikipedia.org/wiki/Distributed_computing). RPyC makes use of [object-proxying](http://en.wikipedia.org/wiki/Proxy_pattern), a technique that employs python's dynamic nature, to overcome the physical boundaries between processes and computers, so that remote objects can be manipulated as if they were local.
 
-<figure>
-<img src="https://raw.githubusercontent.com/tomerfiliba-org/rpyc/master/docs/_static/screenshot.png" alt="A Windows client connected to a Linux server" />
-<figcaption>A screenshot of a Windows client connecting to a Linux server. Note that text written to the server's <code>stdout</code> is actually printed on the server's console.</figcaption>
-</figure>
+A Windows client can connect to a Linux server: text written to the server's `stdout` is
+printed on the SERVER's console, not the client's.
 
 ## Getting Started
 
