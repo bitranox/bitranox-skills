@@ -33,3 +33,10 @@ A false absolute repeated at three sites.
 - [x] Present tense; no session narrative, no operator instructions, no scratch paths.
 - [x] No address, MAC, hostname or machine path added. Verified:
       `grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}|/home/|/Users/|/tmp/' SKILL.md`
+
+## Follow-up (decision review, same day)
+- [x] The replacement claim is itself UNVERIFIABLE on this host, so the passage now says so in
+      line and names the single run that would settle it. Chosen over dropping the exit code
+      (which makes 'check the exit code' untestable) and over reverting to the original, which
+      is plainly false. The marker is deliberate: this file carries many measured facts, and an
+      unmarked inherited one would read as measured.

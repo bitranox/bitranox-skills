@@ -515,6 +515,9 @@ state log, the registry build, the boot state.
 **`wmic` is GONE in 25H2, and a harness that captures only stdout sees EMPTY.**
 `wmic logicaldisk get DeviceID,VolumeName,Size` writes `'wmic' is not recognized as an internal
 or external command` to STDERR and exits 9009 (PowerShell raises `CommandNotFoundException`).
+UNVERIFIED ON 25H2: the stderr-and-exit-code behaviour is the documented behaviour of any
+missing command under cmd.exe, not something measured on a 25H2 box here. Settle it with one
+run capturing both streams and `ERRORLEVEL`, on a machine that is genuinely 25H2.
 Redirect stdout only - the usual `> out.txt` in a scheduled task or over SSH - and `out.txt` is
 empty with nothing raised, which reads as "no drives" rather than "the tool is missing", so an
 inventory step reports a machine with no disks. Capture `2>&1` and check the exit code before
