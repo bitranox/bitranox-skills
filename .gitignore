@@ -49,3 +49,6 @@ plugins/bitranox/hooks/CLAUDE.md
 # defaults to the current directory. Those are LIVE firewall configs carrying password hashes,
 # private keys and certificates, and this repo is public: never commit one.
 config-*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].xml
+
+# session scaffolding, never committed
+.sweep-2026-08-27/
