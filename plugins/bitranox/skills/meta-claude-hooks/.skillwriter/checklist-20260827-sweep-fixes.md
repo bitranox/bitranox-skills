@@ -20,3 +20,14 @@ SKILL.md change is the one line the stamp tool owns, rewritten by that tool.
 - [x] No address, MAC, hostname or machine path added.
 - [x] Present tense, no session narrative, no private provenance.
 - [x] Description unchanged - no routing keyword moved, cap not in play.
+- [x] REVISED after the decision review: the first stamp was premature. Re-stamping asserts our
+      references match upstream, but `coverage` only checks that stamped NAMES appear, so it cannot
+      see a behavioural note about a name we already document. Diffed the 2.1.236 -> 2.1.246 window
+      by fetching both upstream pages and listing every version marker in them.
+- [x] The window holds exactly two items. `classifierContext` (2.1.236) was already covered, in
+      `io-contract.md` - the previous stamp was honest. The 2.1.246 item was NOT: in terminal
+      sessions `permission_prompt` now also fires for a sandboxed command's network request. Added
+      to `events.md`, with the point a reader needs - on an older build the hook sees nothing, so
+      its silence is not evidence the request did not happen.
+- [x] Re-stamped after that fix. The stamp hashes UPSTREAM, so our addition does not move it; the
+      gap was ours alone and closing it is what makes the CURRENT verdict true rather than asserted.

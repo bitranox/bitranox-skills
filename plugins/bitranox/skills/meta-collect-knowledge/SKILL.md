@@ -56,11 +56,12 @@ unknown, defer - a blind gather pulls noise.
    carry a credential across. Concrete operational detail (paths, hostnames) is the useful part -
    keep it.
 5. **Debounce.** Record the (project, topic) as gathered so the same topic is not re-grepped on
-   every trigger. Nothing ships to do this for you - there is no debounce store and
-   `gather_scan.py` has no `--mark` - so keep your own, out-of-store, beside the other
-   out-of-store counters: append `<abs project path>\t<topic>\t<ISO date>` to
-   `~/.claude/self-improve-audit/gathered-topics.tsv`, and skip a pair already listed there.
-   Out-of-store is the point: it must not become a fact that the next dream then tidies.
+   every trigger: `gather_scan.py --topic "<topic>" --mark`. Ask before spending a scan with
+   `--seen` (exit 0 already gathered, 1 not), which answers from the record and walks nothing.
+   Neither GATES a scan - a scan you ask for still runs, whatever the record says, so `--seen`
+   is advice to the caller rather than a lock. The record lives OUT of the curated store on
+   purpose: written into it, it would be a fact, and the next dream would tidy, promote or
+   dedup a bookkeeping row.
 6. **Verify + report.** `reconcile_memory_index.py --check <altitude chain>` (home:
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`, launch via
    `hooks/run-python.sh`) must end

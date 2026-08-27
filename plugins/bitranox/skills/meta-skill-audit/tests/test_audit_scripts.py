@@ -5,6 +5,8 @@ substitute reviewer rather than patching internals. Nothing here spawns `claude 
 
 import re
 
+import pytest
+
 import audit_skills as A
 
 
@@ -492,3 +494,31 @@ def test_audit_scripts_routes_a_lead_into_the_leads_block(tmp_path):
     A.audit_scripts(src, tmp_path / "room", jobs=1, runner=runner, log=lambda *_a: None)
     block = seen["guard"][seen["guard"].index("LEADS"):]
     assert "shlex" in block
+
+
+def test_a_prepass_that_cannot_run_aborts_the_sweep_rather_than_emptying_the_block(tmp_path):
+    """Fail-open here is indistinguishable from a genuinely clean corpus.
+
+    An empty ALREADY KNOWN block reads as "the pre-pass found nothing", so a broken pre-pass would
+    send every reviewer out to re-derive the same mechanical hits at full price, and the only signal
+    would be one NOTE scrolling past in a long run. Stopping costs a restart; not stopping costs the
+    sweep."""
+    def explodes(_room, _targets):
+        raise OSError("the corpus could not be read")
+
+    with pytest.raises(RuntimeError) as caught:
+        A._prepass_maps(tmp_path, [], log=lambda *_a: None, compute=explodes)
+    assert "pre-pass" in str(caught.value)
+    assert isinstance(caught.value.__cause__, OSError), "the real cause must survive"
+
+
+def test_the_default_prepass_seam_is_the_real_one(tmp_path):
+    """The negative for the test above: with no injection, a real room really is scanned.
+
+    Without this, `compute` could default to something inert and the abort test would still pass."""
+    room = tmp_path / "plugin"
+    (room / "hooks").mkdir(parents=True)
+    (room / "hooks" / "h.py").write_text(
+        "import subprocess\nsubprocess.run(['x'], text=True)\n", encoding="utf-8")
+    facts, _leads = A._prepass_maps(room, [("hooks/h.py", "hook")], log=lambda *_a: None)
+    assert "no encoding=" in " ".join(facts.get("hooks/h.py", []))

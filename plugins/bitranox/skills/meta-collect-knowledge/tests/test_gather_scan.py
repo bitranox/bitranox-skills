@@ -311,3 +311,94 @@ def test_cli_walled_scan_stays_in_tree_unless_cross_tree(tmp_path, monkeypatch, 
     G.main(["--topic", "zorblax frobnicator", "--self", str(cur), "--cross-tree"])
     out = capsys.readouterr().out
     assert "othertree" in out and "TREE:" in out
+
+
+# ---- debounce store ------------------------------------------------------------------------------
+
+def test_a_freshly_marked_pair_reads_back_as_gathered(tmp_path, monkeypatch):
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    assert G.already_gathered("/p/alpha", "zfs snapshots") is False
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    assert G.already_gathered("/p/alpha", "zfs snapshots") is True
+
+
+def test_the_debounce_is_per_project_and_per_topic(tmp_path, monkeypatch):
+    """The negative: marking one pair must not silence a different project or a different topic."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    assert G.already_gathered("/p/beta", "zfs snapshots") is False
+    assert G.already_gathered("/p/alpha", "pfsense rules") is False
+
+
+def test_marking_twice_records_one_row(tmp_path, monkeypatch):
+    """Re-gathering the same topic must not grow the file without bound."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    rows = [ln for ln in (tmp_path / G.GATHERED_FILE).read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(rows) == 1
+
+
+def test_a_topic_matches_regardless_of_case_and_surrounding_space(tmp_path, monkeypatch):
+    """A topic is free text a caller retypes; exact-match would debounce almost nothing."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    G.mark_gathered("/p/alpha", "  ZFS Snapshots ")
+    assert G.already_gathered("/p/alpha", "zfs snapshots") is True
+
+
+def test_a_tab_in_the_topic_cannot_forge_a_second_field(tmp_path, monkeypatch):
+    """The store is TSV; an unescaped tab in free text would split one row into a wrong pair."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    G.mark_gathered("/p/alpha", "zfs\tsnapshots")
+    assert G.already_gathered("/p/alpha", "zfs\tsnapshots") is True
+    assert G.already_gathered("/p/alpha", "snapshots") is False
+
+
+def test_an_unreadable_store_reports_not_gathered_rather_than_raising(tmp_path, monkeypatch):
+    """Debounce is an optimisation: losing it costs a re-grep, and must never break a gather."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path / "nonexistent")
+    assert G.already_gathered("/p/alpha", "zfs snapshots") is False
+
+
+def test_seen_exits_zero_when_marked_and_one_when_not(tmp_path, monkeypatch, capsys):
+    """Exit-code contract: 0 = yes already gathered, 1 = no. Format-independent, per house rule."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"]) == 1
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"]) == 0
+
+
+def test_seen_answers_without_running_the_scan(tmp_path, monkeypatch):
+    """--seen is the cheap pre-check; if it walked the tree it would defeat its own purpose."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    called = []
+    monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
+    G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--seen"])
+    assert called == [], "--seen ran the file discovery"
+
+
+def test_mark_records_the_pair_and_exits_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
+    assert G.already_gathered("/p/alpha", "zfs snapshots") is True
+
+
+def test_mark_does_not_run_a_scan_either(tmp_path, monkeypatch):
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    called = []
+    monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
+    G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"])
+    assert called == []
+
+
+def test_a_plain_scan_still_ignores_the_debounce(tmp_path, monkeypatch):
+    """The negative that matters: marking a topic must NOT silently stop an explicit scan.
+
+    Debounce is advice to the caller, not a gate on the tool - a scan asked for is a scan run."""
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    G.mark_gathered("/p/alpha", "zfs snapshots")
+    called = []
+    monkeypatch.setattr(G, "discover_files", lambda *a, **k: called.append(1) or [])
+    monkeypatch.setattr(G, "discover_curated", lambda *a, **k: [])
+    G.main(["--topic", "zfs snapshots", "--self", "/p/alpha"])
+    assert called == [1], "a marked topic suppressed an explicitly requested scan"

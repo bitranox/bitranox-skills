@@ -644,22 +644,42 @@ def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(
     return results
 
 
-def _prepass_maps(room, targets, log=print):
+def _default_prepass(room, targets):
+    """The real pre-pass over the room, as (facts, leads, summary)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import script_prepass  # noqa: PLC0415 - sibling script, resolved from this file's own dir
+    vendored = script_prepass.vendored_targets(sys.modules[__name__], room)
+    return script_prepass.run_prepass(room, targets, vendored=vendored)
+
+
+def _prepass_maps(room, targets, log=print, compute=None):
     """The deterministic pre-pass, run over the same room the reviewers read.
 
     Computed HERE rather than handed down from `main()`, because it was handed down from nowhere:
     `prepass=` was threaded through three signatures and no caller ever supplied one, so every
     reviewer read "(nothing - the pre-pass found no mechanical hits here)" while the pre-pass sat
     unused and 133 reviewers re-derived the same 28 lines. A producer with no consumer passes its
-    own unit tests. The parameters stay, as the injection seam the tests use."""
+    own unit tests. The parameters stay, as the injection seam the tests use.
+
+    RAISES rather than degrading. Fail-open is wrong here specifically because the degraded output
+    is INDISTINGUISHABLE from success: an empty map renders as "the pre-pass found no mechanical
+    hits here", so a broken pre-pass would send every reviewer out to re-derive the same hits at
+    full price, and the only trace would be one NOTE scrolling past in a run that prints hundreds.
+    A hook fails open because a wedged turn is worse than a missed check; a sweep is the opposite
+    trade - it is long, it is paid for per target, and it is trivial to restart.
+
+    `compute` is the injection seam, defaulting to the real pre-pass - the same shape as `runner`
+    here and `run` in script_prepass. Injected rather than reached for directly so the abort path
+    can be tested with a collaborator that genuinely fails: a broken ROOM does not raise (rglob
+    over a non-directory returns empty), so a fixture built that way asserts nothing."""
+    compute = _default_prepass if compute is None else compute
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import script_prepass  # noqa: PLC0415 - sibling script, resolved from this file's own dir
-        vendored = script_prepass.vendored_targets(sys.modules[__name__], room)
-        facts, leads, summary = script_prepass.run_prepass(room, targets, vendored=vendored)
-    except Exception as exc:                     # a broken pre-pass must not cancel the sweep
-        log("NOTE: the pre-pass did not run (%s) - reviewers get no ALREADY KNOWN block" % exc)
-        return {}, {}
+        facts, leads, summary = compute(room, targets)
+    except Exception as exc:
+        raise RuntimeError(
+            "the pre-pass could not run over %s (%s) - refusing to start the sweep, because every "
+            "reviewer would be told nothing is already known and would re-derive it" % (room, exc)
+        ) from exc
     for line in summary:
         log("  pre-pass: " + line)
     return facts, leads

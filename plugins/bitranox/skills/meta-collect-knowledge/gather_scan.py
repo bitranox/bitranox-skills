@@ -15,6 +15,7 @@ Imports the shared helpers from the plugin's hooks dir, like the meta-dream-tree
 
 import argparse
 import hashlib
+import datetime
 import os
 import re
 import sys
@@ -290,6 +291,64 @@ def scan(keywords, files):
     return out
 
 
+# ---- debounce -----------------------------------------------------------------------------------
+# A (project, topic) pair already gathered should not be re-grepped on every trigger. The record
+# lives OUT of the curated store on purpose: written into it, it would be a fact, and the next dream
+# would dutifully tidy, promote or dedup a bookkeeping row. It sits beside the other out-of-store
+# counters instead.
+
+GATHERED_FILE = "gathered-topics.tsv"
+
+
+def _gathered_path():
+    return sig._audit_dir() / GATHERED_FILE
+
+
+def _pair_key(proj, topic):
+    """The comparison key for a (project, topic) pair.
+
+    Topic is free text a caller retypes, so an exact match would debounce almost nothing: it is
+    casefolded and its whitespace collapsed. Tabs go with that collapse, which also keeps a topic
+    from forging a second column in a TSV row."""
+    return (os.path.abspath(str(proj)), " ".join(str(topic).split()).casefold())
+
+
+def _read_pairs():
+    """Every recorded pair. An unreadable store is an EMPTY one, never an error: debounce is an
+    optimisation, and losing it costs a re-grep - it must not break a gather."""
+    out = set()
+    try:
+        text = _gathered_path().read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            out.add(_pair_key(parts[0], parts[1]))
+    return out
+
+
+def already_gathered(proj, topic):
+    """True when this (project, topic) pair was already marked."""
+    return _pair_key(proj, topic) in _read_pairs()
+
+
+def mark_gathered(proj, topic, when=None):
+    """Record a (project, topic) pair as gathered. Idempotent - re-marking adds no row."""
+    if already_gathered(proj, topic):
+        return False
+    path = _gathered_path()
+    stamp = when or datetime.date.today().isoformat()
+    row = "%s\t%s\t%s\n" % (os.path.abspath(str(proj)), " ".join(str(topic).split()), stamp)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(row)
+    except OSError:
+        return False
+    return True
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Cross-tree gather stage-1: keyword grep for candidates.")
     ap.add_argument("--topic", required=True, help="topic / scope-descriptor text to gather for")
@@ -298,9 +357,23 @@ def main(argv=None):
     ap.add_argument("--cross-tree", action="store_true", dest="cross_tree",
                     help="deliberately gather across OTHER knowledge trees even when "
                          "cross_tree_search=false (import is always a labeled COPY)")
+    ap.add_argument("--seen", action="store_true",
+                    help="ask ONLY whether this (project, topic) pair was already gathered and "
+                         "exit: 0 yes, 1 no. Runs no scan - it is the cheap pre-check")
+    ap.add_argument("--mark", action="store_true",
+                    help="record this (project, topic) pair as gathered and exit. Runs no scan")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     self_proj = args.self_proj or os.getcwd()
+
+    # Both answer from the debounce record alone. Deliberately BEFORE any discovery: --seen exists
+    # to avoid the walk, so a version that walked first would defeat its own purpose. And neither
+    # gates a plain scan - a scan explicitly asked for is a scan run, whatever the record says.
+    if args.seen:
+        return 0 if already_gathered(self_proj, args.topic) else 1
+    if args.mark:
+        mark_gathered(self_proj, args.topic)
+        return 0
     keywords = extract_keywords(args.topic, proj=self_proj)   # per-project blacklist for the current proj
     if not keywords:
         print("no usable keywords from topic", file=sys.stderr)

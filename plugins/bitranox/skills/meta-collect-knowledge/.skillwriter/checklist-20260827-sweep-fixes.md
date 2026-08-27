@@ -20,3 +20,14 @@
       descriptor no longer lives in a `bitranox:self-learning` block in `CLAUDE.local.md`. It does -
       the marker wraps the WHAT/STACK/CHILDREN block, and `self_improve_signals` reads it from
       `claude_local_md_path`. The skill's sentence is correct and is unchanged.
+- [x] REVISED after the decision review: the first fix documented a hand-maintained TSV that no
+      shipped code wrote or read, which is a spec that becomes fiction. `gather_scan.py` now owns
+      it - `--mark` records a pair, `--seen` answers from the record (exit 0 gathered, 1 not) and
+      walks nothing. Step 5 names those instead of a convention.
+- [x] Six store tests and five CLI tests, each watched fail first. The ones that matter are the
+      negatives: a mark on one project must not silence another project or another topic; a tab in
+      free text must not forge a second TSV column; an unreadable store must read as "not gathered"
+      rather than raise, because debounce is an optimisation and losing it costs only a re-grep.
+- [x] Deliberate non-behaviour, with its own test: neither flag GATES a scan. A marked topic still
+      scans when a scan is asked for - `--seen` is advice to the caller, not a lock - so the tool
+      cannot silently do less than it was told to.

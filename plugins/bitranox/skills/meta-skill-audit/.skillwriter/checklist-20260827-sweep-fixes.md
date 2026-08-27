@@ -22,3 +22,16 @@
       requoting; a quote normalized at record time), while `[113]` and `[114]` kept theirs and were
       fixed (the repair made the documented command work, so the example correctly persists).
       An 11-of-134 heuristic that is wrong in both directions decides which defects ship.
+- [x] REVISED after the decision review: the pre-pass now ABORTS the sweep instead of failing open.
+      Fail-open is wrong here specifically because the degraded output is indistinguishable from
+      success - an empty map renders as "the pre-pass found no mechanical hits here", so every
+      reviewer would re-derive the same hits at full price behind one NOTE in a run that prints
+      hundreds. A hook fails open because a wedged turn is worse than a missed check; a sweep is the
+      opposite trade, being long, paid per target, and trivial to restart.
+- [x] The first RED for this asserted NOTHING and was replaced: a room pointed at a file does not
+      raise (rglob over a non-directory returns empty), so the fixture never produced the failure it
+      claimed to test. Added a real injection seam (`compute`, the same shape as `runner` here and
+      `run` in script_prepass) and a collaborator that genuinely raises.
+- [x] RED-verified by mutation: reverting the raise to the old fail-open makes the abort test fail,
+      with `__pycache__` cleared first. A negative control asserts the default seam is the REAL
+      pre-pass, so `compute` cannot quietly default to something inert.

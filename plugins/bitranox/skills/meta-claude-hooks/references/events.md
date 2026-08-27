@@ -430,3 +430,7 @@ event for desktop notifications.
 six seconds after Claude asks, it is not deferred while you type, and it does not run at all if you or a
 `PermissionRequest` hook answer sooner. Set `CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS` to `1` to turn
 it off there. Before v2.1.233 it did not fire in those sessions at all.
+
+In a TERMINAL session, `permission_prompt` also fires for a sandboxed command's network request,
+but only from CLI v2.1.246. A hook written against an older build sees nothing for that case, so
+do not read its silence as the request not having happened.
