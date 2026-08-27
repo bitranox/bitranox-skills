@@ -17,6 +17,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  # a run only ever exists for a tree state that was pushed, so an outage that eats the
+  # push-triggered run leaves that commit permanently unverified. This lets it be re-run.
+  workflow_dispatch: {}
 
 jobs:
   tests:

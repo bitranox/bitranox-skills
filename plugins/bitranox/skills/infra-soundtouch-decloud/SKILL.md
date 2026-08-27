@@ -1,6 +1,6 @@
 ---
 name: infra-soundtouch-decloud
-description: Use when Bose SoundTouch speakers lost internet radio and presets after Bose shut down the SoundTouch cloud, when setting up a self-hosted replacement service for them, when a speaker is not discovered on the network, when presets disappear after every reboot or a preset is accepted but never plays, when a speaker needs telnet or SSH access enabled, or when its service URLs still point at streaming.bose.com.
+description: Use when Bose SoundTouch speakers lost internet radio and presets after Bose shut down the SoundTouch cloud, when setting up a self-hosted replacement service for them, when a speaker is not discovered on the network, when a station's stream URL must be found or verified before it becomes a preset, when presets disappear after every reboot or a preset is accepted but never plays, when a speaker needs telnet or SSH access enabled, or when its service URLs still point at streaming.bose.com.
 ---
 
 # Bose SoundTouch without the Bose cloud
@@ -33,19 +33,20 @@ presets, so the backup is what stands between the owner and losing them.
 
 Ask one question at a time. Prefer multiple choice. Check in after each phase.
 
-| Phase | Do this                                                                    | Detail in            |
-|-------|----------------------------------------------------------------------------|----------------------|
-| 1     | Ask which speakers and models. Warn about stereo pairs before anything else | this file, below     |
-| 2     | Decide where the service runs and PIN that address                          | service-setup.md     |
-| 3     | Check Docker is installed; if not, walk them through installing it          | service-setup.md     |
-| 4     | Start the container with host networking, verify it answers                 | service-setup.md     |
-| 5     | Find the speakers; ask the owner to wake any that do not answer             | service-setup.md     |
-| 6     | Back up every speaker BEFORE any change                                     | presets.md           |
-| 7     | Open SSH over the diagnostic port IF something needs it, and make it persist | access-and-rooting.md|
-| 8     | Rewrite the four service URLs, verify nothing cloud is left                 | migration.md         |
-| 9     | Wait for the radio sources; bind the account if they never mount            | migration.md         |
-| 10    | Write the presets and keep them across reboots                              | presets.md           |
-| 11    | Acceptance: hear two different stations, reboot, check they came back       | presets.md           |
+| Phase | Do this                                                                            | Detail in             |
+|-------|------------------------------------------------------------------------------------|-----------------------|
+| 1     | Ask which speakers and models. Warn about stereo pairs before anything else        | this file, below      |
+| 2     | Decide where the service runs and PIN that address                                 | service-setup.md      |
+| 3     | Check Docker is installed; if not, walk them through installing it                 | service-setup.md      |
+| 4     | Start the container with host networking, verify it answers                        | service-setup.md      |
+| 5     | Find the speakers; ask the owner to wake any that do not answer                    | service-setup.md      |
+| 6     | Back up every speaker BEFORE any change                                            | presets.md            |
+| 7     | Open SSH over the diagnostic port IF something needs it, and make it persist       | access-and-rooting.md |
+| 8     | Rewrite the four service URLs, verify nothing cloud is left                        | migration.md          |
+| 9     | Wait for the radio sources; bind the account if they never mount                   | migration.md          |
+| 10    | Harvest the old presets, ask which stations they still want, validate every stream | presets.md            |
+| 11    | Write the presets. Measure before adding anything that rewrites them               | presets.md            |
+| 12    | Acceptance: hear two different stations, reboot, check they came back              | presets.md            |
 
 **Phase 1, before anything else: ask what you are working with.** Ask whether any two speakers are
 a left/right STEREO PAIR, and whether any unit is a Lifestyle or CineMate console rather than a
@@ -60,25 +61,25 @@ them.
 
 Use the Read tool to load the file for the phase you are in. Do not answer from this table alone.
 
-| Topic                                                                                     | File                   |
-|-------------------------------------------------------------------------------------------|------------------------|
-| Docker check and install per OS, compose file, host networking, env, discovery, waking a speaker | references/service-setup.md |
-| Diagnostic port 17000, opening SSH over it and its precondition, making it survive a reboot | references/access-and-rooting.md |
-| The four service URLs, the write order, verification, binding an account                  | references/migration.md |
-| Preset location format, the boot wipe, restore loop, backup, the JSON template            | references/presets.md  |
-| Symptom to cause, the diagnostic one-liners, how long each step takes, upstream docs       | references/troubleshooting.md |
+| Topic                                                                                                                                                                                       | File                             |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
+| Docker check and install per OS, compose file, host networking, env, discovery, waking a speaker                                                                                            | references/service-setup.md      |
+| Diagnostic port 17000, opening SSH over it and its precondition, making it survive a reboot                                                                                                 | references/access-and-rooting.md |
+| The four service URLs, the write order, verification, binding an account                                                                                                                    | references/migration.md          |
+| Where a stream URL comes from (harvest, research, validate), preset location format, the boot wipe, measuring before automating, alerting instead of auto-repair, backup, the JSON template | references/presets.md            |
+| Symptom to cause, the diagnostic one-liners, how long each step takes, upstream docs                                                                                                        | references/troubleshooting.md    |
 
 ## Scripts
 
 Run with `uv run scripts/<name>.py`. Each prints a JSON envelope; exit 0 yes, 1 no, 2 error.
 Anything that CHANGES a speaker requires `--confirm`, so the read half is always safe to run.
 
-| Script                  | Use it to                                                            |
-|-------------------------|-----------------------------------------------------------------------|
-| `soundtouch_service.py` | Check Docker, write and validate the compose file, check service health |
-| `soundtouch_find.py`    | Discover speakers and report what state each is in                    |
-| `soundtouch_onboard.py` | Open SSH, migrate the URLs, reboot, prove a preset really played     |
-| `soundtouch_presets.py` | Back up, template, restore and check presets                          |
+| Script                  | Use it to                                                                                        |
+|-------------------------|--------------------------------------------------------------------------------------------------|
+| `soundtouch_service.py` | Check Docker, write and validate the compose file, check service health                          |
+| `soundtouch_find.py`    | Discover speakers and report what state each is in                                               |
+| `soundtouch_onboard.py` | Open SSH, migrate the URLs, reboot, prove a preset really played                                 |
+| `soundtouch_presets.py` | Back up, harvest a template from an old backup, validate every stream, restore and check presets |
 
 ## When it does not work
 
@@ -99,13 +100,16 @@ issue rather than something they did wrong.
 
 ## Common mistakes
 
-| Mistake                                                | What happens                                                        |
-|--------------------------------------------------------|----------------------------------------------------------------------|
-| Bridge networking, or adding a `ports:` block           | Service answers HTTP and discovers nothing. Looks installed, is useless |
-| Migrating before backing up the presets                 | The speaker's empty set overwrites the service copy; presets are gone |
-| Rewriting only the account URL                          | Presets sync and nothing ever plays                                  |
-| Writing the persisting command before the others        | Every value reverts at the next reboot although each replied OK      |
-| Skipping the persistent marker after opening SSH        | Access is gone at the next boot and looks like it never worked       |
-| Putting the raw stream URL in a preset                  | Accepted at write time, never plays                                  |
-| Letting the service's address come from plain DHCP      | Every speaker breaks at once, weeks later, when the lease changes    |
-| Declaring failure 30 seconds after a reboot             | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging |
+| Mistake                                                            | What happens                                                                                                                                                                                                               |
+|--------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Bridge networking, or adding a `ports:` block                      | Service answers HTTP and discovers nothing. Looks installed, is useless                                                                                                                                                    |
+| Migrating before backing up the presets                            | A migration that leaves `bmxRegistryUrl` on the cloud makes the speaker discard every preset and send its empty set back to the service. Observed once, six presets. A REBOOT does not do this - see references/presets.md |
+| Installing a repair timer without measuring the wipe first         | A silent writer for a loss that is not happening, which also reverts any station changed on the speaker                                                                                                                    |
+| Rewriting only the account URL                                     | Presets sync and nothing ever plays                                                                                                                                                                                        |
+| Writing the persisting command before the others                   | Every value reverts at the next reboot although each replied OK                                                                                                                                                            |
+| Skipping the persistent marker after opening SSH                   | Access is gone at the next boot and looks like it never worked                                                                                                                                                             |
+| Putting the raw stream URL in a preset                             | Accepted at write time, never plays                                                                                                                                                                                        |
+| Writing a harvested or researched stream without fetching it first | A station that moved or died is accepted at write time and stays silent. One of six harvested presets was already dead                                                                                                     |
+| Treating an `.m3u`/`.pls` link as the stream                       | Served as `audio/x-mpegurl`, so an `audio/` test passes a text file that plays nothing                                                                                                                                     |
+| Letting the service's address come from plain DHCP                 | Every speaker breaks at once, weeks later, when the lease changes                                                                                                                                                          |
+| Declaring failure 30 seconds after a reboot                        | Readiness ranges 55 to 92 seconds and is per-port; wait 90 s before judging                                                                                                                                                |

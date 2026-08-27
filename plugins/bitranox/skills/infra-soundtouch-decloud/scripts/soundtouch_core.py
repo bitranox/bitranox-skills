@@ -12,6 +12,7 @@ writes have an order in which the persisting command must come last.
 from __future__ import annotations
 
 import base64
+import json
 import socket
 import time
 import urllib.parse
@@ -26,6 +27,10 @@ URL_FIELDS = ("margeServerUrl", "statsServerUrl", "swUpdateUrl", "bmxRegistryUrl
 CLOUD_MARKERS = ("bose.com", "bose.io", "bosecm.com")
 RADIO_SOURCES = ("TUNEIN", "LOCAL_INTERNET_RADIO", "RADIO_BROWSER")
 PLAYBACK_PATH = "/custom/v1/playback/"
+# Served for .m3u and .pls. They are TEXT that lists streams, so a bare `audio/` test passes them
+# and the resulting preset is accepted at write time and never plays.
+PLAYLIST_TYPES = ("audio/x-mpegurl", "audio/mpegurl", "application/x-mpegurl",
+                  "audio/x-scpls", "application/pls+xml", "audio/scpls")
 
 # The firmware passes this configuration value to a shell, so a suffix appended to it runs on the
 # speaker the next time the value is read. That read is the whole mechanism: see
@@ -36,6 +41,8 @@ __all__ = [
     "parse_urls", "parse_sources", "cloud_leftovers", "injected_values", "service_urls",
     "build_url_commands", "build_enable_ssh_commands", "SSH_INJECT", "playback_location", "decode_playback_location", "slots_to_write",
     "missing_streams", "parse_presets", "parse_preset_slots", "port_open", "telnet_run", "http_get",
+    "decode_cloud_location", "stream_url_from_location", "is_cloud_location", "harvest_presets",
+    "preset_name", "classify_stream", "playlist_targets", "PLAYLIST_TYPES",
     "SpeakerError",
 ]
 
@@ -174,6 +181,109 @@ def decode_playback_location(location: str) -> str:
         return base64.urlsafe_b64decode(encoded).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return ""
+
+
+def decode_cloud_location(location: str) -> str:
+    """Recover the stream URL buried in a Bose adapter location, or "" if it is not one.
+
+    A preset written while the Bose cloud was alive points at the Orion station adapter and carries
+    the real stream inside its `data` query parameter, as base64url JSON with a `streamUrl` key. So
+    an owner's own pre-shutdown presets usually already CONTAIN the direct stream, and harvesting
+    beats hunting for it. Presets from a catalogue source such as TUNEIN carry a station id instead
+    and yield nothing here, which is the case that has to be researched by hand.
+    """
+    query = urllib.parse.urlparse(location).query
+    blob = urllib.parse.parse_qs(query).get("data", [""])[0]
+    if not blob:
+        return ""
+    try:
+        padded = blob + "=" * (-len(blob) % 4)
+        return str(json.loads(base64.b64decode(padded)).get("streamUrl", ""))
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return ""
+
+
+def stream_url_from_location(location: str) -> str:
+    """The plain stream URL a stored location stands for, whichever form it is in, or "".
+
+    Three forms reach this: our own playback wrapping, a surviving Bose cloud adapter URL, and a
+    bare stream URL somebody wrote by hand. Anything else - a catalogue station id - has no stream
+    in it to find.
+    """
+    for decoded in (decode_playback_location(location), decode_cloud_location(location)):
+        if decoded:
+            return decoded
+    if location.startswith(("http://", "https://")) and not is_cloud_location(location):
+        return location
+    return ""
+
+
+def is_cloud_location(location: str) -> bool:
+    """Does this location still point into Bose's dead infrastructure?"""
+    host = urllib.parse.urlparse(location).netloc.lower()
+    return any(marker in host for marker in CLOUD_MARKERS)
+
+
+def harvest_presets(raw: str) -> list[dict[str, object]]:
+    """Turn a speaker's stored presets into template entries, saying which ones need research.
+
+    An entry whose `location` is empty could not be resolved to a stream and is NOT a usable
+    preset: it is a name to look up. Emitting it rather than dropping it is deliberate, so the
+    button and the station name survive into whatever replaces it.
+    """
+    out: list[dict[str, object]] = []
+    for button, location in sorted(parse_preset_slots(raw).items()):
+        out.append({
+            "buttonNumber": button,
+            "name": preset_name(raw, button) or f"preset {button}",
+            "location": stream_url_from_location(location),
+            "contentItemType": "stationurl",
+            "source": "LOCAL_INTERNET_RADIO",
+        })
+    return out
+
+
+def preset_name(raw: str, button: int) -> str:
+    """The itemName the speaker shows for one button, or "" when it has none."""
+    for chunk in raw.split("<preset ")[1:]:
+        if f'id="{button}"' not in chunk.split(">", 1)[0]:
+            continue
+        if "<itemName>" in chunk:
+            return chunk.split("<itemName>", 1)[1].split("</itemName>", 1)[0].strip()
+    return ""
+
+
+def classify_stream(status: int | None, content_type: str, head: str) -> str:
+    """What a fetch of a candidate stream URL actually returned.
+
+    The content type alone is not enough, and trusting it is the trap: an .m3u playlist is served
+    as `audio/x-mpegurl`, so a check for `audio/` passes a text file that contains no audio at all,
+    and the preset is then accepted at write time and never plays. HLS is separated out because
+    resolving it gains nothing - the speaker cannot play a segment list.
+    """
+    if status is None or status >= 400:
+        return "dead"
+    ctype = content_type.split(";", 1)[0].strip().lower()
+    if "#EXT-X-" in head:
+        return "hls"
+    if ctype in PLAYLIST_TYPES or head.lstrip().startswith(("#EXTM3U", "[playlist]")):
+        return "playlist"
+    if ctype.startswith("audio/") or ctype in ("application/ogg", "video/mp2t"):
+        return "audio"
+    return "not-audio"
+
+
+def playlist_targets(body: str) -> list[str]:
+    """The stream URLs listed inside an .m3u or .pls body, in order."""
+    found: list[str] = []
+    for line in body.splitlines():
+        text = line.strip()
+        if text.startswith("#") or not text:
+            continue
+        candidate = text.split("=", 1)[1].strip() if text.lower().startswith("file") else text
+        if candidate.startswith(("http://", "https://")) and candidate not in found:
+            found.append(candidate)
+    return found
 
 
 def parse_presets(raw: str) -> list[str]:

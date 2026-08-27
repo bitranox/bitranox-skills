@@ -24,9 +24,12 @@ SCRIPTS = {"soundtouch_find.py": F, "soundtouch_service.py": S,
 REFERENCES = Path(__file__).resolve().parent.parent / "references"
 
 
-# Stops at a backtick (end of a code span), a pipe (a table cell boundary) and a shell comment,
-# all three of which end the command rather than belonging to it.
-INVOCATION = re.compile(r"(?:\S*/)?(soundtouch_\w+\.py)((?:(?!\s*[`|]|\s+#).)*)")
+# Stops at a backtick (end of a code span), a pipe (a table cell boundary), a shell comment and a
+# redirect, all of which end the command rather than belonging to it. The redirect stop is written
+# as whitespace, an optional fd number or `&`, then `>` so that it fires on ` > f`, ` >> f` and
+# ` 2>&1` while leaving a `<placeholder>` argument alone - those also contain angle brackets, and a
+# rule that merely looked for one would eat every documented argument.
+INVOCATION = re.compile(r"(?:\S*/)?(soundtouch_\w+\.py)((?:(?!\s*[`|]|\s+#|\s+\d?&?>).)*)")
 
 
 def _usage_lines(text: str) -> list[tuple[str, list[str]]]:
@@ -224,3 +227,14 @@ def test_the_full_form_reboots_itself_so_a_closed_port_is_a_definite_no(
     body = _envelope(capsys)
     assert rc == 1 and body["ok"] is False
     assert "serial" in str(body["data"]["next"]).lower()
+
+
+def test_a_redirect_ends_the_command_but_a_placeholder_argument_does_not() -> None:
+    """A documented line may log to a file; the shell part is not argv and must not be parsed."""
+    line = ("uv run scripts/soundtouch_presets.py check --ip <speaker-ip> --template <file> "
+            "--service <service> >> /var/log/soundtouch-check.log 2>&1")
+    (name, argv), = _usage_lines(line)
+    assert name == "soundtouch_presets.py"
+    assert argv == ["check", "--ip", "<speaker-ip>", "--template", "<file>",
+                    "--service", "<service>"]
+    P.build_parser().parse_args(argv)
