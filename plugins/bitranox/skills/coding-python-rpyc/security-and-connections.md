@@ -65,7 +65,9 @@ conn = rpyc.ssl_connect("hostname", port=12345,
 ### Authenticators
 
 - `SSLAuthenticator(keyfile, certfile, ca_certs=None, ...)` -- SSL/TLS authenticator
-- `TlsliteVdbAuthenticator` -- TLSlite-based authenticator (if tlslite available)
+
+`SSLAuthenticator` is the only authenticator rpyc 6.x ships; `rpyc.utils.authenticators` exports
+nothing else besides `AuthenticationError`.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: docs-convert-markitdown
-description: Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images (OCR), audio (transcription), HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs.
+description: Use when converting documents to Markdown for LLM use - PDF, DOCX, PPTX, XLSX, images (EXIF metadata and AI descriptions), audio (transcription), HTML, CSV, JSON, XML, ZIP, EPUB, or YouTube URLs.
 ---
 
 # MarkItDown - File to Markdown Conversion
@@ -16,26 +16,27 @@ MarkItDown is a Python tool developed by Microsoft for converting various file f
 - Token-efficient format for LLM processing
 - Supports 15+ file formats
 - Optional AI-enhanced image descriptions
-- OCR for images and scanned documents
+- Scanned-document text via Azure Document Intelligence (a remote service); markitdown itself
+  runs no local OCR
 - Speech transcription for audio files
 
 ## Supported Formats
 
-| Format      | Description              | Notes                        |
-|-------------|--------------------------|------------------------------|
-| **PDF**     | Portable Document Format | Full text extraction         |
-| **DOCX**    | Microsoft Word           | Tables, formatting preserved |
-| **PPTX**    | PowerPoint               | Slides with notes            |
-| **XLSX**    | Excel spreadsheets       | Tables and data              |
-| **Images**  | JPEG, PNG, GIF, WebP     | EXIF metadata + OCR          |
-| **Audio**   | WAV, MP3                 | Metadata + transcription     |
-| **HTML**    | Web pages                | Clean conversion             |
-| **CSV**     | Comma-separated values   | Table format                 |
-| **JSON**    | JSON data                | Structured representation    |
-| **XML**     | XML documents            | Structured format            |
-| **ZIP**     | Archive files            | Iterates contents            |
-| **EPUB**    | E-books                  | Full text extraction         |
-| **YouTube** | Video URLs               | Fetch transcriptions         |
+| Format      | Description              | Notes                                    |
+|-------------|--------------------------|------------------------------------------|
+| **PDF**     | Portable Document Format | Full text extraction                     |
+| **DOCX**    | Microsoft Word           | Tables, formatting preserved             |
+| **PPTX**    | PowerPoint               | Slides with notes                        |
+| **XLSX**    | Excel spreadsheets       | Tables and data                          |
+| **Images**  | JPEG, PNG, GIF, WebP     | EXIF metadata + optional LLM description |
+| **Audio**   | WAV, MP3                 | Metadata + transcription                 |
+| **HTML**    | Web pages                | Clean conversion                         |
+| **CSV**     | Comma-separated values   | Table format                             |
+| **JSON**    | JSON data                | Structured representation                |
+| **XML**     | XML documents            | Structured format                        |
+| **ZIP**     | Archive files            | Iterates contents                        |
+| **EPUB**    | E-books                  | Full text extraction                     |
+| **YouTube** | Video URLs               | Fetch transcriptions                     |
 
 ## Quick Start
 
@@ -275,7 +276,12 @@ print(result.text_content)
 
 ## Docker Usage
 
+MarkItDown's `Dockerfile` lives in its own repository and does not ship with this skill, so the
+build below must be run from a clone of it:
+
 ```bash
+git clone https://github.com/microsoft/markitdown.git && cd markitdown
+
 # Build image
 docker build -t markitdown:latest .
 
@@ -290,7 +296,8 @@ docker run --rm -i markitdown:latest < ~/document.pdf > output.md
 - **Simple documents**: Use basic `MarkItDown()`
 - **Complex PDFs**: Use Azure Document Intelligence
 - **Visual content**: Enable AI image descriptions
-- **Scanned documents**: Ensure OCR dependencies are installed
+- **Scanned documents**: Use Azure Document Intelligence, or pass an `llm_client`; there is no
+  local OCR path
 
 ### 2. Handle Errors Gracefully
 
@@ -415,19 +422,21 @@ print(result.text_content)
        result = md.convert_stream(f, file_extension=".pdf")
    ```
 
-3. **OCR not working**: Install tesseract
-   ```bash
-   # macOS
-   brew install tesseract
-   
-   # Ubuntu
-   sudo apt-get install tesseract-ocr
+3. **No text extracted from an image**: this is expected -- markitdown has no OCR code path.
+   `ImageConverter` emits EXIF metadata plus, optionally, an LLM description. Installing
+   tesseract changes nothing. To get text out of an image, either pass an `llm_client` and
+   `llm_model`, or route the document through Azure Document Intelligence.
+   ```python
+   md = MarkItDown(llm_client=client, llm_model="anthropic/claude-opus-4.5")
+   result = md.convert("scan.png")
    ```
+   EXIF metadata additionally requires an explicit `exiftool_path`; without it
+   `exiftool_metadata()` returns `{}`.
 
 ## Performance Considerations
 
 - **PDF files**: Large PDFs may take time; consider page ranges if supported
-- **Image OCR**: OCR processing is CPU-intensive
+- **Image descriptions**: each image costs an LLM API call
 - **Audio transcription**: Requires additional compute resources
 - **AI image descriptions**: Requires API calls (costs may apply)
 
@@ -451,6 +460,6 @@ Use the Read tool to load a referenced file when its detail is needed.
 - **OpenRouter API Keys**: https://openrouter.ai/keys
 - **OpenRouter Models**: https://openrouter.ai/models
 - **MCP Server**: markitdown-mcp (for Claude Desktop integration)
-- **Plugin Development**: See `packages/markitdown-sample-plugin`
+- **Plugin Development**: https://github.com/microsoft/markitdown/tree/main/packages/markitdown-sample-plugin
 
 

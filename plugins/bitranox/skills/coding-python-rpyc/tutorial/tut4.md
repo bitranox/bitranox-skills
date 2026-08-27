@@ -45,7 +45,7 @@ Since in python functions (as well as any other value) are objects, and since RP
 To explain what the symmetry of RPyC means, consider the following diagram:
 
 <figure>
-<img src="../_static/symmetry.png" class="align-center" alt="_static/symmetry.png" />
+<img src="_static/symmetry.png" class="align-center" alt="_static/symmetry.png" />
 </figure>
 
 As you can see, while the client is waiting for the result (a synchronous request), it will serve all incoming requests, meaning the server can invoke the callback it had received on the client. In other words, the symmetry of RPyC means that both the client and the server are ultimately "servers", and the "role" is more semantic than programmatic.

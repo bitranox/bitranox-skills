@@ -26,7 +26,7 @@ Also note that if you are using classic mode RPyC, you can use the [context mana
     >>>
 
 <figure>
-<img src="../_static/howto-redirected.png" class="align-center" alt="_static/howto-redirected.png" />
+<img src="_static/howto-redirected.png" class="align-center" alt="_static/howto-redirected.png" />
 <figcaption>A screenshot of an RPyC client redirecting standard output from the server to its own console.</figcaption>
 </figure>
 
@@ -87,7 +87,7 @@ Many times, especially in testing environments, you have subnets, VLANs, VPNs, f
 Consider the following diagram:
 
 <figure>
-<img src="../_static/howto-tunneling.png" class="align-center" alt="_static/howto-tunneling.png" />
+<img src="_static/howto-tunneling.png" class="align-center" alt="_static/howto-tunneling.png" />
 </figure>
 
 Machine `A` belongs to network `A`, and it wants to connect to machine `B`, which belongs to network `B`. Assuming there's a third machine, `C` that has access to both networks (for instance, it has multiple network cards or it belongs to multiple VLANs), you can use it as a transparent bridge between machines `A` and `B` very easily: simply run an RPyC server on machine `C`, to which machine `A` would connect, and use its `socket` module to connect to machine `B`. It's really simple:

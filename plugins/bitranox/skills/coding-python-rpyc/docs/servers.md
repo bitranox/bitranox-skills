@@ -4,7 +4,7 @@ Since RPyC is a symmetric protocol (where both client and server can process req
 
 - Forking - forks a child-process to handle each incoming connection (POSIX only)
 - Threaded - spawns a thread to handle each incoming connection (POSIX and Windows)
-- Thread Pool - assigns a worker-thread for each incoming connection from the thread pool; if the thread pool is exhausted, the connection is dropped.
+- Thread Pool - assigns a worker-thread for each incoming connection from the thread pool; when every worker is busy the connection WAITS in an unbounded queue rather than being dropped. A connection is closed only on a poll error or hangup.
 
 If you wish to implement new servers (say, reactor-based, etc.), you can derive from `rpyc.utils.server.Server` and implement `_accept_method()` to your own liking.
 
@@ -79,7 +79,7 @@ Refer to `rpyc.utils.server.Server` for the list all possible arguments.
 
 RPyC comes with a simple command-line registry server, which can be configured quite extensively by command-line switches. The registry server is a bonjour-like agent, with which services may register and clients may perform queries. For instance, if you start an RPyC server that provides service `Foo` on `myhost:17777`, you can register that server with the registry server, which would allow clients to later query for the servers that expose that service (and get back a list of TCP endpoints). Example usage:
 
-    $ ./bin/rpyc_registry.py --listing
+    $ ./bin/rpyc_registry.py --listing true
     DEBUG:REGSRV/UDP/18811:registering 172.18.0.6:18861 as MY
 
     For more info, see [api-registry](../api/utils_registry.md).
@@ -88,7 +88,7 @@ RPyC comes with a simple command-line registry server, which can be configured q
 
 - `-m`, `--mode=MODE` - The registry mode; either `UDP` or `TCP`. The default is `UDP`.
 - `-p`, `--port=PORT` - The UDP/TCP port to bind to. The default is `18811`.
-- `-f`, `--file=FILE` - The log file to use. The default is `stderr`.
-- `-q`, `--quiet` - If given, sets quiet mode (only errors are logged)
+- `--logfile=FILE` - The log file to use. The default is `stderr`. There is no short form; `-f` and `--file` are rejected as unknown switches.
+- `-q`, `--quiet=BOOL` - Sets quiet mode (only errors are logged). Takes a value; given bare it fails with "Switch -q requires an argument".
 - `-t`, `--timeout=PRUNING_TIMEOUT` - Sets a custom pruning timeout, in seconds. The pruning time is the amount of time the registry server will keep a previously-registered service, when it no longer sends timely keepalives. The default is 4 minutes (240 seconds).
-- `-l`, `--listing` - Give a boolean indicating if registry should allow sending the list of its known services. The default is False.
+- `-l`, `--listing=BOOL` - A boolean indicating if the registry should allow sending the list of its known services. Takes a value; given bare it fails with "Switch --listing requires an argument". The default is False.

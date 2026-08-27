@@ -60,13 +60,14 @@ Convert from a file-like binary stream.
 ```python
 result = md.convert_stream(
     stream,
-    file_extension
+    file_extension=".pdf",   # keyword-only; passing it positionally is a TypeError
 )
 ```
 
 **Parameters**:
 - `stream` (BinaryIO): Binary file-like object (e.g., file opened in `"rb"` mode)
-- `file_extension` (str): File extension to determine conversion method (e.g., ".pdf")
+- `file_extension` (str, KEYWORD-ONLY): File extension to determine conversion method (e.g., ".pdf")
+- `stream_info` (StreamInfo, keyword-only): richer alternative to `file_extension`
 
 **Returns**: `DocumentConverterResult` object
 
@@ -110,47 +111,56 @@ You can create custom document converters by implementing the `DocumentConverter
 
 ### DocumentConverter Interface
 
+A converter implements TWO methods. `accepts()` is what gates it: markitdown asks every
+registered converter whether it wants the stream, and a converter that does not implement it
+inherits a base returning `False`, so it is never called and conversion falls through to a
+generic converter with NO error. A wrong signature therefore fails silently, not loudly.
+
 ```python
-from markitdown import DocumentConverter
+from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
 
 class CustomConverter(DocumentConverter):
-    def convert(self, stream, file_extension):
+    def accepts(self, file_stream, stream_info: StreamInfo, **kwargs) -> bool:
+        """Return True if this converter handles the stream. Required."""
+        return (stream_info.extension or "").lower() == ".custom"
+
+    def convert(self, file_stream, stream_info: StreamInfo, **kwargs) -> DocumentConverterResult:
         """
-        Convert a document from a binary stream.
-        
         Parameters:
-            stream (BinaryIO): Binary file-like object
-            file_extension (str): File extension (e.g., ".custom")
-            
+            file_stream (BinaryIO): Binary file-like object
+            stream_info (StreamInfo): carries .extension, .mimetype, .charset, .filename
+
         Returns:
             DocumentConverterResult: Conversion result
         """
-        # Your conversion logic here
-        pass
+        content = file_stream.read().decode("utf-8")
+        return DocumentConverterResult(markdown=f"# Custom Format\n\n{content}")
 ```
 
 ### Registering Custom Converters
 
+`register_converter()` takes the converter ALONE -- there is no extension argument, and passing
+one raises `TypeError: register_converter() takes 2 positional arguments but 3 were given`. The
+extension is decided by the converter's own `accepts()`.
+
 ```python
-from markitdown import MarkItDown, DocumentConverter, DocumentConverterResult
+from markitdown import MarkItDown, DocumentConverter, DocumentConverterResult, StreamInfo
 
 class MyCustomConverter(DocumentConverter):
-    def convert(self, stream, file_extension):
-        content = stream.read().decode('utf-8')
-        markdown_text = f"# Custom Format\n\n{content}"
-        return DocumentConverterResult(
-            text_content=markdown_text,
-            title="Custom Document"
-        )
+    def accepts(self, file_stream, stream_info: StreamInfo, **kwargs) -> bool:
+        return (stream_info.extension or "").lower() == ".custom"
 
-# Create MarkItDown instance
+    def convert(self, file_stream, stream_info: StreamInfo, **kwargs) -> DocumentConverterResult:
+        content = file_stream.read().decode("utf-8")
+        return DocumentConverterResult(markdown=f"# Custom Format\n\n{content}")
+
 md = MarkItDown()
 
-# Register custom converter for .custom files
-md.register_converter(".custom", MyCustomConverter())
+# priority is keyword-only; lower runs first. PRIORITY_SPECIFIC_FILE_FORMAT (0.0) is the
+# default, PRIORITY_GENERIC_FILE_FORMAT (10.0) is for catch-all converters.
+md.register_converter(MyCustomConverter())
 
-# Use it
-result = md.convert("myfile.custom")
+result = md.convert("myfile.custom")   # -> "# Custom Format\n\nhello"
 ```
 
 ## Plugin System
@@ -235,7 +245,8 @@ client = OpenAI(
 # Create MarkItDown with AI support
 md = MarkItDown(
     llm_client=client,
-    llm_model="anthropic/claude-opus-4.5",  # recommended for scientific vision
+    llm_model="anthropic/claude-opus-4.5",  # a current vision model as of 2026-08; check
+                                        # openrouter.ai/models for what is current now
     llm_prompt="Describe this image in detail for scientific documentation"
 )
 
@@ -295,7 +306,7 @@ result = md.convert("complex_document.pdf")
 
 Set environment variables:
 ```bash
-export AZURE_DOCUMENT_INTELLIGENCE_KEY="your-key"
+export AZURE_API_KEY="your-key"
 ```
 
 Or pass credentials programmatically.
@@ -378,9 +389,9 @@ with ThreadPoolExecutor(max_workers=4) as executor:
 
 ## Environment Variables
 
-| Variable                               | Description                               | Example        |
-|----------------------------------------|-------------------------------------------|----------------|
-| `OPENROUTER_API_KEY`                   | OpenRouter API key for image descriptions | `sk-or-v1-...` |
-| `AZURE_DOCUMENT_INTELLIGENCE_KEY`      | Azure DI authentication                   | `key123...`    |
-| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` | Azure DI endpoint                         | `https://...`  |
+| Variable                               | Description                                                      | Example        |
+|----------------------------------------|------------------------------------------------------------------|----------------|
+| `OPENROUTER_API_KEY`                   | OpenRouter API key for image descriptions                        | `sk-or-v1-...` |
+| `AZURE_API_KEY`                        | Azure DI authentication (falls back to `DefaultAzureCredential`) | `key123...`    |
+| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` | Azure DI endpoint                                                | `https://...`  |
 

@@ -188,7 +188,9 @@ The registry is a bonjour-like discovery agent. Servers register themselves; cli
 > Module: `rpyc.utils.authenticators`
 
 - `SSLAuthenticator(keyfile, certfile, ca_certs=None, ...)` -- SSL/TLS authenticator
-- `TlsliteVdbAuthenticator` -- TLSlite-based authenticator (if tlslite available)
+
+`SSLAuthenticator` is the only authenticator rpyc 6.x ships; `rpyc.utils.authenticators` exports
+nothing else besides `AuthenticationError`.
 
 Usage:
 ```python

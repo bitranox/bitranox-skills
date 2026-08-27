@@ -180,12 +180,12 @@ conn.root.bar(foofunc)  # => "foobar"
 
 > Source: `docs/servers.md`
 
-| Server             | Description                                        | Platform        |
-|--------------------|----------------------------------------------------|-----------------|
-| `ForkingServer`    | Forks child process per connection                 | POSIX only      |
-| `ThreadedServer`   | Spawns thread per connection                       | POSIX + Windows |
-| `ThreadPoolServer` | Thread pool; drops connections when pool exhausted | POSIX + Windows |
-| `OneShotServer`    | Handles one connection then exits                  | All             |
+| Server             | Description                                                           | Platform        |
+|--------------------|-----------------------------------------------------------------------|-----------------|
+| `ForkingServer`    | Forks child process per connection                                    | POSIX only      |
+| `ThreadedServer`   | Spawns thread per connection                                          | POSIX + Windows |
+| `ThreadPoolServer` | Thread pool; queues connections when pool exhausted, never drops them | POSIX + Windows |
+| `OneShotServer`    | Handles one connection then exits                                     | All             |
 
 **Custom server** -- derive from `rpyc.utils.server.Server`, implement `_accept_method()`.
 

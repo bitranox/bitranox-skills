@@ -57,14 +57,14 @@ rpyc_classic.py [options]
 
 **General switches:**
 
-| Switch               | Description                                  | Default                |
-|----------------------|----------------------------------------------|------------------------|
-| `-m`, `--mode=MODE`  | Serving mode: `threaded`, `forking`, `stdio`, `oneshot` | `threaded`  |
-| `-p`, `--port=PORT`  | TCP port                                     | `18812` (SSL: `18821`) |
-| `--host=HOSTNAME`    | Bind address                                 | `localhost`            |
-| `--ipv6`             | Bind IPv6 socket                             | IPv4                   |
-| `--logfile=FILENAME` | Log file                                     | `stderr`               |
-| `-q`, `--quiet`      | Quiet mode (no logging)                      | off                    |
+| Switch               | Description                                             | Default                |
+|----------------------|---------------------------------------------------------|------------------------|
+| `-m`, `--mode=MODE`  | Serving mode: `threaded`, `forking`, `stdio`, `oneshot` | `threaded`             |
+| `-p`, `--port=PORT`  | TCP port                                                | `18812` (SSL: `18821`) |
+| `--host=HOSTNAME`    | Bind address                                            | `localhost`            |
+| `--ipv6`             | Bind IPv6 socket                                        | IPv4                   |
+| `--logfile=FILENAME` | Log file                                                | `stderr`               |
+| `-q`, `--quiet`      | Quiet mode (no logging)                                 | off                    |
 
 **Registry switches:**
 
@@ -100,18 +100,18 @@ Service registry server (bonjour-like discovery).
 rpyc_registry.py [options]
 ```
 
-| Switch                    | Description                                        | Default       |
-|---------------------------|----------------------------------------------------|---------------|
-| `-m`, `--mode=MODE`       | Registry mode: `UDP` or `TCP`                      | `UDP`         |
-| `-p`, `--port=PORT`       | Bind port                                          | `18811`       |
-| `-f`, `--file=FILE`       | Log file                                           | `stderr`      |
-| `-q`, `--quiet`           | Quiet mode                                         | off           |
-| `-t`, `--timeout=SECONDS` | Pruning timeout (time to keep stale registrations) | `240` (4 min) |
-| `-l`, `--listing`         | Allow listing all known services                   | `False`       |
+| Switch                    | Description                                            | Default       |
+|---------------------------|--------------------------------------------------------|---------------|
+| `-m`, `--mode=MODE`       | Registry mode: `UDP` or `TCP`                          | `UDP`         |
+| `-p`, `--port=PORT`       | Bind port                                              | `18811`       |
+| `--logfile=FILE`          | Log file (no short form; `-f`/`--file` do not exist)   | `stderr`      |
+| `-q`, `--quiet=BOOL`      | Quiet mode -- takes a value, unlike the classic server | off           |
+| `-t`, `--timeout=SECONDS` | Pruning timeout (time to keep stale registrations)     | `240` (4 min) |
+| `-l`, `--listing=BOOL`    | Allow listing all known services -- takes a value      | `False`       |
 
 **Example:**
 ```bash
-rpyc_registry.py --listing
+rpyc_registry.py --listing true
 rpyc_registry.py -m TCP -p 18811 -t 120
 ```
 

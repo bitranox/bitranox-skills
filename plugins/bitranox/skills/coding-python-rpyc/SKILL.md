@@ -14,7 +14,9 @@ Use the Read tool to load referenced files identified as relevant for full detai
 **Install:** `pip install rpyc`
 **Default ports:** Classic `18812`, SSL `18821`, Registry `18811`
 **Python:** CPython 3.8+ (rpyc 6.x `Requires-Python >=3.8`; no Python 2<->3 crossing)
-**Dependencies:** None for core; `plumbum` for zero-deploy; `pywin32` for `PipeStream` on Windows
+**Dependencies:** `plumbum` is unconditional (rpyc 6.x declares `Requires-Dist: plumbum`, no
+extra, no marker), so `pip install rpyc` always installs it; `pywin32` is optional, needed only
+for `PipeStream` on Windows
 **Repository:** https://github.com/tomerfiliba-org/rpyc
 
 ## When to Use

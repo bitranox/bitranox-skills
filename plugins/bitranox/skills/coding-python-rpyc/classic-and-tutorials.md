@@ -218,7 +218,9 @@ sock.send(...)
 sock.recv(...)
 ```
 
-**Monkey-patching**  -  replace local modules with remote ones:
+**Monkey-patching**  -  replace local modules with remote ones.
+`telnetlib` was removed from the standard library in Python 3.13 (PEP 594), so this example runs
+only on 3.12 and older; the pattern itself works with any module that holds a `socket` reference.
 ```python
 import rpyc, telnetlib
 machine_c = rpyc.classic.connect("machine-c")

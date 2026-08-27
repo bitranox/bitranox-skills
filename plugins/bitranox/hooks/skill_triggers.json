@@ -441,13 +441,13 @@
   "pptx",
   "xlsx",
   "images",
+  "exif",
+  "metadata",
+  "descriptions",
   "audio",
   "transcription",
   "html",
-  "json",
-  "epub",
-  "youtube",
-  "urls"
+  "json"
  ],
  "docs-generate-schematics": [
   "document",

@@ -10,7 +10,7 @@ This document provides detailed information about each file format supported by 
 - Text extraction
 - Table detection
 - Metadata extraction
-- OCR for scanned documents (with dependencies)
+- Scanned-document text only via Azure Document Intelligence (remote); no local OCR
 
 **Dependencies**:
 ```bash
