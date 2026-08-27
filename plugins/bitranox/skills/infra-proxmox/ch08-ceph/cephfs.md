@@ -3,7 +3,7 @@
 *[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
 
 mkdir /etc/pve/priv/ceph
-cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage. ←keyring
+cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage.keyring
 
 
 ## 8.12 CephFS

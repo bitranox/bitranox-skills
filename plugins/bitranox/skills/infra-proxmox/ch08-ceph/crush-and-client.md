@@ -91,7 +91,7 @@ osd.14
 To instruct a pool to only distribute objects on a specific device class, you first need to create a ruleset for
 the device class:
 
-ceph osd crush rule create-replicated <rule-name> <root> <failure-domain> < ←class>
+ceph osd crush rule create-replicated <rule-name> <root> <failure-domain> <class>
 <rule-name>
 <root>
 <failure-domain>
@@ -128,7 +128,7 @@ on the Proxmox nodes itself, then this will be done automatically.
 
 
 mkdir /etc/pve/priv/ceph
-cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage. ←keyring
+cp /etc/ceph/ceph.client.admin.keyring /etc/pve/priv/ceph/my-ceph-storage.keyring
 
 
 ## 8.12 CephFS

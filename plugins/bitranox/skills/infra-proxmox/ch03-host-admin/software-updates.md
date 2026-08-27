@@ -13,7 +13,7 @@ If you install Proxmox VE on top of Debian, download and install the key with th
 
 
 ```
-# wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring- ←trixie.gpg -O /usr/share/keyrings/proxmox-archive-keyring.gpg
+# wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg -O /usr/share/keyrings/proxmox-archive-keyring.gpg
 ```
 
 
@@ -28,11 +28,11 @@ If you install Proxmox VE on top of Debian, download and install the key with th
 Verify the checksum afterwards with the sha512sum CLI tool:
 
 # sha256sum /usr/share/keyrings/proxmox-archive-keyring.gpg
-136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45 /usr/ ←share/keyrings/proxmox-archive-keyring.gpg
+136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45 /usr/share/keyrings/proxmox-archive-keyring.gpg
 or the md5sum CLI tool:
 
 # md5sum /usr/share/keyrings/proxmox-archive-keyring.gpg
-77c8b1166d15ce8350102ab1bca2fcbf /usr/share/keyrings/proxmox-archive- ←keyring.gpg
+77c8b1166d15ce8350102ab1bca2fcbf /usr/share/keyrings/proxmox-archive-keyring.gpg
 
 
 > **Note:**

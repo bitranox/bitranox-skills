@@ -239,12 +239,12 @@ Example: Sample pvenode invocation for using Let's Encrypt certificates
 root@proxmox:~# pvenode acme account register default mail@example.invalid
 Directory endpoints:
 0) Let's Encrypt V2 (https://acme-v02.api.letsencrypt.org/directory)
-1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/ ←directory)
+1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/directory)
 2) Custom
 Enter selection: 1
 
 
-Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November ←-15-2017.pdf
+Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf
 Do you agree to the above terms? [y|N]y
 ...
 Task OK
@@ -278,7 +278,7 @@ root@proxmox:~# cat /path/to/api-token
 OVH_AK=XXXXXXXXXXXXXXXX
 OVH_AS=YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
 root@proxmox:~# source /path/to/api-token
-root@proxmox:~# curl -XPOST -H"X-Ovh-Application: $OVH_AK" -H "Content-type ←: application/json" \
+root@proxmox:~# curl -XPOST -H"X-Ovh-Application: $OVH_AK" -H "Content-type: application/json" \
 https://eu.api.ovh.com/1.0/auth/credential -d '{
 "accessRules": [
 {"method": "GET","path": "/auth/time"},
@@ -293,16 +293,15 @@ https://eu.api.ovh.com/1.0/auth/credential -d '{
 }'
 
 
-{"consumerKey":"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ","state":" ←pendingValidation","validationUrl":"https://eu.api.ovh.com/auth/? ←credentialToken= ←AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+{"consumerKey":"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ","state":"pendingValidation","validationUrl":"https://eu.api.ovh.com/auth/?credentialToken=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
 (open validation URL and follow instructions to link Application Key with
 account/Consumer Key)
 
-←-
 
-root@proxmox:~# echo "OVH_CK=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" >> /path/to/ ←api-token
+root@proxmox:~# echo "OVH_CK=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" >> /path/to/api-token
 Now you can setup the the ACME plugin:
 
-root@proxmox:~# pvenode acme plugin add dns example_plugin --api ovh --data ←/path/to/api_token
+root@proxmox:~# pvenode acme plugin add dns example_plugin --api ovh --data/path/to/api_token
 root@proxmox:~# pvenode acme plugin config example_plugin
 &#x250c;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252c;&#x
 &#x2502; key
@@ -332,12 +331,12 @@ root@proxmox:~# pvenode acme plugin config example_plugin
 &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x
 At last you can configure the domain you want to get certificates for and place the certificate order for it:
 
-root@proxmox:~# pvenode config set -acmedomain0 example.proxmox.com,plugin= ←example_plugin
+root@proxmox:~# pvenode config set -acmedomain0 example.proxmox.com,plugin=example_plugin
 root@proxmox:~# pvenode acme cert order
 Loading ACME account details
 Placing ACME order
-Order URL: https://acme-staging-v02.api.letsencrypt.org/acme/order ←/11111111/22222222
-Getting authorization details from 'https://acme-staging-v02.api. ←letsencrypt.org/acme/authz-v3/33333333'
+Order URL: https://acme-staging-v02.api.letsencrypt.org/acme/order/11111111/22222222
+Getting authorization details from 'https://acme-staging-v02.api.letsencrypt.org/acme/authz-v3/33333333'
 The validation for example.proxmox.com is pending!
 [Wed Apr 22 09:25:30 CEST 2020] Using OVH endpoint: ovh-eu
 [Wed Apr 22 09:25:30 CEST 2020] Checking authentication
@@ -372,15 +371,15 @@ also deactivate the staging account and recreate it.
 Example: Changing the default ACME account from staging to directory using pvenode
 
 root@proxmox:~# pvenode acme account deactivate default
-Renaming account file from '/etc/pve/priv/acme/default' to '/etc/pve/priv/ ←acme/_deactivated_default_4'
+Renaming account file from '/etc/pve/priv/acme/default' to '/etc/pve/priv/acme/_deactivated_default_4'
 Task OK
 root@proxmox:~# pvenode acme account register default example@proxmox.com
 Directory endpoints:
 0) Let's Encrypt V2 (https://acme-v02.api.letsencrypt.org/directory)
-1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/ ←directory)
+1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/directory)
 2) Custom
 Enter selection: 0
-Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November ←-15-2017.pdf
+Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf
 Do you agree to the above terms? [y|N]y
 ...
 Task OK

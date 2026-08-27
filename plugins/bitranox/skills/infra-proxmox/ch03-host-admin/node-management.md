@@ -89,7 +89,7 @@ changed by setting the broadcast-address explicitly using the following command:
 
 
 ```
-pvenode config set -wakeonlan XX:XX:XX:XX:XX:XX,broadcast-address=< ←broadcast-address>
+pvenode config set -wakeonlan XX:XX:XX:XX:XX:XX,broadcast-address=<broadcast-address>
 ```
 
 

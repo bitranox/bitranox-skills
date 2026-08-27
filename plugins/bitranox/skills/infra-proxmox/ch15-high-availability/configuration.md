@@ -184,7 +184,7 @@ resource vm:100 prefer the node node1:
 
 
 ```
-# ha-manager rules add node-affinity ha-rule-vm100 --resources vm:100 -- ←nodes node1
+# ha-manager rules add node-affinity ha-rule-vm100 --resources vm:100 --nodes node1
 By default, node affinity rules are not strict, i.e., if there is none of the specified nodes available, the HA
 resource can also be moved to other nodes. If, on the other hand, a HA resource must be restricted to the
 specified nodes, then the node affinity rule must be set to be strict.

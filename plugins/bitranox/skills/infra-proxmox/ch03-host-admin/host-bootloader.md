@@ -25,15 +25,15 @@ also deactivate the staging account and recreate it.
 Example: Changing the default ACME account from staging to directory using pvenode
 
 root@proxmox:~# pvenode acme account deactivate default
-Renaming account file from '/etc/pve/priv/acme/default' to '/etc/pve/priv/ ←acme/_deactivated_default_4'
+Renaming account file from '/etc/pve/priv/acme/default' to '/etc/pve/priv/acme/_deactivated_default_4'
 Task OK
 root@proxmox:~# pvenode acme account register default example@proxmox.com
 Directory endpoints:
 0) Let's Encrypt V2 (https://acme-v02.api.letsencrypt.org/directory)
-1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/ ←directory)
+1) Let's Encrypt V2 Staging (https://acme-staging-v02.api.letsencrypt.org/directory)
 2) Custom
 Enter selection: 0
-Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November ←-15-2017.pdf
+Terms of Service: https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf
 Do you agree to the above terms? [y|N]y
 ...
 Task OK
@@ -217,7 +217,7 @@ If the output contains a line similar to the following, systemd-boot is used.
 Boot0006* Linux Boot Manager
 )
 
-[...] File(\EFI\systemd\systemd-bootx64.efi ←-
+[...] File(\EFI\systemd\systemd-bootx64.efi-
 
 By running:
 

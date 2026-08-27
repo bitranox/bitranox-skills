@@ -142,17 +142,17 @@ Already many distributions provide ready-to-use Cloud-Init images (provided as .
 image provided by Ubuntu at https://cloud-images.ubuntu.com.
 
 # download the image
-wget https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg- ←amd64.img
+wget https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img
 # create a new VM with VirtIO SCSI controller
 
 ```
-qm create 9000 --memory 2048 --net0 virtio,bridge=vmbr0 --scsihw virtio- ←scsi-pci
+qm create 9000 --memory 2048 --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-pci
 ```
 
-# import the downloaded disk to the local-lvm storage, attaching it as a ←SCSI drive
+# import the downloaded disk to the local-lvm storage, attaching it as aSCSI drive
 
 ```
-qm set 9000 --scsi0 local-lvm:0,import-from=/path/to/bionic-server-cloudimg ←-amd64.img
+qm set 9000 --scsi0 local-lvm:0,import-from=/path/to/bionic-server-cloudimg-amd64.img
 ```
 
 

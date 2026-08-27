@@ -392,11 +392,11 @@ Here are some examples:
 [RULES]
 IN SSH(ACCEPT) -i net0
 IN SSH(ACCEPT) -i net0 # a comment
-IN SSH(ACCEPT) -i net0 -source 192.168.2.192 # only allow SSH from ←192.168.2.192
+IN SSH(ACCEPT) -i net0 -source 192.168.2.192 # only allow SSH from192.168.2.192
 IN SSH(ACCEPT) -i net0 -source 10.0.0.1-10.0.0.10 # accept SSH for IP range
-IN SSH(ACCEPT) -i net0 -source 10.0.0.1,10.0.0.2,10.0.0.3 #accept ssh for ←IP list
-IN SSH(ACCEPT) -i net0 -source +mynetgroup # accept ssh for ipset ←mynetgroup
-IN SSH(ACCEPT) -i net0 -source myserveralias #accept ssh for alias ←myserveralias
+IN SSH(ACCEPT) -i net0 -source 10.0.0.1,10.0.0.2,10.0.0.3 #accept ssh forIP list
+IN SSH(ACCEPT) -i net0 -source +mynetgroup # accept ssh for ipsetmynetgroup
+IN SSH(ACCEPT) -i net0 -source myserveralias #accept ssh for aliasmyserveralias
 |IN SSH(ACCEPT) -i net0 # disabled rule
 IN DROP # drop all incoming packages
 OUT ACCEPT # accept all outgoing packages

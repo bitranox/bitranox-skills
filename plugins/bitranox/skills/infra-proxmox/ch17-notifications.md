@@ -312,7 +312,6 @@ target backup-admins
 comment Send notifications about backup failures to one group of
 admins
 
-←-
 
 matcher: cluster-failures
 match-field exact:type=replication,fencing

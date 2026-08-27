@@ -174,10 +174,23 @@ domain__validate_port() {
     echo "$port"  # return validated value
 }
 
+domain__validate_host() {
+    local host="$1"
+    # A host reaches a shell redirection in the adapter below, so "is this a hostname" is a
+    # domain rule with a security consequence: anything outside this set is not a hostname.
+    [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+        || { echo "error: host is not a valid hostname" >&2; return 1; }
+    echo "$host"
+}
+
 # Adapter (catches external failure)
 adapter__check_port_open() {
     local host="$1" port="$2"
-    timeout 5 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null || return 1
+    # The script body is SINGLE-quoted and the values arrive as positional arguments. Interpolate
+    # them into a double-quoted body instead and `bash -c` re-parses them AS CODE: a host of
+    # `a;id;x` read from a config file then runs `id`. Validating in the domain is the first
+    # defence, this is the one that holds when validation is bypassed or wrong.
+    timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null || return 1
 }
 ```
 

@@ -34,6 +34,20 @@ def _char_class():
 _TELL = re.compile("[" + _char_class() + "]")
 _INLINE = re.compile(r"`[^`]*`")
 
+# A PDF or HTML extraction marks a WRAPPED line with U+2190 at the join. Two shapes are artifacts,
+# one is prose:
+#   " <-token"   the wrapped remainder of a token - the shape that splits a command or a path in
+#                two, so a reader who copies it gets something that fails
+#   "<-" alone   a lone marker line; it carries nothing and renders as literal garbage
+#   "x <- y"     an arrow FOLLOWED by whitespace is ordinary prose and is never flagged
+# U+2192 (->) is an allowed-on-purpose symbol per this module's header and is not matched here.
+#
+# This deliberately scans INSIDE fenced blocks, which is the opposite of the tell scan above. That
+# difference is the whole point: the tell scan skips code so a file documenting the tells does not
+# self-flag, and a split command lives in exactly that blind spot. 104 broken commands and paths
+# shipped through it.
+_CONTINUATION = re.compile("[ \t]\u2190(?=\\S)|^[ \t]*\u2190-?[ \t]*$")
+
 
 def transform_outside_code(text, fn):
     """Rebuild `text` with `fn` applied to every stretch that is NOT code, leaving inline-code
@@ -80,3 +94,15 @@ def find_tell_lines(text):
         if _TELL.search(_INLINE.sub("", line)):
             hits.append("%d: %s" % (n, line))
     return hits
+
+
+def find_continuation_lines(text):
+    """Return ['<lineno>: <line>', ...] for lines carrying an extraction line-continuation
+    artifact, INCLUDING inside fenced code blocks. Empty list means clean.
+
+    Deliberately not code-aware. `find_tell_lines` skips code so a file documenting the tells does
+    not self-flag; that exemption is the blind spot this covers, because a wrapped token inside a
+    fenced block is a command a reader copies and cannot run."""
+    return ["%d: %s" % (n, line)
+            for n, line in enumerate((text or "").splitlines(), 1)
+            if _CONTINUATION.search(line)]

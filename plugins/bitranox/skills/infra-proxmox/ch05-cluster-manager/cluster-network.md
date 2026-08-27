@@ -280,7 +280,6 @@ creating your cluster with pvecm:
 ```
 
 
-←-
 
 This would cause link1 to be used first, since it has the higher priority.
 If no priorities are configured manually (or two links have the same priority), links will be used in order of their

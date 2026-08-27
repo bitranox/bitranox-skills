@@ -44,15 +44,25 @@ def main() -> int:
         return 0
 
     hits = tell_chars.find_tell_lines(text)
-    if not hits:
+    joins = tell_chars.find_continuation_lines(text)
+    if not hits and not joins:
         return 0
 
-    sys.stderr.write(
-        "AI-writing tell(s) found in %s outside code spans "
-        "(em/en-dash, curly quote, ellipsis, NBSP, ZWSP, BOM, etc.).\n"
-        "Replace with ASCII (use - , . : () ...).\n" % fp
-    )
-    sys.stderr.write("\n".join(hits[:20]) + "\n")
+    if hits:
+        sys.stderr.write(
+            "AI-writing tell(s) found in %s outside code spans "
+            "(em/en-dash, curly quote, ellipsis, NBSP, ZWSP, BOM, etc.).\n"
+            "Replace with ASCII (use - , . : () ...).\n" % fp
+        )
+        sys.stderr.write("\n".join(hits[:20]) + "\n")
+    if joins:
+        sys.stderr.write(
+            "Extraction line-continuation artifact(s) in %s (U+2190 at a wrapped join).\n"
+            "A token was split in two, so any command or path on these lines is broken: rejoin the\n"
+            "halves and delete the marker. An arrow FOLLOWED by a space is prose and is not this.\n"
+            % fp
+        )
+        sys.stderr.write("\n".join(joins[:20]) + "\n")
     return 2
 
 

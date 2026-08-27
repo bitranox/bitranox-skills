@@ -280,7 +280,7 @@ dependent volume name, separated by colon. A valid <VOLUME_ID> looks like:
 local:230/example-image.raw
 local:iso/debian-501-amd64-netinst.iso
 local:vztmpl/debian-5.0-joomla_1.5.9-1_i386.tar.gz
-iscsi-storage:0.0.2.scsi-14 ←f504e46494c4500494b5042546d2d646744372d31616d61
+iscsi-storage:0.0.2.scsi-14f504e46494c4500494b5042546d2d646744372d31616d61
 To get the file system path for a <VOLUME_ID> use:
 
 
@@ -328,7 +328,7 @@ pvesm add dir <STORAGE_ID> --path <PATH>
 
 
 ```
-pvesm add nfs <STORAGE_ID> --path <PATH> --server <SERVER> --export ←<EXPORT>
+pvesm add nfs <STORAGE_ID> --path <PATH> --server <SERVER> --export<EXPORT>
 ```
 
 
@@ -338,7 +338,7 @@ pvesm add lvm <STORAGE_ID> --vgname <VGNAME>
 
 
 ```
-pvesm add iscsi <STORAGE_ID> --portal <HOST[:PORT]> --target <TARGET ←>
+pvesm add iscsi <STORAGE_ID> --portal <HOST[:PORT]> --target <TARGET>
 ```
 
 Disable storage pools
@@ -458,7 +458,7 @@ internally with pvesm import. The stream format qcow2+size is different to the q
 
 
 ```
-pvesm export local:103/vm-103-disk-0.qcow2 qcow2+size target --with- ←snapshots 1
+pvesm export local:103/vm-103-disk-0.qcow2 qcow2+size target --with-snapshots 1
 ```
 
 

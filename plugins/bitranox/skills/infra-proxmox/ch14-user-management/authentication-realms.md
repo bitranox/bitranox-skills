@@ -199,7 +199,7 @@ Here is an example of creating an OpenID realm using Google. You need to replace
 
 
 ```
-pveum realm add myrealm1 --type openid --issuer-url https://accounts. ←google.com --client-id XXXX --client-key YYYY --username-claim email
+pveum realm add myrealm1 --type openid --issuer-url https://accounts.google.com --client-id XXXX --client-key YYYY --username-claim email
 ```
 
 
@@ -212,7 +212,7 @@ with your information:
 
 
 ```
-pveum realm add myrealm2 --type openid --issuer-url https://your.server ←:8080/realms/your-realm --client-id XXX --username-claim username
+pveum realm add myrealm2 --type openid --issuer-url https://your.server:8080/realms/your-realm --client-id XXX --username-claim username
 ```
 
 

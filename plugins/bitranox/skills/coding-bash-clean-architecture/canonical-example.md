@@ -19,7 +19,10 @@ domain__validate_service_def() {
     IFS=: read -r name host port <<< "$def"
 
     [[ -n "$name" ]] || { echo "error: empty service name" >&2; return 1; }
-    [[ -n "$host" ]] || { echo "error: empty host for $name" >&2; return 1; }
+    # Not just non-empty: this host reaches a shell redirection in the TCP adapter, so the
+    # character set is the rule that matters. A non-empty check alone lets `a;id;x` through.
+    [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+        || { echo "error: invalid host for $name" >&2; return 1; }
     [[ "$port" =~ ^[0-9]+$ ]] || { echo "error: port must be numeric for $name" >&2; return 1; }
     (( port >= 1 && port <= 65535 )) || { echo "error: port out of range for $name" >&2; return 1; }
 
@@ -179,7 +182,9 @@ adapter__check_tcp_nc() {
 
     start=$(date +%s%N)
 
-    if timeout "$timeout_sec" bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null; then
+    # Positional args into a SINGLE-quoted body: interpolating them makes `bash -c` re-parse the
+    # values as code, so a host of `a;id;x` from the config file would run `id`.
+    if timeout "$timeout_sec" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
         end=$(date +%s%N)
         elapsed=$(( (end - start) / 1000000 ))
         echo "$elapsed"

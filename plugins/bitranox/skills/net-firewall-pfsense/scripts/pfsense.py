@@ -27,7 +27,10 @@ key policy and no host names:
     pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/key" info
     pfsense.py --fw home dhcp list                  # named target from ~/.config/bitranox/pfsense.ini
 
-Mutating verbs are dry-run until `--apply`, and snapshot the config first:
+Mutating verbs are dry-run until `--apply`. The four that edit config.xml (`dhcp rm`,
+`dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first. `table del` and `snort unblock`
+change LIVE pf state, which a config.xml snapshot neither captures nor restores, so they take
+none - re-add the entry to undo them:
 
     pfsense.py --fw home dns add --name nas.example.com --ip 192.0.2.10 --apply
     pfsense.py --fw home dhcp rm --mac 00:11:22:33:44:55 --apply
@@ -187,7 +190,8 @@ def _run(argv: list[str], *, stdin_text: str | None = None, timeout: int = 30) -
     purpose: everything the ssh client says about host keys and key exchange is stderr, and merging
     it into stdout is what corrupts parsed output.
     """
-    proc = subprocess.run(argv, input=stdin_text, capture_output=True, text=True, timeout=timeout, check=False)
+    proc = subprocess.run(argv, input=stdin_text, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout, check=False)
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -677,24 +681,71 @@ def _guard_mutation(args, target: Target, what: str) -> str | None:
     """
     if not args.apply:
         return None
-    path = do_snapshot(target, Path(args.snapshot_dir), run=args.run)
+    path = do_snapshot(target, Path(args.snapshot_dir or default_snapshot_dir()),
+                       run=args.run, allow_repo=getattr(args, "allow_repo_snapshot", False))
     print(f"pfsense: snapshot before {what}: {path}", file=sys.stderr)
     return str(path)
 
 
-def do_snapshot(target: Target, directory: Path, *, run=_run) -> Path:
+def default_snapshot_dir() -> Path:
+    """Where a config snapshot goes when the caller does not name a directory.
+
+    NOT the current directory. A snapshot is a whole config.xml carrying password hashes, private
+    keys and certificates; defaulting to the cwd drops that wherever the operator happened to be
+    standing, and one such file reached a public repository's index that way. An XDG state dir is
+    private to the user and is not somewhere anybody runs `git add .`.
+    """
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "bitranox" / "pfsense"
+
+
+def inside_git_worktree(directory: Path, *, run=_run) -> bool:
+    """True when `directory` sits inside a git work tree. False when git cannot answer.
+
+    Fail-open by design: this is the SECOND layer, behind a default that already points outside any
+    checkout. A machine with no git must still be able to take a snapshot.
+    """
+    import shutil  # noqa: PLC0415 - only needed on this path, and only to probe for git
+    if not shutil.which("git"):
+        return False
+    try:
+        rc, out, _err = run(["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+                            timeout=10)
+    except Exception:
+        return False
+    return rc == 0 and (out or "").strip() == "true"
+
+
+def prepare_snapshot_dir(directory: Path, *, allow_repo: bool = False, run=_run) -> Path:
+    """Create `directory` private to the user, refusing a git work tree unless told otherwise."""
+    directory = Path(directory).expanduser()
+    if not allow_repo and directory.exists() and inside_git_worktree(directory, run=run):
+        raise PfsenseError(
+            f"{directory} is inside a git work tree, and a snapshot is a live config.xml with "
+            f"password hashes and private keys in it. Pass --snapshot-dir to send it somewhere "
+            f"private (default {default_snapshot_dir()}), or --allow-repo-snapshot to override."
+        )
+    directory.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        os.chmod(directory, 0o700)
+    return directory
+
+
+def do_snapshot(target: Target, directory: Path, *, run=_run, allow_repo: bool = False) -> Path:
     """Fetch /conf/config.xml and write it under a timestamped name.
 
     The content is validated before it is written: an ssh failure or a truncated read must not be
     saved as a snapshot, because a snapshot nobody can restore from is worse than none at all.
     """
+    # Resolve the destination BEFORE fetching: a refusal should cost nothing, and there is no
+    # reason to pull 180 KB of credentials over the wire only to decline to write it.
+    directory = prepare_snapshot_dir(directory, allow_repo=allow_repo, run=run)
     rc, out, err = run_remote(target, "cat /conf/config.xml", run=run, timeout=max(target.timeout, 60))
     if rc != 0:
         raise PfsenseError(f"could not read /conf/config.xml from {target.host}: {err.strip()[:200]}")
     root = parse_xml(out)
     if root.tag != "pfsense":
         raise PfsenseError(f"root element is <{root.tag}>, not <pfsense>; refusing to save it")
-    directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     path = directory / f"config-{target.host}-{stamp}.xml"
     path.write_text(out, encoding="utf-8")
@@ -721,7 +772,7 @@ def cmd_info(args) -> int:
 
 def cmd_snapshot(args) -> int:
     target = _target_from_args(args)
-    path = do_snapshot(target, Path(args.dir), run=args.run)
+    path = do_snapshot(target, Path(args.dir or default_snapshot_dir()), run=args.run)
     _emit(envelope(command="snapshot", data={"path": str(path), "bytes": path.stat().st_size}, ok=True),
           args.json, f"  saved {path} ({path.stat().st_size} bytes)")
     return 0
@@ -1075,7 +1126,27 @@ def cmd_doctor(args) -> int:
 
 
 # ---- cli ----------------------------------------------------------------------------------------
+def _mutation_flags() -> argparse.ArgumentParser:
+    """The flags a mutating verb accepts AFTER its subcommand, as a reusable parent.
+
+    They also exist on the top-level parser, so both `--apply dns add ...` and the documented
+    `dns add ... --apply` work. `SUPPRESS` is what makes that safe: without it argparse would set
+    the subparser's default over a value the top level already parsed, so `--apply` given first
+    would be silently reset to False and a mutation the operator asked for would run as a dry run.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--apply", action="store_true", default=argparse.SUPPRESS,
+                        help="actually make the change (default is a dry run)")
+    common.add_argument("--snapshot-dir", default=argparse.SUPPRESS,
+                        help="where a pre-change snapshot is written (default is a private "
+                             "per-user state dir, never the current directory)")
+    common.add_argument("--allow-repo-snapshot", action="store_true", default=argparse.SUPPRESS,
+                        help="permit writing a snapshot inside a git work tree")
+    return common
+
+
 def build_parser() -> argparse.ArgumentParser:
+    mut = _mutation_flags()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", help="firewall host or address (no default: name the box you mean)")
     ap.add_argument("--fw", help=f"named target from {CONFIG_FILE}")
@@ -1084,13 +1155,19 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--timeout", type=int, default=30, help="per-command ssh timeout in seconds")
     ap.add_argument("--json", action="store_true", help="emit the machine-readable envelope")
     ap.add_argument("--apply", action="store_true", help="actually make the change (default is a dry run)")
-    ap.add_argument("--snapshot-dir", default=".", help="where an automatic pre-change snapshot is written")
+    ap.add_argument("--snapshot-dir", default=None,
+                    help=f"where a pre-change snapshot is written "
+                         f"(default {default_snapshot_dir()}, mode 0700)")
+    ap.add_argument("--allow-repo-snapshot", action="store_true",
+                    help="permit writing a snapshot inside a git work tree (refused by default)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("info", help="version, DHCP backend, resolver, interfaces, packages").set_defaults(func=cmd_info)
 
     p = sub.add_parser("snapshot", help="save /conf/config.xml under a timestamped name")
-    p.add_argument("--dir", default=".", help="destination directory (default .)")
+    p.add_argument("--dir", default=None,
+                   help="destination directory (default: a private per-user "
+                        "state dir, never the current directory)")
     p.set_defaults(func=cmd_snapshot)
 
     p = sub.add_parser("arp", help="the ARP table, flagging permanent entries")
@@ -1108,25 +1185,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     dhcp = sub.add_parser("dhcp", help="DHCP reservations").add_subparsers(dest="action", required=True)
     dhcp.add_parser("list", help="every reservation, with the static-ARP flag").set_defaults(func=cmd_dhcp_list)
-    p = dhcp.add_parser("rm", help="delete one reservation, selected by MAC")
+    p = dhcp.add_parser("rm", parents=[mut], help="delete one reservation, selected by MAC")
     p.add_argument("--mac", required=True)
     p.set_defaults(func=cmd_dhcp_rm)
-    p = dhcp.add_parser("rm-static-arp", help="clear ARP Table Static Entry, keeping the reservation")
+    p = dhcp.add_parser("rm-static-arp", parents=[mut], help="clear ARP Table Static Entry, keeping the reservation")
     p.add_argument("--mac", required=True)
     p.set_defaults(func=cmd_dhcp_rm_static_arp)
 
     dns = sub.add_parser("dns", help="unbound host overrides").add_subparsers(dest="action", required=True)
     dns.add_parser("list", help="every host override").set_defaults(func=cmd_dns_list)
-    p = dns.add_parser("add", help="add one host override")
+    p = dns.add_parser("add", parents=[mut], help="add one host override")
     p.add_argument("--name", required=True, help="fully qualified, e.g. nas.example.com")
     p.add_argument("--ip", required=True)
     p.add_argument("--descr", default="added by pfsense.py")
     p.set_defaults(func=cmd_dns_add)
-    p = dns.add_parser("rm", help="remove one host override, selected by name")
+    p = dns.add_parser("rm", parents=[mut], help="remove one host override, selected by name")
     p.add_argument("--name", required=True)
     p.set_defaults(func=cmd_dns_rm)
 
-    table = sub.add_parser("table", help="pf tables: snort2c, ISP aliases, anything else")
+    table = sub.add_parser("table", parents=[mut], help="pf tables: snort2c, ISP aliases, anything else")
     table.add_argument("action", choices=["list", "show", "test", "del"])
     table.add_argument("table", nargs="?", help="table name (not needed for list)")
     table.add_argument("ips", nargs="*", help="addresses, for test and del")
@@ -1139,7 +1216,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = snort.add_parser("why", help="which SID blocked this IP (reads the rotated alert logs)")
     p.add_argument("ips", nargs="+")
     p.set_defaults(func=cmd_snort_why)
-    p = snort.add_parser("unblock", help="delete IPs from snort2c (temporary; suppress the SID too)")
+    p = snort.add_parser("unblock", parents=[mut], help="delete IPs from snort2c (temporary; suppress the SID too)")
     p.add_argument("ips", nargs="+")
     p.set_defaults(func=cmd_snort_unblock)
     p = snort.add_parser("verify", help="is the SID suppressed and the CIDR pass-listed, in the LIVE instance?")

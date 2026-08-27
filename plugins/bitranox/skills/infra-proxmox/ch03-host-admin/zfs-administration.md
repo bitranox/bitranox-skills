@@ -64,7 +64,7 @@ Minimum 4 disks
 
 
 ```
-# zpool create -f -o ashift=12 <pool> mirror <device1> <device2> mirror < ←device3> <device4>
+# zpool create -f -o ashift=12 <pool> mirror <device1> <device2> mirror <device3> <device4>
 ```
 
 
@@ -87,7 +87,6 @@ Minimum 4 disks
 ```
 
 
-←-
 
 Please read the section for ZFS RAID Level Considerations to get a rough estimate on how IOPS and
 bandwidth expectations before setting up a pool, especially when wanting to use a RAID-Z mode.

@@ -93,3 +93,46 @@ def test_transform_preserves_text_with_no_trailing_newline():
 def test_transform_of_empty_and_none_is_empty():
     assert TC.transform_outside_code("", _to_dash) == ""
     assert TC.transform_outside_code(None, _to_dash) == ""
+
+
+# --- extraction line-continuation artifacts (U+2190) -------------------------------------------
+
+LARR = chr(0x2190)
+RARR = chr(0x2192)
+
+
+def test_continuation_flags_a_wrapped_token():
+    """The shape that splits a command: ' <-token' with no space after the arrow."""
+    hits = TC.find_continuation_lines("wget https://example.com/keyring- %strixie.gpg" % LARR)
+    assert len(hits) == 1 and hits[0].startswith("1: ")
+
+
+def test_continuation_flags_a_lone_marker_line():
+    assert TC.find_continuation_lines("a\n%s-\nb" % LARR) == ["2: %s-" % LARR]
+    assert TC.find_continuation_lines("a\n%s\nb" % LARR) == ["2: %s" % LARR]
+
+
+def test_continuation_ignores_prose_where_the_arrow_is_followed_by_a_space():
+    """'runs in process.cwd() <- empty parameter' is an annotation, not an artifact."""
+    assert TC.find_continuation_lines("runs in cwd() %s empty parameter" % LARR) == []
+
+
+def test_continuation_ignores_the_allowed_right_arrow():
+    assert TC.find_continuation_lines("Datacenter %s Cluster %s Join" % (RARR, RARR)) == []
+
+
+def test_continuation_looks_INSIDE_fenced_blocks():
+    """The whole point: a split command lives in the blind spot find_tell_lines exempts."""
+    src = "prose\n```bash\nmv /a/b/ %sc/d\n```\n" % LARR
+    assert TC.find_continuation_lines(src) == ["3: mv /a/b/ %sc/d" % LARR]
+
+
+def test_find_tell_lines_does_NOT_see_it_which_is_why_the_second_scanner_exists():
+    """Control: the two scanners must disagree here, or the new one is redundant."""
+    src = "prose\n```bash\nmv /a/b/ %sc/d\n```\n" % LARR
+    assert TC.find_tell_lines(src) == []
+    assert TC.find_continuation_lines(src) != []
+
+
+def test_continuation_of_empty_and_none_is_empty():
+    assert TC.find_continuation_lines("") == [] and TC.find_continuation_lines(None) == []

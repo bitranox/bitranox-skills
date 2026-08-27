@@ -91,7 +91,6 @@ tank/encrypted_data
 ```
 
 
-←-
 
 
 > **Warning:**
@@ -155,7 +154,6 @@ mirror <device3> <device4>
 ```
 
 
-←-
 
 Add a special device to an existing pool with RAID-1:
 

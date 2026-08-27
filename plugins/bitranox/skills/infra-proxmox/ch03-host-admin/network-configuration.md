@@ -6,9 +6,9 @@
 ```
 # apt install intel-microcode=3.202305*
 ...
-Selected version '3.20230512.1' (Debian:12.1/stable [amd64]) for 'intel- ←microcode'
+Selected version '3.20230512.1' (Debian:12.1/stable [amd64]) for 'intel-microcode'
 ...
-dpkg: warning: downgrading intel-microcode from 3.20230808.1~deb12u1 to ←3.20230512.1
+dpkg: warning: downgrading intel-microcode from 3.20230808.1~deb12u1 to3.20230512.1
 ...
 intel-microcode: microcode will be updated at next boot
 ...
@@ -169,7 +169,6 @@ When pinning a specific interface, you can specify the exact name that the inter
 pve-network-interface-pinning generate --interface enp1s0 --target-name
 if42
 
-←-
 
 In order to apply the changes made by pve-network-interface-pinning to the network configuration, the node needs to be rebooted.
 
@@ -404,8 +403,8 @@ bridge-fd 0
 post-up
 echo 1 > /proc/sys/net/ipv4/ip_forward
 post-up
-iptables -t nat -A POSTROUTING -s '10.10.10.0/24' -o eno1 ←-j MASQUERADE
-post-down iptables -t nat -D POSTROUTING -s '10.10.10.0/24' -o eno1 ←-j MASQUERADE
+iptables -t nat -A POSTROUTING -s '10.10.10.0/24' -o eno1-j MASQUERADE
+post-down iptables -t nat -D POSTROUTING -s '10.10.10.0/24' -o eno1-j MASQUERADE
 
 
 > **Note:**

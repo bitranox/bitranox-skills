@@ -65,8 +65,8 @@ Check the journal to confirm that the newly configured NTP servers are being use
 # journalctl --since -1h -u chrony
 ...
 Aug 26 13:00:09 node1 systemd[1]: Started chrony, an NTP client/server.
-Aug 26 13:00:15 node1 chronyd[4873]: Selected source 10.0.0.1 (ntp1.example ←.com)
-Aug 26 13:00:15 node1 chronyd[4873]: System clock TAI offset set to 37 ←seconds
+Aug 26 13:00:15 node1 chronyd[4873]: Selected source 10.0.0.1 (ntp1.example.com)
+Aug 26 13:00:15 node1 chronyd[4873]: System clock TAI offset set to 37seconds
 ...
 ```
 
@@ -84,8 +84,8 @@ that your newly configured NTP servers are in use by checking the journal (journ
 Oct 07 14:58:36 node1 systemd[1]: Stopping Network Time Synchronization...
 Oct 07 14:58:36 node1 systemd[1]: Starting Network Time Synchronization...
 Oct 07 14:58:36 node1 systemd[1]: Started Network Time Synchronization.
-Oct 07 14:58:36 node1 systemd-timesyncd[13514]: Using NTP server ←10.0.0.1:123 (ntp1.example.com).
-Oct 07 14:58:36 node1 systemd-timesyncd[13514]: interval/delta/delay/jitter ←/drift 64s/-0.002s/0.020s/0.000s/-31ppm
+Oct 07 14:58:36 node1 systemd-timesyncd[13514]: Using NTP server10.0.0.1:123 (ntp1.example.com).
+Oct 07 14:58:36 node1 systemd-timesyncd[13514]: interval/delta/delay/jitter/drift 64s/-0.002s/0.020s/0.000s/-31ppm
 ...
 
 

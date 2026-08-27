@@ -108,7 +108,7 @@ not possible at the moment, you may use the following command to enforce quorum 
 - move both guest configuration files form the origin node A to node B:
 
 ```
-# mv /etc/pve/nodes/A/qemu-server/100.conf /etc/pve/nodes/B/qemu-server ←/100.conf
+# mv /etc/pve/nodes/A/qemu-server/100.conf /etc/pve/nodes/B/qemu-server/100.conf
 # mv /etc/pve/nodes/A/lxc/200.conf /etc/pve/nodes/B/lxc/200.conf
 ```
 

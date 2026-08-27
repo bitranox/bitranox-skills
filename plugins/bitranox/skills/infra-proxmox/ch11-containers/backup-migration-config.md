@@ -11,7 +11,7 @@ the web interface)
 
 
 ```
-# pct create 100 /var/lib/vz/template/cache/debian-10.0-standard_10.0-1 ←_amd64.tar.gz
+# pct create 100 /var/lib/vz/template/cache/debian-10.0-standard_10.0-1_amd64.tar.gz
 Start container 100
 
 # pct start 100
@@ -27,7 +27,7 @@ Display the configuration
 Add a network interface called eth0, bridged to the host bridge vmbr0, set the address and gateway, while
 it's running
 
-# pct set 100 -net0 name=eth0,bridge=vmbr0,ip=192.168.15.147/24,gw ←=192.168.15.1
+# pct set 100 -net0 name=eth0,bridge=vmbr0,ip=192.168.15.147/24,gw=192.168.15.1
 Reduce the memory of the container to 512MB
 
 # pct set 100 -memory 512

@@ -49,7 +49,7 @@ internally with pvesm import. The stream format qcow2+size is different to the q
 
 
 ```
-pvesm export local:103/vm-103-disk-0.qcow2 qcow2+size target --with- ←snapshots 1
+pvesm export local:103/vm-103-disk-0.qcow2 qcow2+size target --with-snapshots 1
 ```
 
 
@@ -185,7 +185,7 @@ Please use the following command to allocate a 4GB image on storage local:
 
 ```
 # pvesm alloc local 100 vm-100-disk10.raw 4G
-Formatting '/var/lib/vz/images/100/vm-100-disk10.raw', fmt=raw size ←=4294967296
+Formatting '/var/lib/vz/images/100/vm-100-disk10.raw', fmt=raw size=4294967296
 successfully created 'local:100/vm-100-disk10.raw'
 ```
 

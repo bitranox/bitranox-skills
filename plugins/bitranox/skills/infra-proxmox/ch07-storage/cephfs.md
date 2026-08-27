@@ -100,7 +100,7 @@ needs to be a path to the secret file that you copied. For example:
 
 
 ```
-# pvesm add cephfs <name> --monhost "10.1.1.20 10.1.1.21 10.1.1.22" -- ←content backup --keyring /root/cephfs.secret
+# pvesm add cephfs <name> --monhost "10.1.1.20 10.1.1.21 10.1.1.22" --content backup --keyring /root/cephfs.secret
 When configuring an external RBD storage via the GUI, you can copy and paste the secret into the appropriate field.
 The secret is only the key itself, as opposed to the rbd backend which also contains a [client.userid]
 section.

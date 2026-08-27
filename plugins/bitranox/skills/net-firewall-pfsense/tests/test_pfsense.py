@@ -11,6 +11,8 @@ The load-bearing properties, each one a fault that has actually shipped:
 
 Addresses are RFC 5737 documentation ranges throughout.
 """
+import os
+import pathlib
 import json
 
 import pytest
@@ -549,3 +551,85 @@ def test_a_section_without_a_host_is_refused(tmp_path):
     ini.write_text("[home]\nuser = admin\n", encoding="utf-8")
     with pytest.raises(P.PfsenseError, match="no host"):
         P.load_named_target("home", path=ini)
+
+
+# ---- snapshot destination: a live config.xml must not land in the cwd or a checkout ------------
+
+def _git_says(answer, code=0):
+    """A stand-in for `_run`, which returns the TUPLE (rc, stdout, stderr).
+
+    An earlier version of this helper returned an object with .returncode/.stdout. Every test
+    passed and the real guard was inert, because the real call raised and the fail-open swallowed
+    it. A double whose SHAPE differs from the seam tests nothing.
+    """
+    def fake(argv, *, timeout=None, stdin_text=None):
+        assert argv[0] == "git", "the probe must shell out to git, got %r" % (argv[0],)
+        return code, answer, ""
+    return fake
+
+
+def test_the_git_double_matches_the_real_run_signature():
+    """Guards the trap above: if _run's contract moves, this fails instead of the guard going quiet."""
+    import inspect
+    real = inspect.signature(P._run).parameters
+    assert set(real) >= {"argv", "timeout"}
+    rc, out, err = _git_says("true")(["git", "rev-parse"], timeout=10)
+    assert (rc, out, err) == (0, "true", "")
+
+
+def test_default_snapshot_dir_is_not_the_cwd(monkeypatch, tmp_path):
+    """The whole point: a snapshot carries password hashes and private keys."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    d = P.default_snapshot_dir()
+    assert d == tmp_path / "bitranox" / "pfsense"
+    assert d.resolve() != pathlib.Path.cwd().resolve()
+
+
+def test_default_snapshot_dir_falls_back_to_local_state(monkeypatch, tmp_path):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(pathlib.Path, "home", staticmethod(lambda: tmp_path))
+    assert P.default_snapshot_dir() == tmp_path / ".local" / "state" / "bitranox" / "pfsense"
+
+
+def test_prepare_refuses_a_git_work_tree(tmp_path):
+    target = tmp_path / "repo" / "scripts"
+    target.mkdir(parents=True)
+    with pytest.raises(P.PfsenseError) as exc:
+        P.prepare_snapshot_dir(target, run=_git_says("true"))
+    assert "git work tree" in str(exc.value)
+    assert "--allow-repo-snapshot" in str(exc.value)
+
+
+def test_prepare_allows_a_git_work_tree_when_overridden(tmp_path):
+    target = tmp_path / "repo"
+    target.mkdir()
+    assert P.prepare_snapshot_dir(target, allow_repo=True, run=_git_says("true")) == target
+
+
+def test_prepare_allows_a_plain_directory(tmp_path):
+    """The known negative: the refusal must not fire where it should not."""
+    target = tmp_path / "state"
+    target.mkdir()
+    assert P.prepare_snapshot_dir(target, run=_git_says("false")) == target
+
+
+def test_prepare_creates_the_directory_when_missing(tmp_path):
+    target = tmp_path / "state" / "pfsense"
+    P.prepare_snapshot_dir(target, run=_git_says("false"))
+    assert target.is_dir()
+
+
+def test_prepare_makes_the_directory_private_on_posix(tmp_path):
+    if os.name != "posix":
+        pytest.skip("POSIX modes only")
+    target = tmp_path / "state"
+    P.prepare_snapshot_dir(target, run=_git_says("false"))
+    assert oct(target.stat().st_mode & 0o777) == "0o700"
+
+
+def test_inside_git_worktree_is_false_when_git_cannot_answer(tmp_path):
+    """Fail-open: this is the second layer, behind a default that is already outside a checkout."""
+    def boom(*_a, **_k):
+        raise OSError("no git")
+    assert P.inside_git_worktree(tmp_path, run=boom) is False
+    assert P.inside_git_worktree(tmp_path, run=_git_says("", 128)) is False

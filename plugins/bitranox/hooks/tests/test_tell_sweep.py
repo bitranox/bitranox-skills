@@ -91,3 +91,22 @@ def test_shim_smoke(tmp_path):
     )
     assert r.returncode == 2
     assert "tell(s) found" in r.stderr
+
+
+LEFT_ARROW = chr(0x2190)
+
+
+def test_sweep_blocks_a_continuation_artifact_inside_a_code_fence(tmp_path, monkeypatch, capsys):
+    """A split command is exactly what the tell scan exempts, so the hook must still catch it."""
+    fp = tmp_path / "doc.md"
+    fp.write_text("intro\n```bash\nwget https://example.com/k- %strixie.gpg\n```\n" % LEFT_ARROW,
+                  encoding="utf-8")
+    rc = _run(monkeypatch, {"tool_input": {"file_path": str(fp)}})
+    assert rc == 2
+    assert "line-continuation artifact" in capsys.readouterr().err
+
+
+def test_sweep_allows_a_prose_arrow_followed_by_a_space(tmp_path, monkeypatch):
+    fp = tmp_path / "doc.md"
+    fp.write_text("git init runs in cwd() %s empty parameter\n" % LEFT_ARROW, encoding="utf-8")
+    assert _run(monkeypatch, {"tool_input": {"file_path": str(fp)}}) == 0

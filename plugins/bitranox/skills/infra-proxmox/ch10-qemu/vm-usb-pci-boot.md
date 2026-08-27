@@ -54,7 +54,7 @@ You can create such a disk with the following command:
 
 
 ```
-# qm set <vmid> -efidisk0 <storage>:1,format=<format>,efitype=4m,pre- ←enrolled-keys=1
+# qm set <vmid> -efidisk0 <storage>:1,format=<format>,efitype=4m,pre-enrolled-keys=1
 Where <storage> is the storage where you want to have the disk, and <format> is a format which the
 storage supports. Alternatively, you can create such a disk through the web interface with Add → EFI Disk
 in the hardware section of a VM.

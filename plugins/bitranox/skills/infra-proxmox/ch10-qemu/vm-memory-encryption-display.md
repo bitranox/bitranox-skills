@@ -58,7 +58,7 @@ Example Configuration (SEV):
 
 
 ```
-# qm set <vmid> -amd-sev type=std,no-debug=1,no-key-sharing=1,kernel-hashes ←=1
+# qm set <vmid> -amd-sev type=std,no-debug=1,no-key-sharing=1,kernel-hashes=1
 The type defines the encryption technology ("type=" is not necessary). Available options are std, es & snp.
 The QEMU policy parameter gets calculated with the no-debug and no-key-sharing parameters. These
 parameters correspond to policy-bit 0 and 1. If type is es the policy-bit 2 is set to 1 so that SEV-ES is

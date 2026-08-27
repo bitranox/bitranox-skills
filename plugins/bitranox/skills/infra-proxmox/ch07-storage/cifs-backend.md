@@ -157,7 +157,7 @@ You can get a list of exported CIFS shares with:
 # pvesm scan cifs <server> [--username <username>] [--password]
 Then you can add one of these shares as a storage to the whole Proxmox VE cluster with:
 
-# pvesm add cifs <storagename> --server <server> --share <share> [-- ←username <username>] [--password]
+# pvesm add cifs <storagename> --server <server> --share <share> [--username <username>] [--password]
 ```
 
 

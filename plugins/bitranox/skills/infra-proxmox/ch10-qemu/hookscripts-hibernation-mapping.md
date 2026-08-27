@@ -89,7 +89,7 @@ Using an iso file uploaded on the local storage, create a VM with a 4 GB IDE dis
 
 
 ```
-# qm create 300 -ide0 local-lvm:4 -net0 e1000 -cdrom local:iso/proxmox- ←mailgateway_2.1.iso
+# qm create 300 -ide0 local-lvm:4 -net0 e1000 -cdrom local:iso/proxmox-mailgateway_2.1.iso
 Start the new VM
 
 # qm start 300

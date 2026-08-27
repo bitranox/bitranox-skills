@@ -162,7 +162,6 @@ vzdump 123 --storage pbs-storage --pbs-change-detection-mode
 
 metadata
 
-←-
 
 
 > **Note:**

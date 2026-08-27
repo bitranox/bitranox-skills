@@ -120,7 +120,6 @@ a message in the system log saying "microcode updated early".
 ```
 
 
-←-
 
 Troubleshooting
 For debugging purposes, the set up Early OS Microcode Update applied regularly at system boot can be
@@ -148,9 +147,9 @@ intel-microcode/stable 3.20230512.1 amd64
 ```
 # apt install intel-microcode=3.202305*
 ...
-Selected version '3.20230512.1' (Debian:12.1/stable [amd64]) for 'intel- ←microcode'
+Selected version '3.20230512.1' (Debian:12.1/stable [amd64]) for 'intel-microcode'
 ...
-dpkg: warning: downgrading intel-microcode from 3.20230808.1~deb12u1 to ←3.20230512.1
+dpkg: warning: downgrading intel-microcode from 3.20230808.1~deb12u1 to3.20230512.1
 ...
 intel-microcode: microcode will be updated at next boot
 ...

@@ -227,7 +227,6 @@ esp=aes256-sha1!
 leftfirewall=yes
 firewall rules
 
-←-
 
 # the fastest, but reasonably secure cipher
 
@@ -252,7 +251,6 @@ and add the key to /etc/ipsec.secrets, so that the file contents looks like:
 : PSK <generatedbase64key>
 Copy the PSK and the configuration to all nodes participating in the VXLAN network.
 
-←-
 
 
 Proxmox VE Firewall provides an easy way to protect your IT infrastructure. You can setup firewall rules for

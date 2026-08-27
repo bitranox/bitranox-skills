@@ -43,7 +43,7 @@ _You **can** combine them_
 You can use automatic detection of links, for example, https://forum.proxmox.com/ would transform it into a clickable link.
 You can also control the link text, for example:
 
-Now, [the part in brackets will be the link text](https://forum.proxmox.com ←/).
+Now, [the part in brackets will be the link text](https://forum.proxmox.com/).
 
 
 ### G.1.4 Lists
@@ -89,26 +89,25 @@ in that separation one can also set the text alignment, making one column left-,
 
 | Left columns | Right columns | Some | More | Cols.| Centering Works
 Too
-| ------------- ←|--------------:|--------|------|------|:------------------:|
+| -------------|--------------:|--------|------|------|:------------------:|
 | left foo
 | right foo
-| First | Row | Here | >center< ←|
+| First | Row | Here | >center<|
 | left bar
 | right bar
-| Second | Row | Here | 12345 ←|
+| Second | Row | Here | 12345|
 | left baz
 | right baz
-| Third | Row | Here | Test ←|
+| Third | Row | Here | Test|
 | left zab
 | right zab
-| Fourth | Row | Here | ←&#x2601;&#xfe0f;&#x2601;&#xfe0f;&#x2601;&#xfe0f;
+| Fourth | Row | Here |&#x2601;&#xfe0f;&#x2601;&#xfe0f;&#x2601;&#xfe0f;
 |
 | left rab
 | right rab
 | And
-| Last | Here | The End ←|
+| Last | Here | The End|
 
-←-
 
 Note that you do not need to align the columns nicely with white space, but that makes editing tables easier.
 
@@ -118,10 +117,10 @@ Note that you do not need to align the columns nicely with white space, but that
 
 You can enter block quotes by prefixing a line with >, similar as in plain-text emails.
 
-> Markdown is a lightweight markup language with plain-text-formatting ←syntax,
+> Markdown is a lightweight markup language with plain-text-formattingsyntax,
 > created in 2004 by John Gruber with Aaron Swartz.
 >
->> Markdown is often used to format readme files, for writing messages in ←online discussion forums,
+>> Markdown is often used to format readme files, for writing messages inonline discussion forums,
 >> and to create rich text using a plain text editor.
 
 

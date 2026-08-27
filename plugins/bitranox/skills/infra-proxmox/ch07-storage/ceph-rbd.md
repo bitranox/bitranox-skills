@@ -106,7 +106,7 @@ way is to copy the file from the external Ceph cluster directly to one of the Pr
 example will copy it to the /root directory of the node on which we run it:
 
 
-# scp <external cephserver>:/etc/ceph/ceph.client.admin.keyring /root/rbd. ←keyring
+# scp <external cephserver>:/etc/ceph/ceph.client.admin.keyring /root/rbd.keyring
 Then use the pvesm CLI tool to configure the external RBD storage, use the --keyring parameter, which
 needs to be a path to the keyring file that you copied. For example:
 
@@ -117,7 +117,6 @@ images --keyring /root/rbd.keyring
 ```
 
 
-←-
 
 When configuring an external RBD storage via the GUI, you can copy and paste the keyring into the appropriate field.
 The keyring will be stored at

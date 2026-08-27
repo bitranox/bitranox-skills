@@ -87,7 +87,7 @@ lio_tpg tpg1
 sparse 1
 zfs: solaris
 blocksize 4k
-target iqn.2010-08.org.illumos:02:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx: ←tank1
+target iqn.2010-08.org.illumos:02:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:tank1
 pool tank
 
 

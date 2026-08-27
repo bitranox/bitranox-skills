@@ -233,7 +233,7 @@ Boot0009* proxmox
 shimx64.efi)
 [..]
 
-HD(2,GPT,..,0x800,0x100000)/File(\EFI\proxmox\ ←-
+HD(2,GPT,..,0x800,0x100000)/File(\EFI\proxmox\-
 
 
 > **Note:**

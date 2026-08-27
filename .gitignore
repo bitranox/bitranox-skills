@@ -44,3 +44,8 @@ CLAUDE.local.md
 plugins/CLAUDE.md
 plugins/bitranox/CLAUDE.md
 plugins/bitranox/hooks/CLAUDE.md
+
+# pfsense.py writes `config-<host>-<timestamp>.xml` snapshots into its --snapshot-dir, which
+# defaults to the current directory. Those are LIVE firewall configs carrying password hashes,
+# private keys and certificates, and this repo is public: never commit one.
+config-*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].xml

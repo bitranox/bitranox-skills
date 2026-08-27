@@ -156,7 +156,7 @@ for your CPU, see chapter Firmware Updates. Note that not all affected CPUs can 
 spec-ctrl.
 To check if the Proxmox VE host is vulnerable, execute the following command as root:
 
-for f in /sys/devices/system/cpu/vulnerabilities/*; do echo "${f##*/} -" $( ←cat "$f"); done
+for f in /sys/devices/system/cpu/vulnerabilities/*; do echo "${f##*/} -" $(cat "$f"); done
 A community script is also available to detect if the host is still vulnerable. 4
 3 Meltdown Attack https://meltdownattack.com/
 4 spectre-meltdown-checker https://meltdown.ovh/
@@ -238,7 +238,7 @@ Currently this feature is only supported on Linux, a kernel newer than 3.10 is n
 
 You can use a udev rule as follow to automatically set new CPUs as online in the guest:
 
-SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{ ←online}="1"
+SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{online}="1"
 Save this under /etc/udev/rules.d/ as a file ending in .rules.
 Note: CPU hot-remove is machine dependent and requires guest cooperation. The deletion command does
 not guarantee CPU removal to actually happen, typically it's a request forwarded to guest OS using target

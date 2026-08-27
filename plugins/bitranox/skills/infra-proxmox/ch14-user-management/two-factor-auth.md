@@ -59,7 +59,7 @@ certificate, otherwise some browsers may warn or refuse to authenticate altogeth
 
 This is done via /etc/pve/datacenter.cfg. For instance:
 
-webauthn: rp=mypve.example.com,origin=https://mypve.example.com:8006,id= ←mypve.example.com
+webauthn: rp=mypve.example.com,origin=https://mypve.example.com:8006,id=mypve.example.com
 
 
 ### 14.6.9 Server Side U2F Configuration

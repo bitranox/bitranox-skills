@@ -104,11 +104,10 @@ will output something similar to
 
 01:00.0 VGA compatible controller: NVIDIA Corporation GP108 [GeForce GT
 1030] (rev a1)
-Subsystem: Micro-Star International Co., Ltd. [MSI] GP108 [ ←GeForce GT 1030]
+Subsystem: Micro-Star International Co., Ltd. [MSI] GP108 [GeForce GT 1030]
 Kernel driver in use: <some-module>
 Kernel modules: <some-module>
 
-←-
 
 Now we can blacklist the drivers by writing them into a .conf file:
 
@@ -119,7 +118,7 @@ For example, if you are using drivers named <some-module>:
 
 
 ```
-# echo "softdep <some-module> pre: vfio-pci" >> /etc/modprobe.d/<some- ←module>.conf
+# echo "softdep <some-module> pre: vfio-pci" >> /etc/modprobe.d/<some-module>.conf
 ```
 
 
@@ -147,7 +146,7 @@ Furthermore, using OVMF, disabling vga arbitration may be possible, reducing the
 needed to be run during boot. To disable vga arbitration:
 
 
-echo "options vfio-pci ids=<vendor-id>,<device-id> disable_vga=1" > /etc/ ←modprobe.d/vfio.conf
+echo "options vfio-pci ids=<vendor-id>,<device-id> disable_vga=1" > /etc/modprobe.d/vfio.conf
 replacing the <vendor-id> and <device-id> with the ones obtained from:
 
 

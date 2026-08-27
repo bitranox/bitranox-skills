@@ -52,7 +52,14 @@ Run `pfsense.py --help` and `pfsense.py <verb> --help` for the current flags.
 | `rules [--counters] [--nat]`                              | the live ruleset, with per-rule counters              |
 | `snort check` / `why` / `unblock` / `verify` / `fixsteps` | a Snort block and its durable fix                     |
 
-Everything is a dry run until `--apply`, which snapshots first and aborts if the snapshot fails.
+Everything is a dry run until `--apply`. The four verbs that edit `config.xml` (`dhcp rm`,
+`dhcp rm-static-arp`, `dns add`, `dns rm`) snapshot it first and abort if the snapshot fails.
+`table del` and `snort unblock` change LIVE pf state, which a `config.xml` snapshot neither
+captures nor restores, so they take none - undo those by re-adding the entry.
+
+A snapshot is a whole `config.xml`, with password hashes, private keys and certificates in it, so
+it is written to a private per-user state directory (`--snapshot-dir` to choose another). Writing
+one into a git work tree is refused unless you pass `--allow-repo-snapshot`.
 
 ```bash
 pfsense.py --host 192.0.2.1 --user admin --ssh "ssh -i /path/to/key" doctor

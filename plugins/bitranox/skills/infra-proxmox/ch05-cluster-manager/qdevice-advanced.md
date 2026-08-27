@@ -223,9 +223,9 @@ Issue: quorum.expected_votes must be configured
 When corosync starts to fail and you get the following message in the system log:
 
 [...]
-corosync[1647]: [QUORUM] Quorum provider: corosync_votequorum failed to ←initialize.
-corosync[1647]: [SERV ] Service engine 'corosync_quorum' failed to load ←for reason
-'configuration error: nodelist or quorum.expected_votes must be ←configured!'
+corosync[1647]: [QUORUM] Quorum provider: corosync_votequorum failed toinitialize.
+corosync[1647]: [SERV ] Service engine 'corosync_quorum' failed to loadfor reason
+'configuration error: nodelist or quorum.expected_votes must beconfigured!'
 [...]
 It means that the hostname you set for a corosync ringX_addr in the configuration could not be resolved.
 Write Configuration When Not Quorate

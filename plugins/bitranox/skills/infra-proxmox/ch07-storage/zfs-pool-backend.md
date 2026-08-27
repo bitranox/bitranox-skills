@@ -10,7 +10,7 @@ preparation for the worst case scenario, you should also consider keeping a pape
 away in a safe place. The paperkey subcommand can be used to create a QR encoded version of your
 key. The following command sends the output of the paperkey command to a text file, for easy printing.
 
-# proxmox-backup-client key paperkey /etc/pve/priv/storage/<STORAGE-ID>.enc ←--output-format text > qrkey.txt
+# proxmox-backup-client key paperkey /etc/pve/priv/storage/<STORAGE-ID>.enc--output-format text > qrkey.txt
 Additionally, it is possible to use a single RSA master key pair for key recovery purposes: configure all
 clients doing encrypted backups to use a single public master key, and all subsequent encrypted backups
 will contain a RSA-encrypted copy of the used AES encryption key. The corresponding private master key
@@ -39,10 +39,10 @@ You can get a list of available Proxmox Backup Server datastores with:
 
 
 ```
-# pvesm scan pbs <server> <username> [--password <string>] [--fingerprint < ←string>]
+# pvesm scan pbs <server> <username> [--password <string>] [--fingerprint <string>]
 Then you can add one of these datastores as a storage to the whole Proxmox VE cluster with:
 
-# pvesm add pbs <id> --server <server> --datastore <datastore> --username < ←username> --fingerprint 00:B4:... --password
+# pvesm add pbs <id> --server <server> --datastore <datastore> --username <username> --fingerprint 00:B4:... --password
 ```
 
 

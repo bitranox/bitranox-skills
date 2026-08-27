@@ -209,10 +209,9 @@ cd 'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf'
 7. (optional) Create a snapshot of the VM before Sysprep in case of a misconfiguration
 8. Run Sysprep:
 
-←-
 
 
-C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /unattend: ←Unattend.xml
+C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /unattend:Unattend.xml
 
 After following the above steps the VM should be in shut down state due to the Sysprep. Now you can make
 it into a template, clone it and configure it as needed.

@@ -173,7 +173,7 @@ To make it always accessible add the following line in /etc/fstab.
 
 Resize the LV and the metadata pool with the following command:
 
-# lvresize --size +<size[\M,G,T]> --poolmetadatasize +<size[\M,G]> < ←VG>/<LVThin_pool>
+# lvresize --size +<size[\M,G,T]> --poolmetadatasize +<size[\M,G]> <VG>/<LVThin_pool>
 
 
 > **Note:**
