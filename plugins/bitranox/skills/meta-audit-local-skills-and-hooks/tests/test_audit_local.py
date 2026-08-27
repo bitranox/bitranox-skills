@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -344,3 +345,18 @@ def test_a_local_only_hook_is_not_reported(tmp_path):
     (home / ".claude" / "hooks" / "mine.py").write_text("x\n", encoding="utf-8")
     found = audit_local.check_personal(home, shipped_root=plug)
     assert not [m for c, m in found if c == "duplicate-of-shipped"]
+
+
+def test_the_module_docstring_states_check_s_own_exit_codes(tmp_path):
+    """One line sat under BOTH synopses and described only `targets`.
+
+    The two verbs answer OPPOSITE questions with the same numbers: `targets` exits 0 when it FOUND
+    targets, `check` exits 0 when it found NO findings. A reader wiring CI off the shared line
+    inverts the meaning of a clean run."""
+    text = Path(audit_local.__file__).read_text(encoding="utf-8")
+    doc = text.split('"""')[1]
+    assert "0 targets found, 1 none found" not in doc.replace("\n", " ") or "check" in doc, doc
+    # the docstring must say, for `check`, that 0 means no findings
+    lowered = " ".join(doc.split()).lower()
+    assert "check" in lowered and "0 = no findings" in lowered, (
+        "the docstring never states check's own exit-code meaning")

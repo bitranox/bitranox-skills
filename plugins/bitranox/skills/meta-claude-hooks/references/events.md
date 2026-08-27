@@ -416,7 +416,9 @@ Matcher: MCP server name. Input adds `mcp_server_name`, `action`, `content`, `el
 Fires when Claude Code sends a notification. **Exit code and stderr are ignored**; no decision control.
 
 Matcher: `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`,
-`elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`.
+`elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`,
+`quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled` - the three quota values fire on claude.ai usage-limit
+auto-resume and need CLI 2.1.234 or newer.
 
 Input adds `message`, `title`, `notification_type`.
 

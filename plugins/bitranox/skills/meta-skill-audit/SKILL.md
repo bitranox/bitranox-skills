@@ -50,9 +50,15 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 
 ## Procedure
 
-1. **Wall recall and record the old value.** `cross_tree_search: false` via `save_config` in
-   `self_improve_signals` (home: `<plugin>/hooks/`). Write the original value to a file first - a
-   sweep is long and the restore is easy to lose.
+1. **Wall recall and record the old value.** Use the shipped front door - `settings.py` (home:
+   `skills/meta-memory-settings/`, launch via `hooks/run-python.sh`), which validates the value and
+   refuses an unknown one. `self_improve_signals.save_config` is a library function with no CLI, so
+   it is not something you can run.
+
+   ```bash
+   settings.py view > <room>/cross_tree_search.before   # a sweep is long; the restore is easy to lose
+   settings.py set cross_tree_search false
+   ```
 2. **Run the sweep.** `scripts/audit_skills.py --plugin <plugin dir> --room <dir outside the tree>`
    (home: `skills/meta-skill-audit/`, launch via `hooks/run-python.sh`). It copies the plugin into
    the room, runs one reviewer per skill at `--jobs` at a time, and writes

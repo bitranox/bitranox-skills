@@ -1,5 +1,11 @@
 # Skill authoring best practices
 
+> **Bundled copy.** Source: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
+> (also served at docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices, and as raw
+> Markdown at that URL plus `.md`). Fetched 2026-08-27; upstream carries no version number, so
+> re-fetch and diff rather than trusting this copy's age. Its inline images are `mintcdn.com`
+> links that no longer resolve, and its `/en/docs/...` links are relative to the source site.
+
 > Learn how to write effective Skills that Claude can discover and use successfully.
 
 Good Skills are concise, well-structured, and tested with real usage. This guide provides practical authoring decisions to help you write Skills that Claude can discover and use effectively.

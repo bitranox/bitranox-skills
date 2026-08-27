@@ -32,7 +32,8 @@ unknown, defer - a blind gather pulls noise.
 1. **Stage 1 - cheap grep (no model).** `python3 <this-skill-dir>/gather_scan.py --topic "<scope
    or topic>" --self "<cwd>"`. It greps other projects' curated slug-store bodies + native memory
    and prints candidates GROUPED BY KNOWLEDGE TREE (`TREE: <top>` headers; the native tier is
-   labeled machine-local). With `cross_tree_search=false` (the knob defaults to true) the scan stays inside the CURRENT tree;
+   labeled `native-tier (machine-local)` - that whole string is the label, so grep for it, not for
+`machine-local` alone). With `cross_tree_search=false` (the knob defaults to true) the scan stays inside the CURRENT tree;
    pass `--cross-tree` for a deliberate cross-tree gather. Nothing matched -> stop (the whole
    gather cost one grep).
    - Optional MCP boost: with the `mcp_search` knob `auto` and a covering `basic-memory` index,
@@ -54,8 +55,12 @@ unknown, defer - a blind gather pulls noise.
 4. **Privacy scrub on anything crossing a boundary.** Scrub secrets/PII before writing; never
    carry a credential across. Concrete operational detail (paths, hostnames) is the useful part -
    keep it.
-5. **Debounce.** Record the (project, topic) as gathered (out-of-store) so the same topic is not
-   re-grepped on every trigger.
+5. **Debounce.** Record the (project, topic) as gathered so the same topic is not re-grepped on
+   every trigger. Nothing ships to do this for you - there is no debounce store and
+   `gather_scan.py` has no `--mark` - so keep your own, out-of-store, beside the other
+   out-of-store counters: append `<abs project path>\t<topic>\t<ISO date>` to
+   `~/.claude/self-improve-audit/gathered-topics.tsv`, and skip a pair already listed there.
+   Out-of-store is the point: it must not become a fact that the next dream then tidies.
 6. **Verify + report.** `reconcile_memory_index.py --check <altitude chain>` (home:
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`, launch via
    `hooks/run-python.sh`) must end

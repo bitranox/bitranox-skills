@@ -52,3 +52,6 @@ config-*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].
 
 # session scaffolding, never committed
 .sweep-2026-08-27/
+
+# render-graphs.js writes its SVGs beside the skill it rendered; they are generated, not shipped.
+plugins/bitranox/skills/*/diagrams/

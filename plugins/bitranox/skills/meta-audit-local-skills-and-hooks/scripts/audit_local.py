@@ -11,7 +11,14 @@ CLAUDE.md exists to prevent. So run `targets` and read it before running anythin
     audit_local.py check   [--root DIR ...] [--no-personal] [--home DIR]
                            [--shipped SKILLS_DIR] [--json]
 
-Exit codes are format-independent: 0 targets found, 1 none found, 2 error.
+Exit codes are format-independent, and the two verbs answer OPPOSITE questions with the same
+numbers - do not wire CI off one of them expecting the other:
+
+    targets   0 = targets found      1 = none found        2 = error
+    check     0 = no findings        1 = findings found    2 = error
+
+So `check` exiting 0 is the CLEAN result, and it exits 0 over an empty tree too (0 findings
+across 0 targets) - run `targets` first if you need to know anything was in scope at all.
 """
 
 import argparse

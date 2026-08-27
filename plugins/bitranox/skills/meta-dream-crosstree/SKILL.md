@@ -5,8 +5,9 @@ description: Use on "dream crosstree", "/dream-crosstree", "consolidate across p
 
 # meta-dream-crosstree
 
-The cross-project dream. `bitranox:meta-dream-tree` tidies ONE project's store, stays inside ONE
-knowledge tree, and is the frequent, cheap pass; **meta-dream-crosstree is the occasional, EXPENSIVE
+The cross-project dream. `bitranox:meta-dream-tree` tidies ONE knowledge tree, TREE-WIDE - every
+level under that anchor, so it already sees sibling projects sharing it - and is the frequent, cheap
+pass; **meta-dream-crosstree is the occasional, EXPENSIVE
 pass that reads across ALL project stores - and it is the ONLY dream whose territory spans
 INDEPENDENT KNOWLEDGE TREES** (a machine can carry several tree tops; the project dream never
 crosses them). Cascade only flows down one ancestor chain, so knowledge filed in a sibling project
@@ -81,8 +82,9 @@ Create one todo per step.
      "Concrete tiers" in the same skill.)
 4. **Promotion gate (corroboration + dedup against CLAUDE.md).** A promotion to a tree's TOP loads into every
    session UNDER THAT TREE, so it is high-blast. Gate by **cross-project corroboration** - a model-inferred
-   generalization promotes once seen in **>= 2 distinct projects** (vs the same-project >= 2-dreams dwell
-   meta-dream-tree uses); a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
+   generalization promotes once seen in **>= 2 DISTINCT PROJECTS** - the same bar meta-dream-tree uses,
+   from the same dwell store, which is idempotent per project, so no number of dreams over one project
+   ever corroborates; a USER-stated concrete rule promotes eagerly. **Before promoting, dedup the
    candidate against the existing global layer, the shipped skills, AND every `CLAUDE.md` in the tree**
    (project roots + ancestors + the workspace), not only the memory stores - during the conversion phase
    many rules still live in `CLAUDE.md`, and promoting one that is already there would DUPLICATE it.
@@ -172,15 +174,18 @@ Create one todo per step.
 ## Convergence
 
 A second global dream on an already-converged set of stores must write nothing: corroboration / gather
-counters live OUT of the dreamed stores; a content-hash stops re-copying an item already present up the
-ancestor chain; gathered copies are marked exempt from re-promotion AND re-gather. If a run keeps
+counters live OUT of the dreamed stores; an item already present up the ancestor chain is caught by the
+ancestor-overlap check, not by any content-hash (none exists - a duplicate is always a CANDIDATE the
+dream adjudicates, per dream-core.md's "Dedup semantics"); gathered copies are marked exempt from
+re-promotion AND re-gather. If a run keeps
 re-moving the same item, stop and treat it as a bug (the circle-breaker), do not loop.
 
 ## Boundaries
 
 - The family Boundaries (memory, CLAUDE.md, skills/hooks, pinned entries, structural moves) live in
   `bitranox:meta-dream-tree` -> references/dream-core.md and apply here unchanged. The CLAUDE.md
-  case model + guards are in references/dream-passes.md "CLAUDE.md reconciliation".
+  case model + guards are in `bitranox:meta-dream-tree` -> references/dream-passes.md
+  "CLAUDE.md reconciliation".
 - **Never a cross-tree reference.** Bridge trees only by lift-to-common-ancestor or a self-contained
   copy. A sideways or downward pointer dangles when the lower / sibling tree is deleted.
 

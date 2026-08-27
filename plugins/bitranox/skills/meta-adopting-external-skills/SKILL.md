@@ -13,6 +13,18 @@ the user's other plugins.
 its original author first, and keep a bitranox copy only if upstream stalls or rejects it. The
 bitranox copy lives beside the user's other plugins; you never uninstall or disable anything.
 
+## Where you must be standing
+
+Every path in this skill is relative to a CHECKOUT OF THE MARKETPLACE REPO, not to an installed
+plugin - `plugins/bitranox/.claude-plugin/plugin.json`, `plugins/bitranox/hooks/repo-gate.py`,
+`CONTRIBUTING.md` at the repo root. Adoption commits to that repo, so there is nowhere else the
+work can happen; `adopt_skill.py` agrees, resolving the repo root by searching upward for
+`plugins/bitranox/.claude-plugin/plugin.json` and failing if it never finds one.
+
+From an INSTALLED plugin those paths resolve to nothing, because an install is the plugin
+directory alone - it has `hooks/` and `skills/` at its top level and no `plugins/bitranox/`
+anywhere. If that is where you are, clone the marketplace repo and work there.
+
 ## When to use
 
 User-directed only. The user points you at a specific external skill: a repo URL, a path to an

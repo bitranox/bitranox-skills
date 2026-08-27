@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-08-23",
+  "generated_at": "2026-08-27",
   "generator": "scripts/hookdoc_stamp.py",
   "normalisation": {
     "id": "n1",
@@ -18,11 +18,11 @@
       "name": "hooks-reference",
       "url": "https://code.claude.com/docs/en/hooks.md",
       "tier": "api",
-      "raw_bytes": 283488,
-      "normalised_lines": 3522,
-      "content_sha256": "70c05a3733e6c2ade940b6b5fe525327e0560826359347e40248d0235fbf99ce",
-      "structure_sha256": "a4909f00a213a0dfddbd54252df95ffb1132ac6d2b987eaef27f8850c791f98c",
-      "max_cli_version_mentioned": "2.1.236",
+      "raw_bytes": 291938,
+      "normalised_lines": 3532,
+      "content_sha256": "489065ccea523b0bd14b99f9afcc76a795d35088b1e4bb960bdb609e03713f45",
+      "structure_sha256": "b71ce7857af54b0edd821ea7fad1d99de1b41c33ac7c007795e424d590b25bb8",
+      "max_cli_version_mentioned": "2.1.246",
       "control": {
         "min_raw_bytes": 138611,
         "require_headings": [
@@ -40,7 +40,7 @@
         "output_fields": 48,
         "handler_types": 6,
         "env_vars": 14,
-        "table_keys": 199
+        "table_keys": 202
       },
       "fingerprint": {
         "headings": [
@@ -580,6 +580,9 @@
           "prompt_input_exit",
           "query",
           "questions",
+          "quota_auto_resume_disabled",
+          "quota_auto_resume_fired",
+          "quota_auto_resume_stale",
           "reason",
           "recurring",
           "register_repo_root",
@@ -655,13 +658,13 @@
         },
         {
           "path": "## Configuration > ### Hook locations",
-          "lines": 34,
-          "sha256": "325ec716d2b50aec654a5f89142d8619311101b00d5fb706c77ec52bb67cf368"
+          "lines": 35,
+          "sha256": "fad31c1deda1c8af3ff97089a905a115084cd0d445e348c273fdfad190596d9d"
         },
         {
           "path": "## Configuration > ### Matcher patterns",
           "lines": 66,
-          "sha256": "35043137b2b60c1ef0d78f180775e3a30c2221c1e3b3bb7383580f276eee0f80"
+          "sha256": "44577134618ded06fca2ecba299589a7de0e3cf6409ebfc1fb9227166efb7386"
         },
         {
           "path": "## Configuration > ### Matcher patterns > #### Match MCP tools",
@@ -716,7 +719,7 @@
         {
           "path": "## Configuration > ### Disable or remove hooks",
           "lines": 9,
-          "sha256": "be9750a931c11e7ee55a042b67e1558c4b38bf93bdea0eea82e4441c92c0e990"
+          "sha256": "bc34d5d5010a553703ce9f2d8bcc09e37a0abda26779d8b9e3c9bd9f542253de"
         },
         {
           "path": "## Hook input and output",
@@ -905,8 +908,8 @@
         },
         {
           "path": "## Hook events > ### PermissionRequest",
-          "lines": 8,
-          "sha256": "9fb2e02e99bd6f25c1940553a1fdd5e96981b4203013e7a62a5283f311d58013"
+          "lines": 10,
+          "sha256": "e8ec8915395fedf865ef58cf998abe4d99e3ab624fdba8dfd7b059f593d6ef1c"
         },
         {
           "path": "## Hook events > ### PermissionRequest > #### PermissionRequest input",
@@ -990,8 +993,8 @@
         },
         {
           "path": "## Hook events > ### Notification",
-          "lines": 62,
-          "sha256": "17e4b493898515ab03b14374760197095f23f72ce2c8e0ddf23c155f59fe4c3a"
+          "lines": 69,
+          "sha256": "a4b20eb80a27bd386cbe3ffcbf4151dcd6042156439fe45300e7a7c8e5525c46"
         },
         {
           "path": "## Hook events > ### Notification > #### Notification input",
@@ -1329,11 +1332,11 @@
       "name": "hooks-guide",
       "url": "https://code.claude.com/docs/en/hooks-guide.md",
       "tier": "prose",
-      "raw_bytes": 71146,
-      "normalised_lines": 1033,
-      "content_sha256": "ec9b5840cf98d7f45a3fe67297e5043fca9219c472df9671a5e93fc49b41fb74",
+      "raw_bytes": 78481,
+      "normalised_lines": 1040,
+      "content_sha256": "c7c5b720cd33b4530737033040402d2aacaa774bb680ae1ea2d58b91521a65a6",
       "structure_sha256": "65edc22a716ef96435370c708b22069acd7e7656fa744e9b0cf3b4036c107ab5",
-      "max_cli_version_mentioned": "2.1.210",
+      "max_cli_version_mentioned": "2.1.246",
       "control": {
         "min_raw_bytes": 35573,
         "require_headings": [
@@ -1404,8 +1407,8 @@
         },
         {
           "path": "## What you can automate > ### Get notified when Claude needs input",
-          "lines": 101,
-          "sha256": "ca14f578bb65b05f8bfe0ba8d7749d81a409395aa6fc1492024015a391103f75"
+          "lines": 108,
+          "sha256": "92b1a8c2a584622731ee709cec0b4fa63d4b9134eb57fa8ca18ff46712ea1791"
         },
         {
           "path": "## What you can automate > ### Auto-format code after edits",
@@ -1435,7 +1438,7 @@
         {
           "path": "## What you can automate > ### Auto-approve specific permission prompts",
           "lines": 47,
-          "sha256": "ccc1e2151f27757612b1b6a863ed20a0e9a392475d10cd006590c9e2e0714be4"
+          "sha256": "9db5748e8e59b2c4efc287123c9f611bcc6c45953045b74fee90fbcb56654e6b"
         },
         {
           "path": "## How hooks work",
@@ -1470,7 +1473,7 @@
         {
           "path": "## How hooks work > ### Filter hooks with matchers",
           "lines": 110,
-          "sha256": "7603aeaf3fdd803968fdd15f6d01fa41ac6e3d8942b7d30f0a670d2b73222d5e"
+          "sha256": "f487683b29dd4960cfae2eb1d59bff48b6193ba82531e15e9be3ac03c8c13ebb"
         },
         {
           "path": "## How hooks work > ### Filter hooks with matchers > #### Filter by tool name and arguments with the `if` field",
@@ -1480,7 +1483,7 @@
         {
           "path": "## How hooks work > ### Configure hook location",
           "lines": 19,
-          "sha256": "463581e2fc4d19af278a57a292dca6a9fb10a8ac093b7f07db312c9c8adc1aa6"
+          "sha256": "3c34d30c72635cd5c10627ce971e4b9312c5b6808cb6304788a41111d6720bad"
         },
         {
           "path": "## Prompt-based hooks",

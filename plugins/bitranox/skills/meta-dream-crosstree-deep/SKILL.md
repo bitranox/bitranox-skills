@@ -14,8 +14,10 @@ routine, convergence-gated pass that asks before going deep.
 **REQUIRED BACKGROUND:** Follow `bitranox:meta-dream-crosstree` for the full procedure (capture-first
 reading the session from DISK via `dream_state.py session-review`, backup, inbound gather, promotion
 gate, outbound cross-pollination, re-dedup + reconcile, skill-fit, report) and
-`bitranox:meta-self-improve` for the altitude/normalization primitives. This skill only overrides how
-the scan in step 3 is run; do not duplicate the rest.
+`bitranox:meta-self-improve` for the altitude/normalization primitives. This skill replaces how the
+scan is run, and FOLDS IN crosstree's promotion gate and misplacement audit as its own steps 3 and
+3b - so those two are already done when you reach step 5, and running them again is the one
+duplication to avoid. Everything else, do not duplicate: follow crosstree.
 
 ## What changes vs meta-dream-crosstree
 
@@ -76,8 +78,8 @@ the scan in step 3 is run; do not duplicate the rest.
      cross-tree consolidation above), or a truly-universal rule with no top home. Propose CREATING that
      folder's `CLAUDE.md` (a home for the lifted shared rule[s]) at the LOWEST common ancestor whose
      children share a domain - NEVER a generic bucket (`projects/`, `apps/`, `public/`); its child-derived
-     scope descriptor is synthesized by the per-level scope-descriptor subagent described in step 4
-     below and
+     scope descriptor is synthesized by the per-level scope-descriptor subagent described in
+     `bitranox:meta-dream-tree` step 0b "Scope-descriptor synthesis", and
      written into that rung's pointer-block scope (in `CLAUDE.local.md`), not hand-typed into the `CLAUDE.md`. A
      structural-only look-alike (siblings that merely seem related, no shared-rule evidence) is SURFACED
      as a question, not auto-proposed. The **workspace-root `CLAUDE.md`** is the file-tree HQ; because the

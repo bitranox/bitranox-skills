@@ -1171,10 +1171,13 @@ example-js.js, example-py.py, example-go.go
 **Why bad:** Mediocre quality, maintenance burden
 
 ### NO Code in Flowcharts
-```dot
+```text
 step1 [label="import fs"];
 step2 [label="read file"];
 ```
+(Fenced `text`, not `dot`, on purpose: `render-graphs.js` renders every ` ```dot ` block, and
+these two bare statements have no `digraph {}` wrapper, so a `dot` fence makes the tool report a
+failure on this very file. Fence an illustration that is not a renderable diagram as `text`.)
 **Why bad:** Can't copy-paste, hard to read
 
 ### NO Generic Labels

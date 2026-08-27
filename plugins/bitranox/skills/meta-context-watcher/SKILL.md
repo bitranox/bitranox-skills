@@ -7,7 +7,13 @@ description: Use when a session's context is large enough that quality is degrad
 
 A long session gets worse before it gets full. Accuracy falls from roughly 300-400k tokens on a 1M
 window and from about 50k on a 200k one, while Claude Code does not auto-compact until around 83% -
-and compaction DISCARDS working detail rather than preserving it. Between those two points is where
+and compaction DISCARDS working detail rather than preserving it.
+
+Both numbers are dated, and neither is measured here. The accuracy figures are Chroma's 2025
+context-rot study, read second-hand from a summary rather than from the paper; the 83% is Claude
+Code product behaviour that can move in any release. Treat them as the order of magnitude that
+justifies handing over early, never as thresholds to tune against - and re-check both before
+quoting either as current. Between those two points is where
 a session should be handed over deliberately instead of truncated.
 
 ## The one rule
