@@ -33,6 +33,9 @@ the plugin is its own package, was told to install Docker.
       An assertion on the verdict alone would have passed against the old code.
 - [x] The seam control is carried forward and updated: every reported version must still come from
       the injected lookup, now across five checks rather than four.
+- [x] The row is named for the COMMAND, `docker compose`, not the package. `docker-compose` is
+      also the deprecated standalone v1 binary, so a reader who searched the label would have
+      reached the wrong tool: the failure this change exists to stop, one step further along.
 - [x] Declined, with reason: compose is not made optional. The service is started with
       `docker compose up`, so an owner without it cannot finish, and reporting it as a nicety would
       be the same wrong-advice failure in the other direction.
