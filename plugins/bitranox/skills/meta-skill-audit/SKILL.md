@@ -67,6 +67,50 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
    applied to one copy leaves the other wrong. Regenerate the stale side, re-apply the by-convention
    divergences, and bump BOTH plugin versions.
 
+## Auditing the shipped SCRIPTS, not the skills
+
+The same harness reviews a plugin's shipped Python and JavaScript - hooks, skill scripts, the shim -
+with `--scripts`. It is a different job from the skill sweep and its defaults say so: one reviewer
+per FILE rather than per skill, `opus` rather than `sonnet`, because judging a script needs a
+concrete failing input and a decision about whether a fail-open path is house style or a defect.
+
+```bash
+scripts/audit_skills.py --plugin <plugin dir> --room <dir outside the tree> --scripts \
+    --kind hook --skip-existing
+```
+
+Run `--help` for the full flag list; these are the three choices it cannot make for you.
+
+- **`--kind` is how a 134-target run becomes survivable.** Slice by `hook`, `hook-lib`, `shim`,
+  `skill-script` or `js` and triage each slice before spending the next. `--list` prints the corpus
+  and exits without spending a reviewer, which is what to run first.
+- **`--skip-existing` is the resume switch**, and it pairs with `--reuse-room`: a target whose
+  report already exists and is non-empty is skipped. Without both, an interrupted run restarts from
+  zero against a freshly-copied room.
+- **`--include-vendored` is off, and should usually stay off.** Upstream sample code (`demos/`,
+  `examples/`) ships as a copy of someone else's repository, so fixing a defect there diverges our
+  copy from its source and the next sync silently reverts it. Those files still get `ast.parse` from
+  the pre-pass - the one property we own whatever upstream says.
+
+### The pre-pass runs first, and its two kinds of hit are not the same
+
+`script_prepass.py` (home: `skills/meta-skill-audit/scripts/`, launch via `hooks/run-python.sh`)
+scans the whole corpus deterministically before any reviewer starts, and `--scripts` runs it for you
+- it is not a separate step. Run it alone with `--room <plugin dir>` to see the corpus summary, or
+`--json` for the per-file map.
+
+What it finds splits in two, and a reviewer is told the OPPOSITE thing about each:
+
+| Kind             | Example                                                  | The reviewer is told                      |
+|------------------|----------------------------------------------------------|-------------------------------------------|
+| **Settled fact** | `text=True` with no `encoding=`; a hook carrying PEP 723 | already known, do not re-report           |
+| **Lead**         | `shlex` on a path; no test module names this stem        | not settled, judge it and say which it is |
+
+Keep that split. A settled fact is wrong wherever it appears and one line names the fix, so 133
+reviewers re-deriving it is pure noise. A lead is only a defect depending on what the code does with
+the result - which is the judgement the reviewer exists to make, and suppressing it silences the one
+reader who can answer, in the files most likely to hold a real defect.
+
 ## Triage: what a finding is worth
 
 | Class            | Act on it when                                                                        | Usual false positive                                                        |

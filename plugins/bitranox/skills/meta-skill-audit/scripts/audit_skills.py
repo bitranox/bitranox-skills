@@ -161,6 +161,13 @@ ALREADY KNOWN - DO NOT RE-REPORT
 A deterministic pre-pass already scanned this file. These are its hits. Reporting them again is
 noise, and every reviewer in this sweep has been told the same:
 %(prepass)s
+
+LEADS - THESE ARE NOT SETTLED, JUDGE EACH ONE
+The same pre-pass flagged the lines below mechanically, but it cannot tell a real defect from a
+deliberate choice: that depends on what this file does with the result, which is your job and no
+script's. Do NOT treat these as known. For each, say either that it is a defect on this file's real
+execution path - with the input that breaks it - or that it is correct as written, and why.
+%(leads)s
 HOW TO VERIFY WITHOUT BREAKING THE MACHINE
 %(donotrun)s
 Verify with `--help`, or against a fixture you create inside this room. NEVER against a real path,
@@ -236,7 +243,7 @@ def _bullets(items, empty="(none)"):
 
 
 def build_script_prompt(rel, kind, anchors=(), mentions="", registration=None, tests=(),
-                        prepass=(), prefix="bitranox"):
+                        prepass=(), prefix="bitranox", leads=()):
     """The reviewer contract for one script.
 
     Deliberately `%`-formatted, not `str.format`: a script prompt quotes a hook's JSON output
@@ -263,6 +270,7 @@ def build_script_prompt(rel, kind, anchors=(), mentions="", registration=None, t
         "registration": reg,
         "mentions": mentions.rstrip() or "  (the shipped docs never name this file)",
         "prepass": _bullets(prepass, "(nothing - the pre-pass found no mechanical hits here)"),
+        "leads": _bullets(leads, "(nothing - the pre-pass raised no leads on this file)"),
         "donotrun": ("DO NOT RUN THIS SCRIPT AT ALL beyond `--help`. Its name says it mutates a real\n"
                      "host, store, or process, and this room cannot contain that."
                      if DO_NOT_RUN_RX.search(str(rel)) else
@@ -565,7 +573,7 @@ def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitr
 
 
 def audit_one_script(target, room, reports_dir, model="opus", timeout=1500, prefix="bitranox",
-                     runner=_subprocess_runner, prepass=None):
+                     runner=_subprocess_runner, prepass=None, leads=None):
     """Review one script and write its report, with the evidence post-pass appended."""
     rel, kind = target
     anchors = doc_anchors(room, rel, kind)
@@ -576,6 +584,7 @@ def audit_one_script(target, room, reports_dir, model="opus", timeout=1500, pref
         registration=hook_registration(room, rel) if kind in (KIND_HOOK, KIND_SHIM) else None,
         tests=sibling_tests(room, rel),
         prepass=(prepass or {}).get(rel, ()),
+        leads=(leads or {}).get(rel, ()),
         prefix=prefix,
     )
     out = runner(prompt, room, model, timeout)
@@ -635,9 +644,31 @@ def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(
     return results
 
 
+def _prepass_maps(room, targets, log=print):
+    """The deterministic pre-pass, run over the same room the reviewers read.
+
+    Computed HERE rather than handed down from `main()`, because it was handed down from nowhere:
+    `prepass=` was threaded through three signatures and no caller ever supplied one, so every
+    reviewer read "(nothing - the pre-pass found no mechanical hits here)" while the pre-pass sat
+    unused and 133 reviewers re-derived the same 28 lines. A producer with no consumer passes its
+    own unit tests. The parameters stay, as the injection seam the tests use."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import script_prepass  # noqa: PLC0415 - sibling script, resolved from this file's own dir
+        vendored = script_prepass.vendored_targets(sys.modules[__name__], room)
+        facts, leads, summary = script_prepass.run_prepass(room, targets, vendored=vendored)
+    except Exception as exc:                     # a broken pre-pass must not cancel the sweep
+        log("NOTE: the pre-pass did not run (%s) - reviewers get no ALREADY KNOWN block" % exc)
+        return {}, {}
+    for line in summary:
+        log("  pre-pass: " + line)
+    return facts, leads
+
+
 def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, only=(),
                   prefix="bitranox", reuse=False, runner=_subprocess_runner, log=print,
-                  kinds=(), include_vendored=False, skip_existing=False, prepass=None):
+                  kinds=(), include_vendored=False, skip_existing=False, prepass=None,
+                  leads=None):
     """Audit every selected script. Returns {rel: finding_count}.
 
     A sibling of `audit_all` rather than a mode flag on it: `audit_all` already takes twelve
@@ -655,11 +686,13 @@ def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, onl
             keep.append((rel, kind))
         log("resuming: %d of %d target(s) still need a reviewer" % (len(keep), len(targets)))
         targets = keep
+    if prepass is None and leads is None:
+        prepass, leads = _prepass_maps(room, targets, log)
     log("auditing %d script(s) in %s with %d job(s)" % (len(targets), room, jobs))
     before = room_manifest(room)
     results = _run_pool(jobs, targets,
                         lambda t: audit_one_script(t, room, reports, model, timeout, prefix,
-                                                   runner, prepass), log)
+                                                   runner, prepass, leads), log)
     drift = manifest_drift(before, room_manifest(room))
     if drift:
         log("WARNING: the room changed under the sweep - later reviewers read a different program:")

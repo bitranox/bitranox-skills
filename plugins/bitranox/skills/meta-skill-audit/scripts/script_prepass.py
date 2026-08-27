@@ -151,15 +151,46 @@ def subprocess_text_without_encoding(paths):
     return out
 
 
+_PLATFORM_ATTRS = frozenset({("os", "name"), ("sys", "platform")})
+
+
+def _reads_platform(node):
+    """True when this node reads `os.name`, `sys.platform`, or calls `platform.system()`."""
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return (node.value.id, node.attr) in _PLATFORM_ATTRS
+    if isinstance(node, ast.Call):
+        func = node.func
+        return (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                and func.value.id == "platform" and func.attr in ("system", "machine"))
+    return False
+
+
+def _platform_test(node):
+    """True when this node TESTS the platform, rather than merely mentioning it.
+
+    Two shapes: a comparison somewhere containing a platform read (`os.name == "posix"`,
+    `platform.system() == "Windows"`), and a method call ON a platform read
+    (`sys.platform.startswith("win")`)."""
+    if isinstance(node, ast.Compare):
+        return any(_reads_platform(n) for n in ast.walk(node))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return _reads_platform(node.func.value)
+    return False
+
+
 def _is_platform_guarded(func):
     """True when a function already branches on the platform.
 
-    `harness_checks.is_executable` is the reference shape: it returns False off POSIX before ever
-    reaching os.access, so its X_OK call is correct and reporting it is a false positive."""
-    source = ast.dump(func)
-    return ("attr='name'" in source and "id='os'" in source) or \
-           ("attr='platform'" in source and "id='sys'" in source) or \
-           "posix" in source
+    Structural, never a substring of the dumped AST. The substring form suppressed real defects
+    three ways: `"posix" in source` matched a DOCSTRING saying "only meaningful on posix", or a
+    parameter named `posix`; and `attr='name' and id='os'` matched an unrelated `os.path.join(f.name)`.
+    Every one of those reads as a guard while the `os.access(X_OK)` under it is genuinely unguarded,
+    and this function's only job is to SUPPRESS a finding - so a loose rule here is silent.
+
+    `harness_checks.is_executable` is the reference shape: `(os.name == "posix") if posix is None
+    else posix` returns False off POSIX before ever reaching os.access, so its X_OK call is correct
+    and reporting it is a false positive."""
+    return any(_platform_test(node) for node in ast.walk(func))
 
 
 def os_access_x_ok(paths, allow=()):
@@ -332,6 +363,14 @@ CHECKS = {
     "per_file_test_module": per_file_test_module,
 }
 
+# A hit that is a SETTLED FACT and a hit that is a LEAD need opposite instructions, and a single
+# ALREADY KNOWN - DO NOT RE-REPORT block gives them the same one. `text=True` with no encoding is
+# settled: it is wrong wherever it appears and one line names the fix. `shlex.split` on a path and
+# "no test module names this stem" are not: whether either is a defect depends on what the code
+# does with the result, which is exactly the judgement the reviewer exists to make. Suppressing
+# those silences the only reader who can answer, in the files most likely to hold a real defect.
+LEAD_CHECKS = frozenset({"shlex_on_paths", "per_file_test_module"})
+
 
 def group_by_file(hits):
     """{rel: ["line N: message", ...]} - the shape a reviewer prompt interpolates."""
@@ -341,18 +380,27 @@ def group_by_file(hits):
     return out
 
 
-def run_prepass(room, targets, ci_min="3.11"):
-    """Every deterministic check over the enumerated corpus. Returns (per_file, summary_lines)."""
+def run_prepass(room, targets, ci_min="3.11", vendored=()):
+    """Every deterministic check over the enumerated corpus.
+
+    Returns (facts_per_file, leads_per_file, summary_lines). The two maps carry opposite
+    instructions to a reviewer, so they must not be merged - see LEAD_CHECKS.
+
+    `vendored` is the corpus that is deliberately kept OUT of the reviewer sweep, because fixing a
+    defect in upstream sample code diverges our copy from upstream. It still gets `ast.parse`: that
+    is the one property we own whatever upstream says, and without it those files were the only
+    shipped Python in the plugin that nothing checked at all. Nothing else is run over them, and
+    they reach no reviewer prompt - the hits are for the operator reading the summary."""
     room = Path(room)
     py = [(rel, room / rel) for rel, _k in targets if rel.endswith(".py")]
-    js = [(rel, room / rel) for rel, _k in targets if rel.endswith(".js")]
     hooks = [rel for rel, kind in targets if kind in ("hook", "hook-lib")]
     hook_py = [(rel, path) for rel, path in py if rel in set(hooks)]
     siblings = [p.stem for p in room.rglob("*.py")]
     test_roots = [d for d in room.rglob("tests") if d.is_dir()]
+    vendored_py = [(rel, room / rel) for rel, _k in vendored if rel.endswith(".py")]
 
-    hits, summary = [], []
-    for name, fn in (("syntax_errors", lambda: syntax_errors(py)),
+    facts, leads, summary = [], [], []
+    for name, fn in (("syntax_errors", lambda: syntax_errors(py + vendored_py)),
                      ("unguarded_third_party_imports",
                       lambda: unguarded_third_party_imports(hook_py, siblings)),
                      ("subprocess_text_without_encoding",
@@ -363,9 +411,20 @@ def run_prepass(room, targets, ci_min="3.11"):
                      ("pep723_problems", lambda: pep723_problems(py, ci_min, hooks)),
                      ("per_file_test_module", lambda: per_file_test_module(py, test_roots))):
         found = fn()
-        hits.extend(found)
-        summary.append("%-34s %d hit(s)" % (name, len(found)))
-    return group_by_file(hits), summary
+        (leads if name in LEAD_CHECKS else facts).extend(found)
+        summary.append("%-34s %d hit(s)%s" % (name, len(found),
+                                              " (lead)" if name in LEAD_CHECKS else ""))
+    return group_by_file(facts), group_by_file(leads), summary
+
+
+def vendored_targets(audit_skills, room):
+    """The vendored corpus: everything the reviewer sweep excludes, and nothing it includes.
+
+    Derived as a set difference rather than by re-testing each path, so it cannot disagree with
+    `script_targets`' own exclusion rule - which is the rule that decides who gets a reviewer."""
+    reviewed = {rel for rel, _k in audit_skills.script_targets(room)}
+    return [(rel, kind) for rel, kind in audit_skills.script_targets(room, include_vendored=True)
+            if rel not in reviewed]
 
 
 def main(argv=None):
@@ -377,13 +436,14 @@ def main(argv=None):
     import audit_skills  # noqa: PLC0415 - sibling script, resolved from this file's own dir
 
     targets = audit_skills.script_targets(args.room)
-    per_file, summary = run_prepass(args.room, targets)
+    facts, leads, summary = run_prepass(args.room, targets,
+                                        vendored=vendored_targets(audit_skills, args.room))
     if args.json:
-        print(json.dumps(per_file, indent=2, sort_keys=True))
+        print(json.dumps({"facts": facts, "leads": leads}, indent=2, sort_keys=True))
         return 0
     for line in summary:
         print(line)
-    print("TOTAL: %d file(s) with at least one hit" % len(per_file))
+    print("TOTAL: %d file(s) with a settled hit, %d with a lead" % (len(facts), len(leads)))
     return 0
 
 

@@ -274,8 +274,8 @@ def test_run_prepass_never_hands_a_js_file_to_the_python_parser(tmp_path):
     room = tmp_path / "plugin"
     (room / "skills" / "s").mkdir(parents=True)
     (room / "skills" / "s" / "d.js").write_text("export const x = `a${1}b`;\n", encoding="utf-8")
-    per_file, _summary = P.run_prepass(room, [("skills/s/d.js", "js")])
-    assert per_file == {}
+    facts, leads, _summary = P.run_prepass(room, [("skills/s/d.js", "js")])
+    assert facts == {} and leads == {}
 
 
 def test_a_sibling_script_anywhere_in_the_plugin_is_not_third_party(tmp_path):
@@ -286,8 +286,8 @@ def test_a_sibling_script_anywhere_in_the_plugin_is_not_third_party(tmp_path):
     (room / "skills" / "meta-collect-knowledge" / "gather_scan.py").write_text("x = 1\n",
                                                                               encoding="utf-8")
     (room / "hooks" / "recall-memory.py").write_text("import gather_scan\n", encoding="utf-8")
-    per_file, _summary = P.run_prepass(room, [("hooks/recall-memory.py", "hook")])
-    assert "gather_scan" not in " ".join(per_file.get("hooks/recall-memory.py", []))
+    facts, _leads, _summary = P.run_prepass(room, [("hooks/recall-memory.py", "hook")])
+    assert "gather_scan" not in " ".join(facts.get("hooks/recall-memory.py", []))
 
 
 def test_run_prepass_reports_every_check_and_groups_by_file(tmp_path):
@@ -295,8 +295,125 @@ def test_run_prepass_reports_every_check_and_groups_by_file(tmp_path):
     (room / "hooks").mkdir(parents=True)
     (room / "hooks" / "bad-hook.py").write_text(
         "import yaml\nimport subprocess\nsubprocess.run(['x'], text=True)\n", encoding="utf-8")
-    per_file, summary = P.run_prepass(room, [("hooks/bad-hook.py", "hook")])
-    assert "hooks/bad-hook.py" in per_file
-    messages = " ".join(per_file["hooks/bad-hook.py"])
+    facts, _leads, summary = P.run_prepass(room, [("hooks/bad-hook.py", "hook")])
+    assert "hooks/bad-hook.py" in facts
+    messages = " ".join(facts["hooks/bad-hook.py"])
     assert "yaml" in messages and "no encoding=" in messages
     assert len(summary) == len(P.CHECKS)
+
+
+# ---- facts vs leads -----------------------------------------------------------------------------
+
+def test_a_shlex_hit_is_a_lead_not_a_settled_fact(tmp_path):
+    """A lead suppressed as ALREADY KNOWN silences the only thing that can judge it."""
+    room = tmp_path / "plugin"
+    (room / "hooks").mkdir(parents=True)
+    (room / "hooks" / "h.py").write_text("import shlex\nshlex.split('a')\n", encoding="utf-8")
+    facts, leads, _summary = P.run_prepass(room, [("hooks/h.py", "hook")])
+    assert "shlex" in " ".join(leads.get("hooks/h.py", []))
+    assert "shlex" not in " ".join(facts.get("hooks/h.py", []))
+
+
+def test_a_missing_test_module_is_a_lead_not_a_settled_fact(tmp_path):
+    room = tmp_path / "plugin"
+    (room / "hooks").mkdir(parents=True)
+    (room / "hooks" / "lonely.py").write_text("x = 1\n", encoding="utf-8")
+    facts, leads, _summary = P.run_prepass(room, [("hooks/lonely.py", "hook")])
+    assert "lonely" in " ".join(leads.get("hooks/lonely.py", []))
+    assert "lonely" not in " ".join(facts.get("hooks/lonely.py", []))
+
+
+def test_a_text_true_hit_stays_a_settled_fact(tmp_path):
+    """The negative: not everything drains into leads, or the split means nothing."""
+    room = tmp_path / "plugin"
+    (room / "hooks").mkdir(parents=True)
+    (room / "hooks" / "h.py").write_text(
+        "import subprocess\nsubprocess.run(['x'], text=True)\n", encoding="utf-8")
+    facts, leads, _summary = P.run_prepass(room, [("hooks/h.py", "hook")])
+    assert "no encoding=" in " ".join(facts.get("hooks/h.py", []))
+    assert "no encoding=" not in " ".join(leads.get("hooks/h.py", []))
+
+
+def test_every_lead_check_name_is_a_real_check():
+    """A typo in LEAD_CHECKS silently reclassifies nothing and no test would notice."""
+    assert P.LEAD_CHECKS and P.LEAD_CHECKS <= set(P.CHECKS)
+
+
+# ---- platform guard -----------------------------------------------------------------------------
+
+def test_a_function_that_only_mentions_posix_in_a_string_is_not_platform_guarded(tmp_path):
+    """The substring rule read its own docstring as a guard and suppressed a real X_OK defect."""
+    body = ('import os\n'
+            'def check(p):\n'
+            '    """Only meaningful on posix."""\n'
+            '    return os.access(p, os.X_OK)\n')
+    hits = P.os_access_x_ok(_write(tmp_path, "m.py", body))
+    assert hits, "an unguarded os.access(X_OK) was suppressed by a mention of posix in prose"
+
+
+def test_a_function_naming_a_parameter_posix_is_not_platform_guarded_by_that_alone(tmp_path):
+    body = ('import os\n'
+            'def check(p, posix=True):\n'
+            '    return os.access(p, os.X_OK)\n')
+    assert P.os_access_x_ok(_write(tmp_path, "m.py", body))
+
+
+def test_an_unrelated_dot_name_read_on_os_is_not_a_platform_guard(tmp_path):
+    """`attr='name' and id='os'` matched os.path.join(f.name) - unrelated to the platform."""
+    body = ('import os\n'
+            'def check(p, f):\n'
+            '    os.path.join(f.name)\n'
+            '    return os.access(p, os.X_OK)\n')
+    assert P.os_access_x_ok(_write(tmp_path, "m.py", body))
+
+
+def test_a_function_comparing_os_name_is_platform_guarded(tmp_path):
+    """harness_checks.is_executable's exact shape - this must stay suppressed."""
+    body = ('import os\n'
+            'def is_executable(path, posix=None):\n'
+            '    on_posix = (os.name == "posix") if posix is None else posix\n'
+            '    if not on_posix:\n'
+            '        return False\n'
+            '    return os.access(path, os.X_OK)\n')
+    assert P.os_access_x_ok(_write(tmp_path, "m.py", body)) == []
+
+
+def test_a_function_testing_sys_platform_startswith_is_platform_guarded(tmp_path):
+    body = ('import os, sys\n'
+            'def check(p):\n'
+            '    if sys.platform.startswith("win"):\n'
+            '        return False\n'
+            '    return os.access(p, os.X_OK)\n')
+    assert P.os_access_x_ok(_write(tmp_path, "m.py", body)) == []
+
+
+def test_a_function_comparing_platform_system_is_platform_guarded(tmp_path):
+    body = ('import os, platform\n'
+            'def check(p):\n'
+            '    if platform.system() == "Windows":\n'
+            '        return False\n'
+            '    return os.access(p, os.X_OK)\n')
+    assert P.os_access_x_ok(_write(tmp_path, "m.py", body)) == []
+
+
+# ---- vendored corpus ----------------------------------------------------------------------------
+
+def test_a_vendored_file_that_does_not_parse_is_reported(tmp_path):
+    """Vendored code is out of the reviewer corpus, so ast.parse is the ONLY check it ever gets."""
+    room = tmp_path / "plugin"
+    (room / "skills" / "s" / "demos").mkdir(parents=True)
+    (room / "skills" / "s" / "demos" / "d.py").write_text("def f(:\n", encoding="utf-8")
+    facts, _leads, _summary = P.run_prepass(
+        room, [], vendored=[("skills/s/demos/d.py", "vendored")])
+    assert "does not parse" in " ".join(facts.get("skills/s/demos/d.py", []))
+
+
+def test_a_vendored_file_gets_no_check_beyond_parsing(tmp_path):
+    """Fixing a vendored defect diverges our copy from upstream, so only parse-ability is ours."""
+    room = tmp_path / "plugin"
+    (room / "skills" / "s" / "demos").mkdir(parents=True)
+    (room / "skills" / "s" / "demos" / "d.py").write_text(
+        "import yaml\nimport subprocess\nsubprocess.run(['x'], text=True)\n", encoding="utf-8")
+    facts, leads, _summary = P.run_prepass(
+        room, [], vendored=[("skills/s/demos/d.py", "vendored")])
+    assert facts == {} and leads == {}

@@ -440,3 +440,55 @@ def test_the_prepass_hits_reach_the_right_target_only(tmp_path):
                     prepass={"hooks/my-guard.py": ["line 1: text=True without encoding"]})
     assert "text=True without encoding" in seen["guard"]
     assert "text=True without encoding" not in seen["other"]
+
+
+def test_script_prompt_tells_the_reviewer_to_judge_a_lead_rather_than_skip_it():
+    """A lead is the OPPOSITE instruction to a settled fact, and must not land in that block."""
+    p = A.build_script_prompt("x.py", A.KIND_SKILL_SCRIPT,
+                              leads=["line 4: shlex in POSIX mode eats backslashes (lead)"])
+    assert "line 4: shlex in POSIX mode" in p
+    known = p.index("ALREADY KNOWN")
+    leads = p.index("LEADS")
+    assert p.index("line 4: shlex in POSIX mode") > leads
+    assert known != leads
+
+
+def test_a_lead_is_never_rendered_inside_the_do_not_re_report_block():
+    """The whole point: 19 leads were suppressed in the files most likely to hold a real defect."""
+    p = A.build_script_prompt("x.py", A.KIND_SKILL_SCRIPT,
+                              prepass=["line 1: settled"], leads=["line 4: unsettled"])
+    block = p[p.index("ALREADY KNOWN"):p.index("LEADS")]
+    assert "line 1: settled" in block and "line 4: unsettled" not in block
+
+
+def test_audit_scripts_runs_the_prepass_itself_when_none_is_injected(tmp_path):
+    """`prepass=` was threaded through three functions and no caller ever supplied it, so every
+    reviewer's ALREADY KNOWN block read '(nothing)' while the pre-pass sat unused."""
+    src = _plugin(tmp_path)
+    (src / "hooks" / "my-guard.py").write_text(
+        "import subprocess\nsubprocess.run(['x'], text=True)\n", encoding="utf-8")
+    seen = {}
+
+    def runner(prompt, cwd, model, timeout):
+        if "my-guard.py" in prompt.splitlines()[0]:
+            seen["guard"] = prompt
+        return "NO FINDINGS"
+
+    A.audit_scripts(src, tmp_path / "room", jobs=1, runner=runner, log=lambda *_a: None)
+    assert "no encoding=" in seen["guard"]
+
+
+def test_audit_scripts_routes_a_lead_into_the_leads_block(tmp_path):
+    src = _plugin(tmp_path)
+    (src / "hooks" / "my-guard.py").write_text(
+        "import shlex\nshlex.split('a b')\n", encoding="utf-8")
+    seen = {}
+
+    def runner(prompt, cwd, model, timeout):
+        if "my-guard.py" in prompt.splitlines()[0]:
+            seen["guard"] = prompt
+        return "NO FINDINGS"
+
+    A.audit_scripts(src, tmp_path / "room", jobs=1, runner=runner, log=lambda *_a: None)
+    block = seen["guard"][seen["guard"].index("LEADS"):]
+    assert "shlex" in block
