@@ -20,6 +20,7 @@ or slow hook never blocks or delays a session.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from self_improve_signals import (
@@ -225,11 +226,59 @@ def _self_heal(proj):
         pass
 
 
+_DECOY_CHECK_INTERVAL_S = 86400
+"""How often the decoy-anchor scan actually runs. It is a full `os.walk` of the tree (measured 1.34s
+over a 97-level tree), far too slow to pay on every start, and a decoy appears only when a migration
+leaves a drained sub-store behind - twice in two months on the tree that motivated this. Daily closes
+the gap at a fiftieth of the cost."""
+
+
+def decoy_context(proj):
+    """Warn when the tree holds a `.claude-memory` BELOW its top - a decoy anchor that silently
+    breaks body retrieval for a whole subtree.
+
+    `find_decoy_anchors` has existed for a while, but only `reconcile --check-tree` ran it, and that
+    runs only during a dream - so a decoy could shadow real bodies for however long sits between two
+    dreams. The walk-up retrieval text resolves a slug to the NEAREST store first, so a drained
+    sub-store answers with a stale or empty-stub body while the real one at the top is never read,
+    and nothing reports an error.
+
+    Throttled to :data:`_DECOY_CHECK_INTERVAL_S` via a stamp file, and fail-open like every other
+    part of this hook: a broken check must never wedge a session start.
+    """
+    try:
+        import self_improve_signals as sig
+
+        stamp = sig._audit_dir() / "decoy-check.stamp"
+        if stamp.exists() and (time.time() - stamp.stat().st_mtime) < _DECOY_CHECK_INTERVAL_S:
+            return ""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "meta-self-improve"))
+        import memory_engine
+        import reconcile_memory_index as rmi
+
+        anchor = memory_engine._anchor(str(proj))
+        found = rmi.find_decoy_anchors(anchor)
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
+        if not found:
+            return ""
+        listed = "\n".join(f"  {d}" for d in found[:5])
+        return (
+            f"MEMORY STORE: {len(found)} decoy anchor(s) under {anchor} - a `.claude-memory` BELOW "
+            f"the tree top:\n{listed}\nWalk-up retrieval resolves a slug to the NEAREST store, so "
+            "these shadow the real bodies at the top and return stale or empty ones with no error. "
+            "A migration that centralized bodies should have deleted them. Verify each is drained, "
+            "then remove it; `reconcile_memory_index.py --check-tree` reports them in full."
+        )
+    except Exception:  # noqa: BLE001 - a hook must never block a session
+        return ""
+
+
 def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [retrieval_context(proj), audit_context(proj), contrib_context(proj)]
+    parts = [retrieval_context(proj), audit_context(proj), contrib_context(proj), decoy_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]
     ctx = [p for p in parts if p]

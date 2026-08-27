@@ -401,3 +401,71 @@ def test_session_banner_missing_skill_emits_nothing(tmp_path, monkeypatch, capsy
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path))
     rc = B.main()
     assert rc == 0 and capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
+# decoy_context: a second .claude-memory BELOW the tree top
+# ---------------------------------------------------------------------------
+
+
+def _tree(tmp_path, *, decoy: bool):
+    """Build a minimal tree: CLAUDE.md + a store at the top, a project level under it.
+
+    With ``decoy=True`` a SECOND store is planted below the top, which is what the walk-up
+    retrieval resolves to FIRST - the whole reason this check exists.
+    """
+    top = tmp_path / "tree"
+    (top / ".claude-memory" / "facts").mkdir(parents=True)
+    (top / "CLAUDE.md").write_text("# top\n", encoding="utf-8")
+    proj = top / "proj"
+    proj.mkdir()
+    (proj / "CLAUDE.md").write_text("# proj\n", encoding="utf-8")
+    if decoy:
+        (proj / ".claude-memory").mkdir()
+    return proj
+
+
+def _clear_stamp():
+    stamp = SIG._audit_dir() / "decoy-check.stamp"
+    if stamp.exists():
+        stamp.unlink()
+
+
+def test_decoy_context_is_silent_on_a_healthy_tree(tmp_path):
+    """Exactly one store, at the top, is the healthy shape and must say nothing."""
+    proj = _tree(tmp_path, decoy=False)
+    _clear_stamp()
+
+    assert S.decoy_context(str(proj)) == ""
+
+
+def test_decoy_context_reports_a_store_below_the_top(tmp_path):
+    """The arm that matters: without it the check could be silent for the wrong reason.
+
+    A store below the top shadows the real bodies at the top and returns stale or empty ones
+    with NO error, so a silent check and a healthy tree are indistinguishable from the outside.
+    """
+    proj = _tree(tmp_path, decoy=True)
+    _clear_stamp()
+
+    out = S.decoy_context(str(proj))
+
+    assert "decoy anchor" in out
+    assert str(proj / ".claude-memory") in out
+
+
+def test_decoy_context_is_throttled_after_it_runs(tmp_path):
+    """The scan is a full os.walk of the tree, far too slow to pay on every session start."""
+    proj = _tree(tmp_path, decoy=True)
+    _clear_stamp()
+
+    first = S.decoy_context(str(proj))
+    second = S.decoy_context(str(proj))
+
+    assert "decoy anchor" in first
+    assert second == ""
+
+
+def test_decoy_context_never_raises_on_a_broken_tree(tmp_path):
+    """A hook must never wedge a session: an unresolvable project is an empty string, not a raise."""
+    assert S.decoy_context(str(tmp_path / "does-not-exist")) == ""

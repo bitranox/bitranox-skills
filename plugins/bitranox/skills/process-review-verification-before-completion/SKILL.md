@@ -51,6 +51,28 @@ Skip any step = lying, not verifying
 | Regression test works  | Red-green cycle verified        | Test passes once               |
 | Agent completed        | VCS diff shows changes          | Agent reports "success"        |
 | Requirements met       | Line-by-line checklist          | Tests passing                  |
+| Write landed           | Read back from the SAME layer   | A read served by another layer |
+
+### Read it back from the layer the write landed in
+
+Reading a value back only proves anything when the read is served by the SAME layer the write
+targeted. A write to a STORED/persisted layer is invisible to a RUNTIME read, and the runtime read
+does not fail - it returns well-formed, plausible, OLD data. So a successful write reads as a
+failed one, and after a reload the reverse: a write that never persisted reads as applied.
+
+The pairs that produce this are everywhere once you look for them:
+
+| Wrote to                     | A read that will LIE about it |
+|------------------------------|-------------------------------|
+| the git index (`git add`)    | the working tree              |
+| a config file on disk        | the already-running process   |
+| a systemd unit file          | the loaded unit (`show`)      |
+| a device's stored settings   | its current running settings  |
+
+The instrument reporting "unchanged" is not evidence the write failed, and "changed" is not
+evidence it persisted. Name BOTH layers explicitly and say which one you just read. If the stored
+layer has no read path of its own, force the transition (reload, restart, reboot) and verify
+AFTER it - that is the only read that covers both.
 
 ## Red Flags - STOP
 
