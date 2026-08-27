@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.263.1]
+
+### Fixed
+
+- **`git-path-not-here-nudge` fired on two shapes that were not the trap.** As shipped in 5.263.0
+  the hook fired 3 times across the replay corpus and the entry claimed all 3 were real. Reading
+  the two remaining transcripts showed that was wrong: both came from a LINKED WORKTREE asking
+  about a file that exists only in the shared checkout (`.claude`, and a gitignored review log),
+  and neither session was misled. One had printed `pwd` in the same call and labelled its own
+  question "is .claude ignored in the main repo?"; the other ran `ls` first and concluded out loud
+  that the file lives only in the shared checkout. Real precision was 1 of 3.
+
+  Two limits close it, and each is pinned by a test that fails without it:
+
+  - **A linked worktree is skipped.** Its `.git` is a FILE rather than a directory, and it
+    legitimately holds a different file set from the checkout it hangs off, so "absent here,
+    present above" is its normal state and carries no signal.
+  - **The ancestor walk now has a ceiling**: the first work tree ENCLOSING the cwd's own one,
+    rather than running to the filesystem root. This makes the nudge's own wording true - it says
+    "the project you think you are in", and that is exactly the repository above the one the shell
+    is standing in. Without it, a common name (`README.md`, `Makefile`) far above could be
+    attributed to a project unrelated to the call.
+
+  Re-priced over 65,695 real Bash calls: 1 firing, 0.0015%, and it is the genuine trap. The hook
+  stays non-blocking and fail-open.
+
 ## [5.263.0]
 
 ### Added
@@ -46,9 +72,10 @@ installed copies and needs no bump.
   Priced over 65,588 real Bash calls replayed with the cwd they actually ran under (that field is
   present on 100% of them): 350 use a path-status verb, 133 of those carry no `cd`, 13 name a path
   absent under their cwd, and 3 find it in an ancestor. Those 3 are the firings, 0.0046% of all
-  commands, and all 3 are the real trap, from two unrelated sessions. Replay understates recall,
-  since a path deleted since cannot be found in an ancestor today; that cost is accepted for the
-  same reason the sibling hook accepts it.
+  commands. **This entry originally claimed all 3 were the real trap. That was wrong - 2 of the 3
+  were false positives, corrected in 5.263.1, which narrows the hook to 1 firing.** Replay
+  understates recall, since a path deleted since cannot be found in an ancestor today; that cost is
+  accepted for the same reason the sibling hook accepts it.
 
   Non-blocking (`additionalContext`, exit 0), fail-open, data regions masked so prose documenting
   the footgun does not trip the guard for it. 12 tests, both directions, with the "present in BOTH

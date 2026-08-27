@@ -28,13 +28,20 @@ Scope, and why it is drawn here rather than wider:
 - **Readable, relative paths only.** A shell variable or a glob cannot be attributed to a location,
   and a verdict built on a guessed one is invented rather than measured.
 
-Priced over 65,573 real Bash calls replayed with the cwd they actually ran under (the cwd field is
+Priced over 65,695 real Bash calls replayed with the cwd they actually ran under (the cwd field is
 present on 100% of them): 350 use a path-status verb, 133 of those carry no `cd`, 13 name a path
-absent under their cwd, and 3 of those find it in an ancestor. Those 3 are the firings - 0.0046% of
-all commands - and all 3 are true positives from two unrelated sessions: the measured incident
-above, plus a worktree cwd asking about `.claude` and `EXECUTION-USER-REVIEW.md`, both of which
-live in the parent checkout. Replay understates recall, since a path deleted since cannot be found
-in an ancestor today; that cost is accepted for the same reason the sibling hook accepts it.
+absent under their cwd, and 1 survives the worktree and ceiling tests. That 1 is the firing -
+0.0015% of all commands - and it is the measured incident above.
+
+An earlier revision of this hook had no worktree test and no ceiling, and fired 3 times. TWO OF
+THOSE THREE WERE FALSE POSITIVES, which is why both limits exist: a linked worktree asking about
+`.claude` and about a gitignored review log. Reading those transcripts settled it - neither session
+was misled. One had printed `pwd` in the same call and labelled the question "is .claude ignored in
+the main repo?"; the other ran `ls` first and concluded out loud that the file lives only in the
+shared checkout. Do not relax either limit without re-reading those two cases.
+
+Replay understates recall, since a path deleted since cannot be found in an ancestor today; that
+cost is accepted for the same reason the sibling hook accepts it.
 
 Data regions are masked before the structure is read, so a command inside a heredoc or a quoted
 string is text rather than a statement - prose documenting this footgun must not trip the guard for
@@ -90,8 +97,55 @@ def _path_arguments(rest, verb):
     return [t for t in tokens if t]
 
 
+def _work_tree_root(start):
+    """The work tree `start` belongs to, or None. A linked worktree carries a `.git` FILE."""
+    current = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def _in_linked_worktree(cwd):
+    """True when `cwd` sits in a LINKED worktree (its `.git` is a file, not a directory).
+
+    Measured: both false positives this hook produced came from a linked worktree asking about a
+    file that exists only in the shared checkout - `.claude`, and a gitignored review log. Neither
+    session was misled; one had just printed `pwd`, the other had run `ls` first and drawn the right
+    conclusion out loud. A linked worktree legitimately holds a different file set from the checkout
+    it hangs off, so "absent here, present above" is its NORMAL state and carries no signal.
+    """
+    root = _work_tree_root(cwd)
+    return bool(root) and os.path.isfile(os.path.join(root, ".git"))
+
+
+def _search_ceiling(cwd):
+    """The highest ancestor worth searching: the first work tree ENCLOSING the cwd's own one.
+
+    This is the bound that makes the nudge's own wording true - it says "the project you think you
+    are in", and that is precisely the repository above the one the shell is standing in. Without a
+    ceiling the walk runs to the filesystem root, where a common name (README.md, Makefile) sitting
+    far above could be attributed to a project that has nothing to do with the call.
+    """
+    start = _work_tree_root(cwd) or os.path.abspath(cwd)
+    current = start
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        if os.path.exists(os.path.join(parent, ".git")):
+            return parent
+        current = parent
+
+
 def _ancestor_holding(path, cwd):
-    """The nearest ancestor of `cwd` that has `path` under it, or None."""
+    """The nearest ancestor of `cwd` that has `path` under it, at or below the search ceiling."""
+    ceiling = _search_ceiling(cwd)
+    if not ceiling:
+        return None
     current = os.path.abspath(cwd)
     while True:
         parent = os.path.dirname(current)
@@ -99,6 +153,8 @@ def _ancestor_holding(path, cwd):
             return None
         if os.path.exists(os.path.join(parent, path)):
             return parent
+        if os.path.abspath(parent) == os.path.abspath(ceiling):
+            return None
         current = parent
 
 
@@ -106,6 +162,8 @@ def notice(command, cwd):
     """The nudge text when a path-status verb asks about a path that is not here, else None."""
     if not command or not isinstance(command, str) or not cwd:
         return None
+    if _in_linked_worktree(cwd):
+        return None                        # a worktree's file set legitimately differs; no signal
     masked, spans = _statements(command)
     if any(_CD.match(masked[start:end]) for start, end in spans):
         return None                        # an explicit cd states the subject

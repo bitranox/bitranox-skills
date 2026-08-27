@@ -111,6 +111,30 @@ def test_prose_documenting_this_footgun_does_not_trip_it(tmp_path):
     assert G.notice(cmd, str(inner)) is None
 
 
+def test_a_linked_worktree_is_silent(tmp_path):
+    # Both false positives this hook produced were here. A linked worktree carries a `.git` FILE and
+    # legitimately holds a different file set from the checkout it hangs off, so a path that is
+    # absent in it and present above is its normal state, not a confused session. Measured: one such
+    # session had just printed `pwd`; the other ran `ls` first and said out loud that the file lives
+    # only in the shared checkout. Neither was misled.
+    outer = _repo(tmp_path, "project")
+    (outer / "EXECUTION-USER-REVIEW.md").write_text("x")
+    wt = outer / ".claude" / "worktrees" / "docs"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: /elsewhere\n")      # a FILE: the linked-worktree marker
+    assert G.notice("git ls-files --error-unmatch EXECUTION-USER-REVIEW.md", str(wt)) is None
+
+
+def test_a_match_above_the_enclosing_project_is_silent(tmp_path):
+    # The ceiling. With no work tree enclosing the cwd's own one there is no "project you think you
+    # are in" to point at, so a same-named file further up must not be attributed to this call.
+    stray = tmp_path / "unrelated"
+    stray.mkdir()
+    (stray / "README.md").write_text("x")
+    here = _repo(stray, "here")                            # cwd's own repo; nothing above it is one
+    assert G.notice("git ls-files --error-unmatch README.md", str(here)) is None
+
+
 def test_missing_inputs_are_silent(tmp_path):
     assert G.notice("", str(tmp_path)) is None
     assert G.notice("git check-ignore x", "") is None
