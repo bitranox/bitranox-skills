@@ -69,6 +69,15 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 4. **Verify every finding against the real files before acting on one.** A reviewer's quote is a
    claim, not evidence: `grep -F` the quote in the file it names. An unfindable quote means the
    finding is fabricated, whatever else is right about it.
+4b. **Do NOT reuse that quote match to ask which findings are still OPEN.** A triage outlives
+   several fix-and-ship rounds, so you will come back to the list against a changed tree - and
+   step 4's rule inverts into a plausible wrong one: "quote gone, so it was fixed". Measured
+   over one round, that is wrong in BOTH directions. Quote GONE and still open: an unrelated
+   edit requoted the line, and the recorded quote had been normalized so it never matched the
+   file verbatim anyway. Quote PRESENT and fixed: the repair made the documented command WORK,
+   so the example text correctly survives. Re-read the CLAIM against the file instead, and keep
+   an explicit list of what you fixed - the work you did is the record, not a state query over
+   the tree.
 5. **Fix, then mirror.** A skill that also ships from its own tool repo has a twin, and a fix
    applied to one copy leaves the other wrong. Regenerate the stale side, re-apply the by-convention
    divergences, and bump BOTH plugin versions.
