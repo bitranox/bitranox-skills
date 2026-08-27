@@ -21,6 +21,7 @@ _HOOK_MODULES = {
     "ci-watch-nudge": "ci_watch_nudge",
     "ci-watch-gate": "ci_watch_gate",
     "validate-structured-files": "validate_structured_files",
+    "git-path-not-here-nudge": "git_path_not_here_nudge",
     "block-pgrep-self-match": "block_pgrep_self_match",
     "block-partial-typecheck": "block_partial_typecheck",
     "block-masked-gate-exit": "block_masked_gate_exit",

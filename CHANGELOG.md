@@ -17,6 +17,44 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.263.0]
+
+### Added
+
+- **`git-path-not-here-nudge`: a path-status answer about a path that is not in this directory.**
+  The Bash tool's working directory PERSISTS across calls, so a call carrying no `cd` runs wherever
+  an earlier call left the shell. When such a call asks git a question ABOUT A PATH and the path is
+  not there, git returns rc 1 - and rc 1 from these verbs is shaped like a VERDICT ("untracked",
+  "not ignored") rather than like "no such file here", so a wrong answer is indistinguishable from
+  a real one.
+
+  The incident: a session was left in a nested sub-repo, then ran `git ls-files --error-unmatch
+  <file>` and `git check-ignore -q <file>` with no `cd`. Both returned rc 1, which reads as
+  "untracked AND not ignored" - impossible for a real file, since an untracked non-ignored file
+  must show as `??` in `git status`. The true meaning was that the file is not in that repository
+  at all. The nudge names that signature explicitly, because the contradiction is the tell.
+
+  Scope is deliberately narrow, and each limit is priced rather than assumed. Only the path-status
+  verbs (`ls-files --error-unmatch`, `check-ignore`, `check-attr`), because only they turn an absent
+  path into a verdict-shaped answer - a pathspec on another verb is excluded, since `git log --
+  <path>` about a deleted file is routine. Only a call with NO `cd` of its own, since an explicit
+  `cd` states the subject and the two-work-tree shape already belongs to `git-wrong-repo-nudge`;
+  this covers the half that hook cannot see, because it reads the cd's inside one call and this
+  failure has none. The path must also exist in an ANCESTOR of the cwd: absent everywhere is a typo,
+  which is not this hook's business and leaves nothing to point at.
+
+  Priced over 65,588 real Bash calls replayed with the cwd they actually ran under (that field is
+  present on 100% of them): 350 use a path-status verb, 133 of those carry no `cd`, 13 name a path
+  absent under their cwd, and 3 find it in an ancestor. Those 3 are the firings, 0.0046% of all
+  commands, and all 3 are the real trap, from two unrelated sessions. Replay understates recall,
+  since a path deleted since cannot be found in an ancestor today; that cost is accepted for the
+  same reason the sibling hook accepts it.
+
+  Non-blocking (`additionalContext`, exit 0), fail-open, data regions masked so prose documenting
+  the footgun does not trip the guard for it. 12 tests, both directions, with the "present in BOTH
+  the cwd and an ancestor" case pinned separately: a mutation removing that guard left the rest of
+  the suite green, because a later check absorbed it.
+
 ## [5.253.0]
 
 ### Fixed
