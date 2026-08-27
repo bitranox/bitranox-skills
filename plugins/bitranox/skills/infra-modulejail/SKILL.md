@@ -51,11 +51,30 @@ blocking a dependency of a kept module silently breaks the kept module:
 
 ```bash
 # resolve depends recursively to convergence
+# `tr` to the underscore form: module FILE names are hyphenated (snd-hda-intel.ko) while
+# lsmod/modprobe names are underscored, and `comm` below compares the two sets literally.
 resolve() { modprobe --show-depends "$1" 2>/dev/null | awk '/^insmod/{print $2}' \
-            | xargs -rn1 basename | sed 's/\.ko.*//'; }
+            | xargs -rn1 basename | sed 's/\.ko.*//' | tr '-' '_'; }
 ```
 
-Feed each name through `resolve` and re-feed new names until the set stops growing.
+Feed each name through `resolve` and re-feed new names until the set stops growing. That is
+the loop, and it has to WRITE the file the next step reads:
+
+```bash
+export -f resolve
+LC_ALL=C sort -u keep.raw > keep.closure
+while :; do
+  before=$(wc -l < keep.closure)
+  xargs -a keep.closure -rn1 -I{} sh -c 'resolve "$1"' _ {} \
+    | cat - keep.closure | LC_ALL=C sort -u > keep.next
+  mv keep.next keep.closure
+  [ "$(wc -l < keep.closure)" = "$before" ] && break
+done
+```
+
+`comm` needs BOTH inputs sorted under the SAME collation and in the same name form. Sort
+both with `LC_ALL=C sort -u` and normalise both to the underscore form - a mismatch on
+either axis silently puts a KEPT module into `block.list`.
 
 **The three KEEP inputs are not equally durable, and you must be able to tell them apart.**
 
@@ -70,11 +89,11 @@ cold boot, or with the service stopped, and it moves to BLOCK - on a node nobody
 silently the next time something asks for it.
 
 So "is this module covered?" is answered by the whitelist and the baseline, never by `lsmod` and
-never by the feature working. Read the baseline rather than guessing at it - in a script-based
-implementation it is a plain variable:
+never by the feature working. Read the baseline rather than guessing at it - if you drive this with a generator script,
+it is usually a plain variable in that script:
 
 ```bash
-grep -nE "^[A-Z_]*(MINIMAL|CONSERVATIVE|DESKTOP|BASELINE)[A-Z_]*=" modulejail.sh
+grep -nE "^[A-Z_]*(MINIMAL|CONSERVATIVE|DESKTOP|BASELINE)[A-Z_]*=" <your-generator>.sh
 ```
 
 Measured on one node: `overlay` appears in both the whitelist and the baseline, `xt_addrtype` and
@@ -85,8 +104,14 @@ was last built.
 ### 2. BLOCK = all installed modules MINUS the KEEP closure
 
 ```bash
+# Strip exactly the four real suffixes and drop anything else `*.ko*` caught (e.g. a
+# stray .ko.xz.sig), then normalise to the underscore form so this set and keep.closure
+# are comparable. A `[gxz]+` character class does NOT match `.zst`.
 find "/lib/modules/$(uname -r)" -name '*.ko*' \
-  | sed -E 's#.*/##; s#\.ko(\.[gxz]+)?$##' | sort -u > all.mods
+  | awk '{ n=$0; sub(/.*\//,"",n)
+           if (!sub(/\.ko\.gz$/,"",n) && !sub(/\.ko\.xz$/,"",n) \
+            && !sub(/\.ko\.zst$/,"",n) && !sub(/\.ko$/,"",n)) next
+           gsub(/-/,"_",n); print n }' | LC_ALL=C sort -u > all.mods
 comm -23 all.mods keep.closure > block.list
 ```
 
@@ -94,9 +119,15 @@ comm -23 all.mods keep.closure > block.list
 
 ```bash
 # one directive per line; comments on their OWN line (modprobe.d does not parse
-# a trailing inline #). /bin/true = exit 0, silent; use /bin/false to make a
-# manual `modprobe X` fail loudly and leave a journal trace.
-awk '{print "install", $1, "/bin/true"}' block.list \
+# a trailing inline #). Two forms, and the choice decides whether the runtime-discovery
+# step further down has anything to read at all:
+#   /bin/true           -> exit 0, silent, and NOTHING is logged anywhere
+#   the logger form     -> exit 0 to the caller, one syslog line per refusal
+# Use the logger form unless /usr/bin/logger is absent. With a bare /bin/true jail,
+# `journalctl -t modulejail` is empty FOREVER - and "the list is empty" is exactly the
+# stop condition of the discovery loop, so it terminates on its first pass and reports
+# the jail finished.
+awk '{printf "install %s /bin/sh -c '"'"'/usr/bin/logger -t modulejail \"blocked: %s\" 2>/dev/null; exit 0'"'"'\n", $1, $1}' block.list \
   > /etc/modprobe.d/modulejail-blacklist.conf
 depmod -a
 ```
@@ -125,8 +156,13 @@ Measured on one implementation: stdout carried 1 summary line and 0 `install` li
 carried 6725. Redirect both and assert the parsed count is what the summary claims.
 
 ```bash
-modulejail --dry-run >out.txt 2>err.txt
-grep -c '^install ' out.txt err.txt      # know which stream you are actually parsing
+# "dry run" = build the file and count it BEFORE moving it into /etc/modprobe.d.
+awk '{print "install", $1, "/bin/true"}' block.list > candidate.conf
+wc -l < block.list; grep -c '^install ' candidate.conf   # must be equal, and non-zero
+# If you drive this with a generator instead, capture BOTH streams and count both - some
+# print the would-be blacklist to stderr:
+#   <your-generator> --dry-run >out.txt 2>err.txt
+#   grep -c '^install ' out.txt err.txt
 ```
 
 **Validate the gate against a known-negative:** drop one obviously-required module (e.g.
@@ -189,7 +225,10 @@ sweep every whitelist entry's own `modinfo -F depends` rather than trusting the 
 **Method: exercise the real code path, read what was refused, add it, repeat.**
 
 ```bash
-# modulejail logs every refusal under its own syslog tag - this is the discovery channel
+# Refusals are logged under this syslog tag - the discovery channel. This works ONLY if
+# step 3 generated the logger form; with bare `install X /bin/true` lines nothing is
+# written and the query below is empty on a fully-blocking jail. Verify before you trust
+# an empty result:  grep -c logger /etc/modprobe.d/modulejail-blacklist.conf
 journalctl -t modulejail --since "-1h" \
   | sed -n 's/.*blocked: \([a-zA-Z0-9_-]*\).*/\1/p' | sort | uniq -c | sort -rn
 ```

@@ -17,6 +17,89 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.266.0]
+
+### Fixed
+
+- **Bucket G of the 82-skill audit: 41 verified findings across 30 skills, plus 8 adjacent defects
+  found while verifying them.** Every finding was re-checked against the real files, the installed
+  packages and live CLI output before editing; 14 of the 41 turned out UNDERSTATED, meaning the
+  filed claim named a smaller defect than the real one, so fixing exactly what was filed would
+  have fixed nothing in those cases.
+
+  Defects that made a documented command fail or a shipped example wrong:
+
+  - **`coding-bash-clean-architecture`**: the use case echoed its report to stdout from inside the
+    command substitution that captured it, so the default path exited 0 on `overall=critical` and
+    `critical) exit 1` was unreachable; `domain__build_summary` counted one record too many
+    (`total=1` for zero services); and `IFS=: read -r _svc[name] ...` left the array indices
+    unquoted, which is a glob, so a file named `_svcn` in the working directory made the script
+    die with `svc[name]: unbound variable` and report `Config not found` (exit 3) for a config it
+    had read fine. Also found while verifying: the `--source-only` guard sat ABOVE the layer
+    sources, so the shipped test block defined nothing and `2>/dev/null || true` hid it - which is
+    how the first two shipped undetected.
+  - **`coding-python-clean-architecture`**: the in-memory idempotency adapter used `Any` without
+    importing it, and the UoW adapter typed its deps factory `Mapping[str, Any]` against the
+    skill's own rule. Fixing the second unmasked a genuine port mismatch: the outbox adapter's
+    parameter was `evts` where the port declares `events`, so `add_all(events=[])` raised
+    `TypeError`. A mistyped deps key now fails the type check instead of `KeyError`ing at runtime.
+  - **`compuse-ssh` and `warn-inline-powershell`**: the hook told every user to reach for
+    `runps.sh`, which ships nowhere in this plugin, and its test ASSERTED that name, pinning the
+    defect. The hook now names the safe FORM (`-File`), the test asserts on that instead, and a
+    second assertion stops the script name coming back. The skill was correct all along and now
+    carries the two-step recipe the hook points at.
+  - **`git-worktrees`**: the ignore check tested both candidate directory names with `||`, so it
+    reported "ignored" whenever EITHER name was listed, including the one not chosen. The chosen
+    directory is now bound to `$LOCATION` and checked; `$LOCATION` and `$BRANCH_NAME` had also
+    never been assigned anywhere in the skill.
+  - **`infra-modulejail`**: the `all.mods` pipeline used `\.ko(\.[gxz]+)?$`, which cannot match
+    `.ko.zst`; neither side normalised hyphens, so `comm` mismatched every hyphen-named module and
+    put LOADED modules into the block list; `keep.closure` was consumed and never produced; and
+    step 3 emitted bare `install X /bin/true`, which cannot write syslog, so the mandatory runtime
+    discovery loop read empty forever and terminated on its first pass reporting success.
+  - **`infra-swap-tuning`**: the idempotency guard compared `/sys/block/zram0/disksize` (bytes)
+    against `zram-size` (megabytes), so it never matched and fired the unconditional
+    swapoff/reset the bullet three lines above it warns against.
+  - **`net-tailscale`**: `tailscale up --tun=userspace` does not exist; userspace networking is a
+    `tailscaled` daemon flag and the value is `userspace-networking`. The `Tailscale DNS:
+    disabled` line reports the `accept-dns` pref, not the platform, so it cannot be the
+    FreeBSD/pfSense tell it was cited as. Issue 12021 is a control long-poll failure, not a boot
+    race, and now sits beside the watchdog paragraph it actually supports.
+  - **`process-agents-subagent-driven-development`**: all 8 documented invocations used a relative
+    `scripts/` path that only resolves from the skill directory, which is the one place the
+    scripts' own git calls fail. They now use `$CLAUDE_PLUGIN_ROOT` and say to run from the repo
+    under review.
+  - **`process-debug-systematic`**: 6 `waitFor` calls and 1 `waitForEvent` call passed too few
+    arguments for the signatures the same files document (`tsc --strict` reproduced every one).
+  - **`infra-chrome-remote-desktop`**: the positive control could not run - it needed four names
+    from the first block, and concatenating them did not help because that block ends in driver
+    code reading `sys.argv` and the real config. The skill says to run the control BEFORE trusting
+    that config, which was impossible as printed.
+  - **`coding-python-send-mail`**: the dangerous-extension default is OS-selected and the POSIX and
+    Windows sets share only 4 of 58 entries, so `.exe` is not blocked on Linux and `.sh` is not
+    blocked on Windows. `--subject` and `--body` are required and have no environment variable,
+    contradicting "every option also reads a matching `BTX_MAIL_*` variable".
+  - **`coding-python-layered-config`**: not one of the six flags presented as CLI-wide is accepted
+    by all six subcommands, and two subcommands accept no options at all.
+  - Smaller corrections in `coding-python-use-modern-libraries` (httpx2 has no `proxies=`),
+    `coding-python-performance-review` (the claims script extracts, it does not validate),
+    `compuse-toolbox` (`gate` must not be launched with `uv run`), `docs-generate-schematics` (the
+    wrapper runs the full review loop and needs `httpx2` itself), `compuse-vnc` (noVNC is a
+    client, and the Proxmox console server is on the host), `infra-proxmox-bindsnap` (the
+    mountpoint error belongs to `pct clone`, not `pct snapshot`), `infra-soundtouch-decloud` (the
+    service writes no pre-migration preset backup), `net-rotating-proxies` (the background refresh
+    polls every 10 minutes and is opt-in), `infra-windows-servicing` (`wmic` does raise, on stderr
+    with exit 9009), `process-test-design` (nextest does not shuffle), `process-test-driven-
+    development` and `redcheck.py` (exit 3 fires only for `--corpus-cascade`),
+    `process-review-receiving-code-review` (the field flag alone switches `gh api` to POST),
+    `process-plan-writing-plans` and `process-ship-finishing-development-branch` (announcements
+    named a pre-rename slug), `process-agents-dispatching-parallel` (an unreachable digraph node),
+    and `write-humanize-en`/`-de` (the sweep and the strip script are twins, not one function, and
+    a codepoint that is itself a line break passes one and is rewritten by the other).
+
+  Five of these skills are mirrored into their tool repos; each twin was synced and its own
+  `plugin.json` bumped.
+
 ## [5.263.1]
 
 ### Fixed

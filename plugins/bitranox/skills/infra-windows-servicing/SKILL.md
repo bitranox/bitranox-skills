@@ -15,22 +15,22 @@ do not tell you.
 
 ## The false signals
 
-| Symptom                                         | The obvious reading               | What it usually is                                                                        |
-|-------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------|
-| Update fails, `ScanHealth` clean                | not corruption, so look elsewhere | **disk headroom** - a cumulative update needs far more free space than its own size       |
-| "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it       |
-| Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                           |
-| Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin               |
-| Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                            |
-| Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                         |
-| Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size          |
-| Upgrade reverts on reboot, down-level was `0x0` | the upgrade failed, retry it      | **the apply was cut off** - `0x0` says the down-level was fine, so check the reboot       |
-| Monitor reports an unknown build for hours      | the upgrade is stuck              | **the monitor was deleted** - it was staged under a path the upgrade replaces             |
-| `wmic` prints nothing at all                    | the machine has no such objects   | **`wmic` is removed in 25H2** - it returns EMPTY, not an error                            |
-| A wrapper says the job wrote no verdict         | the job failed                    | **a failed READ of the log** - ask the guest, whose log may say success                   |
-| Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree          |
-| Week-old failure, `CBS.log` grep finds nothing  | no evidence, so not the store     | **the live logs cover days** - the history is in `CbsPersist_*.cab`, unreadable by a grep |
-| `0xC1900200` survives the MoSetup waiver        | the key did not take effect       | **several blocks at once** - and the key does not waive an ABSENT TPM                     |
+| Symptom                                         | The obvious reading               | What it usually is                                                                                          |
+|-------------------------------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------|
+| Update fails, `ScanHealth` clean                | not corruption, so look elsewhere | **disk headroom** - a cumulative update needs far more free space than its own size                         |
+| "Access is denied" on a delete                  | ACL or ownership                  | the **read-only attribute** - not a permission, so `takeown`/`icacls` cannot fix it                         |
+| Permission command says success, op still fails | need a bigger permission pass     | the **diagnosis is wrong** - inspect the object                                                             |
+| Access denied under a SYSTEM task               | not privileged enough             | **SYSTEM is a different principal** and often has less access than an admin                                 |
+| Log silent for 40 minutes                       | hung, kill it                     | a **phase handover** - the next step writes to a different log                                              |
+| Delete stopped with N dirs left                 | N separate failures               | **one blocker** - the walk abandoned at the first                                                           |
+| Windows.old is 25 GB, deleting frees 11         | the delete was incomplete         | **hard links counted once each** - the byte total was never the reclaimable size                            |
+| Upgrade reverts on reboot, down-level was `0x0` | the upgrade failed, retry it      | **the apply was cut off** - `0x0` says the down-level was fine, so check the reboot                         |
+| Monitor reports an unknown build for hours      | the upgrade is stuck              | **the monitor was deleted** - it was staged under a path the upgrade replaces                               |
+| `wmic` prints nothing at all                    | the machine has no such objects   | **`wmic` is removed in 25H2** - the error is on STDERR with exit 9009, so a stdout-only capture looks empty |
+| A wrapper says the job wrote no verdict         | the job failed                    | **a failed READ of the log** - ask the guest, whose log may say success                                     |
+| Strip pass "completed", 48 of 51 links removed  | 3 benign leftovers                | **the 3 the encoding mangled** - and those are the ones pointing out of the tree                            |
+| Week-old failure, `CBS.log` grep finds nothing  | no evidence, so not the store     | **the live logs cover days** - the history is in `CbsPersist_*.cab`, unreadable by a grep                   |
+| `0xC1900200` survives the MoSetup waiver        | the key did not take effect       | **several blocks at once** - and the key does not waive an ABSENT TPM                                       |
 
 ## A clean health check does not mean an update will install
 
@@ -512,11 +512,14 @@ minutes earlier: the script's read of that log came back empty and it could not 
 from an absent marker. When a wrapper reports failure, ask the GUEST before believing it - its own
 state log, the registry build, the boot state.
 
-**`wmic` is GONE in 25H2 and returns EMPTY rather than an error.**
-`wmic logicaldisk get DeviceID,VolumeName,Size` produces no output at all, which reads as "no
-drives" rather than "the tool is missing" - so an inventory step reports a machine with no disks
-and nothing raises. Use `fsutil fsinfo drives` (cmd-native), or `Get-Volume` / `Get-Partition` /
-`Get-Disk`.
+**`wmic` is GONE in 25H2, and a harness that captures only stdout sees EMPTY.**
+`wmic logicaldisk get DeviceID,VolumeName,Size` writes `'wmic' is not recognized as an internal
+or external command` to STDERR and exits 9009 (PowerShell raises `CommandNotFoundException`).
+Redirect stdout only - the usual `> out.txt` in a scheduled task or over SSH - and `out.txt` is
+empty with nothing raised, which reads as "no drives" rather than "the tool is missing", so an
+inventory step reports a machine with no disks. Capture `2>&1` and check the exit code before
+parsing; better, do not call it at all - use `fsutil fsinfo drives` (cmd-native), or
+`Get-Volume` / `Get-Partition` / `Get-Disk`.
 
 ## Durations: measure, do not quote
 
@@ -561,7 +564,8 @@ unmeasured.
 - You staged a monitor under `C:\Windows\Temp` and are waiting on it across an upgrade
 - A check reports "not armed" and you cannot tell that from "could not read the guest"
 - You are believing a wrapper's failure verdict without asking the guest
-- A `wmic` query came back empty and you read it as the machine having none
+- A `wmic` query came back empty and you read it as the machine having none, without checking
+  stderr or the exit code
 
 ## Common mistakes
 

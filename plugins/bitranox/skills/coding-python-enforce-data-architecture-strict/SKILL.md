@@ -558,4 +558,6 @@ of stopping.
 2. Read `pyproject.toml` (if it exists) to identify configured tools
 3. Use TodoWrite to add one item per target file to the DoD checklist from Instructions step 1
 4. Create `.data_arch_violations.json` with initial state
-5. Launch parallel analysis subagents for STEP A
+
+Then enter the MAIN LOOP at STEP A, which begins by reading that state file and
+incrementing the pass counter before it launches any subagent.

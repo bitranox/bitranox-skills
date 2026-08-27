@@ -99,14 +99,17 @@ being present, the AppArmor profile is blocking the ioctls: the source likely us
 `lxc.apparmor.profile: unconfined`; diff the two `.conf` files rather than guessing, and add
 that line to the clone's `.conf` if the source has it. Any host-side `.conf` change needs a
 full `pct stop`/`pct start`, not a reload. As a fallback
-where you cannot grant the device, `tailscale up --tun=userspace` runs without a kernel tun
-device at lower throughput. Confirm the `tun` module is available on the HOST (all containers
+where you cannot grant the device, userspace networking runs without a kernel tun device at
+lower throughput. It is a `tailscaled` DAEMON flag, not a `tailscale up` flag, and the value
+is `userspace-networking`, not `userspace`: put `FLAGS="--tun=userspace-networking"` in
+`/etc/default/tailscaled` (or the unit's `ExecStart`), restart the daemon, then run
+`tailscale up` as normal. Confirm the `tun` module is available on the HOST (all containers
 share the host kernel).
 
 ## Boot ordering and staying up
 
-`tailscaled` can start before the network is up and lose the boot race (Tailscale issue
-12021). Order it after the network:
+`tailscaled` can start before the network is up and lose the boot race. Order it after the
+network:
 
 ```ini
 # /etc/systemd/system/tailscaled.service.d/override.conf
@@ -117,7 +120,9 @@ Wants=network-online.target
 
 `tailscaled` reconnects on its own via DERP, so no extra keepalive is needed for basic
 connectivity. For unattended fleet nodes, add a small watchdog that restarts `tailscaled`
-when its control long-poll goes dead (not merely when the process exists): probe
+when its control long-poll goes dead (not merely when the process exists - Tailscale issue
+12021 is exactly this failure, still open, where the daemon logs "control: map response
+long-poll timed out!" and never reconnects on its own): probe
 `tailscale status --json` for a recent control-plane contact on a timer, restart the unit on
 a stale/failed result. Build it self-healing per `bitranox:coding-resilience` (timeout,
 backoff, a stderr note on failure).
@@ -127,9 +132,14 @@ backoff, a stderr note on failure).
 MagicDNS answers on `100.100.100.100` (quad-100), but WHO answers it depends on the node's OS.
 On Linux, quad-100 is served by the LOCAL `tailscaled`, so it answers even with
 `accept-dns=false` (that flag only keeps `tailscaled` out of `/etc/resolv.conf`; it does not
-disable MagicDNS). On FreeBSD, including pfSense, `tailscaled` does NOT serve quad-100:
-`tailscale status` there reports `Tailscale DNS: disabled`, the tailnet route to
-`100.100.100.100` still exists, and a query against it just times out. That platform gap is the
+disable MagicDNS). On FreeBSD, including pfSense, `tailscaled` is reported NOT to serve quad-100: the tailnet
+route to `100.100.100.100` still exists, but a query against it times out. Verify that on the
+node itself before designing around it - `dig +time=3 +tries=1 @100.100.100.100
+<host>.<tailnet>.ts.net` answers on Linux, and a timeout there is the real tell.
+Do NOT use `tailscale dns status` as the tell: its `Tailscale DNS: disabled.` line reports the
+`accept-dns` pref (upstream reads `prefs.CorpDNS`), not the platform, so it says the same thing
+on a Linux node where quad-100 resolves perfectly well - and this skill tells you to run
+pfSense with `accept-dns=false` anyway. That platform gap is the
 trap - a resolver config that forwards to quad-100 is correct on Linux and dead on
 FreeBSD/pfSense with nothing wrong in the config itself.
 

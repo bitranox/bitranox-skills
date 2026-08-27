@@ -35,8 +35,10 @@ is giving you:
     names the file it is in.
   * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
     NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
-A corpus of zero documents makes every scenario look clean, so it is a distinct outcome
-(`unchecked`, exit 3), never a quiet pass.
+A corpus of zero documents makes every scenario look clean, so for `--corpus-cascade` it is a
+distinct outcome (`unchecked`, exit 3), never a quiet pass. `--corpus` does NOT get that guard:
+an empty or mistyped `--corpus` directory exits 0 as `clean` and only warns, so read the
+printed document count when you pass one.
 
 Run:
   `uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json`
@@ -45,8 +47,9 @@ Run:
 
 Exit codes: 0 = clean (neither leak found - this does NOT prove the RED can fail, only that
 these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 =
-usage/IO error, 3 = unchecked (a corpus was requested and assembled nothing, so the
-inherited-coverage check never ran). `--json` emits the machine-readable envelope.
+usage/IO error, 3 = unchecked (`--corpus-cascade` was given and assembled nothing, so the
+inherited-coverage check never ran; `--corpus` alone never yields 3). `--json` emits the
+machine-readable envelope.
 
 Installed plugin/marketplace skills are deliberately NOT assembled: their on-disk location is a
 function of the reader's plugin cache and installed versions, so any built-in path would be a

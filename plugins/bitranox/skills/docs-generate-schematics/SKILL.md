@@ -17,7 +17,9 @@ quality threshold or the iteration cap is hit.
 - `OPENROUTER_API_KEY` in the environment (both scripts talk to OpenRouter).
 - `httpx2` for the AI script: run it with `uv run`, which reads the script's PEP 723 block
   and fetches the dependency. Plain `python3` only works if httpx2 is already installed. The
-  wrapper script is stdlib-only.
+  wrapper script imports only stdlib, but it re-launches the AI script with the SAME
+  interpreter (`sys.executable`), so it needs `httpx2` just as much - run it under
+  `uv run --with httpx2` too, or the child exits 1 on its first import.
 
 ## Usage
 
@@ -27,8 +29,8 @@ uv run scripts/generate_schematic_ai.py "CONSORT participant flow for a two-arm 
 uv run scripts/generate_schematic_ai.py "Neural network architecture diagram" -o arch.png --iterations 2
 uv run scripts/generate_schematic_ai.py "Simple block diagram" -o diagram.png --doc-type poster
 
-# Thin wrapper (single shot, no review loop)
-python3 scripts/generate_schematic.py "Data pipeline overview" -o pipeline.png
+# Wrapper: same quality-review loop, with the iteration cap clamped to 2
+uv run --with httpx2 scripts/generate_schematic.py "Data pipeline overview" -o pipeline.png
 ```
 
 `--doc-type` tunes the acceptance threshold (a poster tolerates less detail than a paper

@@ -252,8 +252,9 @@ OK "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
 ## GitHub Thread Replies
 
 When replying to inline review comments on GitHub, reply in the comment thread, not as a
-top-level PR comment. `gh api` sends GET unless you give it a method or a field, so the reply
-needs both:
+top-level PR comment. `gh api` defaults to GET, but adding any field switches it to POST, so
+the `-f body=` below is what makes this a reply; `-X POST` is explicit for readability, not
+required:
 
 ```bash
 gh api -X POST repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies -f body='...'

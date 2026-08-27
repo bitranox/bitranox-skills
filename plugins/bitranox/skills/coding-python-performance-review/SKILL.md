@@ -52,16 +52,16 @@ Systematically identify performance issues  -  caching opportunities, uncompiled
 
 Use the Read tool to load referenced files for full details.
 
-| Tool                          | File                           | Purpose                                                   |
-|-------------------------------|--------------------------------|-----------------------------------------------------------|
-| Pure function finder (AST)    | find_cache_candidates.py       | Detect pure, expensive functions via AST analysis         |
-| Hotspot profiler              | find_hotspots.py               | Find frequently-called functions from cProfile data       |
-| Candidate prioritizer         | prioritize_cache_candidates.py | Cross-reference pure functions with hotspots              |
-| Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch        |
-| Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns |
-| Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data  |
+| Tool                          | File                           | Purpose                                                    |
+|-------------------------------|--------------------------------|------------------------------------------------------------|
+| Pure function finder (AST)    | find_cache_candidates.py       | Detect pure, expensive functions via AST analysis          |
+| Hotspot profiler              | find_hotspots.py               | Find frequently-called functions from cProfile data        |
+| Candidate prioritizer         | prioritize_cache_candidates.py | Cross-reference pure functions with hotspots               |
+| Cache profiling template      | profile_with_cache_template.py | Before/after profiling with lru_cache monkey-patch         |
+| Uncompiled regex finder (AST) | find_uncompiled_regex.py       | Flag re.match/search/findall with string literal patterns  |
+| Unbounded memory finder (AST) | find_unbounded_memory.py       | Flag whole-file/DB/log reads that materialize large data   |
 | Performance claims extractor  | validate_perf_claims.py        | Extract claims from a diff; YOU validate each by profiling |
-| Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison       |
+| Before/after comparator       | compare_performance.py         | Git-based before/after test-suite timing comparison        |
 
 ## Workflow
 
@@ -86,8 +86,9 @@ Step 5 (Merge & sort) -> Step 6 (Present one-by-one) ->
 When invoked to vet a performance claim in a diff rather than hunt for new ones, skip the
 discovery steps and use the two checker tools directly:
 
-- `validate_perf_claims.py <diff_file>` - extract any "Nx faster / N% faster" style claims from
-  the diff and check them against a real profiled run; report unproven or contradicted claims.
+- `validate_perf_claims.py <diff_file>` - EXTRACTS the "Nx faster / N% faster" style claim
+  phrases from the diff and prints them. It does no profiling and reaches no verdict: YOU
+  check each against a real profiled run and report the unproven or contradicted ones.
 - `compare_performance.py` - stash the working changes, time the test suite on the previous
   commit, restore, time again, and report the measured delta as before/after evidence.
 
@@ -361,7 +362,8 @@ Parse the six output files from Step 4. Output format reference:
 - `cache_candidates.txt`: `file:line - function()` + `Reason: ...`
 - `uncompiled_regex.txt`: `file:line - re.func(pattern, ...)` + `Fix: ...`
 - `hotspots.txt`: `file:line - function()` + `Calls: N, Cumtime: Xs`
-- `priority_cache_candidates.txt`: `file:line - function()`
+- `priority_cache_candidates.txt`: `**file:line - function()**` + `Action: ...` (the emitter
+  wraps this line in markdown bold; strip the `**` before lifting it into a finding)
 - `existing_caches.txt`: `file:line - @decorator function_name()` + `Verdict: ...`
 - `memory_candidates.txt`: `file:line - <obj>.read()/.fetchall()/...` + `Risk: ...`
 

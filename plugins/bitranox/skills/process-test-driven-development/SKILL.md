@@ -230,16 +230,17 @@ it is in. A clean result is WEAK: the check compares distinctive terms, so it ca
 paraphrase, and "no hit" means NOT CAUGHT rather than absent. Do not read a clean run as a sealed
 fixture.
 
-| Exit | Meaning                                                                                            |
-|------|----------------------------------------------------------------------------------------------------|
-| 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail           |
-| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it |
-| 2    | usage or IO error                                                                                  |
-| 3    | unchecked - the corpus assembled 0 documents, so the inherited check never ran                     |
+| Exit | Meaning                                                                                                                                                                                                                         |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail                                                                                                                                        |
+| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it                                                                                                                              |
+| 2    | usage or IO error                                                                                                                                                                                                               |
+| 3    | unchecked - `--corpus-cascade` assembled 0 documents, so the inherited check never ran. `--corpus` alone does NOT produce this: an empty or mistyped `--corpus` directory exits 0 with verdict "clean" and only warns on stderr |
 
 Exit 3 is its own outcome for a reason: an empty corpus makes every scenario look clean, so a
-mistyped start directory would otherwise read as a pass. The run always prints how many documents
-it read.
+mistyped `--corpus-cascade` start directory would otherwise read as a pass. `--corpus` carries no
+such guard, so when you pass one, read the printed document count yourself. The run always prints
+how many documents it read.
 
 If a hit comes back, rewrite the scenario (a different domain, de-telegraphed prose) and re-check
 before dispatching the real baseline run. If your corpus reuses one vocabulary throughout and

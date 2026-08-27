@@ -96,14 +96,19 @@ def test_hook_never_wedges_a_turn_on_bad_input():
 
 # ---- the nudge must name the SAFE FORM, not only the failure -----------------------------------
 # The fact `remote-powershell-file-not-inline` reached recurrence 3 with this hook already in
-# place, and named the reason: the nudge describes the failure without naming the wrapper that
-# already exists on the machine, leaving its reader to hand-roll the fix. Its own stated
-# escalation was to make the message name runps.sh.
+# place, and named the reason: a nudge that describes the failure without naming the safe FORM
+# leaves its reader to hand-roll the fix, and they hand-roll it wrong.
+#
+# It must name the form, NOT a particular script. An earlier version named `runps.sh`, which
+# ships nowhere in this plugin - it exists only on the maintainer's own machine - so every
+# other user was pointed at a command they do not have. Assert on `-File`, the part that is
+# true on every install.
 
-def test_the_notice_names_the_wrapper_that_does_it_correctly():
+def test_the_notice_names_the_safe_form():
     notice = W.build_notice("ssh host powershell -Command \"Get-Process | Select Name\"")
     assert notice is not None
-    assert "runps.sh" in notice, "a guard that does not name the safe form gets routed around"
+    assert "-File" in notice, "a guard that does not name the safe form gets routed around"
+    assert "runps.sh" not in notice, "names a script this plugin does not ship"
 
 
 def test_a_heredoc_body_is_data_not_a_command():

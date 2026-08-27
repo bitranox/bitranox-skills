@@ -1,6 +1,6 @@
 ---
 name: compuse-vnc
-description: Use when you must drive a remote machine, VM, or GUI/TUI program over VNC/RFB - sending keystrokes and clicks and reading the screen with OCR - because the target has no network, SSH, agent, or API. Covers Proxmox/hypervisor VM consoles (first boot before networking, or a VM that will never have a network), legacy line-of-business GUIs and dated installers that are only a window, and old TUI apps driven by keypresses. Nothing is installed on the target except its VNC server (Proxmox ships noVNC out of the box). Driven with the `vnc-remote-control` CLI (PyPI).
+description: Use when you must drive a remote machine, VM, or GUI/TUI program over VNC/RFB - sending keystrokes and clicks and reading the screen with OCR - because the target has no network, SSH, agent, or API. Covers Proxmox/hypervisor VM consoles (first boot before networking, or a VM that will never have a network), legacy line-of-business GUIs and dated installers that are only a window, and old TUI apps driven by keypresses. Nothing is installed on the target - it needs only a VNC/RFB server, which a Proxmox VM console already exposes on the host. Driven with the `vnc-remote-control` CLI (PyPI).
 ---
 
 # Driving a remote machine over VNC (compuse-vnc)

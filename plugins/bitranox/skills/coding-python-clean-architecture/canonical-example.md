@@ -227,13 +227,18 @@ def make_memory_account_repo(state: dict[str, Account]):
 # src/<pkg>/accounts/adapters/memory/outbox.py
 from collections.abc import Sequence
 from ...domain.events import DomainEvent
+from ...application.ports.uow import RequestContext
 
 def make_memory_outbox(storage: list[DomainEvent] | None = None):
-    events = storage if storage is not None else []
+    stored = storage if storage is not None else []
 
     class _Outbox:
-        async def add_all(self, evts: Sequence[DomainEvent], *, ctx=None) -> None:
-            events.extend(evts)
+        # Parameter name matches the port exactly: a caller using the port's own
+        # keyword, add_all(events=...), must not hit a TypeError here.
+        async def add_all(
+            self, events: Sequence[DomainEvent], *, ctx: RequestContext | None = None
+        ) -> None:
+            stored.extend(events)
 
     return _Outbox()
 ```
@@ -242,6 +247,8 @@ def make_memory_outbox(storage: list[DomainEvent] | None = None):
 
 ```python
 # src/<pkg>/accounts/adapters/memory/idempotency.py
+from typing import Any
+
 def make_memory_idempotency():
     results: dict[str, Any] = {}
 
@@ -261,14 +268,24 @@ def make_memory_idempotency():
 ```python
 # src/<pkg>/accounts/adapters/uow/memory_uow.py
 import asyncio
-from collections.abc import Callable, Mapping
-from typing import Any
-from ...application.ports.uow import RequestContext
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
+from ...application.ports.uow import RequestContext, UnitOfWork
 
-def make_memory_uow(*, deps_factory: Callable[[], Mapping[str, Any]]):
+D = TypeVar("D")
+T = TypeVar("T")
+
+def make_memory_uow(*, deps_factory: Callable[[], D]) -> UnitOfWork[D]:
     class _UoW:
-        async def run(self, fn, *, ctx: RequestContext | None = None, timeout: float | None = None):
-            deps = dict(deps_factory())
+        async def run(
+            self,
+            fn: Callable[[D, RequestContext], Awaitable[T]],
+            *,
+            ctx: RequestContext | None = None,
+            timeout: float | None = None,
+        ) -> T:
+            # No dict() wrapper: it erases the TypedDict back to dict[str, object].
+            deps = deps_factory()
             coro = fn(deps, ctx or RequestContext())
             if timeout is None:
                 return await coro
@@ -292,7 +309,7 @@ from ..accounts.adapters.memory.outbox import make_memory_outbox
 from ..accounts.adapters.memory.idempotency import make_memory_idempotency
 from ..accounts.adapters.uow.memory_uow import make_memory_uow
 from ..accounts.application.ports.clock import system_clock
-from ..accounts.application.use_cases.transfer_funds import create_transfer_funds
+from ..accounts.application.use_cases.transfer_funds import TransferDeps, create_transfer_funds
 
 def compose_testing():
     """Wire in-memory adapters for testing."""
@@ -302,10 +319,15 @@ def compose_testing():
     }
     outbox_storage: list[DomainEvent] = []
 
-    uow = make_memory_uow(deps_factory=lambda: {
-        "account_repo": make_memory_account_repo(state),
-        "outbox": make_memory_outbox(outbox_storage),
-    })
+    # An annotated factory, not a bare lambda: without the return type D infers as
+    # dict[...] and a mistyped key type-checks clean, then KeyErrors at runtime.
+    def _deps() -> TransferDeps:
+        return {
+            "account_repo": make_memory_account_repo(state),
+            "outbox": make_memory_outbox(outbox_storage),
+        }
+
+    uow = make_memory_uow(deps_factory=_deps)
 
     id_provider = lambda: uuid.uuid4().hex
     clock = system_clock()

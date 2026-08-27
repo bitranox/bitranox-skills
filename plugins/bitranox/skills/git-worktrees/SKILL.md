@@ -81,12 +81,21 @@ Follow this priority order. Explicit user preference always beats observed files
 
 3. **If there is no other guidance available**, default to `.worktrees/` at the project root.
 
+4. **Bind the outcome**, because every step below refers to the directory you just chose:
+   ```bash
+   LOCATION=$(ls -d .worktrees 2>/dev/null || ls -d worktrees 2>/dev/null || echo .worktrees)
+   BRANCH_NAME=<your-topic-branch>
+   ```
+
 #### Safety Verification (project-local directories only)
 
 **MUST verify directory is ignored before creating worktree:**
 
 ```bash
-git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/dev/null
+# Check the directory you CHOSE, not both names. `git check-ignore` matches a PATHNAME and
+# does not care whether it exists, so testing both with `||` reports "ignored" whenever
+# EITHER name is listed - including the one you are not about to use.
+git check-ignore -q "$LOCATION" 2>/dev/null
 ```
 
 **If NOT ignored:** Add to .gitignore, commit the change, then proceed.
@@ -96,7 +105,8 @@ git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/d
 #### Create the Worktree
 
 ```bash
-# Determine path based on chosen location
+# $LOCATION and $BRANCH_NAME were bound in Directory Selection above. Unset, this
+# expands to "/<branch>" at the filesystem root, and the failure looks like a sandbox denial.
 path="$LOCATION/$BRANCH_NAME"
 
 git worktree add "$path" -b "$BRANCH_NAME"

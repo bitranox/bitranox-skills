@@ -149,7 +149,7 @@ IMPORTANT - NO FIGURE NUMBERS:
         self._last_error = None  # Track last error for better reporting
         self.base_url = "https://openrouter.ai/api/v1"
         # Nano Banana 2 - Google's advanced image generation model
-        # https://openrouter.ai/google/gemini-3-pro-image-preview
+        # https://openrouter.ai/google/gemini-3.1-flash-image-preview
         self.image_model = "google/gemini-3.1-flash-image-preview"
         # Gemini 3.1 Pro Preview for quality review - excellent vision and reasoning
         self.review_model = "google/gemini-3.1-pro-preview"

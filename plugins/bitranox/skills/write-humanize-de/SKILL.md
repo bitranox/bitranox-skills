@@ -54,10 +54,14 @@ Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
 enthalten solche Zeichen absichtlich. Deshalb steht jedes solche Beispiel in einem
-Code-Span oder Codeblock: Hook und `strip_typographic_tells.py` teilen sich EINE Definition von
-Code (`tell_chars.transform_outside_code`), sodass das exakte Zeichen sowohl den Hook als auch
-einen versehentlichen Durchlauf übersteht - eine Datei, die der Sweep durchlässt, kann das Skript
-nicht mehr verändern. Neue Beispiele
+Code-Span oder Codeblock: Hook (`tell_chars.find_tell_lines`) und `strip_typographic_tells.py`
+(`tell_chars.transform_outside_code`) sind zwei Läufe über dieselben `tell_chars`-Regeln für
+Fences und Inline-Spans, sodass ein Geviertstrich in einem Span oder Codeblock beide übersteht.
+Es sind Zwillinge, keine gemeinsame Funktion, und für eine Zeichenklasse macht das einen
+Unterschied: ein Codepoint, der SELBST ein Zeilenumbruch ist (U+2028, U+2029, U+0085), bleibt
+für den Detektor unsichtbar und wird vom Skript trotzdem umgeschrieben, weil `str.splitlines()`
+genau an diesen Zeichen trennt. Ein sauberer Sweep garantiert also nicht, dass das Skript die
+Datei unverändert lässt. Neue Beispiele
 ebenfalls in Backticks setzen. Danach die inhaltlichen Umschreibungen vornehmen.
 
 ---

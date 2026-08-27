@@ -34,7 +34,7 @@ domain__parse_service() {
     local def="$1"
     declare -n _svc="$2"
 
-    IFS=: read -r _svc[name] _svc[host] _svc[port] <<< "$def"
+    IFS=: read -r "_svc[name]" "_svc[host]" "_svc[port]" <<< "$def"
 }
 
 # Determine health status from check result
@@ -60,6 +60,9 @@ domain__build_summary() {
     local total=0 healthy=0 degraded=0 down=0
 
     while IFS=' ' read -r _name status _time; do
+        # A here-string always appends a newline, so an empty or newline-terminated
+        # accumulator still yields one blank record. Guard the RECORD, not the string.
+        [[ -n "$_name" ]] || continue
         (( ++total ))
         case "$status" in
             healthy)  (( ++healthy )) ;;
@@ -118,6 +121,7 @@ domain__build_summary() {
 # Check health of all services from a config source.
 # $1=check_tcp_fn $2=read_services_fn $3=write_report_fn
 # $4=source_path $5=report_dest $6=threshold_ms
+# $7=name of the caller's report variable (nameref out-parameter)
 uc__check_all_services() {
     local check_tcp_fn="$1"
     local read_services_fn="$2"
@@ -125,6 +129,7 @@ uc__check_all_services() {
     local source_path="$4"
     local report_dest="$5"
     local threshold="${6:-1000}"
+    declare -n _uc_report_out="$7"
 
     # Read service list via port
     local service_lines
@@ -159,10 +164,13 @@ uc__check_all_services() {
     local report
     report=$(domain__build_summary "$results")
 
+    # Hand the report back through the nameref, NOT stdout: the write port below
+    # may print to stdout itself, and a caller capturing us would swallow it and
+    # get the report twice.
+    _uc_report_out="$report"
+
     # Write via port (adapter does I/O)
     "$write_report_fn" "$report" "$report_dest" || return 1
-
-    echo "$report"
 }
 ```
 
@@ -184,6 +192,8 @@ adapter__check_tcp_nc() {
 
     # Positional args into a SINGLE-quoted body: interpolating them makes `bash -c` re-parse the
     # values as code, so a host of `a;id;x` from the config file would run `id`.
+    # The single quotes above ARE the fix; expanding here would be the bug, so silence SC2016.
+    # shellcheck disable=SC2016
     if timeout "$timeout_sec" bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
         end=$(date +%s%N)
         elapsed=$(( (end - start) / 1000000 ))
@@ -292,14 +302,16 @@ readonly TRACE_ID="${TRACE_ID:-$(date +%s%N)}"
 log_info()  { echo "[INFO]  [$TRACE_ID] $*" >&2; }
 log_error() { echo "[ERROR] [$TRACE_ID] $*" >&2; }
 
-# Support sourcing for tests: `source script.sh --source-only`
-[[ "${1:-}" == "--source-only" ]] && return 0
-
 # Source layers (in multi-file, these would be separate files)
 # source lib/domain.sh
 # source lib/application.sh
 # source lib/adapters/file.sh
 # source lib/adapters/tcp.sh
+
+# Support sourcing for tests: `source script.sh --source-only`. This MUST come
+# AFTER the layer sources above: put it first and a test sourcing this file
+# returns 0 having defined nothing.
+[[ "${1:-}" == "--source-only" ]] && return 0
 
 cleanup() {
     # Remove temp files, release locks, etc.
@@ -325,16 +337,19 @@ main() {
     local write_fn="adapter__write_report_to_file"
     [[ "$report_dest" != "-" ]] || write_fn="adapter__write_report_to_stdout"
 
-    # Execute use case with wired adapters
-    local result rc=0
-    result=$(uc__check_all_services \
+    # Execute use case with wired adapters. NOT inside a command substitution:
+    # the stdout write adapter prints the report, and a capture here would
+    # swallow it and corrupt $result.
+    local result="" rc=0
+    uc__check_all_services \
         adapter__check_tcp_nc \
         adapter__read_services_from_file \
         "$write_fn" \
         "$config_file" \
         "$report_dest" \
         "$threshold" \
-    ) || rc=$?
+        result \
+        || rc=$?
 
     if (( rc != 0 )); then
         case $rc in
@@ -369,7 +384,8 @@ set -euo pipefail
 # test_health_check.sh -- Unit and stub tests
 
 # Source the script under test (all functions)
-source "$(dirname "$0")/../health-check.sh" --source-only 2>/dev/null || true
+# No `2>/dev/null || true` here: a source that defines nothing must be loud.
+source "$(dirname "$0")/../health-check.sh" --source-only
 
 PASS=0 FAIL=0
 
@@ -413,9 +429,12 @@ test_classify_health__down() {
 }
 
 test_build_summary__all_healthy() {
-    local input=$'web healthy 50\napi healthy 30'
+    # The trailing newline is what uc__check_all_services actually produces.
+    # Without it this test never sees the accumulator's real shape.
+    local input=$'web healthy 50\napi healthy 30\n'
     local result
     result=$(domain__build_summary "$input")
+    assert_eq "counts both services" "2" "$(echo "$result" | grep '^total=' | cut -d= -f2)"
     assert_eq "overall ok" "ok" "$(echo "$result" | grep '^overall=' | cut -d= -f2)"
 }
 
@@ -435,15 +454,15 @@ stub__write_report_noop() {
 }
 
 test_uc__check_all_services() {
-    local result
-    result=$(uc__check_all_services \
+    local result=""
+    uc__check_all_services \
         stub__check_tcp_always_healthy \
         stub__read_services \
         stub__write_report_noop \
         "/fake/path" \
         "/fake/dest" \
         1000 \
-    )
+        result
     local overall
     overall=$(echo "$result" | grep '^overall=' | cut -d= -f2)
     assert_eq "all healthy -> ok" "ok" "$overall"

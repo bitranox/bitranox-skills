@@ -40,9 +40,9 @@ _NOTICE = (
     "a layer you are not quoting for.\n"
     "Write the script to a .ps1 file, copy it over, and run it with -File <path>: a file path has "
     "nothing for cmd.exe to eat, and you get local syntax checking plus an artifact you can diff. "
-    "A wrapper already does that pair - `runps.sh <local.ps1> [host] [user] [keyfile]` "
-    "syntax-checks the script locally, then scp's it and runs it with -File - so reach for it "
-    "instead of hand-rolling the copy. Detail: bitranox:compuse-ssh."
+    "Wrap that pair in a script of your own once - syntax-check the .ps1 with `pwsh -NoProfile "
+    "-Command \"$null = [ScriptBlock]::Create((Get-Content -Raw <file>))\"`, then scp it and run "
+    "it with -File - so you are not hand-rolling the copy every time. Detail: bitranox:compuse-ssh."
 )
 
 

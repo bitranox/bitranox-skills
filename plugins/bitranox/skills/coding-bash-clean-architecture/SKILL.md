@@ -145,8 +145,8 @@ domain__parse_record() {
 
     local key="${input%%:*}"
     local val="${input#*:}"
-    _out[name]="$key"
-    _out[value]="$val"
+    _out["name"]="$key"
+    _out["value"]="$val"
     # No I/O, no external commands  -  pure parameter expansion
 }
 

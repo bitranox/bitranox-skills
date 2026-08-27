@@ -28,9 +28,11 @@ lone positional gate (`-- <cmd ...>`) may be labeled by a single `--name` too, s
 then only one gate to label. Any other placement, and an empty label, is a usage error (exit 2),
 never a gate result. An unnamed gate is labeled by its whole command, never by argv[0].
 
-Run:
-  uv run scripts/gate.py --log /tmp/g.log -- pytest -q
-  uv run scripts/gate.py --log /tmp/g.log --summary "passed" \\
+Run (plain python3, NOT uv run: this jig declares no dependencies, and uv run puts its own
+ephemeral interpreter on the environment the CHILD gates inherit - measured, a gate shelling
+out to `python3 -m pytest` then died with `No module named pytest` and reported a false RED):
+  python3 scripts/gate.py --log /tmp/g.log -- pytest -q
+  python3 scripts/gate.py --log /tmp/g.log --summary "passed" \\
       --gate "pytest -q" --name "unit tests" \\
       --gate "ruff check src" \\
       --then "git push origin HEAD"

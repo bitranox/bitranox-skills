@@ -56,9 +56,14 @@ heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
 mark, bullet) untouched. Do not run it on this skill file itself - the examples below
 contain those characters on purpose. That is also why every such example is kept inside a
-code span or fenced block: the hook and `strip_typographic_tells.py` now share ONE definition of
-code (`tell_chars.transform_outside_code`), so an inline span and a fenced block survive both - a
-file the sweep passes cannot be rewritten by the script. That agreement is the protection; before
+code span or fenced block: the hook (`tell_chars.find_tell_lines`) and
+`strip_typographic_tells.py` (`tell_chars.transform_outside_code`) are two walks over the same
+`tell_chars` fence and inline-span rules, so an em dash inside a span or a fence survives both.
+They are twins, not one function, and the difference matters for one class of character: a
+codepoint that is ITSELF a line break (U+2028, U+2029, U+0085) is invisible to the detector and
+still rewritten by the script, because `str.splitlines()` breaks on exactly those. So a clean
+sweep is not a promise that the script will leave the file alone. Keeping the examples in
+backticks is the protection; before
 it, the script rewrote the tell inside a span and inside a fence alike. A prose warning alone did
 not protect them either (a
 past pass flattened the curly-quote example into two identical halves). Put any new

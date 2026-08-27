@@ -162,7 +162,19 @@ Two traps, both of which produce a green run and a broken host:
   and the node ends with no zram at all.
 - **Skip on the DESIRED STATE, not on liveness.** A guard that returns early whenever zram is
   active silently ignores a changed `zram-size`. Compare `/sys/block/zram0/disksize` against the
-  configured value; if they differ, `swapoff` and reset before re-creating.
+  configured value, but CONVERT FIRST: the kernel reports `disksize` in BYTES while
+  `zram-generator.conf`'s `zram-size` is in MEGABYTES, so an 8192 device reads 8589934592.
+  Compared raw they are never equal, which turns this guard into the unconditional
+  swapoff/reset the bullet above warns against.
+
+  ```bash
+  want_mb=$(awk -F= '/^zram-size/ {gsub(/ /,"",$2); print $2}' /etc/systemd/zram-generator.conf)
+  have_bytes=$(cat /sys/block/zram0/disksize)
+  [ "$have_bytes" -eq "$(( want_mb * 1024 * 1024 ))" ] || need_reset=1
+  ```
+
+  `zram-size` also accepts expressions (`min(ram / 10, 2048)`); resolve one to a number before
+  comparing, or the arithmetic above fails rather than reporting a difference.
 
 If the host runs a module allowlist, `zram` and its compression backends must be whitelisted, and
 that block is silent - see `bitranox:infra-modulejail`.

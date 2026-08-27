@@ -36,7 +36,11 @@ in the background while downloading.
    job needs only a few. Size with a generous `~100%` margin: `N ~= 2 x concurrency` (e.g. 8-wide is
    `--need ~16`, not thousands). The over-provision is what lets the speed-weighted pick run the load on
    the FASTEST proxies while the slower half idles as warm backup (effectively phased out - rarely
-   picked), and the background refresh draws in a replacement the moment one dies. Distribute requests
+   picked). That warm backup is the ONLY instant replacement: a proxy that dies is banned and the
+   next pick skips it immediately. The background refresh is what REFILLS the backup, and it is
+   slow - with `--background-discovery` it discovers and tops up every 10 minutes (hardcoded, and
+   the first pass is at t+10min, not t+0); without that flag it never runs at all. Size `--need`
+   to survive ten minutes of attrition rather than to be rescued from it. Distribute requests
    across the pool so no single exit-IP is hammered.
 4. **Download in parallel, wide.** Most free proxies are awfully slow (tens of seconds each), so
    parallelism is the only way to make progress: 8 workers minimum, 16 when the pool is large.

@@ -200,9 +200,13 @@ def matches(cfg, pin):
     return hmac.compare_digest(computed, cfg["host_secret_hash"])
 
 
-cfg = json.load(open(sys.argv[1], encoding="utf-8"))
-print(sys.argv[2], matches(cfg, sys.argv[2]))
+# Guarded so this file can be imported by the control below without reading a real config.
+if __name__ == "__main__" and len(sys.argv) > 2:
+    cfg = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(sys.argv[2], matches(cfg, sys.argv[2]))
 ```
+
+Save that as `crdpin.py`.
 
 **The argument order carries the whole result.** `host_id` is the key and the PIN is the
 message. Swap them and the comparison fails for every possible input, so the check reports a
@@ -224,11 +228,16 @@ resolving - manufacture one. Build a config of your own with a `host_id` and a P
 and require the same function to return `True` on it:
 
 ```python
+# Same directory as crdpin.py above. Needs no config file and no argv, so it runs
+# BEFORE you touch the real one - which is the whole point of a positive control.
+from crdpin import base64, hashlib, hmac, matches
+
 host_id, pin = "test-host-id", "999000"
 probe = {"host_id": host_id,
          "host_secret_hash": "hmac:" + base64.b64encode(
              hmac.new(host_id.encode(), pin.encode(), hashlib.sha256).digest()).decode()}
 assert matches(probe, pin) and not matches(probe, "111222")
+print("control OK: matches() reports True for the right PIN and False for a wrong one")
 ```
 
 That is the positive control, and it needs no network and no correct answer in advance. Run it
