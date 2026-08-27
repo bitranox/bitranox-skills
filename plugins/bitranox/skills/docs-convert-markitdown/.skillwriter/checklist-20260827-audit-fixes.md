@@ -79,3 +79,6 @@ been for: the API as documented does not error, it silently does nothing.
       which the repo-gate rejected: that is not valid YAML, and the regex front-matter readers
       recover the value anyway so nothing downstream would have noticed. Reworded with ` - ` and
       re-parsed with a real YAML loader, not a regex.
+- [x] `pages` removed from the description. It was filler introduced by the phrase "scanned pages"
+      and it occupied one of the 14 head slots, displacing `epub`; `scanned` alone carries the
+      meaning. Measured before and after: the head now ends `... html, json, epub`.

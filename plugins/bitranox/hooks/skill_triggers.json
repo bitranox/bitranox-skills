@@ -442,12 +442,12 @@
   "xlsx",
   "images",
   "scanned",
-  "pages",
   "tesseract",
   "audio",
   "transcription",
   "html",
-  "json"
+  "json",
+  "epub"
  ],
  "docs-generate-schematics": [
   "document",
