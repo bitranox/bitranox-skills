@@ -1239,3 +1239,49 @@ def test_lf_endings_flags_crlf_whatever_the_name_encodes(tmp_path, name):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     assert any(name in f for f in RG.check_lf_endings(tmp_path))
+
+
+def git_repo_with_origin(tmp_path, files):
+    """A repo carrying an origin/master ref, so the origin-comparing checks actually run.
+
+    Both checks below return [] the moment `rev-parse --verify origin/master` fails, so without
+    this ref they pass while asserting nothing - which is how they came to have no test at all.
+    """
+    git_repo(tmp_path, files)
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                    "commit", "-q", "--no-verify", "-m", "base"], cwd=tmp_path, check=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/master", head],
+                   cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_changed_vs_origin_returns_a_non_ascii_path_unquoted(tmp_path):
+    """`git diff --name-only` quotes exactly like `ls-files` does.
+
+    These paths feed a regex that decides whether a changed SKILL.md needs its skill-writer
+    receipt, so a quoted name does not merely look wrong - it stops matching, and the receipt
+    requirement silently lapses for that skill.
+    """
+    git_repo_with_origin(tmp_path, {UMLAUT_NAME: "x = 1\n", "plain.py": "x = 1\n"})
+    (tmp_path / UMLAUT_NAME).write_text("x = 2\n", encoding="utf-8")
+    (tmp_path / "plain.py").write_text("x = 2\n", encoding="utf-8")
+    assert sorted(RG._changed_vs_origin(tmp_path)) == sorted(["plain.py", UMLAUT_NAME])
+
+
+def test_version_bumped_fires_when_a_plugin_file_changes_without_a_bump(tmp_path):
+    """Coverage for a check that had none, in both directions.
+
+    Quoting cannot change THIS verdict - the function only tests the changed list for emptiness,
+    and a quoted path is just as non-empty - so this is not a quoting regression test. It is here
+    because the check now enumerates through a helper it did not use before, and nothing else
+    proves it still fires, or still goes quiet once the version moves.
+    """
+    pj = "plugins/bitranox/.claude-plugin/plugin.json"
+    git_repo_with_origin(tmp_path, {pj: '{"version": "1.0.0"}\n',
+                                    "plugins/bitranox/hooks/x.py": "x = 1\n"})
+    (tmp_path / "plugins" / "bitranox" / "hooks" / "x.py").write_text("x = 2\n", encoding="utf-8")
+    assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
+    (tmp_path / pj).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
+    assert RG.check_version_bumped(tmp_path) == []

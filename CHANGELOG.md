@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.3]
+
+### Added
+
+- **Tests for the two `repo-gate` checks that 5.271.2 converted but nothing covered.**
+  `_changed_vs_origin` and `check_version_bumped` both return `[]` the moment
+  `rev-parse --verify origin/master` fails, which is why they had no test at all: without that ref
+  they pass while asserting nothing. The new fixture mints the ref with `update-ref`, so both
+  checks actually run.
+
+  `_changed_vs_origin` gets the same non-ASCII case as the scanners, and it is a real regression
+  test: its paths feed the regex deciding whether a changed `SKILL.md` needs its skill-writer
+  receipt, so a quoted name does not just look wrong, it stops matching and the receipt
+  requirement lapses in silence. RED-verified - the pre-fix form returns
+  `"f\303\244hig.py"` and the test names it.
+
+  `check_version_bumped` gets coverage rather than a quoting test, and says so: that function only
+  tests the changed list for emptiness, and a quoted path is exactly as non-empty, so quoting
+  cannot change its verdict. It is asserted in both directions - the finding fires on a plugin
+  change with a stale version, and goes quiet once the version moves - and RED-verified against a
+  mutation that blinds it to the change.
+
 ## [5.271.2]
 
 ### Fixed
