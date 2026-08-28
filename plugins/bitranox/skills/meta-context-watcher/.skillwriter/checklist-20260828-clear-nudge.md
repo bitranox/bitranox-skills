@@ -74,15 +74,34 @@ measured, against the shipped 5.268.0 text.
 - [x] Control already held: when the file IS `handover.md` at the repo root, both earlier arms sent
       the literal unchanged.
 
-**Verdict: the template does not get parroted.** 2 of 2 adapted, including the case where parroting
-would have pointed the reader at another session's file. The predicted defect did not reproduce, so
-no change is made - adding wording for it would be content for a hypothetical case.
+**Verdict: OVERTURNED - the template DOES get parroted.** The two arms above ran on sonnet only.
+Re-run on haiku, a more literal tier, the worktree arm sent a bare "Handover written to
+`handover.md`" for a file in a worktree while the main checkout held its own - naming the wrong
+file. Its gaps section: "The skill's template nudge refers to `handover.md` without a path,
+assuming one checkout per session context. I decided not to qualify the path."
 
-**Residual, recorded not closed:** both arms reached the right answer by INFERENCE and said so.
-Arm A: "'send it as written' guards against softening the `/clear` instruction, not against filling
-the placeholder in with the file's real name ... this substitution is my inference, not something
-the text states." Arm B: "a stricter reading would have me send the template's exact wording
-unchanged." So the prose reads as ambiguous even though both resolved it correctly. Declined for
-now on the evidence: behaviour is right 2 of 2, and the user's standing decision is to keep the
-wording fixed. Re-open if a run is ever observed emitting the bare literal for a file that is
-somewhere else.
+- [x] sonnet, nested path: adapted. sonnet, worktree: adapted.
+- [x] haiku, nested path: adapted. haiku, worktree: PARROTED.
+
+Three of four adapted, which is why two runs on one tier read as a clean pass. Literal
+template-following is a weak-model failure, so the tier that exposes it is the one the first
+round did not use.
+
+## Fix and verification
+
+- [x] The template line now states that `handover.md` is the path slot rather than a literal, and
+      that a bare basename is for the unambiguous case only.
+- [x] The failing arm re-run on haiku now sends "Handover written to `rate-limiting/handover.md`" -
+      a path that resolves from either checkout.
+- [x] Control against over-triggering: a single ordinary checkout with no other `handover.md` on
+      the machine still sends the bare `handover.md` unchanged. The fix does not turn every reply
+      into an absolute path.
+- [x] Residual: "the path that reaches the file from where the user is standing" is under-specified
+      when two terminals are open. The arm resolved it sensibly with a relative path good from
+      either. Left as judgment rather than over-specified.
+
+## Method note for the next edit
+
+A pass measured on one model tier is not a pass. The failure mode being tested (following a literal
+template too literally) is exactly the behaviour a capable model reasons its way around, so the
+arms that matter are the least inferential ones available.

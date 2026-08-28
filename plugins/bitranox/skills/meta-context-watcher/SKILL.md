@@ -70,10 +70,16 @@ thing dies with this session: what you were part-way through, and why you chose 
    and tell the user to type `/clear`. It is an instruction, not an invitation: "type `/clear` when
    you're ready" hands back a decision nobody asked them to make. You cannot run it yourself -
    built-in slash commands are not invocable by the model - and that is the half that goes missing
-   when the wording is rebuilt from scratch, so send it as written:
+   when the wording is rebuilt from scratch, so send it as written, changing one thing only - the
+   path:
 
    > Handover written to `handover.md`. Type `/clear` to start the next session - I cannot run it
    > for you.
+
+   `handover.md` there is the path slot, not a literal to copy. Send the path that reaches the file
+   from where the user is standing, and a bare basename only when that is unambiguous: a second
+   `handover.md` in another worktree, checkout or package makes the bare name point at somebody
+   else's file, and the reader cannot tell which one they opened.
 
    **Nothing follows it.** Not a recap of what you just wrote, not an offer to keep going, not "let
    me know if you want X first", not a question. A reply that ends by inviting more work invites it
