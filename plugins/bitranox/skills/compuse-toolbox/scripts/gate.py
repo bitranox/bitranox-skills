@@ -28,6 +28,19 @@ lone positional gate (`-- <cmd ...>`) may be labeled by a single `--name` too, s
 then only one gate to label. Any other placement, and an empty label, is a usage error (exit 2),
 never a gate result. An unnamed gate is labeled by its whole command, never by argv[0].
 
+Two ways a correct exit status still proves nothing, both closed here:
+
+  * A SHARED log. The default used to be one fixed `<tempdir>/gate.log`. Gates APPEND, so two
+    runs at once (parallel agents, two worktrees, a CI matrix cell) wrote into one file and each
+    read the other's lines back - measured 2026-07-29, a PASS was read beside a different
+    worktree's log. The default is now a fresh per-invocation file; `--log` still pins an
+    explicit path, which is what a caller who wants to read the log afterwards should use.
+  * A filter that matched NOTHING. `pytest -k <typo>` and `cargo test <prefix no test starts
+    with>` run zero tests and exit 0, so the status says green about work that never happened.
+    Each gate's output is now read for the count the runner itself reports, that count is
+    printed, and a recognised count of ZERO fails the gate whatever it exited. A gate that is
+    not a test runner reports no count and is judged on its status alone.
+
 Run (plain python3, NOT uv run: this jig declares no dependencies, and uv run puts its own
 ephemeral interpreter on the environment the CHILD gates inherit - measured, a gate shelling
 out to `python3 -m pytest` then died with `No module named pytest` and reported a false RED):
@@ -52,10 +65,81 @@ from pathlib import Path
 
 _NAME_WIDTH = 56                                                # keeps one report line readable
 
-# NOT "/tmp/gate.log": on Windows that string is DRIVE-RELATIVE, not absolute - Path turns it
-# into `\tmp\gate.log`, so the log silently lands on whichever drive happens to be current
-# and the "log: ..." line printed at the end names a path the user cannot open.
-DEFAULT_LOG = str(Path(tempfile.gettempdir()) / "gate.log")
+# NOT "/tmp": on Windows that string is DRIVE-RELATIVE, not absolute - Path turns it into
+# `\tmp`, so the log silently lands on whichever drive happens to be current and the
+# "log: ..." line printed at the end names a path the user cannot open.
+def default_log_path() -> str:
+    """A FRESH log file for THIS invocation - deliberately never a shared, fixed name.
+
+    The old default was the one constant path `<tempdir>/gate.log`. Gates append to it, so two
+    runs at the same time interleave into a single file and each one greps the other's output
+    back out: measured 2026-07-29, a PASS was read beside another worktree's log. Nothing in the
+    report shows it, because the `log:` line names the same path either way - the wrong answer
+    is indistinguishable from the right one, which is the exact failure this tool exists to
+    prevent, arriving through the log instead of through a pipe.
+
+    mkstemp rather than an f-string on the pid: it creates the file ATOMICALLY under a name
+    nothing else holds, so two runs cannot be handed the same path even when they share a pid
+    namespace (containers) or a pid has been recycled. The pid stays in the PREFIX because it is
+    what a human greps for when several of these are lying around in the temp dir.
+
+    No `dir=`, so mkstemp resolves the temp dir through tempfile.gettempdir() at CALL time and
+    TMPDIR set by the caller is honoured. A module constant computed at import would freeze
+    whatever was set when the module was first loaded, which is the same "decided once, shared
+    by everyone after" shape as the fixed log name being removed here.
+    """
+    fd, path = tempfile.mkstemp(prefix=f"gate-{os.getpid()}-", suffix=".log")
+    os.close(fd)                                    # only the NAME is wanted; run_gates reopens it
+    return path
+
+
+# What a test runner says it RAN. Kept as module constants so the shapes are readable together
+# and a new runner is one line rather than a rewrite of the matcher.
+_CARGO_RUNNING = re.compile(r"^\s*running (\d+) tests?\b", re.MULTILINE)
+_PYTEST_SELECTED = re.compile(r"^.*?\b(\d+) selected\b", re.MULTILINE)
+_PYTEST_COLLECTED = re.compile(r"^.*?\bcollected (\d+) items?\b", re.MULTILINE)
+_PYTEST_NO_TESTS = re.compile(r"^.*\bno tests ran\b", re.MULTILINE)
+
+
+def observed_test_count(text: str) -> int | None:
+    r"""How many tests the gate's OWN output says it ran, or None if it is not a test run.
+
+    None and 0 are DIFFERENT answers and must stay so. None means "this gate is not a test
+    runner" - `ruff check`, `git status`, a build - and it goes on being judged by its exit
+    status alone. 0 means "a test runner ran and nothing was there to run", which is the state
+    this function exists to catch. Defaulting an unrecognised gate to 0 would fail every lint
+    gate in every caller's pipeline, so the recogniser has to be able to say "not applicable".
+
+    That is also why the shapes below are narrow rather than a generic "(\d+) (passed|errors)"
+    sweep: a linter printing `Found 0 errors.` is a GREEN run, and a matcher loose enough to
+    read a count out of it turns the tool's own success line into a red gate.
+
+    cargo/libtest prints one `running N tests` line per test BINARY, so those SUM - a workspace
+    whose lib tests ran and whose integration binary matched nothing has still run tests.
+
+    pytest is read in the order that survives DESELECTION, because deselection is precisely the
+    zero-match case: `collected 300 items / 300 deselected / 0 selected` is a filter that hit
+    nothing, and its `collected` number is 300, so reading `collected` alone reports the empty
+    run as a 300-test pass. The SELECTED count wins wherever pytest prints one. `no tests ran`
+    is pytest's own wording for the same state under `-q`, where it prints no counts at all.
+
+    Known limit, deliberately left: a `-q` run that DID run tests prints only `5 passed`, which
+    is not matched here, so it reports None and is judged on its status. That is the safe
+    direction - the dangerous state (zero) is still caught by `no tests ran`, and widening the
+    match to the summary line is what would produce the false red described above.
+    """
+    cargo = [int(n) for n in _CARGO_RUNNING.findall(text)]
+    if cargo:
+        return sum(cargo)
+    selected = _PYTEST_SELECTED.findall(text)
+    if selected:
+        return int(selected[-1])
+    collected = _PYTEST_COLLECTED.findall(text)
+    if collected:
+        return sum(int(n) for n in collected)
+    if _PYTEST_NO_TESTS.search(text):
+        return 0
+    return None
 
 
 def _windows_argv(command):
@@ -227,6 +311,16 @@ class GateResult:
     argv: list[str]
     returncode: int
     summary_lines: list[str] = field(default_factory=list)
+    test_count: int | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Green only if it exited 0 AND, where it is a test run, actually ran a test.
+
+        `test_count != 0` is True for None too, and that is the point: a gate that is not a test
+        runner has no count to refuse and keeps being judged on its status alone.
+        """
+        return self.returncode == 0 and self.test_count != 0
 
 
 @dataclass
@@ -235,8 +329,9 @@ class GateReport:
 
     @property
     def ok(self) -> bool:
-        """True only when EVERY gate exited 0. A missing binary counts as failed."""
-        return all(r.returncode == 0 for r in self.results)
+        """True only when EVERY gate passed. A missing binary counts as failed, and so does a
+        test gate that ran zero tests however it exited - see GateResult.ok."""
+        return all(r.ok for r in self.results)
 
 
 def run_gates(gates, log_path, summary: str = "") -> GateReport:
@@ -269,7 +364,11 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
             log.write(out)
             log.flush()
             lines = [ln for ln in out.splitlines() if pattern.search(ln)] if pattern else []
-            results.append(GateResult(name=name, argv=list(argv), returncode=rc, summary_lines=lines))
+            # Counted from the gate's OWN combined output, not from the log file: the log is
+            # opened in append mode and may already hold earlier gates, so reading it back
+            # would attribute a previous gate's tests to this one.
+            results.append(GateResult(name=name, argv=list(argv), returncode=rc,
+                                      summary_lines=lines, test_count=observed_test_count(out)))
 
     return GateReport(results=results)
 
@@ -277,8 +376,14 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
 def format_report(report: GateReport, log_path) -> str:
     out = []
     for r in report.results:
-        mark = "PASS" if r.returncode == 0 else "FAIL"
-        out.append(f"  [{mark}] {r.name} (rc={r.returncode})")
+        mark = "PASS" if r.ok else "FAIL"
+        # The count is printed for EVERY recognised test run, not only the zero one: a reader
+        # who never sees the number cannot notice it halving between two runs either.
+        counted = "" if r.test_count is None else f" [{r.test_count} tests]"
+        out.append(f"  [{mark}] {r.name} (rc={r.returncode}){counted}")
+        if r.test_count == 0:
+            out.append("         REFUSED: ran 0 tests. A filter matching nothing exits 0, so "
+                       "this gate's status is not evidence that anything was checked.")
         out.extend(f"         {ln.strip()}" for ln in r.summary_lines[:3])
     out.append("")
     out.append("ALL GATES PASSED" if report.ok else "GATE RED - follow-up NOT run")
@@ -302,8 +407,11 @@ def main(argv=None) -> int:
                         "overrides any 'name=' prefix on that gate and is the only way to give "
                         "a label with spaces). A lone positional gate may be labeled too. An "
                         "empty or blank label is a usage error, not a silently ignored one")
-    p.add_argument("--log", default=DEFAULT_LOG,
-                   help=f"append all gate output here [{DEFAULT_LOG}]")
+    p.add_argument("--log", default=None,
+                   help="append all gate output here [default: a FRESH per-invocation file "
+                        f"under {tempfile.gettempdir()}; the old fixed default was one shared "
+                        "path, so two concurrent runs appended into a single file and a reader "
+                        "could not tell whose output was whose]")
     p.add_argument("--summary", default="", help="regex; matching output lines are shown per gate")
     p.add_argument("--then", default="", help="run ONLY if every gate passed")
     # NOT argparse.REMAINDER: it swallows every option that follows the first positional, so
@@ -353,8 +461,12 @@ def main(argv=None) -> int:
         name, gate_argv = positional
         gates.append((leading[0] if leading else name, gate_argv))
 
-    report = run_gates(gates, args.log, args.summary)
-    print(format_report(report, args.log))
+    # Resolved HERE, not as an argparse default: an argparse default is evaluated once at
+    # parser-construction time, which would hand every gate run in one process the same file
+    # and reintroduce the sharing this fixes one scope further in.
+    log_path = args.log or default_log_path()
+    report = run_gates(gates, log_path, args.summary)
+    print(format_report(report, log_path))
     if not report.ok:
         return 1
     if args.then:

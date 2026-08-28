@@ -4,6 +4,8 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -202,15 +204,6 @@ def test_on_posix_a_backslash_still_escapes():
     """The Windows fix must not quietly change POSIX behaviour: a backslash-escaped space
     still joins one argument here."""
     assert gate.split_command(r"esc\ aped x") == ["esc aped", "x"]
-
-
-def test_the_default_log_path_is_absolute(tmp_path):
-    r"""'/tmp/gate.log' is DRIVE-RELATIVE on Windows, not absolute: Path reads it as
-    \tmp\gate.log, so the log landed on whichever drive happened to be current and the
-    'log: ...' line named a path the user could not open. The default must be a real
-    absolute path on every platform."""
-    from pathlib import Path as _P
-    assert _P(gate.DEFAULT_LOG).is_absolute()
 
 
 def test_a_flag_looking_head_is_never_split_into_a_label(tmp_path):
@@ -515,3 +508,183 @@ class TestExplicitNameOption:
         out = capsys.readouterr().out
         assert "name=command" in out
         assert "--name" in out
+
+
+def emit(text: str, code: int = 0):
+    """A gate that prints `text` and exits `code` - a REAL subprocess, nothing stubbed.
+
+    The count is read off a gate's own output, so the test has to produce that output the way a
+    gate does. Handing the string straight to `observed_test_count` would skip the capture, the
+    decoding and the stdout/stderr join that sit between a runner's line and the verdict, and
+    those are where a count gets lost.
+    """
+    return [sys.executable, "-c", f"print({text!r}); raise SystemExit({code})"]
+
+
+def log_path_in(report_text: str) -> str:
+    """The path the report says it wrote to. That line is the ONLY pointer a reader is given."""
+    for line in report_text.splitlines():
+        if line.startswith("log: "):
+            return line[len("log: "):].strip()
+    raise AssertionError(f"no 'log:' line in report:\n{report_text}")
+
+
+class TestThePerInvocationDefaultLog:
+    """A fixed default log is SHARED, and gates APPEND to it.
+
+    So two runs at once - parallel agents, two worktrees, one CI matrix - interleave into a
+    single file, and whoever reads it back attributes the other run's lines to the run they just
+    watched. Observed 2026-07-29: a PASS was read beside another worktree's log. Nothing in the
+    report shows it, because the `log:` line names the same path either way. That is the same
+    "a correct exit status still proves nothing" failure this tool exists to prevent, arriving
+    through the log instead of through a pipe.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _default_log_into_tmp(self, tmp_path, monkeypatch):
+        """Keep the suite from littering the real temp dir with a file per test.
+
+        Patches tempfile's OWN `tempdir` global rather than anything in gate: mkstemp resolves
+        the directory through `gettempdir()` at call time, so this steers the real code path
+        instead of replacing it, and it is a seam that exists whichever version of gate.py is
+        imported - a fixture that patched a name only the FIXED gate.py defines would make this
+        class error in setup against the old one, which proves the symbol is absent and not that
+        the behaviour is wrong.
+        """
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    def test_two_default_paths_taken_in_one_process_are_different_files(self):
+        """A 'per-invocation' default that hands back the same name twice is the shared default
+        again under a new name. mkstemp also CREATES each one, so these are not merely two
+        strings that differ: neither run can be given a name the other already holds."""
+        first, second = gate.default_log_path(), gate.default_log_path()
+        assert first != second
+
+    def test_two_runs_that_pass_no_log_option_report_two_different_paths(self, capsys):
+        first_rc = gate.main(["--gate", OK])
+        first = log_path_in(capsys.readouterr().out)
+        second_rc = gate.main(["--gate", OK])
+        second = log_path_in(capsys.readouterr().out)
+        assert first_rc == 0 and second_rc == 0
+        assert first != second
+
+    def test_one_runs_log_does_not_hold_another_runs_output(self, capsys):
+        """The defect itself rather than the path it hides behind.
+
+        Asserted against the LOG FILE on purpose. `--summary` is extracted from the gate's own
+        captured stdout and never reads the log, so a summary-based version of this test passes
+        even against the shared default and would prove nothing - the first assertion below is
+        the premise check that keeps this one honest.
+        """
+        gate.main(["--gate", quoted(*emit("MARKER-FROM-RUN-A"))])
+        first_log = Path(log_path_in(capsys.readouterr().out))
+        gate.main(["--gate", quoted(*emit("run B says nothing of interest"))])
+        second_log = Path(log_path_in(capsys.readouterr().out))
+        assert "MARKER-FROM-RUN-A" in first_log.read_text(encoding="utf-8"), \
+            "premise: run A's output really did reach run A's log"
+        assert "MARKER-FROM-RUN-A" not in second_log.read_text(encoding="utf-8"), \
+            "run B's log holds run A's output, so a reader cannot tell whose result it is"
+
+
+def test_an_explicit_log_option_still_pins_the_path(tmp_path, capsys):
+    """Control: `--log` is how a caller reads the log afterwards, so it has to survive the
+    change of default. Deliberately OUTSIDE TestThePerInvocationDefaultLog: a control belongs
+    where no fixture of the thing under test can decide whether it runs."""
+    wanted = tmp_path / "mine.log"
+    rc = gate.main(["--gate", OK, "--log", str(wanted)])
+    assert rc == 0
+    assert log_path_in(capsys.readouterr().out) == str(wanted)
+    assert wanted.exists()
+
+
+def test_the_default_log_path_is_absolute():
+    r"""'/tmp/gate.log' is DRIVE-RELATIVE on Windows, not absolute: Path reads it as
+    \tmp\gate.log, so the log landed on whichever drive happened to be current and the
+    'log: ...' line named a path the user could not open. Carried over from the fixed-path
+    era - the default moved, and this property has to move with it."""
+    assert Path(gate.default_log_path()).is_absolute()
+
+
+class TestAZeroTestGateIsRefused:
+    """A filter that matches NOTHING exits 0.
+
+    `pytest -k <typo>` and `cargo test <prefix no test starts with>` each run zero tests and
+    return success, so the status reports green about work that never happened - and a renamed
+    or moved test quietly turns a gate into a no-op that keeps passing forever after.
+    """
+
+    def test_a_cargo_run_that_matched_no_test_is_refused_though_it_exited_zero(self, tmp_path):
+        rep = gate.run_gates([("unit", emit("running 0 tests"))], tmp_path / "g.log")
+        assert rep.results[0].returncode == 0, "the premise: the gate itself did succeed"
+        assert rep.results[0].test_count == 0
+        assert rep.ok is False
+
+    def test_a_pytest_filter_that_deselected_everything_is_refused(self, tmp_path):
+        """The number that must NOT be believed here is `collected`. On a total deselection it
+        still reads 300, so anyone reading that alone calls the empty run a 300-test pass."""
+        line = "collected 300 items / 300 deselected / 0 selected"
+        rep = gate.run_gates([("unit", emit(line))], tmp_path / "g.log")
+        assert rep.results[0].test_count == 0
+        assert rep.ok is False
+
+    def test_pytests_quiet_wording_for_an_empty_run_is_refused(self, tmp_path):
+        """Under -q pytest prints no counts at all, only this sentence."""
+        rep = gate.run_gates([("unit", emit("no tests ran in 0.01s"))], tmp_path / "g.log")
+        assert rep.results[0].test_count == 0
+        assert rep.ok is False
+
+    def test_a_zero_test_gate_blocks_the_follow_up_and_exits_red(self, tmp_path):
+        """End to end through main(): the `--then` is the thing that must not fire, since the
+        whole tool exists so that a red state never gets pushed."""
+        marker = tmp_path / "pushed"
+        rc = gate.main(["--gate", quoted(*emit("running 0 tests")),
+                        "--log", str(tmp_path / "g.log"), "--then", f"touch {marker}"])
+        assert rc == 1
+        assert not marker.exists(), "a gate that ran no tests let the follow-up fire"
+
+
+class TestTheObservedCountIsReported:
+    """A count nobody is shown cannot be sanity-checked, so it is printed for every recognised
+    test run and not only for the zero that gets refused: a suite that HALVES is the next
+    failure along, and the status stays green through all of it."""
+
+    def test_the_count_appears_in_the_report_for_a_healthy_run(self, tmp_path):
+        rep = gate.run_gates([("unit", emit("running 7 tests"))], tmp_path / "g.log")
+        assert rep.results[0].test_count == 7
+        assert rep.ok is True
+        assert "7 tests" in gate.format_report(rep, tmp_path / "g.log")
+
+    def test_a_refused_run_says_it_ran_zero_and_why(self, tmp_path):
+        rep = gate.run_gates([("unit", emit("running 0 tests"))], tmp_path / "g.log")
+        text = gate.format_report(rep, tmp_path / "g.log")
+        assert "[FAIL]" in text
+        assert "0 tests" in text
+
+    def test_cargo_counts_sum_over_every_test_binary(self):
+        """libtest prints one `running N tests` per BINARY. A workspace whose lib tests ran and
+        whose integration binary matched nothing has still run tests, so these add up rather
+        than the last line winning."""
+        assert gate.observed_test_count("running 2 tests\nok\nrunning 3 tests\n") == 5
+
+    def test_a_gate_that_is_not_a_test_runner_is_classified_as_having_no_count(self, tmp_path):
+        """None and 0 are different answers: None is 'not a test run', judged on the exit status
+        as before, while 0 is 'a test run that ran nothing'. Collapsing the two would fail every
+        lint gate in every caller's pipeline."""
+        rep = gate.run_gates([("lint", emit("All checks passed!"))], tmp_path / "g.log")
+        assert rep.results[0].test_count is None
+
+
+class TestNonTestGatesKeepPassing:
+    """Controls for the over-reach this refusal could cause. Both pass BEFORE and after the
+    change, which is what makes them controls rather than more of the same assertion."""
+
+    def test_a_gate_that_is_not_a_test_runner_still_passes(self, tmp_path):
+        rep = gate.run_gates([("lint", emit("All checks passed!"))], tmp_path / "g.log")
+        assert rep.ok is True
+
+    def test_a_linter_reporting_zero_errors_is_not_read_as_a_zero_test_run(self, tmp_path):
+        """The false red a looser matcher would produce. `Found 0 errors.` is a linter
+        SUCCEEDING, and a rule that counts any `0 <word>` as an empty test run turns every clean
+        lint run into a gate failure."""
+        rep = gate.run_gates([("lint", emit("Found 0 errors."))], tmp_path / "g.log")
+        assert rep.ok is True

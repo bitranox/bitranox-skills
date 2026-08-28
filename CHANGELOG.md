@@ -17,6 +17,70 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.269.0]
+
+### Changed
+
+- **`gate.py` defaults `--log` to a fresh per-invocation file instead of one shared
+  `<tempdir>/gate.log`.** Gates APPEND to the log, so with a single fixed default two runs at once -
+  parallel agents, two worktrees, one CI matrix - interleaved into the same file, and whoever read
+  it back attributed the other run's lines to the run they had just watched. Observed 2026-07-29: a
+  PASS was read beside another worktree's log. Nothing in the report shows it, because the `log:`
+  line names the same path either way, so the wrong answer is indistinguishable from the right one -
+  the same failure this tool exists to prevent, arriving through the log rather than through a pipe.
+
+  The name comes from `mkstemp` with a `gate-<pid>-` prefix, not from an f-string on the pid alone:
+  `mkstemp` creates the file atomically under a name nothing else holds, so two runs cannot be
+  handed the same path even when they share a pid namespace or a pid has been recycled. It passes no
+  `dir=`, so the temp directory is resolved at CALL time and a caller's `TMPDIR` is honoured; a
+  module constant computed at import would freeze whatever was set when the module first loaded,
+  which is the same decided-once-and-shared shape being removed. `--log` still pins an explicit path
+  and is still what a caller who wants to read the log afterwards should use.
+
+### Added
+
+- **`gate.py` reports how many tests each gate observed, and REFUSES a gate that ran zero.** A
+  filter matching nothing exits 0. `cargo test <prefix no test starts with>` prints `running 0
+  tests` and returns success, so the status reports green about work that never happened, and a
+  renamed or moved test quietly turns a gate into a no-op that keeps passing forever after. The
+  count is read from each gate's own output, printed for every recognised test run rather than only
+  for the zero, and a recognised count of zero fails the gate whatever it exited, which blocks
+  `--then` exactly as a red gate does.
+
+  The recogniser deliberately answers "not applicable" as well as a number, because `None` and `0`
+  are different findings: `None` means the gate is not a test runner - `ruff check`, `git status`, a
+  build - and it goes on being judged by its exit status alone, while `0` means a test runner ran
+  and nothing was there to run. Defaulting an unrecognised gate to zero would fail every lint gate
+  in every caller's pipeline. That is also why the matched shapes are narrow rather than a general
+  `(\d+) (passed|errors)` sweep: a linter printing `Found 0 errors.` is a run that SUCCEEDED, and a
+  matcher loose enough to read a count out of it turns the tool's own success line into a red gate.
+  A control pins that case.
+
+  Two details the obvious implementation gets wrong. `cargo`/libtest prints one `running N tests`
+  line per test BINARY, so those SUM - a workspace whose lib tests ran and whose integration binary
+  matched nothing has still run tests. And pytest is read in the order that survives DESELECTION,
+  since deselection IS the zero-match case: `collected 300 items / 300 deselected / 0 selected` is a
+  filter that hit nothing, and its `collected` number is 300, so reading `collected` alone reports
+  the empty run as a 300-test pass. The SELECTED count wins wherever pytest prints one, and `no
+  tests ran` is pytest's own wording for the same state under `-q`. A `-q` run that DID run tests
+  prints only `5 passed`, which is deliberately not matched: it reports no count and is judged on
+  its status, which is the safe direction, since the dangerous state is still caught and widening
+  the match to the summary line is what would produce the false red described above.
+
+  15 tests, 12 of which were watched fail against the pre-fix source, and 3 of which are controls
+  that pass both before and after: `--log` still pinning an explicit path, a non-test gate still
+  passing, and a linter reporting zero errors not being read as a zero-test run.
+
+### Fixed
+
+- **12 released versions had no changelog entry at all.** `5.254.0`, `5.254.1`, `5.255.0`,
+  `5.255.1`, `5.256.0`, `5.256.1`, `5.257.0`, `5.258.0`, `5.259.0`, `5.260.0`, `5.261.0` and
+  `5.262.0` were published with the file jumping straight from `5.263.0` to `5.253.0`. They are
+  reconstructed above from each bump commit and the diff it carried, describing what changed for a
+  reader of the skill rather than restating the commit subject - several of those subjects name the
+  process rather than the change, and one undercounts its own findings. `5.264.0`, `5.265.0`,
+  `5.265.1`, `5.265.2`, `5.266.1` and `5.268.0` are still missing and are not covered here.
+
 ## [5.267.3]
 
 ### Changed
@@ -335,6 +399,344 @@ installed copies and needs no bump.
   the footgun does not trip the guard for it. 12 tests, both directions, with the "present in BOTH
   the cwd and an ancestor" case pinned separately: a mutation removing that guard left the rest of
   the suite green, because a later check absorbed it.
+
+## [5.262.0]
+
+### Fixed
+
+- **`meta-skill-audit` step 4 turned into a trap on the second pass through a triage.** The step
+  tells the reader that a quote which cannot be found in the file it names is a fabricated
+  finding. That is right the first time through the list and wrong every time after, because a
+  triage of 134 findings is worked over several fix-and-ship rounds and you come back to the list
+  against a tree that has moved since it was written. The rule then inverts into something that
+  sounds like it follows: quote gone, so it must have been fixed.
+
+  Measured over one round of the sweep, that inference is wrong in BOTH directions. Quote gone and
+  the finding STILL OPEN, twice: one row's line had been requoted by an unrelated fix in the same
+  file, and one had been normalized when it was recorded, so it never matched the file verbatim to
+  begin with. Quote PRESENT and the finding already FIXED, twice: the `pfsense.py --apply` examples
+  still read exactly as recorded, because the fix made the documented command work rather than
+  rewriting the example, so a surviving quote is what success looks like there.
+
+  Eleven of 134 rows turned on this, which makes it a rule that decides WHICH defects ship. Step 4b
+  now says to re-read the claim rather than the quote, and to keep the list of what you actually
+  fixed: the work you did is the record, not a state query run over the tree afterwards.
+
+## [5.261.0]
+
+### Fixed
+
+- **18 verified defects in the `meta-*` skills, which describe this repo's own memory and dream
+  machinery.** The 82-skill sweep filed 23 findings against them; 18 verify against ground truth
+  and are fixed, and 5 do not and are rejected with the reason recorded in the review artifacts so
+  they are not filed again. These are not documentation drift at the edges: they are claims about
+  the machinery that steers every session on the machine, and two of them contradicted the code and
+  each other.
+
+  - **The promotion gate was stated wrong in two skills, differently.** `meta-memory-settings` said
+    a model-inferred rule "needs >= 2 dreams", and `meta-dream-crosstree` attributed a "same-project
+    >= 2-dreams dwell" to `meta-dream-tree`. No such counter exists. `note_promotion_candidate`
+    returns the number of DISTINCT PROJECTS that sighted the key and is documented idempotent within
+    one, so re-recording the same project adds no evidence at all. A reader who dreamed one project
+    twice believed a fact was corroborated while its dwell was still 1. Both now say distinct
+    projects, and both say plainly that re-dreaming one project never corroborates anything.
+  - **`meta-dream-crosstree` described its sibling and its own mechanism wrongly.** It said
+    `meta-dream-tree` "tidies ONE project's store", while `dream-core.md`, which this skill cites as
+    authoritative, says tree-wide across every level under the anchor. It also credited convergence
+    to "a content-hash" that does not exist; the only hashing within reach turns a PATH into a cache
+    filename. Convergence is the ancestor-overlap check plus the exemption marks.
+  - **Two documented steps could not be carried out.** `meta-skill-audit` step 1 told the reader to
+    wall recall "via `save_config` in `self_improve_signals`", a module with no argparse and no
+    `__main__`, so there was nothing to run in the skill whose whole procedure depends on that
+    setting being walled and then restored; it now uses `settings.py`, which validates the value,
+    and captures the old one first. `meta-collect-knowledge`'s Debounce step named no file, no
+    format and no tool, and no debounce store exists anywhere in the plugin; it now names a path and
+    a record shape, and says outright that nothing ships to enforce it.
+  - **`meta-skill-writer` broke its own tool and its own rule.** It tells the reader to render its
+    flowcharts with `render-graphs.js`; doing that reports a syntax error, because the "NO Code in
+    Flowcharts" anti-pattern is fenced as `dot`, the extractor renders every `dot` block, and two
+    bare node statements have no `digraph` wrapper. The block is refenced as text with the reason
+    inline. Its output directory was also untracked and not ignored, so following the documented
+    instruction left behind an artifact a hook then auto-staged. The same skill requires a bundled
+    upstream doc to carry its source URL and shipped one with none; the source is confirmed and
+    stamped.
+  - **`meta-claude-hooks` had fallen behind upstream, by its own instrument.** `hookdoc_stamp check`
+    returned STRUCTURAL, naming `quota_auto_resume_fired`, `_stale` and `_disabled` as added. Both
+    places that enumerate Notification matcher values now carry them with their CLI floor.
+  - **`audit_local.py` documented one exit code for two opposite verbs.** The line sat under both
+    synopses and described only one of them: `targets` exits 0 when it FOUND targets, `check` exits
+    0 when it found NO findings. A reader wiring CI off the shared line inverts what a clean run
+    means. It is now stated per verb.
+
+## [5.260.0]
+
+### Fixed
+
+- **The script pre-pass had a producer and no consumer, so every reviewer was told it found
+  nothing.** `script_prepass.run_prepass` was called by its own `main()` and its own tests, and by
+  nothing else: the `prepass=` parameter was threaded through `audit_scripts`, `audit_one_script`
+  and `build_script_prompt`, and no caller ever supplied one, because `main()` calls `audit_scripts`
+  without it. So every reviewer in the sweep read "(nothing - the pre-pass found no mechanical hits
+  here)" while the pre-pass sat unused and the reviewers re-derived the same 28 lines by hand. A
+  producer with no consumer passes all of its unit tests. `audit_scripts` now computes it from the
+  room it already has instead of waiting to be handed one by a caller that does not exist; the
+  parameters stay as the injection seam the tests use.
+- **`_is_platform_guarded` matched a substring of the dumped AST, so a loose guard read as a real
+  one.** It suppresses an unguarded `os.access(X_OK)` finding, which makes a loose rule there
+  silent. `"posix" in ast.dump(func)` matched a docstring reading "only meaningful on posix" and a
+  parameter named `posix`, and `attr='name'` with `id='os'` matched an unrelated `os.path.join`
+  on `f.name`. Each of those reads as a guard while the `X_OK` call beneath it is genuinely
+  unguarded. The check is now structural: a comparison containing `os.name`, `sys.platform` or
+  `platform.system()`, or a method call on one.
+- **The 327 vendored files were excluded from the pre-pass as well as from the reviewer sweep, so
+  nothing checked them at all.** They are excluded from review on purpose, since fixing a defect
+  there diverges our copy from its source, but that is not a reason to check nothing. They now get
+  `ast.parse` and nothing else, which is the one property we own whatever upstream says. All 327
+  parse.
+
+### Changed
+
+- **A lead and a settled fact are no longer given the same instruction.** Both went into ALREADY
+  KNOWN - DO NOT RE-REPORT. That is correct for `text=True` with no encoding, which is wrong
+  wherever it appears and whose fix is one line. It is wrong for the 17 `shlex` hits and the 2
+  missing-test-module hits, where whether the hit is a defect depends on what the code does with the
+  result, which is exactly the judgement the reviewer exists to make. Suppressing those silenced the
+  only reader who could answer, in the files most likely to hold a real defect. `run_prepass` now
+  returns facts and leads separately, and the prompt carries a second block saying the opposite: not
+  settled, judge each one, and say which it is and why.
+
+### Added
+
+- **`--scripts`, which shipped undocumented in 5.257.0, is now documented.** Comparing `--help`
+  against the SKILL.md, 12 real flags appeared in one and not the other. The skill now covers the
+  mode, the pre-pass, and the three choices `--help` cannot make for you: `--kind` as the slicing
+  that makes a 134-target run survivable, `--skip-existing` with `--reuse-room` as the resume pair,
+  and why `--include-vendored` stays off. The other six flags are deliberately left to `--help`
+  rather than frozen into prose that goes stale.
+
+## [5.259.0]
+
+### Fixed
+
+- **`coding-bash-clean-architecture` shipped a command-injection example.** The TCP-check adapter
+  built its probe as `bash -c "echo >/dev/tcp/$host/$port"`. `bash -c` re-parses that body as code,
+  and the domain layer validated the port numerically but the host only for non-emptiness, so the
+  config line `web:a;id;x:443` validated and reached the shell. Proven rather than reasoned: with a
+  host of `a;touch F;x` the pre-change form creates the file and the post-change form does not,
+  while a real host still connects. Both layers change - the domain gains a hostname character rule,
+  and the adapter passes host and port as positional arguments into a single-quoted body. Both sites
+  say why in a comment, because the shorter interpolated form is what someone reverts to.
+- **`pfsense.py` rejected every mutation it documented, and wrote credentials into the working
+  directory.** `--apply` was registered on the top-level parser while every example in the skill
+  places it after the subcommand, so `pfsense.py --fw home dns add ... --apply` exited 2 with
+  "unrecognized arguments: --apply". It is now a shared parent on all six mutating leaves, with
+  SUPPRESS defaults: without those, argparse would overwrite a top-level value and `--apply` given
+  FIRST would silently become a dry run. Two further corrections came with it. The docs claimed all
+  mutating verbs snapshot first; four do, but `table del` and `snort unblock` change live pf state,
+  which a `config.xml` snapshot neither captures nor restores, so they take none. And a snapshot is
+  a whole `config.xml` - password hashes, private keys, certificates - which defaulted to the
+  current directory; it now goes to a private per-user state dir at mode 0700, and writing one
+  inside a git work tree is refused unless overridden, with the destination resolved before the
+  fetch so a refusal costs no round trip.
+- **104 commands and paths in `infra-proxmox` were split in half by an extraction artifact.** The
+  extraction that produced those files marked a wrapped line with U+2190 at the join, mid-token, so
+  `proxmox-archive-keyring- <-trixie.gpg` is one filename in two pieces and a reader who copies it
+  gets a `wget` that fails. 45 files, plus 15 lone marker lines that render as literal garbage.
+  Prose arrows are left alone: an arrow FOLLOWED by a space is an annotation, and U+2192 is an
+  allowed-on-purpose symbol per `tell_chars`' own header, so 64 legitimate navigation paths like
+  `Datacenter -> Cluster` survive, as does one correct left arrow.
+- **The tell-sweep hook could not have caught that, and now can.** Adding the codepoint to `RANGES`
+  would not have worked, because `find_tell_lines` deliberately skips fenced blocks so that a file
+  documenting the tells does not flag itself, and a split command lives inside exactly that
+  exemption. `find_continuation_lines` is therefore a second scanner that looks INSIDE code, and a
+  test asserts the two disagree on that input, since otherwise it would be redundant. Replayed over
+  the pre-fix content it would have blocked all 45 files, and it flags none after.
+
+## [5.258.0]
+
+### Added
+
+- **`compuse-bash`: `/dev/tcp/HOST/PORT` is a bash BUILTIN, not a path, so a port probe run under
+  `sh` reports CLOSED for every port including the open ones, with nothing saying why.** `pct exec`,
+  `docker exec` and `ssh host cmd` commonly hand you dash on Debian and Ubuntu, so this is easy to
+  hit, and the false negative is indistinguishable from a real closed port. The new row also asks
+  for a known-open and a known-closed control port in the same run, which is what separates "the
+  port is shut" from "this probe cannot open anything".
+- **`process-review-verification-before-completion`: reading a value back proves nothing unless the
+  read is served by the SAME layer the write targeted.** A stored-layer write is invisible to a
+  runtime read, and the runtime read does not fail: it returns well-formed OLD data, so a successful
+  write reads as a failed one and, after a reload, the reverse. The skill now lists the pairs that
+  produce it - git index against working tree, config file against running process, unit file
+  against loaded unit, a device's stored settings against its running ones.
+- **The session-start hook runs `find_decoy_anchors` automatically.** The detector already existed,
+  but only `reconcile --check-tree` called it and that runs only during a dream, so a second
+  `.claude-memory` below the tree top could shadow real bodies for however long sits between two
+  dreams, returning stale or empty ones with no error. It is throttled to daily via a stamp file:
+  the scan is a full `os.walk`, measured at 1.34s over a 97-level tree, which is far too slow to pay
+  per session, while a decoy appears about twice in two months. Fail-open like the rest of the hook,
+  which nearly hid a real bug here - the first version called a `memory_engine.resolve_anchor` that
+  does not exist, and the swallow turned that into a silent no-op the healthy-tree arm passed. The
+  planted-decoy test is what caught it, and all four arms are RED-verified.
+
+## [5.257.0]
+
+### Added
+
+- **`meta-skill-audit` sweeps the shipped SCRIPTS too, not only the skills.** The harness reviewed
+  skills and nothing reviewed the 133 shipped scripts, and the risk runs the wrong way round: a
+  wrong sentence in a SKILL.md misleads a reader, while a wrong hook fails open and reads as
+  approval. `audit_skills.py` gains a sibling script sweep, additive to the skill path and its four
+  prompt tests, which are untouched.
+
+  Three mechanics that the obvious implementation gets wrong:
+
+  - **The reviewer contract for code cannot be the one for prose.** A verbatim quote cannot separate
+    a real bug from a misread, because the quote is genuine and only the inference is invented. A
+    script finding carries an EXHIBIT plus exactly one of REPRO or TRACE, and `evidence_problems`
+    re-checks every exhibit against the file at its stated line. The skill sweep needs a human to
+    grep each quote, and at 133 targets that does not happen.
+  - **Report names are path-derived.** `gate.py` exists twice and `client.py` six times, so naming a
+    report after the basename writes 120 files for 133 targets while printing 133 - the silent
+    shadowing that `check_duplicate_basenames` exists to prevent, reproduced inside the auditor.
+  - **46 of the 63 hooks swallow a broad except into exit 0 by design.** A reviewer not told so
+    files 46 false positives, so the prompt states the convention as fact and names the two shapes
+    that are real defects instead.
+
+  `script_prepass.py` decides mechanically what a reviewer should not be spent on, and its hits are
+  fed into each prompt as already known. It reuses the gate's exclusion sets rather than copying
+  them, documents the eleven checks `repo-gate` and `harness_checks` already own, and a test asserts
+  that no check here shadows a `repo_gate.check_*` name. Four of its checks were wrong on the first
+  real run and are fixed with a negative control each: feeding `.js` to `ast.parse` manufactured two
+  syntax errors; the PEP 723 floor rule was inverted and flagged 27 correct files, since `ci.yml`
+  states 3.11 is the minimum while shipped scripts declare their own wider floors; a
+  platform-guarded `os.access(X_OK)` is the correct shape; and a sibling module reached through
+  `sys.path` is not third-party. Also fixes `_subprocess_runner`, which decoded reviewer output with
+  the locale codec - the sweep's own first pre-pass finding was against the sweep.
+
+  Real corpus after the fixes: 19 `subprocess` `text=True` sites with no encoding, 2 hard-coded
+  POSIX path literals, 1 `requires-python` floor above the oldest CI cell.
+
+## [5.256.1]
+
+### Fixed
+
+- **The preflight's compose row was named after the package, not the command the reader types.** It
+  read `docker-compose`, which is also the name of the deprecated standalone v1 binary. The install
+  line beside it was correct, but the label is the string a reader searches, and that search reaches
+  v1. For an audience that cannot tell the two apart, which is precisely the audience this skill is
+  written for, that is the same wrong-advice failure the 5.256.0 split was made to fix, one step
+  further along. It reads `docker compose` now, which is what the skill actually runs.
+
+## [5.256.0]
+
+### Fixed
+
+- **The preflight folded the Docker engine and the compose plugin into one result, so it gave the
+  right verdict with the wrong advice.** On a distribution where the plugin is a separate package,
+  an owner who had just installed Docker was told to install Docker. They are two findings now:
+  `docker` answers for the engine and reads present when the engine is present, and `docker compose`
+  answers for the plugin with its own instruction - the plugin package on Debian and Fedora,
+  updating Docker Desktop on Windows and macOS, where the engine ships it. With no engine at all,
+  compose reports "not available" rather than pretending to have probed. Compose stays required,
+  since the service is started with `docker compose up`, so an owner without it cannot finish and
+  demoting it would be the same wrong-advice failure pointing the other way.
+
+  The old tests missed this because they asserted the VERDICT, which was correct, and nothing
+  asserted what the reader was told to DO. The new test asserts both halves: docker present, compose
+  absent, and the compose instruction naming the plugin rather than the engine installer.
+
+## [5.255.1]
+
+### Fixed
+
+- **The preflight's test seam forwarded the PATH lookup but not the VERSION lookup, so a check could
+  still ask the real machine.** `run_checks` forwarded only the first, so a test that said "pretend
+  docker is installed" went on asking the actual `docker` for its version. That passed on a runner
+  where docker exists and failed on macOS, where it does not: the compose probe came back empty, the
+  check reported docker absent, and a test asserting nothing was missing failed. Both seams are
+  forwarded now, and the control that holds it asserts every reported version is the injected
+  sentinel rather than whatever the machine happens to have, which fails against the old code on any
+  operating system instead of only on the one without docker.
+
+  A first attempt at that control asserted the version lookup was never called at all. That is
+  wrong: for a tool the lookup says is present, calling it is the correct behaviour, so the control
+  failed against working code. Asserting where the answer CAME FROM is the version that
+  distinguishes the two.
+
+## [5.255.0]
+
+### Added
+
+- **`infra-soundtouch-decloud` checks its prerequisites and says how to install them.** Every
+  command in the skill was documented as `uv run ...`, and nothing checked that uv, Python or Docker
+  were present or told the owner how to get them. Docker was the exception, with a check and a
+  per-platform table already. This adds the rest, plus a phase 0 that runs before anything else.
+
+  The design point is that the checker cannot need the tool it checks for. A preflight written the
+  usual way, as `uv run`, is unrunnable on exactly the machine that needs it, so
+  `soundtouch_preflight.py` imports nothing outside the standard library and is documented as
+  `python3 scripts/soundtouch_preflight.py`. It reports Python, uv, Docker and pytest, each with a
+  reason, and gives a per-platform install line for whatever is missing. pytest is reported and
+  never required: it is for people changing the skill, not using it.
+
+  The platform is detected rather than asked, because an owner who cannot say whether their box is
+  Debian or Fedora is the person this skill is written for; `--system` still overrides, for a
+  container, a NAS, or a machine that is not the one in front of you. Phase 0 also says how to
+  deliver the result: one missing tool at a time, and expect a fresh terminal to be needed before a
+  new install is on PATH, since handing somebody three commands at once gets none of them run.
+
+  Verified against a control that must answer differently: with only Python on PATH the check exits
+  1 and names uv and docker. Docker present without the compose plugin counts as not present,
+  because that state fails later at `docker compose up` rather than here.
+
+## [5.254.1]
+
+### Added
+
+- **`infra-soundtouch-decloud` also ships from its own installable marketplace, and both copies are
+  now gate-checked against each other.** An owner can add just that one repo rather than the whole
+  collection. Two copies drift in both directions: an edit here that is never mirrored leaves that
+  repo's installers a release behind, and an edit there leaves this marketplace describing behaviour
+  the skill no longer has. Listing the pair in `repo-gate.py` makes either side drifting a gate
+  failure. The manifest is hand-maintained and a missing entry is invisible, since it simply stops
+  checking that pair, so the entry goes in with the repo rather than after somebody notices.
+  Audited: 11 pairs, 0 drifted.
+
+## [5.254.0]
+
+### Added
+
+- **Sourcing a preset's stream is now four steps with tooling behind them.** The skill never said
+  where a preset's stream URL comes from. `harvest` turns a saved presets XML into a template: a
+  preset stored while the Bose cloud was alive carries the real stream inside its Orion adapter URL,
+  so the owner's own presets usually already contain it and there is nothing to search for. A
+  catalogue preset carries a station id instead, and comes back as a named hole. The owner is then
+  asked which stations they still want, before anyone researches anything.
+- **`validate` fetches every stream and says per button whether it plays, and the writing path
+  refuses a template that still has holes.** Harvesting is not enough on its own: of six presets
+  recovered from one household's pre-shutdown backup, one had gone dead in the years since, and a
+  preset built on it would have been accepted at write time and then stayed silent. `validate`
+  separates the ways a URL can fail to be a stream, including the one a naive check misses - an
+  `.m3u` playlist is served as `audio/x-mpegurl`, so a test for `audio/` passes a text file.
+
+### Changed
+
+- **The repair guidance no longer tells the owner to run a restore loop on a schedule.** It said to,
+  "or the presets vanish again at the next power cut", and measurement contradicts that: the retired
+  timer's own journal shows 11692 runs over 18.7 days wrote presets exactly once, in the first hour,
+  cleaning up a loss that predated it, and no speaker ever answered while short. Both costs of an
+  always-on loop are now stated - it reverts a station retuned on the speaker, and it hides the
+  event the owner wanted to know about. In its place, alerting built on the exit codes the scripts
+  already return, with preset loss and unreachability kept apart: one sleeping speaker produced 1303
+  unreadable readings out of 11692 while never once being short. The boot-wipe trace now carries the
+  service version it was measured on, and says that a restore run, not the speaker, wrote the last
+  line.
+
+### Fixed
+
+- **SKILL.md advertised a `template` subcommand that does not exist.** The mistakes table also
+  borrowed the boot wipe's mechanism to describe a migration, and the usage-line contract test
+  stopped at a pipe but not at a shell redirect.
 
 ## [5.253.0]
 
