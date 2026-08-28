@@ -46,7 +46,9 @@ switch-model-or-continue (the main agent cannot self-switch its model). See
 
 **Documentation:**
 - Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
-- Use elements-of-style:writing-clearly-and-concisely skill if available
+- Optional: the `writing-clearly-and-concisely` skill, which ships in the SEPARATE
+  `elements-of-style` plugin (`/plugin install elements-of-style@superpowers-marketplace`),
+  not in this one - skip this line if you do not have it installed
 - Commit the design document to git
 
 **Implementation (if continuing):**

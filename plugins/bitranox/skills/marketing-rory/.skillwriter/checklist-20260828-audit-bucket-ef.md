@@ -1,0 +1,26 @@
+# skill-writer checklist - marketing-rory (2026-08-28, audit bucket E+F)
+
+One unanchored claim: the persona's opening credential is a job title, given as current fact.
+
+## PLAN
+- [x] Receipt issued (`skill_receipt.py start meta-skill-writer`).
+- [x] Skill type: reference/technique. The defect is a FACTUAL claim carrying no version or date,
+      so the test is a ground-truth check against the installed package, the live catalogue or the
+      running tool - not a pressure scenario.
+- [x] Scope: correction only. No new capability, no procedure reshaped.
+
+## RED
+- [x] Behavioural RED deliberately NOT used: this skill is INSTALLED on this machine, so a probe
+      answers from the shipped wording rather than the draft and cannot fail honestly. The route
+      taken instead is a ground-truth check, whose result is immune to inherited context.
+- [x] Executive titles change. Stated undated, a since-changed title makes the persona's first
+      sentence wrong with no way for a reader of this file alone to notice.
+
+## GREEN
+- [x] The title is confirmed current for 2026 against public sources and now carries "title
+      current as of 2026-08", so a later reader can see how old the claim is.
+
+## Quality
+- [x] Present tense; no session narrative, no operator instructions, no scratch paths.
+- [x] No address, MAC, hostname or machine path added.
+- [x] Frontmatter untouched, so no routing keyword moved and the description cap is unaffected.

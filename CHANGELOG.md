@@ -17,6 +17,52 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.266.2]
+
+### Fixed
+
+- **Buckets E and F of the 82-skill audit: 14 verified findings across 13 skills.** Thirteen were
+  claims stated as current fact with no version or date behind them, and one was a reference to a
+  skill that does not ship here. Every claim was re-checked against ground truth before editing,
+  and every check command written into a skill was executed first rather than merely written.
+
+  Claims that turned out STILL TRUE and now say what they were true of:
+
+  - `coding-python-enforce-data-architecture-strict`: the rich-click `reportUnknownMemberType`
+    diagnostic is a stub gap, not a language rule. Now named as rich-click 1.9.8 with pyright
+    1.1.411, with the instruction to run pyright first - a completed stub set makes the worked
+    example unnecessary rather than confusing.
+  - `coding-python-gitignore`: the `[performance]` defaults are igittigitt 2.2.3's, and the table
+    now carries a command that reads the default out of the reader's own install.
+  - `coding-python-network-probe`: the macOS BPF path is still untested, and the warning now names
+    ipscout 1.6.0 and `ipscout --version`.
+  - `compuse-ssh`: the ollama asset name is a dated snapshot (v0.33.1) rather than a fact.
+  - `infra-chrome-remote-desktop`: the PIN-hash construction names the build it was read off
+    (151.0.7922.13) and points at the skill's existing positive control as the detector for a
+    changed format.
+  - `marketing-rory`: the persona's opening credential carries the date it was current.
+  - `docs-generate-schematics`: both OpenRouter model IDs were confirmed live in the catalogue,
+    and the script now records that date plus the one command that lists the current IDs.
+
+  Claims that could not stand as written:
+
+  - `process-debug-systematic`: two unsourced statistics removed. The "95% vs 40% first-time fix
+    rate" figures had no date or source, unlike the dated ones in this skill's own supporting
+    files, and the second was load-bearing - it told a reader who had finished a real
+    investigation to distrust their conclusion on the strength of an unsourced number. The
+    direction is kept and the override now asks for the evidence that RULED OUT a code cause.
+  - `web-frontend-pagespeed`: "measured on three" named no servers, date or versions. The
+    unreproducible sample is gone; the mechanism and the confirm-with-a-GET instruction stay.
+  - `write-humanize-en`: which chatbots emit curly quotes is dated to early 2026 and marked a weak
+    signal, matching the dated behavioural claims elsewhere in the same file.
+  - `coding-python-use-modern-libraries`: `StrEnum` carries its 3.11+ interpreter floor.
+  - `process-agents-subagent-driven-development`: the agent-frontmatter hot-load exception is kept
+    with an explicit marker that it has NOT been re-verified since Claude Code 2.1.250, plus the
+    one action that settles it either way.
+  - `process-plan-brainstorming`: `elements-of-style:writing-clearly-and-concisely` does not ship
+    in this plugin. It is now named as a separate plugin with its install command, so "if
+    available" is a question the reader can answer.
+
 ## [5.266.0]
 
 ### Fixed

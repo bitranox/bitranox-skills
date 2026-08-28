@@ -438,7 +438,9 @@ Order of preference:
 
 Worked example - rich-click's `option`/`argument`/`version_option` decorators have a
 partially-unknown return type, so pyright strict reports `reportUnknownMemberType` at every
-`@click.option(...)`. click's own decorators are fully typed, but they default the parameter class
+`@click.option(...)`. This is a stub gap, not a language rule: reproduced on rich-click 1.9.8
+with pyright 1.1.411 (2026-08-28). Run pyright first - if a newer rich-click ships complete
+stubs it reports nothing, and the facade below would be solving a problem you no longer have. click's own decorators are fully typed, but they default the parameter class
 to `click.Option` rather than rich-click's `RichOption` (which changes help rendering), so you
 cannot just import them from click. Cast the MODULE to a `Protocol`: the `cast` is a runtime no-op,
 so the wrappers forward to rich-click's own decorators (RichOption preserved) while pyright sees

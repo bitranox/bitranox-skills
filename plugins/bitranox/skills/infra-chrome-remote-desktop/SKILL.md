@@ -187,7 +187,11 @@ exactly one**. Extra files from earlier registrations, and the `host_id` plus `p
 cloned image inherits from the machine it was cloned from, produce a device entry that can never
 connect. Remove them.
 
-The stored value is `"hmac:" + base64(HMAC_SHA256(key=host_id, message=pin))`.
+The stored value is `"hmac:" + base64(HMAC_SHA256(key=host_id, message=pin))`. This is an
+internal, undocumented format, read off chrome-remote-desktop 151.0.7922.13 (2026-08-28);
+Google can change it in any release. Check your own build with
+`dpkg -l chrome-remote-desktop`, and run the positive control below before trusting a
+verdict - a changed construction shows up there as a control that no longer passes.
 
 ```python
 import base64, hashlib, hmac, json, sys

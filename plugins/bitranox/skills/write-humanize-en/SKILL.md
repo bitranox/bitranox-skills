@@ -340,7 +340,7 @@ them with Hyphens "-"
 
 ### 18. Curly Quotation Marks and Apostrophes
 
-**Problem:** ChatGPT and DeepSeek typically use curly quotes (`“ ”`) instead of straight quotes (`"`). They may do this inconsistently within the same response. They also use curly apostrophes (`’`) instead of straight apostrophes (`'`). Note: Gemini and Claude typically do not use curly quotes. Microsoft Word and macOS/iOS "smart quotes" also produce curly quotes, so this alone doesn't prove AI use.
+**Problem:** (model behaviour as of early 2026 - it changes between releases, so treat attribution to a named chatbot as a weak signal and re-check before relying on it) ChatGPT and DeepSeek typically use curly quotes (`“ ”`) instead of straight quotes (`"`). They may do this inconsistently within the same response. They also use curly apostrophes (`’`) instead of straight apostrophes (`'`). Note: Gemini and Claude typically do not use curly quotes. Microsoft Word and macOS/iOS "smart quotes" also produce curly quotes, so this alone doesn't prove AI use.
 
 **Before:** (shown in a code block so the curly characters survive verbatim)
 

@@ -148,6 +148,11 @@ IMPORTANT - NO FIGURE NUMBERS:
         self.verbose = verbose
         self._last_error = None  # Track last error for better reporting
         self.base_url = "https://openrouter.ai/api/v1"
+        # Both IDs are preview-tier, which providers rename and retire without notice.
+        # Verified present in the live OpenRouter catalogue on 2026-08-28. When a run starts
+        # failing with an opaque HTTP error, list the current IDs before debugging anything else:
+        #   curl -s https://openrouter.ai/api/v1/models | python3 -c \
+        #     "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
         # Nano Banana 2 - Google's advanced image generation model
         # https://openrouter.ai/google/gemini-3.1-flash-image-preview
         self.image_model = "google/gemini-3.1-flash-image-preview"

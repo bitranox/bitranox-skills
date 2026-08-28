@@ -137,7 +137,9 @@ Outside an armed plan execution the same hook only warns.
 **Effort is chosen through the tier, not the dispatch.** A dispatch has no
 per-call reasoning-effort field: effort rides the agent-type definition
 (`.claude/agents/*.md` frontmatter, key `effort`; hot-loaded, EXCEPT the very
-first agents dir on a machine, which needs one session restart) or a Workflow
+first agents dir on a machine, which needs one session restart - probed on an
+earlier build and NOT re-verified since Claude Code 2.1.250, so if a newly added
+agents dir seems to ignore `effort`, restart the session once before digging) or a Workflow
 `agent()` call (`opts.effort`). Probe-verified: the knob swings the same
 model's thinking budget by orders of magnitude, so it cuts both ways - set it
 only at the EXTREMES and leave everything else at the default (inherit).

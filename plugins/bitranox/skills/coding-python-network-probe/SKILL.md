@@ -32,32 +32,32 @@ Python 3.10+.
 
 ## Quick reference
 
-| Task                              | Call                                                                     |
-|-----------------------------------|--------------------------------------------------------------------------|
-| Ping one host                     | `ping("1.1.1.1", 4)`                                                     |
-| Sweep many, concurrently          | `ping_many(hosts, concurrency=64)`                                       |
-| Is it up, by any means            | `is_reachable(host)`                                                     |
-| Path to a host                    | `traceroute(host)`                                                       |
-| Scan ports                        | `scan_ports(host, "22,80,8000-8100")`                                    |
-| MAC of an address                 | `lookup_mac(ip)`, `get_mac_address(ip)`                                  |
-| Which host holds a MAC            | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`              |
-| Neighbour / ARP cache             | `neighbours()`, `arp_scan(network)`; both take `family=`                 |
-| What a sweep will cover           | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`      |
-| Sweep exactly that plan           | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)`     |
-| Default route, any route          | `default_gateway()`, `query_route(ip)`                                   |
-| Interfaces and subnets            | `local_interfaces()`, `subnet_info()`, `local_networks()`                |
-| Wake a sleeping host              | `wake_on_lan(mac)`                                                       |
-| Address of a machine just started | `observe_dhcp(mac, interface="br0")` -> every offer, in order            |
-| ... startable before you start it | `with observe_dhcp_session(mac, interface="br0") as s:`                  |
-| ... and just the one that answers | `observe_dhcp_first_reachable(mac, interface="br0")`                     |
-| Largest unfragmented packet       | `path_mtu(host)`                                                         |
-| What can this host do             | `icmp_available()`, `dhcp_capture_available()`                           |
-| Package metadata                  | `print_info()`                                                           |
-| Name to address, and back         | `resolve(name)`, `reverse_dns(ip)`                                       |
-| Compare two hardware addresses    | `normalise_mac(written)`                                                 |
-| Parse a port specification        | `parse_ports("22,80,8000-8100")`                                         |
-| Trace over your own transport     | `trace_path(transport, ...)`, `atrace_path(...)`                         |
-| async equivalents                 | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports`     |
+| Task                              | Call                                                                 |
+|-----------------------------------|----------------------------------------------------------------------|
+| Ping one host                     | `ping("1.1.1.1", 4)`                                                 |
+| Sweep many, concurrently          | `ping_many(hosts, concurrency=64)`                                   |
+| Is it up, by any means            | `is_reachable(host)`                                                 |
+| Path to a host                    | `traceroute(host)`                                                   |
+| Scan ports                        | `scan_ports(host, "22,80,8000-8100")`                                |
+| MAC of an address                 | `lookup_mac(ip)`, `get_mac_address(ip)`                              |
+| Which host holds a MAC            | `find_ip_by_mac(mac, scan=True, family=AddressFamily.IPV4)`          |
+| Neighbour / ARP cache             | `neighbours()`, `arp_scan(network)`; both take `family=`             |
+| What a sweep will cover           | `sweep_scope()` -> `SweepScope(limit, networks, skipped, complete)`  |
+| Sweep exactly that plan           | `arp_scan(scope=scope)`, `find_ip_by_mac(mac, scan=True, scope=...)` |
+| Default route, any route          | `default_gateway()`, `query_route(ip)`                               |
+| Interfaces and subnets            | `local_interfaces()`, `subnet_info()`, `local_networks()`            |
+| Wake a sleeping host              | `wake_on_lan(mac)`                                                   |
+| Address of a machine just started | `observe_dhcp(mac, interface="br0")` -> every offer, in order        |
+| ... startable before you start it | `with observe_dhcp_session(mac, interface="br0") as s:`              |
+| ... and just the one that answers | `observe_dhcp_first_reachable(mac, interface="br0")`                 |
+| Largest unfragmented packet       | `path_mtu(host)`                                                     |
+| What can this host do             | `icmp_available()`, `dhcp_capture_available()`                       |
+| Package metadata                  | `print_info()`                                                       |
+| Name to address, and back         | `resolve(name)`, `reverse_dns(ip)`                                   |
+| Compare two hardware addresses    | `normalise_mac(written)`                                             |
+| Parse a port specification        | `parse_ports("22,80,8000-8100")`                                     |
+| Trace over your own transport     | `trace_path(transport, ...)`, `atrace_path(...)`                     |
+| async equivalents                 | `aping`, `aping_many`, `ais_reachable`, `atraceroute`, `ascan_ports` |
 
 ```python
 import ipscout
@@ -252,7 +252,9 @@ what reaches *this host's* interface; on a Hyper-V virtual switch that excludes
 other guests unless the port is set to mirror. So Windows is right for DHCP on
 this host's own segment, and the POSIX pair for watching a guest boot.
 
-**The macOS device path has not been run on real hardware.** No CI runner may
+**The macOS device path has not been run on real hardware** (ipscout 1.6.0, checked
+2026-08-28 - `ipscout --version`; treat it as still true unless a later release says
+otherwise). No CI runner may
 open a BPF device, so its ioctl encoding and record splitting are pinned by
 tests while the syscalls themselves are untested. Linux is the one to trust for
 anything that matters; treat macOS as new until you have exercised it. On macOS

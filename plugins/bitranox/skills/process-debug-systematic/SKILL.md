@@ -314,7 +314,9 @@ If systematic investigation reveals issue is truly environmental, timing-depende
 3. Implement appropriate handling (retry, timeout, error message)
 4. Add monitoring/logging for future investigation
 
-**But:** 95% of "no root cause" cases are incomplete investigation.
+**But:** most "no root cause" verdicts are incomplete investigation. Before accepting one,
+name the evidence that RULED OUT a code cause - the absence of a cause you found is not
+the same as a cause you excluded.
 
 ## Supporting Techniques
 
@@ -330,8 +332,9 @@ These techniques are part of systematic debugging and available in this director
 
 ## Real-World Impact
 
-From debugging sessions:
-- Systematic approach: 15-30 minutes to fix
-- Random fixes approach: 2-3 hours of thrashing
-- First-time fix rate: 95% vs 40%
-- New bugs introduced: Near zero vs common
+From debugging sessions. The direction is the claim; the sizes are unmeasured, so do not
+quote them as figures:
+- Systematic investigation reaches a fix sooner than trying candidate fixes, and reaches
+  the right one more often.
+- A fix aimed at a confirmed root cause rarely introduces a new bug. Candidate fixes
+  routinely do, because each one changes code that was never shown to be at fault.
