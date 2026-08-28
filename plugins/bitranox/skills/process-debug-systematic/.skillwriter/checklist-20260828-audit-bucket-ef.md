@@ -30,3 +30,17 @@ Two unsourced statistics, one of them used to override the reader's own investig
 - [x] Present tense; no session narrative, no operator instructions, no scratch paths.
 - [x] No address, MAC, hostname or machine path added.
 - [x] Frontmatter untouched, so no routing keyword moved and the description cap is unaffected.
+
+## Follow-up: upstream provenance checked (decision review)
+
+- [x] The upstream this skill is adapted from (`obra/superpowers`,
+      `skills/systematic-debugging/`) was fetched and read. The `95%` line appears there VERBATIM
+      and BARE, in the same position, with no citation; `CREATION-LOG.md` names no measurement,
+      study or data.
+- [x] The `Real-World Impact` block carrying "15-30 minutes", "2-3 hours" and "95% vs 40%" does
+      NOT EXIST upstream at all - the string "Real-World Impact" is absent from the upstream
+      SKILL.md. So neither figure has provenance to restore, and the deletion stands.
+- [x] The first search for this was run against the local `superpowers-marketplace` clone and
+      found nothing. That negative was void: the clone holds LICENSE and README only, zero
+      SKILL.md files. The control (does this corpus contain any skill body at all?) is what
+      exposed it, and the real check went to the plugin repo instead.

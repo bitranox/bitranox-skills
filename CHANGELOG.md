@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.266.3]
+
+### Fixed
+
+- **The agent-frontmatter hot-load claim was WRONG, not merely unanchored.**
+  `process-agents-subagent-driven-development` said an `effort` setting is hot-loaded except in a
+  machine's very first agents dir. Measured on Claude Code 2.1.250: a new project agents dir and a
+  new file in the ALREADY-LOADED user agents dir both failed to dispatch with `Agent type not
+  found`, and the reported available list stayed the session-start roster in both cases, while a
+  definition present at session start resolved as the control. The exception is not the first dir,
+  it is every mid-session addition, so the text now states the measured rule - the roster is fixed
+  when the session starts. Whether EDITING a definition already in the roster takes effect
+  mid-session was not tested and is not claimed.
+
+### Changed
+
+- **`web-frontend-pagespeed` gets a real measurement where it had an anecdote.** The row's
+  "measured on three" was dropped in 5.266.2 as unreproducible; it is now a dated one instead:
+  curl 8.18.0, 2026-08-28, six origins each probed with a HEAD and a GET under `--compressed`.
+  HEAD and GET agreed on all six. The disagreement direction the row warned about was not produced
+  by this sample, and the row now says so rather than implying it was observed. Confirm-with-a-GET
+  stays, which is what that residual risk calls for.
+- **The two deleted `process-debug-systematic` statistics stay deleted, now on evidence.** The
+  upstream this skill is adapted from carries the `95%` line verbatim, bare and uncited, and has
+  no `Real-World Impact` section at all, so neither figure had provenance to restore.
+
 ## [5.266.2]
 
 ### Fixed

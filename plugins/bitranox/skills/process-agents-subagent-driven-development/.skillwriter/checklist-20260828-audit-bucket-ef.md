@@ -29,3 +29,21 @@ One unanchored claim: the agent-frontmatter hot-loading exception, with no versi
 - [x] Frontmatter untouched, so no routing keyword moved and the description cap is unaffected.
 - [x] The version is stated as the build the claim was NOT re-tested against, not as the build
       it was verified on - the distinction the finding turned on.
+
+## Follow-up: re-tested instead of hedged, and the claim was WRONG (decision review)
+
+- [x] Two arms on Claude Code 2.1.250, both dispatched mid-session with no restart:
+      a NEW project agents dir (`.claude/agents/probe-hotload.md`) and a NEW file in the
+      already-loaded user dir (`~/.claude/agents/probe-hotload2.md`). BOTH failed with
+      `Agent type 'X' not found`, and the reported available list was the session-start roster
+      in both cases.
+- [x] Positive control: `probe-effort-low`, which comes from that same user dir and was present
+      when the session started, IS in that list. So the dir is read - just not again.
+- [x] The shipped claim ("hot-loaded, EXCEPT the very first agents dir on a machine") is
+      therefore WRONG on this version, not merely unanchored: the exception is not the first dir,
+      it is EVERY mid-session addition. The text now states the measured rule, that the roster is
+      fixed at session start.
+- [x] Scope stated honestly: this measures ADDING a definition. Whether EDITING one already in
+      the roster takes effect mid-session was not tested, and the text does not claim it.
+- [x] Probe files removed from both dirs; one had been auto-staged and was unstaged, and the
+      working tree is clean.
