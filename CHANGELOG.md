@@ -17,6 +17,46 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.272.0]
+
+### Added
+
+- **`self_improve_signals.session_key()` and `session_state_path()`** - one place that turns a
+  `session_id` into a filename, replacing the eight sites that each built their own path. Hooks now
+  call `session_state_path(session, ".suffix")` rather than joining `_audit_dir()` themselves, so
+  the next session-keyed state file cannot reintroduce the hole one hook at a time.
+
+### Fixed
+
+- **A `session_id` carrying path separators no longer steers a hook's state file out of the audit
+  dir.** Six sites concatenated the raw id into a path and two more inherited one through
+  `touched_file`. Measured before the change: `../../../tmp/pwned` resolved to `/home/tmp/pwned`,
+  and `/tmp/absolute-pwned` replaced the base dir outright, because joining an absolute path
+  discards what it was joined to. Worse than naming a stray file, each writer `mkdir`s its parent
+  first, so an unconfined id CREATED directories outside the dir.
+
+  **Severity is bounded and the fix is not urgent: `session_id` is minted by Claude Code, not by
+  the model.** This is defense in depth at a trust boundary, not a live hole. What earned it one
+  shared helper rather than eight patches is the breadth - only three of the sites had been
+  reviewed, and the two that were already safe had each grown a private copy of the same sanitiser.
+
+  The key is an allowlist, not an escape of whatever looks dangerous today: everything outside
+  `[A-Za-z0-9_.-]` becomes `_`, so no separator, drive colon or NUL survives to reach the
+  filesystem. A real id is a UUID and passes through byte-for-byte, which is what keeps every state
+  file already on disk addressable - a sanitiser that rewrote those would have orphaned all of them
+  silently, trading a bounded hardening for a real regression.
+
+  Sites now confined: `touched_file`, `subagent_learnings_file`, `jig-repetition-nudge`,
+  `recovery-retry-gate`, `retry-with-a-flag-nudge`, `toolbox-nudge` (whose inline join was
+  extracted to `_nudge_flag` so the path is testable at all), and `context-watcher` plus
+  `decision-review-nudge` through `touched_file`. `skill-router` and `recall-memory` kept their
+  behaviour exactly and lost their duplicate sanitisers.
+
+  The regression test is a table over all ten sites, not over the helper. Wiring the helper into
+  one hook fixes only that hook, and a test that exercises the helper alone goes green against a
+  plugin that is still entirely unconfined. The two already-safe sites sit in the same table as the
+  known negative: a table whose every row fails cannot show that the rows differ.
+
 ## [5.271.8]
 
 ### Fixed

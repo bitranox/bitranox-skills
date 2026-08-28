@@ -287,8 +287,8 @@ def matching_recovery(armed: list, pending_ids: set, pending_ops: set, position:
 # ----------------------------------------------------------------------------- transcript state
 
 def _state_path(session: str) -> Path:
-    from self_improve_signals import _audit_dir           # noqa: PLC0415 - shared audit dir helper
-    return _audit_dir() / (str(session) + ".recovery-gate.json")
+    from self_improve_signals import session_state_path   # noqa: PLC0415 - shared, confines the id
+    return session_state_path(session, ".recovery-gate.json")
 
 
 def _load(session: str) -> dict:

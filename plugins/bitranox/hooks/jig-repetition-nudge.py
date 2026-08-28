@@ -426,8 +426,8 @@ def count_kin(store, path, sh):
 # ----------------------------------------------------------------------------- session state
 
 def _state_path(session):
-    from self_improve_signals import _audit_dir           # noqa: PLC0415 - shared audit dir helper
-    return _audit_dir() / (str(session) + ".jig-ledger.json")
+    from self_improve_signals import session_state_path   # noqa: PLC0415 - shared, confines the id
+    return session_state_path(session, ".jig-ledger.json")
 
 
 def _load(session):

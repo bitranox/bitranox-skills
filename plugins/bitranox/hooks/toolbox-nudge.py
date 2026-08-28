@@ -114,13 +114,19 @@ def _tool_invocation(tool):
     return None
 
 
+def _nudge_flag(session):
+    """Where this session's already-nudged tool list lives - a named helper so the path is testable
+    rather than built inline, and so the id passes through the shared confinement on the way."""
+    from self_improve_signals import session_state_path   # noqa: PLC0415 - shared, confines the id
+    return session_state_path(session, ".toolbox-nudged")
+
+
 def _already_nudged(session, tool):
     """Per-session dedup: True if `tool` was already nudged this session; else record it. Best-effort."""
     if not session:
         return False
     try:
-        from self_improve_signals import _audit_dir
-        f = _audit_dir() / (str(session) + ".toolbox-nudged")
+        f = _nudge_flag(session)
         seen = set(f.read_text(encoding="utf-8").split()) if f.exists() else set()
         if tool in seen:
             return True

@@ -12,7 +12,6 @@ Pure standard library. Fail-open: every error path exits 0, so a broken or slow 
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -32,8 +31,9 @@ COMMON_FRACTION = 0.25  # a keyword in > this fraction of the whole store is a c
 
 
 def _state_file(cwd, sid):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid))[:64]
-    return Path.home() / ".claude" / "self-improve-audit" / ("%s.recall-%s.txt" % (sig.proj_key(cwd), safe))
+    """Per-project, per-session recall state. Both keys are confined by their shared helper:
+    `proj_key` hashes the project, `session_key` flattens the id to one filename component."""
+    return sig._audit_dir() / ("%s.recall-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
 
 
 def _label(path):

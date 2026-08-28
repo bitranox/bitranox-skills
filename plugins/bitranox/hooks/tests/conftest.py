@@ -52,6 +52,8 @@ _HOOK_MODULES = {
     "config-edit-guard": "config_edit_guard",
     "context-watcher": "context_watcher",
     "retry-with-a-flag-nudge": "retry_with_a_flag_nudge",
+    "recovery-retry-gate": "recovery_retry_gate",
+    "jig-repetition-nudge": "jig_repetition_nudge",
     "toolbox-nudge": "toolbox_nudge",
     "skill-edit-guard": "skill_edit_guard",
     "skill-router": "skill_router",

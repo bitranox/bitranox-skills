@@ -65,8 +65,8 @@ FIRE_CAP = 3               # nudges per session; past that the reader has stoppe
 
 
 def _state_path(session: str) -> Path:
-    from self_improve_signals import _audit_dir           # noqa: PLC0415 - shared audit dir helper
-    return _audit_dir() / (str(session) + ".retry-flag.json")
+    from self_improve_signals import session_state_path   # noqa: PLC0415 - shared, confines the id
+    return session_state_path(session, ".retry-flag.json")
 
 
 def _load(session: str) -> dict:

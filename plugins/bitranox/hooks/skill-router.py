@@ -29,9 +29,9 @@ MAX_SKILLS = 2
 
 
 def _state_file(cwd, sid):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid))[:64]
-    return (Path.home() / ".claude" / "self-improve-audit"
-            / ("%s.skillrouter-%s.txt" % (sig.proj_key(cwd), safe)))
+    """Per-project, per-session router state. Both keys are confined by their shared helper:
+    `proj_key` hashes the project, `session_key` flattens the id to one filename component."""
+    return sig._audit_dir() / ("%s.skillrouter-%s.txt" % (sig.proj_key(cwd), sig.session_key(sid)))
 
 
 def load_triggers():

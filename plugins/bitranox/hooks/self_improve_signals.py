@@ -61,6 +61,38 @@ def audit_file(proj):
     return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
 
 
+_SESSION_KEY_MAX = 64
+
+
+def session_key(session):
+    """`session` reduced to ONE safe filename component - the session-side twin of `proj_key`.
+
+    `session_id` arrives on hook stdin and a dozen state files are named after it. A path built by
+    concatenation is confined by nothing: measured before this existed, `../../../tmp/pwned` walked
+    out of the audit dir and `/tmp/absolute-pwned` replaced the base dir outright, because joining
+    an absolute path DISCARDS what it was joined to. Severity is bounded - Claude Code mints the id,
+    not the model - so this is defense in depth at a trust boundary, not a live hole; what earns it
+    one shared helper is that a dozen sites each built their own path.
+
+    An ALLOWLIST, not an escape of the characters that happen to be dangerous today: everything
+    outside `[A-Za-z0-9_.-]` becomes `_`, so no separator, no drive colon and no NUL survives to be
+    interpreted by the filesystem. `.` and `-` stay because a real id is a UUID and must pass
+    through UNCHANGED - a sanitiser that rewrote those would silently orphan every state file
+    already on disk. `..` therefore survives as a name, which is harmless: the result is always
+    appended to a suffix, so it can only ever name a file inside the audit dir.
+    """
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(session or ""))[:_SESSION_KEY_MAX]
+
+
+def session_state_path(session, suffix):
+    """The audit-dir path of `session`'s `suffix` state file, confined to a single component.
+
+    Hooks call THIS rather than joining `_audit_dir()` themselves: making the sink shared is what
+    stops the next session-keyed state file from reintroducing the traversal one hook at a time.
+    """
+    return _audit_dir() / (session_key(session) + suffix)
+
+
 # ---- meta-dream-tree consolidation: cadence markers + mode (shared by session-start + dream_state) --
 
 _DREAM_THRESHOLD_S = 24 * 3600  # do not nudge a fresh consolidation more often than this
@@ -1070,7 +1102,7 @@ def resolve_transcript(proj):
 
 def subagent_learnings_file(session):
     """Queue of learning signals detected in this session's SUBAGENT transcripts."""
-    return _audit_dir() / (str(session) + ".subagent-learnings")
+    return session_state_path(session, ".subagent-learnings")
 
 
 def read_subagent_learnings(session):
@@ -1125,7 +1157,7 @@ def drain_subagent_learnings(session):
 
 def touched_file(session):
     """Scratch file holding the paths this session's turns wrote/edited (capture-routing evidence)."""
-    return _audit_dir() / (str(session) + ".touched")
+    return session_state_path(session, ".touched")
 
 
 def read_touched_paths(session):
