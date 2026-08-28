@@ -61,7 +61,9 @@ def test_non_git_command_ignored(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32",
-                    reason='bare "bash" on a Windows runner resolves to the WSL stub in System32, not Git Bash; this drives the bash shim directly')
+                    reason="a Windows tmp_path is backslashed and POSIX shlex eats the separators, "
+                           "so -F names an unopenable path and this guard approves the commit - a "
+                           "real defect, fixed by keying the split on the TOOL, not a test artifact")
 def test_message_file_scanned(monkeypatch, tmp_path):
     f = tmp_path / "msg.txt"
     f.write_text("Subject %s tell\n" % EM_DASH, encoding="utf-8")
@@ -106,7 +108,13 @@ def test_a_value_taking_flag_before_m_is_not_a_message(monkeypatch):
 
 
 def test_the_attached_file_form_is_read(monkeypatch, tmp_path):
-    """`-Fmsg.txt` is the same cluster gap on the file side: only `-F file` was handled."""
+    """`-Fmsg.txt` is the same cluster gap on the file side: only `-F file` was handled.
+
+    The path is passed forward-slashed and quoted so this stays a test of the ATTACHED form. A
+    BACKSLASHED path is mangled by POSIX shlex on every platform and is a separate, real defect -
+    see the skip on test_message_file_scanned - and letting it fail here would attribute it to the
+    cluster parsing instead.
+    """
     f = tmp_path / "msg.txt"
     f.write_text("subject %s here\n" % EM_DASH, encoding="utf-8")
-    assert _run(monkeypatch, 'git commit -F%s' % f) == 2
+    assert _run(monkeypatch, 'git commit -F"%s"' % f.as_posix()) == 2

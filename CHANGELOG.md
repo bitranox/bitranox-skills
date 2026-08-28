@@ -17,6 +17,26 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.5]
+
+### Fixed
+
+- **A Windows CI failure in 5.271.4's own new test, and the wrong skip reason that had been hiding
+  the defect behind it.** `test_the_attached_file_form_is_read` passed a `tmp_path` straight into
+  the command string; on the Windows runner that path is backslashed, POSIX `shlex` eats the
+  separators (`-FC:\Users\x\msg.txt` becomes `-FC:Usersxmsg.txt`), the file cannot be opened and
+  the guard approves the commit. The test now passes the path forward-slashed and quoted, so it
+  tests the ATTACHED `-F` form - which is its subject - rather than attributing a separator defect
+  to the cluster parsing.
+
+  The separator defect is real and unfixed: this guard cannot read a `-F` message file named by a
+  backslashed path, on any platform. `test_message_file_scanned` covers exactly that and is
+  skipped on Windows, but its skip reason described a different test - it claimed bare `bash`
+  resolves to the WSL stub, while that test drives `main()` in-process and starts no subprocess at
+  all, the reason having been copied from the shim smoke test. So the one test that would have
+  caught this was skipped for a reason that did not apply to it. The reason now states the actual
+  defect, which turns a silent hole into a documented one until the split is keyed on the tool.
+
 ## [5.271.4]
 
 ### Fixed
