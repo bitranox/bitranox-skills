@@ -83,3 +83,30 @@ def test_shim_smoke(tmp_path):
     payload = json.dumps({"tool_input": {"command": 'git commit -m "bad %s dash"' % EM_DASH}})
     r = subprocess.run(["bash", str(SHIM), str(SCRIPT)], input=payload, capture_output=True, text=True)
     assert r.returncode == 2 and "tell(s)" in r.stderr
+
+
+@pytest.mark.parametrize("flags", ["-m", "-am", "-sm", "-asm", "-anm"])
+def test_a_clustered_short_flag_still_exposes_the_message(monkeypatch, flags):
+    """`git commit -am "..."` is the commonest commit form there is, and it bypassed this guard.
+
+    `_messages` tested `t in ("-m", "--message")` and `t.startswith("-m")`; a cluster matches
+    neither, so the message list came back empty and the hook approved a message it never read.
+    `-m` is the control: it always worked, so a harness broken for another reason fails it too.
+    """
+    assert _run(monkeypatch, 'git commit %s "subject %s here"' % (flags, EM_DASH)) == 2
+
+
+def test_a_value_taking_flag_before_m_is_not_a_message(monkeypatch):
+    """In `-Cm` the `m` is `-C`'s VALUE (reuse commit "m"), not the message flag.
+
+    Scanning a cluster for `m` anywhere would read the next token as a message and block a commit
+    that carries none - so the scan has to stop at the first value-taking option.
+    """
+    assert _run(monkeypatch, 'git commit -Cm "not %s a message"' % EM_DASH) == 0
+
+
+def test_the_attached_file_form_is_read(monkeypatch, tmp_path):
+    """`-Fmsg.txt` is the same cluster gap on the file side: only `-F file` was handled."""
+    f = tmp_path / "msg.txt"
+    f.write_text("subject %s here\n" % EM_DASH, encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F%s' % f) == 2

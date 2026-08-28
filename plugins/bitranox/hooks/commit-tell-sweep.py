@@ -26,6 +26,54 @@ from pathlib import Path
 import tell_chars
 
 
+# git short options that CONSUME a value, so whatever follows them INSIDE a cluster is that value
+# rather than another flag: in `-Cm` the `m` is `-C`'s argument (reuse commit "m"), not the message
+# flag, and reading the next token as a message there would block a commit that carries none.
+#
+# Deliberately tuned for `git commit`, not per-subcommand, and that is a known limit rather than an
+# oversight: `-s` is `--signoff` here and takes no value, which is what lets `-sm "msg"` work, but
+# in `git merge` the same letter is `--strategy` and does take one. So `git merge -sm ours` is read
+# as a message where git reads it as a strategy. Accepted because reaching a wrong verdict from it
+# needs a strategy or branch name containing a typographic tell, and commit is nearly all of the
+# traffic this hook sees. Splitting the set per subcommand means parsing the subcommand first.
+_VALUE_SHORT = "cCFmStu"
+
+
+def _cluster(tok, toks, i):
+    """What a single-dash short-option cluster carries: (kind, value, extra tokens consumed).
+
+    `git commit -am "..."` and `-sm "..."` are the commonest commit forms there are, and both a
+    `t in ("-m", "--message")` test and a `t.startswith("-m")` test miss them, because the flag
+    sits in the MIDDLE of the cluster - so the message list came back empty and this guard
+    approved a message it had never read. Scanning stops at the first value-taking option, which
+    is what keeps `-Cm` from being misread as a message flag.
+
+    `kind` is "msg", "file", or None.
+    """
+    body = tok[1:]
+    for pos, ch in enumerate(body):
+        if ch not in _VALUE_SHORT:
+            continue
+        if ch not in ("m", "F"):
+            return None, None, 0          # -c/-C/-S/-t/-u swallow the rest as their own value
+        kind = "msg" if ch == "m" else "file"
+        rest = body[pos + 1:]
+        if rest:                          # attached form: -m"msg" / -Fmsg.txt
+            return kind, rest, 0
+        if i + 1 < len(toks):             # separated form: -am "msg" / -F msg.txt
+            return kind, toks[i + 1], 1
+        return None, None, 0
+    return None, None, 0
+
+
+def _read_message_file(path):
+    """The file's text, or None when it cannot be read - a path we cannot open carries no tell."""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def _messages(command):
     """Inline commit/merge/tag messages in a git command: the values of -m/--message and the
     contents of the file named by -F/--file. Empty unless the command is a git command."""
@@ -38,23 +86,31 @@ def _messages(command):
     msgs, i = [], 0
     while i < len(toks):
         t = toks[i]
-        if t in ("-m", "--message") and i + 1 < len(toks):
-            msgs.append(toks[i + 1]); i += 2; continue
+        if t == "--message" and i + 1 < len(toks):
+            msgs.append(toks[i + 1])
+            i += 2
+            continue
+        if t == "--file" and i + 1 < len(toks):
+            text = _read_message_file(toks[i + 1])
+            if text is not None:
+                msgs.append(text)
+            i += 2
+            continue
         if t.startswith("--message="):
             msgs.append(t.split("=", 1)[1])
-        elif t.startswith("-m") and len(t) > 2:            # attached form: -m"msg"
-            msgs.append(t[2:])
-        elif t in ("-F", "--file") and i + 1 < len(toks):
-            try:
-                msgs.append(Path(toks[i + 1]).read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                pass
-            i += 2; continue
         elif t.startswith("--file="):
-            try:
-                msgs.append(Path(t.split("=", 1)[1]).read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                pass
+            text = _read_message_file(t.split("=", 1)[1])
+            if text is not None:
+                msgs.append(text)
+        elif t.startswith("-") and not t.startswith("--") and len(t) > 1:
+            kind, value, extra = _cluster(t, toks, i)
+            if kind == "msg":
+                msgs.append(value)
+            elif kind == "file":
+                text = _read_message_file(value)
+                if text is not None:
+                    msgs.append(text)
+            i += extra
         i += 1
     return msgs
 

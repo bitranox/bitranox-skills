@@ -17,6 +17,24 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.4]
+
+### Fixed
+
+- **`commit-tell-sweep` never read the message of a `git commit -am` or `-sm`.** `_messages()`
+  tested `t in ("-m", "--message")` and `t.startswith("-m")`, and a clustered short flag matches
+  neither: `shlex` yields the single token `-am`, which starts with `-a`. The message list came
+  back empty, the hook found no tells because it had inspected nothing, and it returned 0. The
+  form it missed is the commonest commit form there is, so the guard was effectively off for
+  anyone not using `-m` or `-F` exactly.
+
+  A single-dash cluster is now scanned for `m` or `F`, in both the attached (`-m"msg"`,
+  `-Fmsg.txt`) and separated (`-am "msg"`, `-F msg.txt`) forms - the attached `-F` spelling was a
+  second gap in the same function. Scanning stops at the first value-taking short option, because
+  in `-Cm` the `m` is `-C`'s argument rather than the message flag; reading the next token there
+  would block a commit carrying no message at all. That negative case is a permanent test, beside
+  the plain `-m` form kept as a control so a harness broken for an unrelated reason fails it too.
+
 ## [5.271.3]
 
 ### Added
