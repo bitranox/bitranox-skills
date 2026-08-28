@@ -58,3 +58,31 @@ on every run and the "I cannot run it" half went missing while the reply still r
       agent noted the answer is the same either way, so the distinction changes no action.
 - [x] "Is more than one sentence of acknowledgement permitted?" - declined by design. One sentence
       is the cap; more becomes the recap step 6 forbids.
+
+## Open thread SETTLED: does the fixed wording get parroted when it misfits?
+
+The verbatim template was kept on the reasoning that reconstruction was the measured failure. The
+risk accepted alongside it was that an agent would emit `handover.md` when the file is elsewhere.
+Tested with two arms where the bare basename is insufficient, neither telegraphing what was being
+measured, against the shipped 5.268.0 text.
+
+- [x] Nested path (`services/auth/handover.md`, with an unrelated months-old `handover.md` at the
+      monorepo root, so the bare literal names the WRONG file): the agent sent
+      "Handover written to `services/auth/handover.md`." Path substituted, rest verbatim, nudge last.
+- [x] Two checkouts open (a worktree plus its main checkout, each with its own `handover.md`): the
+      agent sent the full worktree path and added one line naming which checkout it worked in.
+- [x] Control already held: when the file IS `handover.md` at the repo root, both earlier arms sent
+      the literal unchanged.
+
+**Verdict: the template does not get parroted.** 2 of 2 adapted, including the case where parroting
+would have pointed the reader at another session's file. The predicted defect did not reproduce, so
+no change is made - adding wording for it would be content for a hypothetical case.
+
+**Residual, recorded not closed:** both arms reached the right answer by INFERENCE and said so.
+Arm A: "'send it as written' guards against softening the `/clear` instruction, not against filling
+the placeholder in with the file's real name ... this substitution is my inference, not something
+the text states." Arm B: "a stricter reading would have me send the template's exact wording
+unchanged." So the prose reads as ambiguous even though both resolved it correctly. Declined for
+now on the evidence: behaviour is right 2 of 2, and the user's standing decision is to keep the
+wording fixed. Re-open if a run is ever observed emitting the bare literal for a file that is
+somewhere else.
