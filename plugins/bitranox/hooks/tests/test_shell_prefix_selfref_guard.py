@@ -136,3 +136,110 @@ def test_ordinary_command_substitution_is_untouched():
 def test_a_text_flag_with_no_substitution_is_fine():
     assert guard.substitutes_inside_text_arg('git commit -m "plain subject line"') is False
     assert guard.substitutes_inside_text_arg("tool add --title 'single quoted $(safe)'") is False
+
+
+# ------------------------------------------- the UNQUOTED HEREDOC (recurrence 5)
+#
+# Bash performs parameter expansion, command substitution and arithmetic expansion in the body of
+# a bare `<<EOF`, and NONE of it in `<<'EOF'`. So self-authored prose carrying backticks inside a
+# bare heredoc is executed before the program ever sees it. Measured 2026-08-27: composing a
+# memory body that way turned 4 KB of prose into 3.4 MB of shell output, exit 0, no warning.
+#
+# The argument-position half of this rule has been guarded since plugin 5.161.0. The heredoc half
+# was NOT, and the same fact has now been violated in that position twice - because
+# `strip_heredoc_bodies` hides every heredoc body from every command-scanning guard, which is
+# correct for a QUOTED delimiter and wrong for a bare one.
+
+
+def heredoc_blocked(command: str) -> bool:
+    return guard.substitutes_inside_unquoted_heredoc(command)
+
+
+def test_the_composition_that_produced_3_4_mb_of_garbage() -> None:
+    assert heredoc_blocked("python3 - <<EOPY\nextra = '''see `avg-*.txt`'''\nEOPY")
+
+
+def test_dollar_paren_in_a_bare_heredoc_body_is_the_same_bug() -> None:
+    assert heredoc_blocked("cat > f.md <<EOF\nrun $(git rev-parse HEAD) first\nEOF")
+
+
+def test_the_dash_form_is_the_same_opener() -> None:
+    assert heredoc_blocked("cat <<-EOF\n\tsee `date` here\n\tEOF")
+
+
+def test_an_unterminated_bare_heredoc_still_counts() -> None:
+    """It consumes the rest of the command, so the substitution is still expanded."""
+
+    assert heredoc_blocked("python3 - <<EOPY\nprose with `backticks` and no terminator")
+
+
+# ------------------------------------------------------- what must NOT be blocked
+
+
+def test_a_quoted_delimiter_is_the_documented_fix_and_must_pass() -> None:
+    """<<'EOF' is inert: bash expands nothing inside it. Blocking it would block the fix."""
+
+    assert not heredoc_blocked("python3 - <<'EOPY'\nextra = '''see `avg-*.txt`'''\nEOPY")
+    assert not heredoc_blocked('python3 - <<"EOPY"\nsee `avg-*.txt`\nEOPY')
+
+
+def test_a_bare_heredoc_without_substitution_is_ordinary_work() -> None:
+    assert not heredoc_blocked("cat > f.txt <<EOF\nplain prose, nothing to expand\nEOF")
+
+
+def test_a_bare_dollar_var_does_not_count() -> None:
+    """Templating a value into a heredoc is normal and does not EXECUTE anything.
+
+    Only the substituting forms run a command. Including $VAR would fire on ordinary work,
+    and a guard that fires on ordinary work gets disabled rather than obeyed.
+    """
+
+    assert not heredoc_blocked("cat > f.conf <<EOF\npath = $HOME/x\nEOF")
+
+
+def test_an_opener_inside_a_quoted_string_is_not_an_opener() -> None:
+    """The false positive that showed up when this rule was priced against real history.
+
+    A `python3 -c "...<<EOPY..."` argument MENTIONS a heredoc; it does not open one. Read
+    literally, the mention has no terminator, so it swallows the rest of the command and every
+    backtick in it. This is the shape that makes a guard block its own documentation.
+    """
+
+    assert not heredoc_blocked(
+        'python3 -c "real = \\"python3 - <<EOPY\\nsee `x`\\nEOPY\\""'
+    )
+    assert not heredoc_blocked("echo 'use <<EOPY and then `cmd`'")
+
+
+def test_prose_inside_a_QUOTED_heredoc_may_mention_a_bare_one() -> None:
+    """Writing the documentation for this very rule must not trip it."""
+
+    command = (
+        "cat > doc.md <<'MDEOF'\n"
+        "Bash expands `$(...)` inside a bare <<EOF and not inside <<'EOF'.\n"
+        "MDEOF"
+    )
+    assert not heredoc_blocked(command)
+
+
+def test_commands_with_no_heredoc_at_all() -> None:
+    for text in ("", "git status", "echo `date`", 'git commit -m "see `date`"'):
+        assert not heredoc_blocked(text), text
+
+
+def test_an_escaped_backtick_in_a_bare_heredoc_runs_nothing() -> None:
+    r"""A bare heredoc still honours a backslash, so \` is a literal backtick.
+
+    Adjudicating this rule's firings against their source transcripts, this was 9 of 12: the
+    author had already escaped, precisely because they knew the delimiter was unquoted. Firing
+    on them would make the guard mostly wrong, which is how a guard gets disabled.
+    """
+
+    assert not heredoc_blocked("cat > f.md <<EOF\nsee \\`avg.txt\\` here\nEOF")
+    assert not heredoc_blocked("cat > f.sh <<EOF\ndeadline=\\$(( \\$(date +%s) + 780 ))\nEOF")
+
+
+def test_an_escaped_and_an_unescaped_span_in_one_body_still_blocks() -> None:
+    """The escape blanking must not excuse a real substitution sitting beside a safe one."""
+
+    assert heredoc_blocked("cat > f.md <<EOF\nsafe \\`a\\` then live `b`\nEOF")

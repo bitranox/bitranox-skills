@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.267.0]
+
+### Added
+
+- `shell-prefix-selfref-guard` now blocks an UNQUOTED heredoc whose body carries a command
+  substitution. Bash expands backticks and `$(...)` inside `<<EOF` and expands nothing inside
+  `<<'EOF'`, so self-authored prose written through a bare heredoc is executed before the program
+  sees it. Measured: composing a memory body that way turned 4 KB of prose into 3.4 MB of shell
+  output, exit 0, nothing logged. The argument-position half of this rule has been guarded since
+  5.161.0; this position had not been, which is why the same rule was violated here twice.
+
+  `strip_heredoc_bodies` is deliberately NOT changed - 16 hooks consume it, and replaying the real
+  failure through the guard with the body made visible showed it would not have caught this case
+  anyway. The new check locates openers on masked lines, so a heredoc merely MENTIONED inside a
+  quoted string is not read as opening one, and reads the body from the original line, since
+  masking would erase the substitution being looked for. Backslash-escaped forms are ignored: a
+  bare heredoc still honours `\``, so an author who escaped had already made the text safe.
+
+  Priced with `compuse-toolbox guard_replay` over 66,227 real Bash commands: 3 firings, 0.005%.
+  All three were adjudicated against their source transcripts and all three are genuine prose
+  corruptions in three different projects; none of them errored, which is why they went unnoticed.
+  Before the escape handling the same rule fired 12 times, and the 9 extra were all correctly
+  escaped bodies.
+
 ## [5.266.3]
 
 ### Fixed
