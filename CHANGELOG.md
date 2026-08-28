@@ -17,6 +17,47 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.6]
+
+### Added
+
+- **`shell_text.split_for_tool(command, tool_name)` - split a tool's command by the TOOL's
+  language, never the host OS.** A hook on a `Bash|PowerShell` matcher receives two different
+  languages. The Bash tool is a POSIX command line even on Windows, because Claude Code runs it
+  through Git Bash; the PowerShell tool is a Windows one, where the same backslash is a path
+  separator that POSIX `shlex` eats. `harness_checks.split_command_line` cannot be reused: it keys
+  on `os.name`, which is right for a command this machine will run and wrong here, since on a
+  Windows host it would hand the Bash tool's POSIX string to the Windows parser.
+
+  The Windows side is a pure-Python implementation of the documented C-runtime backslash rules
+  rather than a `ctypes` call to `CommandLineToArgvW`. The PowerShell tool's string can reach a
+  hook on any host - pwsh runs on Linux - and a Windows-only path would also be untestable on the
+  platform most of this suite runs on.
+
+  It is tested as a PROPERTY rather than against a case list: `subprocess.list2cmdline` is the
+  stdlib's own Windows command-line builder, quoting to the same rules this reads, so the two are
+  required to be inverses. That covers the shapes a hand-written list misses - a UNC prefix, a
+  trailing backslash run, an empty argument - and it fails if either side drifts.
+
+### Fixed
+
+- **`commit-tell-sweep` could not read a `-F` message file on the PowerShell arm**, so it returned
+  0 on a commit whose message it had never inspected. It now splits by the event's tool. The
+  guard resolves that token - it opens the path - which is what makes the mangling a defect here
+  rather than cosmetic; a token merely compared or name-matched survives it.
+
+- **Corrects an overstatement shipped in 5.271.5.** That entry said the guard "cannot read a `-F`
+  message file named by a backslashed path, on any platform", and framed the Windows skip on
+  `test_message_file_scanned` as hiding a live defect on both arms. Verified against real bash
+  since: an unquoted `C:\Users\me\f.txt` reaches the program as `C:Usersmef.txt`, exactly what
+  `shlex` produces. On the Bash arm the guard was agreeing with the shell, and the test was simply
+  passing a command no real Bash invocation would contain. The defect is real only on the
+  PowerShell arm. That test now hands bash a path bash can carry, runs on every platform, and the
+  skip is gone rather than re-worded.
+
+  The 5.271.5 finding that stands unchanged is the one about the skip's REASON: it described a
+  different test, having been copied from the shim smoke test beside it.
+
 ## [5.271.5]
 
 ### Fixed

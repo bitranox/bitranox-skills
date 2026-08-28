@@ -4,6 +4,8 @@ This module exists so the command-scanning guards agree about what counts as DAT
 are the corpus that proved the two former copies behaviourally identical before they were merged;
 keeping them here is what stops the next edit from splitting the behaviour again.
 """
+import subprocess
+import pytest
 import shell_text as S
 
 
@@ -153,3 +155,69 @@ def test_blank_unexpanded_text_still_leaves_double_quotes_alone():
     """The two functions answer different questions and must keep treating quotes differently."""
     assert "$?" in S.blank_unexpanded_text('echo "rc=$?"')
     assert "$?" not in S.mask_data_regions('echo "rc=$?"')
+
+
+# --------------------------------------------------------------------------
+# split_for_tool: a Bash|PowerShell matcher delivers command strings in two
+# different languages, and the TOOL decides which, never the host OS.
+# --------------------------------------------------------------------------
+
+WIN_PATH = r"C:\Users\me\msg.txt"
+
+
+def test_split_for_tool_keeps_a_windows_path_whole_for_powershell():
+    """In PowerShell a backslash is a PATH SEPARATOR, so eating it destroys the argument.
+
+    A guard that then resolves the token - opens it, stats it, runs it - gets nothing back and
+    fails open, which is a guard approving exactly what it exists to block.
+    """
+    assert S.split_for_tool("git commit -F " + WIN_PATH, "PowerShell")[-1] == WIN_PATH
+
+
+def test_split_for_tool_matches_bash_itself_for_the_bash_tool():
+    """Not a bug on this arm, and the reason the split must be keyed rather than made uniform.
+
+    Real bash gives `C:Usersmemsg.txt` for that same unquoted string - verified against bash - so
+    shlex is not merely acceptable here, it is what the tool actually does. Applying the Windows
+    rules to a Bash command would be a NEW defect on a Windows host.
+    """
+    assert S.split_for_tool("git commit -F " + WIN_PATH, "Bash")[-1] == "C:Usersmemsg.txt"
+
+
+def test_split_for_tool_defaults_to_bash_for_an_unknown_tool():
+    assert S.split_for_tool("git commit -F " + WIN_PATH)[-1] == "C:Usersmemsg.txt"
+
+
+@pytest.mark.parametrize("command,expected", [
+    (r'a "b c"', ["a", "b c"]),                        # quotes group
+    (r'a "b\"c"', ["a", 'b"c']),                       # 2n+1 backslashes -> literal quote
+    (r'a "b\\" c', ["a", "b\\", "c"]),                 # 2n backslashes -> n, quote still toggles
+    (r'a C:\dir\file.txt', ["a", r"C:\dir\file.txt"]), # a run with no quote after it is literal
+    ("", []),                                          # must not become the interpreter path
+])
+def test_split_for_tool_follows_the_documented_backslash_rules(command, expected):
+    """The CRT rules are only surprising around quotes; a plain path must pass through untouched."""
+    assert S.split_for_tool(command, "PowerShell") == expected
+
+
+_B = chr(92)   # kept out of the literals below so this file needs no escaping puzzles
+
+
+@pytest.mark.parametrize("argv", [
+    ["git", "commit", "-F", "C:" + _B + "Users" + _B + "me" + _B + "msg.txt"],
+    ["a", "C:" + _B + "dir" + _B + " "],          # a space inside a quoted path
+    ["x", 'b"c'],                                  # an embedded quote
+    ["p", "C:" + _B + "a b" + _B + "c.txt"],
+    ["q", ""],                                     # an empty argument must survive
+    ["tool", _B + _B + "server" + _B + "share" + _B + "f.txt"],   # UNC
+    ["n", "trailing" + _B],                        # a run with nothing after it
+])
+def test_split_for_tool_inverts_list2cmdline(argv):
+    """The property, rather than cases I happened to think of.
+
+    `subprocess.list2cmdline` is the stdlib's own Windows command-line BUILDER, quoting to the
+    same C-runtime rules this splitter reads. Requiring the two to be inverses covers the shapes
+    a hand-written case list reliably misses - UNC prefixes, a trailing backslash run, an empty
+    argument - and it fails if either side drifts.
+    """
+    assert S.split_for_tool(subprocess.list2cmdline(argv), "PowerShell") == argv

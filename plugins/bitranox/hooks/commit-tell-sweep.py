@@ -19,10 +19,10 @@ shows stderr to the model; every other path (including any error) exits 0, so a 
 never wedges a turn.
 """
 import json
-import shlex
 import sys
 from pathlib import Path
 
+import shell_text
 import tell_chars
 
 
@@ -74,11 +74,16 @@ def _read_message_file(path):
         return None
 
 
-def _messages(command):
+def _messages(command, tool_name="Bash"):
     """Inline commit/merge/tag messages in a git command: the values of -m/--message and the
-    contents of the file named by -F/--file. Empty unless the command is a git command."""
+    contents of the file named by -F/--file. Empty unless the command is a git command.
+
+    `tool_name` picks the splitting language. It matters here because this function RESOLVES a
+    token - it opens the `-F` path - so a separator eaten by the wrong splitter leaves a path that
+    opens nothing and the guard approves a message it never read.
+    """
     try:
-        toks = shlex.split(command)
+        toks = shell_text.split_for_tool(command, tool_name)
     except ValueError:
         return []
     if "git" not in toks:
@@ -122,7 +127,7 @@ def main() -> int:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     hits = []
-    for msg in _messages(command):
+    for msg in _messages(command, event.get("tool_name") or "Bash"):
         hits += tell_chars.find_tell_lines(msg)
     if not hits:
         return 0

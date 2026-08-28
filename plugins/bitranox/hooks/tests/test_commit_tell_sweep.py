@@ -6,6 +6,7 @@ All source ASCII; tell characters via chr(), never pasted.
 
 import io
 import json
+import os
 import subprocess
 import sys
 import pytest
@@ -21,8 +22,9 @@ EM_DASH = chr(0x2014)
 CURLY = chr(0x201C)
 
 
-def _run(monkeypatch, command):
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": command}})))
+def _run(monkeypatch, command, tool_name="Bash"):
+    payload = {"tool_name": tool_name, "tool_input": {"command": command}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     return C.main()
 
 
@@ -60,14 +62,18 @@ def test_non_git_command_ignored(monkeypatch):
     assert _run(monkeypatch, 'grep -m 5 "%s" file' % EM_DASH) == 0
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="a Windows tmp_path is backslashed and POSIX shlex eats the separators, "
-                           "so -F names an unopenable path and this guard approves the commit - a "
-                           "real defect, fixed by keying the split on the TOOL, not a test artifact")
 def test_message_file_scanned(monkeypatch, tmp_path):
+    """Runs on every platform now.
+
+    It was skipped on Windows because a Windows tmp_path is backslashed and shlex eats the
+    separators - but that is what BASH does too (verified against real bash: an unquoted
+    C:\\Users\\me\\f.txt reaches the program as C:Usersmef.txt), so on the Bash arm it was never a
+    defect, only an unrealistic command. Hand bash a path bash can carry and the test is portable.
+    The backslash case that IS a defect lives on the PowerShell arm, below.
+    """
     f = tmp_path / "msg.txt"
     f.write_text("Subject %s tell\n" % EM_DASH, encoding="utf-8")
-    assert _run(monkeypatch, 'git commit -F %s' % f) == 2
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
 
 
 def test_bad_payload_safe(monkeypatch):
@@ -118,3 +124,39 @@ def test_the_attached_file_form_is_read(monkeypatch, tmp_path):
     f = tmp_path / "msg.txt"
     f.write_text("subject %s here\n" % EM_DASH, encoding="utf-8")
     assert _run(monkeypatch, 'git commit -F"%s"' % f.as_posix()) == 2
+
+
+def _backslashed_file(tmp_path, text):
+    """A file that really exists and whose path string contains a backslash, on either platform.
+
+    On Windows every path already is one. On POSIX a backslash is an ordinary filename character,
+    which is what lets the PowerShell arm be tested on the platform this suite mostly runs on.
+    """
+    if os.name == "nt":
+        f = tmp_path / "sub" / "msg.txt"
+        f.parent.mkdir()
+    else:
+        f = tmp_path / "sub\\msg.txt"
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def test_a_powershell_backslashed_message_file_is_read(monkeypatch, tmp_path):
+    """The defect this whole split exists for: in PowerShell a backslash is a PATH SEPARATOR.
+
+    POSIX shlex eats it, the -F path opens nothing, and the guard returns 0 on a commit whose
+    message it never inspected - a guard approving precisely what it exists to block.
+    """
+    f = _backslashed_file(tmp_path, "Subject %s tell\n" % EM_DASH)
+    assert _run(monkeypatch, 'git commit -F %s' % f, tool_name="PowerShell") == 2
+
+
+def test_the_same_command_under_bash_is_not_second_guessed(monkeypatch, tmp_path):
+    """The control that proves the split is KEYED rather than made uniform.
+
+    Real bash mangles that unquoted path identically, so the guard reading nothing here is the
+    guard agreeing with the shell. Applying the Windows rules to a Bash command would be a new
+    defect, not a wider net.
+    """
+    f = _backslashed_file(tmp_path, "Subject %s tell\n" % EM_DASH)
+    assert _run(monkeypatch, 'git commit -F %s' % f, tool_name="Bash") == 0

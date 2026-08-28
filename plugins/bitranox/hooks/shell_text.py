@@ -18,6 +18,7 @@ Import it directly (`import shell_text`); the hooks directory is on `sys.path` f
 from __future__ import annotations
 
 import re
+import shlex
 
 # The opener forms bash accepts: `<<WORD`, `<<-WORD`, `<< WORD`, `<<'WORD'`, `<<"WORD"`. The
 # backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
@@ -37,6 +38,78 @@ COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commi
 PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
 
+
+
+def _windows_command_argv(command):
+    r"""Split a Windows command line by the documented C-runtime rules.
+
+    Pure Python rather than `CommandLineToArgvW`, unlike the copy in `harness_checks`: that one
+    parses a command line THIS MACHINE will run, so a Windows-only path is fine there. This one
+    parses the PowerShell TOOL's string, which can reach a hook on any host - pwsh runs on Linux -
+    and a ctypes path would also be untestable on the platform most of this suite runs on.
+
+    The backslash rules only bite around a quote: 2n backslashes before one are n backslashes and
+    the quote still toggles, 2n+1 are n backslashes and a LITERAL quote, and a run with no quote
+    after it is literal throughout. That last rule is the one that matters here - it is what keeps
+    `C:\dir\file.txt` intact.
+    """
+    args, cur, in_quotes, started, i, n = [], [], False, False, 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "\\":
+            j = i
+            while j < n and command[j] == "\\":
+                j += 1
+            slashes = j - i
+            if j < n and command[j] == '"':
+                cur.append("\\" * (slashes // 2))
+                if slashes % 2:
+                    cur.append('"')
+                else:
+                    in_quotes = not in_quotes
+                started, i = True, j + 1
+            else:
+                cur.append("\\" * slashes)
+                started, i = True, j
+            continue
+        if ch == '"':
+            in_quotes, started, i = not in_quotes, True, i + 1
+            continue
+        if ch in " \t" and not in_quotes:
+            if started:
+                args.append("".join(cur))
+                cur, started = [], False
+            i += 1
+            continue
+        cur.append(ch)
+        started, i = True, i + 1
+    if started:
+        args.append("".join(cur))
+    return args
+
+
+def split_for_tool(command, tool_name="Bash"):
+    r"""Split a tool's `tool_input.command` into argv, by the TOOL's language, never the host OS.
+
+    A hook on a `Bash|PowerShell` matcher receives two different languages. The Bash tool is a
+    POSIX command line even on Windows, because Claude Code runs it through Git Bash - verified
+    against real bash, which mangles an unquoted `C:\Users\me\f.txt` to `C:Usersmef.txt` exactly
+    as `shlex` does, so shlex is not merely tolerable there, it is what the tool actually does.
+    The PowerShell tool is a Windows command line, where that same backslash is a PATH SEPARATOR
+    and eating it hands the caller a path that opens nothing.
+
+    That matters only where a guard RESOLVES the token - opens, stats or executes it - because the
+    read then fails and a fail-open approves what the guard exists to block. Tokens merely compared
+    or name-matched survive mangling.
+
+    Do NOT reach for `harness_checks.split_command_line` instead: it keys on `os.name`, which is
+    right for a command this machine will run and wrong here - on a Windows host it would hand the
+    Bash tool's POSIX string to the Windows parser. An unknown tool takes the Bash reading, which
+    is the one that cannot invent separators that were never in the string.
+    """
+    if tool_name == "PowerShell":
+        return _windows_command_argv(command)
+    return shlex.split(command)
 
 def is_shell_tool(tool_name) -> bool:
     """True when `tool_name` is a tool that carries a shell command in `tool_input.command`.
