@@ -66,8 +66,23 @@ thing dies with this session: what you were part-way through, and why you chose 
    after the handover is work the handover does not describe, so the next session inherits a file
    that is already wrong about the state it exists to report, which is worse than no handover at all.
    If the user asks for something new, write the handover, stop, and let them re-ask after the clear.
-6. **Tell the user to type `/clear`, then wait.** You cannot run it - built-in slash commands are not
-   invocable by the model - so say so plainly rather than implying the session clears itself.
+6. **Make the `/clear` nudge the last line, then stop.** Say the handover is written, name the file,
+   and tell the user to type `/clear`. It is an instruction, not an invitation: "type `/clear` when
+   you're ready" hands back a decision nobody asked them to make. You cannot run it yourself -
+   built-in slash commands are not invocable by the model - and that is the half that goes missing
+   when the wording is rebuilt from scratch, so send it as written:
+
+   > Handover written to `handover.md`. Type `/clear` to start the next session - I cannot run it
+   > for you.
+
+   **Nothing follows it.** Not a recap of what you just wrote, not an offer to keep going, not "let
+   me know if you want X first", not a question. A reply that ends by inviting more work invites it
+   into THIS session, which is the one thing the handover exists to prevent.
+
+   Anything you genuinely owe the user goes BEFORE that line, in one sentence. A question they asked
+   while you were writing is the case that matters: say you are not answering it in this session and
+   that they should re-ask after the clear, then send the nudge. Step 5 sends them back to re-ask,
+   which only works if they know the question was heard - dropping it in silence reads as ignored.
 
 ## When you are the one READING a handover
 
