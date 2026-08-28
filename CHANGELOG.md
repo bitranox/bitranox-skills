@@ -17,6 +17,16 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.267.2]
+
+### Changed
+
+- Say in 5.267.0's entry that its 0.005% firing rate was measured on a SINGLE machine's command
+  history. The number is unchanged and every firing was adjudicated, but how often an author
+  escapes a bare heredoc is a habit, and the escape handling that took the rule from 12 firings
+  to 3 was driven by that habit. A reader tuning or challenging this guard needs to know what the
+  figure does not cover.
+
 ## [5.267.1]
 
 ### Fixed
@@ -86,7 +96,10 @@ installed copies and needs no bump.
   masking would erase the substitution being looked for. Backslash-escaped forms are ignored: a
   bare heredoc still honours `\``, so an author who escaped had already made the text safe.
 
-  Priced with `compuse-toolbox guard_replay` over 66,227 real Bash commands: 3 firings, 0.005%.
+  Priced with `compuse-toolbox guard_replay` over 66,227 real Bash commands from a SINGLE
+  machine's history: 3 firings, 0.005%. Read the rate with that limit in mind - the escape
+  handling above was driven by 9 of the first 12 firings being correctly escaped, and how often
+  an author escapes a bare heredoc is a habit that may not generalise.
   All three were adjudicated against their source transcripts and all three are genuine prose
   corruptions in three different projects; none of them errored, which is why they went unnoticed.
   Before the escape handling the same rule fired 12 times, and the 9 extra were all correctly
