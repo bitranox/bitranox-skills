@@ -238,3 +238,23 @@ def test_basename_for_tool_uses_the_tool_s_separator_rules(token, tool, expected
     path is the TOOL's question. `.exe` goes on the PowerShell arm because a Windows program is
     spelled with it while every command allowlist in this plugin is spelled without."""
     assert S.basename_for_tool(token, tool) == expected
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_basename_for_tool_strips_exe_on_both_arms(tool):
+    """Git Bash on Windows runs `sed.exe`, so the Bash arm needs this exactly as much.
+
+    The earlier PowerShell-only stripping was justified by separator handling, which has nothing
+    to do with it: `.exe` is about how a program is NAMED, and every command allowlist in this
+    plugin is spelled without it. The asymmetry left `sed.exe -i config.json` unblocked under the
+    tool that carries nearly all the traffic.
+    """
+    assert S.basename_for_tool("sed.exe", tool) == "sed"
+    assert S.basename_for_tool("SED.EXE", tool) == "SED"
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_basename_for_tool_leaves_a_non_exe_suffix_alone(tool):
+    """Only `.exe` goes. A dot in a program name is otherwise part of the name."""
+    assert S.basename_for_tool("my.tool", tool) == "my.tool"
+    assert S.basename_for_tool("sed.executable", tool) == "sed.executable"

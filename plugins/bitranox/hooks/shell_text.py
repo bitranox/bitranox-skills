@@ -129,14 +129,12 @@ def basename_for_tool(token, tool_name="Bash"):
     the guard off: split correctly and the basename still fails, fix the basename and the split
     has already eaten the separators.
 
-    `.exe` is dropped on the PowerShell arm because a Windows program is spelled with it while
-    every command allowlist in this plugin is spelled without. It is NOT dropped on the Bash arm,
-    where nothing has eaten a separator on our behalf and inventing a match would be the mirror
-    error.
+    `.exe` is dropped on BOTH arms, because it is about how a program is NAMED and not about
+    separators at all - Git Bash on Windows runs `sed.exe`, and every command allowlist in this
+    plugin is spelled without the suffix. Stripping it only on the PowerShell arm left
+    `sed.exe -i config.json` unblocked under the tool that carries nearly all the traffic.
     """
-    if tool_name != "PowerShell":
-        return PurePosixPath(token).name
-    name = PureWindowsPath(token).name
+    name = (PureWindowsPath(token) if tool_name == "PowerShell" else PurePosixPath(token)).name
     return name[:-4] if name.lower().endswith(".exe") else name
 
 def is_shell_tool(tool_name) -> bool:

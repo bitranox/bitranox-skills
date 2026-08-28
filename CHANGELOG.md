@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.8]
+
+### Fixed
+
+- **`basename_for_tool` now strips `.exe` on BOTH arms, so `sed.exe -i config.json` is blocked
+  under the Bash tool too.** 5.271.7 stripped it only for PowerShell, justified by separator
+  handling - which has nothing to do with it. `.exe` is about how a program is NAMED, and Git Bash
+  on Windows runs `sed.exe` routinely, so the asymmetry left the guard silent under the tool that
+  carries nearly all the traffic. Measured before the change: `sed.exe -i c.json` returned block
+  under PowerShell and nothing under Bash.
+
+  The gap predates 5.271.7 - the old `argv[0].split("/")[-1]` left `sed.exe` unmatched as well -
+  but that release reasoned about `.exe` explicitly on the line in question, which turned it from
+  an oversight into a decision. A wrong justification that reads as principled is worse than an
+  undocumented gap, because the next reader has no reason to re-examine it.
+
 ## [5.271.7]
 
 ### Added

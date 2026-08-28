@@ -116,3 +116,9 @@ def test_the_plain_posix_form_still_blocks_on_both_arms():
     """The case the guard was built for, kept as a control on both arms."""
     assert H.assess("sed -i 's/a/b/' config.json", "Bash")[0] == "block"
     assert H.assess("sed -i 's/a/b/' config.json", "PowerShell")[0] == "block"
+
+
+def test_sed_exe_is_blocked_under_bash_too():
+    """Git Bash on Windows runs sed.exe; this arm carries nearly all the traffic."""
+    assert H.assess("sed.exe -i s/a/b/ config.json", "Bash")[0] == "block"
+    assert H.assess("sed.exe -i s/a/b/ config.json", "PowerShell")[0] == "block"
