@@ -3,6 +3,15 @@
 Skill type: REFERENCE (a routing table over bundled scripts). The row changes because the tool it
 routes to gained two behaviours a caller must know about before trusting a green gate.
 
+**Ordering, stated plainly: this review is RETROSPECTIVE.** The row was authored alongside the code
+change, and the checks below were run afterwards, against the already-written row. The Iron Law's
+remedy for an untested skill edit is to delete it and start over; that is not what happened here,
+and the phases below record what was VERIFIED, not an order that was followed. The verification
+itself stands on its own - the accuracy check, the executed behaviour and the control are
+reproducible from the shipped files by anyone, independent of when the row was written. What a
+retrospective review cannot provide is the RED signal: evidence that the row's wording was shaped
+by watching an agent fail without it. It was not, and no claim here should be read as saying so.
+
 ## PLAN
 
 - [x] Skill type identified: reference/hub. One row in an existing table, no new skill, no new

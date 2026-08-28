@@ -17,6 +17,22 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.270.2]
+
+### Fixed
+
+- `compuse-toolbox`: the 5.269.0 skill-writer review artifact now states that it is a
+  RETROSPECTIVE review. The `gate` routing row was authored alongside the code change and the
+  checks were run afterwards, so the phase headings record what was verified rather than an order
+  that was followed. The verification is unchanged and reproducible from the shipped files; what
+  the artifact previously left implied, and now says outright, is that it carries no RED signal -
+  no evidence that the row's wording was shaped by watching an agent fail without it.
+
+- Versions with no entry, recorded so this file does not read as complete: 5.254.0 through 5.262.0
+  were backfilled under 5.269.0, and 5.264.0, 5.265.0, 5.265.1, 5.265.2, 5.266.1, 5.268.0, 5.270.0
+  and 5.270.1 are still missing. The last two shipped while this entry was being written and belong
+  to whoever made them.
+
 ## [5.269.0]
 
 ### Changed
