@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.1]
+
+### Fixed
+
+- **`arbitrary-sleep-nudge` keys the brace-block polling exemption on the TOOL, not on the text.**
+  A brace block is loop syntax in PowerShell and nothing of the kind in a shell command, where the
+  same shape is an awk or jq program. `awk '/for/ { system("sleep 300") }'` pairs a loop word with a
+  later brace, really does wait on the clock, and was silently exempted - the failure mode nobody
+  reports, because a nudge that does not fire looks exactly like a command that did not need one.
+  `notice()` now takes `(command, tool_name="Bash")` and `main()` passes the event's tool. An
+  unknown tool gets the stricter shell reading: for a nudge that already fails open, a false nudge
+  is cheaper than a false silence.
+
+  Replayed over 66,514 distinct commands from the local transcript corpus, the previous and the
+  narrowed version disagree on exactly one, and that one was the probe written to test this. The
+  narrowing was bought for correctness, not to cut noise. Completes the `arbitrary-sleep-nudge`
+  work begun in 5.271.0.
+
+### Added
+
+- **A test that drives `main()` with one command under two tools and requires two verdicts.** Every
+  other tool-keyed test calls `notice()` directly, so `main()` could stop forwarding `tool_name`
+  with the whole suite still green, while every Windows polling loop quietly started getting
+  nudged. RED-verified against that exact mutation: dropping the forwarding fails the PowerShell
+  arm and leaves the Bash arm passing, so the pair discriminates rather than both keying on one
+  thing.
+
 ## [5.270.2]
 
 ### Fixed

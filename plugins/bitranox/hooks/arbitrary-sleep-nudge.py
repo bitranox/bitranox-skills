@@ -40,8 +40,9 @@ _SLEEP = re.compile(
 _DO = re.compile(r"(?:^|[;&|\n(])\s*(do)\b")
 _DONE = re.compile(r"(?:^|[;&|\n(])\s*(done)\b")
 
-# PowerShell paces a poll with a brace BLOCK instead of do/done. Excluding `;` from the run before
-# the brace keeps a bash `while ...; do` from reaching an unrelated later `{`.
+# PowerShell paces a poll with a brace BLOCK instead of do/done. Applied ONLY for the PowerShell
+# tool: excluding `;` from the run before the brace is not enough on its own, because an awk or jq
+# program pairs a loop word with a brace and is not a loop body at all.
 _BRACE_LOOP = re.compile(r"\b(?:while|until|for|foreach|do)\b[^{;\n]*\{", re.IGNORECASE)
 
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -109,12 +110,21 @@ def _brace_body_spans(text):
     return spans
 
 
-def notice(command):
-    """The nudge text when a long sleep waits on the clock outside a polling loop, else None."""
+def notice(command, tool_name="Bash"):
+    """The nudge text when a long sleep waits on the clock outside a polling loop, else None.
+
+    `tool_name` selects the loop syntax, because a brace block is a loop BODY only in PowerShell.
+    In a shell command it is an awk or jq program, and `awk '/for/ { system("sleep 300") }'` really
+    does wait on the clock - exempting it would be silent, which is the failure nobody reports. An
+    unknown tool gets the stricter shell reading: for a nudge, a false nudge is cheaper than a
+    false silence.
+    """
     if not command or not isinstance(command, str):
         return None
     text = strip_heredoc_bodies(command)
-    spans = _loop_body_spans(text) + _brace_body_spans(text)
+    spans = _loop_body_spans(text)
+    if tool_name == "PowerShell":
+        spans += _brace_body_spans(text)
     longest = 0.0
     for match in _SLEEP.finditer(text):
         if any(start <= match.start() < end for start, end in spans):
@@ -134,7 +144,8 @@ def main() -> int:
         return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"))
+    message = notice((event.get("tool_input") or {}).get("command"),
+                     event.get("tool_name") or "Bash")
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -135,5 +135,39 @@ def test_a_powershell_polling_loop_is_left_alone(command):
     Regression guard: keying the exemption on do/done alone would start nudging every Windows
     polling loop the moment the detector learned the Start-Sleep spelling.
     """
-    assert N.notice(command) is None
+    assert N.notice(command, "PowerShell") is None
 
+
+@pytest.mark.parametrize("command", [
+    "awk '/for/ { system(\"sleep 300\") }' file.txt",
+    "awk '/while/ { system(\"sleep 600\") }' log",
+])
+def test_a_brace_block_never_exempts_a_bash_command(command):
+    """A brace block is PowerShell LOOP syntax; in Bash it is not a loop body at all.
+
+    awk pairs a loop WORD with a later brace and really does wait on the clock, so exempting it
+    would be silent - the failure mode nobody reports. Bash keeps do/done and nothing else.
+    """
+    assert N.notice(command, "Bash") is not None
+
+
+def test_the_tool_defaults_to_the_stricter_shell():
+    """An unknown tool must not buy the PowerShell exemption: fewer silent misses is the safe
+    default for a nudge that fails open anyway."""
+    assert N.notice("awk '/for/ { system(\"sleep 300\") }' f") is not None
+
+
+
+@pytest.mark.parametrize("tool_name,expect_silence", [("PowerShell", True), ("Bash", False)])
+def test_main_forwards_the_event_s_tool_to_the_exemption(tool_name, expect_silence):
+    """The same command, two tools, two verdicts - through main(), which is where the tool lives.
+
+    Every other tool-keyed test calls notice() directly, so main() could stop forwarding
+    tool_name and the suite would stay green while every Windows polling loop got nudged.
+    """
+    event = {"hook_event_name": "PreToolUse", "tool_name": tool_name,
+             "tool_input": {"command": "while ($true) { Start-Sleep -Seconds 300 }"}}
+    proc = subprocess.run([sys.executable, str(_HOOK)], input=json.dumps(event),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0
+    assert (proc.stdout.strip() == "") is expect_silence
