@@ -42,6 +42,9 @@ system          debian-10-standard_10.7-1_amd64.tar.gz
 system          ubuntu-20.04-standard_20.04-1_amd64.tar.gz
 ```
 
+Three rows shown; the real listing is longer and its contents change with every template refresh,
+so read your own `pveam available` output rather than this sample.
+
 Before you can use such a template, you need to download them into one of your storages. If you are
 unsure to which one, you can simply use the local named storage for that purpose. For clustered
 installations, it is preferred to use a shared storage so that all nodes can access those images.

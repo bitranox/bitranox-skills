@@ -17,6 +17,17 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.267.3]
+
+### Changed
+
+- **Section 11.3's restored `pveam available` sample says that it is abridged.** The section was
+  restored from upstream in 5.267.1, but its example listing was trimmed from eighteen rows to
+  three while the review artifact said only "restored from upstream". The prose, commands and
+  structure are upstream's; the sample output is now marked as three illustrative rows, with the
+  reader pointed at their own `pveam available` output, since the real listing changes with every
+  template refresh.
+
 ## [5.267.2]
 
 ### Changed

@@ -43,7 +43,11 @@ upstream Proxmox guide rather than by anything an author wrote.
       `security-and-os-config.md`. Neither was wrong; each was incomplete. Both now name the other
       half, so either entry point yields the whole fix.
 - [x] Section 11.3 restored from upstream into `container-images.md`, and the 11.4 material it had
-      been holding moved into `container-settings.md`, which previously began mid-11.4.2.
+      been holding moved into `container-settings.md`, which previously began mid-11.4.2. The
+      prose, commands and section structure are upstream's; the one abridgement is the
+      `pveam available --section system` sample output, kept to three rows because the listing is
+      illustrative and its contents change with every template refresh. The file says so at that
+      point, so the trim is visible to a reader and to the next audit.
 - [x] `locks.md` truncated at the chapter boundary. Verified non-destructive first: all 24 bled
       lines of chapter 12 text are already present in `ch12-sdn/overview-and-installation.md`, so
       nothing is lost; a See also now points there.
