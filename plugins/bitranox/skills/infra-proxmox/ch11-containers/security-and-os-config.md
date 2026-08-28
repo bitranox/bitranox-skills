@@ -194,7 +194,10 @@ line (see the pct manual page for details).
 - **Docker inside an unprivileged LXC** needs `--features nesting=1,keyctl=1` on the CT, and inside the
   container switch the iptables backend to legacy (`update-alternatives --set iptables /usr/sbin/iptables-legacy`):
   nf_tables fails to create the nat chains in a container netns, so dockerd silently fails network setup
-  without it.
+  without it. That is the networking half only: an unprivileged CT ALSO needs
+  `lxc.apparmor.profile: unconfined` plus `dpkg-divert --rename --add /usr/sbin/apparmor_parser` inside
+  the container, or every `docker run` fails on the AppArmor profile check. The main index's
+  troubleshooting table carries that half, including why a privileged CT fails differently.
 - **Kernel-global sysctls set inside an (unprivileged) LXC are silently ignored.** Params like
   `vm.overcommit_memory` (Redis) or `net.core.somaxconn` must be set on the **Proxmox host** (tracked in
   the host repo under `root_volume/etc/sysctl.d/`), not in the guest.

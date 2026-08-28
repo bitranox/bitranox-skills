@@ -137,7 +137,7 @@ x86-64-v2-AES: +avx, +avx2, +bmi1, +bmi2, +f16c, +fma, +movbe, +xsave.
 compared to x86-64-v3: +avx512f, +avx512bw, +avx512cd, +avx512dq, +avx512vl.
 Custom CPU Types
 
-You can specify custom CPU types with a configurable set of features. These are maintained in the configuration file /etc/pve/virtual-guest/cpu-models.conf by an administrator. See man cpu-models.c
+You can specify custom CPU types with a configurable set of features. These are maintained in the configuration file /etc/pve/virtual-guest/cpu-models.conf by an administrator. See man cpu-models.conf
 for format details.
 Specified custom types can be selected by any user with the Sys.Audit privilege on /nodes. When
 configuring a custom CPU type for a VM via the CLI or API, the name needs to be prefixed with custom-.

@@ -2,6 +2,14 @@
 
 *[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
 
+```
+pveceph fs destroy <name> [OPTIONS]
+```
+
+Destroy a Ceph filesystem. Refuses if any PVE storage entry of type cephfs still references the
+filesystem and is not disabled. Optionally also removes the storage entries and/or the underlying
+metadata and data pools.
+
 <name>: <string>
 The ceph filesystem name.
 
@@ -216,7 +224,7 @@ pveceph pool create <name> [OPTIONS]
 
 Create Ceph pool
 
-<name>: (?ˆ:ˆ[ˆ:/\s]+$)
+<name>: (?^:^[^:/\s]+$)
 The name of the pool. It must be unique.
 
 - `--add_storages` <boolean> (default = 0; for erasure coded pools:
@@ -252,7 +260,7 @@ Minimal number of placement groups.
 - `--size` <integer> (1 - 7) (default = 3)
 Number of replicas per object
 
-- `--target_size` ˆ(\d+(\.\d+)?)([KMGT])?$
+- `--target_size` ^(\d+(\.\d+)?)([KMGT])?$
 The estimated target size of the pool for the PG autoscaler.
 
 - `--target_size_ratio` <number>
@@ -301,7 +309,7 @@ pveceph pool set <name> [OPTIONS]
 
 Change POOL settings
 
-<name>: (?ˆ:ˆ[ˆ:/\s]+$)
+<name>: (?^:^[^:/\s]+$)
 The name of the pool. It must be unique.
 
 - `--application` <cephfs | rbd | rgw>
@@ -325,7 +333,7 @@ Minimal number of placement groups.
 - `--size` <integer> (1 - 7)
 Number of replicas per object
 
-- `--target_size` ˆ(\d+(\.\d+)?)([KMGT])?$
+- `--target_size` ^(\d+(\.\d+)?)([KMGT])?$
 The estimated target size of the pool for the PG autoscaler.
 
 

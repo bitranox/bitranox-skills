@@ -65,7 +65,7 @@ calculated by intersecting user and token permissions.
 > again over the API at a later time!
 
 
-To use an API token, set the HTTP header Authorization to the displayed value of the form PVEAPIToken=USER@
+To use an API token, set the HTTP header Authorization to the displayed value of the form PVEAPIToken=USER@REALM!TOKENID=UUID
 when making API requests, or refer to your API client's documentation.
 
 

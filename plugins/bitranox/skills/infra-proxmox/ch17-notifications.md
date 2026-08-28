@@ -263,7 +263,7 @@ A calendar matcher matches the time when a notification is sent against a config
 
 - match-calendar 8-12
 - match-calendar 8:00-15:30
-- match-calendar mon-fri 9:00-17:00
+- match-calendar mon..fri 9:00-17:00
 - match-calendar sun,tue-wed,fri 9-17
 
 
@@ -277,7 +277,7 @@ specified values.
 - match-field exact:type=vzdump Only match notifications about backups.
 - match-field exact:type=replication,fencing Match replication and fencing notifications.
 
-- match-field regex:hostname=ˆ.+\.example\.com$ Match the hostname of the node.
+- match-field regex:hostname=^.+\.example\.com$ Match the hostname of the node.
 If a matched metadata field does not exist, the notification will not be matched. For instance, a match-field
 regex:hostname=.* directive will only match notifications that have an arbitrary hostname metadata
 field, but will not match if the field does not exist.

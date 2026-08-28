@@ -4,13 +4,13 @@
 
 ## Contents
 
-| Section                                 | File                                                           |
-|-----------------------------------------|----------------------------------------------------------------|
-| 15.1-15.5 HA Overview and How It Works  | [overview-and-how-it-works.md](overview-and-how-it-works.md)   |
-| 15.6 HA Configuration                   | [configuration.md](configuration.md)                           |
-| 15.7-15.9 HA Fencing and Error Recovery | [configuration-fencing.md](configuration-fencing.md)           |
-| 15.7-15.9 Fencing and Recovery          | [fencing-and-recovery.md](fencing-and-recovery.md)             |
-| 15.10-15.12 Maintenance and Scheduling  | [maintenance-and-scheduling.md](maintenance-and-scheduling.md) |
+| Section                                                                                           | File                                                           |
+|---------------------------------------------------------------------------------------------------|----------------------------------------------------------------|
+| 15.1-15.5 HA Overview and How It Works                                                            | [overview-and-how-it-works.md](overview-and-how-it-works.md)   |
+| 15.6 HA Configuration                                                                             | [configuration.md](configuration.md)                           |
+| 15.7-15.9 Fencing, watchdog, start failure policy, error recovery                                 | [configuration-fencing.md](configuration-fencing.md)           |
+| 15.7.3-15.11 Recover fenced services through node maintenance (overlaps the rows above and below) | [fencing-and-recovery.md](fencing-and-recovery.md)             |
+| 15.10-15.12 Maintenance and Scheduling                                                            | [maintenance-and-scheduling.md](maintenance-and-scheduling.md) |
 
 
 ## See also

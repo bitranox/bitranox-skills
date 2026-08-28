@@ -285,10 +285,10 @@ Export stream format
 <filename>: <string>
 Destination file name
 
-- `--base` (?ˆi:[a-z0-9_\-]{1,40})
+- `--base` (?^i:[a-z0-9_\-]{1,40})
 Snapshot to start an incremental stream from
 
-- `--snapshot` (?ˆi:[a-z0-9_\-]{1,40})
+- `--snapshot` (?^i:[a-z0-9_\-]{1,40})
 Snapshot to export
 
 - `--snapshot-list` <string>
@@ -354,13 +354,13 @@ the unix://PATH-TO-SOCKET format a UNIX socket as input.Else, the file is treate
 - `--allow-rename` <boolean> (default = 0)
 Choose a new volume ID if the requested volume ID already exists, instead of throwing an error.
 
-- `--base` (?ˆi:[a-z0-9_\-]{1,40})
+- `--base` (?^i:[a-z0-9_\-]{1,40})
 Base snapshot of an incremental stream
 
-- `--delete-snapshot` (?ˆi:[a-z0-9_\-]{1,80})
+- `--delete-snapshot` (?^i:[a-z0-9_\-]{1,80})
 A snapshot to delete on success
 
-- `--snapshot` (?ˆi:[a-z0-9_\-]{1,40})
+- `--snapshot` (?^i:[a-z0-9_\-]{1,40})
 The current-state snapshot if the stream contains snapshots
 
 - `--with-snapshots` <boolean> (default = 0)

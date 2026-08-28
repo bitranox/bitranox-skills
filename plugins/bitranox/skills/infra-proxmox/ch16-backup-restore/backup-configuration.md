@@ -63,7 +63,7 @@ Backup mode.
 
 notes-template: <string>
 Template string for generating notes for the backup(s). It can contain variables which will be replaced
-by their values. Currently supported are {\{\cluster}}, {\{\guestname}}, {\{\node}}, and {\{\vmid}}, but
+by their values. Currently supported are {{cluster}}, {{guestname}}, {{node}}, and {{vmid}}, but
 more might be added in the future. Needs to be a single line, newline and backslash need to be
 escaped as \n and \\ respectively.
 
@@ -230,7 +230,7 @@ Backup all guest systems and send notification mails to root and admin. Due to m
 notification-mode being set to auto by default, the notification mails are sent via the system's
 sendmail command instead of the notification system.
 
-# vzdump --all --mode suspend --mailto root --mailto admin
+# vzdump --all --mode suspend --mailto root,admin
 Use snapshot mode (no downtime) and non-default dump directory.
 
 # vzdump 777 --dumpdir /mnt/backup --mode snapshot

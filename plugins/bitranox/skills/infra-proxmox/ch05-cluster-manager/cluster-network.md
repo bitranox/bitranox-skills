@@ -391,8 +391,9 @@ merging all authorized keys within a cluster
 > **Note:**
 > Older systems might also have /etc/ssh/ssh_known_hosts set up as symlink pointing to
 > /etc/pve/priv/known_hosts, containing a merged version of all node host keys. This system
-> was replaced with explicit host key pinning in pve-cluster <<INSERT VERSION>>, the symlink
-> can be deconfigured if still in place by running pvecm updatecerts --unmerge-known-hosts.
+> was replaced with explicit host key pinning. The upstream guide leaves that release number
+> unfilled, so check the state rather than the version: if `ls -l /etc/ssh/ssh_known_hosts`
+> still shows the symlink, deconfigure it by running pvecm updatecerts --unmerge-known-hosts.
 
 
 ### 5.9.2 Pitfalls due to automatic execution of .bashrc and siblings

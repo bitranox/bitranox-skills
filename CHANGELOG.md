@@ -17,6 +17,57 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.267.1]
+
+### Fixed
+
+- **Bucket A of the 82-skill audit: all 22 remaining findings, every one in `infra-proxmox`.**
+  Nearly all were damage done by the original extraction of the upstream Proxmox guide rather than
+  by anything an author wrote, and each fix was checked against that guide before editing.
+
+  - **The cpuunits defaults were not wrong numbers, they were shuffled lines.**
+    `(default = cgroup v1: 1024, cgroup v2: 100)` had been broken across three lines in an order
+    that reads as the two values REVERSED. Eight occurrences across seven files, all reassembled,
+    with the per-command ranges preserved (1-262144 for qm, 0-500000 for pct). SKILL.md's
+    troubleshooting row no longer calls 1024 "the default" either: upstream says the weight
+    defaults to 100, and 1024 only on legacy cgroup v1.
+  - **Four more line-wrap truncations repaired**, each of which broke a copy-paste: the pveproxy
+    private key path (the filename had been swallowed into the previous word), `man cpu-models.c`,
+    the Ceph `target_size_ratio` option, and the `PVEAPIToken=USER@REALM!TOKENID=UUID` header,
+    which had been cut off after the `@`.
+  - **Section 11.3 Container Images was missing entirely** while the chapter index pointed at a
+    file holding section 11.4. The section is restored from upstream and the 11.4 material moved
+    to `container-settings.md`, which previously began mid-section.
+  - **Chapter 12 text bleeding into `locks.md` removed** after confirming all 24 lines already
+    exist in `ch12-sdn/`, so nothing is lost.
+  - **Two CLI files got their commands back**: `pveceph fs destroy` had only orphaned flags, and
+    the `qm wait` options had landed at the top of `qmrestore.md`, which never mentions that
+    command.
+  - **The HA error-recovery step that the text promised and never gave** is restored
+    (`ha-manager set vm:100 --state disabled`), and the HA chapter index no longer claims the same
+    section range for two different files.
+  - **The change-detection table now names the VALUES** (`legacy`, `data`, `metadata`) beside the
+    labels, because "Default" is a label and not something you can pass, and the `vzdump` example's
+    argument is back inside its code fence.
+  - **Two findings were upstream defects faithfully copied, and are treated as such.** The
+    `<<INSERT VERSION>>` placeholder appears verbatim upstream, so the note now tells the reader to
+    test the state (`ls -l /etc/ssh/ssh_known_hosts`) instead of a version that was never
+    published.
+  - **The Docker-in-an-unprivileged-CT contradiction was two halves, not a conflict.** SKILL.md
+    covered the AppArmor failure and `security-and-os-config.md` covered nesting and nat-chain
+    networking; neither was wrong and each was incomplete. Both now name the other half.
+
+- **The same corruption swept skill-wide, well past what the audit reported.** The audit found a
+  corrupted circumflex twice; a sweep found it **63 times across 10 files**, every one inside a
+  regex or escape default needing an ASCII caret. The upstream guide contains zero of that
+  character and 70 real carets, so all of them were ours. The same strings carried a second one:
+  `\x10-\x1F` where upstream has `\x0a-\x1F`, which changes which control characters the pattern
+  accepts. Twelve of those, also fixed.
+
+- **The appendix G table is repaired**, a known regression since 5.259.0. Every row had been split
+  across three lines, and an earlier bulk repair had removed the markers showing where. It is a
+  valid six-column table again, with upstream's alignment markers and the header word it had lost.
+
 ## [5.267.0]
 
 ### Added

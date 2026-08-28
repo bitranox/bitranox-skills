@@ -82,7 +82,8 @@ operating systems.
 3. use ACME (Let's Encrypt) to get a trusted certificate with automatic renewal, this is also integrated in
 the Proxmox VE API and web interface.
 
-For options 2 and 3 the file /etc/pve/local/pveproxy-ssl.pem (and /etc/pve/local/pveproxywhich needs to be without password) is used.
+For options 2 and 3 the file /etc/pve/local/pveproxy-ssl.pem (and /etc/pve/local/pveproxy-ssl.key,
+which needs to be without password) is used.
 
 > **Note:**
 > Keep in mind that /etc/pve/local is a node specific symlink to /etc/pve/nodes/NODENAME.

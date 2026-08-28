@@ -220,11 +220,7 @@ Emulated CPU type.
 Limit of CPU usage.
 
 
-- `--cpuunits` <integer> (1 - 262144) (default = cgroup v1:
-v2: 100)
-
-
-1024, cgroup
+- `--cpuunits` <integer> (1 - 262144) (default = cgroup v1: 1024, cgroup v2: 100)
 
 CPU weight for a VM, will be clamped to [1, 10000] in cgroup v2.
 

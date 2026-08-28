@@ -137,30 +137,21 @@ unchanged files are handled for container backups with Proxmox Backup Server as 
 
 The change detection mode option can be configured for individual backup jobs in the Advanced tab while
 editing a job. Further, this option can be set as node-wide fallback via the configuration options.
-There are 3 change detection modes available:
-Mode
+There are 3 change detection modes available. The `pbs-change-detection-mode` option takes
+`<data | legacy | metadata>`; the mode the guide labels "Default" is the value `legacy`.
 
-Default
-Data
-Metadata
-
-Description
-Read and encode all files into a single archive, using the pxar format version 1.
-Read and encode all files, but split data and metadata into separate streams,
-using the pxar format version 2.
-Split streams and use archive format version 2 like Data, but use the metadata
-archive of the previous snapshot (if one exists) to detect unchanged files, and
-reuse their data chunks without reading file contents from disk, whenever
-possible.
+| Mode     | Value      | Description                                                                                                                                                                                                                                        |
+|----------|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Default  | `legacy`   | Read and encode all files into a single archive, using the pxar format version 1.                                                                                                                                                                  |
+| Data     | `data`     | Read and encode all files, but split data and metadata into separate streams, using the pxar format version 2.                                                                                                                                     |
+| Metadata | `metadata` | Split streams and use archive format version 2 like Data, but use the metadata archive of the previous snapshot (if one exists) to detect unchanged files, and reuse their data chunks without reading file contents from disk, whenever possible. |
 
 To perform a backup using the change detecation mode metadata you can run
 
 
 ```
-vzdump 123 --storage pbs-storage --pbs-change-detection-mode
+vzdump 123 --storage pbs-storage --pbs-change-detection-mode metadata
 ```
-
-metadata
 
 
 

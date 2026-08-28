@@ -195,10 +195,7 @@ Limit of CPU usage.
 > If the computer has 2 CPUs, it has a total of 2 CPU time. Value 0 indicates no CPU limit.
 
 
-cpuunits: <integer> (0 - 500000) (default = cgroup v1:
-100)
-
-1024, cgroup v2:
+cpuunits: <integer> (0 - 500000) (default = cgroup v1: 1024, cgroup v2: 100)
 
 CPU weight for a container. Argument is used in the kernel fair scheduler. The larger the number
 is, the more CPU time this container gets. Number is relative to the weights of all the other running
@@ -231,12 +228,12 @@ Path to the device to pass through to the container
 uid=<integer> (0 - N)
 User ID to be assigned to the device node
 
-entrypoint: (?ˆ:[ˆ\x00-\x08\x10-\x1F\x7F]+) (default = /sbin/init)
+entrypoint: (?^:[^\x00-\x08\x0a-\x1F\x7F]+) (default = /sbin/init)
 Command to run as init, optionally with arguments; may start with an absolute path, relative path, or a
 binary in $PATH.
 
 env:
-(?ˆ:(?:\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)(?:\0\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)*
+(?^:(?:\w+=[^\x00-\x08\x0a-\x1F\x7F]*)(?:\0\w+=[^\x00-\x08\x0a-\x1F\x7F]*)*
 The container runtime environment as NUL-separated list. Replaces any lxc.environment.runtime
 entries in the config.
 

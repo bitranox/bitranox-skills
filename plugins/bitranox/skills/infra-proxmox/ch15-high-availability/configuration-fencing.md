@@ -100,7 +100,14 @@ the max_restart value is exceeded on the actual node. The default is set to one.
 If, after all attempts, the service state could not be recovered, it gets placed in an error state. In this state,
 the service won't get touched by the HA stack anymore. The only way out is disabling a service:
 
+```
+# ha-manager set vm:100 --state disabled
+```
+
+This can also be done in the web interface.
+
 ## See also
 
 - [HA Configuration](configuration.md)
+- [Fencing and Recovery](fencing-and-recovery.md)
 - [High Availability Overview](_index.md)

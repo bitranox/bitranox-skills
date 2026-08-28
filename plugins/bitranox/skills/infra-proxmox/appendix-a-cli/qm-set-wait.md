@@ -437,7 +437,7 @@ socket)
 <vmid>: <integer> (100 - 999999999)
 The (unique) ID of the VM.
 
-- `--escape` <string> (default = ˆO)
+- `--escape` <string> (default = ^O)
 Escape character.
 
 - `--iface` <serial0 | serial1 | serial2 | serial3>
@@ -473,8 +473,11 @@ qm wait <vmid> [OPTIONS]
 
 Wait until the VM is stopped.
 
-## See also
+<vmid>: <integer> (100 - 999999999)
+The (unique) ID of the VM.
 
+- `--timeout` <integer> (1 - N)
+Timeout in seconds. Default is to wait forever.
 
 ## See also
 

@@ -160,10 +160,7 @@ Limit of CPU usage.
 > If the computer has 2 CPUs, it has total of 2 CPU time. Value 0 indicates no CPU limit.
 
 
-cpuunits: <integer> (1 - 262144) (default = cgroup v1:
-100)
-
-1024, cgroup v2:
+cpuunits: <integer> (1 - 262144) (default = cgroup v1: 1024, cgroup v2: 100)
 
 CPU weight for a VM. Argument is used in the kernel fair scheduler. The larger the number is, the
 more CPU time this VM gets. Number is relative to weights of all the other running VMs.

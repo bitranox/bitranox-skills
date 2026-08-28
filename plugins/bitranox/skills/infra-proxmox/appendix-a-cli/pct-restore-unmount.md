@@ -40,10 +40,7 @@ Limit of CPU usage.
 > If the computer has 2 CPUs, it has a total of 2 CPU time. Value 0 indicates no CPU limit.
 
 
-- `--cpuunits` <integer> (0 - 500000) (default = cgroup v1:
-v2: 100)
-
-1024, cgroup
+- `--cpuunits` <integer> (0 - 500000) (default = cgroup v1: 1024, cgroup v2: 100)
 
 CPU weight for a container, will be clamped to [1, 10000] in cgroup v2.
 
@@ -58,13 +55,13 @@ inside the configuration file.
 [,mode=<Octal access mode>] [,uid=<integer>]
 Device to pass through to the container
 
-- `--entrypoint` (?ˆ:[ˆ\x00-\x08\x10-\x1F\x7F]+) (default = /sbin/init)
+- `--entrypoint` (?^:[^\x00-\x08\x0a-\x1F\x7F]+) (default = /sbin/init)
 Command to run as init, optionally with arguments; may start with an absolute path, relative path, or a
 binary in $PATH.
 
 
 --env
-(?ˆ:(?:\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)(?:\0\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)*
+(?^:(?:\w+=[^\x00-\x08\x0a-\x1F\x7F]*)(?:\0\w+=[^\x00-\x08\x0a-\x1F\x7F]*)*
 The container runtime environment as NUL-separated list. Replaces any lxc.environment.runtime
 entries in the config.
 
@@ -241,10 +238,7 @@ Limit of CPU usage.
 > If the computer has 2 CPUs, it has a total of 2 CPU time. Value 0 indicates no CPU limit.
 
 
-- `--cpuunits` <integer> (0 - 500000) (default = cgroup v1:
-v2: 100)
-
-1024, cgroup
+- `--cpuunits` <integer> (0 - 500000) (default = cgroup v1: 1024, cgroup v2: 100)
 
 CPU weight for a container, will be clamped to [1, 10000] in cgroup v2.
 
@@ -267,12 +261,12 @@ Device to pass through to the container
 Prevent changes if current configuration file has different SHA1 digest. This can be used to prevent
 concurrent modifications.
 
-- `--entrypoint` (?ˆ:[ˆ\x00-\x08\x10-\x1F\x7F]+) (default = /sbin/init)
+- `--entrypoint` (?^:[^\x00-\x08\x0a-\x1F\x7F]+) (default = /sbin/init)
 Command to run as init, optionally with arguments; may start with an absolute path, relative path, or a
 binary in $PATH.
 
 --env
-(?ˆ:(?:\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)(?:\0\w+=[ˆ\x00-\x08\x10-\x1F\x7F]*)*
+(?^:(?:\w+=[^\x00-\x08\x0a-\x1F\x7F]*)(?:\0\w+=[^\x00-\x08\x0a-\x1F\x7F]*)*
 The container runtime environment as NUL-separated list. Replaces any lxc.environment.runtime
 entries in the config.
 

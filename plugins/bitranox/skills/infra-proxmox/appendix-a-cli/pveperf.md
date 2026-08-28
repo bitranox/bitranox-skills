@@ -85,7 +85,7 @@ Create a Ceph filesystem
 - `--add-storage` <boolean> (default = 0)
 Configure the created CephFS as storage for this cluster.
 
-- `--name` (?ˆ:ˆ[ˆ:/\s]+$) (default = cephfs)
+- `--name` (?^:^[^:/\s]+$) (default = cephfs)
 The ceph filesystem name.
 
 - `--pg_num` <integer> (8 - 32768) (default = 128)

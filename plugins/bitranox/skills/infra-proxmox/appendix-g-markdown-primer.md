@@ -87,26 +87,13 @@ For example:
 Tables use the pipe symbol | to separate columns, and - to separate the table header from the table body,
 in that separation one can also set the text alignment, making one column left-, center-, or right-aligned.
 
-| Left columns | Right columns | Some | More | Cols.| Centering Works
-Too
-| -------------|--------------:|--------|------|------|:------------------:|
-| left foo
-| right foo
-| First | Row | Here | >center<|
-| left bar
-| right bar
-| Second | Row | Here | 12345|
-| left baz
-| right baz
-| Third | Row | Here | Test|
-| left zab
-| right zab
-| Fourth | Row | Here |&#x2601;&#xfe0f;&#x2601;&#xfe0f;&#x2601;&#xfe0f;
-|
-| left rab
-| right rab
-| And
-| Last | Here | The End|
+| Left columns | Right columns | Some   | More | Cols. | Centering Works Too                              |
+|--------------|--------------:|--------|------|-------|:------------------------------------------------:|
+| left foo     | right foo     | First  | Row  | Here  | >center<                                         |
+| left bar     | right bar     | Second | Row  | Here  | 12345                                            |
+| left baz     | right baz     | Third  | Row  | Here  | Test                                             |
+| left zab     | right zab     | Fourth | Row  | Here  | &#x2601;&#xfe0f;&#x2601;&#xfe0f;&#x2601;&#xfe0f; |
+| left rab     | right rab     | And    | Last | Here  | The End                                          |
 
 
 Note that you do not need to align the columns nicely with white space, but that makes editing tables easier.

@@ -256,7 +256,7 @@ Add an authentication server.
 <realm>: <string>
 Authentication domain ID
 
-- `--acr-values` ˆ[ˆ\x00-\x1F\x7F <>#"]*$
+- `--acr-values` ^[^\x00-\x1F\x7F <>#"]*$
 Specifies the Authentication Context Class Reference values that theAuthorization Server is being
 requested to use for the Auth Request.
 
@@ -320,7 +320,7 @@ as name.
 - `--groups-autocreate` <boolean> (default = 0)
 Automatically create groups if they do not exist.
 
-- `--groups-claim` (?ˆ:[A-Za-z0-9\.\-_]+)
+- `--groups-claim` (?^:[A-Za-z0-9\.\-_]+)
 OpenID claim used to retrieve groups with.
 
 - `--groups-overwrite` <boolean> (default = 0)
@@ -365,7 +365,7 @@ LDAPS TLS/SSL version. It's not recommended to use version older than 1.2!
 [,scope=<users|groups|both>]
 The default options for behavior of synchronizations.
 
-- `--sync_attributes` \w+=[ˆ,]+(,\s*\w+=[ˆ,]+)*
+- `--sync_attributes` \w+=[^,]+(,\s*\w+=[^,]+)*
 Comma separated list of key=value pairs for specifying which LDAP attributes map to which PVE user
 field. For example, to map the LDAP attribute mail to PVEs email, write email=mail. By default, each
 PVE user field is represented by an LDAP attribute of the same name.
@@ -415,7 +415,7 @@ Update authentication server settings.
 <realm>: <string>
 Authentication domain ID
 
-- `--acr-values` ˆ[ˆ\x00-\x1F\x7F <>#"]*$
+- `--acr-values` ^[^\x00-\x1F\x7F <>#"]*$
 Specifies the Authentication Context Class Reference values that theAuthorization Server is being
 requested to use for the Auth Request.
 
@@ -485,7 +485,7 @@ as name.
 - `--groups-autocreate` <boolean> (default = 0)
 Automatically create groups if they do not exist.
 
-- `--groups-claim` (?ˆ:[A-Za-z0-9\.\-_]+)
+- `--groups-claim` (?^:[A-Za-z0-9\.\-_]+)
 OpenID claim used to retrieve groups with.
 
 - `--groups-overwrite` <boolean> (default = 0)
@@ -530,7 +530,7 @@ LDAPS TLS/SSL version. It's not recommended to use version older than 1.2!
 [,scope=<users|groups|both>]
 The default options for behavior of synchronizations.
 
-- `--sync_attributes` \w+=[ˆ,]+(,\s*\w+=[ˆ,]+)*
+- `--sync_attributes` \w+=[^,]+(,\s*\w+=[^,]+)*
 Comma separated list of key=value pairs for specifying which LDAP attributes map to which PVE user
 field. For example, to map the LDAP attribute mail to PVEs email, write email=mail. By default, each
 PVE user field is represented by an LDAP attribute of the same name.
@@ -791,7 +791,8 @@ pveum user permissions [<userid>] [OPTIONS] [FORMAT_OPTIONS]
 Retrieve effective permissions of given user/token.
 
 <userid>:
-(?ˆ:ˆ(?ˆ:[ˆ\s:/]+)\@(?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)(?:!(?ˆ:[A-Za-z][A-Za-z0User ID or full API token ID
+(?^:^(?^:[^\s:/]+)\@(?^:[A-Za-z][A-Za-z0-9\.\-_]+)(?:!(?^:[A-Za-z][A-Za-z0-9\.\-_]+))?$)
+User ID or full API token ID
 
 - `--path` <string>
 Only dump this specific path, not the whole tree.
@@ -835,7 +836,7 @@ it cannot be retrieved afterwards!
 
 <userid>: <string>
 Full User ID, in the name@realm format.
-<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+<tokenid>: (?^:[A-Za-z][A-Za-z0-9\.\-_]+)
 User-specific token identifier.
 
 - `--comment` <string>
@@ -855,7 +856,7 @@ Remove API token for a specific user.
 
 <userid>: <string>
 Full User ID, in the name@realm format.
-<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+<tokenid>: (?^:[A-Za-z][A-Za-z0-9\.\-_]+)
 User-specific token identifier.
 
 ```
@@ -876,7 +877,7 @@ Update API token for a specific user.
 
 <userid>: <string>
 Full User ID, in the name@realm format.
-<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+<tokenid>: (?^:[A-Za-z][A-Za-z0-9\.\-_]+)
 User-specific token identifier.
 
 - `--comment` <string>
@@ -899,7 +900,7 @@ Retrieve effective permissions of given token.
 
 <userid>: <string>
 Full User ID, in the name@realm format.
-<tokenid>: (?ˆ:[A-Za-z][A-Za-z0-9\.\-_]+)
+<tokenid>: (?^:[A-Za-z][A-Za-z0-9\.\-_]+)
 User-specific token identifier.
 
 - `--path` <string>

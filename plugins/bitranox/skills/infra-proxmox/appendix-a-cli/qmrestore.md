@@ -2,14 +2,6 @@
 
 *[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
 
-<vmid>: <integer> (100 - 999999999)
-The (unique) ID of the VM.
-
-- `--timeout` <integer> (1 - N)
-Timeout in seconds. Default is to wait forever.
-
-A.10
-
 
 ```
 qmrestore - Restore QemuServer vzdump Backups

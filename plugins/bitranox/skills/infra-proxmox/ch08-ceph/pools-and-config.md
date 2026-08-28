@@ -234,7 +234,7 @@ The pg_num is adjusted automatically with no need for any manual interaction.
 No automatic pg_num adjustments are made, and no warning will be issued if the
 PG count is not optimal.
 
-The scaling factor can be adjusted to facilitate future data storage with the target_size, target_size_rati
+The scaling factor can be adjusted to facilitate future data storage with the target_size, target_size_ratio
 and the pg_num_min options.
 
 

@@ -2,92 +2,100 @@
 
 *[Chapter Index](_index.md) | [Main Index](../SKILL.md)*
 
-
-## 11.4 Container Settings
-
-
-### 11.4.1 General Settings
+## 11.3 Container Images
 
 
-General settings of a container include
-
-- the Node : the physical server on which the container will run
-- the CT ID: a unique number in this Proxmox VE installation used to identify your container
-- Hostname: the hostname of the container
-- Resource Pool: a logical group of containers and VMs
-- Password: the root password of the container
-- SSH Public Key: a public key for connecting to the root account over SSH
-- Unprivileged container: this option allows to choose at creation time if you want to create a privileged or
-unprivileged container.
-
-- Nesting: expose procfs and sysfs to allow nested containers. Note that systemd also uses this to isolate
-services.
-
-Unprivileged Containers
-Unprivileged containers use a new kernel feature called user namespaces. The root UID 0 inside the container is mapped to an unprivileged user outside the container. This means that most security issues (container escape, resource abuse, etc.) in these containers will affect a random unprivileged user, and would
-be a generic kernel security bug rather than an LXC issue. The LXC team thinks unprivileged containers are
-safe by design.
-This is the default option when creating a new container.
+Container images, sometimes also referred to as "templates" or "appliances", are tar archives which
+contain everything to run a container. Proxmox VE can utilize two main types of images: System
+Container Templates for creating full virtual environments, and Application Container Images based
+on the OCI standard for running specific applications.
 
 
-> **Note:**
-> If the container uses systemd as an init system, please be aware the systemd version running inside the
-> container should be equal to or greater than 220.
+### 11.3.1 System Container Templates
 
 
-Privileged Containers
-Security in containers is achieved by using mandatory access control AppArmor restrictions, seccomp filters
-and Linux kernel namespaces. The LXC team considers this kind of container as unsafe, and they will not
-consider new container escape exploits to be security issues worthy of a CVE and quick fix. That's why
-privileged containers should only be used in trusted environments.
+Proxmox VE itself provides a variety of basic templates for the most common Linux distributions.
+They can be downloaded using the GUI or the pveam (short for Proxmox VE Appliance Manager)
+command-line utility. Additionally, TurnKey Linux container templates are also available to
+download.
 
-
-### 11.4.2 CPU
-
-
-You can restrict the number of visible CPUs inside the container using the cores option. This is implemented using the Linux cpuset cgroup (control group). A special task inside pvestatd tries to distribute
-running containers among available CPUs periodically. To view the assigned CPUs run the following command:
-
+The list of available templates is updated daily through the pve-daily-update timer. You can also
+trigger an update manually by executing:
 
 ```
-# pct cpusets
---------------------102:
-6 7
-105:
-2 3 4 5
-108: 0 1
---------------------Containers use the host kernel directly. All tasks inside a container are handled by the host CPU scheduler.
-Proxmox VE uses the Linux CFS (Completely Fair Scheduler) scheduler by default, which has additional
-bandwidth control options.
+# pveam update
+```
+
+To view the list of available images run:
+
+```
+# pveam available
+```
+
+You can restrict this large list by specifying the section you are interested in, for example basic
+system images:
+
+```
+# pveam available --section system
+system          alpine-3.12-default_20200823_amd64.tar.xz
+system          debian-10-standard_10.7-1_amd64.tar.gz
+system          ubuntu-20.04-standard_20.04-1_amd64.tar.gz
+```
+
+Before you can use such a template, you need to download them into one of your storages. If you are
+unsure to which one, you can simply use the local named storage for that purpose. For clustered
+installations, it is preferred to use a shared storage so that all nodes can access those images.
+
+```
+# pveam download local debian-10.0-standard_10.0-1_amd64.tar.gz
+```
+
+You are now ready to create containers using that image, and you can list all downloaded images on
+storage local with:
+
+```
+# pveam list local
+local:vztmpl/debian-10.0-standard_10.0-1_amd64.tar.gz  219.95MB
+```
+
+You can also use the Proxmox VE web interface GUI to download, list and delete container templates.
+
+pct uses them to create a new container, for example:
+
+```
+# pct create 999 local:vztmpl/debian-10.0-standard_10.0-1_amd64.tar.gz
+```
+
+The above command shows you the full Proxmox VE volume identifiers. They include the storage name,
+and most other Proxmox VE commands can use them. For example you can delete that image later with:
+
+```
+# pveam remove local:vztmpl/debian-10.0-standard_10.0-1_amd64.tar.gz
 ```
 
 
-cpulimit:
-
-cpuunits:
+### 11.3.2 Open Container Initiative (OCI) Images
 
 
-### 11.4.3 You can use this option to further limit assigned CPU time. Please note that this is a
+Proxmox VE can also use OCI images to create containers, both system containers but also
+application containers. Note that running application containers in Proxmox VE is currently
+considered a technology preview.
 
-floating point number, so it is perfectly valid to assign two cores to a container, but
-restrict overall CPU consumption to half a core.
+A container created from an OCI image still uses the existing LXC framework.
 
-cores: 2
-cpulimit: 0.5
-This is a relative weight passed to the kernel scheduler. The larger the number is, the
-more CPU time this container gets. Number is relative to the weights of all the other
-running containers. The default is 100 (or 1024 if the host uses legacy cgroup v1).
-You can use this setting to prioritize some containers.
 
-Memory
+### 11.3.3 Obtaining OCI Images
 
-Container memory is controlled using the cgroup memory controller.
 
-memory:
-swap:
+In the web interface an OCI image can be uploaded manually or pulled from a registry using the
+Pull from OCI registry button on the container template view of a storage.
 
-Limit overall memory usage. This corresponds to the memory.limit_in_bytes
-cgroup setting.
-Allows the container to use additional swap memory from the host swap space. This
-corresponds to the memory.memsw.limit_in_bytes cgroup setting, which is
-set to the sum of both value (memory + swap).
+Once the template is on a storage, you can create the container with pct create or use the wizard
+in the web interface.
+
+
+## See also
+
+- [Container Settings](container-settings.md)
+- [Technology Overview and Distributions](technology-and-distributions.md)
+- [Linux Containers](_index.md)

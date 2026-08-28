@@ -95,7 +95,7 @@ ACME account config file name.
 <contact>: <string>
 Contact email addresses.
 
-- `--directory` ˆhttps?://.*
+- `--directory` ^https?://.*
 URL of ACME CA directory endpoint.
 
 ```
