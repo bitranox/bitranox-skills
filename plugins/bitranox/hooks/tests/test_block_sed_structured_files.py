@@ -96,3 +96,23 @@ def test_main_clean_exits_0(monkeypatch):
 def test_main_empty_stdin_exits_0(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     assert H.main() == 0
+
+
+_B = chr(92)
+
+
+def test_a_powershell_pathed_sed_is_still_blocked():
+    """Two separate defects had to be fixed for this to work, and the split alone was not enough.
+
+    POSIX shlex first eats the separators, so the token becomes one word; and even split
+    correctly, a basename taken on "/" alone leaves the whole path, which never matches "sed".
+    Either one on its own lets the guard wave through exactly what it exists to block.
+    """
+    cmd = "C:" + _B + "tools" + _B + "sed.exe -i s/a/b/ config.json"
+    assert H.assess(cmd, "PowerShell")[0] == "block"
+
+
+def test_the_plain_posix_form_still_blocks_on_both_arms():
+    """The case the guard was built for, kept as a control on both arms."""
+    assert H.assess("sed -i 's/a/b/' config.json", "Bash")[0] == "block"
+    assert H.assess("sed -i 's/a/b/' config.json", "PowerShell")[0] == "block"

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import PurePosixPath, PureWindowsPath
 
 # The opener forms bash accepts: `<<WORD`, `<<-WORD`, `<< WORD`, `<<'WORD'`, `<<"WORD"`. The
 # backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
@@ -88,7 +89,7 @@ def _windows_command_argv(command):
     return args
 
 
-def split_for_tool(command, tool_name="Bash"):
+def split_for_tool(command, tool_name="Bash", comments=False):
     r"""Split a tool's `tool_input.command` into argv, by the TOOL's language, never the host OS.
 
     A hook on a `Bash|PowerShell` matcher receives two different languages. The Bash tool is a
@@ -102,6 +103,10 @@ def split_for_tool(command, tool_name="Bash"):
     read then fails and a fail-open approves what the guard exists to block. Tokens merely compared
     or name-matched survive mangling.
 
+    `comments` reaches the POSIX arm only, where shlex knows `#`. The Windows arm has no comment
+    concept at all - the C runtime hands `#` to the program like any other character - so passing
+    it does not silently mean something different there, it means nothing.
+
     Do NOT reach for `harness_checks.split_command_line` instead: it keys on `os.name`, which is
     right for a command this machine will run and wrong here - on a Windows host it would hand the
     Bash tool's POSIX string to the Windows parser. An unknown tool takes the Bash reading, which
@@ -109,7 +114,30 @@ def split_for_tool(command, tool_name="Bash"):
     """
     if tool_name == "PowerShell":
         return _windows_command_argv(command)
-    return shlex.split(command)
+    return shlex.split(command, comments=comments)
+
+
+def basename_for_tool(token, tool_name="Bash"):
+    r"""The program name from a token that may carry a path, by the TOOL's separator rules.
+
+    A guard asking "is this command `sed`?" has to strip the path first, and which characters
+    separate a path is the tool's question, not the host's. `C:\bin\sed.exe` is a path in
+    PowerShell and one long filename under POSIX rules - so a basename taken on `/` alone returns
+    the whole string and never matches, which is a guard silently declining to fire.
+
+    This is the SECOND half of the same defect as `split_for_tool`, and either half alone leaves
+    the guard off: split correctly and the basename still fails, fix the basename and the split
+    has already eaten the separators.
+
+    `.exe` is dropped on the PowerShell arm because a Windows program is spelled with it while
+    every command allowlist in this plugin is spelled without. It is NOT dropped on the Bash arm,
+    where nothing has eaten a separator on our behalf and inventing a match would be the mirror
+    error.
+    """
+    if tool_name != "PowerShell":
+        return PurePosixPath(token).name
+    name = PureWindowsPath(token).name
+    return name[:-4] if name.lower().endswith(".exe") else name
 
 def is_shell_tool(tool_name) -> bool:
     """True when `tool_name` is a tool that carries a shell command in `tool_input.command`.

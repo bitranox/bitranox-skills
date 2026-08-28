@@ -29,9 +29,10 @@ any error) exits 0, so a broken guard never wedges a turn.
 
 import json
 import re
-import shlex
 import sys
 from pathlib import Path
+
+import shell_text
 
 # Pyright options that consume the following token, so it is a value and not a
 # path to check.
@@ -84,16 +85,22 @@ _NON_CHECK = frozenset({"--version", "--help", "-h", "--stats", "--verifytypes"}
 _TEST_DIR_NAMES = ("tests", "test")
 
 
-def _pyright_positionals(cmd: str) -> list[str] | None:
-    """Positional paths handed to pyright, or None if this is not a check run."""
+def _pyright_positionals(cmd: str, tool_name: str = "Bash") -> list[str] | None:
+    r"""Positional paths handed to pyright, or None if this is not a check run.
+
+    `tool_name` picks the splitting language AND the path-separator rules, because both decide
+    whether argv names pyright at all: POSIX shlex eats the separators out of a PowerShell
+    `C:\venv\Scripts\pyright.exe`, and a POSIX basename over what survives still never matches.
+    Either half missing lets a partial typecheck through the gate that exists to catch it.
+    """
     try:
-        tokens = shlex.split(cmd, comments=True)
+        tokens = shell_text.split_for_tool(cmd, tool_name, comments=True)
     except ValueError:
         return None  # unbalanced quotes: not ours to judge
 
     for index, token in enumerate(tokens):
         # Match the executable itself, not a substring of some other word.
-        if Path(token).name not in {"pyright", "pyright.exe"}:
+        if shell_text.basename_for_tool(token, tool_name) not in {"pyright", "pyright.exe"}:
             continue
         # ...and not a token that merely spells it, as the value of another
         # tool's flag. Keep scanning: a real invocation may follow in the same
@@ -152,7 +159,7 @@ def main() -> int:
     if not re.search(r"\bpyright\b", cmd):
         return 0
 
-    positionals = _pyright_positionals(cmd)
+    positionals = _pyright_positionals(cmd, data.get("tool_name") or "Bash")
     if not positionals:
         # None = not a check run. Empty = no paths given, so pyright uses its
         # config's include list: that IS the full project.

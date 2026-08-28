@@ -379,6 +379,13 @@ def split_command_line(command):
     parser is called instead: it removes the class of problem rather than the instances.
 
     Kept identical in gate.py and diffbehave.py.
+
+    NOT the same question as `shell_text.split_for_tool`, and the two are deliberately not merged.
+    This one splits a command line THIS MACHINE will run, so keying on `os.name` and calling the
+    host's own parser is exactly right. That one splits a TOOL's command string, which arrives in
+    the tool's language whatever the host, so it keys on the tool and implements the rules in pure
+    Python - a host-only call would be unavailable when a PowerShell command reaches a hook on
+    Linux, and untestable on the platform most of this suite runs on.
     """
     if os.name != "nt":
         return shlex.split(command)

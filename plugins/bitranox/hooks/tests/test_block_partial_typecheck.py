@@ -28,8 +28,8 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def run_main(monkeypatch, command, cwd: Path | None = None) -> int:
-    payload = {"tool_input": {"command": command}}
+def run_main(monkeypatch, command, cwd: Path | None = None, tool_name: str = "Bash") -> int:
+    payload = {"tool_name": tool_name, "tool_input": {"command": command}}
     if cwd is not None:
         payload["cwd"] = str(cwd)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
@@ -178,3 +178,15 @@ def test_script_exists_and_is_ascii():
     text = SCRIPT.read_text(encoding="utf-8")
     text.encode("ascii")  # raises if a tell slipped in
     assert text.startswith("#!/usr/bin/env python3")
+
+
+_BS = chr(92)
+
+
+def test_a_powershell_pathed_pyright_still_blocks(monkeypatch, project):
+    """Same two defects as the sed guard: the split, then the basename.
+
+    Here the consequence is a partial typecheck sailing through the gate that exists to catch it.
+    """
+    cmd = "C:" + _BS + "venv" + _BS + "Scripts" + _BS + "pyright.exe src"
+    assert run_main(monkeypatch, cmd, project, tool_name="PowerShell") == 2

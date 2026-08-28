@@ -17,6 +17,42 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.7]
+
+### Added
+
+- **`shell_text.basename_for_tool(token, tool_name)`** - the second half of the same defect as
+  `split_for_tool`, and either half alone leaves the guard off. A guard asking "is this command
+  `sed`?" must strip the path first, and which characters separate a path is the tool's question:
+  `C:\bin\sed.exe` is a path in PowerShell and one long filename under POSIX rules, so a basename
+  taken on `/` alone returns the whole string and never matches. `.exe` is dropped on the
+  PowerShell arm because a Windows program is spelled with it while every command allowlist here
+  is spelled without; it is kept on the Bash arm, where nothing has eaten a separator on our
+  behalf and inventing a match would be the mirror error.
+
+- **`split_for_tool` takes `comments`**, forwarded to the POSIX arm only. The Windows arm has no
+  comment concept - the C runtime hands `#` to the program like any other character - so the flag
+  means nothing there rather than something different.
+
+### Fixed
+
+- **`block-sed-structured-files` and `block-partial-typecheck` were both silently declining to
+  fire on a PowerShell command with a pathed program.** Wiring `split_for_tool` alone would not
+  have fixed either: both took a basename on `/` alone, so even a correctly split
+  `C:\tools\sed.exe` still would not match `sed`. Both defects had to go together, which is why
+  each hook's new test uses a pathed Windows program rather than a bare name - a test that only
+  exercised the split would have passed against a still-broken guard.
+
+  The consequences differ and both are silent: the sed guard waves through an in-place edit of a
+  structured file, and the typecheck guard lets a partial typecheck reach the gate it exists to
+  catch.
+
+- **`harness_checks.split_command_line` now says why it is NOT `shell_text.split_for_tool`.** The
+  two are deliberately separate: this one splits a command line THIS MACHINE will run, so keying
+  on `os.name` and calling the host's own parser is right; the other splits a tool's string, which
+  arrives in the tool's language whatever the host. Without the note the obvious next reading is
+  that one of them is redundant.
+
 ## [5.271.6]
 
 ### Added

@@ -21,9 +21,9 @@ launched via run-python.sh so it works on Windows too.
 """
 import json
 import re
-import shlex
 import sys
 
+import shell_text
 from shell_text import strip_heredoc_bodies
 
 STRUCTURED_EXT = (".json", ".yaml", ".yml", ".toml", ".xml")
@@ -52,8 +52,14 @@ def _has_inplace(cmd, tokens):
     return any(t == "-i" or t.startswith("-i") or t == "--in-place" or t.startswith("--in-place") for t in tokens)
 
 
-def assess(command):
-    """Pure: classify a shell command. Returns (action, file, message); action in {block, warn, None}."""
+def assess(command, tool_name="Bash"):
+    r"""Pure: classify a shell command. Returns (action, file, message); action in {block, warn, None}.
+
+    `tool_name` picks BOTH the splitting language and the path-separator rules. This guard decides
+    whether argv[0] names an in-place editor, so a PowerShell `C:\tools\sed.exe` has to survive
+    the split AND reduce to `sed` - either half missing and the guard declines to fire on exactly
+    what it exists to block.
+    """
     # A heredoc body is DATA being written, not a command the shell will run. Scanning it
     # makes this guard fire on a script or document that merely CONTAINS a `sed -i x.json`
     # line - which is how it blocked a probe being written about this very footgun, twice.
@@ -62,14 +68,14 @@ def assess(command):
     command = strip_heredoc_bodies(command or "")
     for segment in SEP.split(command):
         try:
-            tokens = shlex.split(segment)
+            tokens = shell_text.split_for_tool(segment, tool_name)
         except ValueError:
             tokens = segment.split()
         # skip leading ENV=val assignments to find the real command
         argv = [t for t in tokens if not ASSIGN.match(t)]
         if not argv:
             continue
-        cmd = argv[0].split("/")[-1]  # basename, so /usr/bin/sed -> sed
+        cmd = shell_text.basename_for_tool(argv[0], tool_name)
         if cmd in INPLACE_CMDS and _has_inplace(cmd, argv[1:]):
             target = _targets_structured(argv[1:])
             if target:
@@ -96,7 +102,7 @@ def main():
     command = (event.get("tool_input") or {}).get("command") or ""
     if not command:
         return 0
-    action, _file, message = assess(command)
+    action, _file, message = assess(command, event.get("tool_name") or "Bash")
     if action == "block":
         sys.stderr.write("STRUCTURED-FILE GUARD: " + message + "\n")
         return 2  # PreToolUse: non-zero blocks the tool call and feeds stderr back to the model

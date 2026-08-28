@@ -221,3 +221,20 @@ def test_split_for_tool_inverts_list2cmdline(argv):
     argument - and it fails if either side drifts.
     """
     assert S.split_for_tool(subprocess.list2cmdline(argv), "PowerShell") == argv
+
+
+@pytest.mark.parametrize("token,tool,expected", [
+    ("/usr/bin/sed", "Bash", "sed"),
+    ("sed", "Bash", "sed"),
+    ("C:" + _B + "tools" + _B + "sed.exe", "PowerShell", "sed"),
+    ("C:" + _B + "tools" + _B + "sed", "PowerShell", "sed"),
+    ("sed.exe", "PowerShell", "sed"),
+    # The Bash arm must NOT learn Windows separators: bash would have eaten them, so a token
+    # still carrying one is one long filename and calling it "sed" would invent a match.
+    ("C:" + _B + "tools" + _B + "sed", "Bash", "C:" + _B + "tools" + _B + "sed"),
+])
+def test_basename_for_tool_uses_the_tool_s_separator_rules(token, tool, expected):
+    """A guard asking "is this command sed?" must strip the path, and which characters separate a
+    path is the TOOL's question. `.exe` goes on the PowerShell arm because a Windows program is
+    spelled with it while every command allowlist in this plugin is spelled without."""
+    assert S.basename_for_tool(token, tool) == expected
