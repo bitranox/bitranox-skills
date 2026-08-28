@@ -1193,3 +1193,49 @@ def test_floor_names_the_baseline_to_update(tmp_path):
 
 def test_a_grown_suite_is_never_a_failure(tmp_path):
     assert RG.floor_problems(_junit(tmp_path, tests=9999), baseline=3000) == []
+
+
+# --------------------------------------------------------------------------
+# Non-ASCII tracked paths. Git C-quotes them (core.quotePath), so a scanner that
+# opens the file by the name git printed opens nothing, and a fail-open turns
+# that into a clean verdict on a file it never read.
+# The name is built from an escape so this file itself stays ASCII.
+# --------------------------------------------------------------------------
+
+UMLAUT_NAME = "f\u00e4hig.py"
+
+
+def test_git_paths_returns_names_that_open_a_real_file(tmp_path):
+    """The seam every scanner enumerates through.
+
+    Without -z, git prints the literal "f\\303\\244hig.py", quotes included, which names no file
+    on disk. Both names must come back as paths that exist, or the caller skips one in silence.
+    """
+    git_repo(tmp_path, {"plain.py": "x = 1\n", UMLAUT_NAME: "x = 1\n"})
+    rc, paths = RG._git_paths(tmp_path, "ls-files")
+    assert rc == 0
+    assert sorted(paths) == sorted(["plain.py", UMLAUT_NAME])
+    assert all((tmp_path / p).exists() for p in paths)
+
+
+@pytest.mark.parametrize("name", ["plain.py", UMLAUT_NAME])
+def test_secrets_scans_a_file_whatever_its_name_encodes(tmp_path, name):
+    """The ASCII twin is the control: it must pass for the same reason the other must.
+
+    Proven 2026-08-28 with exactly this pair - the quoted path raised inside read_bytes, the
+    `except OSError` swallowed it, and the file carrying the token was never scanned while the
+    gate reported clean. This check is the automated enforcement of the no-secrets rule, and the
+    tree it guards is SMB-exported and edited from Windows, so an umlaut in a filename is
+    ordinary rather than exotic.
+    """
+    git_repo(tmp_path, {name: "token = " + GH_TOKEN + "\n"})
+    assert any("GitHub token" in f for f in RG.check_secrets(tmp_path))
+
+
+@pytest.mark.parametrize("name", ["plain.py", UMLAUT_NAME])
+def test_lf_endings_flags_crlf_whatever_the_name_encodes(tmp_path, name):
+    """Same defect, second scanner - and nothing previously proved this check FIRES at all."""
+    (tmp_path / name).write_bytes(b"x = 1\r\ny = 2\r\n")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    assert any(name in f for f in RG.check_lf_endings(tmp_path))

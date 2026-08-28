@@ -72,6 +72,27 @@ def _git(root, *args):
         return 1, "", ""
 
 
+def _git_paths(root, subcommand, *args):
+    """Enumerate paths from git NUL-separated, so no path is ever C-quoted.
+
+    Without `-z`, git renders any non-ASCII path through `core.quotePath`: the caller receives the
+    literal `"f\\303\\244hig.py"`, quotes included, which names no file on disk. Every read of it
+    then raises, a fail-open skips that file, and the scan reports clean on a file it never read -
+    the failure mode a scanner cannot notice about itself. `os.fsdecode` round-trips a name in any
+    encoding the filesystem allows, which plain text-mode decoding does not.
+
+    Returns (returncode, paths); a non-zero rc yields an empty list, and callers fail open on it
+    exactly as before - being unable to enumerate is not evidence of a violation.
+    """
+    try:
+        out = subprocess.run(["git", subcommand, "-z", *args], cwd=str(root), capture_output=True)
+    except Exception:  # noqa: BLE001
+        return 1, []
+    if out.returncode != 0:
+        return out.returncode, []
+    return 0, [os.fsdecode(p) for p in out.stdout.split(b"\0") if p]
+
+
 def repo_root():
     rc, out, _ = _git(Path.cwd(), "rev-parse", "--show-toplevel")
     if rc == 0 and out.strip():
@@ -128,14 +149,11 @@ def check_json_valid(root):
 
 
 def check_lf_endings(root):
-    rc, out, _ = _git(root, "ls-files", "*.py", "*.sh", "*.json")
+    rc, paths = _git_paths(root, "ls-files", "*.py", "*.sh", "*.json")
     if rc != 0:
         return []  # cannot enumerate -> do not block
     crlf = []
-    for rel in out.splitlines():
-        rel = rel.strip()
-        if not rel:
-            continue
+    for rel in paths:
         fp = root / rel
         try:
             if b"\r\n" in fp.read_bytes():
@@ -164,14 +182,11 @@ def check_duplicate_basenames(root):
     and it does nothing for any other tool or for a consumer importing these modules. Two real
     duplications shipped in this plugin before this check existed.
     """
-    rc, out, _ = _git(root, "ls-files", "*.py")
+    rc, paths = _git_paths(root, "ls-files", "*.py")
     if rc != 0:
         return []                                     # cannot enumerate -> do not block
     by_name = {}
-    for rel in out.splitlines():
-        rel = rel.strip()
-        if not rel:
-            continue
+    for rel in paths:
         parts = Path(rel).parts
         if _VENDORED_DIRNAMES.intersection(parts):
             continue
@@ -196,9 +211,9 @@ def check_version_bumped(root):
     rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
     if rc != 0:
         return []  # no origin/master reference available -> skip, do not block
-    rc, changed, _ = _git(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
-    rc2, untracked, _ = _git(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
-    plugin_changed = bool(changed.strip()) or bool(untracked.strip())
+    _, changed = _git_paths(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
+    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
+    plugin_changed = bool(changed) or bool(untracked)
     if not plugin_changed:
         return []
     pj_rel = "plugins/bitranox/.claude-plugin/plugin.json"
@@ -387,15 +402,12 @@ def check_secrets(root):
     """Block credentials, private keys, sensitive files, and (locally) denylisted infra terms.
     Runs on every commit and PR, so the credential class of leak can never land. The judgment
     class (generic vs real IPs/domains) is left to the documented human/agent security review."""
-    rc, listing, _ = _git(root, "ls-files")
+    rc, paths = _git_paths(root, "ls-files")
     if rc != 0:
         return []
     deny = [(t, t.lower()) for t in _denylist_terms(root)]
     findings = []
-    for rel in listing.splitlines():
-        rel = rel.strip()
-        if not rel:
-            continue
+    for rel in paths:
         if _SENSITIVE_NAME_RX.search(rel):
             findings.append(f"  {rel}: sensitive filename")
         fp = root / rel
@@ -597,9 +609,9 @@ def _changed_vs_origin(root):
     rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
     if rc != 0:
         return None
-    rc, changed, _ = _git(root, "diff", "--name-only", "origin/master")
-    rc2, untracked, _ = _git(root, "ls-files", "--others", "--exclude-standard")
-    return [p for p in (changed.splitlines() + untracked.splitlines()) if p.strip()]
+    _, changed = _git_paths(root, "diff", "--name-only", "origin/master")
+    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard")
+    return changed + untracked
 
 
 def skill_review_failures(root, changed):

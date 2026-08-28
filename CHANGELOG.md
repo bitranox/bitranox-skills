@@ -17,6 +17,36 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.271.2]
+
+### Fixed
+
+- **The repo gate scanned no file whose name git had to quote, and reported that as clean.** Git
+  renders any non-ASCII tracked path through `core.quotePath`, so `git ls-files` hands back the
+  literal `"f\303\244hig.py"` - quotes included - which names nothing on disk. The read then
+  raised, the `except OSError` swallowed it, and `check_secrets` returned clean on a file it had
+  never opened. Proven with a positive control pair in one scratch repo carrying the same
+  denylisted term: `plain.py` was flagged and its umlaut twin was not. This check is the automated
+  enforcement of the no-secrets rule, and the tree it guards is SMB-exported and edited from
+  Windows, so an umlaut in a filename is the ordinary case rather than an exotic one.
+
+  All five enumeration sites now go through one `_git_paths()` helper that passes `-z`, splits on
+  NUL and decodes with `os.fsdecode`, which round-trips a name in any encoding the filesystem
+  allows: `check_secrets`, `check_lf_endings`, `check_duplicate_basenames`, `check_version_bumped`
+  and `_changed_vs_origin`. The last two were not skipping work - one only tests a list for
+  emptiness, the other feeds a path regex - but they read the same quoted paths, so leaving them
+  would have left the next reader to rediscover the same thing. Splitting no longer calls
+  `.strip()` on each path, which would corrupt a name with a leading or trailing space; with `-z`
+  there is no line terminator to strip.
+
+### Added
+
+- **A test for each of the two scanners at the seam, every one paired with its ASCII twin as a
+  control**, so a harness that broke for an unrelated reason fails both arms rather than reading
+  as a fix. Plus a direct test that the enumeration helper returns names that open a real file.
+  `check_lf_endings` separately had no test proving it fires at all, only one proving it stays
+  quiet outside a git repo; it has both now.
+
 ## [5.271.1]
 
 ### Fixed
