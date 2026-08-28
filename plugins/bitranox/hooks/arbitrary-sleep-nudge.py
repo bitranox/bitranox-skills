@@ -25,11 +25,28 @@ from shell_text import is_shell_tool, strip_heredoc_bodies
 # Below this a sleep is a settle pause, not a wait on an event.
 LONG_SLEEP_SECONDS = 60
 
-_SLEEP = re.compile(r"\bsleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smhd])?\b")
-# A sleep that PACES a poll: the loop is the wait, the sleep is just the interval.
-_POLLING = re.compile(r"\b(?:until|while)\b|\bfor\s+\w+\s+in\b|\bdone\b")
+# Both spellings: POSIX `sleep 300` / `sleep 10m`, and PowerShell `Start-Sleep -Seconds 300`.
+# The plugin registers this hook on a Bash|PowerShell matcher, so knowing only one of them makes
+# it run on Windows and find nothing, which is as silent as never firing at all.
+_SLEEP = re.compile(
+    r"\b(?:start-)?sleep\s+(?:-(?P<param>seconds|milliseconds|ms|s)\s+)?"
+    r"(?P<n>\d+(?:\.\d+)?)(?P<unit>[smhd])?\b",
+    re.IGNORECASE,
+)
+
+# A keyword counts only at a COMMAND POSITION - start of line, or after a separator. Matching the
+# bare word anywhere silenced the nudge on `sleep 300 && echo done`, which is the exact shape this
+# hook exists to catch, and left `/tmp/done` looking like a loop terminator.
+_DO = re.compile(r"(?:^|[;&|\n(])\s*(do)\b")
+_DONE = re.compile(r"(?:^|[;&|\n(])\s*(done)\b")
+
+# PowerShell paces a poll with a brace BLOCK instead of do/done. Excluding `;` from the run before
+# the brace keeps a bash `while ...; do` from reaching an unrelated later `{`.
+_BRACE_LOOP = re.compile(r"\b(?:while|until|for|foreach|do)\b[^{;\n]*\{", re.IGNORECASE)
 
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+# PowerShell names the unit as a parameter instead of a suffix; -Milliseconds is not seconds.
+_PARAM_SCALE = {"milliseconds": 0.001, "ms": 0.001}
 
 _NOTICE = (
     "ARBITRARY SLEEP: this waits on the CLOCK for %s seconds, not on the event. Wait on a "
@@ -42,7 +59,54 @@ _NOTICE = (
 
 
 def _seconds(match) -> float:
-    return float(match.group("n")) * _UNITS.get(match.group("unit") or "s", 1)
+    param = (match.group("param") or "").lower()
+    if param in _PARAM_SCALE:
+        return float(match.group("n")) * _PARAM_SCALE[param]
+    return float(match.group("n")) * _UNITS.get((match.group("unit") or "s").lower(), 1)
+
+
+def _loop_body_spans(text):
+    """Half-open spans covered by a `do ... done` loop body, honouring nesting.
+
+    An unterminated `do` runs to the end of the text: a sleep after it is still inside the body as
+    far as anything here can tell, and exempting it errs toward silence rather than a false nudge.
+    """
+    marks = [(m.start(1), 1) for m in _DO.finditer(text)]
+    marks += [(m.start(1), -1) for m in _DONE.finditer(text)]
+    marks.sort()
+    spans, depth, opened = [], 0, None
+    for pos, delta in marks:
+        if delta == 1:
+            if depth == 0:
+                opened = pos
+            depth += 1
+        elif depth:
+            depth -= 1
+            if depth == 0 and opened is not None:
+                spans.append((opened, pos))
+                opened = None
+    if depth and opened is not None:
+        spans.append((opened, len(text)))
+    return spans
+
+
+def _brace_body_spans(text):
+    """Half-open spans covered by a PowerShell loop's brace block."""
+    spans = []
+    for match in _BRACE_LOOP.finditer(text):
+        opened = match.end() - 1
+        depth = 0
+        for index in range(opened, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    spans.append((opened, index))
+                    break
+        else:
+            spans.append((opened, len(text)))
+    return spans
 
 
 def notice(command):
@@ -50,14 +114,17 @@ def notice(command):
     if not command or not isinstance(command, str):
         return None
     text = strip_heredoc_bodies(command)
-    if _POLLING.search(text):
-        return None
+    spans = _loop_body_spans(text) + _brace_body_spans(text)
     longest = 0.0
     for match in _SLEEP.finditer(text):
+        if any(start <= match.start() < end for start, end in spans):
+            continue  # this sleep PACES a poll: the loop is the wait, not the clock
         longest = max(longest, _seconds(match))
     if longest < LONG_SLEEP_SECONDS:
         return None
-    return _NOTICE % int(longest)
+    # Not int(): a long enough literal overflows float to inf, and int(inf) raises, which the
+    # top-level fail-open would turn into a silently lost nudge.
+    return _NOTICE % format(longest, ".0f")
 
 
 def main() -> int:
