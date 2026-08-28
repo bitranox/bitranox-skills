@@ -105,3 +105,34 @@ round did not use.
 A pass measured on one model tier is not a pass. The failure mode being tested (following a literal
 template too literally) is exactly the behaviour a capable model reasons its way around, so the
 arms that matter are the least inferential ones available.
+
+## Post-fix matrix, both tiers
+
+The fix was first verified on two haiku cells only. Completed on sonnet, the tier that writes
+handovers in live sessions.
+
+| case                              | haiku                       | sonnet                                                  |
+|-----------------------------------|-----------------------------|---------------------------------------------------------|
+| worktree beside its main checkout | `rate-limiting/handover.md` | `~/code/api-server-worktrees/rate-limiting/handover.md` |
+| single checkout, unambiguous      | `handover.md`               | `~/code/invoice-parser/handover.md`                     |
+
+- [x] The defect is closed on both tiers: every cell now names a file the reader can find, and the
+      bare-name-for-somebody-else's-file case does not recur.
+- [x] The two tiers pick DIFFERENT path forms for the same situation (relative vs absolute-from-home).
+      Both are unambiguous, so the form is left to judgment rather than specified.
+
+## Accepted drift: the control does not hold on sonnet
+
+The over-trigger control - an unambiguous single checkout must still send the bare `handover.md` -
+PASSES on haiku and FAILS on sonnet, which sends the full path. Sonnet's stated reason: a bare
+basename is "technically unambiguous - but 'where the user is standing' is unstated, so I used the
+full path rather than guess they're already sitting in the repo root."
+
+Accepted rather than fixed. The failure modes are asymmetric: a longer-but-correct path is a
+blemish, naming another session's file is a bug, and the wording that would restore the bare name
+is the wording that produced that bug. The cost is honest and worth stating: the fixed sentence
+this change was built around is not what sonnet sends in the common case, so the template is less
+literal in practice than the step implies.
+
+Re-open if the verbosity is judged to matter more than the risk, and re-run the full four cells on
+both tiers if the wording is ever tightened - it has been wrong here once already.
