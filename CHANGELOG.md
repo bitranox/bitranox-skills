@@ -17,6 +17,32 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.272.1]
+
+### Fixed
+
+- **`session_key` no longer truncates an over-long id flat**, which aliased: two sessions sharing a
+  64-char prefix landed on ONE state file and the second silently read the first one's. Over the
+  cap it now keeps a sha1 digest of the FULL id, so distinct ids stay distinct and the name stays
+  bounded. The digest is taken of the raw id, not the sanitised one, so two ids differing only in a
+  character the allowlist strips do not converge either.
+
+  The cap itself was inherited by copying it out of the two hooks that had always had one into six
+  that never did - so for those six, 5.272.0 introduced an aliasing mechanism nobody chose.
+  Unreachable with real 36-char UUID ids, which is why it needed pinning rather than trusting.
+
+- **`contrib_file` refuses a `queue_key:` that is not a real key** instead of slicing it into a
+  path. The key is `proj_key` output and nothing else - 16 hex chars, confirmed against every
+  `*.contrib.jsonl` on the machine - so anything else is a typo or an attempt to steer the path.
+  This one REFUSES where a session id is flattened, and the asymmetry is the point: an operator who
+  mistyped a key wants to be told, not silently pointed at a different queue whose emptiness reads
+  in the same words as a queue already shipped out.
+
+  `contrib_queue.py` turns the refusal into a diagnosis and exit 2 rather than a traceback. Two
+  callers - one in the CLI's `queues` verb, one in its tests - were routing a fake key through
+  `contrib_file` purely to take `.parent`; both now ask `_audit_dir()` for the directory directly,
+  which is what they wanted. That abuse is what a strict validator was always going to find.
+
 ## [5.272.0]
 
 ### Added

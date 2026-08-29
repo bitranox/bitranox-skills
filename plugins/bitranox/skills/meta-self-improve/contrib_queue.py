@@ -110,6 +110,16 @@ def main(argv=None):
         return 2
     proj = args.proj or os.getcwd()
 
+    # A key that is not `proj_key` output cannot name a queue at all, and `contrib_file` refuses it
+    # rather than steering the path. Turn that into a diagnosis here: a traceback is not an
+    # answer, and a plain typo is the common way to arrive at one.
+    if isinstance(proj, str) and proj.startswith(sig.QUEUE_KEY_PREFIX):
+        try:
+            sig.contrib_file(proj)
+        except ValueError as exc:
+            print(str(exc))
+            return 2
+
     # A queue_key naming no queue file must REFUSE. Falling through would run the verb against an
     # absent queue, and every verb reports that as "no pending upstream contributions" - the exact
     # words an empty queue produces - so a mistyped or truncated key reads as "already shipped".
@@ -139,7 +149,10 @@ def main(argv=None):
         # there is no way to ask which projects have pending contributions, and a queue whose cwd was
         # deleted or renamed is invisible AND unreachable by every other verb. Entries added since
         # the `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
-        qdir = sig.contrib_file(sig.QUEUE_KEY_PREFIX + "probe").parent
+        # The DIRECTORY, asked for directly. This used to route a fake key through
+        # `contrib_file` just to take `.parent`, which stopped working the moment that
+        # function started refusing keys that are not real ones.
+        qdir = sig._audit_dir()
         rows = []
         for f in sorted(qdir.glob("*.contrib.jsonl")):
             key = f.name[: -len(".contrib.jsonl")]

@@ -80,8 +80,19 @@ def session_key(session):
     through UNCHANGED - a sanitiser that rewrote those would silently orphan every state file
     already on disk. `..` therefore survives as a name, which is harmless: the result is always
     appended to a suffix, so it can only ever name a file inside the audit dir.
+
+    Over-long ids keep a digest of the FULL id rather than being truncated flat. Truncation
+    aliases: two sessions sharing a long prefix would land on one state file and the second would
+    read the first one's, silently. Real ids are 36-char UUIDs so neither branch fires on them.
     """
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(session or ""))[:_SESSION_KEY_MAX]
+    raw = str(session or "")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", raw)
+    if len(safe) <= _SESSION_KEY_MAX:
+        return safe
+    # Hash the RAW id, not the sanitised one: two ids differing only in a stripped character are
+    # different sessions and must not converge here either.
+    digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
+    return safe[:_SESSION_KEY_MAX - len(digest) - 1] + "-" + digest
 
 
 def session_state_path(session, suffix):
@@ -437,6 +448,7 @@ def mark_dream_done(proj, now=None):
 # facility every state function understands, and passing it to one that does not would silently
 # resolve it as a literal directory and write to the wrong file. `queue_key:` cannot be misread.
 QUEUE_KEY_PREFIX = "queue_key:"
+_QUEUE_KEY_RE = re.compile(r"[0-9a-f]{16}")   # exactly what proj_key emits: sha1 hex, truncated
 
 
 def contrib_file(proj):
@@ -448,7 +460,15 @@ def contrib_file(proj):
     cannot even see that it exists. `contrib_queue.py queues` prints these keys. The prefix is
     queue-scoped by NAME because no other per-project state file honors it."""
     if isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX):
-        return _audit_dir() / (proj[len(QUEUE_KEY_PREFIX):] + ".contrib.jsonl")
+        key = proj[len(QUEUE_KEY_PREFIX):]
+        # REFUSED, not flattened, unlike a session id: this key is `proj_key` output and nothing
+        # else, so anything that is not 16 hex is a typo or an attempt to steer the path. Silently
+        # repairing it would address a DIFFERENT queue and every verb would report that queue's
+        # emptiness in the same words a shipped-out queue produces.
+        if not _QUEUE_KEY_RE.fullmatch(key):
+            raise ValueError(
+                "not a queue key: %r - expected the 16 hex chars `contrib_queue.py queues` prints" % key)
+        return _audit_dir() / (key + ".contrib.jsonl")
     return _audit_dir() / (proj_key(proj) + ".contrib.jsonl")
 
 

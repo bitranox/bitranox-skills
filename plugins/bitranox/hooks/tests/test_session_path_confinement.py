@@ -108,3 +108,37 @@ def test_a_real_session_id_keeps_its_historical_filename(audit_dir):
     assert toolbox_nudge._nudge_flag(real).name == real + ".toolbox-nudged"
     assert context_watcher._asked_flag(real).name == real + ".handover-asked"
     assert decision_review_nudge.asked_flag(real).name == real + ".decisions-asked"
+
+
+def test_two_ids_sharing_the_first_64_chars_get_different_state_files(audit_dir):
+    """The cap truncates, and truncation aliases: without a disambiguator two distinct sessions
+    land on ONE file and the second silently reads the first one's state.
+
+    Unreachable with real ids, which are 36-char UUIDs. It is pinned because the cap was inherited
+    by copying it from two hooks that had always had one, into six sites that never did - so for
+    those six this was a behaviour change nobody chose.
+    """
+    a = "s" * 64 + "-alpha"
+    b = "s" * 64 + "-beta"
+    assert sig.session_key(a) != sig.session_key(b)
+    assert sig.touched_file(a) != sig.touched_file(b)
+    # Still bounded: the point is to disambiguate WITHIN the cap, not to abandon it.
+    for oversized in (a, b):
+        assert len(sig.session_key(oversized)) <= 64
+
+
+def test_a_queue_key_that_is_not_a_real_key_is_refused(audit_dir):
+    """`contrib_file` accepts the pseudo-path `queue_key:<hash>` and slices the key straight into a
+    filename. The key is `proj_key` output - exactly 16 hex chars - so anything else is a typo or an
+    attempt to steer the path, and a REJECT is right here where a flatten is not: an operator who
+    mistyped a key wants to be told, not silently pointed at a different queue.
+
+    Ground truth for the shape: every *.contrib.jsonl on this machine is 16 hex chars.
+    """
+    good = sig.contrib_file(sig.QUEUE_KEY_PREFIX + "b76cc15ac35f308a")
+    assert good.parent == audit_dir
+    assert good.name == "b76cc15ac35f308a.contrib.jsonl"
+
+    for bad in ("../../../tmp/pwned", "/tmp/absolute", "probe", "b76cc15ac35f308", "B76CC15AC35F308A"):
+        with pytest.raises(ValueError):
+            sig.contrib_file(sig.QUEUE_KEY_PREFIX + bad)

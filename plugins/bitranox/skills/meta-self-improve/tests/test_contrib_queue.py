@@ -273,7 +273,7 @@ def _fake_session(home, key, cwd, sid="s1"):
     tdir.mkdir(parents=True, exist_ok=True)
     tp = tdir / (sid + ".jsonl")
     tp.write_text(json.dumps({"type": "user", "cwd": cwd}) + "\n", encoding="utf-8")
-    adir = S.contrib_file(S.QUEUE_KEY_PREFIX + "probe").parent
+    adir = S._audit_dir()      # the DIRECTORY, asked for directly - not a fake key via contrib_file
     adir.mkdir(parents=True, exist_ok=True)
     (adir / (key + ".session.json")).write_text(
         json.dumps({"session_id": sid, "transcript_path": str(tp)}), encoding="utf-8")
@@ -342,3 +342,14 @@ def test_an_unknown_queue_key_is_refused_not_reported_as_empty(capsys):
 
     assert rc == 2, "an unknown queue key exited 0 as though the queue were merely empty"
     assert "no such queue" in out.lower()
+
+
+def test_a_malformed_queue_key_is_refused_with_a_message_not_a_traceback(capsys):
+    """A key that is not `proj_key` output is refused by `contrib_file`. The CLI must turn that
+    into a diagnosis and exit 2, the way an unknown-but-well-formed key already does - a traceback
+    is not a machine-readable failure, and it is what an operator sees for a plain typo."""
+    for bad in ("../../etc/passwd", "/tmp/absolute", "b76cc15ac35f308"):
+        rc = Q.main(["list", S.QUEUE_KEY_PREFIX + bad])
+        out = capsys.readouterr().out
+        assert rc == 2, "malformed key %r did not exit 2" % bad
+        assert "queue key" in out.lower(), "malformed key %r printed no diagnosis: %r" % (bad, out)
