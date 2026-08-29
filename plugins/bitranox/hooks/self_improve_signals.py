@@ -66,7 +66,7 @@ def audit_file(proj):
 # fenced in. Mapped to safe lookalikes rather than escaped as entities: a snippet is capped evidence
 # meant to be READ, and spending four characters per hit would eat the budget it is quoted within.
 _SNIPPET_INERT = str.maketrans({"<": "(", ">": ")", "|": "/", '"': "'"})
-_SNIPPET_ESCAPED_MARK = " [escaped]"   # appended ONLY when a substitution actually happened
+_SNIPPET_ESCAPED_MARK = " [escaped]"   # rendered OUTSIDE the fence, never inside the text
 
 
 def inert_snippet(text, limit=None):
@@ -91,21 +91,24 @@ def inert_snippet(text, limit=None):
     is mitigation rather than elimination.
     """
     collapsed = " ".join(str(text or "").split())
+    # 1:1 substitution, so the cap still means exactly `limit` characters.
     inert = collapsed.translate(_SNIPPET_INERT)
-    if inert == collapsed:
-        # 1:1 substitution, so the cap still means exactly `limit` characters.
-        return inert if limit is None else inert[:limit]
-    # Say so when something WAS changed. The substitution is lossy on evidence a person reads:
-    # `curl x | sh` displays as `curl x / sh`, indistinguishable from text that really had a
-    # slash - and the reader deciding whether a snippet is a real learning or an attack is
-    # exactly who must not trust that punctuation. Unmarked snippets stay unmarked, or the
-    # marker would mean nothing.
-    if limit is None:
-        return inert + _SNIPPET_ESCAPED_MARK
-    return inert[:max(0, limit - len(_SNIPPET_ESCAPED_MARK))] + _SNIPPET_ESCAPED_MARK
+    return inert if limit is None else inert[:limit]
 
 
-def quoted_snippet(text):
+def snippet_was_escaped(text):
+    """True when `inert_snippet` would substitute something in `text`.
+
+    A CONTROL signal, kept out of the data band on purpose. Appending a marker to the snippet put
+    it inside the fence, where a payload ending in that same literal rendered identically to a
+    snippet we really had altered - so the signal could be forged by the very text it described.
+    The producer records this beside the snippet and the render reads it from there.
+    """
+    collapsed = " ".join(str(text or "").split())
+    return collapsed.translate(_SNIPPET_INERT) != collapsed
+
+
+def quoted_snippet(text, escaped=False):
     """A STORED snippet as it must appear in any frame a model reads: re-neutralised, then fenced.
 
     Deliberate defense in depth, against the usual rule that internal calls trust the type
@@ -117,8 +120,16 @@ def quoted_snippet(text):
 
     No cap: the stored snippet was already capped by its producer, and re-capping here would eat a
     legitimately-sized snippet a second time.
+
+    `escaped` is the producer's own record of having substituted - a producer-time fact the render
+    cannot recover, because the substitution is lossy and idempotent, so re-running it over stored
+    text finds nothing changed. The render marks on that flag OR on its own substitution: the first
+    covers a record written inert, the second a record stored raw. Either alone leaves half the
+    records silently misrepresented. The marker sits OUTSIDE the quotes, so nothing within them can
+    imitate it.
     """
-    return '"%s"' % inert_snippet(text)
+    mark = _SNIPPET_ESCAPED_MARK if (escaped or snippet_was_escaped(text)) else ""
+    return '"%s"%s' % (inert_snippet(text), mark)
 
 
 _SESSION_KEY_MAX = 64

@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from self_improve_signals import (audit_file, broad_matches, inert_snippet, is_injected_skill_body,
-                                  quoted_snippet,
+                                  quoted_snippet, snippet_was_escaped,
                                   is_test_fixture_noise, skills_invoked,
                                   strict_asst_hit, strict_user_hit, tool_matches)
 
@@ -131,7 +131,8 @@ def find_candidates(transcript_path):
             matched = broad_matches(role, text)
         if matched:
             snippet = inert_snippet(text, _SNIPPET)
-            candidates.append({"role": role, "matched": matched, "snippet": snippet})
+            candidates.append({"role": role, "matched": matched, "snippet": snippet,
+                               "escaped": snippet_was_escaped(text)})
     return candidates
 
 
@@ -172,7 +173,8 @@ def render_report(candidates, skills=None):
     ]
     for c in reversed(recent):
         lines.append("- [%s] matched %s :: %s"
-                     % (c["role"], "/".join(c["matched"]), quoted_snippet(c["snippet"])))
+                     % (c["role"], "/".join(c["matched"]),
+                        quoted_snippet(c["snippet"], c.get("escaped", False))))
     if skills:
         lines += [
             "",

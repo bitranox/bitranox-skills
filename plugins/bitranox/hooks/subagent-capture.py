@@ -88,6 +88,7 @@ def find_signals(event):
         if not matched:
             continue
         snippet = sig.inert_snippet(text, _SNIPPET)
+        escaped = sig.snippet_was_escaped(text)   # control signal, kept OUT of the snippet
         # Containment dedup, not exact-match: `last_assistant_message` is normally the same finding
         # as the transcript's last assistant message (often a substring of it), so an exact-match
         # check buffers one discovery twice.
@@ -96,7 +97,8 @@ def find_signals(event):
         seen.add(snippet)
         hits.append({"agent_id": event.get("agent_id") or "",
                      "agent_type": event.get("agent_type") or "",
-                     "role": role, "matched": matched, "snippet": snippet})
+                     "role": role, "matched": matched, "snippet": snippet,
+                     "escaped": escaped})
     return hits
 
 

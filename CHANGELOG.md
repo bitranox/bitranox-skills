@@ -17,6 +17,34 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.276.0]
+
+### Added
+
+- **`self_improve_signals.snippet_was_escaped(text)`** - answers whether `inert_snippet` would
+  substitute anything, so the producer can record that fact beside the snippet instead of inside
+  it. Both producers now store an `escaped` flag on the record.
+
+### Fixed
+
+- **The `[escaped]` marker could be forged by the text it described.** 5.275.0 appended it to the
+  snippet, which put it INSIDE the fence, so a payload ending in the literal `[escaped]` rendered
+  identically to a snippet that had really been altered. The marker is a CONTROL signal and was
+  travelling in the data band; that is the whole defect.
+
+  It now rides beside the snippet as a flag and is rendered OUTSIDE the quotes, where nothing
+  within them can imitate it. `inert_snippet` went back to pure substitution and says nothing.
+
+  Marking is driven by the flag OR by the render's own substitution: the first covers a record the
+  producer wrote inert, the second a record stored raw by some future producer that forgets.
+  Either alone leaves half the records silently misrepresented - the producer-time fact cannot be
+  recovered at render, because the substitution is lossy and idempotent, so re-running it over
+  stored text finds nothing changed.
+
+  Moving the marker without moving the DECISION would not have fixed anything: stripping a trailing
+  `[escaped]` and re-appending it outside does the same to a payload's copy, and the spoof survives
+  unchanged.
+
 ## [5.275.0]
 
 ### Added
