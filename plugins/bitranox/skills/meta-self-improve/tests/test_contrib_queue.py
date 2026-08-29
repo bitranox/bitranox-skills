@@ -353,3 +353,17 @@ def test_a_malformed_queue_key_is_refused_with_a_message_not_a_traceback(capsys)
         out = capsys.readouterr().out
         assert rc == 2, "malformed key %r did not exit 2" % bad
         assert "queue key" in out.lower(), "malformed key %r printed no diagnosis: %r" % (bad, out)
+
+
+def test_a_bad_queue_key_degrades_inside_the_module_rather_than_escaping(home):
+    """`contrib_file` refuses a bad key, and that refusal must not escape the module's BEST-EFFORT
+    functions. They guard with `except OSError`, which does not catch ValueError.
+
+    Unreachable from a hook today - a hook's `proj` is always a cwd path, never a queue key - but
+    fail-open is the property the whole plugin rests on, and "unreachable today" is not a guarantee.
+    The CLI keeps its hard refusal because its own check runs before any of these.
+    """
+    bad = S.QUEUE_KEY_PREFIX + "../../etc/passwd"
+    assert S.read_contributions(bad) == []
+    assert S.add_contribution(bad, {"what": "x"}) is False
+    S.drain_contributions(bad)          # must not raise

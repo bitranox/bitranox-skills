@@ -486,7 +486,7 @@ def read_contributions(proj):
                 continue
             if isinstance(rec, dict) and rec.get("what"):
                 out.append(rec)
-    except OSError:
+    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
         return []
     return out
 
@@ -527,7 +527,7 @@ def add_contribution(proj, record, max_items=100):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
         return True
-    except OSError:
+    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
         return False
 
 
@@ -535,7 +535,7 @@ def drain_contributions(proj):
     """Clear the queue - ONLY after the contributions actually shipped. Best-effort."""
     try:
         contrib_file(proj).unlink()
-    except OSError:
+    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
         pass
 
 
@@ -640,7 +640,7 @@ def _close_contribution(proj, index, outcome, note="", max_items=200, match=None
             prev = prev[-max_items:]
         rf = rejected_file(proj)
         rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
         pass
     return rec
 

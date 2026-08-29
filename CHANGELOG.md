@@ -17,6 +17,30 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.273.0]
+
+### Fixed
+
+- **`contrib_file`'s refusal no longer escapes the module's best-effort functions.**
+  `read_contributions`, `add_contribution`, `drain_contributions` and `_close_contribution` all
+  guarded with `except OSError`, which does not catch the `ValueError` 5.272.1 introduced, so a
+  malformed `queue_key:` would have propagated out of a function documented as never raising. They
+  now catch both and degrade the way an unreadable file already does.
+
+  Not reachable from a hook - a hook's `proj` is always a cwd path, never a queue key - but
+  fail-open is the property the whole plugin rests on, and "unreachable today" is not a guarantee.
+  The CLI keeps its hard refusal, because its own check runs before any of these. `read_closed` is
+  deliberately NOT widened: it reads `rejected_file`, which is keyed by `proj_key` and cannot
+  refuse anything.
+
+### Changed
+
+- **Re-cut of 5.272.1 at the correct tier.** That release tightened `contrib_file` to refuse input
+  it previously accepted, which is neither a "backward-compatible fix" nor a "backward-compatible
+  addition" - the two rows the version table offers below MAJOR, whose own row is scoped to skills
+  rather than internal helpers. Shipping a behaviour change as a PATCH understated it, so it is
+  restated here as a MINOR. 5.272.1 remains in history; nothing in it is withdrawn.
+
 ## [5.272.1]
 
 ### Fixed
