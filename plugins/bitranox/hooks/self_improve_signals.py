@@ -61,6 +61,39 @@ def audit_file(proj):
     return Path.home() / ".claude" / "self-improve-audit" / (proj_key(proj) + ".md")
 
 
+# The characters that carry STRUCTURE in the frames a snippet is quoted into: the audit envelope's
+# `</SELF-IMPROVE-AUDIT>` tag, the Stop hint's ` | ` record separator, and the quotes a snippet is
+# fenced in. Mapped to safe lookalikes rather than escaped as entities: a snippet is capped evidence
+# meant to be READ, and spending four characters per hit would eat the budget it is quoted within.
+_SNIPPET_INERT = str.maketrans({"<": "(", ">": ")", "|": "/", '"': "'"})
+
+
+def inert_snippet(text, limit):
+    """`text` as one line of quoted evidence that cannot escape the frame it is displayed in.
+
+    Untrusted text reaches a model's context through three frames - the `<SELF-IMPROVE-AUDIT>`
+    envelope injected at SessionStart, the Stop hook's block reason, and the dream's report - and
+    the source is genuinely outside our control: a `tool_result` is a fetched page, remote stderr or
+    the contents of a file someone else wrote, and `last_assistant_message` is written by a subagent
+    that may itself have been summarising any of those. Verified in the 2026-08-28 audit: a
+    tool_result carrying a literal closing tag ended the envelope early, so everything after it was
+    read as ordinary session context instead of as quoted candidate data.
+
+    Applied at the PRODUCER, which is the trust boundary - the point where text nobody vouches for
+    enters main-session storage. The three consumers then render data that is already inert, rather
+    than each re-deriving the same escaping and one of them forgetting.
+
+    What this does NOT do, and must not be read as doing: make the text stop SOUNDING like an
+    instruction. No escaping turns "SYSTEM: ignore the audit" into something that reads as inert
+    prose. What is defended here is the FRAME - the payload cannot close the envelope, forge a
+    record boundary, or close its own quotes. Labelling it as untrusted is the consumers' job, and
+    is mitigation rather than elimination.
+    """
+    collapsed = " ".join(str(text or "").split())
+    # 1:1 substitution, so the cap still means exactly `limit` characters.
+    return collapsed.translate(_SNIPPET_INERT)[:limit]
+
+
 _SESSION_KEY_MAX = 64
 
 

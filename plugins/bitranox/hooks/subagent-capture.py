@@ -87,7 +87,7 @@ def find_signals(event):
             matched = sorted(set(matched) | {"strict"})
         if not matched:
             continue
-        snippet = " ".join(text.split())[:_SNIPPET]
+        snippet = sig.inert_snippet(text, _SNIPPET)
         # Containment dedup, not exact-match: `last_assistant_message` is normally the same finding
         # as the transcript's last assistant message (often a substring of it), so an exact-match
         # check buffers one discovery twice.

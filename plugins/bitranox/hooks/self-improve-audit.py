@@ -21,7 +21,7 @@ import os
 import sys
 from pathlib import Path
 
-from self_improve_signals import (audit_file, broad_matches, is_injected_skill_body,
+from self_improve_signals import (audit_file, broad_matches, inert_snippet, is_injected_skill_body,
                                   is_test_fixture_noise, skills_invoked,
                                   strict_asst_hit, strict_user_hit, tool_matches)
 
@@ -129,7 +129,7 @@ def find_candidates(transcript_path):
                 continue
             matched = broad_matches(role, text)
         if matched:
-            snippet = " ".join(text.split())[:_SNIPPET]
+            snippet = inert_snippet(text, _SNIPPET)
             candidates.append({"role": role, "matched": matched, "snippet": snippet})
     return candidates
 

@@ -17,6 +17,49 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.274.0]
+
+### Added
+
+- **`self_improve_signals.inert_snippet(text, limit)`** - the single place that turns text nobody
+  vouches for into one line of quoted evidence that cannot escape the frame it is shown in.
+  Collapses whitespace, maps the four structural characters to safe lookalikes
+  (`<` `>` to parentheses, `|` to a slash, `"` to an apostrophe), then caps. The substitution is
+  1:1, so the cap still means exactly `limit` characters.
+
+### Fixed
+
+- **Untrusted text could break out of the frame it was quoted into.** Two producers copy text they
+  do not control into a snippet - `self-improve-audit` from a `tool_result` (a fetched page, remote
+  stderr, the contents of a file someone else wrote) and `subagent-capture` from
+  `last_assistant_message` - and three consumers render that snippet into something a model reads:
+  the `<SELF-IMPROVE-AUDIT>` envelope injected whole at SessionStart, the Stop hook's `block`
+  reason, and the dream's report.
+
+  Both holes were VERIFIED with working repros in the 2026-08-28 hook audit, and both repros are
+  now closed against the live tree. A `tool_result` carrying a literal `</SELF-IMPROVE-AUDIT>`
+  ended the envelope early, so everything after it was read as ordinary session context instead of
+  as quoted candidate data; `error:` alone qualifies a message as a candidate, so reaching that
+  line was trivial. A subagent's final message carrying ` | ` forged a second, independently-found
+  learning in the gate's list.
+
+  Fixed at the PRODUCER, which is the trust boundary - where text nobody vouches for enters
+  main-session storage. The consumers then render data that is already inert, rather than each
+  re-deriving the same escaping and one of them forgetting. `dream_state` was exactly that third
+  consumer: it renders the same buffered record and the audit report never named it.
+
+- **The Stop hint and the dream report now fence and attribute the subagent's words.** This is the
+  other half of the same finding, which reads "no delimiting **or** neutralisation". Neutralising
+  the frame stops a payload breaking out of it; nothing about escaping stops prose that merely
+  READS as a directive, and these records land inside an instruction ("Judge each: capture the
+  durable ones"). Both renderers now quote each snippet and say the text is the subagent's own
+  words, not an instruction to the reader. The fence is safe only because the producer already
+  removed the quote character - the two halves depend on each other.
+
+  Stated plainly because it should not be mistaken for elimination: this is mitigation. A snippet
+  that reads like an instruction still reads like an instruction; it is now unmistakably somebody
+  else's instruction.
+
 ## [5.273.0]
 
 ### Fixed
