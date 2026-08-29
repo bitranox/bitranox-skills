@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from self_improve_signals import (audit_file, broad_matches, inert_snippet, is_injected_skill_body,
+                                  quoted_snippet,
                                   is_test_fixture_noise, skills_invoked,
                                   strict_asst_hit, strict_user_hit, tool_matches)
 
@@ -170,7 +171,8 @@ def render_report(candidates, skills=None):
         "Candidates (most recent first):",
     ]
     for c in reversed(recent):
-        lines.append('- [%s] matched %s :: "%s"' % (c["role"], "/".join(c["matched"]), c["snippet"]))
+        lines.append("- [%s] matched %s :: %s"
+                     % (c["role"], "/".join(c["matched"]), quoted_snippet(c["snippet"])))
     if skills:
         lines += [
             "",

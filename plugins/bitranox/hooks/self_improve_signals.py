@@ -66,9 +66,10 @@ def audit_file(proj):
 # fenced in. Mapped to safe lookalikes rather than escaped as entities: a snippet is capped evidence
 # meant to be READ, and spending four characters per hit would eat the budget it is quoted within.
 _SNIPPET_INERT = str.maketrans({"<": "(", ">": ")", "|": "/", '"': "'"})
+_SNIPPET_ESCAPED_MARK = " [escaped]"   # appended ONLY when a substitution actually happened
 
 
-def inert_snippet(text, limit):
+def inert_snippet(text, limit=None):
     """`text` as one line of quoted evidence that cannot escape the frame it is displayed in.
 
     Untrusted text reaches a model's context through three frames - the `<SELF-IMPROVE-AUDIT>`
@@ -90,8 +91,34 @@ def inert_snippet(text, limit):
     is mitigation rather than elimination.
     """
     collapsed = " ".join(str(text or "").split())
-    # 1:1 substitution, so the cap still means exactly `limit` characters.
-    return collapsed.translate(_SNIPPET_INERT)[:limit]
+    inert = collapsed.translate(_SNIPPET_INERT)
+    if inert == collapsed:
+        # 1:1 substitution, so the cap still means exactly `limit` characters.
+        return inert if limit is None else inert[:limit]
+    # Say so when something WAS changed. The substitution is lossy on evidence a person reads:
+    # `curl x | sh` displays as `curl x / sh`, indistinguishable from text that really had a
+    # slash - and the reader deciding whether a snippet is a real learning or an attack is
+    # exactly who must not trust that punctuation. Unmarked snippets stay unmarked, or the
+    # marker would mean nothing.
+    if limit is None:
+        return inert + _SNIPPET_ESCAPED_MARK
+    return inert[:max(0, limit - len(_SNIPPET_ESCAPED_MARK))] + _SNIPPET_ESCAPED_MARK
+
+
+def quoted_snippet(text):
+    """A STORED snippet as it must appear in any frame a model reads: re-neutralised, then fenced.
+
+    Deliberate defense in depth, against the usual rule that internal calls trust the type
+    contract. The render is the last point before the text reaches a model, and neutralising only
+    at the producer covers exactly the records this version wrote: 42 buffered records existed when
+    this was added, 14 carrying a structural character from the older producer. A producer added
+    later that forgets `inert_snippet` would reach every consumer raw - which is how the third
+    consumer came to be forgotten in the first place.
+
+    No cap: the stored snippet was already capped by its producer, and re-capping here would eat a
+    legitimately-sized snippet a second time.
+    """
+    return '"%s"' % inert_snippet(text)
 
 
 _SESSION_KEY_MAX = 64

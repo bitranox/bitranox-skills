@@ -124,7 +124,8 @@ def _subagent_hint(session):
         recs = _sig.read_subagent_learnings(session)
         if not recs:
             return ""
-        bits = ['[%s] "%s"' % (r.get("agent_type") or "subagent", r.get("snippet") or "") for r in recs]
+        bits = ["[%s] %s" % (r.get("agent_type") or "subagent", _sig.quoted_snippet(r.get("snippet")))
+                for r in recs]
         # Fenced and attributed: the snippet is a SUBAGENT's words, and it lands inside an
         # instruction ("Judge each ..."). Neutralising the frame stops a payload BREAKING out;
         # only saying whose words these are stops instruction-shaped prose reading as ours.

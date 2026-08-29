@@ -17,6 +17,33 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.275.0]
+
+### Added
+
+- **`self_improve_signals.quoted_snippet(text)`** - a stored snippet as it must appear in any frame
+  a model reads: re-neutralised, then fenced. All three consumers now render through it.
+
+### Fixed
+
+- **The consumers no longer trust what is already on disk.** 5.274.0 neutralised at the producer
+  only, which covers exactly the records that version wrote: 42 buffered records existed at the
+  time, 14 of them carrying a structural character from the older producer. More to the point, a
+  producer added later that forgot `inert_snippet` would have reached all three consumers raw -
+  which is precisely how the third consumer came to be forgotten in the first place.
+
+  This is deliberate defense in depth, against the usual rule that an internal call trusts the type
+  contract. The render is the last point before the text reaches a model, so that is where the
+  guarantee belongs; the producer-side call stays, so a stored record is inert at rest too.
+
+- **A neutralised snippet now says that it was altered.** The substitution is lossy on evidence a
+  person reads: `curl x | sh` displays as `curl x / sh`, indistinguishable from text that really
+  had a slash - and the reader deciding whether a snippet is a real learning or an attack is
+  exactly the person who must not trust that punctuation. `inert_snippet` appends `[escaped]` when
+  it changed something, and only then, so the marker carries signal. It is counted against the
+  cap rather than pushing past it, and it does not stack when an already-marked snippet is
+  re-neutralised at render.
+
 ## [5.274.0]
 
 ### Added
