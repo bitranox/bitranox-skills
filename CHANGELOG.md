@@ -17,6 +17,31 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.6]
+
+### Changed
+
+- **`guard_replay` now says when it drops a predicate's second argument.** Choosing that argument
+  by NAME (5.287.5) means a predicate whose second parameter is called something else - `haystack`,
+  `context`, `root` - is called with the command alone, where by arity it used to receive the cwd.
+  That is the correct reading and it CHANGES RESULTS for an existing caller on upgrade, so the run
+  now prints one line to stderr naming the parameter it did not fill.
+
+  The report field alone was not enough. `forwarded_second_arg` states the reading in every run,
+  but it is passive, and the caller whose numbers just moved is exactly the one with no reason to
+  look at it - which is how the arity bug survived in the first place, found only while chasing an
+  unrelated discrepancy. Shipping a second silent behaviour change inside the fix for a silent
+  behaviour change would have repeated the defect one level up.
+
+  The warning goes to stderr, never stdout, so a `--json` run stays parseable; it is emitted once
+  before the loop rather than per call. Verified end to end against the real latent signature in
+  this plugin, `bracket_leaks(cmd, haystack=None)`: the warning names `haystack`, stdout parses,
+  and `forwarded_second_arg` is null.
+
+  5 tests added, 3 of them directions where it must NOT fire. Mutation-verified four ways: warning
+  unconditionally fails 2, warning when nothing is declared fails 1, printing to stdout fails 3,
+  and moving it inside the loop fails 1.
+
 ## [5.287.5]
 
 ### Fixed

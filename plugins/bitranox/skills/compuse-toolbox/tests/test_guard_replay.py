@@ -242,3 +242,50 @@ def test_the_report_names_which_second_argument_was_forwarded():
     assert G.classify(calls, lambda command, tool_name: False)["forwarded_second_arg"] == "tool_name"
     assert G.classify(calls, lambda cmd, cwd: False)["forwarded_second_arg"] == "cwd"
     assert G.classify(calls, lambda cmd: False)["forwarded_second_arg"] is None
+
+
+# ---- an unrecognised second parameter is announced, not silently dropped ------------------------
+#
+# Choosing by name means a predicate whose second parameter is `haystack` now gets ONE argument
+# where it used to get the cwd. That is the right call and it changes results on upgrade, so it
+# says so. The whole reason this fix exists is a wrong number that arrived quietly; shipping a
+# second quiet change in the same commit would repeat the defect one level up.
+
+def test_an_unrecognised_second_parameter_warns_on_stderr(capsys):
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda cmd, haystack=None: False)
+    err = capsys.readouterr().err
+    assert "haystack" in err, "the warning must NAME the parameter being dropped"
+
+
+def test_the_warning_never_touches_stdout(capsys):
+    """stdout carries the JSON envelope; a warning there would corrupt a parsed run."""
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda cmd, haystack=None: False)
+    assert capsys.readouterr().out == ""
+
+
+def test_a_recognised_second_parameter_is_not_warned_about(capsys):
+    """The direction where it must NOT fire - twice, because both names are recognised."""
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda command, tool_name: False)
+    G.classify(calls, lambda cmd, cwd: False)
+    assert capsys.readouterr().err == ""
+
+
+def test_a_single_argument_predicate_is_not_warned_about(capsys):
+    """Nothing is being dropped, so there is nothing to say."""
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda cmd: False)
+    assert capsys.readouterr().err == ""
+
+
+def test_the_warning_is_emitted_once_not_per_call():
+    """66,000 copies of one warning is the same as no warning."""
+    calls = [{"id": str(n), "command": "git status", "cwd": "/x", "error": None}
+             for n in range(50)]
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        G.classify(calls, lambda cmd, haystack=None: False)
+    assert buf.getvalue().count("haystack") == 1

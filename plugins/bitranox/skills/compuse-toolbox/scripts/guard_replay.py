@@ -151,16 +151,24 @@ def _second_arg_kind(predicate):
     real signature in this plugin, and a cwd in its haystack slot would change what the guard
     searches without saying so.
     """
+    name = _second_param_name(predicate)
+    return name if name in _SECOND_ARG_NAMES else None
+
+
+def _second_param_name(predicate):
+    """The NAME of this predicate's second positional parameter, or None if it has none.
+
+    Separate from `_second_arg_kind` so a caller can tell "there is nothing to fill" from "there is
+    something and I do not know what it means" - the two look identical downstream and only the
+    second is worth telling anyone about.
+    """
     try:
         params = inspect.signature(predicate).parameters
     except (TypeError, ValueError):                      # a builtin or C callable: assume one arg
         return None
     positional = [p for p in params.values()
                   if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-    if len(positional) < 2:
-        return None
-    name = positional[1].name
-    return name if name in _SECOND_ARG_NAMES else None
+    return positional[1].name if len(positional) >= 2 else None
 
 
 def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN,
@@ -174,6 +182,15 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
     declares a `tool_name` parameter, so the guard is measured on the reading production gives it.
     """
     second = _second_arg_kind(predicate)
+    declared = _second_param_name(predicate)
+    if declared and not second:
+        # Said ONCE, before the loop, and on stderr so it cannot corrupt the JSON on stdout. This
+        # is a behaviour CHANGE for a caller upgrading: that parameter used to receive the cwd,
+        # by arity and regardless of meaning. Announcing it is the whole lesson of the bug being
+        # fixed here - a result that shifts without saying so is the expensive kind.
+        print("warning: second parameter %r is not recognised (expected one of %s); "
+              "calling the predicate with the command alone"
+              % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
     extra = {"cwd": None, "tool_name": tool}
     fires, blocked, errored, clean, predicate_errors, samples = [], 0, 0, 0, 0, []
     for call in calls:
