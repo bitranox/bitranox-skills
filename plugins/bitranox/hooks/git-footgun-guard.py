@@ -20,11 +20,10 @@ import sys
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `git_footgun_guard.strip_heredoc_bodies`.
-from shell_text import strip_heredoc_bodies  # noqa: F401
+from shell_text import SEP, git_verb_operands, strip_heredoc_bodies
 
 # Split a command line into statements so a rev-parse in one segment is judged
 # on its own operands, not tokens from a neighbouring command.
-SEP = re.compile(r"&&|\|\||[;\n|]")
 
 # Strip shell redirections BEFORE counting operands, else a `2>/dev/null` (or its
 # target when spaced, `2> /dev/null`) is miscounted as a second revision and the
@@ -32,11 +31,7 @@ SEP = re.compile(r"&&|\|\||[;\n|]")
 # `>>out`, `2>&1`, `&>out`, `<in` (operator + attached or space-separated target).
 REDIR = re.compile(r"(?:&|\d+)?>>?(?:&\d+|\s*\S+)|<\s*\S+")
 
-# git global options that consume a SEPARATE following token, so the subcommand
-# search does not mistake their value for the subcommand.
-GIT_VALUE_OPTS = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
-)
+_REV_PARSE = frozenset({"rev-parse"})
 
 
 def _revparse_operands(toks: list[str]) -> list[str] | None:
@@ -45,20 +40,12 @@ def _revparse_operands(toks: list[str]) -> list[str] | None:
     Returns None when this segment is not a `git rev-parse` invocation - e.g.
     `git commit -m "...git rev-parse --short A B..."`, where the words appear
     only inside an argument.
+
+    The walk itself now lives in `shell_text.git_verb_operands`. It started here, and it was the
+    only correct answer to "what git command is this?" in the plugin while three other callers
+    each got it wrong in their own way - so it moved to where they could all reach it.
     """
-    idx = 0
-    while idx < len(toks) and "=" in toks[idx] and not toks[idx].startswith("-"):
-        idx += 1  # leading VAR=value environment assignments
-    if idx >= len(toks) or toks[idx].rsplit("/", 1)[-1] != "git":
-        return None
-    idx += 1
-    while idx < len(toks) and toks[idx].startswith("-"):
-        if toks[idx] in GIT_VALUE_OPTS:
-            idx += 1
-        idx += 1
-    if idx >= len(toks) or toks[idx] != "rev-parse":
-        return None
-    return toks[idx + 1 :]
+    return git_verb_operands(toks, _REV_PARSE)
 
 
 def broken_revparse(command: str) -> bool:

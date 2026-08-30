@@ -80,7 +80,7 @@ import re
 import sys
 
 # Shared with the other command-scanning guards - a heredoc body is DATA, not a command.
-from shell_text import is_shell_tool, strip_heredoc_bodies
+from shell_text import is_git_verb, is_shell_tool, iter_segments, strip_heredoc_bodies
 
 # Verbs a PreToolUse gate in this plugin can block. Deliberately short: a false nudge on a safe
 # command teaches the reader to ignore the channel, which costs more than the miss it prevents.
@@ -88,8 +88,23 @@ from shell_text import is_shell_tool, strip_heredoc_bodies
 # own line under a heredoc terminator. Without it the common shape is invisible.
 # `gh pr create` is gated by this repo's own commit gate, so a body file written beside it is lost
 # exactly like a commit message. Verified 2026-08-09 that it slipped through.
-_GATED = re.compile(
-    r"(?:^|[;&|]|\b(?:&&|\|\|)\s*)\s*(?:git\s+(?:commit|push|tag)|gh\s+pr\s+create)\b", re.M)
+_GATED_VERBS = frozenset({"commit", "push", "tag"})
+_GH_PR_CREATE = re.compile(r"^\s*(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
+
+
+def _gated_start(text):
+    """Offset of the first gated verb in `text`, or None.
+
+    The verb is identified by TOKEN WALK, not by a regex requiring it to sit next to `git`: the
+    old pattern could not see `git -C <path> commit`, so this nudge stayed silent on a shape the
+    gate it exists to explain really does block. Position is returned rather than a bare yes,
+    because a write AFTER the verb is not prep for it.
+    """
+    for start, seg in iter_segments(text):
+        body = seg.lstrip("( \t").lstrip()
+        if is_git_verb(body, _GATED_VERBS) or _GH_PR_CREATE.match(body):
+            return start + (len(seg) - len(body))
+    return None
 
 # A write that CREATES the file a later statement reads. Both shapes seen in practice.
 _HEREDOC_TO_FILE = re.compile(r"""(?:^|[;&|]|\bcat\b)[^\n<>]*?>\s*(?P<f>[^\s;&|<>]+)\s*<<-?\s*['"]?\w+""")
@@ -160,11 +175,11 @@ def tree_prep_before_gate(command: str):
     a false positive on an ordinary sequence.
     """
     text = strip_heredoc_bodies(command or "")
-    gate = _GATED.search(text)
-    if not gate:
+    gate_at = _gated_start(text)
+    if gate_at is None:
         return None
     for m in _TREE_WRITING_GIT.finditer(text):
-        if m.start() < gate.start():
+        if m.start() < gate_at:
             return m.group("verb")
     return None
 
@@ -194,7 +209,7 @@ def notice(command):
     if written or writes_via_interpreter(command):
         # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents
         # `git commit` is prose, and nudging on it is how a guard blocks its own documentation.
-        if _GATED.search(strip_heredoc_bodies(command)):
+        if _gated_start(strip_heredoc_bodies(command)) is not None:
             what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
             return (
                 "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr "

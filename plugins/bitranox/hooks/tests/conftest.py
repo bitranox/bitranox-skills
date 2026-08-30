@@ -34,6 +34,7 @@ _HOOK_MODULES = {
     "commit-tell-sweep": "commit_tell_sweep",
     "git-footgun-guard": "git_footgun_guard",
     "git-wrong-repo-nudge": "git_wrong_repo_nudge",
+    "git-revparse-nudge": "git_revparse_nudge",
     "block-git-semicolon-chain": "block_git_semicolon_chain",
     "gated-prep-nudge": "gated_prep_nudge",
     "sed-line1-range-nudge": "sed_line1_range_nudge",

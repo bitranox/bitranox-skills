@@ -17,6 +17,49 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.278.0]
+
+### Added
+
+- **`shell_text.git_verb_operands` / `is_git_verb` / `iter_segments`** - one answer to "what git
+  command is this?", lifted from `git-footgun-guard`, which had the only correct implementation in
+  the plugin. `GIT_VALUE_OPTS` moved with it. `iter_segments` yields each statement WITH its
+  offset, so a caller that needs order does not keep a second splitter.
+
+### Fixed
+
+- **`git <global options> <verb>` is now seen everywhere a hook asks what a git command is doing.**
+  Four callers asked that question three different ways, and only one was right.
+
+  Under-matching, both VERIFIED in the 2026-08-28 audit: `git-revparse-nudge` and
+  `gated-prep-nudge` required the verb to sit adjacent to `git`, so `git -C <path> rev-parse master`
+  and `git -C <path> commit -F msg` matched nothing. Each was silent on the exact shape it exists
+  to teach - and `git -C <path>` is the very form the rev-parse notice tells the reader to use, so
+  the one reader who had half-learned the lesson got nothing.
+
+- **A commit could bypass the repo gate entirely.** Not from the audit, which reviewed the hooks
+  and not the shared module: `is_gated_command` is what `repo-gate.py` consults to decide whether
+  to BLOCK, and it returned False for `git -c user.name=bob commit -m x`,
+  `git --work-tree /r -C /r commit`, and `git -c http.proxy=x push`. `key=value` does not start
+  with `-`, so the old pattern's option run ended early and the verb was never reached.
+
+  It was also wrong in the other direction: `git -C commit status` read `-C`'s VALUE as the verb,
+  so the gate BLOCKED a status command run in a directory named `commit`.
+
+- **The gate predicate no longer backtracks exponentially.** `COMMIT_RE`/`PUSH_RE` carried a nested
+  quantifier, `(?:\s+-C\s+\S+|\s+--?\S+)*`, which explodes when a segment does not end in the verb.
+  Measured on the pre-change pattern: 0.4 ms at 10 options, 113 ms at 18, 1815 ms at 22, and no
+  result at 40 within two minutes. This runs inside a PreToolUse hook, so a long option-heavy git
+  command would have stalled the session. The whole suite dropped from ~50 s to ~23 s.
+
+  A wall-clock test pins it, which is sound only because the separation is exponential rather than
+  marginal - the token walk answers the 60-option case in ~0.04 ms.
+
+- **A git verb inside a command substitution counts again.** Anchoring the match at a segment start
+  is what stops `git commit` in prose counting - but it also silently dropped `A=$(git commit ...)`,
+  which the older match-anywhere regexes did see. `$(`, a backtick and process substitution are now
+  segment starts. Caught as a regression by the existing revparse-nudge suite, not by the new work.
+
 ## [5.277.0]
 
 ### Changed

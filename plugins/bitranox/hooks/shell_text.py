@@ -35,9 +35,79 @@ SHELL_TOOLS = ("Bash", "PowerShell")
 
 # Statement separators, and the three shapes that mean "a change is leaving this machine".
 SEP = re.compile(r"&&|\|\||[;\n|]")
+# A statement can also begin INSIDE a command substitution, and what is in there is a real
+# command. Anchoring a match at a segment start is what makes `git commit` appearing as DATA not
+# count - but without these, anchoring also silently drops `A=$(git commit ...)`, which the older
+# match-anywhere regexes did see. Measured as a regression when the walk replaced them.
+_SEGMENT_START = re.compile(r"&&|\|\||[;\n|]|\$\(|`|<\(|>\(")
 COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
 PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
+_GATED_GIT_VERBS = frozenset({"commit", "push"})
 PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
+
+
+# git global options that consume a SEPARATE following token, so a subcommand search never
+# mistakes their VALUE for the verb. Lifted here from `git-footgun-guard`, which had the only
+# correct implementation of this in the plugin while three other callers each got it wrong in
+# their own way - two blind to any option at all, and the regex pair above wrong in BOTH
+# directions (see `git_verb_operands`).
+GIT_VALUE_OPTS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+)
+
+
+def git_verb_operands(tokens, verbs, tool_name="Bash"):
+    r"""Tokens after git's SUBCOMMAND when this really is `git <global opts> <verb>`; else None.
+
+    The single answer to "what git command is this?", because asking it with a regex is wrong in
+    both directions and every caller here had drifted:
+
+    * UNDER-matching, which the 2026-08-28 audit found in two nudges: `\bgit\s+rev-parse\b`
+      requires the verb to sit adjacent to `git`, so any global option between them silences the
+      hook - and `git -C <path>` is the shape the rev-parse nudge's own advice steers people
+      toward, so the one reader who half-learned the lesson got nothing.
+    * OVER-matching, found while checking the shared module for the same class of gap: the old
+      `COMMIT_RE` treats `-C` as a bare flag, so `git -C commit status` read `-C`'s VALUE as the
+      verb and the repo gate BLOCKED a status command run in a directory named `commit`. In the
+      other direction `git -c key=value commit` was not gated at all, because `key=value` does
+      not start with `-` and ended the option run early. A commit that the gate cannot see is a
+      commit it cannot gate.
+
+    Leading `VAR=value` environment assignments are skipped, and the program name is taken with
+    `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count.
+    """
+    idx = 0
+    while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
+        idx += 1                                  # leading VAR=value environment assignments
+    if idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) != "git":
+        return None
+    idx += 1
+    while idx < len(tokens) and tokens[idx].startswith("-"):
+        if tokens[idx] in GIT_VALUE_OPTS:
+            idx += 1                              # this option's VALUE is a separate token
+        idx += 1
+    if idx >= len(tokens) or tokens[idx] not in verbs:
+        return None
+    return tokens[idx + 1:]
+
+
+def is_git_verb(segment, verbs, tool_name="Bash"):
+    """True when `segment` is a `git <global opts> <verb>` command for one of `verbs`."""
+    return git_verb_operands(segment.split(), verbs, tool_name) is not None
+
+
+def iter_segments(text):
+    """(offset, segment) for each statement in `text`, offsets into `text` itself.
+
+    `SEP.split` throws the positions away, which is fine for a yes/no question and not fine for a
+    caller that must know whether a write happened BEFORE the gated verb. Without this such a
+    caller keeps its own second splitter, and the two drift on exactly the shapes that matter.
+    """
+    pos = 0
+    for m in _SEGMENT_START.finditer(text):
+        yield pos, text[pos:m.start()]
+        pos = m.end()
+    yield pos, text[pos:]
 
 
 
@@ -167,9 +237,9 @@ def is_gated_command(command):
     when the decision-review nudge fires. Two copies of this regex set would drift, and the drift
     would be silent in both directions: a shape one recognises and the other does not.
     """
-    for seg in SEP.split(strip_heredoc_bodies(command or "")):
+    for _at, seg in iter_segments(strip_heredoc_bodies(command or "")):
         seg = seg.strip().lstrip("(").strip()
-        if COMMIT_RE.match(seg) or PR_RE.match(seg) or PUSH_RE.match(seg):
+        if is_git_verb(seg, _GATED_GIT_VERBS) or PR_RE.match(seg):
             return True
     return False
 

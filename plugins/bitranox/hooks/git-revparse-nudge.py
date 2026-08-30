@@ -20,9 +20,9 @@ import json
 import re
 import sys
 
-from shell_text import is_shell_tool, strip_heredoc_bodies
+from shell_text import git_verb_operands, is_shell_tool, iter_segments, strip_heredoc_bodies
 
-_REV_PARSE = re.compile(r"\bgit\s+rev-parse\b(?P<rest>[^\n;&|]*)")
+_REV_PARSE_VERB = frozenset({"rev-parse"})
 # Options that either make it safe, or make it a question about the repo rather than a ref.
 _SAFE_OPTS = re.compile(
     r"--verify\b|--show-toplevel\b|--abbrev-ref\b|--git-dir\b|--git-common-dir\b"
@@ -44,8 +44,14 @@ def notice(command):
     """The nudge text when a ref-resolving rev-parse lacks --verify, else None."""
     if not command or not isinstance(command, str):
         return None
-    for match in _REV_PARSE.finditer(strip_heredoc_bodies(command)):
-        rest = match.group("rest") or ""
+    for _at, segment in iter_segments(strip_heredoc_bodies(command)):
+        # The VERB is found by token walk, not by a regex demanding it sit next to `git`: any
+        # global option between them (`git -C <path> rev-parse master`) silenced this hook, and
+        # that is the very shape the notice below tells the reader to use.
+        operands = git_verb_operands(segment.split(), _REV_PARSE_VERB)
+        if operands is None:
+            continue
+        rest = " ".join(operands)
         if _SAFE_OPTS.search(rest):
             continue
         if not rest.strip():
