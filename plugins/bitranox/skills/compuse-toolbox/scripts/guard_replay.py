@@ -171,6 +171,29 @@ def _second_param_name(predicate):
     return positional[1].name if len(positional) >= 2 else None
 
 
+def _spread_sample(fires, n):
+    """`n` firings drawn evenly across `fires`, in corpus order - never the first `n`.
+
+    The corpus is walked file by file, so the firings arrive grouped by PROJECT. Filling the
+    sample from the front therefore hands back whichever project sorts first, and it reads exactly
+    like a representative sample of the whole run.
+
+    Measured 2026-08-30: 40 of 557 firings read this way put a residual at ~10 percent, because
+    those 40 came almost entirely from one project that writes scripts via heredocs; classifying
+    all 557 put it at ~2 percent. The full set also held four shapes the 40 never contained, and
+    those four were a live regression. A spread cannot make a small sample sufficient, but it stops
+    it being systematically one project's habits.
+    """
+    if n <= 0:
+        return []
+    if n >= len(fires):
+        picked = list(fires)
+    else:
+        step = len(fires) / n
+        picked = [fires[int(i * step)] for i in range(n)]
+    return [{"command": c["command"], "cwd": c["cwd"], "error": c["error"]} for c in picked]
+
+
 def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN,
              tool: str = "Bash"):
     """Run the predicate over every call and split the firings by what actually happened.
@@ -192,7 +215,7 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
               "calling the predicate with the command alone"
               % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
     extra = {"cwd": None, "tool_name": tool}
-    fires, blocked, errored, clean, predicate_errors, samples = [], 0, 0, 0, 0, []
+    fires, blocked, errored, clean, predicate_errors = [], 0, 0, 0, 0
     for call in calls:
         extra["cwd"] = call["cwd"]
         try:
@@ -210,9 +233,8 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
             errored += 1
         else:
             clean += 1
-        if len(samples) < sample:
-            samples.append({"command": call["command"], "cwd": call["cwd"],
-                            "error": call["error"]})
+    # Drawn AFTER the walk, so it can span the whole corpus rather than its first file.
+    samples = _spread_sample(fires, sample)
     total = len(calls)
     return {
         "commands": total,
@@ -304,7 +326,10 @@ def _parse(argv):
     ap.add_argument("--func", default="notice", help="predicate name in that module (default: notice)")
     ap.add_argument("--root", default="~/.claude/projects", help="corpus dir or a single .jsonl")
     ap.add_argument("--tool", default="Bash", help="tool_use name to replay (default: Bash)")
-    ap.add_argument("--sample", type=int, default=0, help="print N example firings for eyeballing")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="print N example firings, spread evenly across the corpus "
+                         "(not the first N). A sample cannot establish a RATIO - "
+                         "classify every firing for that.")
     ap.add_argument("--block-pattern", default=DEFAULT_BLOCK_PATTERN,
                     help="regex marking a tool_result as a GATE block (default: %(default)s)")
     ap.add_argument("--json", action="store_true", help="emit the report as a JSON envelope")

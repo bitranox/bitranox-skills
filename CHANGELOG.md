@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.289.0]
+
+### Changed
+
+- **`guard_replay --sample` now spreads its picks across the corpus instead of taking the first
+  N.** The corpus is walked file by file, so firings arrive grouped by PROJECT and a front-filled
+  sample is one project's habits wearing the whole run's clothes - while reading exactly like a
+  representative draw. This is a visible behaviour change for anyone upgrading: the same command
+  returns different example firings.
+
+  Measured on this repo's own work, which is what prompted it. Reading 40 of 557 firings put a
+  residual at ~10 percent and that figure was published in a CHANGELOG; classifying all 557 put it
+  at ~2 percent, because the 40 came almost entirely from one project that writes scripts through
+  heredocs. The 517 unread also held four firings that were a live regression in the very guard
+  being measured, which the sample never surfaced. Re-derived on the live corpus against a shipped
+  guard with 29 firings: the new draw returns 8 samples from 7 distinct working directories, the
+  old one returns 8 from a single project tree.
+
+  `--help` and the skill's table now also say what a sample can and cannot do: it shows what
+  firings LOOK like, and it cannot establish a ratio among them. When a proportion or a residual
+  is the answer you need, classify every firing.
+
 ## [5.288.1]
 
 ### Fixed

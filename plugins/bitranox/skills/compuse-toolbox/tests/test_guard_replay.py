@@ -112,6 +112,34 @@ def test_a_predicate_that_raises_does_not_abort_the_replay():
     assert report["predicate_errors"] == 1
 
 
+def test_the_sample_is_spread_across_the_corpus_not_the_first_n():
+    """A first-N sample clusters by walk order, which is by project, and reads as representative.
+
+    Measured 2026-08-30: reading 40 of 557 firings this way put a residual at ~10 percent because
+    the 40 came almost entirely from one project that scripts heavily; classifying all 557 put it
+    at ~2 percent, and the full set held four shapes the 40 did not contain at all. The sample is
+    what a reader judges the firings from, so drawing it from one end of the corpus is the half
+    that turns a volume figure into a wrong conclusion.
+    """
+    calls = [{"id": str(i), "command": "fire %03d" % i, "cwd": "/r", "error": None}
+             for i in range(100)]
+    got = [s["command"] for s in G.classify(calls, lambda cmd: True, sample=5)["samples"]]
+
+    assert got != ["fire %03d" % i for i in range(5)], "sample is still the first N"
+    assert len(got) == 5
+    assert got == sorted(got), "corpus order must be preserved within the sample"
+    # It must actually REACH the far end - that is the whole point.
+    assert int(got[-1].split()[1]) >= 80, "sample never reaches the end of the corpus: %s" % got
+    assert len(set(got)) == 5, "sample repeats a firing"
+
+
+def test_a_sample_larger_than_the_firings_returns_them_all():
+    calls = [{"id": "a", "command": "fire one", "cwd": "/r", "error": None},
+             {"id": "b", "command": "quiet", "cwd": "/r", "error": None}]
+    report = G.classify(calls, lambda cmd: cmd.startswith("fire"), sample=5)
+    assert [s["command"] for s in report["samples"]] == ["fire one"]
+
+
 def test_samples_carry_the_firing_commands_for_eyeballing():
     calls = [{"id": "a", "command": "fire one", "cwd": "/r", "error": None},
              {"id": "b", "command": "quiet", "cwd": "/r", "error": None}]
