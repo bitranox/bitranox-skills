@@ -127,6 +127,21 @@ def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
     return None
 
 
+_STATEMENT_SEP = re.compile(r"&&|\|\||[;\n]")
+
+
+def _statement_around(text: str, index: int) -> str:
+    """The single statement containing `index`, so a flag in a NEIGHBOURING statement is not read
+    as belonging to this one. `git push --dry-run x && git push x` is one dry run and one real
+    push, and matching `--dry-run` against the whole command silenced the second."""
+    start = 0
+    for m in _STATEMENT_SEP.finditer(text):
+        if m.start() > index:
+            return text[start:m.start()]
+        start = m.end()
+    return text[start:]
+
+
 def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
     """What this push actually built: (sha, display), or None to fall back to the branch test.
 
@@ -171,7 +186,13 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
     # Read STRUCTURE from the masked form so a command merely quoting "git push" cannot trigger it,
     # then take VALUES from the real repo rather than from the text.
     masked = commands_only(command)
-    if not _PUSH.search(masked) or _NOT_A_BUILD.search(masked):
+    # _NOT_A_BUILD must be judged on the push STATEMENT, not the whole command: a dry run in
+    # one statement silenced the nudge for a genuine push in another.
+    # EVERY push, not the first: scoping the flag correctly but then selecting the first match
+    # still lets `git push --dry-run x && git push x` silence itself, because the first match IS
+    # the dry run. The nudge is owed if ANY statement carries a real build push.
+    if not any(not _NOT_A_BUILD.search(_statement_around(masked, m.start()))
+               for m in _PUSH.finditer(masked)):
         return None
     repo = _repo_dir(command, cwd) if cwd else None
     if not repo or not _has_workflows(repo):

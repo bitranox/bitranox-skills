@@ -243,3 +243,35 @@ def test_an_escaped_and_an_unescaped_span_in_one_body_still_blocks() -> None:
     """The escape blanking must not excuse a real substitution sitting beside a safe one."""
 
     assert heredoc_blocked("cat > f.md <<EOF\nsafe \\`a\\` then live `b`\nEOF")
+
+
+def test_a_separator_inside_a_quoted_value_does_not_split_the_statement():
+    """The MISS. `SEP.split` is not quote-aware, so a newline inside the assignment's own quoted
+    value split the segment and the prefix self-reference was lost entirely - the guard went
+    silent on the exact footgun it exists to block. A two-line commit message is the common case."""
+    cmd = 'MSG="Release 5.2\n\nfixes the gate" make push MSG="$MSG"'
+    assert guard.self_referencing_prefix(cmd) is True
+
+
+def test_a_plain_self_reference_is_still_blocked():
+    """The direction where it must NOT apply."""
+    assert guard.self_referencing_prefix('MSG="Release 5.2" make push MSG="$MSG"') is True
+    assert guard.self_referencing_prefix('MSG="Release 5.2" make push') is False
+
+
+def test_a_single_quoted_mention_is_not_a_substitution():
+    """A single-quoted string is inert - no expansion happens there at all - so prose describing
+    the footgun is not an instance of it, and blocking it stops the footgun being written down."""
+    cmd = """echo 'never write: git commit -m "fix $(whoami)"' >> notes.md"""
+    assert guard.substitutes_inside_text_arg(cmd) is False
+
+
+def test_a_mention_after_a_comment_is_not_a_substitution():
+    cmd = 'git commit -F /tmp/msg.txt   # never -m "x $(y)"'
+    assert guard.substitutes_inside_text_arg(cmd) is False
+
+
+def test_a_real_substitution_in_a_double_quoted_message_is_still_blocked():
+    """The direction where it must NOT apply: `$( )` DOES expand inside double quotes, which is
+    the whole footgun. Blanking those too would delete what this guard looks for."""
+    assert guard.substitutes_inside_text_arg('git commit -m "fix $(whoami)"') is True

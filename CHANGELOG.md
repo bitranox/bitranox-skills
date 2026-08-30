@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.284.0]
+
+### Fixed
+
+Rank 7 continued - inert text, and a scope that stopped one match too early.
+
+- **`shell-prefix-selfref-guard` went SILENT on its own footgun.** `SEP.split` is not
+  quote-aware, so a `;` or newline inside the assignment's OWN quoted value split the segment
+  and the self-reference was lost - and a two-line commit message passed as `MSG="..."` is the
+  everyday shape. Statements are now split on length-preserving masked text. Two wrong tools were
+  tried first and both are recorded in the code: a bare `SEP.split` misses this, and
+  `iter_segments` also breaks at `$(`, which is right for statements and wrong here,
+  because `MSG="$(cat f)" make push` is ONE assignment.
+- **The same guard blocked prose describing the footgun.** A SINGLE-quoted string and a `#`
+  comment are inert, so text mentioning the trap is not an instance of it. It now scans
+  `blank_unexpanded_text`, which deliberately leaves DOUBLE-quoted text intact - that is where
+  a real substitution expands, so a broader mask would delete the finding itself.
+- **`ci-watch-nudge` let a dry run silence a real push.** `--dry-run` was matched against
+  the whole command. Scoping it to the push's own statement was necessary but not sufficient: the
+  FIRST push match is the dry run, so the nudge still silenced itself. It now asks whether ANY
+  statement carries a real build push.
+
 ## [5.283.0]
 
 ### Fixed

@@ -31,7 +31,7 @@ import sys
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
-from shell_text import HEREDOC_OPEN, mask_data_regions, strip_heredoc_bodies  # noqa: F401
+from shell_text import HEREDOC_OPEN, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies  # noqa: F401
 
 # Statement separators. A prefix assignment dies at the end of ITS command, so a
 # reference after one of these is a deliberate use of the shell's own variable.
@@ -102,14 +102,38 @@ def substitutes_inside_text_arg(command: str) -> bool:
     Scoped to prose-carrying flags on purpose. `$(...)` is legitimate nearly everywhere else, so a
     blanket rule would block ordinary work - and a guard that blocks ordinary work gets disabled.
     """
+    # blank_unexpanded_text, not the raw command: a SINGLE-quoted string and a `#` comment are
+    # inert, so prose describing this footgun is not an instance of it and must not be blocked.
+    # It deliberately leaves DOUBLE-quoted text alone, which is where a real `$( )` expands - the
+    # very thing this guard looks for - so a broader mask would delete the finding.
     return any(_SUBSTITUTION_RX.search(arg)
-               for arg in _TEXT_ARG_RX.findall(strip_heredoc_bodies(command)))
+               for arg in _TEXT_ARG_RX.findall(
+                   blank_unexpanded_text(strip_heredoc_bodies(command))))
+
+
+def _statements(text: str) -> list[str]:
+    """`text` split into statements, ignoring separators inside quotes, comments and
+    substitutions. Offsets come from the length-preserving mask and index the raw text."""
+    out, start = [], 0
+    masked = mask_data_regions(text)
+    for m in SEP.finditer(masked):
+        out.append(text[start:m.start()])
+        start = m.end()
+    out.append(text[start:])
+    return out
 
 
 def self_referencing_prefix(command: str) -> bool:
     """Return whether any segment references a variable it assigns as a prefix."""
 
-    for segment in SEP.split(strip_heredoc_bodies(command)):
+    # Split statements on the MASKED text and slice the raw. Two wrong tools were tried first:
+    # a bare `SEP.split` is not quote-aware, so a `;` or newline inside the assignment's own
+    # quoted value split the segment and the self-reference was LOST - the guard went silent on
+    # the footgun it exists to block. `iter_segments` fixes that but also breaks at `$(`, which
+    # is right for statements and wrong here: `MSG="$(cat f)" make push` is ONE assignment, and
+    # splitting it lost the prefix instead. `mask_data_regions` is length-preserving, so the
+    # separator offsets it yields index the raw text exactly.
+    for segment in _statements(strip_heredoc_bodies(command)):
         names = _prefix_names(segment)
         if not names:
             continue

@@ -289,3 +289,18 @@ def test_a_dash_c_inside_a_heredoc_body_is_not_the_repo():
 def test_a_real_dash_c_is_still_the_repo():
     """The direction where it must NOT apply."""
     assert _names(hook._repo_dir("git -C /real/repo push origin master", "/cwd"), "/real/repo")
+
+
+def test_a_neighbouring_statements_flag_is_not_read_as_this_ones():
+    """`--dry-run` was matched against the WHOLE command, so a dry run in one statement silenced
+    the nudge for a genuine push in another. `_statement_around` is the scoping that fixes it;
+    `notice` itself needs a real repo, so the pure helper is what can actually be asserted here."""
+    cmd = "git push --dry-run origin master && git push origin master"
+    real_push = cmd.rindex("git push")
+    assert "--dry-run" not in hook._statement_around(cmd, real_push)
+
+
+def test_the_statement_around_a_lone_dry_run_still_contains_it():
+    """The direction where it must NOT apply."""
+    cmd = "git push --dry-run origin master"
+    assert "--dry-run" in hook._statement_around(cmd, cmd.index("git push"))
