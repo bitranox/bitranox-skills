@@ -18,6 +18,21 @@ def test_is_git_commit():
     assert not G._is_git_commit("echo commit")
 
 
+def test_is_git_commit_ignores_git_commit_appearing_as_data():
+    """git+commit in a STRING, a COMMENT or a HEREDOC body is not a commit.
+
+    The bag-of-tokens test this replaces split on separators and then asked only whether both
+    words were present ANYWHERE in a segment, so a read-only `git log` carrying the word in a
+    trailing comment spent 2-4 git subprocesses and warned about a commit that is not happening.
+    The last assertion is the control: it must stay True, or this test would pass against a
+    predicate that has simply stopped recognising commits at all.
+    """
+    assert not G._is_git_commit('echo "run git commit later"')
+    assert not G._is_git_commit("git log -1 --pretty=%B  # inspect the commit message")
+    assert not G._is_git_commit("cat > note.md <<'EOF'\ngit commit -m x\nEOF")
+    assert G._is_git_commit('git commit -m "x"')  # control: a real commit still matches
+
+
 def _fake_git(returns):
     def _f(cwd, *a):
         if a[0] == "rev-parse" and "--show-toplevel" in a:

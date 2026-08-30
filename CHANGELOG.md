@@ -17,6 +17,52 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.288.0]
+
+### Added
+
+- **`shell_text.argv_for_match`, one quote-aware tokeniser for the git verb walk.** The three
+  places that asked "is this segment `git <verb>`?" each split on whitespace, so a global option
+  whose value is QUOTED AND CONTAINS A SPACE broke the walk: `git -c user.name="Robert Nowotny"
+  commit` splits into `user.name="Robert` plus `Nowotny"`, the option walk consumes the wrong
+  token, reads the next as the verb, and the command is not recognised at all. `is_gated_command`
+  is what `repo-gate.py` consults to decide whether to BLOCK, so this was a commit the gate could
+  not see. Found by replaying the real corpus, where that exact commit had run.
+
+  The earlier pass closed `-c key=value` and left the shape: the value only has to contain a
+  space to walk past the same gate again. The new case is parametrised into `GLOBAL_OPTS`, so it
+  is asserted for all five callers at once rather than the one that surfaced it.
+
+### Fixed
+
+- **`git-commit-branch-guard` no longer treats `git` and `commit` as DATA.** `_is_git_commit` was
+  an unanchored bag-of-tokens test over separator-split segments, so an echoed string, a trailing
+  comment on a read-only `git log`, or a heredoc body each spent 2-4 git subprocesses and warned
+  about a commit that was not happening. It now asks `shell_text` the same question the repo gate
+  asks. Measured on 65,778 real commands: 2,315 firings to 2,113, and adjudication of a 40-firing
+  sample put ~90 percent of the removals in prose, echoed banners and heredoc bodies.
+
+- **`reformat-md-tables` no longer reads a git verb it merely NAMES as a reason to stand down.**
+  `_rewrites_the_tree` scanned the raw command, so writing a doc whose body explains how to
+  recover from a merge turned the path-guessing fallback off for that very write, and the table it
+  wrote shipped misaligned - the one case where this hook is the only formatter in the loop. Now a
+  statement walk: 1,161 firings to 794, including a remote `ssh host 'git pull'` that never
+  touched the local tree.
+
+- **Both matchers now SEE two shapes the old ones missed**, which is why this is not only a
+  narrowing: a real `git -C "$R" commit -F msg` inside `out=$(...)`, where the old token test saw
+  `out=$(git`, and a real `git clone` the old regex walked past.
+
+### Known gap
+
+- **A script written and executed by one command still rewrites the tree unseen**
+  (`cat > s.sh <<EOF ... git merge ... EOF; bash s.sh`), about a tenth of `_rewrites_the_tree`'s
+  real matches. Not stripping heredoc bodies is NOT the fix - a quoted delimiter makes the body
+  literal, so markdown backticks around `git merge --abort` would parse as a command substitution
+  and reinstate the defect above. It needs write-vs-execute ordering, the same gap already open
+  against `gated-prep-nudge`. Recorded as a strict `xfail` so closing it fails the suite instead
+  of leaving a stale exemption.
+
 ## [5.287.6]
 
 ### Changed

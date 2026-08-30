@@ -15,21 +15,30 @@ tuned to stay silent in normal solo / feature-branch work:
     be pure noise there; enable it for repos you work on a single branch directly.
 
 WARN only, fail-open: writes to stderr and exits 0 on every path, so it never blocks a commit and a broken
-guard never wedges a turn. Pure standard library; launched via run-python.sh so it works on Windows too.
+guard never wedges a turn. Standard library plus the sibling shell_text helper; launched via run-python.sh
+so it works on Windows too.
 """
 import json
 import os
-import re
 import subprocess
 import sys
 
-SEP = re.compile(r"&&|\|\||[;\n|]")
+from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
+
+_COMMIT_VERBS = frozenset({"commit"})
 
 
 def _is_git_commit(command):
-    for segment in SEP.split(command):
-        toks = segment.split()
-        if "git" in toks and "commit" in toks:
+    """True when a STATEMENT in `command` is a git commit - not merely text mentioning one.
+
+    This asks shell_text the same question the repo gate asks, rather than keeping a second
+    matcher here. The bag-of-tokens test it replaces split on separators and then checked only
+    whether both words appeared ANYWHERE in a segment, so `echo "run git commit later"`, a
+    trailing `# ... commit ...` comment on a read-only `git log`, and a heredoc body all counted:
+    each spent 2-4 git subprocesses and warned about a commit that was not happening.
+    """
+    for _at, segment in iter_segments(strip_heredoc_bodies(command or "")):
+        if is_git_verb(segment.strip().lstrip("(").strip(), _COMMIT_VERBS):
             return True
     return False
 

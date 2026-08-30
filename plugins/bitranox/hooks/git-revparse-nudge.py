@@ -20,7 +20,7 @@ import json
 import re
 import sys
 
-from shell_text import git_verb_operands, is_shell_tool, iter_segments, strip_heredoc_bodies
+from shell_text import argv_for_match, git_verb_operands, is_shell_tool, iter_segments, strip_heredoc_bodies
 
 _REV_PARSE_VERB = frozenset({"rev-parse"})
 # Options that either make it safe, or make it a question about the repo rather than a ref.
@@ -52,7 +52,7 @@ def notice(command, tool_name=None):
         # The VERB is found by token walk, not by a regex demanding it sit next to `git`: any
         # global option between them (`git -C <path> rev-parse master`) silenced this hook, and
         # that is the very shape the notice below tells the reader to use.
-        operands = git_verb_operands(segment.split(), _REV_PARSE_VERB)
+        operands = git_verb_operands(argv_for_match(segment, tool_name), _REV_PARSE_VERB)
         if operands is None:
             continue
         # Redirections are not revisions. `git rev-parse 2>/dev/null` is the standard

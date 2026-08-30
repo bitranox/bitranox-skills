@@ -75,6 +75,37 @@ def run_bash(monkeypatch, cwd, command="cat > doc.md"):
     return H.main()
 
 
+def test_rewrites_the_tree_ignores_a_git_verb_appearing_as_data():
+    """A heredoc that DOCUMENTS `git merge` must not disable the path-guessing fallback.
+
+    The predicate matched the subcommand anywhere in the raw command, so writing a doc whose body
+    explains how to recover from a merge turned the fallback off for that very write, and the
+    table it wrote shipped misaligned. The last assertion is the control: a real tree-writing git
+    call must still be detected, or this test would pass against a predicate that never fires.
+    """
+    assert not H._rewrites_the_tree("cat > doc.md <<'EOF'\nrecover with `git merge --abort`\nEOF")
+    assert not H._rewrites_the_tree("git log --oneline  # after the rebase")
+    assert H._rewrites_the_tree("git merge --no-ff topic")  # control: a real merge still matches
+
+
+@pytest.mark.xfail(
+    reason="KNOWN GAP: heredoc bodies are stripped, so a script written and run by one command "
+           "is not seen. Not stripping reinstates the prose false positive above, because a "
+           "quoted delimiter makes backticks literal while the segment walk reads them as a "
+           "command substitution. Needs write-vs-execute ordering, open against gated-prep-nudge.",
+    strict=True,
+)
+def test_rewrites_the_tree_sees_a_git_write_in_a_script_this_command_then_runs():
+    """Records the residual measured on the corpus: ~10 percent of this hook's real matches.
+
+    Kept as a failing expectation rather than deleted, because the cost of the miss is concrete -
+    the hook restyles files git itself just wrote, which is how a re-cut merge once aborted with
+    "your local changes would be overwritten".
+    """
+    written_then_run = "cat > recut.sh <<'SHEOF'\ngit merge --no-ff origin/topic\nSHEOF\nbash recut.sh"
+    assert H._rewrites_the_tree(written_then_run)
+
+
 def test_a_git_command_that_rewrites_the_tree_is_skipped(tmp_path, monkeypatch):
     """Verify markdown restamped by a git operation is left alone.
 

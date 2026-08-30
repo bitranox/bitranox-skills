@@ -18,12 +18,11 @@ broken hook never wedges a turn.
 import importlib.util
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
 
-from shell_text import is_shell_tool
+from shell_text import is_git_verb, is_shell_tool, iter_segments, strip_heredoc_bodies
 
 _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
 
@@ -41,7 +40,6 @@ _GIT_TREE_WRITERS = frozenset({
     "checkout", "switch", "merge", "rebase", "pull", "clone", "reset",
     "stash", "cherry-pick", "revert", "am", "apply", "restore", "worktree",
 })
-_GIT_CALL_RE = re.compile(r"\bgit\b(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+([a-z-]+)")
 
 
 def _rewrites_the_tree(command: str) -> bool:
@@ -55,8 +53,27 @@ def _rewrites_the_tree(command: str) -> bool:
 
     Matched on the SUBCOMMAND, so read-only git (log, status, diff) still allows
     the fallback - a doc written beside `git log` is the operator's.
+
+    Asked per STATEMENT through shell_text, because the subcommand also has to be a
+    command rather than data. Scanning the raw command matched a git verb the text
+    merely NAMED, so writing a doc whose body explains how to recover from a merge
+    turned this fallback off for that very write and the table it wrote shipped
+    misaligned - the one case where the hook is the only formatter in the loop.
+
+    KNOWN GAP, measured rather than assumed. Heredoc bodies ARE stripped, so a script
+    written and executed by one command - `cat > s.sh <<EOF ... git merge ... EOF;
+    bash s.sh` - rewrites the tree without this seeing it. That was ~10 percent of
+    the pre-2026-08-30 matches on the real corpus. Not stripping is NOT the fix: a
+    quoted heredoc delimiter makes its body literal, so markdown backticks around
+    `git merge --abort` would then parse as a command substitution and reinstate
+    exactly the defect this walk exists to close. Detecting write-then-run needs
+    ordering the write against the execution, the same gap already open against
+    gated-prep-nudge; it belongs there, once, not hand-rolled here.
     """
-    return any(sub in _GIT_TREE_WRITERS for sub in _GIT_CALL_RE.findall(command))
+    for _at, segment in iter_segments(strip_heredoc_bodies(command or "")):
+        if is_git_verb(segment.strip().lstrip("(").strip(), _GIT_TREE_WRITERS):
+            return True
+    return False
 
 
 def _reformat_file_fn():

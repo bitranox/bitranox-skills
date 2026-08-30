@@ -184,9 +184,36 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
     return tokens[idx + 1:]
 
 
+def argv_for_match(segment, tool_name="Bash"):
+    r"""Quote-aware argv for NAME MATCHING a command - never for resolving an operand.
+
+    `segment.split()` is wrong wherever a global option's VALUE may be quoted and contain a
+    space: `git -c user.name="Robert Nowotny" commit` splits into `user.name="Robert` plus
+    `Nowotny"`, so the option walk consumes the wrong token, reads the next one as the verb, and
+    the command is not recognised at all. The 2026-08-30 corpus replay found that exact commit
+    had really run, and `is_gated_command` is what repo-gate consults to decide whether to BLOCK,
+    so this was a commit the gate could not see.
+
+    Fixing `-c key=value` alone in the earlier pass closed the instance and left the shape: the
+    value simply has to contain a space to walk past the same gate again.
+
+    Mangling is acceptable here and only here. `split_for_tool` eats POSIX backslashes, so an
+    operand it returns may name nothing on disk - but a caller that merely COMPARES a token
+    against a verb name is unaffected, which is exactly what the verb walk does.
+
+    Falls back to a whitespace split when the segment does not parse. An unbalanced quote is
+    normal in a segment cut out of a larger command, and a caller whose whole purpose is a
+    yes/no is better served by a partial answer than by an exception.
+    """
+    try:
+        return split_for_tool(segment, tool_name)
+    except ValueError:
+        return segment.split()
+
+
 def is_git_verb(segment, verbs, tool_name="Bash"):
     """True when `segment` is a `git <global opts> <verb>` command for one of `verbs`."""
-    return git_verb_operands(segment.split(), verbs, tool_name) is not None
+    return git_verb_operands(argv_for_match(segment, tool_name), verbs, tool_name) is not None
 
 
 def iter_segments(text, tool_name=None):

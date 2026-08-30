@@ -20,7 +20,7 @@ import sys
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `git_footgun_guard.strip_heredoc_bodies`.
-from shell_text import git_verb_operands, iter_segments, strip_heredoc_bodies
+from shell_text import argv_for_match, git_verb_operands, iter_segments, strip_heredoc_bodies
 
 # Split a command line into statements so a rev-parse in one segment is judged
 # on its own operands, not tokens from a neighbouring command.
@@ -55,7 +55,7 @@ def broken_revparse(command: str, tool_name: str | None = None) -> bool:
     # its own advisory nudge (git-revparse-nudge) already fires on.
     for _at, segment in iter_segments(strip_heredoc_bodies(command), tool_name):
         segment = REDIR.sub(" ", segment)
-        rest = _revparse_operands(segment.split())
+        rest = _revparse_operands(argv_for_match(segment, tool_name))
         if rest is None:
             continue
         if not any(t == "--short" or t.startswith("--short=") for t in rest):

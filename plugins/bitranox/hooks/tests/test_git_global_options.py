@@ -39,6 +39,12 @@ GLOBAL_OPTS = [
     "--work-tree /repo ",
     "--work-tree /repo -C /repo ",
     "-c core.hooksPath=gh -C /repo ",
+    # A quoted value CONTAINING A SPACE. Measured in the real corpus as
+    # `git -c user.name="Robert Nowotny" -c user.email="..." commit -q ...`, which a
+    # whitespace split turns into `user.name="Robert` + `Nowotny"`, so the option walk
+    # lands on the wrong token and the verb is never reached.
+    '-c user.name="Robert Nowotny" ',
+    "-c user.name='Robert Nowotny' ",
 ]
 
 
