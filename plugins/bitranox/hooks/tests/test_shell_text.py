@@ -376,3 +376,39 @@ def test_a_windows_path_qualified_sink_needs_the_powershell_reading():
     cmd = "C:\\bin\\echo.exe 'pkill -f x'"
     assert "pkill -f x" not in S.strip_data_sink_statements(cmd, "PowerShell")
     assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+# ---- the program name is kept, only the operands go -----------------------------------------
+#
+# Blanking the whole statement hid the VERB as well as its text. No hook using this today cares,
+# but the helper is shared and the obvious next adopter is a commit-detecting guard - which would
+# adopt it and go blind to the very verb it gates, with nothing in the diff to show it.
+
+def test_the_commit_verb_survives_so_a_commit_detector_still_sees_it():
+    out = S.strip_data_sink_statements("git commit -m 'pkill -f x'")
+    assert "pkill -f x" not in out
+    assert "git commit" in out
+
+
+def test_echo_itself_survives_the_blank():
+    out = S.strip_data_sink_statements("echo 'pkill -f x'")
+    assert out.startswith("echo")
+    assert "pkill -f x" not in out
+
+
+def test_the_pr_create_verb_survives_but_its_body_does_not():
+    out = S.strip_data_sink_statements("gh pr create --body 'pkill -f x'")
+    assert "gh pr create" in out
+    assert "pkill -f x" not in out
+
+
+def test_a_flag_between_git_and_commit_does_not_hide_the_verb():
+    out = S.strip_data_sink_statements("git -q commit -m 'pkill -f x'")
+    assert "commit" in out
+    assert "pkill -f x" not in out
+
+
+def test_a_path_qualified_sink_keeps_its_whole_program_token():
+    out = S.strip_data_sink_statements("/bin/echo 'pkill -f x'")
+    assert out.startswith("/bin/echo")
+    assert "pkill -f x" not in out

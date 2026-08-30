@@ -587,26 +587,43 @@ def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
     return _RUNS_SUBSTITUTION.match(text, at + len(segment)) is not None
 
 
-def _is_data_sink(segment: str, tool_name=None) -> bool:
-    """True when this statement's program provably will not execute its own arguments."""
+def _sink_keep_words(segment: str, tool_name=None) -> int:
+    """How many leading words to KEEP when this statement is a data sink; 0 when it is not.
+
+    The VERB is kept and only its operands are blanked, which matters for a reason none of the
+    current callers show: a hook that detects `git commit` could adopt this helper and go blind to
+    the verb it gates, silently, with nothing in the diff to point at. Keeping the program name
+    also removes strictly less text, so it cannot turn a false positive into a miss.
+
+    For a mapped program the count runs to the end of the matched SUBCOMMAND, skipping flags on the
+    way - `git -q commit -m x` keeps three words, not one.
+    """
     if _RUNS_SUBSTITUTION.search(segment):
-        return False
+        return 0
     head = segment.strip().lstrip("(").strip()
     if not head:
-        return False
+        return 0
     try:
         tokens = split_for_tool(head, tool_name or "Bash")
     except ValueError:
         # Unbalanced quotes. The text cannot be read as argv, so nothing here is provably inert.
-        return False
+        return 0
     if not tokens:
-        return False
+        return 0
     program = basename_for_tool(tokens[0], tool_name or "Bash")
     if program in _DATA_SINK_PROGRAMS:
-        return True
-    operands = tuple(t for t in tokens[1:] if not t.startswith("-"))
-    return any(operands[:len(prefix)] == prefix
-               for prefix in _DATA_SINK_SUBCOMMANDS.get(program, ()))
+        return 1
+    for prefix in _DATA_SINK_SUBCOMMANDS.get(program, ()):
+        matched, wanted = 0, len(prefix)
+        for position, token in enumerate(tokens[1:], start=2):
+            if token.startswith("-"):
+                continue                              # a flag, or a flag's own value
+            if token != prefix[matched]:
+                break
+            matched += 1
+            if matched == wanted:
+                return position
+    return 0
 
 
 def strip_data_sink_statements(command: str, tool_name=None) -> str:
@@ -622,6 +639,9 @@ def strip_data_sink_statements(command: str, tool_name=None) -> str:
     looks: this repo has broken three guards by guessing at exactly this boundary, and each time
     the damage was a deleted finding rather than an extra warning.
 
+    The PROGRAM NAME survives and only its operands are blanked, so a caller that asks a different
+    question of the same text - did a `git commit` happen here? - still gets the right answer.
+
     Blanking is length-preserving, so a caller that already holds a match offset into the raw
     command can index the result at the same position - the same contract `mask_data_regions` has.
 
@@ -635,9 +655,13 @@ def strip_data_sink_statements(command: str, tool_name=None) -> str:
     for at, segment in iter_segments(text, tool_name):
         if _cut_by_substitution(text, at, segment):
             continue
-        if not _is_data_sink(segment, tool_name):
+        keep = _sink_keep_words(segment, tool_name)
+        if not keep:
             continue
-        for index in range(at, min(at + len(segment), len(out))):
+        words = list(re.finditer(r"\S+", segment))
+        if len(words) < keep:
+            continue
+        for index in range(at + words[keep - 1].end(), min(at + len(segment), len(out))):
             if out[index] != "\n":
                 out[index] = " "
     return "".join(out)

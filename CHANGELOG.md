@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.286.1]
+
+### Fixed
+
+- **`strip_data_sink_statements` blanked the VERB along with its operands.** No hook shipped in
+  5.286.0 was affected, because none of the three asks whether a `git commit` happened - but the
+  helper is shared, and the obvious next adopter is a commit-detecting guard, which would have
+  adopted it and gone blind to the verb it gates. Silently: a gate that goes quiet reads exactly
+  like a gate that found nothing, and nothing in the diff would have pointed at it. The program
+  name and any matched subcommand are now kept and only the operands are blanked, so
+  `git commit -m 'text'` still answers True to `is_gated_command` while the text is gone. Keeping
+  the verb also removes strictly less, so it cannot turn a preserved false positive into a miss.
+
 ## [5.286.0]
 
 ### Fixed
