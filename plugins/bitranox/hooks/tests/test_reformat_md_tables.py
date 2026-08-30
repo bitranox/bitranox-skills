@@ -96,7 +96,7 @@ def test_rewrites_the_tree_ignores_a_git_verb_appearing_as_data():
     strict=True,
 )
 def test_rewrites_the_tree_sees_a_git_write_in_a_script_this_command_then_runs():
-    """Records the residual measured on the corpus: ~10 percent of this hook's real matches.
+    """Records the residual measured on the corpus: 8 of the 360 firings the walk removes.
 
     Kept as a failing expectation rather than deleted, because the cost of the miss is concrete -
     the hook restyles files git itself just wrote, which is how a re-cut merge once aborted with

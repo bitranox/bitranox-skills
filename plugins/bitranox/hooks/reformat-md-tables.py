@@ -62,8 +62,8 @@ def _rewrites_the_tree(command: str) -> bool:
 
     KNOWN GAP, measured rather than assumed. Heredoc bodies ARE stripped, so a script
     written and executed by one command - `cat > s.sh <<EOF ... git merge ... EOF;
-    bash s.sh` - rewrites the tree without this seeing it. That was ~10 percent of
-    the pre-2026-08-30 matches on the real corpus. Not stripping is NOT the fix: a
+    bash s.sh` - rewrites the tree without this seeing it. That is 8 of the 360
+    firings this walk removes on the real corpus. Not stripping is NOT the fix: a
     quoted heredoc delimiter makes its body literal, so markdown backticks around
     `git merge --abort` would then parse as a command substitution and reinstate
     exactly the defect this walk exists to close. Detecting write-then-run needs

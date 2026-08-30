@@ -17,6 +17,29 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.288.1]
+
+### Fixed
+
+- **A statement does not have to BEGIN with `git`.** 5.288.0's statement walk read only a
+  segment's first token, so it missed a git call behind a launcher that runs it - `nice -n 19
+  ionice -c3 git -C "$S" commit -F msg`, `timeout 1500 git rebase --continue` - and one sitting
+  after a shell keyword, `for b in ...; do git merge --no-ff ...; done`. The bag-of-tokens test it
+  replaced caught these accidentally, so 5.288.0 traded a false-positive class for a miss in the
+  predicate `repo-gate` blocks on and in the hook that decides whether to restyle files git just
+  wrote. `git_verb_operands` now steps past `do`/`then`/`else` and a known launcher prefix, then
+  looks for a token whose basename is exactly `git` - narrow enough that `nice -n 19 echo "git
+  commit"` and `timeout 30 ssh host 'git commit'` still do not match, because each keeps its whole
+  quoted command as one token.
+
+### Changed
+
+- **Corrected the residual figures published in 5.288.0.** They came from reading 40 of 557
+  firings, and that sample was clustered in one project's transcripts. Classifying every firing put
+  the heredoc-then-run residual at 3 of 187 and 8 of 360 - about 2 percent, not the tenth first
+  reported - and the full pass is also what surfaced the launcher misses above, which the 40 had
+  not contained. The measurement, not the fix, was what the small sample got wrong.
+
 ## [5.288.0]
 
 ### Added
@@ -40,7 +63,8 @@ installed copies and needs no bump.
   comment on a read-only `git log`, or a heredoc body each spent 2-4 git subprocesses and warned
   about a commit that was not happening. It now asks `shell_text` the same question the repo gate
   asks. Measured on 65,778 real commands: 2,315 firings to 2,113, and adjudication of a 40-firing
-  sample put ~90 percent of the removals in prose, echoed banners and heredoc bodies.
+  adjudication of ALL 187 removals put 184 of them in prose, echoed banners, heredoc bodies
+  and comments.
 
 - **`reformat-md-tables` no longer reads a git verb it merely NAMES as a reason to stand down.**
   `_rewrites_the_tree` scanned the raw command, so writing a doc whose body explains how to
@@ -56,8 +80,8 @@ installed copies and needs no bump.
 ### Known gap
 
 - **A script written and executed by one command still rewrites the tree unseen**
-  (`cat > s.sh <<EOF ... git merge ... EOF; bash s.sh`), about a tenth of `_rewrites_the_tree`'s
-  real matches. Not stripping heredoc bodies is NOT the fix - a quoted delimiter makes the body
+  (`cat > s.sh <<EOF ... git merge ... EOF; bash s.sh`), 8 of `_rewrites_the_tree`'s 360
+  removals. Not stripping heredoc bodies is NOT the fix - a quoted delimiter makes the body
   literal, so markdown backticks around `git merge --abort` would parse as a command substitution
   and reinstate the defect above. It needs write-vs-execute ordering, the same gap already open
   against `gated-prep-nudge`. Recorded as a strict `xfail` so closing it fails the suite instead

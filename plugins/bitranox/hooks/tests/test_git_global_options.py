@@ -48,6 +48,44 @@ GLOBAL_OPTS = [
 ]
 
 
+# A statement does not have to BEGIN with `git`. These all run one, and every one of them was
+# measured in the real corpus - `nice -n 19 ionice -c3 git -C "$S" commit -F msg`, `timeout 1500
+# git rebase --continue`, and a `git merge` sitting after `do` in a for-loop body.
+COMMAND_PREFIXES = [
+    "nice -n 19 ",
+    "ionice -c3 ",
+    "nice -n 19 ionice -c3 ",
+    "timeout 1500 ",
+    "sudo ",
+    "env ",
+    "do ",          # for/while loop body
+    "then ",        # if branch
+]
+
+
+@pytest.mark.parametrize("prefix", COMMAND_PREFIXES, ids=[p.strip() for p in COMMAND_PREFIXES])
+def test_the_commit_gate_sees_a_commit_behind_a_launcher_or_keyword(prefix):
+    """repo-gate blocks on this predicate, and a launcher does not make a commit stop being one."""
+    assert shell_text.is_gated_command(prefix + "git commit -m x") is True
+
+
+@pytest.mark.parametrize("prefix", COMMAND_PREFIXES, ids=[p.strip() for p in COMMAND_PREFIXES])
+def test_a_tree_writing_verb_behind_a_launcher_or_keyword_is_still_a_command(prefix):
+    """reformat-md-tables stands down on these; missing one restyles files git just wrote."""
+    assert shell_text.is_git_verb(prefix + "git merge --no-ff origin/topic", frozenset({"merge"}))
+
+
+def test_a_launcher_does_not_turn_ITS_ARGUMENT_into_a_git_command():
+    """The control for the two above: walking past a launcher must not start matching data.
+
+    Without this, a forward scan for `git` would be free to match the word anywhere, which is the
+    bag-of-tokens failure the statement walk exists to replace.
+    """
+    assert shell_text.is_gated_command('nice -n 19 echo "git commit -m x"') is False
+    assert shell_text.is_gated_command("sudo apt-get install git") is False
+    assert shell_text.is_gated_command("timeout 30 ssh host 'git commit -m x'") is False
+
+
 @pytest.mark.parametrize("opts", GLOBAL_OPTS, ids=[o.strip() or "<none>" for o in GLOBAL_OPTS])
 def test_the_commit_gate_sees_a_commit_whatever_global_options_precede_it(opts):
     """repo-gate blocks on this predicate. A commit it cannot see is a commit it cannot gate."""

@@ -149,6 +149,44 @@ GIT_VALUE_OPTS = frozenset(
 )
 
 
+# A statement need not BEGIN with the program that decides it. These RUN a command handed to them
+# as a later operand, so the git call sits behind them - measured in the real corpus as
+# `nice -n 19 ionice -c3 git -C "$S" commit -F msg` and `timeout 1500 git rebase --continue`,
+# both of which a first-token-only reading missed entirely.
+_COMMAND_PREFIXES = frozenset({
+    "nice", "ionice", "timeout", "sudo", "doas", "env", "stdbuf",
+    "nohup", "setsid", "chrt", "taskset", "time",
+})
+
+# A segment cut from a loop or branch body starts at the keyword, not at the command.
+_STATEMENT_KEYWORDS = frozenset({"do", "then", "else", "elif", "{", "!", "("})
+
+# How far past a launcher to look. Its own flags and their values sit here, and so does an operand
+# that carries no dash at all (`timeout 1500`, `nice -n 19`), which is why this cannot simply skip
+# tokens beginning with `-`.
+_PREFIX_SCAN_LIMIT = 12
+
+
+def _past_command_prefix(tokens, idx, tool_name):
+    """Index of `git` when a known launcher runs it, else None.
+
+    Scans forward for a token whose basename is EXACTLY `git`, which is narrow enough to stay a
+    statement walk rather than the bag-of-tokens test this module replaced. The two shapes that
+    would abuse a looser scan cannot reach it: `nice -n 19 echo "git commit"` and `timeout 30 ssh
+    host 'git commit'` keep the whole quoted command as ONE token, whose basename is the entire
+    string and never `git`.
+
+    Starting only after a KNOWN launcher is what bounds it. `ssh host '...'` is not one, so the
+    scan never begins there - the same reason `_deciding_program_index` refuses to scan the token
+    list for a script name.
+    """
+    limit = min(len(tokens), idx + 1 + _PREFIX_SCAN_LIMIT)
+    for at in range(idx + 1, limit):
+        if basename_for_tool(tokens[at], tool_name) == "git":
+            return at
+    return None
+
+
 def git_verb_operands(tokens, verbs, tool_name="Bash"):
     r"""Tokens after git's SUBCOMMAND when this really is `git <global opts> <verb>`; else None.
 
@@ -170,9 +208,14 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
     `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count.
     """
     idx = 0
-    while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
-        idx += 1                                  # leading VAR=value environment assignments
-    if idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) != "git":
+    while idx < len(tokens) and (
+        tokens[idx] in _STATEMENT_KEYWORDS
+        or ("=" in tokens[idx] and not tokens[idx].startswith("-"))
+    ):
+        idx += 1                                  # loop/branch keywords, then VAR=value env prefix
+    if idx < len(tokens) and basename_for_tool(tokens[idx], tool_name) in _COMMAND_PREFIXES:
+        idx = _past_command_prefix(tokens, idx, tool_name)
+    if idx is None or idx >= len(tokens) or basename_for_tool(tokens[idx], tool_name) != "git":
         return None
     idx += 1
     while idx < len(tokens) and tokens[idx].startswith("-"):
