@@ -17,6 +17,21 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.277.0]
+
+### Changed
+
+- **`quoted_snippet` takes the RECORD, not the text plus a flag.** The snippet and the fact that it
+  was substituted are always a pair, and passing them as two arguments made the second optional in
+  practice: a consumer that handed over only the text rendered a producer-escaped record unmarked,
+  and nothing could detect it - the stored text is already inert, so the render's own check finds
+  nothing to report.
+
+  That is the same "one consumer forgets" failure this area produced twice already (a third
+  consumer nobody knew about, then a producer-side-only fix), reintroduced by 5.276.0's own
+  signature. It is now unrepresentable rather than merely discouraged: a bare string is refused.
+  All three consumers pass the record they already hold.
+
 ## [5.276.0]
 
 ### Added

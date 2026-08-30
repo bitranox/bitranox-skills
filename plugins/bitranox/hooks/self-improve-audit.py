@@ -173,8 +173,7 @@ def render_report(candidates, skills=None):
     ]
     for c in reversed(recent):
         lines.append("- [%s] matched %s :: %s"
-                     % (c["role"], "/".join(c["matched"]),
-                        quoted_snippet(c["snippet"], c.get("escaped", False))))
+                     % (c["role"], "/".join(c["matched"]), quoted_snippet(c)))
     if skills:
         lines += [
             "",

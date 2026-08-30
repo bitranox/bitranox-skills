@@ -22,6 +22,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
@@ -108,7 +109,7 @@ def snippet_was_escaped(text):
     return collapsed.translate(_SNIPPET_INERT) != collapsed
 
 
-def quoted_snippet(text, escaped=False):
+def quoted_snippet(record):
     """A STORED snippet as it must appear in any frame a model reads: re-neutralised, then fenced.
 
     Deliberate defense in depth, against the usual rule that internal calls trust the type
@@ -121,14 +122,22 @@ def quoted_snippet(text, escaped=False):
     No cap: the stored snippet was already capped by its producer, and re-capping here would eat a
     legitimately-sized snippet a second time.
 
+    Takes the RECORD, never the text plus a flag. The two are always a pair, and passing them
+    separately made the flag optional in practice: a consumer that handed over only the text
+    rendered a producer-escaped record unmarked, and nothing could detect it, because the stored
+    text is already inert so the render's own check finds nothing to report. Forgetting is made
+    impossible here rather than merely discouraged - a bare string is refused.
+
     `escaped` is the producer's own record of having substituted - a producer-time fact the render
-    cannot recover, because the substitution is lossy and idempotent, so re-running it over stored
-    text finds nothing changed. The render marks on that flag OR on its own substitution: the first
-    covers a record written inert, the second a record stored raw. Either alone leaves half the
-    records silently misrepresented. The marker sits OUTSIDE the quotes, so nothing within them can
-    imitate it.
+    cannot recover, because the substitution is lossy and idempotent. The render marks on that flag
+    OR on its own substitution: the first covers a record written inert, the second a record stored
+    raw by a producer that skipped `inert_snippet`. Either alone leaves half the records silently
+    misrepresented. The marker sits OUTSIDE the quotes, so nothing within them can imitate it.
     """
-    mark = _SNIPPET_ESCAPED_MARK if (escaped or snippet_was_escaped(text)) else ""
+    if not isinstance(record, Mapping):
+        raise TypeError("quoted_snippet takes the record, not the snippet text: %r" % type(record).__name__)
+    text = record.get("snippet") or ""
+    mark = _SNIPPET_ESCAPED_MARK if (record.get("escaped") or snippet_was_escaped(text)) else ""
     return '"%s"%s' % (inert_snippet(text), mark)
 
 
