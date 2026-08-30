@@ -979,7 +979,7 @@ def gate_tool_repo_mirror(root):
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001
         return 0
-    if not is_gated_command((event.get("tool_input") or {}).get("command") or ""):
+    if not is_gated_command((event.get("tool_input") or {}).get("command") or "", event.get("tool_name") or "Bash"):
         return 0
 
     public = _public_tree(root / "x")
@@ -1093,7 +1093,7 @@ def main():
         except Exception:  # noqa: BLE001
             return 0
         command = (event.get("tool_input") or {}).get("command") or ""
-        if not is_gated_command(command):
+        if not is_gated_command(command, event.get("tool_name") or "Bash"):
             return 0
 
     # A real git pre-push hook receives REF LINES on stdin, never a Claude Code event, so it must

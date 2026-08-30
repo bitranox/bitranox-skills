@@ -188,3 +188,30 @@ def test_a_closing_paren_does_not_start_a_statement_on_its_own():
     not manufacture a segment - and what follows a real one is still judged as data when quoted."""
     assert shell_text.is_gated_command("(cd /x && ls)") is False
     assert shell_text.is_gated_command("echo '$(ls) git commit -m x'") is False
+
+
+# --- The escape character is the TOOL's, not the host's. ---------------------------------
+# `is_gated_command` runs on PowerShell commands too, where `\` is a PATH SEPARATOR and the
+# escape is a BACKTICK. Reading `\` as an escape there eats the separator behind a Windows
+# path, so the gate stops seeing a real commit - the silent-miss direction, in a blocking gate.
+
+def test_a_windows_path_separator_is_not_an_escape():
+    assert shell_text.is_gated_command(r"cd C:\; git commit -m x", tool_name="PowerShell") is True
+    assert shell_text.is_gated_command(
+        r"Set-Location C:\src\; git push origin master", tool_name="PowerShell"
+    ) is True
+
+
+def test_a_posix_escape_is_still_an_escape_under_bash():
+    """The direction where it must NOT apply: threading the tool must not cost the Bash case."""
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x") is False
+
+
+def test_a_backtick_escapes_under_powershell_and_substitutes_under_bash():
+    """The backtick is the mirror image: PowerShell's escape character, and Bash's command
+    substitution. Reading it as a substitution under PowerShell invents a statement; reading it
+    as an escape under Bash loses one."""
+    assert shell_text.is_gated_command("A=`git commit -m x`", tool_name="Bash") is True
+    assert shell_text.is_gated_command(r"echo a`; git commit -m x", tool_name="PowerShell") is False
+    assert shell_text.is_gated_command(r"cd C:\a; git commit -m x", tool_name="PowerShell") is True

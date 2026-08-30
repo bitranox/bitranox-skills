@@ -44,7 +44,7 @@ SEP = re.compile(r"&&|\|\||[;\n|]")
 # the spellings live in the walk below rather than in a pattern of their own.
 
 
-def _iter_separators(text):
+def _iter_separators(text, tool_name="Bash"):
     """(start, end) of every separator in `text` that genuinely begins a new statement.
 
     Quoting decides this, and it decides it DIFFERENTLY for the two kinds of separator, which
@@ -58,13 +58,21 @@ def _iter_separators(text):
     outside it must be restored at the matching `)`, or the closing `"` of `echo "$(date)"` reads
     as an OPENING one and every separator on the rest of the line looks quoted - turning a false
     block into a silent miss, which is the worse direction.
+
+    `tool_name` decides which character escapes, and the two shells are mirror images of each
+    other, so guessing is wrong in both directions at once. Under Bash `\\` escapes and a backtick
+    opens a substitution; under PowerShell a BACKTICK escapes and `\\` is a PATH SEPARATOR. Reading
+    `\\` as an escape under PowerShell eats the separator behind a Windows path, so
+    `cd C:\\; git commit` stops being seen at all - the same tool-versus-host confusion that
+    `split_for_tool` exists to prevent, one function further down.
     """
+    escape, substitutes = ("`", False) if tool_name == "PowerShell" else ("\\", True)
     depth: list[tuple[str, bool, bool]] = []   # (closer, saved_single, saved_double)
     in_single = in_double = False
     i, n = 0, len(text)
     while i < n:
         ch = text[i]
-        if ch == "\\" and not in_single:
+        if ch == escape and not in_single:
             i += 2                             # an escaped character is data, whatever it is
             continue
         if in_single:
@@ -91,13 +99,13 @@ def _iter_separators(text):
         two = text[i:i + 2]
         # A substitution runs a command even inside double quotes. Process substitution does
         # NOT happen there, so only `$(` and a backtick survive the in_double test.
-        if two == "$(" or (not in_double and two in ("<(", ">(")):
+        if two == "$(" or (substitutes and not in_double and two in ("<(", ">(")):
             yield i, i + 2
             depth.append((")", in_single, in_double))
             in_single = in_double = False
             i += 2
             continue
-        if ch == "`":
+        if ch == "`" and substitutes:
             yield i, i + 1
             depth.append(("`", in_single, in_double))
             in_single = in_double = False
@@ -173,7 +181,7 @@ def is_git_verb(segment, verbs, tool_name="Bash"):
     return git_verb_operands(segment.split(), verbs, tool_name) is not None
 
 
-def iter_segments(text):
+def iter_segments(text, tool_name="Bash"):
     """(offset, segment) for each statement in `text`, offsets into `text` itself.
 
     `SEP.split` throws the positions away, which is fine for a yes/no question and not fine for a
@@ -181,7 +189,7 @@ def iter_segments(text):
     caller keeps its own second splitter, and the two drift on exactly the shapes that matter.
     """
     pos = 0
-    for start, end in _iter_separators(text):
+    for start, end in _iter_separators(text, tool_name):
         yield pos, text[pos:start]
         pos = end
     yield pos, text[pos:]
@@ -294,7 +302,7 @@ def is_shell_tool(tool_name) -> bool:
     return tool_name in SHELL_TOOLS
 
 
-def is_gated_command(command):
+def is_gated_command(command, tool_name="Bash"):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
     Heredoc bodies are dropped first, then each remaining statement is matched anchored at its
@@ -314,7 +322,7 @@ def is_gated_command(command):
     when the decision-review nudge fires. Two copies of this regex set would drift, and the drift
     would be silent in both directions: a shape one recognises and the other does not.
     """
-    for _at, seg in iter_segments(strip_heredoc_bodies(command or "")):
+    for _at, seg in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
         seg = seg.strip().lstrip("(").strip()
         if is_git_verb(seg, _GATED_GIT_VERBS) or PR_RE.match(seg):
             return True

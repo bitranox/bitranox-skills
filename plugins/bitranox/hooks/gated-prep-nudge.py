@@ -92,7 +92,7 @@ _GATED_VERBS = frozenset({"commit", "push", "tag"})
 _GH_PR_CREATE = re.compile(r"^\s*(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 
 
-def _gated_start(text):
+def _gated_start(text, tool_name="Bash"):
     """Offset of the first gated verb in `text`, or None.
 
     The verb is identified by TOKEN WALK, not by a regex requiring it to sit next to `git`: the
@@ -100,7 +100,7 @@ def _gated_start(text):
     gate it exists to explain really does block. Position is returned rather than a bare yes,
     because a write AFTER the verb is not prep for it.
     """
-    for start, seg in iter_segments(text):
+    for start, seg in iter_segments(text, tool_name):
         body = seg.lstrip("( \t").lstrip()
         if is_git_verb(body, _GATED_VERBS) or _GH_PR_CREATE.match(body):
             return start + (len(seg) - len(body))
@@ -201,7 +201,7 @@ def written_files(command: str):
     return out
 
 
-def notice(command):
+def notice(command, tool_name="Bash"):
     """The warning text when this command co-locates prep with a gated verb, else None."""
     if not command or not isinstance(command, str):
         return None
@@ -209,7 +209,7 @@ def notice(command):
     if written or writes_via_interpreter(command):
         # Strip bodies BEFORE looking for the gated verb: a heredoc that merely documents
         # `git commit` is prose, and nudging on it is how a guard blocks its own documentation.
-        if _gated_start(strip_heredoc_bodies(command)) is not None:
+        if _gated_start(strip_heredoc_bodies(command), tool_name) is not None:
             what = ", ".join(written) if written else "a file (written by an interpreter, not a redirect)"
             return (
                 "This command WRITES %s and then runs a gated verb (git commit/push/tag, gh pr "
@@ -245,7 +245,7 @@ def main(raw=None) -> int:
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     try:
-        text = notice(command)
+        text = notice(command, payload.get("tool_name") or "Bash")
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return 0
     if not text:

@@ -17,6 +17,20 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.279.1]
+
+### Fixed
+
+- **The segment walk read `\` as an escape on PowerShell, where it is a PATH SEPARATOR.**
+  Regression from 5.279.0: `cd C:\; git commit -m x` and `Set-Location C:\src\; git push` were
+  gated before that release and silently missed after it, because the trailing backslash of a
+  Windows path swallowed the `;` that ends the previous statement. The escape character is now
+  keyed on the TOOL, and the two shells are mirror images: Bash escapes with `\` and opens a
+  command substitution on a backtick, PowerShell escapes with a BACKTICK and treats `\` as an
+  ordinary character. Process substitution (`<(`, `>(`) is Bash-only and no longer splits under
+  PowerShell either. `iter_segments`, `is_gated_command`, `broken_revparse` and both nudges'
+  `notice` take `tool_name` (defaulting to `Bash`), and every hook passes the one from its event.
+
 ## [5.279.0]
 
 ### Fixed

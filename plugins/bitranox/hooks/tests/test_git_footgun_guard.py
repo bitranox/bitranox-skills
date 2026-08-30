@@ -144,3 +144,15 @@ def test_backtick_substitution_is_a_real_command():
 
 def test_command_substitution_single_rev_still_ok():
     assert G.broken_revparse("A=$(git rev-parse --short HEAD)") is False
+
+
+def test_a_windows_path_separator_does_not_hide_a_broken_revparse():
+    """This guard BLOCKS, so the tool-keyed escape matters here as much as in the gate: under
+    PowerShell `\\` is a path separator, and reading it as an escape swallows the `;` that ends
+    the previous statement."""
+    cmd = r"cd C:\; git rev-parse --short HEAD HEAD~1"
+    assert G.broken_revparse(cmd, tool_name="PowerShell") is True
+
+
+def test_a_posix_escape_is_still_honoured_by_the_guard():
+    assert G.broken_revparse(r"echo a\; git rev-parse --short A B") is False

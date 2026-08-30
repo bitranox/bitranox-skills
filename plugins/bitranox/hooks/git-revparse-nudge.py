@@ -40,11 +40,11 @@ _NOTICE = (
 )
 
 
-def notice(command):
+def notice(command, tool_name="Bash"):
     """The nudge text when a ref-resolving rev-parse lacks --verify, else None."""
     if not command or not isinstance(command, str):
         return None
-    for _at, segment in iter_segments(strip_heredoc_bodies(command)):
+    for _at, segment in iter_segments(strip_heredoc_bodies(command), tool_name):
         # The VERB is found by token walk, not by a regex demanding it sit next to `git`: any
         # global option between them (`git -C <path> rev-parse master`) silenced this hook, and
         # that is the very shape the notice below tells the reader to use.
@@ -67,7 +67,7 @@ def main() -> int:
         return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"))
+    message = notice((event.get("tool_input") or {}).get("command"), event.get("tool_name") or "Bash")
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

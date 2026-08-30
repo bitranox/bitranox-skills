@@ -48,12 +48,12 @@ def _revparse_operands(toks: list[str]) -> list[str] | None:
     return git_verb_operands(toks, _REV_PARSE)
 
 
-def broken_revparse(command: str) -> bool:
+def broken_revparse(command: str, tool_name: str = "Bash") -> bool:
     # iter_segments, not SEP.split: a statement can begin inside a command substitution,
     # and `A=$(git rev-parse ...)` runs a real git command. SEP does not break at `$(`, so
     # the verb walk saw `A=$(git` and found nothing - this guard stayed quiet on a shape
     # its own advisory nudge (git-revparse-nudge) already fires on.
-    for _at, segment in iter_segments(strip_heredoc_bodies(command)):
+    for _at, segment in iter_segments(strip_heredoc_bodies(command), tool_name):
         segment = REDIR.sub(" ", segment)
         rest = _revparse_operands(segment.split())
         if rest is None:
@@ -74,7 +74,7 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not broken_revparse(command):
+    if not broken_revparse(command, event.get("tool_name") or "Bash"):
         return 0
     sys.stderr.write(
         "git rev-parse --short takes a SINGLE revision; with 2+ revs it fails "
