@@ -266,6 +266,16 @@ def test_bulk_tags_prefers_the_newest_by_time_not_the_highest_version(repo, caps
 
 
 
+def _names(resolved, posix_path):
+    """Does `resolved` name `posix_path`? `_repo_dir` returns an ABSOLUTE path, so on Windows
+    `/real/repo` comes back as `D:\\real\\repo`. A bare `==` fails there - and a bare `!=`
+    passes VACUOUSLY there even with the defect present, which is the worse half of the same
+    mistake. Compare on the normalised tail instead."""
+    if resolved is None:
+        return False
+    return resolved.replace("\\", "/").endswith(posix_path)
+
+
 def test_a_dash_c_inside_a_heredoc_body_is_not_the_repo():
     """A heredoc body is stdin DATA. Reading `git -C <path>` out of one makes the nudge watch CI
     in a repository the command never touched - it would report on the wrong repo, confidently.
@@ -273,9 +283,9 @@ def test_a_dash_c_inside_a_heredoc_body_is_not_the_repo():
     it looking like a statement. The canonical idiom pairs it with `strip_heredoc_bodies`, which
     `git-wrong-repo-nudge` and `git-path-not-here-nudge` both use and this hook does not."""
     cmd = "cat > r.md <<EOF\ngit -C /fake/repo push\nEOF\ngit push origin master"
-    assert hook._repo_dir(cmd, "/cwd") != "/fake/repo"
+    assert not _names(hook._repo_dir(cmd, "/cwd"), "/fake/repo")
 
 
 def test_a_real_dash_c_is_still_the_repo():
     """The direction where it must NOT apply."""
-    assert hook._repo_dir("git -C /real/repo push origin master", "/cwd") == "/real/repo"
+    assert _names(hook._repo_dir("git -C /real/repo push origin master", "/cwd"), "/real/repo")
