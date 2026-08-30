@@ -40,7 +40,7 @@ _NOTICE = (
 )
 
 
-def notice(command, tool_name="Bash"):
+def notice(command, tool_name=None):
     """The nudge text when a ref-resolving rev-parse lacks --verify, else None."""
     if not command or not isinstance(command, str):
         return None

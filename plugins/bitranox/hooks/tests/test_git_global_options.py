@@ -170,7 +170,7 @@ def test_an_apostrophe_inside_double_quotes_opens_nothing():
 
 
 def test_an_escaped_separator_is_not_a_separator():
-    assert shell_text.is_gated_command(r"echo a\; git commit -m x") is False
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False
 
 
 def test_a_substitution_in_an_env_prefix_does_not_hide_the_command():
@@ -205,7 +205,6 @@ def test_a_windows_path_separator_is_not_an_escape():
 def test_a_posix_escape_is_still_an_escape_under_bash():
     """The direction where it must NOT apply: threading the tool must not cost the Bash case."""
     assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False
-    assert shell_text.is_gated_command(r"echo a\; git commit -m x") is False
 
 
 def test_a_backtick_escapes_under_powershell_and_substitutes_under_bash():
@@ -233,3 +232,12 @@ def test_the_two_known_tools_are_unaffected_by_the_unknown_rule():
     assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False
     assert shell_text.is_gated_command(r"echo a`; git commit -m x", tool_name="PowerShell") is False
     assert shell_text.is_gated_command("A=`git commit -m x`", tool_name="Bash") is True
+
+
+def test_an_unspecified_tool_is_an_unknown_tool():
+    """There is ONE rule for every way of not naming a tool. A bare call states no tool, so it gets
+    the same stricter reading an unrecognised one does - otherwise omitting the argument silently
+    picks the reading that can hide a command, which is the shape this whole fix exists to close.
+    A caller that means Bash says so."""
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x") is True
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False

@@ -48,7 +48,7 @@ def _revparse_operands(toks: list[str]) -> list[str] | None:
     return git_verb_operands(toks, _REV_PARSE)
 
 
-def broken_revparse(command: str, tool_name: str = "Bash") -> bool:
+def broken_revparse(command: str, tool_name: str | None = None) -> bool:
     # iter_segments, not SEP.split: a statement can begin inside a command substitution,
     # and `A=$(git rev-parse ...)` runs a real git command. SEP does not break at `$(`, so
     # the verb walk saw `A=$(git` and found nothing - this guard stayed quiet on a shape

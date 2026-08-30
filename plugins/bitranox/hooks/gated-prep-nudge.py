@@ -92,7 +92,7 @@ _GATED_VERBS = frozenset({"commit", "push", "tag"})
 _GH_PR_CREATE = re.compile(r"^\s*(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 
 
-def _gated_start(text, tool_name="Bash"):
+def _gated_start(text, tool_name=None):
     """Offset of the first gated verb in `text`, or None.
 
     The verb is identified by TOKEN WALK, not by a regex requiring it to sit next to `git`: the
@@ -201,7 +201,7 @@ def written_files(command: str):
     return out
 
 
-def notice(command, tool_name="Bash"):
+def notice(command, tool_name=None):
     """The warning text when this command co-locates prep with a gated verb, else None."""
     if not command or not isinstance(command, str):
         return None

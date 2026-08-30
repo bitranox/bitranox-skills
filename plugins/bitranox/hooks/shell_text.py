@@ -44,7 +44,7 @@ SEP = re.compile(r"&&|\|\||[;\n|]")
 # the spellings live in the walk below rather than in a pattern of their own.
 
 
-def _iter_separators(text, tool_name="Bash"):
+def _iter_separators(text, tool_name=None):
     """(start, end) of every separator in `text` that genuinely begins a new statement.
 
     Quoting decides this, and it decides it DIFFERENTLY for the two kinds of separator, which
@@ -189,7 +189,7 @@ def is_git_verb(segment, verbs, tool_name="Bash"):
     return git_verb_operands(segment.split(), verbs, tool_name) is not None
 
 
-def iter_segments(text, tool_name="Bash"):
+def iter_segments(text, tool_name=None):
     """(offset, segment) for each statement in `text`, offsets into `text` itself.
 
     `SEP.split` throws the positions away, which is fine for a yes/no question and not fine for a
@@ -310,7 +310,7 @@ def is_shell_tool(tool_name) -> bool:
     return tool_name in SHELL_TOOLS
 
 
-def is_gated_command(command, tool_name="Bash"):
+def is_gated_command(command, tool_name=None):
     """True when a statement in `command` is a git commit, a git push, or a gh pr create.
 
     Heredoc bodies are dropped first, then each remaining statement is matched anchored at its

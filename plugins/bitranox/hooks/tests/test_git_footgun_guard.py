@@ -155,7 +155,7 @@ def test_a_windows_path_separator_does_not_hide_a_broken_revparse():
 
 
 def test_a_posix_escape_is_still_honoured_by_the_guard():
-    assert G.broken_revparse(r"echo a\; git rev-parse --short A B") is False
+    assert G.broken_revparse(r"echo a\; git rev-parse --short A B", tool_name="Bash") is False
 
 
 def test_an_event_without_a_tool_name_takes_the_stricter_reading(monkeypatch):

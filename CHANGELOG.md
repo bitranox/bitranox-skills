@@ -17,6 +17,19 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.280.0]
+
+### Changed
+
+- **One rule for every way of not naming a tool.** `tool_name` now defaults to `None`, which takes
+  the same stricter reading an unrecognised tool does, so omitting the argument can no longer
+  silently pick the reading that hides a command. 5.279.2 fixed that for an absent value on the
+  event; the parameter default was the same fallback three lines away, and left the
+  forgetting-is-silent shape open for the next caller. A caller that means Bash now says so.
+  Affects `iter_segments`, `is_gated_command`, `broken_revparse` and both nudges' `notice`. MINOR
+  rather than PATCH because a bare call changes meaning: `is_gated_command(r"echo a\; git commit")`
+  answered False and now answers True.
+
 ## [5.279.2]
 
 ### Fixed
