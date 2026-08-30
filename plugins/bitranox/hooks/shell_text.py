@@ -376,7 +376,18 @@ def strip_heredoc_bodies(command: str) -> str:
     index = 0
     while index < len(lines):
         out.append(lines[index])
+        # `<<EOF` inside a quoted ARGUMENT opens nothing: `git commit -m "docs: explain <<EOF
+        # heredocs"` was read as an opener, so the strip swallowed the rest of the command and
+        # every guard downstream went SILENT on a real `git push` after it.
+        #
+        # The test is whether the `<<` ITSELF is quoted, not whether the line contains quotes.
+        # Searching the masked line instead is wrong and was measured so: `mask_data_regions`
+        # masks the delimiter's own quotes in the standard `<<'EOF'` form, which is heredoc
+        # SYNTAX rather than a string, and 23 tests went red. The mask is length-preserving, so
+        # the raw match offset indexes it directly.
         opener = HEREDOC_OPEN.search(lines[index])
+        if opener and mask_data_regions(lines[index])[opener.start():opener.start() + 2] != "<<":
+            opener = None
         index += 1
         if not opener:
             continue

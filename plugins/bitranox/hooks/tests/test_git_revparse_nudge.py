@@ -53,3 +53,14 @@ def test_prose_mentioning_the_footgun_does_not_fire():
 def test_junk_is_ignored():
     assert N.notice("") is None
     assert N.notice(None) is None
+
+
+def test_a_redirection_target_is_not_a_revision():
+    """`git rev-parse 2>/dev/null` is the standard am-I-in-a-repo idiom and names no ref at all.
+    The redirection was left in the operand list, so it counted as a revision to resolve."""
+    assert N.notice("git rev-parse 2>/dev/null") is None
+
+
+def test_a_real_bare_rev_parse_is_still_nudged():
+    """The direction where it must NOT apply."""
+    assert N.notice("git rev-parse master") is not None

@@ -17,6 +17,34 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.285.0]
+
+### Fixed
+
+Rank 7, last batch. Every sampled claim of the class is now closed except one, which is
+documented in place as unfixable at this level.
+
+- **`strip_heredoc_bodies` treated a `<<TAG` inside a QUOTED ARGUMENT as an opener**, so
+  `git commit -m "docs: explain <<EOF heredocs"` swallowed the rest of the command and every
+  guard downstream went SILENT on a real `git push` after it. The test is now whether the
+  `<<` ITSELF is quoted. Searching a masked line instead is wrong and was measured so: the
+  mask blanks the delimiter's own quotes in the standard `<<'EOF'` form, which is heredoc
+  SYNTAX rather than a string, and 23 tests went red.
+- **`block-sed-structured-files` split statements on a `;` inside a quoted string**, so
+  `echo "step 1; sed -i s/a/b/ package.json"` was blocked though it edits no file.
+- **`git-revparse-nudge` counted a redirection as a revision**, so the standard
+  `git rev-parse 2>/dev/null` am-I-in-a-repo idiom fired a nudge about resolving a ref.
+- **`toolbox-nudge` scanned inert text and read across `&&`.** A single-quoted commit
+  message describing a trap counted as an instance of it, and `ls -la` after an `&&`
+  supplied a flag attributed to `grep`.
+
+### Known limitation
+
+`sed-line1-range-nudge` still fires on `echo 'never use sed 1,/^---$/d ...'`. A real sed
+range is ITSELF written single-quoted, so blanking single quotes deletes what the nudge looks for
+- measured, it took four tests down. Telling the two apart needs the ENCLOSING command, not the
+quote. Documented in the function rather than guessed at.
+
 ## [5.284.0]
 
 ### Fixed

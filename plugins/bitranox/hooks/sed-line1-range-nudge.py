@@ -41,6 +41,13 @@ def notice(command):
     if not command or not isinstance(command, str):
         return None
     try:
+        # Heredoc bodies only. NOT blank_unexpanded_text: a real sed range is itself written
+        # single-quoted (`sed -i '1,/^---$/d'`), so blanking single quotes deletes exactly what
+        # this nudge looks for - measured, it took four tests down.
+        #
+        # KNOWN AND NOT FIXED: `echo 'never use sed 1,/^---$/d ...'` still fires. At this level a
+        # single-quoted argument to echo is indistinguishable from the sed script that runs;
+        # telling them apart needs the ENCLOSING command, not the quote.
         text = strip_heredoc_bodies(command)
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return None

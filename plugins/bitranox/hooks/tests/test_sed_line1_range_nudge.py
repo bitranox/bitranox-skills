@@ -97,3 +97,8 @@ def test_main_is_silent_for_a_clean_command(capsys):
 def test_main_never_wedges_on_malformed_input():
     for raw in ("", "not json", "{}", '{"tool_name": "Bash"}'):
         assert N.main(raw) == 0
+
+
+def test_a_real_sed_range_is_still_noticed():
+    """The direction where it must NOT apply."""
+    assert N.notice("sed -i '1,/^---$/d' file.md") is not None

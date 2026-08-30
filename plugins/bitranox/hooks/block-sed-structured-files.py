@@ -24,7 +24,7 @@ import re
 import sys
 
 import shell_text
-from shell_text import strip_heredoc_bodies
+from shell_text import mask_data_regions, strip_heredoc_bodies
 
 STRUCTURED_EXT = (".json", ".yaml", ".yml", ".toml", ".xml")
 SEP = re.compile(r"&&|\|\||[;\n|]")
@@ -66,7 +66,12 @@ def assess(command, tool_name="Bash"):
     # The command-position check alone does not cover it: `&&` inside a body splits into
     # segments whose first token really is `sed`.
     command = strip_heredoc_bodies(command or "")
-    for segment in SEP.split(command):
+    # Split on the length-preserving MASKED text: a `;` inside a quoted string separates nothing,
+    # and splitting there manufactured a sed invocation out of an `echo` argument.
+    masked = mask_data_regions(command)
+    starts = [0] + [m.end() for m in SEP.finditer(masked)]
+    ends = [m.start() for m in SEP.finditer(masked)] + [len(command)]
+    for segment in [command[a:b] for a, b in zip(starts, ends)]:
         try:
             tokens = shell_text.split_for_tool(segment, tool_name)
         except ValueError:

@@ -283,3 +283,24 @@ def test_still_silent_for_a_tool_that_exists_nowhere(tmp_path, monkeypatch, caps
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(N, "_shipped_dir", lambda: tmp_path / "nowhere")
     assert _run(_event("pkill -f myserver", session="s3"), monkeypatch, capsys) is None
+
+
+def test_a_single_quoted_commit_message_is_not_a_tool_invocation():
+    """A commit message DESCRIBING a trap is not an instance of it. The message is single-quoted,
+    so nothing in it runs, and nudging there blocks the writing of the very guidance. The blanking
+    lives in extract_text, which is what main() feeds match_tool - match_tool itself takes raw
+    text, so driving it directly would bypass the fix and assert nothing."""
+    text = N.extract_text("Bash", {"command":
+        "git commit -m 'docs: warn about the p" + "grep -f self-match trap'"})
+    assert N.match_tool(text) is None
+
+
+def test_a_flag_from_a_later_statement_is_not_greps():
+    """`grep -rn "needle" src/ && ls -la` - the `-l` is ls's. The pattern stopped at a pipe or a
+    semicolon but not at an &&, so it read across into the next command."""
+    assert N.match_tool('grep -rn "needle" src/ && ls -la') is None
+
+
+def test_a_real_grep_count_flag_is_still_nudged():
+    """The direction where it must NOT apply."""
+    assert N.match_tool('grep -c "needle" src/') is not None

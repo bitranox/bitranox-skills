@@ -122,3 +122,21 @@ def test_sed_exe_is_blocked_under_bash_too():
     """Git Bash on Windows runs sed.exe; this arm carries nearly all the traffic."""
     assert H.assess("sed.exe -i s/a/b/ config.json", "Bash")[0] == "block"
     assert H.assess("sed.exe -i s/a/b/ config.json", "PowerShell")[0] == "block"
+
+
+def test_a_separator_inside_a_quoted_string_does_not_start_a_sed_statement():
+    """`echo "step 1; sed -i s/a/b/ package.json"` prints a string. The `;` is inside double
+    quotes, so it separates nothing, and splitting there manufactured a sed invocation out of
+    an echo argument - blocking a command that edits no file at all."""
+    import io, json, sys as _s
+    _s.stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {
+        "command": 'echo "step 1; sed -i s/a/b/ package.json"'}}))
+    assert H.main() == 0
+
+
+def test_a_real_sed_on_a_structured_file_is_still_blocked():
+    """The direction where it must NOT apply."""
+    import io, json, sys as _s
+    _s.stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {
+        "command": "sed -i s/a/b/ package.json"}}))
+    assert H.main() == 2

@@ -24,6 +24,10 @@ from shell_text import git_verb_operands, is_shell_tool, iter_segments, strip_he
 
 _REV_PARSE_VERB = frozenset({"rev-parse"})
 # Options that either make it safe, or make it a question about the repo rather than a ref.
+# Shell redirections, stripped before operands are counted: `2>/dev/null`, `> out`, `>>out`,
+# `2>&1`, `&>out`, `<in`, with the target attached or space-separated.
+_REDIR = re.compile(r"(?:&|\d+)?>>?(?:&\d+|\s*\S+)|<\s*\S+")
+
 _SAFE_OPTS = re.compile(
     r"--verify\b|--show-toplevel\b|--abbrev-ref\b|--git-dir\b|--git-common-dir\b"
     r"|--is-inside-work-tree\b|--is-bare-repository\b|--show-prefix\b|--show-cdup\b"
@@ -51,7 +55,10 @@ def notice(command, tool_name=None):
         operands = git_verb_operands(segment.split(), _REV_PARSE_VERB)
         if operands is None:
             continue
-        rest = " ".join(operands)
+        # Redirections are not revisions. `git rev-parse 2>/dev/null` is the standard
+        # am-I-in-a-repo idiom and names no ref, but the redirect survived into the operand list
+        # and counted as one, so the nudge fired on a command asking about no ref at all.
+        rest = _REDIR.sub(" ", " ".join(operands))
         if _SAFE_OPTS.search(rest):
             continue
         if not rest.strip():

@@ -258,3 +258,19 @@ def test_basename_for_tool_leaves_a_non_exe_suffix_alone(tool):
     """Only `.exe` goes. A dot in a program name is otherwise part of the name."""
     assert S.basename_for_tool("my.tool", tool) == "my.tool"
     assert S.basename_for_tool("sed.executable", tool) == "sed.executable"
+
+
+def test_a_heredoc_opener_inside_a_quoted_string_is_not_an_opener():
+    """`git commit -m "docs: explain <<EOF heredocs"` opens no heredoc - the `<<EOF` is inside a
+    quoted argument. Reading it as an opener made the strip swallow everything after it, so a real
+    `git push` on the next line vanished and every guard downstream went SILENT. A miss, which is
+    the worse direction, and the shape is ordinary: a commit message about heredocs."""
+    out = S.strip_heredoc_bodies('git commit -m "docs: explain <<EOF heredocs"\ngit push')
+    assert "git push" in out
+
+
+def test_a_real_heredoc_body_is_still_stripped():
+    """The direction where it must NOT apply."""
+    out = S.strip_heredoc_bodies("cat > f <<EOF\nsecret line\nEOF\ngit push")
+    assert "secret line" not in out
+    assert "git push" in out

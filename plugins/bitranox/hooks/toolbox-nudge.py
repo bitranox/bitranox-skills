@@ -22,7 +22,7 @@ from pathlib import Path
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the chore it watches for. Re-exported so callers and
 # tests can keep reaching it as `toolbox_nudge.strip_heredoc_bodies`.
-from shell_text import is_shell_tool, strip_heredoc_bodies  # noqa: F401
+from shell_text import blank_unexpanded_text, is_shell_tool, strip_heredoc_bodies  # noqa: F401
 
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
@@ -48,7 +48,7 @@ _RULES = [
     # "never looked". Each of those produced a confident false ABSENT in one session. The pipe and
     # semicolon exclusions keep the flag search inside this command, so `... | wc -l` is not read as
     # grep's own flag.
-    (re.compile(r"\bgrep\b[^\n|;]*?\s-[A-Za-z]*[clL]"), "claim_check",
+    (re.compile(r"\bgrep\b[^\n|;&]*?\s-[A-Za-z]*[clL]"), "claim_check",
      "deciding whether text is PRESENT from a raw grep count/list, whose negative cannot be trusted"),
 ]
 
@@ -77,7 +77,9 @@ def extract_text(tool_name, tool_input):
         # Only the command LINES are a chore being hand-rolled. A heredoc body is content being
         # written, so scanning it nudges about prose that merely names the tool - which is how
         # documenting a footgun trips the guard that watches for it.
-        return strip_heredoc_bodies(ti.get("command", ""))
+        # blank_unexpanded_text too: a single-quoted commit message DESCRIBING a trap is not
+        # an instance of it, and nudging there blocks the writing of the guidance itself.
+        return blank_unexpanded_text(strip_heredoc_bodies(ti.get("command", "")))
     if tool_name == "Write":
         return ti.get("content", "")
     if tool_name == "Edit":
