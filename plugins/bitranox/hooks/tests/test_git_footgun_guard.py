@@ -156,3 +156,13 @@ def test_a_windows_path_separator_does_not_hide_a_broken_revparse():
 
 def test_a_posix_escape_is_still_honoured_by_the_guard():
     assert G.broken_revparse(r"echo a\; git rev-parse --short A B") is False
+
+
+def test_an_event_without_a_tool_name_takes_the_stricter_reading(monkeypatch):
+    """An event that names no tool is unexpected, so it must not silently get the reading that can
+    HIDE a command. Coercing a missing tool_name to "Bash" put the miss-prone semantics in the
+    fallback: under Bash the `\\` escapes the `;`, the two statements merge, and the broken
+    rev-parse behind it is never seen. Escaping nothing keeps the separator and the guard fires."""
+    payload = {"tool_input": {"command": r"cd C:\; git rev-parse --short A B"}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert G.main() == 2

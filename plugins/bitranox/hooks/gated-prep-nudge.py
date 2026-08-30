@@ -245,7 +245,7 @@ def main(raw=None) -> int:
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     try:
-        text = notice(command, payload.get("tool_name") or "Bash")
+        text = notice(command, payload.get("tool_name"))
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return 0
     if not text:

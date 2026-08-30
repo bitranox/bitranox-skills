@@ -67,7 +67,7 @@ def main() -> int:
         return 0
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"), event.get("tool_name") or "Bash")
+    message = notice((event.get("tool_input") or {}).get("command"), event.get("tool_name"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

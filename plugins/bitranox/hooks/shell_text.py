@@ -66,7 +66,15 @@ def _iter_separators(text, tool_name="Bash"):
     `cd C:\\; git commit` stops being seen at all - the same tool-versus-host confusion that
     `split_for_tool` exists to prevent, one function further down.
     """
-    escape, substitutes = ("`", False) if tool_name == "PowerShell" else ("\\", True)
+    # An UNKNOWN tool escapes NOTHING. The two readings are not symmetric: the Bash one enables
+    # backslash escaping, which is the reading that can swallow a separator and hide a command, so
+    # defaulting an unrecognised tool to it puts the silent miss in the fallback. Escaping nothing
+    # errs toward MORE separators - a false block, which is visible and recoverable. Same rule as
+    # `split_for_tool` one function down: an unknown tool takes the stricter reading.
+    escape, substitutes = {
+        "Bash": ("\\", True),
+        "PowerShell": ("`", False),
+    }.get(tool_name, ("", True))
     depth: list[tuple[str, bool, bool]] = []   # (closer, saved_single, saved_double)
     in_single = in_double = False
     i, n = 0, len(text)

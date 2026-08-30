@@ -74,7 +74,7 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not broken_revparse(command, event.get("tool_name") or "Bash"):
+    if not broken_revparse(command, event.get("tool_name")):
         return 0
     sys.stderr.write(
         "git rev-parse --short takes a SINGLE revision; with 2+ revs it fails "

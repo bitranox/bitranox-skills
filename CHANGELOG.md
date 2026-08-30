@@ -17,6 +17,18 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.279.2]
+
+### Fixed
+
+- **An unknown or absent `tool_name` took the reading that can HIDE a command.** The two escape
+  readings are not symmetric: the Bash one enables backslash escaping, which is what swallows a
+  separator, so falling back to it put the silent-miss semantics in the fallback - the same
+  direction 5.279.1 had just fixed. An unrecognised tool now escapes NOTHING, erring toward more
+  separators and a false block, which is visible and recoverable. The hooks pass the event's raw
+  `tool_name` instead of coercing a missing one to `Bash`, so a malformed event reaches that
+  stricter branch rather than the looser one. Matches the rule `split_for_tool` already states.
+
 ## [5.279.1]
 
 ### Fixed

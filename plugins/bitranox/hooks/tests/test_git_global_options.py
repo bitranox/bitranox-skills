@@ -215,3 +215,21 @@ def test_a_backtick_escapes_under_powershell_and_substitutes_under_bash():
     assert shell_text.is_gated_command("A=`git commit -m x`", tool_name="Bash") is True
     assert shell_text.is_gated_command(r"echo a`; git commit -m x", tool_name="PowerShell") is False
     assert shell_text.is_gated_command(r"cd C:\a; git commit -m x", tool_name="PowerShell") is True
+
+
+def test_an_unknown_tool_takes_the_stricter_reading():
+    """The two readings are NOT symmetric: the Bash one ENABLES backslash escaping, which is what
+    can swallow a separator and hide a command. So an unrecognised tool must escape NOTHING -
+    erring toward more separators and a false block, which is visible and recoverable, rather than
+    a silent miss, which is neither. `split_for_tool` states the same rule one function down."""
+    assert shell_text.is_gated_command(r"cd C:\; git commit -m x", tool_name="Zsh") is True
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Zsh") is True
+    assert shell_text.is_gated_command(r"echo a`; git commit -m x", tool_name="Zsh") is True
+
+
+def test_the_two_known_tools_are_unaffected_by_the_unknown_rule():
+    """The direction where it must NOT apply: widening the fallback must not loosen either
+    tool that IS recognised."""
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x", tool_name="Bash") is False
+    assert shell_text.is_gated_command(r"echo a`; git commit -m x", tool_name="PowerShell") is False
+    assert shell_text.is_gated_command("A=`git commit -m x`", tool_name="Bash") is True
