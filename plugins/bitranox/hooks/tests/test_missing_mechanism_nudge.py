@@ -55,3 +55,20 @@ def test_a_claim_that_already_states_the_evidence_is_left_alone():
 def test_junk_is_ignored():
     assert N.notice("") is None
     assert N.notice(None) is None
+
+
+def test_a_heredoc_body_is_not_a_memory_add():
+    """A heredoc body is stdin DATA. Writing a doc that QUOTES a memory_engine add command is not
+    running one, and firing there blocks the writing of the very guidance this nudge gives."""
+    cmd = ('cat > note.md <<"EOF"\n'
+           'Run: memory_engine.py add --hook "the retry is missing entirely"\n'
+           'EOF')
+    assert N.notice(cmd) is None
+
+
+def test_a_real_memory_add_after_a_heredoc_is_still_noticed():
+    """The direction where it must NOT apply: stripping the BODY must not swallow a real command
+    standing after the terminator."""
+    cmd = ('cat > note.md <<"EOF"\nprose\nEOF\n'
+           'memory_engine.py add --hook "the retry is missing entirely"')
+    assert N.notice(cmd) is not None

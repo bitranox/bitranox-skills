@@ -30,7 +30,7 @@ import json
 import re
 import sys
 
-from shell_text import blank_unexpanded_text, strip_heredoc_bodies
+from shell_text import blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies
 
 # Commands whose exit status is a quality verdict worth protecting.
 GATE = re.compile(
@@ -104,17 +104,26 @@ def reads_masked_status(command: str) -> bool:
 
 
 def masks_a_gate(statement: str) -> bool:
-    """True when a gate runs in this pipeline but is not what sets its status."""
+    """True when a gate runs in this pipeline but is not what sets its status.
+
+    The GATE search runs on the statement with quoted regions masked, because a gate NAME inside
+    an argument is not a gate being run: `grep -rn "npm test" . | head -20` runs grep. The mask is
+    scoped to this search on purpose - `CONSUMER` must still READ quoted text, since the success
+    claim it looks for IS a quoted string (`echo "PASS"`), and masking there deletes the evidence.
+    """
     if "|" not in statement:
         return False
     # Split on a single '|' that is not part of '||' (already handled by SPLIT).
     elements = [e for e in statement.split("|") if e.strip()]
     if len(elements) < 2:
         return False
-    if not GATE.search(statement):
+    # Length-preserving, so the element split below still lines up with the raw text.
+    masked = mask_data_regions(statement)
+    masked_elements = [e for e in masked.split("|") if e.strip()]
+    if not GATE.search(masked):
         return False
     # If the gate IS the last element, the pipeline's status is the gate's.
-    if GATE.search(elements[-1]):
+    if masked_elements and GATE.search(masked_elements[-1]):
         return False
     # Only a swallowing filter actually masks it.
     return any(FILTER.match(e) for e in elements[1:])
@@ -143,6 +152,10 @@ def main() -> int:
                 "`cmd > out 2>&1; rc=$?` and read the file, or gate.py for a real gate."
             ),
         }}) + "\n")
+
+    # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.
+    # Measured live: that shape blocked a real command while this guard was under investigation.
+    cmd = strip_heredoc_bodies(cmd)
 
     # Fast path: nothing further to protect if no gate runs here.
     if not GATE.search(cmd):

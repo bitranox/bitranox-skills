@@ -17,6 +17,34 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.282.0]
+
+### Fixed
+
+Rank 7 continued - four more hooks read DATA as if the shell would run it.
+
+- **`block-masked-gate-exit`'s BLOCKING path split the RAW command** while its advisory path
+  masked data first, so a doc that WRITES an example of the footgun was blocked as being one.
+  Measured live, twice: that shape blocked a real command while the guard was under
+  investigation, and then blocked this very changelog entry. It now strips heredoc bodies.
+  Separately, `masks_a_gate` matched a gate NAME anywhere in the statement, so a
+  `grep -rn "npm test" .` piped into `head` counted as running the gate; that search now
+  runs on quote-masked text. The mask is scoped to the gate search ON PURPOSE - `CONSUMER`
+  must still READ quoted text, because the success claim it looks for IS a quoted string, and
+  masking everywhere took three existing tests down.
+- **`missing-mechanism-nudge` read a heredoc body as a `memory_engine.py add`**, so
+  writing a doc that quotes the command fired the nudge about that command.
+- **`gated-prep-nudge.written_files` scanned heredoc bodies**, contradicting its own
+  docstring, and invented file paths out of prose inside them.
+
+## [5.281.1]
+
+### Fixed
+
+- **A path assertion in the new ci-watch test was platform-dependent.** `_repo_dir` returns an
+  absolute path, so the positive twin failed on Windows and the NEGATIVE twin passed vacuously
+  there with the defect fully present. Both now compare on the normalised tail.
+
 ## [5.281.0]
 
 ### Added

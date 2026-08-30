@@ -219,3 +219,31 @@ def test_blanking_preserves_the_command_shape():
     blanked = shell_text.blank_unexpanded_text("a | tail -2; b && c || d # note")
     assert "|" in blanked and ";" in blanked and "&&" in blanked and "||" in blanked
     assert "note" not in blanked
+
+
+def _rc(monkeypatch, command):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"tool_input": {"command": command}})))
+    return B.main()
+
+
+def test_a_heredoc_body_is_not_a_masked_gate(monkeypatch):
+    """main()'s BLOCKING path split the RAW command while the advisory path masked data first, so
+    a doc that WRITES an example of the footgun was blocked as being one. Measured live: this exact
+    shape blocked a real command while this guard was under investigation."""
+    body = ["C = [", "  'never write: pytest -q " + chr(124) + " tail -3',",
+            "  'grep -rn x . " + chr(124) + " head -20 && git commit -m y',", "]"]
+    cmd = "cat > claims.py <<'PYEOF'\n" + "\n".join(body) + "\nPYEOF\npython3 claims.py"
+    assert _rc(monkeypatch, cmd) == 0
+
+
+def test_a_gate_named_inside_a_quoted_argument_is_not_a_gate(monkeypatch):
+    """`grep -rn "npm test"` runs grep, not npm. The gate name was matched anywhere in the
+    statement rather than in command position."""
+    assert _rc(monkeypatch, 'grep -rn "npm test" . ' + chr(124) + ' head -20 && git commit -m x') == 0
+
+
+def test_a_real_masked_gate_is_still_blocked(monkeypatch):
+    """The direction where it must NOT apply, including one standing after a heredoc."""
+    assert _rc(monkeypatch, "pytest -q " + chr(124) + " tail -3 && echo OK") == 2
+    assert _rc(monkeypatch, "cat > n.md <<'EOF'\nprose\nEOF\npytest -q "
+               + chr(124) + " tail -3 && echo OK") == 2

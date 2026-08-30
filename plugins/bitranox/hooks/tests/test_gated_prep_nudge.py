@@ -336,3 +336,15 @@ def test_the_guard_points_at_the_skill_that_carries_the_method():
 def test_the_skill_points_back_at_this_guard_as_its_worked_example():
     _, skill = _repo_paths()
     assert "gated-prep-nudge.py" in skill.read_text(encoding="utf-8")
+
+
+def test_written_files_does_not_read_a_filename_out_of_a_heredoc_body():
+    """The docstring already says bodies are not scanned; the code scanned them. A path invented
+    from prose inside a body names a file the command never writes."""
+    cmd = "python3 - <<PY\nprint('tip: echo msg > m.txt')\nPY\ngit commit -m x"
+    assert "m.txt')" not in N.written_files(cmd)
+
+
+def test_written_files_still_sees_a_real_redirect():
+    """The direction where it must NOT apply."""
+    assert "m.txt" in N.written_files("echo hi > m.txt && git commit -F m.txt")

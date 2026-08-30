@@ -192,9 +192,13 @@ def written_files(command: str):
     nothing to warn about. Counting it fired on the very common `cmd >/dev/null && git push`
     shape - 7 of 604 real firings in the transcript corpus, every one of them a false nudge.
     """
+    # The opener LINE is kept by strip_heredoc_bodies, so `cat <<EOF > f` is still seen; only
+    # the body goes. Without this the scan invented paths out of prose inside a body - the
+    # docstring above already promised bodies were not scanned, and the code scanned them.
+    command = strip_heredoc_bodies(command or "")
     out = []
     for rx in (_HEREDOC_TO_FILE, _REDIRECT_TO_FILE):
-        for m in rx.finditer(command or ""):
+        for m in rx.finditer(command):
             f = m.group("f")
             if f and f not in out and not f.strip("'\"").startswith("/dev/"):
                 out.append(f)

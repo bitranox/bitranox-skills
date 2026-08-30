@@ -21,7 +21,7 @@ import json
 import re
 import sys
 
-from shell_text import is_shell_tool
+from shell_text import is_shell_tool, strip_heredoc_bodies
 
 _MEMORY_ADD = re.compile(r"memory_engine(?:\.py)?\b[^\n]*\badd\b")
 
@@ -62,6 +62,10 @@ def notice(command):
     `memory_engine.py`, which the evidence pattern would read as a named file, so scanning the
     whole thing silences the nudge on every input. Caught by this module's own tests.
     """
+
+    # A heredoc BODY is stdin data. A doc that QUOTES a memory_engine add command is not
+    # running one, and firing there blocks the writing of this nudge's own guidance.
+    command = strip_heredoc_bodies(command or "")
     if not command or not isinstance(command, str):
         return None
     if not _MEMORY_ADD.search(command):
