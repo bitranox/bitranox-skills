@@ -16,8 +16,8 @@ teaches the reader to ignore the channel. It emits `additionalContext` and exits
 Only the DELETE form is flagged. `1,/re/p` shows you what it selected, so an off-by-one is visible
 rather than silent. An exact `1,5d` has no regex end and cannot overshoot.
 
-The scan runs with heredoc bodies stripped: a body is DATA, and a guard that reads it fires on prose
-documenting the very footgun it guards.
+The scan runs with heredoc bodies AND data-sink statements stripped: both are DATA, and a guard that
+reads them fires on the prose documenting the very footgun it guards.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import json
 import re
 import sys
 
-from shell_text import is_shell_tool, strip_heredoc_bodies
+from shell_text import is_shell_tool, strip_data_sink_statements, strip_heredoc_bodies
 
 # `sed`/`gsed` at a command position, then a 1,/regex/ range ending in `d`. The end pattern is
 # matched non-greedily up to an unescaped `/`, so `1,/^---$/d` and `1,/^BEGIN$/d` both hit while
@@ -36,19 +36,24 @@ _TRAP = re.compile(
 )
 
 
-def notice(command):
-    """The warning text when this command uses the trap range, else None."""
+def notice(command, tool_name=None):
+    """The warning text when this command uses the trap range, else None.
+
+    `tool_name` decides how the sink strip splits the command into argv - the Bash tool is POSIX
+    even on Windows, the PowerShell tool's backslash is a path separator. Passing it is not
+    optional in `main`; the default exists only for the direct callers in the tests.
+    """
     if not command or not isinstance(command, str):
         return None
     try:
-        # Heredoc bodies only. NOT blank_unexpanded_text: a real sed range is itself written
-        # single-quoted (`sed -i '1,/^---$/d'`), so blanking single quotes deletes exactly what
-        # this nudge looks for - measured, it took four tests down.
+        # Heredoc bodies, then whole statements whose program does not execute its argument.
         #
-        # KNOWN AND NOT FIXED: `echo 'never use sed 1,/^---$/d ...'` still fires. At this level a
-        # single-quoted argument to echo is indistinguishable from the sed script that runs;
-        # telling them apart needs the ENCLOSING command, not the quote.
-        text = strip_heredoc_bodies(command)
+        # NOT blank_unexpanded_text and NOT mask_data_regions: a real sed range is itself written
+        # single-quoted (`sed -i '1,/^---$/d'`), so blanking single quotes deletes exactly what
+        # this nudge looks for - measured, it took four tests down. The question was never whether
+        # the text is quoted but WHICH PROGRAM the quote belongs to, and that is what
+        # strip_data_sink_statements answers: echo prints its argument, ssh runs it.
+        text = strip_data_sink_statements(strip_heredoc_bodies(command), tool_name)
     except Exception:  # noqa: BLE001 - a nudge must never wedge a turn
         return None
     match = _TRAP.search(text)
@@ -77,7 +82,7 @@ def main(raw=None) -> int:
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     try:
-        text = notice(command)
+        text = notice(command, payload.get("tool_name"))
     except Exception:  # noqa: BLE001
         return 0
     if not text:

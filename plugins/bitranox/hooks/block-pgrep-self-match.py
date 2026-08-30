@@ -45,6 +45,8 @@ import json
 import re
 import sys
 
+from shell_text import strip_data_sink_statements
+
 # A pgrep/pkill invocation up to the next shell separator, so only the flags and
 # pattern belonging to THIS call are read.
 #
@@ -86,12 +88,23 @@ def strip_data_bodies(cmd):
     return out
 
 
-def bracket_leaks(cmd):
+def bracket_leaks(cmd, haystack=None):
     """Shape 1: a de-bracketed literal appearing contiguously elsewhere in the command.
 
     A contiguous occurrence cannot come from the bracket form itself, so it is
     always a real label/comment leak.
+
+    TWO texts, and they must not be the same one. `cmd` is where INVOCATIONS are read, so it may
+    have inert statements blanked - a pgrep merely named inside an `echo` is not a call. `haystack`
+    is where the LEAKED LITERAL is searched for, and there the echo must survive, because an echo
+    label is precisely what re-introduces the literal into the shell's own argv, which is what
+    `pgrep -f` matches. Blanking it in both places deletes the finding: measured, it took down
+    `pgrep -f "[n]ginx"; echo "=== nginx running? ==="`, this hook's own motivating case.
+
+    Defaulting `haystack` to `cmd` keeps the single-argument form meaningful for a caller that has
+    only one text.
     """
+    haystack = cmd if haystack is None else haystack
     # Only patterns belonging to a real pgrep/pkill invocation can self-match. Scanning the whole
     # command reported ANOTHER command's bracket trick as a leak - `grep "[s]shd"` is grep's own
     # search pattern, and the bracket form there is correct usage, not a footgun.
@@ -99,7 +112,7 @@ def bracket_leaks(cmd):
     for call in _INVOCATION.findall(cmd):
         for tok in _BRACKET_TOKEN.findall(call):
             literal = tok[1] + tok[3:]  # drop the '[' and the ']'
-            if literal in cmd:
+            if literal in haystack:
                 entry = f"{tok} -> {literal}"
                 if entry not in leaked:
                     leaked.append(entry)
@@ -131,20 +144,26 @@ def main() -> int:
     if not cmd:
         return 0
 
-    # Scan the command with DATA bodies (heredocs, commit messages) removed, so text that merely
-    # mentions `pkill -f` is not mistaken for invoking it.
-    cmd = strip_data_bodies(cmd)
+    # Two views of the command, because the two halves of this guard ask different questions.
+    #
+    # `haystack` drops only what the shell never puts in its own argv at all - a heredoc body and a
+    # commit message. `commands` additionally blanks statements that merely PRINT or STORE their
+    # argument, and is what the invocation search reads, so `echo \'pkill -f x\'` is no longer
+    # mistaken for a call. The leak search deliberately keeps reading `haystack`: an echo label IS
+    # the leak, so blanking it there would delete the finding rather than a false positive.
+    haystack = strip_data_bodies(cmd)
+    commands = strip_data_sink_statements(haystack, data.get("tool_name"))
 
     # Fast path: only guard commands that call pgrep/pkill.
-    if not re.search(_PROGRAM, cmd):
+    if not re.search(_PROGRAM, commands):
         return 0
 
     # An explicit self-exclusion means the caller already handled it.
-    if re.search(r"grep\s+-vw\s+[\"']?\$\$", cmd):
+    if re.search(r"grep\s+-vw\s+[\"']?\$\$", commands):
         return 0
 
-    leaked = bracket_leaks(cmd)
-    plain = plain_f_patterns(cmd)
+    leaked = bracket_leaks(commands, haystack)
+    plain = plain_f_patterns(commands)
     if not leaked and not plain:
         return 0
 

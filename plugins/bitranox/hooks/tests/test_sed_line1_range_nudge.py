@@ -7,6 +7,8 @@ parsing and still rendering, so the loss was invisible until the sizes were comp
 """
 import json
 
+import pytest
+
 import sed_line1_range_nudge as N
 
 
@@ -102,3 +104,49 @@ def test_main_never_wedges_on_malformed_input():
 def test_a_real_sed_range_is_still_noticed():
     """The direction where it must NOT apply."""
     assert N.notice("sed -i '1,/^---$/d' file.md") is not None
+
+
+# ---- a mention is not an instance ---------------------------------------------------------------
+#
+# A real sed range is itself single-quoted, so quote-masking would delete exactly what this nudge
+# looks for. What separates `sed -i '1,/re/d'` from `echo '... 1,/re/d ...'` is the ENCLOSING
+# program, which shell_text.strip_data_sink_statements decides.
+
+def test_an_echo_of_the_footgun_is_quiet():
+    assert N.notice("echo 'never use sed 1,/^---$/d on a frame'") is None
+
+
+def test_a_commit_message_describing_the_footgun_is_quiet():
+    assert N.notice("git commit -m 'guard against sed 1,/^---$/d'") is None
+
+
+def test_a_real_range_after_an_echo_of_one_still_fires():
+    """The sink blanking must not swallow the statement after it."""
+    assert N.notice("echo 'sed 1,/re/d is a trap' && sed -i '1,/^---$/d' f.md") is not None
+
+
+def test_the_tool_name_reaches_the_sink_strip():
+    r"""A PowerShell command must be split by PowerShell's rules, not Bash's.
+
+    Both directions are asserted, because only the pair is discriminating. Under the PowerShell
+    reading `C:\bin\echo.exe` has basename `echo`, so the statement is inert and the nudge is
+    silent. Under the Bash reading shlex eats the separators, the program reads as one long
+    filename, nothing is blanked, and the nudge fires. A one-sided version of this test passed
+    with the tool name thrown away.
+    """
+    cmd = 'C:\\bin\\echo.exe "the sed 1,/^---$/d trap"'
+    assert N.notice(cmd, "PowerShell") is None
+    assert N.notice(cmd, "Bash") is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="KNOWN MISS, recorded rather than described. _TRAP requires the start of the string, a "
+           "separator, or whitespace before `sed`, and inside `ssh host '...'` the preceding "
+           "character is the opening quote of ssh's own argument - so a real remote sed range is "
+           "not seen. Closing it needs the enclosing command modelled as an EXEC CARRIER, which "
+           "the data-sink allowlist deliberately does not do: that allowlist can only ever keep a "
+           "false positive, while carrier recursion changes what every guard SEES. strict=True so "
+           "this turns into a failure the day it starts passing, instead of quietly staying green.")
+def test_a_sed_range_inside_an_ssh_argument_is_noticed():
+    assert N.notice("ssh host 'sed -i 1,/^---$/d /etc/x'") is not None

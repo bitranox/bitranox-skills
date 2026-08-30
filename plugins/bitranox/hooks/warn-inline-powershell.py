@@ -14,10 +14,11 @@ a diff-able artifact.
 This is a NUDGE, never a block: it emits `hookSpecificOutput.additionalContext`, which is what
 reaches the model (an exit-0 hook's stdout and stderr do not). Every failure path returns 0.
 
-Known limit, stated rather than hidden: the command text is matched as a whole, so a heredoc that
-merely DOCUMENTS this footgun can trip it. Two shipped guards carry heredoc-stripping helpers that
-have since diverged from each other, so this file deliberately does not add a third copy. The cost
-of a false fire here is one extra line of context, never a blocked command.
+Text that the shell will not execute is removed before matching - heredoc bodies, and statements
+whose program stores or prints its argument rather than running it. Both strips are shared with the
+other command-scanning guards rather than copied here, because two private copies had already
+drifted apart once. The cost of a false fire here is one extra line of context, never a blocked
+command.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ import json
 import re
 import sys
 
-from shell_text import strip_heredoc_bodies
+from shell_text import strip_data_sink_statements, strip_heredoc_bodies
 
 # `pwsh` is PowerShell 7+; both take -Command/-c and both are reached the same way over ssh.
 _SHELL_RX = re.compile(r"\b(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b", re.IGNORECASE)
@@ -48,7 +49,7 @@ _NOTICE = (
 )
 
 
-def _strip_data_regions(command: str) -> str:
+def _strip_data_regions(command: str, tool_name=None) -> str:
     """Every DATA region the shell will not execute - heredoc bodies AND quoted arguments.
 
     Without this the nudge fires on its own documentation and on its own test fixtures: a heredoc
@@ -56,17 +57,18 @@ def _strip_data_regions(command: str) -> str:
     hardening this hook - appending a test whose fixture string contained
     `ssh host powershell -Command ...` tripped it.
 
-    Heredoc bodies ONLY - deliberately not `commands_only`, which also masks quoted strings. This
-    hook's whole subject is a command inside a QUOTED ARGUMENT that ssh executes remotely, so
-    masking quotes deletes the thing it exists to find: measured, `ssh host \'powershell -command
-    "Get-Process"\'` stopped firing entirely and took six tests with it. The shared strip is used
-    for the heredoc half so this hook stops carrying a private regex for it.
+    Heredoc bodies and DATA-SINK STATEMENTS - deliberately not `commands_only`, which also masks
+    quoted strings. This hook's whole subject is a command inside a QUOTED ARGUMENT that ssh
+    executes remotely, so masking quotes deletes the thing it exists to find: measured, `ssh host
+    \'powershell -command "Get-Process"\'` stopped firing entirely and took six tests with it.
 
-    KNOWN AND NOT FIXED: `echo \'ssh host powershell -command x\'` and a `git commit -m` message
-    describing the footgun still fire, because at this level a quoted string is indistinguishable
-    from the ssh one that DOES run. Telling them apart needs the ENCLOSING command, not the quote.
+    The sink strip is the right instrument for the other half, because it asks a different question
+    than the mask does. Not "is this text quoted?" - the ssh argument is quoted too - but "which
+    program does the quote belong to?". `echo` and `git commit` store or print their argument;
+    `ssh` runs it. So `echo \'ssh host powershell -command x\'` and a commit message describing the
+    footgun are now silent, while the ssh form is untouched.
     """
-    return strip_heredoc_bodies(command)
+    return strip_data_sink_statements(strip_heredoc_bodies(command), tool_name)
 
 
 def _powershell_invocation(command: str) -> str | None:
@@ -89,11 +91,15 @@ def _powershell_invocation(command: str) -> str | None:
     return rest
 
 
-def build_notice(command: str) -> str | None:
-    """The nudge text, or None. PURE over the command string - no IO, no environment."""
+def build_notice(command: str, tool_name=None) -> str | None:
+    """The nudge text, or None. PURE over the command string - no IO, no environment.
+
+    `tool_name` picks the argv split the sink strip uses; see `shell_text.split_for_tool` for why
+    the TOOL and not the host decides it.
+    """
     if not command:
         return None
-    command = _strip_data_regions(command)
+    command = _strip_data_regions(command, tool_name)
     if not _SSH_RX.search(command) or not _SHELL_RX.search(command):
         return None
     # Both flag tests must look at the PowerShell call, not the whole line - see
@@ -114,7 +120,8 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         return 0
     try:
-        notice = build_notice(str((event.get("tool_input") or {}).get("command") or ""))
+        notice = build_notice(str((event.get("tool_input") or {}).get("command") or ""),
+                              event.get("tool_name"))
         if notice:
             json.dump(
                 {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": notice}},

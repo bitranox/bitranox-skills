@@ -149,3 +149,18 @@ def test_an_ssh_backgrounding_flag_is_not_powershells_file_flag():
     """`ssh -f` backgrounds ssh. Reading it as PowerShell's -File made the hook SILENT on the exact
     inline -Command footgun it exists to catch - a miss, which is the worse direction."""
     assert W.build_notice("""ssh -f win 'powershell -Command "Get-Process"'""") is not None
+
+
+# ---- a mention is not an instance ---------------------------------------------------------------
+
+def test_an_echo_of_the_footgun_is_quiet():
+    assert W.build_notice("echo 'ssh win powershell -Command \"Get-Process\"'") is None
+
+
+def test_a_commit_message_describing_the_footgun_is_quiet():
+    assert W.build_notice("git commit -m 'ssh win powershell -Command x is mangled by cmd.exe'") is None
+
+
+def test_a_real_invocation_after_an_echo_of_one_still_fires():
+    assert W.build_notice(
+        "echo 'do not do this' && ssh win 'powershell -Command \"Get-Process\"'") is not None

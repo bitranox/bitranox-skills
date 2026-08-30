@@ -547,3 +547,97 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
             out.append(char)
             index += 1
     return "".join(out)
+
+
+# The programs that do NOT execute their arguments. This list is the whole safety argument, so it
+# stays closed and small: every entry has to be a program whose operand is stored or printed, never
+# run. `echo`/`printf` write it to stdout; `git commit` records it in an object; `gh pr create`
+# posts it to an API. None of them hands the text to a shell.
+_DATA_SINK_PROGRAMS = frozenset({"echo", "printf"})
+
+# Programs where the SUBCOMMAND decides. `git commit -m` stores its text, while `git bisect run`
+# executes its argument - so the program name alone is not enough and matching on it would blank a
+# statement that really does run a command. Each entry is a prefix of the non-flag operands.
+_DATA_SINK_SUBCOMMANDS = {
+    "git": (("commit",),),
+    "gh": (("pr", "create"),),
+}
+
+# `$(` and a backtick RUN what they enclose, wherever they sit. `${...}` does not, and neither does
+# a substitution written inside single quotes - but telling those apart needs the quoting state,
+# and getting that wrong here would blank a statement that executes something. A sink carrying
+# either spelling is therefore left intact: the cost is a false positive that was already there,
+# and the alternative cost is a miss.
+_RUNS_SUBSTITUTION = re.compile(r"\$\(|`")
+
+
+def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
+    """True when this segment ends because a substitution opened, not because a statement ended.
+
+    `iter_segments` treats the inside of `$(...)` as real statements, which it is - so `echo $(cmd)`
+    arrives as the three pieces `echo `, `cmd` and `)`. The first looks exactly like a complete,
+    inert `echo`, and blanking it would delete the surrounding context of a command that DOES run.
+    Testing the segment for a substitution cannot see this: the `$(` was consumed as the boundary
+    and is not in the segment at all.
+
+    Measured while writing this: `echo "$(pkill -f foo)"` appeared to be handled correctly, but only
+    because `echo "` has an unbalanced quote that shlex rejects. The unquoted `echo $(pkill -f foo)`
+    parses cleanly and was blanked.
+    """
+    return _RUNS_SUBSTITUTION.match(text, at + len(segment)) is not None
+
+
+def _is_data_sink(segment: str, tool_name=None) -> bool:
+    """True when this statement's program provably will not execute its own arguments."""
+    if _RUNS_SUBSTITUTION.search(segment):
+        return False
+    head = segment.strip().lstrip("(").strip()
+    if not head:
+        return False
+    try:
+        tokens = split_for_tool(head, tool_name or "Bash")
+    except ValueError:
+        # Unbalanced quotes. The text cannot be read as argv, so nothing here is provably inert.
+        return False
+    if not tokens:
+        return False
+    program = basename_for_tool(tokens[0], tool_name or "Bash")
+    if program in _DATA_SINK_PROGRAMS:
+        return True
+    operands = tuple(t for t in tokens[1:] if not t.startswith("-"))
+    return any(operands[:len(prefix)] == prefix
+               for prefix in _DATA_SINK_SUBCOMMANDS.get(program, ()))
+
+
+def strip_data_sink_statements(command: str, tool_name=None) -> str:
+    """Blank each statement whose program stores or prints its argument instead of running it.
+
+    Three shipped nudges fired on `echo '<the footgun>'` and on a commit message describing one,
+    because a quoted string that ssh EXECUTES and a quoted string that echo PRINTS are identical at
+    the level of the quote. What separates them is the ENCLOSING program, which is what this reads.
+
+    The allowlist is inverted on purpose. It names the programs that are provably inert, and an
+    UNRECOGNISED program is treated as executing - so the only way to be wrong is to leave a false
+    positive standing, never to go silent on a real footgun. That direction matters more than it
+    looks: this repo has broken three guards by guessing at exactly this boundary, and each time
+    the damage was a deleted finding rather than an extra warning.
+
+    Blanking is length-preserving, so a caller that already holds a match offset into the raw
+    command can index the result at the same position - the same contract `mask_data_regions` has.
+
+    NOT a replacement for `strip_heredoc_bodies`: a heredoc body is data for a different reason
+    (it is stdin, whatever the program), and the two compose.
+    """
+    text = command or ""
+    if not text:
+        return text
+    out = list(text)
+    for at, segment in iter_segments(text, tool_name):
+        if _cut_by_substitution(text, at, segment):
+            continue
+        if not _is_data_sink(segment, tool_name):
+            continue
+        for index in range(at, min(at + len(segment), len(out))):
+            if out[index] != "\n":
+                out[index] = " "
+    return "".join(out)

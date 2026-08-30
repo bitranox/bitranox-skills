@@ -274,3 +274,105 @@ def test_a_real_heredoc_body_is_still_stripped():
     out = S.strip_heredoc_bodies("cat > f <<EOF\nsecret line\nEOF\ngit push")
     assert "secret line" not in out
     assert "git push" in out
+
+
+# ---- a data sink does not execute its argument -------------------------------------------------
+#
+# The three command-scanning nudges all fired on `echo '<the footgun>'` and on a commit message
+# describing it, because at the level of a quoted string the argument ssh EXECUTES and the one
+# echo PRINTS look identical. What tells them apart is the enclosing program, so these cases pin
+# the direction the allowlist must decide, in both directions.
+
+def test_an_echo_argument_is_blanked_because_echo_never_executes_it():
+    out = S.strip_data_sink_statements("echo 'never use sed 1,/^---$/d on a frame'")
+    assert "1,/^---$/d" not in out
+
+
+def test_a_commit_message_is_blanked_because_git_stores_it():
+    out = S.strip_data_sink_statements("git commit -m 'guard against pkill -f iperf3'")
+    assert "pkill -f iperf3" not in out
+
+
+def test_an_ssh_argument_survives_because_ssh_runs_it():
+    """The direction where the allowlist must NOT apply - an unknown program keeps its text."""
+    cmd = "ssh host 'pkill -f \"iperf3 -s\"'"
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_an_unknown_program_is_left_alone():
+    cmd = "some-wrapper 'pkill -f \"iperf3 -s\"'"
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_a_command_substitution_inside_a_sink_still_runs_so_it_is_kept():
+    """`echo "$(pkill -f x)"` PRINTS the output but RUNS the pkill - blanking it would be a miss."""
+    cmd = 'echo "$(pkill -f foo)"'
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_a_backtick_substitution_inside_a_sink_is_kept_too():
+    cmd = "echo `pkill -f foo`"
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_only_the_sink_statement_is_blanked_not_the_real_command_after_it():
+    out = S.strip_data_sink_statements("echo 'sed 1,/re/d is a trap' && sed -i '1,/^---$/d' f.md")
+    assert "is a trap" not in out
+    assert "sed -i '1,/^---$/d' f.md" in out
+
+
+def test_the_blank_preserves_length_so_raw_offsets_still_index_it():
+    cmd = "echo 'pkill -f x' && ls"
+    assert len(S.strip_data_sink_statements(cmd)) == len(cmd)
+
+
+def test_printf_is_a_sink_too():
+    assert "pkill -f x" not in S.strip_data_sink_statements("printf '%s\\n' 'pkill -f x'")
+
+
+def test_a_path_qualified_echo_is_still_recognised_as_a_sink():
+    assert "pkill -f x" not in S.strip_data_sink_statements("/bin/echo 'pkill -f x'")
+
+
+def test_commit_with_a_message_file_flag_is_a_sink():
+    out = S.strip_data_sink_statements("git commit -F 'notes about pkill -f x'")
+    assert "pkill -f x" not in out
+
+
+def test_a_git_subcommand_that_is_not_a_message_carrier_is_not_a_sink():
+    """`git commit` stores its -m text; `git bisect run` executes its argument."""
+    cmd = "git bisect run sh -c 'pkill -f x'"
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_empty_and_garbage_never_raise():
+    for raw in ("", "   ", "'", 'echo "unterminated', "&&", "|||"):
+        S.strip_data_sink_statements(raw)
+
+
+def test_a_pr_body_is_blanked_because_gh_stores_it():
+    out = S.strip_data_sink_statements("gh pr create --body 'fixes the pkill -f x self-match'")
+    assert "pkill -f x" not in out
+
+
+def test_an_unquoted_substitution_in_a_sink_is_kept():
+    """The balanced-quote twin of the case above.
+
+    `echo "$(...)"` is rejected before the substitution test even runs, because iter_segments cuts
+    the statement at the `$(` and `echo "` has an unbalanced quote. This spelling parses cleanly as
+    argv, so only the substitution test can save it.
+    """
+    cmd = "echo $(pkill -f foo)"
+    assert S.strip_data_sink_statements(cmd) == cmd
+
+
+def test_a_windows_path_qualified_sink_needs_the_powershell_reading():
+    r"""The tool decides the split, never the host - `C:\bin\echo.exe` is one token or three.
+
+    Under the PowerShell reading the backslash is a path separator and the basename is `echo`.
+    Under the Bash reading shlex eats it, the program reads as `C:binecho.exe`, and the statement
+    is left alone. Both are correct for their tool; passing the wrong one silently picks the other.
+    """
+    cmd = "C:\\bin\\echo.exe 'pkill -f x'"
+    assert "pkill -f x" not in S.strip_data_sink_statements(cmd, "PowerShell")
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd

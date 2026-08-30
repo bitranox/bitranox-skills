@@ -177,3 +177,13 @@ def test_a_real_bracket_leak_is_still_reported():
     """The direction where it must NOT apply: the leak shape this guard exists for."""
     leaks = B.bracket_leaks('p' + 'grep -f "[n]ginx"; echo "=== nginx running? ==="')
     assert leaks
+
+
+# ---- a mention is not an instance ---------------------------------------------------------------
+
+def test_an_echo_of_the_footgun_does_not_block(monkeypatch):
+    assert run_main(monkeypatch, "echo 'never run pkill -f \"iperf3 -s\"'") == 0
+
+
+def test_a_real_invocation_after_an_echo_of_one_still_blocks(monkeypatch):
+    assert run_main(monkeypatch, "echo 'do not' && ssh host 'pkill -f \"iperf3 -s\"'") == 2

@@ -17,6 +17,37 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.286.0]
+
+### Fixed
+
+The shape three command-scanning nudges shared: each fired on a MENTION of the footgun it
+guards, so writing the note that warns about one was blocked by the guard for it. Deferred
+three times because the obvious instruments delete the finding instead.
+
+- **`shell_text.strip_data_sink_statements`** decides it by the ENCLOSING PROGRAM rather than
+  by the quote. `ssh host '...'` and `echo '...'` are identical at the level of the quote, and
+  every masking helper that reads quotes therefore removes the real invocation along with the
+  mention - measured previously as four, six and 23 tests going red. The allowlist is inverted
+  on purpose: it names only programs that provably store or print their argument (`echo`,
+  `printf`, `git commit`, `gh pr create`), and an UNRECOGNISED program counts as executing. So
+  the only available error is keeping a false positive, never going silent on a real footgun.
+- **`sed-line1-range-nudge`, `warn-inline-powershell` and `block-pgrep-self-match`** now use it.
+  Each had the limitation written into its own docstring as known and unfixed.
+- **`block-pgrep-self-match` needed the strip on ONE of its two halves.** Its bracket-leak shape
+  is defeated *by* an `echo` label, because that label lands in the shell's own argv where
+  `pgrep -f` matches - so the strip feeds the INVOCATION search while the leak search still
+  reads the unstripped text. Applying it to both deleted the hook's motivating case, and an
+  existing test caught it.
+
+### Known
+
+- **A `sed` range inside `ssh host '...'` is still missed**, now recorded as a `strict=True`
+  xfail rather than as prose, so it turns into a failure the day it starts passing. `_TRAP`
+  wants whitespace or a separator before `sed` and finds ssh's opening quote. Closing it needs
+  the enclosing command modelled as an exec CARRIER, which is a different and riskier change:
+  the allowlist can only keep a false positive, carrier recursion changes what every guard sees.
+
 ## [5.285.0]
 
 ### Fixed
