@@ -17,6 +17,40 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.4]
+
+### Fixed
+
+- **`memory_engine.py add` now counts as a data sink, so recording a footgun no longer trips the
+  guard for it.** A corpus replay over 66,213 real Bash commands found this was the ONLY false
+  positive left in `sed-line1-range-nudge` that a person could actually hit: the tool that writes
+  memory facts, invoked as `memory_engine.py add --hook "...a chained 'sed 1,/^---$/d'..."`, was
+  read as running the text it was storing. Both firings were that shape.
+
+  Two properties made it unlike every existing allowlist entry, and both had to be handled:
+  a leading `VAR=value` assignment sat in front of the command, and the script is not the program -
+  an interpreter or `run-python.sh` is, with the script as an argument. `_deciding_program_index`
+  now steps past environment assignments and script launchers to the token that decides.
+
+  It deliberately does NOT scan the token list for a known script name. `ssh host 'memory_engine.py
+  add ...'` would match such a scan, and blanking it would delete a real finding - the one direction
+  this module must never fail in. The walk halts at the first token that is not a launcher, and
+  whatever it halts on must still be in the sink tables to have any effect, so the blast radius is
+  exactly the scripts listed there. A flag between launcher and script (`python3 -u ... add`) halts
+  the walk and is therefore NOT treated as a sink: it fails toward keeping a false positive, and no
+  such command was measured.
+
+  Measured with both variables held: at the shipped anchor the entry takes the corpus from 12
+  firings to 10, closing exactly the 2 memory_engine commands and nothing else. What remains is 7
+  true positives and 3 firings that are this hook's own test harness, so there is no reachable
+  false positive left. Confirmed against ground truth by driving the real hook's `main()` with a
+  real payload before and after, not by the replay alone.
+
+  8 tests added, 5 of them for directions the change must NOT reach. Verified by mutation: reverting
+  the launcher walk fails 3, the unsafe scan-anywhere design fails 2 pre-existing sink tests,
+  dropping the keep-the-verb contract fails 5 including two for `git commit`, and removing the
+  environment-assignment skip fails 1.
+
 ## [5.287.3]
 
 ### Fixed

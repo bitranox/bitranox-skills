@@ -412,3 +412,64 @@ def test_a_path_qualified_sink_keeps_its_whole_program_token():
     out = S.strip_data_sink_statements("/bin/echo 'pkill -f x'")
     assert out.startswith("/bin/echo")
     assert "pkill -f x" not in out
+
+
+# ---- memory_engine.py add: a sink reached THROUGH a launcher ------------------------------------
+#
+# Measured 2026-08-30 over 66,213 corpus commands: the only real false positive left in the sed
+# nudge was `memory_engine.py add --hook "...<the footgun in prose>..."` - the tool that WRITES
+# memory facts tripping a guard while recording the very trap it guards. Two properties make it
+# unlike every existing entry: a leading `VAR=value` assignment sits in front of it, and the
+# script is not the program - an interpreter or `run-python.sh` is, with the script as an argument.
+
+def test_memory_engine_add_through_run_python_is_a_sink():
+    cmd = ('bash /p/hooks/run-python.sh /p/hooks/memory_engine.py add '
+           '--hook "a chained \'sed 1,/^---$/d\' eats the body"')
+    assert S.strip_data_sink_statements(cmd, "Bash").rstrip() == (
+        "bash /p/hooks/run-python.sh /p/hooks/memory_engine.py add")
+
+
+def test_memory_engine_add_survives_a_leading_env_assignment():
+    """The real corpus firing carried `BITRANOX_RUN_PYTHON_STRICT=1` in front of the launcher."""
+    cmd = ('BITRANOX_RUN_PYTHON_STRICT=1 bash /p/run-python.sh /p/memory_engine.py add '
+           '--hook "sed 1,/^---$/d"')
+    assert "--hook" not in S.strip_data_sink_statements(cmd, "Bash")
+
+
+def test_memory_engine_add_invoked_by_the_interpreter_directly_is_a_sink():
+    cmd = 'python3 /p/memory_engine.py add --hook "sed 1,/^---$/d"'
+    assert "--hook" not in S.strip_data_sink_statements(cmd, "Bash")
+
+
+def test_the_memory_engine_verb_survives_the_blanking():
+    """Same contract as `git commit`: a caller asking what ran must still see it."""
+    cmd = 'python3 /p/memory_engine.py add --hook "sed 1,/^---$/d"'
+    out = S.strip_data_sink_statements(cmd, "Bash")
+    assert "memory_engine.py" in out and " add" in out
+
+
+# ---- the directions where it must NOT apply ----------------------------------------------------
+
+def test_memory_engine_named_inside_an_ssh_argument_is_not_a_sink():
+    """ssh EXECUTES its argument. Resolving a sink by scanning for the script name anywhere in the
+    token list would blank this, which is the direction that DELETES a finding."""
+    cmd = 'ssh host \'python3 /p/memory_engine.py add --hook "sed 1,/^---$/d"\''
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+def test_memory_engine_named_inside_bash_c_is_not_a_sink():
+    """`bash -c` runs its argument, and the script name is INSIDE that single token."""
+    cmd = 'bash -c \'python3 /p/memory_engine.py add --hook "sed 1,/^---$/d"\''
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+def test_a_memory_engine_subcommand_other_than_add_is_not_a_sink():
+    """Only `add` carries prose. `reconcile`/`heal` take paths, and nothing proves them inert."""
+    cmd = 'python3 /p/memory_engine.py reconcile --check-tree /some/sed 1,/^---$/d'
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+def test_an_unknown_script_behind_a_launcher_is_not_a_sink():
+    """The launcher step must not make every scripted command inert."""
+    cmd = 'bash /p/run-python.sh /p/deploy.py add --hook "sed 1,/^---$/d"'
+    assert S.strip_data_sink_statements(cmd, "Bash") == cmd

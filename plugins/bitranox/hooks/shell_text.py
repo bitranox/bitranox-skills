@@ -561,7 +561,27 @@ _DATA_SINK_PROGRAMS = frozenset({"echo", "printf"})
 _DATA_SINK_SUBCOMMANDS = {
     "git": (("commit",),),
     "gh": (("pr", "create"),),
+    # Writes its `--hook`/`--title`/`--body-file` text into a memory fact and never runs it. Added
+    # 2026-08-30 after a corpus replay found it was the ONLY real false positive left in the sed
+    # nudge: the tool that records a footgun tripped the guard for that footgun. Only `add` is
+    # listed - `reconcile`, `heal` and `move` take paths, and nothing proves them inert.
+    "memory_engine.py": (("add",),),
 }
+
+# Programs that run a SCRIPT NAMED AS A SEPARATE TOKEN, so the sink is the script and not them.
+# `bash run-python.sh .../memory_engine.py add` has three of these stacked in front of the program
+# that decides.
+#
+# What makes stepping past them safe is that the walk HALTS at the first token that is not itself a
+# launcher, and whatever it halts on must STILL be in the tables above to have any effect. So the
+# blast radius is exactly the scripts listed there, and every other shape falls through to "not a
+# sink" - the direction that keeps a false positive rather than deleting a finding.
+#
+# `bash -c '<text>'` is therefore handled twice over, and the explicit `-c` test below is belt and
+# braces rather than the load-bearing part: without it the walk simply halts on `-c`, which is not
+# in the tables either. Worth knowing before anyone "simplifies" the walk to skip flags, because
+# that is the change the doubling exists to survive.
+_SCRIPT_LAUNCHERS = frozenset({"bash", "sh", "python", "python3", "py", "run-python.sh"})
 
 # `$(` and a backtick RUN what they enclose, wherever they sit. `${...}` does not, and neither does
 # a substitution written inside single quotes - but telling those apart needs the quoting state,
@@ -587,6 +607,42 @@ def _cut_by_substitution(text: str, at: int, segment: str) -> bool:
     return _RUNS_SUBSTITUTION.match(text, at + len(segment)) is not None
 
 
+def _deciding_program_index(tokens, tool_name):
+    """Index of the token that decides what this statement DOES, or None.
+
+    Two things sit in front of it and neither changes the answer: leading `VAR=value` environment
+    assignments, and launchers that take their script as a separate token. Both were measured in
+    one real corpus command, `BITRANOX_RUN_PYTHON_STRICT=1 bash .../run-python.sh
+    .../memory_engine.py add --hook "..."`, where the old reading took the ASSIGNMENT as the
+    program name.
+
+    The walk stops at the first token that is not a launcher, so the result must still be in the
+    sink tables to matter. It deliberately does NOT scan the whole token list for a known name:
+    `ssh host 'memory_engine.py add ...'` would match such a scan, and blanking it would delete a
+    real finding, which is the one direction this module must never fail in.
+
+    A flag between a launcher and its script (`python3 -u .../memory_engine.py add`) halts the walk
+    at the launcher, so that shape is NOT recognised as a sink. Left deliberately: it fails in the
+    safe direction, keeping a false positive, and the corpus replay that motivated this entry did
+    not contain it. Widen it when one is measured, not before.
+    """
+    at = 0
+    while at < len(tokens) and "=" in tokens[at] and not tokens[at].startswith("-"):
+        at += 1                                     # leading VAR=value environment assignments
+    for _ in range(len(_SCRIPT_LAUNCHERS)):         # bounded: no launcher chain is longer
+        if at >= len(tokens):
+            return None
+        if basename_for_tool(tokens[at], tool_name) not in _SCRIPT_LAUNCHERS:
+            return at
+        nxt = at + 1
+        if nxt >= len(tokens) or tokens[nxt].startswith("-"):
+            return at                               # `-c` and friends run TEXT, not a named script
+        if any(char.isspace() for char in tokens[nxt]):
+            return at                               # a quoted command string, not a script path
+        at = nxt
+    return at
+
+
 def _sink_keep_words(segment: str, tool_name=None) -> int:
     """How many leading words to KEEP when this statement is a data sink; 0 when it is not.
 
@@ -610,12 +666,15 @@ def _sink_keep_words(segment: str, tool_name=None) -> int:
         return 0
     if not tokens:
         return 0
-    program = basename_for_tool(tokens[0], tool_name or "Bash")
+    at = _deciding_program_index(tokens, tool_name or "Bash")
+    if at is None:
+        return 0
+    program = basename_for_tool(tokens[at], tool_name or "Bash")
     if program in _DATA_SINK_PROGRAMS:
-        return 1
+        return at + 1
     for prefix in _DATA_SINK_SUBCOMMANDS.get(program, ()):
         matched, wanted = 0, len(prefix)
-        for position, token in enumerate(tokens[1:], start=2):
+        for position, token in enumerate(tokens[at + 1:], start=at + 2):
             if token.startswith("-"):
                 continue                              # a flag, or a flag's own value
             if token != prefix[matched]:
