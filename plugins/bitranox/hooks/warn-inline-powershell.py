@@ -69,6 +69,26 @@ def _strip_data_regions(command: str) -> str:
     return strip_heredoc_bodies(command)
 
 
+def _powershell_invocation(command: str) -> str | None:
+    """The text of the PowerShell invocation itself, or None.
+
+    Both flag searches used to run over the WHOLE command line, which is wrong in both directions:
+    `ssh win 'powershell.exe job.ps1' && wc -c out.txt` took `wc`'s `-c` as PowerShell's -Command
+    and warned about a footgun nobody wrote, while `ssh -f win '...'` took SSH's backgrounding
+    flag as PowerShell's -File and went SILENT on the exact inline -Command shape this hook
+    exists to catch. The span runs from the shell name to the end of its own statement.
+    """
+    m = _SHELL_RX.search(command)
+    if not m:
+        return None
+    rest = command[m.start():]
+    for sep in ("&&", chr(124) + chr(124), ";", "\n"):
+        cut = rest.find(sep)
+        if cut != -1:
+            rest = rest[:cut]
+    return rest
+
+
 def build_notice(command: str) -> str | None:
     """The nudge text, or None. PURE over the command string - no IO, no environment."""
     if not command:
@@ -76,9 +96,14 @@ def build_notice(command: str) -> str | None:
     command = _strip_data_regions(command)
     if not _SSH_RX.search(command) or not _SHELL_RX.search(command):
         return None
-    if _FILE_FLAG_RX.search(command):
+    # Both flag tests must look at the PowerShell call, not the whole line - see
+    # `_powershell_invocation` for the two directions this was wrong in.
+    invocation = _powershell_invocation(command)
+    if invocation is None:
+        return None
+    if _FILE_FLAG_RX.search(invocation):
         return None                                   # already the -File form this nudge asks for
-    if not _COMMAND_FLAG_RX.search(command):
+    if not _COMMAND_FLAG_RX.search(invocation):
         return None                                   # no command string to be mangled
     return _NOTICE
 

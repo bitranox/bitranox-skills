@@ -119,3 +119,30 @@ def test_garbage_stdin_exits_zero_and_says_nothing() -> None:
     )
     assert r.returncode == 0
     assert r.stdout.strip() == ""
+
+
+def test_newermt_from_another_command_is_not_finds():
+    """`-newermt` belongs to whichever invocation it follows. Scanning every token on the line
+    attributes another command's flag to `find` and describes an invocation nobody wrote."""
+    toks = mod._tokens("grep -rn -- -newermt '-3 minutes' docs/ && find . -name '*.md'")
+    assert mod.find_newermt_relative(toks) is None
+
+
+def test_a_real_relative_newermt_is_still_found():
+    """The direction where it must NOT apply."""
+    toks = mod._tokens("find . -newermt '-3 minutes'")
+    assert mod.find_newermt_relative(toks) == "-3 minutes"
+
+
+def test_a_pin_flag_from_another_command_does_not_count_as_pyright_pinned(tmp_path):
+    """`mkdir -p build && pyright` is an UNPINNED pyright run. `-p` is a pyright pin flag but here
+    it is mkdir's, and reading it as pyright's silences the nudge - a miss, not a false fire."""
+    (tmp_path / ".venv").mkdir()
+    toks = mod._tokens("mkdir -p build && pyright")
+    assert mod.pyright_without_pinned_interpreter(toks, tmp_path) is True
+
+
+def test_a_real_pyright_pin_still_counts(tmp_path):
+    (tmp_path / ".venv").mkdir()
+    toks = mod._tokens("pyright -p pyrightconfig.json")
+    assert mod.pyright_without_pinned_interpreter(toks, tmp_path) is False

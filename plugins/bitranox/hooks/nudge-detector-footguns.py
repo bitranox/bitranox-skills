@@ -68,23 +68,52 @@ def _tokens(command: str) -> list[str]:
         return []
 
 
+_STATEMENT_BREAK = frozenset({"&&", "||", ";", "|", "\n"})
+
+
+def _invocation_tokens(tokens: list[str], program: str) -> list[list[str]]:
+    """Each run of tokens belonging to an invocation of `program`, one list per invocation.
+
+    A flag belongs to the command it FOLLOWS. Scanning every token on the line instead attributes
+    another command's flag to this one, in both directions: it invents a `find -newermt` nobody
+    wrote, and it reads `mkdir -p`'s flag as pyright's pin so a genuinely unpinned run goes
+    unnudged. The second is a MISS, which is the worse half.
+    """
+    runs: list[list[str]] = []
+    current: list[str] | None = None
+    for tok in tokens:
+        if tok in _STATEMENT_BREAK:
+            current = None
+            continue
+        if tok == program or tok.endswith("/" + program):
+            current = []
+            runs.append(current)
+            continue
+        if current is not None:
+            current.append(tok)
+    return runs
+
+
 def find_newermt_relative(tokens: list[str]) -> str | None:
     """Return the offending -newermt value, or None."""
-    if not any(t == "find" or t.endswith("/find") for t in tokens):
-        return None
-    for i, tok in enumerate(tokens):
-        if tok == "-newermt" and i + 1 < len(tokens):
-            value = tokens[i + 1]
-            if _RELATIVE_TIME_RE.match(value):
-                return value
+    for run in _invocation_tokens(tokens, "find"):
+        for i, tok in enumerate(run):
+            if tok == "-newermt" and i + 1 < len(run):
+                value = run[i + 1]
+                if _RELATIVE_TIME_RE.match(value):
+                    return value
     return None
 
 
 def pyright_without_pinned_interpreter(tokens: list[str], cwd: Path) -> bool:
     """True when pyright runs unpinned in a tree that actually has a virtualenv."""
-    if not any(t == "pyright" or t.endswith("/pyright") for t in tokens):
+    runs = _invocation_tokens(tokens, "pyright")
+    if not runs:
         return False
-    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith("--pythonpath=") or t.startswith("--venvpath=") for t in tokens):
+    # A pin flag counts only if it is PYRIGHT's. `-p` is also mkdir's, and reading `mkdir -p build
+    # && pyright` as pinned silenced the nudge on an unpinned run.
+    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith("--pythonpath=") or t.startswith("--venvpath=")
+           for run in runs for t in run):
         return False
     try:
         return any((cwd / d).is_dir() for d in _VENV_DIRS if d)

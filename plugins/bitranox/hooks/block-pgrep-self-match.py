@@ -92,11 +92,17 @@ def bracket_leaks(cmd):
     A contiguous occurrence cannot come from the bracket form itself, so it is
     always a real label/comment leak.
     """
+    # Only patterns belonging to a real pgrep/pkill invocation can self-match. Scanning the whole
+    # command reported ANOTHER command's bracket trick as a leak - `grep "[s]shd"` is grep's own
+    # search pattern, and the bracket form there is correct usage, not a footgun.
     leaked = []
-    for tok in _BRACKET_TOKEN.findall(cmd):
-        literal = tok[1] + tok[3:]  # drop the '[' and the ']'
-        if literal in cmd:
-            leaked.append(f"{tok} -> {literal}")
+    for call in _INVOCATION.findall(cmd):
+        for tok in _BRACKET_TOKEN.findall(call):
+            literal = tok[1] + tok[3:]  # drop the '[' and the ']'
+            if literal in cmd:
+                entry = f"{tok} -> {literal}"
+                if entry not in leaked:
+                    leaked.append(entry)
     return leaked
 
 

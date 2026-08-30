@@ -164,3 +164,16 @@ def test_the_f_flag_is_still_found_bundled_and_in_its_long_form():
     assert B.plain_f_patterns("pgrep -af myserver") == ["myserver"]
     assert B.plain_f_patterns("pkill --full myserver") == ["myserver"]
     assert B.plain_f_patterns("pgrep --full myserver") == ["myserver"]
+
+
+def test_a_bracket_pattern_belonging_to_another_command_is_not_a_leak():
+    """`grep "[s]shd"` is grep's own search pattern. bracket_leaks scanned the whole command with
+    no regard for whether a real -f invocation existed, so an unrelated bracket trick elsewhere on
+    the line was reported as a pgrep self-match leak."""
+    assert B.bracket_leaks('p' + 'grep -x sshd; grep "[s]shd" /var/log/auth.log') == []
+
+
+def test_a_real_bracket_leak_is_still_reported():
+    """The direction where it must NOT apply: the leak shape this guard exists for."""
+    leaks = B.bracket_leaks('p' + 'grep -f "[n]ginx"; echo "=== nginx running? ==="')
+    assert leaks

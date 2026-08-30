@@ -136,3 +136,16 @@ def test_a_real_inline_powershell_is_still_warned():
     strings: in the ssh form the command IS a quoted argument, and it DOES run."""
     assert W.build_notice('ssh host powershell -command "Get-Process"') is not None
     assert W.build_notice("""ssh host 'powershell -command "Get-Process"'""") is not None
+
+
+def test_a_command_flag_from_another_statement_is_not_powershells():
+    """`ssh win 'powershell.exe C:/tmp/job.ps1' && wc -c out.txt` runs a .ps1 BY PATH - there is no
+    -Command anywhere in the PowerShell call. The `-c` was taken from `wc -c` on the other side of
+    the &&, so the nudge described a footgun nobody wrote."""
+    assert W.build_notice("ssh win 'powershell.exe C:/tmp/job.ps1' && wc -c out.txt") is None
+
+
+def test_an_ssh_backgrounding_flag_is_not_powershells_file_flag():
+    """`ssh -f` backgrounds ssh. Reading it as PowerShell's -File made the hook SILENT on the exact
+    inline -Command footgun it exists to catch - a miss, which is the worse direction."""
+    assert W.build_notice("""ssh -f win 'powershell -Command "Get-Process"'""") is not None

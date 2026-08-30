@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.283.0]
+
+### Fixed
+
+Rank 7 continued - a flag belongs to the invocation it FOLLOWS, not to the line it sits on.
+Three hooks searched the whole command, which is wrong in both directions at once.
+
+- **`nudge-detector-footguns` attributed another command's flags to its target.** A
+  `-newermt` written as an argument to `grep` was reported as a `find` invocation
+  nobody wrote; and `mkdir -p build` standing before `pyright` made an UNPINNED pyright
+  run read as pinned, so the nudge went silent - a miss, which is the worse half. Both scans now
+  walk only the tokens belonging to each invocation, via a shared `_invocation_tokens`.
+- **`block-pgrep-self-match` reported another command's bracket trick as a leak.**
+  `bracket_leaks` scanned the whole command with no regard for whether a real invocation
+  existed, so `grep "[s]shd"` - correct usage of the bracket form, in grep's own search
+  pattern - was reported as a self-match leak. It now looks only inside a real invocation span.
+- **`warn-inline-powershell` took its flags from anywhere on the line.** `wc -c` after an
+  `&&` counted as PowerShell's `-Command` and warned about a footgun nobody wrote, while
+  `ssh -f` counted as PowerShell's `-File` and silenced the hook on the exact inline
+  `-Command` shape it exists to catch. Both tests now run against the PowerShell invocation's
+  own span.
+
 ## [5.282.0]
 
 ### Fixed
