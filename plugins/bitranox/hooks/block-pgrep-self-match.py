@@ -47,11 +47,25 @@ import sys
 
 # A pgrep/pkill invocation up to the next shell separator, so only the flags and
 # pattern belonging to THIS call are read.
-_INVOCATION = re.compile(r"\b(?:pgrep|pkill)\b[^|;&\n]*")
+#
+# The program name must be a whole TOKEN, not a substring. `\b` is not that test: a hyphen is a
+# word boundary, so `\bpgrep\b` matched the FILENAME `block-pgrep-self-match` and the guard then
+# read the rest of the line as that call's arguments. A leading `/` is allowed because
+# `/usr/bin/pgrep` is a real invocation; a trailing `-`, `.` or word character is not, because
+# `pgrep-self-match` and `pkill-notes.md` name files, not programs.
+_PROGRAM = r"(?<![\w-])(?:pgrep|pkill)(?![\w.-])"
+_INVOCATION = re.compile(_PROGRAM + r"[^|;&\n]*")
 
-# `-f`, alone or bundled (e.g. -af), followed by its pattern argument: a
-# double-quoted, single-quoted, or bare token.
-_DASH_F_PATTERN = re.compile(r"-[a-zA-Z]*f[a-zA-Z]*\s+(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
+# `-f`, alone or bundled (e.g. -af) or in its long form (--full), followed by its pattern
+# argument: a double-quoted, single-quoted, or bare token.
+#
+# The FLAG must start at a token boundary. Without that guard the `-` inside a hyphenated word
+# matched: `nudge-detector-footguns reformat-md-tables` was read as the flag `-footguns` carrying
+# the pattern `reformat-md-tables`, inventing an invocation out of two filenames. The dash RUN is
+# `-{1,2}` rather than a single `-` because `--full` is a real self-matcher and is matched today;
+# requiring one dash would have silently dropped it.
+_DASH_F_PATTERN = re.compile(
+    r"(?<![\w-])-{1,2}[a-zA-Z]*f[a-zA-Z]*\s+(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
 
 _BRACKET_TOKEN = re.compile(r"\[[^\]]\][A-Za-z0-9_./@:+-]+")
 
@@ -116,7 +130,7 @@ def main() -> int:
     cmd = strip_data_bodies(cmd)
 
     # Fast path: only guard commands that call pgrep/pkill.
-    if not re.search(r"\b(pgrep|pkill)\b", cmd):
+    if not re.search(_PROGRAM, cmd):
         return 0
 
     # An explicit self-exclusion means the caller already handled it.

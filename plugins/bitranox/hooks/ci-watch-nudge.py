@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 import ci_watch_state as state
-from shell_text import is_shell_tool, mask_data_regions
+from shell_text import commands_only, is_shell_tool
 
 __all__ = ["main", "notice"]
 
@@ -71,7 +71,7 @@ def _repo_dir(command: str, cwd: str) -> str | None:
     offsets, because masking preserves length. Comparing values on the masked form would decide the
     path by its filler, not by what it says.
     """
-    found = _DASH_C.search(mask_data_regions(command))
+    found = _DASH_C.search(commands_only(command))
     if not found:
         return cwd
     token = command[found.start(1):found.end(1)]
@@ -134,7 +134,7 @@ def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
     is the object being sent. Bulk `--tags` names no ref, so the newest local tag by creation date
     stands in - the tag just cut is the one whose run is wanted.
     """
-    rest = _AFTER_PUSH.search(mask_data_regions(command))
+    rest = _AFTER_PUSH.search(commands_only(command))
     if not rest:
         return None
     span = rest.span("rest")
@@ -147,7 +147,7 @@ def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
         found = _resolve_ref(repo, source) if source and source != "HEAD" else None
         if found:
             return found
-    if _BULK_TAGS.search(mask_data_regions(command)):
+    if _BULK_TAGS.search(commands_only(command)):
         # In `for-each-ref` the LAST --sort key is the PRIMARY one (measured, not assumed), so
         # this reads as: newest by creation date, ties broken by version order. Creation date
         # alone is not enough - tags cut in the same second tie, and the fallback is plain
@@ -170,7 +170,7 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
         return None
     # Read STRUCTURE from the masked form so a command merely quoting "git push" cannot trigger it,
     # then take VALUES from the real repo rather than from the text.
-    masked = mask_data_regions(command)
+    masked = commands_only(command)
     if not _PUSH.search(masked) or _NOT_A_BUILD.search(masked):
         return None
     repo = _repo_dir(command, cwd) if cwd else None
@@ -213,7 +213,7 @@ def main(raw: str | None = None) -> int:
         return 0
 
     try:
-        masked = mask_data_regions(command)
+        masked = commands_only(command)
         if _WATCHING.search(masked):
             state.clear_session(key, session)
             return 0

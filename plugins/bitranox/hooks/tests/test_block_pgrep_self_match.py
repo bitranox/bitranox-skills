@@ -128,3 +128,39 @@ def test_subprocess_block_via_shim():
     )
     assert res.returncode == 2
     assert "BLOCKED" in res.stderr
+
+
+# --- A trigger must be a whole shell TOKEN, not a substring. ----------------------------------
+# Both halves fired together on a real command in this repo: a `for` loop naming the hook files
+# matched "pgrep" inside the FILENAME block-pgrep-self-match, then matched "-f" inside the WORD
+# detector-footguns and read the following word as its pattern. Neither text runs anything.
+
+def test_a_program_name_inside_a_hyphenated_filename_is_not_an_invocation():
+    assert B.plain_f_patterns("ls block-pgrep-self-match.py -f x") == []
+    assert B.plain_f_patterns("cat pkill-notes.md -f x") == []
+
+
+def test_a_real_invocation_is_still_found_however_it_is_spelled():
+    """The direction where it must NOT apply: tightening the boundary must not lose a real call,
+    including one given by absolute path, after a pipe, or inside an ssh argument."""
+    assert B.plain_f_patterns("pgrep -f myserver") == ["myserver"]
+    assert B.plain_f_patterns("/usr/bin/pgrep -f myserver") == ["myserver"]
+    assert B.plain_f_patterns("ls | pkill -f myserver") == ["myserver"]
+    assert B.plain_f_patterns("""ssh host 'pkill -f "iperf3 -s"'""") == ["iperf3 -s"]
+
+
+def test_a_dash_f_inside_a_word_is_not_the_f_flag():
+    """`-f` has to be its own token. Inside `detector-footguns` it is not, and reading the next
+    word as the pattern invents an invocation out of two unrelated filenames. This is the exact
+    command that fired: a shell loop naming the hook source files."""
+    assert B.plain_f_patterns("for h in pgrep-self-match nudge-detector-footguns reformat-md-tables") == []
+
+
+def test_the_f_flag_is_still_found_bundled_and_in_its_long_form():
+    """The long form is a REAL self-matcher and is matched today, so the token-boundary fix must
+    keep it. Requiring the flag to start at a token boundary is not the same as requiring a single
+    leading dash - measured before the fix: `pkill --full x` already returned ["x"], and a naive
+    `(?<![\\w-])-` guard would have silently dropped it."""
+    assert B.plain_f_patterns("pgrep -af myserver") == ["myserver"]
+    assert B.plain_f_patterns("pkill --full myserver") == ["myserver"]
+    assert B.plain_f_patterns("pgrep --full myserver") == ["myserver"]

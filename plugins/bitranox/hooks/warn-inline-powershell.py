@@ -25,6 +25,8 @@ import json
 import re
 import sys
 
+from shell_text import strip_heredoc_bodies
+
 # `pwsh` is PowerShell 7+; both take -Command/-c and both are reached the same way over ssh.
 _SHELL_RX = re.compile(r"\b(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b", re.IGNORECASE)
 _SSH_RX = re.compile(r"\bssh\b", re.IGNORECASE)
@@ -47,14 +49,24 @@ _NOTICE = (
 
 
 def _strip_data_regions(command: str) -> str:
-    """Blank out heredoc bodies, which are DATA the shell hands on, not commands it runs.
+    """Every DATA region the shell will not execute - heredoc bodies AND quoted arguments.
 
     Without this the nudge fires on its own documentation and on its own test fixtures: a heredoc
     that WRITES an example of the wrong form is not an instance of the wrong form. Measured while
     hardening this hook - appending a test whose fixture string contained
     `ssh host powershell -Command ...` tripped it.
+
+    Heredoc bodies ONLY - deliberately not `commands_only`, which also masks quoted strings. This
+    hook's whole subject is a command inside a QUOTED ARGUMENT that ssh executes remotely, so
+    masking quotes deletes the thing it exists to find: measured, `ssh host \'powershell -command
+    "Get-Process"\'` stopped firing entirely and took six tests with it. The shared strip is used
+    for the heredoc half so this hook stops carrying a private regex for it.
+
+    KNOWN AND NOT FIXED: `echo \'ssh host powershell -command x\'` and a `git commit -m` message
+    describing the footgun still fire, because at this level a quoted string is indistinguishable
+    from the ssh one that DOES run. Telling them apart needs the ENCLOSING command, not the quote.
     """
-    return re.sub(r"<<-?\s*'?\"?(\w+)'?\"?.*?^\1", "", command, flags=re.S | re.M)
+    return strip_heredoc_bodies(command)
 
 
 def build_notice(command: str) -> str | None:

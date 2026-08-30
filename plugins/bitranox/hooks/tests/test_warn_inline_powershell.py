@@ -124,3 +124,15 @@ def test_a_heredoc_body_is_data_not_a_command():
 def test_a_real_inline_invocation_still_fires():
     """The control: stripping data regions must not disarm the guard."""
     assert W.build_notice('ssh host powershell -Command "Get-Process | Select Name"') is not None
+
+
+def test_a_heredoc_body_writing_the_wrong_form_is_not_the_wrong_form():
+    """A heredoc body is DATA. Documenting the footgun must not trip the hook that warns about it."""
+    assert W.build_notice('cat > doc.md <<EOF\nssh host powershell -command "x"\nEOF') is None
+
+
+def test_a_real_inline_powershell_is_still_warned():
+    """The direction where it must NOT apply, and the reason this hook must NOT mask quoted
+    strings: in the ssh form the command IS a quoted argument, and it DOES run."""
+    assert W.build_notice('ssh host powershell -command "Get-Process"') is not None
+    assert W.build_notice("""ssh host 'powershell -command "Get-Process"'""") is not None

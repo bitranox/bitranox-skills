@@ -17,6 +17,34 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.281.0]
+
+### Added
+
+- **`shell_text.commands_only`** - the pairing every command-scanning guard needs, in one call.
+  `mask_data_regions` cannot see a heredoc BODY (a body is not quoted) and `strip_heredoc_bodies`
+  cannot see a quoted ARGUMENT; a guard calling one is wrong in whichever direction it skipped,
+  and which half it skipped is invisible at the call site. Its docstring names the exception:
+  a guard whose subject is `ssh host '...'` or another execute-this-string form must NOT mask
+  quotes, because that deletes what it is looking for.
+
+### Fixed
+
+- **`block-pgrep-self-match` blocked commands that call nothing.** The program name and the `-f`
+  flag were matched as SUBSTRINGS. `\bpgrep\b` matched inside the filename
+  `block-pgrep-self-match`, and `-f` matched inside the word `detector-footguns`, whose following
+  word was then read as the pattern - so a shell loop naming the hook source files was blocked as
+  a self-matching pgrep. Both now require a whole token. The dash run stays `-{1,2}` because
+  `--full` is a real self-matcher that was already matched, and requiring a single dash would have
+  silently dropped it.
+- **`ci-watch-nudge` read `git -C <path>` out of a heredoc BODY** and watched CI in a repository
+  the command never touched. It masked data regions at all five sites but never stripped heredoc
+  bodies; all five now go through `commands_only`.
+- **`block-partial-typecheck` read a pyright invocation out of a heredoc body**, so writing a doc
+  that contains a narrow pyright call was blocked as being one.
+- **`warn-inline-powershell` carried a private heredoc regex**, now the shared strip. It keeps
+  heredoc-only stripping ON PURPOSE - see the `commands_only` exception above.
+
 ## [5.280.0]
 
 ### Changed

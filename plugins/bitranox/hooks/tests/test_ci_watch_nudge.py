@@ -263,3 +263,19 @@ def test_bulk_tags_prefers_the_newest_by_time_not_the_highest_version(repo, caps
     text = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "tag v2.0.0" in text, "picked the highest version instead of the newest tag"
     assert "v10.0.0" not in text
+
+
+
+def test_a_dash_c_inside_a_heredoc_body_is_not_the_repo():
+    """A heredoc body is stdin DATA. Reading `git -C <path>` out of one makes the nudge watch CI
+    in a repository the command never touched - it would report on the wrong repo, confidently.
+    `mask_data_regions` alone cannot catch this: a heredoc body is not quoted, so masking leaves
+    it looking like a statement. The canonical idiom pairs it with `strip_heredoc_bodies`, which
+    `git-wrong-repo-nudge` and `git-path-not-here-nudge` both use and this hook does not."""
+    cmd = "cat > r.md <<EOF\ngit -C /fake/repo push\nEOF\ngit push origin master"
+    assert hook._repo_dir(cmd, "/cwd") != "/fake/repo"
+
+
+def test_a_real_dash_c_is_still_the_repo():
+    """The direction where it must NOT apply."""
+    assert hook._repo_dir("git -C /real/repo push origin master", "/cwd") == "/real/repo"

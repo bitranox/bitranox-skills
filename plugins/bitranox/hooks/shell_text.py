@@ -337,6 +337,31 @@ def is_gated_command(command, tool_name=None):
     return False
 
 
+def commands_only(command: str) -> str:
+    """`command` with every DATA region removed, leaving only text the shell will EXECUTE.
+
+    The pairing every command-scanning guard needs, in one call. Each half alone leaves a hole the
+    other closes, and both holes have shipped: `mask_data_regions` cannot see a heredoc BODY,
+    because a body is not quoted, so a `git -C /elsewhere` written into a runbook read as the repo
+    the command acts on; `strip_heredoc_bodies` cannot see a quoted ARGUMENT, so `echo 'pgrep -f x'`
+    read as an invocation. A guard that calls only one is not half-safe, it is wrong in whichever
+    direction it skipped - and which half was skipped is invisible at the call site, which is why
+    this exists instead of the two-call idiom.
+
+    Offsets do NOT survive: the heredoc strip removes lines. A caller that needs POSITIONS (to tell
+    a write before the verb from one after it) must use `mask_data_regions` and handle heredocs
+    itself - `gated-prep-nudge` is the one that does.
+
+    NOT for every guard, and the exception is not an edge case. A quoted string is data to the
+    LOCAL shell and a COMMAND to a remote one, so a guard whose subject is `ssh host \'...\'`,
+    `bash -c \'...\'` or any other execute-this-string form must NOT mask quotes - that deletes
+    exactly what it is looking for. Measured: routing `warn-inline-powershell` through this made
+    `ssh host \'powershell -command "x"\'` stop firing and took six tests with it. Those guards
+    want `strip_heredoc_bodies` alone. Ask what the guard's subject IS before reaching for this.
+    """
+    return mask_data_regions(strip_heredoc_bodies(command or ""))
+
+
 def strip_heredoc_bodies(command: str) -> str:
     """Drop heredoc bodies, keeping the command lines around them.
 

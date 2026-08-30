@@ -190,3 +190,15 @@ def test_a_powershell_pathed_pyright_still_blocks(monkeypatch, project):
     """
     cmd = "C:" + _BS + "venv" + _BS + "Scripts" + _BS + "pyright.exe src"
     assert run_main(monkeypatch, cmd, project, tool_name="PowerShell") == 2
+
+
+def test_a_pyright_call_inside_a_heredoc_body_is_not_a_call():
+    """A heredoc body is DATA. A doc or script that merely CONTAINS a narrow pyright invocation
+    is not one, and blocking it stops the footgun being written down."""
+    cmd = "cat > notes.md <<EOF\npyright src/one_file.py\nEOF"
+    assert B._pyright_positionals(cmd) is None
+
+
+def test_a_real_pyright_call_after_a_heredoc_is_still_seen():
+    cmd = "cat > notes.md <<EOF\nprose\nEOF\npyright src/one_file.py"
+    assert B._pyright_positionals(cmd) == ["src/one_file.py"]

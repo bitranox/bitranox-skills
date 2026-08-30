@@ -94,7 +94,11 @@ def _pyright_positionals(cmd: str, tool_name: str = "Bash") -> list[str] | None:
     Either half missing lets a partial typecheck through the gate that exists to catch it.
     """
     try:
-        tokens = shell_text.split_for_tool(cmd, tool_name, comments=True)
+        # Heredoc bodies first: a body is stdin DATA, so a doc or script that merely CONTAINS a
+        # narrow pyright invocation is not one, and blocking it stops the footgun being written
+        # down - the guard-blocks-its-own-documentation shape this gate has hit before.
+        tokens = shell_text.split_for_tool(
+            shell_text.strip_heredoc_bodies(cmd), tool_name, comments=True)
     except ValueError:
         return None  # unbalanced quotes: not ours to judge
 
