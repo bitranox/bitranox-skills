@@ -58,3 +58,22 @@ row, one rationale bullet, one description trigger.
 - [x] No session narrative, no scratch paths, no machine-specific addresses in the script or here.
 - [x] `subprocess.run` passes `encoding="utf-8", errors="replace"` - without it Windows decodes in
       a reader thread and returns stdout=None.
+
+## Follow-up (same day, after the decision review)
+- [x] The UNUSABLE message named only ONE of its two causes. A chatty subject - one that prints a
+      banner on every run - produces the identical verdict under the default `--fired-when output`,
+      so the original wording would send a reader to fix a control that was never wrong.
+- [x] RED first: 5 tests failed on `unusable_cause` missing. One assertion was rewritten before
+      implementing because it was convoluted enough to pass vacuously.
+- [x] The two causes are separated by COUNT, not by inspection: every claim unusable means the
+      subject fired on every input; some means a control does not discriminate. A lone unusable
+      claim still reports against the control - one data point cannot show a pattern.
+- [x] Verified against real subjects in both arms, not assertions alone: a banner-printing guard
+      gives the subject message, and the shipped `sed-line1-range-nudge.py` with one deliberately
+      broken control gives the control message.
+- [x] The ADVICE was executed, not just worded: under the default a realistic chatty guard yields
+      all-UNUSABLE, and following the printed suggestion (`--fired-when nonzero`) produces real
+      verdicts while the broken control correctly stays UNUSABLE.
+- [x] The direction where it must NOT apply has its own test: a partial-unusable run still points
+      at the control, and it passed BEFORE the change, so it guards against the new branch
+      over-firing.

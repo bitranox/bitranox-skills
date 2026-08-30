@@ -205,3 +205,57 @@ def test_runs_as_a_subprocess(tmp_path):
                          capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert res.returncode == 0
     assert "CONFIRMED" in res.stdout
+
+
+# ---- telling a broken control from a chatty subject ---------------------------------------------
+#
+# Both produce UNUSABLE, and the original message named only the first, which would send a reader to
+# fix a control that was never wrong. The distinguishing signal is already in hand: one broken
+# control is a control problem, EVERY claim unusable is the subject firing on everything.
+
+def test_one_unusable_among_several_blames_the_control():
+    results = [
+        A.Adjudication("a", "CONFIRMED", A.Run(0), A.Run(0), True, False),
+        A.Adjudication("b", "UNUSABLE", A.Run(0), A.Run(0), True, True),
+    ]
+    assert A.unusable_cause(A.summarize(results)) == "control"
+
+
+def test_every_claim_unusable_blames_the_subject():
+    results = [
+        A.Adjudication("a", "UNUSABLE", A.Run(0), A.Run(0), True, True),
+        A.Adjudication("b", "UNUSABLE", A.Run(0), A.Run(0), True, True),
+    ]
+    assert A.unusable_cause(A.summarize(results)) == "subject"
+
+
+def test_a_single_claim_that_is_unusable_blames_the_control_not_the_subject():
+    """One claim is not evidence of a pattern - with n=1 there is nothing to distinguish."""
+    results = [A.Adjudication("a", "UNUSABLE", A.Run(0), A.Run(0), True, True)]
+    assert A.unusable_cause(A.summarize(results)) == "control"
+
+
+def test_no_unusable_has_no_cause():
+    results = [A.Adjudication("a", "CONFIRMED", A.Run(0), A.Run(0), True, False)]
+    assert A.unusable_cause(A.summarize(results)) is None
+
+
+def test_the_all_unusable_warning_names_the_subject_and_the_fired_when_flag(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, 'sys.stdin.read()\nprint("banner on every run")\n')
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"one","probe":"TRAP","control":"clean"}\n'
+                 '{"name":"two","probe":"TRAP2","control":"clean"}\n', encoding="utf-8")
+    A.main(["--hook", str(hook), "--claim-file", str(f)])
+    err = capsys.readouterr().err
+    assert "subject" in err
+    assert "--fired-when" in err
+
+
+def test_the_partial_unusable_warning_still_points_at_the_control(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nif "TRAP" in data or "BOTH" in data: print("f")\n')
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"good","probe":"TRAP","control":"clean"}\n'
+                 '{"name":"bad","probe":"TRAP","control":"BOTH"}\n', encoding="utf-8")
+    A.main(["--hook", str(hook), "--claim-file", str(f)])
+    err = capsys.readouterr().err
+    assert "control" in err

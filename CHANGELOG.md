@@ -17,6 +17,27 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.1]
+
+### Fixed
+
+- **`adjudicate`'s UNUSABLE message named only one of that verdict's two causes.** A control that
+  does not differ in the claimed way produces it - and so does a chatty SUBJECT, one that prints a
+  banner on every run, since the default `--fired-when output` counts that as firing. The original
+  wording said "fix the control and re-run", which would send a reader to rewrite a control that
+  was never wrong, at the moment they are least able to tell.
+
+  The two are separable by count rather than by inspection: one unusable claim among several is a
+  control problem, while EVERY claim unusable means the subject fired on every input it was given.
+  A lone unusable claim still reports against the control, because one data point cannot show a
+  pattern. The all-unusable message now names the subject and points at `--fired-when nonzero` or
+  `match`.
+
+  The advice was executed rather than only worded: a realistic chatty guard yields all-UNUSABLE
+  under the default, and following the printed suggestion produces real verdicts while a
+  deliberately broken control correctly stays UNUSABLE. 6 tests, one of which passes BEFORE the
+  change - the direction where the new branch must not fire.
+
 ## [5.287.0]
 
 ### Added

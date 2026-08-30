@@ -124,8 +124,13 @@ Per-tool arguments live in each tool's `--help` (loaded only when used, so this 
   third bucket is the point: when BOTH sides fire, the control did not discriminate and the run
   measured nothing, which is not the same as the claim being refuted. Collapsing the two reported
   10 claims refuted where the truth was 7 refuted plus 3 never tested, and a report of refuted
-  claims is acted on by deleting the finding. Any UNUSABLE claim exits 1 for that reason. Re-run it
-  after every fix: a fix that turns the suite green has twice not closed the finding it was for.
+  claims is acted on by deleting the finding. Any UNUSABLE claim exits 1 for that reason. It also
+  says WHICH END is at fault, because two different causes give that one verdict: one unusable
+  claim among several is a control that does not differ in the claimed way, while EVERY claim
+  unusable is the subject firing on every input - which under the default `--fired-when output` is
+  what a program that always prints a banner looks like, and the fix there is `--fired-when
+  nonzero` or `match`, not a rewritten control. Re-run it after every fix: a fix that turns the
+  suite green has twice not closed the finding it was for.
 - **`newest` never compares names.** `ls <glob> | sort | tail -1` looks like "the newest" and is
   not: a longer name sharing the same date prefix sorts AFTER a shorter one, so an extra word
   beats the date. Pruning the wrong file this way is loud and gets noticed; VERIFYING against the

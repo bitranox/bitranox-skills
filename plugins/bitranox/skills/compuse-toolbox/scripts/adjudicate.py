@@ -16,6 +16,10 @@ outcome has THREE buckets rather than two:
     UNUSABLE    probe fired AND control fired     - the control did not discriminate, so this run
                                                     says nothing; fix the control and re-run
 
+When EVERY claim comes back UNUSABLE the fault is usually the SUBJECT rather than the controls: it
+fires on every input it is given, and under the default `--fired-when output` a banner it always
+prints counts as firing. The report says which of the two it is, because the fix differs.
+
 UNUSABLE is the bucket that keeps getting lost. Folding it into REFUTED reads as a clean sweep and
 is how one pass reported 10 claims refuted where the truth was 7 refuted plus 3 never actually
 tested. The exit code is built around that: any UNUSABLE claim makes the whole run exit 1, so a
@@ -199,6 +203,25 @@ def load_claims(claim_file, name, probe, control) -> list[Claim]:
     return claims
 
 
+def unusable_cause(summary: dict) -> str | None:
+    """Which end is at fault when claims come back UNUSABLE - "control", "subject", or None.
+
+    Both causes produce the identical verdict, and naming only the first sends a reader to fix a
+    control that was never wrong. They are separable by COUNT rather than by inspection: one claim
+    unusable among several is a control that does not differ in the claimed way, while EVERY claim
+    unusable means the subject fired on every input it was given - which under the default
+    `--fired-when output` is what a program that prints a banner unconditionally looks like.
+
+    Two claims is the smallest sample that can show a pattern, so a lone unusable claim is still
+    reported against the control: with one data point there is nothing to distinguish.
+    """
+    if not summary["unusable"]:
+        return None
+    if summary["unusable"] == summary["total"] and summary["total"] > 1:
+        return "subject"
+    return "control"
+
+
 def _report(results: list[Adjudication], summary: dict) -> None:
     """The human view. Every UNUSABLE line says what to do, because the verdict is about the
     instrument rather than about the claim."""
@@ -251,9 +274,16 @@ def main(argv=None) -> int:
 
     if not summary["ok"]:
         # Always stderr, --json included, so stdout stays a clean parseable envelope.
-        print(f"adjudicate: {summary['unusable']} claim(s) UNUSABLE - the control fired too, so "
-              f"these were never actually tested: {', '.join(summary['unusable_names'])}. "
-              f"Do NOT read them as refuted.", file=sys.stderr)
+        if unusable_cause(summary) == "subject":
+            print(f"adjudicate: ALL {summary['total']} claim(s) UNUSABLE - the subject fired on "
+                  f"every input, including every control, so nothing was measured. That is usually "
+                  f"the subject rather than the controls: under --fired-when output any banner it "
+                  f"always prints counts as firing. Try --fired-when nonzero, or --fired-when "
+                  f"match with --fired-pattern. Do NOT read these as refuted.", file=sys.stderr)
+        else:
+            print(f"adjudicate: {summary['unusable']} claim(s) UNUSABLE - the control fired too, so "
+                  f"these were never actually tested: {', '.join(summary['unusable_names'])}. "
+                  f"Do NOT read them as refuted.", file=sys.stderr)
 
     if args.json:
         print(json.dumps({"ok": summary["ok"], "command": "adjudicate", "skipped": [],
