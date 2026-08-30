@@ -17,6 +17,28 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.0]
+
+### Added
+
+- **`adjudicate`, a new `compuse-toolbox` jig: score a claim about a guard against a CONTROL.**
+  Running the one input that shows a claim proves the claim and the guard are compatible, never
+  that the guard discriminates - without a second run differing only in the thing claimed, "it
+  fired" and "it fires on everything" are the same observation. So it runs both and keeps THREE
+  verdicts: CONFIRMED (probe fired, control did not), REFUTED (probe did not fire, whatever the
+  control did), UNUSABLE (both fired, so nothing was measured).
+
+  UNUSABLE is the bucket that keeps being lost. Folded into REFUTED it reads as a clean sweep over
+  broken controls - one pass reported 10 claims refuted where the truth was 7 refuted plus 3 never
+  tested, and a refuted claim is acted on by deleting the finding. Any UNUSABLE claim therefore
+  makes the whole run exit 1, so the report cannot be mistaken for all-clear.
+
+  Verified against the shipped `sed-line1-range-nudge.py` rather than fixtures alone, with three
+  claims chosen so every bucket must appear; the UNUSABLE arm uses a deliberately broken control
+  that a two-bucket harness would have called CONFIRMED. The subject is built as an argv LIST, so
+  there is no command string to split and the POSIX-vs-Windows quoting bug is unreachable rather
+  than handled. 27 tests.
+
 ## [5.286.1]
 
 ### Fixed
