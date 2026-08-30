@@ -17,6 +17,40 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.2]
+
+### Fixed
+
+- **`sed-line1-range-nudge` could not see the trap run over ssh.** `_TRAP` accepted only the start
+  of the string, a separator, or whitespace in front of `sed`, so in
+  `ssh host 'sed -i 1,/^---$/d /etc/x'` the preceding character was ssh's own opening quote and the
+  range was invisible. The same shape on the local host fired normally, which is what made the gap
+  hard to notice: the miss was not a class of command, it was one character.
+
+  A quote is a word boundary in the shell, so it separates a command exactly as whitespace does and
+  now counts as a command position. The class stays a boundary set rather than dropping the prefix
+  requirement, because `mysed 1,/re/d` must still not match; a test pins that direction, and it
+  fails if the prefix is widened to nothing.
+
+  This is NOT the exec-carrier recursion declined in 5.286.1, and the difference is the direction
+  the error runs. Nothing here re-interprets the quoted text or changes what any other guard sees.
+  Widening a prefix class can only ever ADD a firing, so the reachable mistake is keeping a false
+  positive, which for a nudge is the tolerable one. Carrier recursion decides what a guard SEES,
+  where the reachable mistake is deleting a finding, silently, in a hook that fails open.
+
+  Measured over 14 cases before and after: 3 true detections gained (ssh single- and double-quoted,
+  and `bash -c`), 11 verdicts unchanged, and 1 false positive added. That false positive is
+  `grep -rn 'sed 1,/re/d' .`, searching for the footgun rather than running it. It joins the class
+  the four-entry data-sink allowlist already accepts by decision for the sibling nudges, and it is
+  the measured case that would justify revisiting that allowlist.
+
+  The previous release recorded this as a `strict=True` xfail rather than describing it, which is
+  what turned it into a failing test the moment it started passing. Each half of the fix was
+  verified by mutation, since a green suite has three times now not closed the finding it was
+  written for: reverting the widening fails the three new detections, removing the boundary fails
+  the mid-word test, and removing the data-sink strip fails both new quiet tests, which confirms
+  they are held up by the strip and not by `_TRAP`. 5 tests added, 1 xfail retired.
+
 ## [5.287.1]
 
 ### Fixed

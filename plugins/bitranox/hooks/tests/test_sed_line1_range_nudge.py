@@ -139,14 +139,43 @@ def test_the_tool_name_reaches_the_sink_strip():
     assert N.notice(cmd, "Bash") is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN MISS, recorded rather than described. _TRAP requires the start of the string, a "
-           "separator, or whitespace before `sed`, and inside `ssh host '...'` the preceding "
-           "character is the opening quote of ssh's own argument - so a real remote sed range is "
-           "not seen. Closing it needs the enclosing command modelled as an EXEC CARRIER, which "
-           "the data-sink allowlist deliberately does not do: that allowlist can only ever keep a "
-           "false positive, while carrier recursion changes what every guard SEES. strict=True so "
-           "this turns into a failure the day it starts passing, instead of quietly staying green.")
+# ---- a quote is a command position too ----------------------------------------------------------
+#
+# `sed` after ssh's opening quote is the same trap run on another host, and it read as invisible
+# for as long as `_TRAP` accepted only whitespace or a separator in front. Closing it widened that
+# class by two characters; these pin both directions of the widening, because only the pair is
+# discriminating - the quiet cases below stay quiet through the data-sink strip, NOT through
+# `_TRAP`, so a regression in either one alone would still leave half of them passing.
+
 def test_a_sed_range_inside_an_ssh_argument_is_noticed():
     assert N.notice("ssh host 'sed -i 1,/^---$/d /etc/x'") is not None
+
+
+def test_a_sed_range_inside_a_double_quoted_remote_argument_is_noticed():
+    assert N.notice('ssh host "sed -i 1,/^---$/d /etc/x"') is not None
+
+
+def test_a_sed_range_inside_bash_c_is_noticed():
+    """Any wrapper that puts a quote in front of the command has the same shape as ssh."""
+    assert N.notice("bash -c 'sed -i 1,/^---$/d /etc/x'") is not None
+
+
+def test_an_echo_whose_argument_opens_with_sed_stays_quiet():
+    """The direction the widening must NOT reach.
+
+    This is the exact shape the new quote-prefix accepts, sitting in a data sink: the quote is
+    immediately before `sed`, so `_TRAP` matches the text and only strip_data_sink_statements
+    keeps it quiet. Before the widening this test could not discriminate, because `_TRAP` refused
+    the string on its own.
+    """
+    assert N.notice("echo 'sed 1,/^---$/d eats the body'") is None
+
+
+def test_a_commit_message_that_opens_with_sed_stays_quiet():
+    assert N.notice("git commit -m 'sed 1,/^---$/d is the trap this guards'") is None
+
+
+def test_a_word_ending_in_sed_is_still_not_a_command():
+    """The class is a BOUNDARY set, not an anything-goes prefix - it must not match mid-word."""
+    assert N.notice("mysed 1,/^---$/d f.md") is None
+    assert N.notice("use-parsed 1,/^---$/d f.md") is None
