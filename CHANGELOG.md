@@ -17,6 +17,38 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.3]
+
+### Fixed
+
+- **`sed-line1-range-nudge` missed `sed` invoked by path, and would have kept missing one
+  character at a time.** `/usr/bin/sed -i '1,/^---$/d' f` and `./sed ...` were invisible, as
+  `ssh host 'sed ...'` had been one release earlier. Both were the same defect: the command
+  position was an ENUMERATED set of characters that may precede `sed`, and such a set is wrong
+  every time it omits one. It omits them silently, and each omission reads as a whole class of
+  command the guard cannot see rather than as a typo.
+
+  The anchor is now the negative lookbehind `(?<![\w-])`, which asks what a command may NOT follow
+  instead of listing what it may. That makes the omission unrepresentable: every separator, quote,
+  path separator and line start is accepted by construction, while `mysed`, `parsed`, `xgsed` and
+  the flag `--use-sed` stay excluded because a word character or a hyphen still blocks the match.
+  It is the anchor `block-pgrep-self-match` already uses, so the two hooks now fail the same way
+  or not at all.
+
+  This closes the SHAPE rather than the instance. Adding `/` to the previous class would have
+  fixed the reported case and left the next character to be discovered the same way, which is how
+  the quote case survived into 5.287.2 in the first place.
+
+  Measured over 21 cases: 10 true detections including the three new path forms, 10 quiet cases
+  unchanged, and no new false positive. The single accepted one is unchanged and unrelated to the
+  anchor: `grep -rn 'sed 1,/re/d' .` fires because it searches for the footgun, which is the class
+  the four-entry data-sink allowlist already accepts by decision for the sibling nudges.
+
+  Verified by mutation rather than by the green suite, four ways: restoring the pre-5.287.2 class
+  fails 5 tests, restoring the 5.287.2 class fails the 2 path tests, dropping the anchor entirely
+  fails both mid-word tests, and removing the data-sink strip fails all 5 quiet tests, which
+  confirms those are held up by the strip and not by the anchor. 4 tests added.
+
 ## [5.287.2]
 
 ### Fixed

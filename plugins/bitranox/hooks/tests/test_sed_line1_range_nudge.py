@@ -176,6 +176,27 @@ def test_a_commit_message_that_opens_with_sed_stays_quiet():
 
 
 def test_a_word_ending_in_sed_is_still_not_a_command():
-    """The class is a BOUNDARY set, not an anything-goes prefix - it must not match mid-word."""
+    """The anchor is a BOUNDARY, not an anything-goes prefix - it must not match mid-word."""
     assert N.notice("mysed 1,/^---$/d f.md") is None
     assert N.notice("use-parsed 1,/^---$/d f.md") is None
+
+
+def test_a_flag_ending_in_sed_is_not_a_command():
+    """A hyphen is part of a word here, so `--use-sed` must not read as an invocation."""
+    assert N.notice("tool --use-sed 1,/^---$/d f.md") is None
+
+
+def test_sed_invoked_by_path_is_noticed():
+    """A path separator is a command boundary exactly as a quote and a space are.
+
+    This is the same defect the quote case was, one character over: an ENUMERATED boundary class
+    is wrong every time it omits a character, and it omits them silently. Scripts, sudo rules and
+    systemd units all invoke sed by absolute path, which is where this trap does its quiet damage.
+    """
+    assert N.notice("/usr/bin/sed -i '1,/^---$/d' f.md") is not None
+    assert N.notice("./sed -i '1,/^---$/d' f.md") is not None
+
+
+def test_sed_invoked_by_path_inside_a_remote_argument_is_noticed():
+    """Both boundaries at once - ssh's quote, then a path - which is the realistic remote form."""
+    assert N.notice("ssh host '/usr/bin/sed -i 1,/^---$/d /etc/x'") is not None

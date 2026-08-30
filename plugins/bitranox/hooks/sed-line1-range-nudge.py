@@ -31,17 +31,20 @@ from shell_text import is_shell_tool, strip_data_sink_statements, strip_heredoc_
 # matched non-greedily up to an unescaped `/`, so `1,/^---$/d` and `1,/^BEGIN$/d` both hit while
 # `1,5d` (no regex) and `2,/re/d` (not anchored at line 1) do not.
 #
-# A QUOTE counts as a command position too, because a remote or wrapped invocation puts one there:
-# in `ssh host 'sed -i 1,/^---$/d f'` the character before `sed` is ssh's own opening quote, and
-# without it in this class the range is invisible - the shape is the same trap, run somewhere else.
-# The quote is a word boundary in the shell, so it separates a command exactly as whitespace does;
-# `mysed` still must not match, which is why the class stays a boundary set and does not go away.
+# The command position is a NEGATIVE LOOKBEHIND, not a list of the characters that may precede
+# `sed`, and that is the whole point. This started as `(?:^|[;&|]|\s)`, which missed a quote, so
+# `ssh host 'sed ...'` was invisible; adding quotes then still missed a path separator, so
+# `/usr/bin/sed ...` was invisible too. An ENUMERATED boundary is wrong every time it omits a
+# character, it omits them silently, and each omission looks like a whole class of command the
+# guard cannot see. Asking instead what a command may NOT follow - a word character or a hyphen,
+# so `mysed`, `parsed` and `--use-sed` are excluded - makes the omission unrepresentable.
 #
-# Widening here can only ever ADD a firing, never remove one, which is the tolerable direction for
-# a nudge. It is NOT the exec-carrier recursion that was declined: nothing here re-interprets the
-# quoted text or changes what any other guard sees.
+# This is the anchor block-pgrep-self-match already uses, so the two now fail the same way or not
+# at all. Widening a command anchor can only ever ADD a firing, never remove one, which is the
+# tolerable direction for a nudge; it is NOT the exec-carrier recursion that was declined, because
+# nothing here re-interprets the quoted text or changes what any other guard sees.
 _TRAP = re.compile(
-    r"""(?:^|[;&|'"]|\s)g?sed\b(?:\s+-[^\s]+)*\s*['"]?\s*1\s*,\s*/(?P<end>(?:\\.|[^/\\])+)/\s*d""",
+    r"""(?<![\w-])g?sed\b(?:\s+-[^\s]+)*\s*['"]?\s*1\s*,\s*/(?P<end>(?:\\.|[^/\\])+)/\s*d""",
     re.M,
 )
 
