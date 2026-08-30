@@ -20,7 +20,7 @@ import sys
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `git_footgun_guard.strip_heredoc_bodies`.
-from shell_text import SEP, git_verb_operands, strip_heredoc_bodies
+from shell_text import git_verb_operands, iter_segments, strip_heredoc_bodies
 
 # Split a command line into statements so a rev-parse in one segment is judged
 # on its own operands, not tokens from a neighbouring command.
@@ -49,7 +49,11 @@ def _revparse_operands(toks: list[str]) -> list[str] | None:
 
 
 def broken_revparse(command: str) -> bool:
-    for segment in SEP.split(strip_heredoc_bodies(command)):
+    # iter_segments, not SEP.split: a statement can begin inside a command substitution,
+    # and `A=$(git rev-parse ...)` runs a real git command. SEP does not break at `$(`, so
+    # the verb walk saw `A=$(git` and found nothing - this guard stayed quiet on a shape
+    # its own advisory nudge (git-revparse-nudge) already fires on.
+    for _at, segment in iter_segments(strip_heredoc_bodies(command)):
         segment = REDIR.sub(" ", segment)
         rest = _revparse_operands(segment.split())
         if rest is None:

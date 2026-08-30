@@ -131,3 +131,60 @@ def test_the_gate_predicate_does_not_backtrack_on_a_long_option_list():
     start = time.perf_counter()
     assert shell_text.is_gated_command(seg) is False
     assert time.perf_counter() - start < 1.0, "the gate predicate is backtracking again"
+
+
+# --- Quoting: a separator only separates where the shell would act on it. -----------------
+# `is_gated_command` is what repo-gate BLOCKS on, so a false positive here refuses a command
+# that runs nothing. Every case below is paired with the direction where it must NOT apply.
+
+def test_a_single_quoted_substitution_is_inert():
+    """'$( )' inside SINGLE quotes is literal text - the shell never runs it."""
+    assert shell_text.is_gated_command("echo '$(git commit -m x)'") is False
+    assert shell_text.is_gated_command("echo '`git commit -m x`'") is False
+
+
+def test_a_double_quoted_substitution_still_runs():
+    """The direction where it must NOT apply: double quotes do NOT stop a substitution."""
+    assert shell_text.is_gated_command('echo "$(git commit -m x)"') is True
+
+
+def test_a_quoted_statement_separator_does_not_separate():
+    """`;` is literal inside quotes of either kind, so what follows is not a new statement."""
+    assert shell_text.is_gated_command("echo 'a; git commit -m x'") is False
+    assert shell_text.is_gated_command('echo "a; git commit -m x"') is False
+    assert shell_text.is_gated_command("echo 'a && git push'") is False
+
+
+def test_quoting_state_is_restored_after_a_substitution_closes():
+    """The silent-miss direction. If `)` does not restore the quoting in force before `$(`, the
+    closing `"` reads as an OPENING one and every separator after it looks quoted - so a real
+    `git commit` later on the line stops being seen at all."""
+    assert shell_text.is_gated_command('echo "$(date)" ; git commit -m x') is True
+    assert shell_text.is_gated_command('echo "$(date)" && git push origin master') is True
+
+
+def test_an_apostrophe_inside_double_quotes_opens_nothing():
+    """A single quote is literal inside double quotes; reading it as an opener would swallow the
+    rest of the line and hide the real command after it."""
+    assert shell_text.is_gated_command('git log -m "it\'s fine" && git commit -m x') is True
+
+
+def test_an_escaped_separator_is_not_a_separator():
+    assert shell_text.is_gated_command(r"echo a\; git commit -m x") is False
+
+
+def test_a_substitution_in_an_env_prefix_does_not_hide_the_command():
+    """`FOO=$(date) git commit -m x` sets FOO for a real commit. The `)` has to CLOSE the
+    substitution's segment, or the rest of the statement stays glued to it as `date) git commit`
+    and anchoring at the segment start no longer finds the verb - a commit the gate cannot see.
+    The env-assignment prefix is already in scope everywhere else here (COMMIT_RE and
+    git_verb_operands both skip one), so this was a gap in a capability, not a missing feature."""
+    assert shell_text.is_gated_command("foo=$(ls) git commit -m x") is True
+    assert shell_text.is_gated_command("A=`date` git push origin master") is True
+
+
+def test_a_closing_paren_does_not_start_a_statement_on_its_own():
+    """The direction where it must NOT apply: a subshell's `)` closes no substitution, so it must
+    not manufacture a segment - and what follows a real one is still judged as data when quoted."""
+    assert shell_text.is_gated_command("(cd /x && ls)") is False
+    assert shell_text.is_gated_command("echo '$(ls) git commit -m x'") is False

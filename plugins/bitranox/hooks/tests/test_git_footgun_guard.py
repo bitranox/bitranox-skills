@@ -129,3 +129,18 @@ def test_shim_smoke():
     )
     assert r.returncode == 2
     assert "Needed a single revision" in r.stderr
+
+
+def test_command_substitution_is_a_real_command():
+    # $( ) opens a new statement, so the rev-parse inside it is a command like any
+    # other. Splitting on SEP alone left `A=$(git` as one token, no verb was found,
+    # and the BLOCKING guard stayed quiet on a shape its own advisory nudge fires on.
+    assert G.broken_revparse("A=$(git rev-parse --short HEAD HEAD~1)") is True
+
+
+def test_backtick_substitution_is_a_real_command():
+    assert G.broken_revparse("A=`git rev-parse --short HEAD HEAD~1`") is True
+
+
+def test_command_substitution_single_rev_still_ok():
+    assert G.broken_revparse("A=$(git rev-parse --short HEAD)") is False

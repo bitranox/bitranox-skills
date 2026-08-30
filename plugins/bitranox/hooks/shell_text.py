@@ -37,9 +37,86 @@ SHELL_TOOLS = ("Bash", "PowerShell")
 SEP = re.compile(r"&&|\|\||[;\n|]")
 # A statement can also begin INSIDE a command substitution, and what is in there is a real
 # command. Anchoring a match at a segment start is what makes `git commit` appearing as DATA not
-# count - but without these, anchoring also silently drops `A=$(git commit ...)`, which the older
+# count - but without that, anchoring also silently drops `A=$(git commit ...)`, which the older
 # match-anywhere regexes did see. Measured as a regression when the walk replaced them.
-_SEGMENT_START = re.compile(r"&&|\|\||[;\n|]|\$\(|`|<\(|>\(")
+#
+# Which of these separators actually separates depends on QUOTING, which a regex cannot carry, so
+# the spellings live in the walk below rather than in a pattern of their own.
+
+
+def _iter_separators(text):
+    """(start, end) of every separator in `text` that genuinely begins a new statement.
+
+    Quoting decides this, and it decides it DIFFERENTLY for the two kinds of separator, which
+    is why one "is it quoted" flag is not enough:
+
+    * inside SINGLE quotes nothing is special - `echo '$(git commit)'` runs no git at all;
+    * inside DOUBLE quotes a command substitution STILL runs, while `;` `|` `&&` are literal.
+
+    Neither is expressible as a pattern, because quoting is state carried across the string, so
+    this walks it. The stack matters as much as the flags: when `$(` opens, the quoting in force
+    outside it must be restored at the matching `)`, or the closing `"` of `echo "$(date)"` reads
+    as an OPENING one and every separator on the rest of the line looks quoted - turning a false
+    block into a silent miss, which is the worse direction.
+    """
+    depth: list[tuple[str, bool, bool]] = []   # (closer, saved_single, saved_double)
+    in_single = in_double = False
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and not in_single:
+            i += 2                             # an escaped character is data, whatever it is
+            continue
+        if in_single:
+            in_single = ch != "'"
+            i += 1
+            continue
+        if ch == "'" and not in_double:
+            in_single = True
+            i += 1
+            continue
+        if ch == '"':
+            in_double = not in_double
+            i += 1
+            continue
+        if depth and not in_double and ch == depth[-1][0]:
+            # The closer ENDS the substitution's statement. Without this the rest of the line
+            # stays glued to it, so `foo=$(ls) git commit -m x` yields one segment `ls) git
+            # commit -m x` whose start is `ls)` - and a gate that anchors at the start cannot
+            # see the commit at all. It also drops the stray `)` off the last operand token.
+            yield i, i + 1
+            _closer, in_single, in_double = depth.pop()
+            i += 1
+            continue
+        two = text[i:i + 2]
+        # A substitution runs a command even inside double quotes. Process substitution does
+        # NOT happen there, so only `$(` and a backtick survive the in_double test.
+        if two == "$(" or (not in_double and two in ("<(", ">(")):
+            yield i, i + 2
+            depth.append((")", in_single, in_double))
+            in_single = in_double = False
+            i += 2
+            continue
+        if ch == "`":
+            yield i, i + 1
+            depth.append(("`", in_single, in_double))
+            in_single = in_double = False
+            i += 1
+            continue
+        if in_double:
+            i += 1                             # a plain separator is literal in double quotes
+            continue
+        if two in ("&&", "||"):
+            yield i, i + 2
+            i += 2
+            continue
+        if ch in ";\n|":
+            yield i, i + 1
+            i += 1
+            continue
+        i += 1
+
+
 COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
 PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 _GATED_GIT_VERBS = frozenset({"commit", "push"})
@@ -104,9 +181,9 @@ def iter_segments(text):
     caller keeps its own second splitter, and the two drift on exactly the shapes that matter.
     """
     pos = 0
-    for m in _SEGMENT_START.finditer(text):
-        yield pos, text[pos:m.start()]
-        pos = m.end()
+    for start, end in _iter_separators(text):
+        yield pos, text[pos:start]
+        pos = end
     yield pos, text[pos:]
 
 

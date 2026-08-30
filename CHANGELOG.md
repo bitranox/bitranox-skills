@@ -17,6 +17,25 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.279.0]
+
+### Fixed
+
+- **`is_gated_command` judged quoted text as commands.** `iter_segments` matched every separator
+  with a regex, which cannot carry quoting state, so `echo '$(git commit -m x)'` was gated though
+  single quotes make it inert, and a `;` or `&&` inside quotes of either kind started a new
+  statement. It now walks the string: single quotes make everything literal, double quotes keep a
+  substitution live but make `;` `|` `&&` literal, and the quoting in force outside a `$(` is
+  restored at its `)` - without which the closing `"` of `echo "$(date)"` read as an opening one
+  and every separator after it looked quoted, turning a false block into a silent miss.
+- **A commit hidden behind an env prefix was not gated at all.** The substitution's closer now
+  ends its statement, so `FOO=$(date) git commit -m x` is seen; previously the rest of the line
+  stayed glued on as `date) git commit -m x` and the anchored match found no verb.
+- **`git-footgun-guard` was weaker than its own advisory nudge.** `broken_revparse` still split on
+  `SEP`, which does not break at `$(`, so the BLOCKING guard stayed silent on
+  `A=$(git rev-parse --short HEAD HEAD~1)` while `git-revparse-nudge` - routed onto `iter_segments`
+  - fired on it. It now uses the same splitter as the other three callers.
+
 ## [5.278.0]
 
 ### Added
