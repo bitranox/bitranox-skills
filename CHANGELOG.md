@@ -17,6 +17,38 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.287.5]
+
+### Fixed
+
+- **`guard_replay` filled a predicate's second argument by ARITY, so a `tool_name` parameter was
+  handed the CWD.** `_wants_cwd` asked only whether the predicate took two positional parameters
+  and passed the call's directory whatever the second one meant. `notice(command, tool_name=None)`
+  is the house shape across the bitranox hooks, so those were all replayed with a filesystem path
+  as their tool name.
+
+  Nothing crashed, which is what made it expensive. An unrecognised tool takes the strict fallback
+  inside `shell_text` - it escapes nothing, so a backslash-continued command splits into 9 segments
+  where the Bash reading gives 5 - and the guard kept answering. The replay reported a fire rate,
+  a precision and a sample list for a reading production never uses, and nothing in the output said
+  so. Measured while pricing the `memory_engine.py` allowlist entry: the same corpus and the same
+  hook gave a different set of firings depending on which reading was measured, and the wrong one
+  had been quoted in two decisions.
+
+  The second argument is now chosen by the parameter's NAME: `cwd` receives the call's directory,
+  `tool_name` receives the tool being replayed (`--tool`, default `Bash`), and any other name is
+  left at its default with the predicate called on the command alone. That last case is not
+  hypothetical - `bracket_leaks(cmd, haystack=None)` ships in this plugin, and a cwd in its
+  haystack slot would silently change what the guard searches.
+
+  The report now carries `forwarded_second_arg`, so a run states which reading it measured instead
+  of leaving it to be inferred.
+
+  Verified against the real hook rather than a fixture: the fixed jig now reproduces, unaided, the
+  firing set that previously needed a hand-written production wrapper - same set, zero missing, the
+  only difference being commands added to the live corpus since the earlier run. 5 tests added, one
+  of them the direction that must not change.
+
 ## [5.287.4]
 
 ### Fixed

@@ -19,7 +19,13 @@ refused by a gate - the only ones where speaking earlier would have saved anybod
 
 The cwd is not optional. A guard that resolves paths answers differently per session directory, so
 a replay that drops it measures a different question than the one the guard is asked at runtime.
-Each call is replayed with the cwd its record carries, and a two-argument predicate receives it.
+Each call is replayed with the cwd its record carries.
+
+A predicate's SECOND argument is filled by the NAME of its second parameter, never by arity: name
+it `cwd` to receive the call's directory, or `tool_name` to receive the tool being replayed. Any
+other name is left at its default. Arity alone once handed a CWD to a `notice(command, tool_name)`
+hook, which did not crash - it measured a reading production never uses and reported a rate for it.
+The report's `forwarded_second_arg` states which one a run actually used.
 
 READ THE PRECISION FIGURE FOR WHAT IT ASKS. It answers one question: of the calls this guard would
 have spoken on, how many did a GATE actually refuse? That is the right question for a guard whose
@@ -126,28 +132,55 @@ def extract_calls(text: str, tool: str = "Bash"):
     return calls
 
 
-def _wants_cwd(predicate) -> bool:
-    """Whether this predicate takes the cwd as a second argument. Asked once, not per call."""
+# What a predicate's SECOND positional parameter may be filled with, keyed by its NAME. Anything
+# not listed here is left at its default and the predicate is called with the command alone.
+_SECOND_ARG_NAMES = ("cwd", "tool_name")
+
+
+def _second_arg_kind(predicate):
+    """What to pass as this predicate's second argument - `"cwd"`, `"tool_name"`, or None.
+
+    Decided by the parameter's NAME, never by arity, and that distinction is the whole function.
+    Asking only "does it take two positional parameters?" filled the second slot whatever it meant,
+    so `notice(command, tool_name=None)` - the house shape across the bitranox hooks - was handed a
+    CWD as its tool name. Nothing failed: an unrecognised tool takes the strict fallback inside
+    `shell_text`, so the guard kept answering, and the replay reported a fire rate for a code path
+    production never runs. A wrong number that arrives quietly is worse than a crash.
+
+    An unknown name is left alone rather than guessed at. `bracket_leaks(cmd, haystack=None)` is a
+    real signature in this plugin, and a cwd in its haystack slot would change what the guard
+    searches without saying so.
+    """
     try:
         params = inspect.signature(predicate).parameters
     except (TypeError, ValueError):                      # a builtin or C callable: assume one arg
-        return False
+        return None
     positional = [p for p in params.values()
                   if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-    return len(positional) >= 2
+    if len(positional) < 2:
+        return None
+    name = positional[1].name
+    return name if name in _SECOND_ARG_NAMES else None
 
 
-def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN):
+def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLOCK_PATTERN,
+             tool: str = "Bash"):
     """Run the predicate over every call and split the firings by what actually happened.
 
     A predicate that raises is COUNTED, never swallowed into the quiet bucket: a guard crashing on
     a real command is a defect, and a replay that hid it would report the crash as good behaviour.
+
+    `tool` is the tool whose calls are being replayed, and it is forwarded to a predicate that
+    declares a `tool_name` parameter, so the guard is measured on the reading production gives it.
     """
-    pass_cwd = _wants_cwd(predicate)
+    second = _second_arg_kind(predicate)
+    extra = {"cwd": None, "tool_name": tool}
     fires, blocked, errored, clean, predicate_errors, samples = [], 0, 0, 0, 0, []
     for call in calls:
+        extra["cwd"] = call["cwd"]
         try:
-            verdict = predicate(call["command"], call["cwd"]) if pass_cwd else predicate(call["command"])
+            verdict = (predicate(call["command"], extra[second]) if second
+                       else predicate(call["command"]))
         except Exception:                                # noqa: BLE001 - a crash is a finding, not a stop
             predicate_errors += 1
             continue
@@ -174,6 +207,9 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
         "precision_pct": round(100 * blocked / len(fires), 2) if fires else None,
         "predicate_errors": predicate_errors,
         "block_pattern": block_pattern,
+        # Which second argument the predicate was given, so a reader can tell WHICH reading of the
+        # guard was measured. Leaving this implicit is what let a cwd-as-tool_name run pass as real.
+        "forwarded_second_arg": second,
         "samples": samples,
     }
 
@@ -229,7 +265,7 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
                     continue
                 seen.add(call["id"])
             calls.append(call)
-    report = classify(calls, predicate, sample=sample, block_pattern=block_pattern)
+    report = classify(calls, predicate, sample=sample, block_pattern=block_pattern, tool=tool)
     report["files_read"] = files_read
     report["duplicates_skipped"] = duplicates
     report["skipped"] = skipped

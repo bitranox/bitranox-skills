@@ -193,3 +193,52 @@ def test_calls_with_no_id_are_not_collapsed_into_one(tmp_path):
     (tmp_path / "one.jsonl").write_text(_mk([rec]), encoding="utf-8")
     report = G.replay(str(tmp_path), lambda cmd: True)
     assert report["commands"] == 2
+
+
+# ---- the second positional argument is chosen by NAME, not by arity ------------------------------
+#
+# Measured 2026-08-30. `_wants_cwd` asked only "does this take two positional parameters?", so a
+# hook whose real signature is `notice(command, tool_name=None)` - the house shape across the
+# bitranox hooks - was handed the CWD in its tool_name slot. It did not crash: an unrecognised tool
+# takes the strict fallback, so the replay silently measured a code path production never runs, and
+# reported a fire rate for it. Deciding by the parameter's NAME is what makes the forwarding mean
+# what it says.
+
+def test_a_tool_name_parameter_receives_the_tool_not_the_cwd():
+    seen = []
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda command, tool_name: seen.append(tool_name) or False, tool="Bash")
+    assert seen == ["Bash"], "a tool_name parameter must get the tool, never the cwd"
+
+
+def test_the_tool_forwarded_is_the_one_being_replayed():
+    seen = []
+    calls = [{"id": "a", "command": "Get-Item x", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda command, tool_name: seen.append(tool_name) or False, tool="PowerShell")
+    assert seen == ["PowerShell"]
+
+
+def test_a_cwd_parameter_still_receives_the_cwd():
+    """The direction that must NOT change."""
+    seen = []
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda cmd, cwd: seen.append(cwd) or False)
+    assert seen == ["/srv/here"]
+
+
+def test_an_unrecognised_second_parameter_is_not_filled_in():
+    """`bracket_leaks(cmd, haystack=None)` is a real shape in this plugin, and a cwd in its
+    haystack slot would quietly change what the guard searches. Only names we understand get
+    forwarded; anything else is called with the command alone."""
+    seen = []
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    G.classify(calls, lambda cmd, haystack=None: seen.append(haystack) or False)
+    assert seen == [None], "an unknown second parameter must be left at its default"
+
+
+def test_the_report_names_which_second_argument_was_forwarded():
+    """A silent choice here is what made the wrong number unnoticeable, so the run states it."""
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+    assert G.classify(calls, lambda command, tool_name: False)["forwarded_second_arg"] == "tool_name"
+    assert G.classify(calls, lambda cmd, cwd: False)["forwarded_second_arg"] == "cwd"
+    assert G.classify(calls, lambda cmd: False)["forwarded_second_arg"] is None
