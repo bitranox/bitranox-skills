@@ -325,13 +325,18 @@ def test_the_tracked_pre_push_hook_is_executable_and_lf():
 
 @pytest.mark.skipif(os.name == "nt", reason="a bash hook; bare `bash` on Windows is the WSL stub")
 def test_the_pre_push_hook_hands_the_gate_no_git_environment(tmp_path):
-    """git exports the repository to every hook, and the gate this hook runs runs the suite.
+    """A push FROM A LINKED WORKTREE hands the hook GIT_DIR, and this hook's gate runs the suite.
 
     Those tests build fixtures with `git init` / `git add` / `git commit` in a temp directory, and
-    git reads GIT_DIR before it considers cwd - so under a hook every one of them writes to THIS
-    repository. Measured 2026-08-31: a push put fixture commits titled "base" on the checked-out
-    branch, moved refs/remotes/origin/master onto one, and set core.bare, after which `git status`
-    refused to run. Every git call exited 0, so nothing announced it.
+    git reads GIT_DIR before it considers cwd - so each of them writes to THIS repository instead.
+    Measured 2026-08-31: such a push put fixture commits titled "base" on the worktree's branch,
+    moved refs/remotes/origin/master onto one, and set core.bare, after which `git status` refused
+    to run in the main checkout. Every git call exited 0, so nothing announced it.
+
+    The worktree is the trigger: on git 2.53.0 a push from an ordinary checkout exports no GIT_DIR,
+    with or without core.hooksPath, while both worktree arms exported it. This test sets the
+    variables itself instead of staging a worktree push, so it pins what the hook must GUARANTEE
+    however the push was made.
 
     The gate is stubbed and `uv` hidden from PATH, which forces the python3 branch: this asserts
     the ENVIRONMENT handed over, not which interpreter runs.

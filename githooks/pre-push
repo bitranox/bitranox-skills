@@ -34,13 +34,19 @@ fi
 # interpreter must be chosen by this repo, never by the caller's shell.
 unset VIRTUAL_ENV
 
-# git EXPORTS the repository's location to every hook, and the gate runs the test suite, whose
-# tests build fixtures with `git init` / `git add` / `git commit` in a temp directory. Those calls
-# read GIT_DIR before they consider their own cwd, so under a hook every one of them operated on
-# THIS repository instead of its fixture - measured 2026-08-31: a push put fixture commits titled
-# "base" on the checked-out branch, moved refs/remotes/origin/master onto one of them, and left
-# core.bare=true, so `git status` in the main checkout stopped working. Every git call exited 0.
-# `$root` is already resolved above, so nothing below needs these.
+# A push FROM A LINKED WORKTREE hands this hook GIT_DIR, pointing at .git/worktrees/<name>. The
+# gate runs the test suite, whose tests build fixtures with `git init` / `git add` / `git commit`
+# in a temp directory - and git reads GIT_DIR before it considers cwd, so every one of those calls
+# writes to THIS repository instead of its fixture. Measured 2026-08-31: such a push put fixture
+# commits titled "base" on the worktree's branch, moved refs/remotes/origin/master onto one of
+# them, and left core.bare=true in the shared config, after which `git status` in the main checkout
+# refused to run. Every git call exited 0, so nothing announced it.
+#
+# The WORKTREE is the trigger, not the hook: measured on git 2.53.0, a push from an ordinary
+# checkout exports no GIT_DIR, with or without core.hooksPath, while both worktree arms exported
+# it. That is why this survived so many pushes - and why it aims squarely at the workflow the
+# git-worktrees skill recommends. The rest of the list is defence in depth; `$root` is resolved
+# above, so nothing below needs any of them.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 unset GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
 

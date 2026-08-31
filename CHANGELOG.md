@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.2]
+
+### Fixed
+
+- **5.297.1's account of the pre-push defect was too broad, and narrowing it changes who is at
+  risk.** It said git hands the repository to every hook. Measured on git 2.53.0 across four arms,
+  varying one thing at a time: a push from an ordinary checkout exports no `GIT_DIR`, with or
+  without `core.hooksPath`, while a push from a LINKED WORKTREE exports it, pointing at
+  `.git/worktrees/<name>`. The worktree is the trigger. That is why this survived so many pushes
+  unnoticed, and why it aims squarely at the workflow the `git-worktrees` skill recommends. The fix
+  is unchanged and was always correct; what was wrong was the explanation carried by the hook's
+  comment and the test's docstring, both of which now say what was measured.
+
 ## [5.297.1]
 
 ### Fixed
