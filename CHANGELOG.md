@@ -29,6 +29,35 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.295.0]
+
+### Added
+
+- **`anchor_edit`, a compuse-toolbox jig that edits a file at an exact anchor or refuses.** The
+  three ways a script edits text all have SUCCESS-SHAPED no-match branches: `str.replace` returns
+  the string unchanged, `str.partition` puts everything in the head, and `str.find` returns -1,
+  which then indexes from the END. So a missed anchor does not crash - it writes a file that looks
+  edited and is not, or edits somewhere else entirely, exiting 0 either way.
+
+  It refuses an anchor that appears zero times or more than once. Zero is also the WRONG-FILE
+  catch, since a file in the wrong directory rarely contains your exact expected text, which makes
+  it a deterministic check with no guard and no cwd bookkeeping. Insertion verifies afterwards that
+  every character of the original survived, per character rather than per line, because inserting
+  inside a line legitimately changes that line while removing nothing.
+
+  Span replacement is supported but never blind: the end marker is searched FROM the start offset
+  rather than from position 0, the region must be unambiguous, the caller states how many lines it
+  covers, and `--must-keep` names constructs verified present after the write. A span meant for one
+  function once removed the two that sat between the markers; the file still parsed and tests in
+  two unrelated modules were the only signal.
+
+  A file git does not track is copied to `<name>.bak` before the write, because git is not the
+  backup for a file git has never seen, and those are the ones most often edited this way.
+
+  Scoped to the SCRIPTED and bulk path. For a single interactive edit the Edit tool already
+  refuses a non-unique anchor, and the baseline arm confirmed an agent handles that case well
+  without any jig; what it reported missing was a tool for the scripted case.
+
 ## [5.294.3]
 
 ### Changed
