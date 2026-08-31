@@ -148,6 +148,60 @@ def test_an_untracked_file_is_backed_up_before_it_is_written(tmp_path):
     assert result.backup.read_text(encoding="utf-8") == SAMPLE
 
 
+def _git_repo(tmp_path, *, name="f.md", body=SAMPLE, commit=True, ignore=False):
+    """A real git repo with one file, committed or not. Real git, because the question the code
+    asks is 'can git restore this', and a fake cannot answer it wrongly the way git can."""
+    run = lambda *a: subprocess.run(["git", *a], cwd=str(tmp_path), check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q", ".")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    if ignore:
+        (tmp_path / ".gitignore").write_text(name + "\n", encoding="utf-8")
+    target = tmp_path / name
+    target.write_text(body, encoding="utf-8")
+    if commit and not ignore:
+        run("add", name)
+        run("commit", "-qm", "base")
+    return target
+
+
+def test_a_tracked_file_with_uncommitted_work_is_still_backed_up(tmp_path):
+    """git is not the backup for changes git has never seen.
+
+    `git checkout -- <file>` restores from HEAD, so it DISCARDS every uncommitted change in that
+    file and exits 0. A rule that skips the backup for anything merely TRACKED therefore skips it
+    in the one state the backup exists for.
+    """
+    target = _git_repo(tmp_path)
+    target.write_text(SAMPLE + "uncommitted work\n", encoding="utf-8")
+    before = target.read_text(encoding="utf-8")
+    result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert result.backup is not None, "a dirty tracked file must be backed up"
+    assert result.backup.read_text(encoding="utf-8") == before
+
+
+def test_a_tracked_and_clean_file_is_not_backed_up(tmp_path):
+    """It must be able to answer the other way, or the test above proves nothing.
+
+    Here git genuinely holds the content, so a .bak would be litter.
+    """
+    target = _git_repo(tmp_path)
+    result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert result.backup is None
+
+
+def test_a_gitignored_file_is_backed_up(tmp_path):
+    """`git status --porcelain <path>` is EMPTY for a gitignored file exactly as for a clean one.
+
+    So a cleanliness test alone reads an ignored file as safely stored in git, which is the
+    opposite of true. Tracking has to be asked separately, and it is.
+    """
+    target = _git_repo(tmp_path, ignore=True)
+    result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert result.backup is not None, "a gitignored file is not in git and must be backed up"
+
+
 def test_a_dry_run_does_not_touch_the_file(tmp_path):
     target = tmp_path / "notes.md"
     target.write_text(SAMPLE, encoding="utf-8")

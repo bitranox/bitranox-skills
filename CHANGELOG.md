@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.295.1]
+
+### Fixed
+
+- **`anchor_edit` skipped its backup for a tracked file carrying UNCOMMITTED work**, which is the
+  one state the backup exists for. The rule asked whether git TRACKS the file; the question that
+  matters is whether git could RESTORE it. `git checkout -- <file>` restores from HEAD, so for a
+  dirty file it discards precisely the content nobody else has, and exits 0 doing it.
+
+  Now keyed on tracked AND clean. Both questions are asked separately because neither answers the
+  other: `git status --porcelain` is EMPTY for a gitignored file exactly as for a clean one, so a
+  cleanliness test alone reads an ignored file as safely stored in git.
+
+  Measured on a real repo before the fix: no `.bak` for a dirty tracked file. Every file edited
+  while building this jig was tracked-and-dirty, so this was the normal case rather than an edge.
+
 ## [5.295.0]
 
 ### Added

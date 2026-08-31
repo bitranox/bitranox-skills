@@ -67,6 +67,19 @@ given the table, does an agent facing the chore find and name the right tool?
 - CLOSED: which insert side is the default. The haiku arm called `--before` the default; the
   default is `--after`, and the help stated neither. Both now say so.
 
+## Found by the decision review, after the first release
+
+- [x] The backup was keyed on whether git TRACKS the file, which skips it for a tracked file
+      carrying uncommitted work - the one state where git cannot restore the content, since
+      `git checkout -- <file>` returns the file to HEAD and exits 0. Probed on a real repo: no
+      `.bak` was written for a dirty tracked file. Every target edited while building this jig was
+      tracked-and-dirty, so that was the normal case, not an edge one.
+- [x] Now keyed on whether git could actually RESTORE the current content: tracked AND clean.
+      Both questions are asked separately, because `git status --porcelain` is empty for a
+      gitignored file exactly as for a clean one, so cleanliness alone would read an ignored file
+      as safely stored in git. Three tests cover the three answers, and the dirty-tracked one was
+      RED-verified before the fix.
+
 ## Verification
 
 - [x] RED-verified: `assert_no_removals` was written line-level first and the insertion test

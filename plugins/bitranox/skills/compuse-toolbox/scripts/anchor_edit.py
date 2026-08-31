@@ -31,8 +31,9 @@ so text meant to land as its own line must carry its own trailing newline. State
 is the one thing a reader cannot infer from the flags, and getting it wrong silently glues the
 insertion onto the anchor's line.
 
-A file git does not track is copied to `<name>.bak` first, because git is not the backup for a
-file git has never seen and those are the ones most often edited this way.
+A file git could not restore is copied to `<name>.bak` first - untracked, gitignored, or tracked
+but carrying uncommitted work. Tracked alone is not enough: `git checkout -- <file>` restores from
+HEAD, so for a dirty file it discards precisely the content nobody else has.
 
 Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error.
 """
@@ -168,16 +169,35 @@ class EditResult:
                 "backup": str(self.backup) if self.backup else None, "written": self.written}
 
 
-def is_tracked(path: Path) -> bool:
-    """Whether git tracks the file. Anything unprovable answers False, which is the safe side."""
+def _git(path: Path, *args):
+    """Run git in the file's directory, or None when git cannot be run at all.
+
+    LC_ALL=C because a localized message is not a stable thing to branch on.
+    """
     try:
-        proc = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", "--", path.name],
-            cwd=str(path.parent), capture_output=True, text=True,
+        return subprocess.run(
+            ["git", *args], cwd=str(path.parent), capture_output=True, text=True,
             encoding="utf-8", errors="replace", env={**os.environ, "LC_ALL": "C"})
     except (OSError, ValueError):
+        return None
+
+
+def is_recoverable_from_git(path: Path) -> bool:
+    """Whether git could actually restore this file's CURRENT content. Unprovable answers False.
+
+    Tracked is not enough. `git checkout -- <file>` restores from HEAD, so for a tracked file
+    carrying uncommitted work it discards exactly the content nobody else has, and exits 0. A
+    backup rule keyed on tracking alone therefore skips the backup in the one state it is for.
+
+    Both questions are asked, because neither answers the other: `git status --porcelain` is
+    EMPTY for a gitignored file exactly as for a clean one, so cleanliness alone reads an ignored
+    file as safely stored in git.
+    """
+    tracked = _git(path, "ls-files", "--error-unmatch", "--", path.name)
+    if tracked is None or tracked.returncode != 0:
         return False
-    return proc.returncode == 0
+    status = _git(path, "status", "--porcelain", "--", path.name)
+    return status is not None and status.returncode == 0 and not status.stdout.strip()
 
 
 def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
@@ -192,7 +212,7 @@ def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool 
     if dry_run:
         return EditResult(path, delta, None, written=False)
     saved = None
-    if backup and not is_tracked(path):
+    if backup and not is_recoverable_from_git(path):
         saved = path.with_name(path.name + ".bak")
         saved.write_text(before, encoding="utf-8")
     path.write_text(after, encoding="utf-8")
@@ -237,7 +257,8 @@ def _add_common(sub):
     sub.add_argument("--new-file", help="file holding the new text, or - for stdin")
     sub.add_argument("--json", action="store_true", help="machine-readable envelope")
     sub.add_argument("--dry-run", action="store_true", help="report the line delta, write nothing")
-    sub.add_argument("--no-backup", action="store_true", help="skip the .bak for an untracked file")
+    sub.add_argument("--no-backup", action="store_true",
+                     help="skip the .bak written when git could not restore the file")
 
 
 def _parser():
