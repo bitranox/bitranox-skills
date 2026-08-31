@@ -34,6 +34,16 @@ fi
 # interpreter must be chosen by this repo, never by the caller's shell.
 unset VIRTUAL_ENV
 
+# git EXPORTS the repository's location to every hook, and the gate runs the test suite, whose
+# tests build fixtures with `git init` / `git add` / `git commit` in a temp directory. Those calls
+# read GIT_DIR before they consider their own cwd, so under a hook every one of them operated on
+# THIS repository instead of its fixture - measured 2026-08-31: a push put fixture commits titled
+# "base" on the checked-out branch, moved refs/remotes/origin/master onto one of them, and left
+# core.bare=true, so `git status` in the main checkout stopped working. Every git call exited 0.
+# `$root` is already resolved above, so nothing below needs these.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+unset GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
+
 # uv resolves the CI dependency set on demand, so the gate runs the SAME suite CI runs without the
 # maintainer having to keep those packages in an ambient python. The list comes from the gate
 # itself (parsed from .github/workflows/ci.yml), so it cannot drift from CI. Without uv, fall back

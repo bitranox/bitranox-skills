@@ -33,6 +33,16 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ### Fixed
 
+- **`githooks/pre-push` let the test suite write to the repository being pushed.** git exports the
+  repository's location to every hook, and this one runs the gate, which runs the suite - whose
+  tests build fixtures with `git init` / `git add` / `git commit` in a temp directory. git reads
+  `GIT_DIR` before it considers cwd, so under the hook those calls operated on the real repo:
+  measured here, one push wrote fixture commits titled "base" onto the checked-out branch, moved
+  `refs/remotes/origin/master` onto one of them, and left `core.bare=true`, after which
+  `git status` refused to run in that clone. Every git call exited 0, so nothing announced it. The
+  hook now clears the repository-scoping `GIT_*` variables before invoking the gate, proven by a
+  test that runs the hook with them set and asserts on the environment the gate receives.
+
 - **`repo-gate`: the ragged-table finding named an absolute, native-separator path.** The detector
   echoes back whatever path it is handed, so every finding carried the home directory of whoever
   ran the gate - and on Windows it carried backslashes, which is what reddened

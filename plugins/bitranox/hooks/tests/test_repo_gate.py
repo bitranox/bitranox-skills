@@ -11,6 +11,8 @@ All content is ASCII.
 
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -319,6 +321,54 @@ def test_the_tracked_pre_push_hook_is_executable_and_lf():
                           capture_output=True, text=True, encoding="utf-8").stdout
     assert mode.startswith("100755"), "githooks/pre-push is not executable in HEAD: " + mode
     assert b"\r\n" not in hook.read_bytes()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a bash hook; bare `bash` on Windows is the WSL stub")
+def test_the_pre_push_hook_hands_the_gate_no_git_environment(tmp_path):
+    """git exports the repository to every hook, and the gate this hook runs runs the suite.
+
+    Those tests build fixtures with `git init` / `git add` / `git commit` in a temp directory, and
+    git reads GIT_DIR before it considers cwd - so under a hook every one of them writes to THIS
+    repository. Measured 2026-08-31: a push put fixture commits titled "base" on the checked-out
+    branch, moved refs/remotes/origin/master onto one, and set core.bare, after which `git status`
+    refused to run. Every git call exited 0, so nothing announced it.
+
+    The gate is stubbed and `uv` hidden from PATH, which forces the python3 branch: this asserts
+    the ENVIRONMENT handed over, not which interpreter runs.
+    """
+    root = Path(RG.__file__).resolve().parents[3]
+    repo = tmp_path / "repo"
+    (repo / "plugins/bitranox/hooks").mkdir(parents=True)
+    shutil.copy(root / "githooks" / "pre-push", repo / "pre-push")
+    seen = tmp_path / "seen.txt"
+    (repo / "plugins/bitranox/hooks/repo-gate.py").write_text(
+        "import os\n"
+        f"open({str(seen)!r}, 'w', encoding='utf-8').write("
+        "'\\n'.join(sorted(k for k in os.environ if k.startswith('GIT_'))))\n",
+        encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+    # PATH is replaced rather than prepended, because hiding uv is the point; git and python3 are
+    # linked in so the hook can still resolve the root and run the stub.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("git", "python3"):
+        os.symlink(shutil.which(tool), bin_dir / tool)
+    env = {**os.environ, "PATH": str(bin_dir),
+           "GIT_DIR": str(repo / ".git"), "GIT_INDEX_FILE": str(repo / ".git" / "index"),
+           "GIT_PREFIX": "", "GIT_QUARANTINE_PATH": str(tmp_path / "quarantine")}
+    subprocess.run([shutil.which("bash"), str(repo / "pre-push")], cwd=repo, env=env, check=True,
+                   capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    # Only the variables that POINT AT A REPOSITORY matter. An unrelated name merely starting with
+    # GIT_ (a local guard's own config, say) is not a leak, and asserting on the prefix made this
+    # test fail on one.
+    repo_scoping = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+                    "GIT_PREFIX", "GIT_QUARANTINE_PATH"}
+    handed_over = set(seen.read_text(encoding="utf-8").split())
+    leaked = sorted(handed_over & repo_scoping)
+    assert leaked == [], "the gate was handed a repository: " + ", ".join(leaked)
 
 
 def test_main_malformed_stdin_passes(tmp_path, monkeypatch):
