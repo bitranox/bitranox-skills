@@ -174,6 +174,53 @@ _BENIGN_DUPLICATE_BASENAMES = frozenset({"conftest.py"})
 _VENDORED_DIRNAMES = frozenset({"demos", "examples"})
 
 
+def _table_checker(root):
+    """The skill's own ragged-row detector, imported rather than re-implemented.
+
+    A second copy of the fence-walking would drift from the one that ships, and then the gate would
+    be enforcing a rule the tool does not apply.
+    """
+    tool = root / _SKILLS_DIR / "docs-md-table-formatting" / "reformat_tables.py"
+    if not tool.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_gate_reformat_tables", tool)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_ragged_tables(root):
+    """No shipped markdown may hold a table row whose cell count differs from its header.
+
+    Maintainer-only, and enforced HERE rather than by changing the tool's default: making
+    `reformat_tables.py` exit non-zero by default would turn every install's CI red on a document
+    the tool was only ever asked to align. This repo opts in for itself, which is where the
+    findings were - three on the first sweep, one of them a routing row that named no file.
+
+    A row with MORE cells than its header loses the surplus when GFM renders it; a row with FEWER
+    renders an empty cell. Both are reported, because both mean the table does not say what it
+    reads as saying.
+    """
+    module = _table_checker(root)
+    if module is None:
+        return []  # tool missing -> cannot enumerate, do not block
+    rc, paths = _git_paths(root, "ls-files", "*.md")
+    if rc != 0:
+        return []
+    findings = []
+    for rel in paths:
+        warnings = []
+        try:
+            module.reformat_file(root / rel, check_only=True, warnings=warnings)
+        except (OSError, UnicodeDecodeError):
+            continue
+        findings.extend(f"  {line}" for line in warnings)
+    return ["Ragged markdown table rows (cell count differs from the header):"] + findings \
+        if findings else []
+
+
 def check_duplicate_basenames(root):
     """Two shipped .py files must not share a basename.
 
@@ -1151,6 +1198,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     # push), never in CI on a contributor's PR.
     if not ci:
         failures += check_version_bumped(root)
+        failures += check_ragged_tables(root)
         failures += check_skill_review(root)
         failures += check_skill_mirrors(root)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway

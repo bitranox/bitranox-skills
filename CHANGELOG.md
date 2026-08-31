@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.296.2]
+
+### Fixed
+
+- **`coding-python-textual`: the vendored ProgressBar table lost its Default column.** Two rows
+  wrote the type as `` `float | None` `` with the pipe unescaped, and GFM processes the pipe before
+  inline parsing, so the cell split and the surplus consumed the `Default` column - the table
+  rendered a column short while still looking well formed. Pipes escaped and both Default cells
+  restored to `None`, read off the installed textual 8.2.8 rather than inferred, matching the
+  `progress` row that was never broken. This is the ONLY divergence from upstream in the vendored
+  docs, and SKILL.md now says so with the instruction to re-apply it on any re-sync.
+
+### Added
+
+- **`repo-gate`: a maintainer-only ragged-table check.** This repo opts itself into the strict
+  behaviour rather than changing the tool's default, because making `reformat_tables.py` exit
+  non-zero by default would turn an install's CI red on a document it was only ever asked to
+  align. The check imports the skill's own detector instead of re-implementing the fence walk, so
+  the gate cannot drift from the tool that ships, and it fails open when the tool is absent like
+  every other check here.
+
 ## [5.296.1]
 
 ### Changed

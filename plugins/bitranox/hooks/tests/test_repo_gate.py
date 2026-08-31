@@ -1560,3 +1560,49 @@ def test_changelog_heading_matcher_rejects_a_version_that_merely_appears(tmp_pat
     bumped_repo(tmp_path, body)
     assert RG.changelog_documents(tmp_path, "1.0.1") is False
     assert RG.check_changelog_current_version(tmp_path) != []
+
+
+# --------------------------------------------------------------------------
+# check_ragged_tables - the repo opts itself into the tool's --strict behaviour
+# --------------------------------------------------------------------------
+
+
+def _repo_with_table(tmp_path, table_md):
+    """A tree carrying the real reformat_tables.py, since the check imports it rather than
+    re-implementing the fence walk."""
+    make_repo(tmp_path)
+    real = Path(RG.__file__).resolve().parents[1] / "skills" / "docs-md-table-formatting" \
+        / "reformat_tables.py"
+    dest = tmp_path / "plugins/bitranox/skills/docs-md-table-formatting/reformat_tables.py"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+    write(tmp_path / "docs/page.md", table_md)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_ragged_tables_flags_a_long_row(tmp_path):
+    root = _repo_with_table(tmp_path, "| a | b |\n|---|---|\n| 1 | 2 | 3 |\n")
+    failures = RG.check_ragged_tables(root)
+    assert failures, failures
+    assert "docs/page.md" in "\n".join(failures)
+
+
+def test_ragged_tables_flags_a_short_row(tmp_path):
+    root = _repo_with_table(tmp_path, "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n")
+    assert RG.check_ragged_tables(root)
+
+
+def test_ragged_tables_passes_a_clean_table(tmp_path):
+    """The control: a well-formed table must NOT be reported, or the check blocks every push."""
+    root = _repo_with_table(tmp_path, "| a | b |\n|---|---|\n| 1 | 2 |\n")
+    assert RG.check_ragged_tables(root) == []
+
+
+def test_ragged_tables_fails_open_without_the_tool(tmp_path):
+    """Unable to enumerate is not evidence of a violation - same contract as the other checks."""
+    make_repo(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    assert RG.check_ragged_tables(tmp_path) == []

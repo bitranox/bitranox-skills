@@ -23,17 +23,29 @@ Measured on textual 8.2.8. Three of these four cost a real defect in one session
 announces itself - the code runs, and the wrong behaviour looks like a styling or data problem
 somewhere else. Check them before debugging outward.
 
-| Name                            | What it reads as                              | What it actually does                                                                                                                                                                                                                                                                    |
-|---------------------------------|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `App.display`                   | "the thing my app displays"                   | `display` is `DOMNode`'s show/hide PROPERTY. Assigning a settings object, a renderable or any model to `self.display` does not set content - it sets visibility, and rendering breaks in a way that points nowhere near the assignment. Name your own attribute anything else.        |
-| `Widget.check_action()`         | one boolean: may this action run              | THREE-valued, and the two falsey answers differ: `False` HIDES the binding from the footer and the palette, `None` shows it GREYED OUT, `True` allows it. Returning `False` where you meant "visible but disabled" makes the key silently vanish from the UI.                          |
-| `DataTable.add_column(width=N)` | a column that wraps or ellipsizes at N        | A HARD CLIP at N with no ellipsis. `text-overflow` never reaches the cell either, because cells render through Rich rather than through the CSS box - so the usual fix is inert and the text simply disappears at the boundary. Truncate in your own cell text if you want a marker.  |
-| `DataTable.RowHighlighted`      | "my table's row changed"                      | Fires for EVERY `DataTable` on screen, in composition order at mount, so a screen with two tables gets both handlers on startup before the user touches anything. Gate on `event.data_table` (or `event.control`) being the table you mean; an `if` on the row index will not do it.  |
+| Name                            | What it reads as                       | What it actually does                                                                                                                                                                                                                                                                |
+|---------------------------------|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `App.display`                   | "the thing my app displays"            | `display` is `DOMNode`'s show/hide PROPERTY. Assigning a settings object, a renderable or any model to `self.display` does not set content - it sets visibility, and rendering breaks in a way that points nowhere near the assignment. Name your own attribute anything else.       |
+| `Widget.check_action()`         | one boolean: may this action run       | THREE-valued, and the two falsey answers differ: `False` HIDES the binding from the footer and the palette, `None` shows it GREYED OUT, `True` allows it. Returning `False` where you meant "visible but disabled" makes the key silently vanish from the UI.                        |
+| `DataTable.add_column(width=N)` | a column that wraps or ellipsizes at N | A HARD CLIP at N with no ellipsis. `text-overflow` never reaches the cell either, because cells render through Rich rather than through the CSS box - so the usual fix is inert and the text simply disappears at the boundary. Truncate in your own cell text if you want a marker. |
+| `DataTable.RowHighlighted`      | "my table's row changed"               | Fires for EVERY `DataTable` on screen, in composition order at mount, so a screen with two tables gets both handlers on startup before the user touches anything. Gate on `event.data_table` (or `event.control`) being the table you mean; an `if` on the row index will not do it. |
 
 And the one that works exactly as documented, recorded because it is the natural thing to distrust
 once the four above have burned you: `overflow-x: auto` resolves to `virtual_size.width > width`,
 so a fixed-width scroll strip gates its own scrollbar correctly with no length comparison in user
 code.
+
+### The vendored docs carry one local fix
+
+`widgets/progress_bar.md` diverges from upstream by two lines, deliberately. Its reactive-attributes
+table wrote the type as `` `float | None` `` with the pipe unescaped, so GFM split the cell there
+and the DEFAULT column was consumed by the second half of the type - the table rendered with a
+column's worth of content gone while still looking well formed. The pipes are now escaped and the
+two Default cells restored to `None`, read off the installed library (textual 8.2.8) rather than
+inferred, matching the `progress` row that was never broken.
+
+Re-apply this if these files are ever re-synced from upstream. Every other vendored file is an
+untouched mirror.
 
 ---
 
