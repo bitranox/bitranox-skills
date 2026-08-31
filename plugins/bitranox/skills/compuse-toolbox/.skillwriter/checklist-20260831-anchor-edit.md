@@ -80,6 +80,13 @@ given the table, does an agent facing the chore find and name the right tool?
       as safely stored in git. Three tests cover the three answers, and the dirty-tracked one was
       RED-verified before the fix.
 
+- [x] A second run overwrote the `.bak`, replacing the original with the state after the first
+      edit. Because that file is one git cannot restore, the `.bak` is the only copy, so the
+      overwrite destroyed the original outright. Probed on real files before the fix.
+- [x] First write wins now: an existing `.bak` is kept, and the run SAYS it kept one, because a
+      pre-existing copy may predate the session and must not be read as the state from just
+      before this edit.
+
 ## Verification
 
 - [x] RED-verified: `assert_no_removals` was written line-level first and the insertion test

@@ -202,6 +202,23 @@ def test_a_gitignored_file_is_backed_up(tmp_path):
     assert result.backup is not None, "a gitignored file is not in git and must be backed up"
 
 
+def test_a_second_run_keeps_the_first_backup(tmp_path):
+    """The .bak is written only for a file git cannot restore, so it IS the only copy.
+
+    Overwriting it on the second run replaces the original with the state after the first edit,
+    and nothing anywhere else holds the original. First write wins, so the surviving copy is the
+    earliest state - the one worth having when a chain of edits goes wrong.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    first = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert first.backup_reused is False
+    second = AE.apply_to_file(target, lambda s: s.replace("return 1", "return 11"))
+    assert second.backup.read_text(encoding="utf-8") == SAMPLE, (
+        "the second run must not overwrite the original with an already-edited state")
+    assert second.backup_reused is True, "a kept backup must be reported as kept, not as fresh"
+
+
 def test_a_dry_run_does_not_touch_the_file(tmp_path):
     target = tmp_path / "notes.md"
     target.write_text(SAMPLE, encoding="utf-8")

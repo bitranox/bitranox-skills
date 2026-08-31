@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.295.2]
+
+### Fixed
+
+- **A second `anchor_edit` run overwrote its own `.bak`, destroying the original.** That backup is
+  written only for a file git cannot restore, so it is the ONLY copy in existence; replacing it
+  with the state after the first edit left nothing holding the original, silently and completely.
+
+  First write wins now: an existing `.bak` is kept. The surviving copy is the earliest state,
+  which is the one worth having when a chain of edits goes wrong.
+
+  The run also SAYS when it kept one, rather than printing the same line either way. A `.bak` that
+  was already there may predate the session, so a reader must not read it as the state from just
+  before this edit - and the message is the only place that distinction can appear.
+
 ## [5.295.1]
 
 ### Fixed
