@@ -274,53 +274,51 @@ def changelog_documents(root, version):
     return bool(re.search(r"^## \[" + re.escape(version) + r"\]\s*(?:-.*)?$", text, re.M))
 
 
-def scan_project_version(text):
-    """The [project] version read WITHOUT tomllib, or None when the table declares none.
+class VersionUnreadable(Exception):
+    """pyproject.toml is present but its version could not be read, carrying the reason why.
 
-    tomllib is 3.11+ and a hook runs under whatever interpreter run-python.sh resolved on the
-    reader's machine, so parsing only with tomllib gives this check an interpreter floor and
-    makes it go quiet below it. Scoped to the [project] table because a `version` key in some
-    tool's table is a different key entirely, and a bare line scan answers with whichever one
-    it meets first. Covers the shape pyproject uses for this key: a quoted single-line value.
+    A reason rather than a bare None because the three causes send a reader to different places:
+    a missing key is an edit to make, invalid TOML is a file to repair, and an interpreter with
+    no tomllib is a toolchain to change. Reporting "no version could be read" for all three sent
+    someone looking for a missing key that was sitting right there.
     """
-    in_project = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("[") and line.endswith("]"):
-            in_project = line == "[project]"
-            continue
-        if not in_project:
-            continue
-        match = re.match(r"""version\s*=\s*(["'])(.*?)\1\s*(?:#.*)?$""", line)
-        if match:
-            return match.group(2)
-    return None
 
 
 def pyproject_version(root):
-    """The version declared in pyproject.toml, or None when the file has none to give.
+    """The version declared in pyproject.toml.
 
-    None no longer doubles as "this interpreter cannot parse TOML": below 3.11 the scanner
-    above answers instead, so the only Nones left mean there is no file or its [project] table
-    declares no readable version. check_version_sync separates those two by asking whether the
-    file exists, because they are different answers - one is not a distribution at all, the
-    other is a distribution nobody can learn the version of.
+    Returns None ONLY when there is no pyproject.toml at all, which means this checkout is not a
+    Python distribution. Every other way of not getting a version raises VersionUnreadable,
+    because "there is nothing to check" and "I could not check" are different answers and
+    collapsing them into one None is what let this check pass on unreadable input.
+
+    There is deliberately no fallback parser for interpreters below 3.11. One shipped in 5.294.2
+    and was removed: a hand-rolled TOML reader answers wrongly in silence, and only below 3.11
+    where nothing exercises it, which trades a silent skip for a silent wrong answer. The repo
+    declares requires-python >=3.11, so reporting is both honest and the same verdict everywhere.
     """
     pp = root / "pyproject.toml"
     if not pp.is_file():
         return None
     try:
         text = pp.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    except OSError as exc:
+        raise VersionUnreadable("pyproject.toml could not be read: %s" % exc)
     try:
-        import tomllib  # noqa: PLC0415 - stdlib only from 3.11; scan_project_version covers below
+        import tomllib  # noqa: PLC0415 - stdlib only from 3.11; absence is reported, not skipped
     except ImportError:
-        return scan_project_version(text)
+        raise VersionUnreadable(
+            "this interpreter has no tomllib, which is stdlib from 3.11, and the repo declares "
+            "requires-python >=3.11"
+        )
     try:
-        return tomllib.loads(text).get("project", {}).get("version")
-    except Exception:  # noqa: BLE001
-        return None
+        data = tomllib.loads(text)
+    except Exception as exc:  # noqa: BLE001
+        raise VersionUnreadable("pyproject.toml is not valid TOML: %s" % exc)
+    version = data.get("project", {}).get("version")
+    if version is None:
+        raise VersionUnreadable("its [project] table declares no version key")
+    return version
 
 
 def check_version_sync(root):
@@ -340,11 +338,12 @@ def check_version_sync(root):
     """
     if not (root / "pyproject.toml").is_file():
         return []  # not a Python distribution; there is no second version to disagree with
-    declared = pyproject_version(root)
-    if declared is None:
+    try:
+        declared = pyproject_version(root)
+    except VersionUnreadable as exc:
         return [
-            "pyproject.toml is present but no [project] version could be read from it.",
-            "The wheel takes its version from that key, so skipping here would report that",
+            "pyproject.toml is present but its version could not be read: %s." % exc,
+            "The wheel takes its version from that key, so passing here would report that",
             "the two versions agree having learned neither of them.",
         ]
     pj = root / "plugins" / "bitranox" / ".claude-plugin" / "plugin.json"

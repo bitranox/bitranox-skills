@@ -29,6 +29,32 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.294.3]
+
+### Changed
+
+- **The `tomllib` fallback added one version ago is removed; below 3.11 the check REPORTS instead
+  of parsing.** `scan_project_version` read the `[project]` version by scanning lines, so that
+  `check_version_sync` would have no interpreter floor. That traded a silent skip for something
+  worse: a hand-rolled TOML reader answers wrongly in SILENCE, and only below 3.11, where neither
+  CI nor any maintainer machine exercises it. A test pinned it to agree with `tomllib` on today's
+  `pyproject.toml`, which says nothing about the shape that file takes next.
+
+  It also failed at the thing it was for. The verdict stayed interpreter-dependent, just in the
+  other direction: a malformed `pyproject.toml` fires on 3.11+ and could still PASS below, because
+  a line scan happily reads a version out of a file `tomllib` rejects. That case is now an
+  executable test, and it is what mutating the parse branch to return a version reproduces.
+
+  The repo declares `requires-python >=3.11`, so an interpreter without `tomllib` cannot develop
+  it in any case. Reporting is the honest answer and it is the SAME verdict everywhere.
+
+### Fixed
+
+- **The failure now names WHICH of the three causes it hit**, via a `VersionUnreadable` carrying
+  the reason: a missing `version` key is an edit to make, invalid TOML is a file to repair, and a
+  missing `tomllib` is a toolchain to change. One message for all three sent a reader looking for
+  a key that was sitting right there in the file.
+
 ## [5.294.2]
 
 ### Fixed
