@@ -29,6 +29,59 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.296.0]
+
+### Added
+
+- **`compuse-toolbox`: `mutation_arm.py` - break the code, run ONE test arm, restore.** Proving a
+  test is not vacuous was hand-rolled eight times in a single session, and two of those verdicts
+  were wrong in ways a tested tool does not repeat. The jig closes all three failure shapes: the
+  verdict comes from pytest's SHORT TEST SUMMARY rather than a grep of the log, where a
+  `pytest.raises(X)` SOURCE line echoed in a traceback makes X look raised while the summary says
+  `DID NOT RAISE`; the reported reason names WHICH assertion failed, so an arm that died on an
+  earlier precondition is not read as the one you meant; and `--mutate` repeats, applying several
+  anchors as ONE arm, because layered validation absorbs a single-layer break and a covered line
+  then reads as uncovered. pytest's exit 5 (nothing collected) maps to INCONCLUSIVE, never to
+  "survived" - an arm that never ran must not report as a pass. Restore is from a copy taken before
+  the first edit, verified byte-for-byte in a `finally`, never `git checkout --`, which restores
+  from HEAD and so discards uncommitted work.
+
+- **`compuse-toolbox`: `newest.py --name-timestamp`.** mtime is the WRONG key when a later pass
+  rewrote the files - compression, re-encoding, a fixup job - because it then records that pass and
+  not the content. The flag keys on a fixed-width stamp in the filename instead, and REFUSES when
+  nothing carries one rather than falling back to mtime, since a silent fallback answers the
+  question the caller just said was wrong. The default run now warns when the two keys pick
+  DIFFERENT files, which needs no threshold: that is exactly when the choice of key changes the
+  answer.
+
+- **`process-agents-dispatching-parallel`: harvest structured output from the TRANSCRIPT.** The
+  agent-to-parent channel HTML-escapes `<`, `>` and `&`, so `>=3.11` arrives as `&gt;=3.11` and a
+  control tag arrives neutralized. The corruption survives every structural check - delimiters
+  match, block count is right - so it lands silently in whatever the parent writes. Also: a NAMED
+  agent's transcript is not symlinked into `tasks/` (it is under `subagents/`), and not every
+  record's `message` is a dict, so an unguarded walk dies after writing some blocks.
+
+### Fixed
+
+- **`docs-md-table-formatting`: a ragged table row was reported as `Unchanged`.** Leaving such a
+  table alone is correct - the tool can only align what parses - but printing `Unchanged` reads as
+  a clean bill of health for the one shape it cannot repair. Every ragged row now goes to stderr
+  with file and line, the status line carries the count, and `--strict` turns it into a non-zero
+  exit for CI while the default keeps existing callers' exit codes. The message distinguishes the
+  two directions, which have different consequences: a row with MORE cells than the header loses
+  the surplus, a row with FEWER is padded and renders empty. Its first sweep of this plugin found
+  three real cases.
+
+- **`coding-python-rpyc`: a routing row named no file.** The `Per-module API` row of the
+  upstream-docs table had two cells under a three-column header, so its path column rendered empty
+  - a dead entry in a table whose only job is routing a reader to a file. Found by the ragged-row
+  report above, on its first run.
+
+- **`compuse-toolbox`: two defects in the index table itself.** An unescaped `|` inside a code span
+  in the `adjudicate` row, which GFM splits the cell at, dropping the rest of the row; and the
+  `anchor_edit` row carrying no usage cell at all, so the shipped table never showed how to run it.
+  A jig nobody can find gets hand-rolled again, which is the failure this table exists to prevent.
+
 ## [5.295.3]
 
 ### Fixed

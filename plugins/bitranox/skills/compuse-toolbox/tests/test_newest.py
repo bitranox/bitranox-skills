@@ -165,3 +165,112 @@ def test_skipped_paths_are_warned_on_stderr_and_listed_in_json_not_stdout(tmp_pa
     payload = json.loads(r.stdout)  # must still parse even though a diagnostic was emitted
     assert payload["skipped"] == [gone]
     assert "skipped 1 unreadable" in r.stderr
+
+
+# --------------------------------------------------------------------------
+# --name-timestamp: mtime is the WRONG key when a later pass rewrote the files.
+# --------------------------------------------------------------------------
+
+
+def test_parse_name_stamp_reads_the_common_fixed_width_forms():
+    assert N.parse_name_stamp("samples-20260823T173409Z.jsonl.gz") is not None
+    assert N.parse_name_stamp("dump-20260823-173409.sql") is not None
+    assert N.parse_name_stamp("dump_20260823_173409.sql") is not None
+    assert N.parse_name_stamp("backup-20260823.tar") is not None
+
+
+def test_parse_name_stamp_orders_correctly():
+    earlier = N.parse_name_stamp("s-20260823T090000Z.gz")
+    later = N.parse_name_stamp("s-20260823T173409Z.gz")
+    assert earlier < later
+
+
+def test_parse_name_stamp_rejects_a_non_date():
+    """13 is not a month. A number of the right WIDTH is not a timestamp."""
+    assert N.parse_name_stamp("build-20261345.log") is None
+    assert N.parse_name_stamp("v1.2.3-release.tar") is None
+
+
+def test_by_name_stamp_ignores_mtime_entirely(tmp_path):
+    """The whole point: the file rewritten LAST is not the one produced last."""
+    old_content = tmp_path / "samples-20260823T173409Z.jsonl.gz"
+    new_content = tmp_path / "samples-20260824T090000Z.jsonl.gz"
+    new_content.write_text("newer content", encoding="utf-8")
+    old_content.write_text("older content", encoding="utf-8")
+    # gzipped afterwards: the OLDER content carries the LATER mtime
+    import os
+    os.utime(new_content, (1000, 1000))
+    os.utime(old_content, (2000, 2000))
+
+    assert N.newest([str(new_content), str(old_content)]).name == old_content.name
+    assert N.newest_by_name_stamp(
+        [str(new_content), str(old_content)]).name == new_content.name
+
+
+def test_unstamped_paths_are_reported_never_guessed(tmp_path):
+    a = tmp_path / "samples-20260824T090000Z.gz"
+    b = tmp_path / "no-stamp-here.gz"
+    for f in (a, b):
+        f.write_text("x", encoding="utf-8")
+    assert N.unstamped([str(a), str(b)]) == [str(b)]
+
+
+def test_keys_disagree_is_the_warning_condition(tmp_path):
+    """No threshold: the key matters exactly when the two keys pick different files."""
+    import os
+    old_content = tmp_path / "s-20260823T173409Z.gz"
+    new_content = tmp_path / "s-20260824T090000Z.gz"
+    for f in (new_content, old_content):
+        f.write_text("x", encoding="utf-8")
+    os.utime(new_content, (1000, 1000))
+    os.utime(old_content, (2000, 2000))
+    assert N.keys_disagree([str(new_content), str(old_content)]) is True
+
+    # and the control: when the two keys agree, no warning
+    os.utime(new_content, (3000, 3000))
+    assert N.keys_disagree([str(new_content), str(old_content)]) is False
+
+
+def test_cli_warns_when_the_keys_disagree(tmp_path):
+    import os
+    old_content = tmp_path / "s-20260823T173409Z.gz"
+    new_content = tmp_path / "s-20260824T090000Z.gz"
+    for f in (new_content, old_content):
+        f.write_text("x", encoding="utf-8")
+    os.utime(new_content, (1000, 1000))
+    os.utime(old_content, (2000, 2000))
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), str(new_content), str(old_content)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 0
+    assert "--name-timestamp" in proc.stderr, proc.stderr
+
+
+def test_cli_name_timestamp_selects_by_the_name(tmp_path):
+    import os
+    old_content = tmp_path / "s-20260823T173409Z.gz"
+    new_content = tmp_path / "s-20260824T090000Z.gz"
+    for f in (new_content, old_content):
+        f.write_text("x", encoding="utf-8")
+    os.utime(new_content, (1000, 1000))
+    os.utime(old_content, (2000, 2000))
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--name-timestamp", str(new_content), str(old_content)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 0
+    assert new_content.name in proc.stdout
+    assert old_content.name not in proc.stdout
+
+
+def test_cli_name_timestamp_refuses_when_nothing_is_stamped(tmp_path):
+    """Falling back to mtime silently would be the same defect this flag exists to fix."""
+    f = tmp_path / "plain.gz"
+    f.write_text("x", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--name-timestamp", str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 1, (proc.returncode, proc.stdout, proc.stderr)
+    assert "stamp" in proc.stderr.lower()

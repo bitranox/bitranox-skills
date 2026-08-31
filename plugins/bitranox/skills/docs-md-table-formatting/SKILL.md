@@ -104,9 +104,14 @@ python3 reformat_tables.py --check -r
 
 # Create .bak backup before writing
 python3 reformat_tables.py --backup file.md
+
+# Fail (exit 1) if any table has a ragged row - for CI
+python3 reformat_tables.py --strict -r
 ```
 
-Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks, preserves alignment markers (`:---`, `:---:`, `---:`), handles pipes inside backtick spans, and bails on tables with inconsistent column counts.
+Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks, preserves alignment markers (`:---`, `:---:`, `---:`), handles pipes inside backtick spans, and leaves a table with inconsistent column counts alone.
+
+**A ragged row is REPORTED, not passed over in silence.** It is the one shape the tool cannot repair, and the two directions differ: a row with MORE cells than the header loses the surplus (GFM splits at each unescaped pipe and DROPS the extras, so a 4-cell row under a 3-column header renders as 3 and the content disappears while the table still looks correct), while a row with FEWER is PADDED, so the missing cell renders empty. The message says which, because a warning that claims content loss for both is wrong half the time. Since there is nothing to reformat, the run would otherwise print `Unchanged`, which reads as a clean bill of health for exactly the defect worth catching. Every ragged row now goes to stderr with its file and line, and the status line carries the count; `--strict` turns that into a non-zero exit for CI, while the default stays a warning so existing callers keep their exit codes. Its first sweep over this plugin found three, one of them a routing table whose third column had gone missing on a single row.
 
 ## Editing tables via JSON (tablekit.py)
 

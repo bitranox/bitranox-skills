@@ -16,6 +16,15 @@ Usage:
     python3 reformat_tables.py --check file.md     # dry-run, exit 1 if changes needed
     python3 reformat_tables.py --backup file.md    # creates file.md.bak before writing
     python3 reformat_tables.py -r [dir]            # find and reformat all *.md under dir (default: .)
+    python3 reformat_tables.py --strict file.md    # exit 1 if any table has a ragged row
+
+A RAGGED ROW - one whose cell count does not match its header - is reported on stderr and named
+in the status line, always. It is the one shape this tool cannot repair: GFM splits a row at each
+unescaped pipe and DROPS the surplus, so the extra content vanishes when rendered while the table
+still looks correct. Since there is nothing to reformat, the file would otherwise be reported as
+Unchanged, which reads as a clean bill of health for the exact defect worth catching. `--strict`
+turns that report into a non-zero exit for CI; the default stays a warning so existing callers
+keep their exit codes.
 """
 
 import re
@@ -117,6 +126,27 @@ def split_table_row(line):
     return cells
 
 
+def table_column_mismatches(lines):
+    """Rows whose cell count differs from the header's, as (index, count) pairs.
+
+    This is the one shape the reformatter cannot repair, and the reason it needs reporting
+    separately: GFM splits a row at each unescaped pipe and DROPS the surplus, so a 4-cell row
+    under a 3-column header renders as 3 cells and the extra content disappears. Nothing about
+    the rendered table looks wrong, and the formatter - which can only align what parses - is
+    right to leave the file alone. Silence is what makes it a defect.
+
+    Empty for anything without a valid separator row: that is not a ragged table, it is not a
+    table, and reporting it would bury the real finding in noise.
+    """
+    if len(lines) < 2:
+        return []
+    rows = [split_table_row(line) for line in lines]
+    if not is_separator_row(rows[1]):
+        return []
+    expected = len(rows[0])
+    return [(i, len(row)) for i, row in enumerate(rows) if len(row) != expected]
+
+
 def reformat_table(lines):
     """Reformat a markdown table. Returns lines unchanged if structure is invalid."""
     if len(lines) < 2:
@@ -185,12 +215,15 @@ def _strip_blockquote(line):
     return prefix, rest
 
 
-def reformat_file(filepath, *, check_only=False, backup=False):
+def reformat_file(filepath, *, check_only=False, backup=False, warnings=None):
     """Reformat all tables in a file.
 
     Tables inside ```markdown / ```md fenced code blocks are reformatted.
     Tables inside all other fenced code blocks are skipped.
     Returns True if the file was (or would be) changed.
+
+    Pass a list as `warnings` to receive one message per ragged table - a row whose cell count
+    does not match its header. Those are never reformatted, so without this they leave no trace.
     """
     with open(filepath, "r", encoding="utf-8") as f:
         original = f.read()
@@ -204,16 +237,33 @@ def reformat_file(filepath, *, check_only=False, backup=False):
     fence_char = None
     fence_len = 0
 
+    table_start = [0]          # 1-based file line of the current table's first row
+
     def flush_table():
         if table_lines:
             prefixes = [t[0] for t in table_lines]
             contents = [t[1] for t in table_lines]
+            if warnings is not None:
+                expected = len(split_table_row(contents[0]))
+                for offset, count in table_column_mismatches(contents):
+                    # The two directions have DIFFERENT consequences, and only one loses content.
+                    # A single message claiming loss would be wrong half the time, which is how a
+                    # warning trains its reader to ignore it.
+                    effect = (
+                        "GFM drops the surplus, so this row LOSES CONTENT when rendered"
+                        if count > expected else
+                        "GFM pads the row, so the missing cell renders EMPTY"
+                    )
+                    warnings.append(
+                        f"{filepath}:{table_start[0] + offset}: ragged table row - "
+                        f"{count} cells under a {expected}-column header; {effect}"
+                    )
             formatted = reformat_table(contents)
             for prefix, fline in zip(prefixes, formatted):
                 result.append(prefix + fline if prefix else fline)
             table_lines.clear()
 
-    for line in lines:
+    for lineno, line in enumerate(lines, 1):
         # Detect fenced code block boundaries (``` or ~~~)
         lstripped = line.lstrip()
         fence_match = re.match(r"^(`{3,}|~{3,})", lstripped)
@@ -254,6 +304,8 @@ def reformat_file(filepath, *, check_only=False, backup=False):
         stripped = line.strip()
         bq_prefix, table_content = _strip_blockquote(stripped)
         if table_content.startswith("|") and "|" in table_content[1:]:
+            if not table_lines:
+                table_start[0] = lineno
             table_lines.append((bq_prefix, table_content))
         else:
             flush_table()
@@ -282,6 +334,7 @@ def main():
     check_only = False
     backup = False
     recursive = False
+    strict = False
     files = []
 
     for arg in args:
@@ -291,6 +344,8 @@ def main():
             backup = True
         elif arg in ("--recursive", "-r"):
             recursive = True
+        elif arg == "--strict":
+            strict = True
         elif arg in ("--help", "-h"):
             print(__doc__.strip())
             sys.exit(0)
@@ -319,22 +374,34 @@ def main():
         sys.exit(1)
 
     any_changed = False
+
+    any_ragged = False
     for path in files:
         path = Path(path)
         if not path.is_file():
             print(f"Error: not a file: {path}", file=sys.stderr)
             sys.exit(1)
-        changed = reformat_file(path, check_only=check_only, backup=backup)
+        warnings = []
+        changed = reformat_file(
+            path, check_only=check_only, backup=backup, warnings=warnings)
+        for message in warnings:
+            print(message, file=sys.stderr)
+            any_ragged = True
+        # A ragged table is named on stdout too. It cannot be reformatted, so the status line
+        # would otherwise read "Unchanged", which is exactly the false all-clear being fixed.
+        suffix = f" ({len(warnings)} ragged table row(s))" if warnings else ""
         if changed:
             any_changed = True
             if check_only:
-                print(f"Would reformat: {path}")
+                print(f"Would reformat{suffix}: {path}")
             else:
-                print(f"Reformatted: {path}")
+                print(f"Reformatted{suffix}: {path}")
         else:
-            print(f"Unchanged: {path}")
+            print(f"Unchanged{suffix}: {path}")
 
     if check_only and any_changed:
+        sys.exit(1)
+    if strict and any_ragged:
         sys.exit(1)
 
 

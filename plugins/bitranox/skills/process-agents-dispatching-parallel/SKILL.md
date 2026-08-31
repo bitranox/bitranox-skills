@@ -162,6 +162,23 @@ for two separate reasons:
   because the enum members compared equal to the strings the old call sites still passed. Name the
   exact command they must run, including the type checker, and check it yourself afterwards.
 
+**Structured output must be harvested from the TRANSCRIPT, not from the delivered message.** When
+what you need back is text you will PARSE and apply - blocks, patches, rewritten file bodies - the
+agent-to-parent channel is the wrong source: it HTML-escapes `<`, `>` and `&`. A dependency floor
+written as `>=3.11` arrives as `&gt;=3.11`, and a control tag arrives neutralized. Whatever you
+write from it is corrupted silently, because every structural check still passes - the delimiters
+match, the block count is right, and only the characters a version comparison or a shell cares
+about are wrong.
+
+Read the agent's transcript JSONL instead and unescape it. Two things bite while doing that:
+
+- **A NAMED agent's transcript is not symlinked into the session's `tasks/` directory** - only an
+  unnamed one is. A named agent's lives under the session's `subagents/` directory.
+- **Not every record's `message` is a dict.** An unguarded walk dies partway through, AFTER it has
+  already written some blocks, so the output looks truncated rather than failed.
+
+Prose you only read is fine to take from the delivered message; the rule is about text you parse.
+
 ## Agent Prompt Structure
 
 Good agent prompts are:

@@ -76,7 +76,7 @@ Try distilled references (above) first. Use upstream docs below only when more d
 | Tutorial 5: Async     | `rpyc.async_()`, `AsyncResult` (`.error`), `BgServingThread`, `conn.poll_all()`, `conn.serve`, event producer/consumer                                                                      | `tutorial/tut5.md`             |
 | Use cases             | remote testing, administration, hardware access, GIL workaround, distributed computation, clustering                                                                                        | `docs/usecases.md`             |
 | Release process       | `hatch build`, `hatch publish`, git tagging, PyPI, semantic versioning, CHANGELOG                                                                                                           | `docs/rpyc-release-process.md` |
-| Per-module API        | STUBS ONLY - each `api/*.md` is a one-line pointer to the source, not API detail. For signatures use `python -c "import rpyc; help(rpyc.core.protocol)"` on the installed package. |
+| Per-module API        | STUBS ONLY - each `api/*.md` is a one-line pointer to the source, not API detail. For signatures use `python -c "import rpyc; help(rpyc.core.protocol)"` on the installed package. | `api/` |
 
 ---
 

@@ -337,3 +337,96 @@ def test_cli_unknown_option_exits_1():
     r = run_cli("--nope")
     assert r.returncode == 1
     assert "Unknown option" in r.stderr
+
+
+# --------------------------------------------------------------------------
+# A ragged row - one whose cell count differs from the header's - is the case
+# the formatter cannot fix. It must not be reported as a clean file.
+# --------------------------------------------------------------------------
+
+
+RAGGED = """\
+| a | b |
+|---|---|
+| 1 | 2 |
+| 3 | 4 | 5 |
+"""
+
+
+def test_column_mismatches_names_the_row_and_its_count():
+    rows = R.table_column_mismatches(RAGGED.rstrip("\n").split("\n"))
+    assert rows == [(3, 3)], rows
+
+
+def test_column_mismatches_is_empty_for_a_well_formed_table():
+    good = "| a | b |\n|---|---|\n| 1 | 2 |".split("\n")
+    assert R.table_column_mismatches(good) == []
+
+
+def test_not_a_table_is_not_ragged():
+    """No separator row means it is not a table at all, which is not a finding."""
+    assert R.table_column_mismatches("| a | b |\n| 1 | 2 |".split("\n")) == []
+
+
+def test_ragged_table_is_reported_not_silently_unchanged(tmp_path):
+    """The whole point: GFM drops the surplus cell, so 'Unchanged' reads as a false all-clear."""
+    f = tmp_path / "ragged.md"
+    f.write_text(RAGGED, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert "ragged" in proc.stdout.lower(), proc.stdout
+    assert "4" in proc.stderr, proc.stderr          # the 1-based line of the bad row
+    assert proc.returncode == 0                     # a warning by default, not a failure
+
+
+def test_strict_makes_a_ragged_table_fail(tmp_path):
+    f = tmp_path / "ragged.md"
+    f.write_text(RAGGED, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--strict", str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 1, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_strict_passes_a_clean_file(tmp_path):
+    """The control: --strict must not fail a file whose tables are well formed."""
+    f = tmp_path / "clean.md"
+    f.write_text("| a | b |\n|---|---|\n| 1 | 2 |\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--strict", str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+
+SHORT_ROW = """\
+| a | b | c |
+|---|---|---|
+| 1 | 2 |
+"""
+
+
+def test_a_short_row_is_reported_as_padded_not_as_lost_content(tmp_path):
+    """The two directions differ: GFM drops a surplus cell but PADS a missing one. A message
+    claiming content loss for both is wrong half the time."""
+    f = tmp_path / "short.md"
+    f.write_text(SHORT_ROW, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert "EMPTY" in proc.stderr, proc.stderr
+    assert "LOSES CONTENT" not in proc.stderr, proc.stderr
+
+
+def test_a_long_row_is_reported_as_losing_content(tmp_path):
+    f = tmp_path / "long.md"
+    f.write_text(RAGGED, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), str(f)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert "LOSES CONTENT" in proc.stderr, proc.stderr
