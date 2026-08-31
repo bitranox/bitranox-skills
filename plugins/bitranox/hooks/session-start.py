@@ -125,7 +125,19 @@ def contrib_context(proj):
 #: drops them makes the admitted guess invisible and leaves only the invented date showing.
 _OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(\S.*)")
 _ISO_DATE_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
-_OPEN_WORK_MAX_ITEMS = 5     # the essentials block is byte-budgeted; see the size test
+#: The whole essentials block must stay small or the harness persists it to a file and injects
+#: only a ~2KB preview, which is how the retrieval rule once stopped reaching context at all.
+#: The open-work block therefore gets what the OTHER blocks left, never a fixed share: a fixed
+#: item COUNT recreated the sink it exists to remove, and a fixed BYTE share passed its unit test
+#: on a fixture that had no other blocks in it, then overran on the real repo by 429 bytes.
+_OPEN_WORK_HEADER = (
+    "%d OPEN-WORK ITEM(S) - the standing backlog at OPEN-WORK.md, ordered by RANK and "
+    "NOT by what was touched last. It persists until an item is closed there, so reading it "
+    "does not clear it. Whatever you do next should be the top-ranked item, or you should say "
+    "plainly why a lower-ranked one goes first:\n"
+)
+_ESSENTIALS_CEILING_BYTES = 3300
+_OPEN_WORK_MIN_BUDGET_BYTES = 400
 _OPEN_WORK_HEAD_CHARS = 96
 
 
@@ -169,7 +181,7 @@ def _age(raised, today):
     return "raised %d day%s ago" % (days, "" if days == 1 else "s")
 
 
-def open_work_context(proj, today=None):
+def open_work_context(proj, today=None, budget=None):
     """Surface the STANDING backlog, ranked, and - like the contribution queue - do NOT consume it.
 
     `handover.md` describes one moment and is overwritten wholesale, so anything outliving the
@@ -184,17 +196,23 @@ def open_work_context(proj, today=None):
         items = _parse_open_work(raw, today)
         if not items:
             return None
-        shown = items[:_OPEN_WORK_MAX_ITEMS]
-        lines = ["- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])
-                 for rank, raised, what in shown]
-        hidden = len(items) - len(shown)
+        head = _OPEN_WORK_HEADER % len(items)
+        allowed = max(_OPEN_WORK_MIN_BUDGET_BYTES,
+                      (_ESSENTIALS_CEILING_BYTES if budget is None else budget))
+        lines, used = [], len(head.encode("utf-8"))
+        for rank, raised, what in items:
+            line = "- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])
+            cost = len(line.encode("utf-8")) + 1
+            # Always emit the first, however long: one oversized item must not reduce the whole
+            # block to a bare count, which would hide the very item ranked most urgent.
+            if lines and used + cost > allowed:
+                break
+            lines.append(line)
+            used += cost
+        hidden = len(items) - len(lines)
         if hidden:
             lines.append("- ... and %d more in OPEN-WORK.md" % hidden)
-        return ("%d OPEN-WORK ITEM(S) - the standing backlog at OPEN-WORK.md, ordered by RANK and "
-                "NOT by what was touched last. It persists until an item is closed there, so "
-                "reading it does not clear it. Whatever you do next should be the top-ranked item, "
-                "or you should say plainly why a lower-ranked one goes first:\n%s"
-                % (len(items), "\n".join(lines)))
+        return head + "\n".join(lines)
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
 
@@ -360,11 +378,14 @@ def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [retrieval_context(proj), audit_context(proj), open_work_context(proj),
-             contrib_context(proj), decoy_context(proj)]
-    if _nudges_on():  # the user can switch session nudges off (recorded in config)
-        parts += [dream_nudge(proj), newproject_nudge(proj)]
-    ctx = [p for p in parts if p]
+    # Everything else is assembled FIRST so the backlog can be given what is actually left. Sized
+    # against a fixture instead, it overran the ceiling on the real repo while its test stayed green.
+    retrieval, audit = retrieval_context(proj), audit_context(proj)
+    contrib, decoy = contrib_context(proj), decoy_context(proj)
+    tail = [dream_nudge(proj), newproject_nudge(proj)] if _nudges_on() else []
+    spent = sum(len(p.encode("utf-8")) + 2 for p in [retrieval, audit, contrib, decoy] + tail if p)
+    open_work = open_work_context(proj, budget=_ESSENTIALS_CEILING_BYTES - spent)
+    ctx = [p for p in [retrieval, audit, open_work, contrib, decoy] + tail if p]
     nudge = autoupdate_nudge(proj)
     if not ctx and not nudge:
         return 0

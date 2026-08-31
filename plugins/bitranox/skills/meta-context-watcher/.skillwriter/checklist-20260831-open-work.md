@@ -111,3 +111,16 @@ without asking.
       `OPEN-WORK.md` as gitignored after the user reversed that, and it still said `size` is "the
       count that decides rank", which is the exact reading that made a test arm rank a 206-item
       internal sweep above the user's own request.
+
+## Follow-up, v5.297.4 - the injection cap
+
+- [x] **A fixed item count was the wrong shape.** Showing five and counting the rest recreated the
+      sink the file exists to remove. Alternatives offered: raise the fixed cap to 8 or 9, or keep
+      5. The user chose filling the byte budget with no fixed count.
+- [x] **The first byte budget passed its test and overran in reality.** A fixed 1600-byte share was
+      approved by a fixture carrying only retrieval and audit; the real repo, which also has
+      pending contributions, produced 3929 bytes against a 3500 ceiling. Caught by running the hook
+      end to end against this repo, not by the suite. The budget is now derived from what the other
+      blocks actually spent, and the real total is 3239 with 7 of 13 items shown.
+- [x] New test populates EVERY block that shares the ceiling, which is what the old one did not.
+      Mutation-verified: raising the ceiling constant to 9000 fails it.

@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.4]
+
+### Changed
+
+- **The backlog block gets what the other essentials left, instead of a fixed share.** It showed
+  the top five items and reported the rest as a bare count, which recreated the sink it exists to
+  remove: everything below rank five was a number rather than a thing. It now fills whatever
+  budget remains under the essentials ceiling, so a backlog that fits is shown WHOLE and only a
+  genuinely long one truncates - 7 items instead of 5 on this repo, with the remainder still
+  counted.
+
+### Fixed
+
+- **A byte budget sized against a fixture overran on the real repo.** The first attempt gave the
+  block a fixed 1600 bytes, which its unit test approved on a fixture carrying only the retrieval
+  and audit blocks - and the real repo, which also has pending contributions, came out at 3929
+  bytes against a 3500 ceiling. Over it, the harness persists the whole essentials block to a file
+  and injects a ~2KB preview, which is how the retrieval rule once stopped reaching context at
+  all. The budget is now computed from what the other blocks actually spent, and the new test
+  populates every block that shares the ceiling rather than two of them.
+
 ## [5.297.3]
 
 ### Fixed

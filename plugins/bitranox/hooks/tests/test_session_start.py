@@ -536,19 +536,49 @@ def test_open_work_skips_closed_items(tmp_path, monkeypatch, capsys):
     assert "open thing" in ctx and "done thing" not in ctx
 
 
-def test_open_work_caps_the_list_and_counts_the_rest(tmp_path, monkeypatch, capsys):
-    # The essentials block is byte-budgeted, so the list is capped - but a hidden item must
-    # still be COUNTED, or capping recreates the sinking it exists to stop.
+def test_open_work_shows_a_short_backlog_whole(tmp_path, monkeypatch, capsys):
+    # A fixed count recreated the sink it exists to remove: with a cap of five, everything below
+    # rank five was a number rather than a thing. The budget is the only real constraint, so a
+    # backlog that fits is shown WHOLE.
     proj = tmp_path / "p5"
     proj.mkdir()
-    lines = "".join("- [ ] (2026-08-27) [%d] FOUND: item number %d\n" % (i, i) for i in range(1, 9))
+    lines = "".join("- [ ] (2026-08-27) [%d] FOUND: item number %d\n" % (i * 10, i) for i in range(1, 9))
     _write_open_work(proj, lines)
     root = make_plugin_root(tmp_path)
     rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
     ctx = _ctx(out)
     assert "item number 1" in ctx
-    assert "item number 8" not in ctx
-    assert "3 more" in ctx
+    assert "item number 8" in ctx
+    assert "more in OPEN-WORK.md" not in ctx
+
+
+def test_open_work_truncates_on_bytes_and_counts_the_rest(tmp_path, monkeypatch, capsys):
+    # Past the budget it still truncates, and a hidden item must be COUNTED - a silent drop is
+    # the failure this file exists to stop.
+    proj = tmp_path / "p5b"
+    proj.mkdir()
+    long_tail = "x" * 300
+    lines = "".join("- [ ] (2026-08-27) [%d] FOUND: item number %d %s\n" % (i * 10, i, long_tail)
+                    for i in range(1, 41))
+    _write_open_work(proj, lines)
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "item number 1 " in ctx
+    assert "item number 40 " not in ctx
+    assert "more in OPEN-WORK.md" in ctx
+
+
+def test_open_work_shows_at_least_one_item_however_long(tmp_path, monkeypatch, capsys):
+    # A single item longer than the whole budget must not reduce the block to a bare count.
+    proj = tmp_path / "p5c"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (2026-08-27) [10] FOUND: the only item %s\n" % ("y" * 4000))
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "the only item" in ctx
+    assert len(ctx.encode("utf-8")) < 3500
 
 
 def test_open_work_absent_is_silent(tmp_path, monkeypatch, capsys):
@@ -618,3 +648,24 @@ def test_open_work_sorts_a_dated_item_above_an_undated_one_of_equal_rank(tmp_pat
     rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
     ctx = _ctx(out)
     assert ctx.index("dated item") < ctx.index("undated item")
+
+
+def test_essentials_stay_under_budget_with_every_block_present(tmp_path, monkeypatch, capsys):
+    # The earlier budget test used a fixture carrying only retrieval + audit, so a backlog sized
+    # against it passed while the REAL repo - which also has contributions - overran by 429 bytes.
+    # This one populates every block that shares the ceiling.
+    anchor, proj, _u = _anchor_tree_with_fact(tmp_path)
+    _write_audit(str(proj), "<SELF-IMPROVE-AUDIT>\n" + "a candidate miss\n" * 6 + "</SELF-IMPROVE-AUDIT>\n")
+    for i in range(4):
+        SIG.add_contribution(str(proj), {"what": "a pending contribution number %d with a description" % i,
+                                         "target": "skill:some-skill", "why": "measured"})
+    lines = "".join(
+        "- [ ] (2026-08-27) [%d] USER: a standing item with a fairly long description number %d"
+        " | size: %d targets | open: not started | next: do the thing\n" % (i * 10, i, i * 11)
+        for i in range(1, 31))
+    _write_open_work(proj, lines)
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "OPEN-WORK ITEM(S)" in ctx and "PENDING UPSTREAM CONTRIBUTION" in ctx   # both present
+    assert len(ctx.encode("utf-8")) < 3500
