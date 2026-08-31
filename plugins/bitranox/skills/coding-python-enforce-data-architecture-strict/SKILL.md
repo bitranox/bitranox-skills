@@ -515,6 +515,45 @@ Rationalizations that do not fly here:
   in those files; wiring is exactly where an untyped decorator or a wrong-typed option silently
   breaks the CLI. Keep them checked; type the surface.
 
+### Worked example - a RECURSIVE alias on a pre-3.12 floor
+
+The third shape a reader meets, after the stub gap and the lambda: a value type that contains
+itself (a JSON document, a config tree, a nested record). The temptation is `Any`, which is a
+suppression wearing a type's clothes. Each of the three traps below reports somewhere other than
+its cause, so getting it wrong costs a gate cycle per attempt.
+
+```python
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import TypeAlias
+
+JsonValue: TypeAlias = (
+    str | int | float | bool | Mapping[str, "JsonValue"] | Sequence["JsonValue"] | None
+)
+```
+
+1. **Quote the SELF-references, not the alias.** `from __future__ import annotations` does not
+   help: a `TypeAlias` VALUE is evaluated at runtime, so the name must already exist - it does not
+   yet, on the line defining it. Quoting only the recursive uses is what makes the definition
+   evaluate. `type JsonValue = ...` (PEP 695) is the 3.12+ spelling and is not available below it.
+2. **Import every other name at RUNTIME, never under `TYPE_CHECKING`.** Same reason: the union is
+   built when the module loads, so `Mapping` and `Sequence` must really be there. This one fails
+   only when the module is imported, so a type-check-only run stays green.
+3. **`Mapping`/`Sequence`, never `dict`/`list`.** `dict` is INVARIANT in its value type, so
+   `dict[str, dict[str, str]]` is not a `dict[str, JsonValue]` and an ordinary nested literal is
+   rejected at a call site that looks plainly correct. `Mapping` is covariant in the value type
+   and `Sequence` in its element type, so the same literal is accepted.
+
+Measured (pyright strict, `pythonVersion` 3.10): the form above reports 0 errors and the
+`dict`/`list` variant reports `reportArgumentType` on `{"a": {"b": "c"}}`, with pyright naming the
+mechanism itself - *Type parameter "_VT@dict" is invariant ... Consider switching from "dict" to
+"Mapping" which is covariant in the value type*. Both forms import fine on 3.10, so the runtime is
+not what separates them.
+
+Ruff's `RUF036` requires `None` LAST in the union (`None` not at the end of the type union), which
+is why the alias ends rather than begins with it.
+
 ---
 
 ## Rationalizations (pressure-tested; these do not fly)

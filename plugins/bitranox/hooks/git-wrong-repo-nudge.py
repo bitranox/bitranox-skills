@@ -33,6 +33,19 @@ agentdag && git log`, whose output read as a check on a different repo - sits in
 no structural guard separates it from thousands of benign commands. A test pins that, so the
 single-cd arm is not re-added on the belief that it covers this.
 
+ALSO NOT GUARDED, and now PRICED rather than assumed: the CROSS-CALL shape, where one call cd's
+somewhere and a LATER call runs a bare git with no cd of its own, relying on the persisted cwd. This
+hook cannot see it - it holds no session state and reads one command at a time - and the fact that
+motivated the hook asked for it. Replayed over the same corpus (65,810 commands by then, grown from
+the 60,517 above), an arm firing on "a git in a call containing no cd and no -C" speaks on 2,961
+commands: 4.499% of everything, one command in 22, against the shipped arm's 0.186%. Sampled, they
+are ordinary single-repo work whose cwd was already correct. The RATE is what rejects it; precision
+is not the deciding number for this hazard, because a plausible-but-wrong ANSWER is never followed
+by a block, so the 0.81% guard_replay reports is measuring refusals this guard was never going to
+cause. Recorded so the arm is not re-proposed as unmeasured. A stateful version tracking "where the
+last cd landed" is worse than none: the harness sometimes RESETS the cwd between calls, so it would
+answer confidently and wrongly.
+
 Data regions are masked before the structure is read, so a `cd` inside a heredoc or a quoted string
 is text rather than a statement - prose documenting this footgun must not trip the guard for it.
 

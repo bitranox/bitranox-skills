@@ -150,6 +150,22 @@ def test_blocks_via_uv_run(monkeypatch, project):
     assert run_main(monkeypatch, "uv run pyright src", project) == 2
 
 
+def test_uv_with_names_the_package_not_a_path(monkeypatch, project):
+    """`--with pyright` is uv's PACKAGE, so the pyright after it is the executable, not a path.
+
+    Read the other way round, the guard takes the flag's value as the executable and the real
+    executable as its only positional - so it blocks the no-paths form it recommends, which is
+    also how this repo documents running any tool (`uv run --with X ...`).
+    """
+    assert run_main(monkeypatch, "uv run --with pyright pyright", project) == 0
+    assert run_main(monkeypatch, "uvx --from pyright pyright", project) == 0
+
+
+def test_uv_with_still_sees_real_paths(monkeypatch, project):
+    """Skipping the flag value must not skip the check: a narrowed run still blocks."""
+    assert run_main(monkeypatch, "uv run --with pyright pyright src", project) == 2
+
+
 def test_blocks_with_flags_before_paths(monkeypatch, project):
     assert run_main(monkeypatch, "pyright --outputjson --pythonversion 3.10 src", project) == 2
 

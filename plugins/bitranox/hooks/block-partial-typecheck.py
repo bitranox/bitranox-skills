@@ -61,6 +61,12 @@ _REDIRECT_RE = re.compile(r"^\d*(?:>>?|<)")
 # Flags of OTHER tools that take a name/pattern as their value. Without this, a
 # token that merely spells "pyright" - `find . -name pyright`, `grep -e pyright` -
 # is mistaken for the executable, and whatever follows is read as its paths.
+#
+# The runner flags below are the same shape and bite harder, because they sit in
+# the recommended invocation rather than in an unrelated command: in
+# `uv run --with pyright pyright`, taking the flag's VALUE as the executable
+# leaves the REAL executable as the only positional, so the guard blocks the
+# no-paths form it tells you to run. This repo documents every tool that way.
 _NAME_VALUE_FLAGS = frozenset(
     {
         "-name",
@@ -76,6 +82,11 @@ _NAME_VALUE_FLAGS = frozenset(
         "--exclude",
         "--exclude-dir",
         "--file",
+        # uv / uvx / pipx: the package to install, not a path to check.
+        "--with",
+        "--with-editable",
+        "--from",
+        "--spec",
     }
 )
 

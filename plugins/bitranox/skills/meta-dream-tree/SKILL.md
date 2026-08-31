@@ -58,9 +58,10 @@ the success line, abort-and-show on a miss).
     descriptors are the PLACEMENT ROUTING KEY, so every level needs a meaningful one. LEVELS MEANS
     THE WHOLE TREE: every pointer-block-bearing dir under the anchor - SIBLING projects and
     departments included - not just the cwd's ancestor chain. Enumerate them with
-    `find <anchor> -name CLAUDE.local.md`, NEVER a bare `grep -r` (see "Level enumeration" in
-    references/dream-core.md: the session `grep` honors `.gitignore` and silently misses every
-    gitignored store). Only synthesize levels whose descriptor is EMPTY,
+    `find <anchor> -name CLAUDE.local.md -not -path '*/.venv*' -not -path '*/site-packages/*'`,
+    NEVER a bare `grep -r` (see "Level enumeration" in references/dream-core.md: the session
+    `grep` honors `.gitignore` and silently misses every gitignored store, while a bare `find`
+    OVER-counts a vendored plugin copy under a repo's `.venv`). Only synthesize levels whose descriptor is EMPTY,
     INCOMPLETE (missing template keys), or whose CHILDREN list is stale vs the actual
     subdirectories. Dispatch one `sonnet` subagent per stale
     level, in parallel (bottom-up in two waves when a leaf and its parent are both stale, so the

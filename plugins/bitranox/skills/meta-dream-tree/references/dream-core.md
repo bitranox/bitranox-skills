@@ -27,13 +27,33 @@ Launch either cross-platform through the same shim as the engine:
 
 ## Level enumeration - `find`, never a bare `grep -r` (and cross-check the count)
 
-Enumerate the tree's levels with `find <anchor> -name CLAUDE.local.md` (or `grep --no-ignore-files`),
+Enumerate the tree's levels with the `find` below (or `grep --no-ignore-files`),
 NEVER a bare `grep -r`. In a Claude Code bash session `grep` forwards to the `claude` search backend,
 which honors `.gitignore` by default; `bmk` adds `CLAUDE.local.md` to a repo's `.gitignore`, so
 `grep -rl BITRANOX-MEMORY-INDEX` silently returns a fraction of the levels (measured: 17 of 43 - every
 project-level store missing) and the miss looks like success. A dream scoped by that grep scores
 itself tree-wide while it only saw one chain. (`.claude-memory/facts/` is git-TRACKED, so a grep over
 the bodies is sound - it is the CLAUDE.local.md pointer files that are gitignored.)
+
+**`find` OVER-counts too, and the excess does not read as noise.** The gitignore miss above is one
+direction; the other is a VENDORED copy of the plugin. An install under a repo's own
+`.venv/lib/python3.x/site-packages/` carries REAL pointer blocks, and `find` has no gitignore
+behaviour to skip it, so those files enumerate as levels. Measured on this tree: `find` returned 100
+levels against `reconcile_memory_index.py --check-tree`'s 98, the two extra being one vendored plugin
+copy under a repo's `.venv`. Because those blocks are real, the cross-check then reports two slugs
+pointed at from two levels each - which reads as a tree-UNIQUENESS VIOLATION in the store rather than
+as vendored files in the scan, while the store itself was clean (`--check-tree`: 0 problems). Exclude
+them in the command itself:
+
+```bash
+find <anchor> -name CLAUDE.local.md \
+     -not -path '*/.venv*' -not -path '*/site-packages/*' -not -path '*/node_modules/*'
+```
+
+`-not -path '*/.venv*'` matches the PREFIX deliberately: a bare `*/.venv/*` misses `.venv-win`,
+`.venv-3.12` and `.venv-bmk`. Then cross-check the result against `--check-tree`'s own level count
+and CHASE a disagreement rather than averaging it - a gap of 2 in 100 is exactly the size that gets
+waved through, and the "a count in the hundreds" tell does not fire at it.
 
 **Cross-check every enumeration or parse against a second method before acting on it.** A silent
 under-count is the recurring failure of this whole procedure (one run hit three: a grep enumeration,

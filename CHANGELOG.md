@@ -29,6 +29,56 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.295.3]
+
+### Fixed
+
+- **`block-partial-typecheck` blocked the no-paths run it recommends, whenever pyright was
+  launched through uv.** In `uv run --with pyright pyright`, the guard took the flag's VALUE as
+  the executable and then read the REAL executable as its only positional path. So the approved
+  form was reported as a narrowed run - and this repo documents running every tool that way.
+  uv/uvx/pipx package flags (`--with`, `--with-editable`, `--from`, `--spec`) now name a package,
+  not a path. A second test pins that skipping the flag value does not skip the check: a genuinely
+  narrowed `uv run --with pyright pyright src` still blocks.
+
+### Added
+
+- **`compuse-bash`: four traps whose failure is a plausible wrong answer, not an error.**
+  `${VAR:-default}` fires on unset OR EMPTY, so an allowlist that blanks unlisted names fails
+  OPEN; the chained `command -v X && X ... || echo "(not installed)"` guard still misreports,
+  because `||` catches X's FINDING exit (measured with a control: it printed "(diff not
+  installed)" straight after diff printed a real diff); a path beginning with `-` is parsed as
+  OPTIONS by cat/tar/stat/ls/grep/dirname, and `--` does not help inside a `for` loop; files that
+  were MOVED are found by ctime (`-newerct`), never mtime, because a rename leaves mtime alone and
+  `-newermt` returns zero, which reads as "nothing was archived".
+
+- **`compuse-git`: the wrong-repo guard's boundary, with the missing arm now priced.** The
+  CROSS-CALL shape - a `cd` in one call, a bare `git` in the next - is not guarded and cannot be:
+  the hook reads one command at a time. An arm firing on any cd-less `git` was replayed over
+  65,810 real commands and speaks on 4.499% of them, one in 22, against the shipped arm's 0.186%.
+  Recorded in the hook and the skill so it is not re-proposed as unmeasured.
+
+- **`meta-dream-tree`: `find` OVER-counts levels, not only `grep` under-counting them.** A plugin
+  copy installed under a repo's own `.venv` carries real pointer blocks, so it enumerates as a
+  level: measured 100 levels against `--check-tree`'s 98, which then reports two slugs pointed at
+  from two levels each and reads as a store uniqueness violation rather than a scan artifact. The
+  prescribed command now excludes `*/.venv*` (a PREFIX match, so `.venv-win` and `.venv-3.12` are
+  caught), `site-packages` and `node_modules`, and says to chase a disagreement rather than
+  average it.
+
+- **`coding-python-textual`: four API names that behave the opposite way from how they read.**
+  `App.display` is DOMNode's show/hide property; `check_action` is three-valued, where `False`
+  hides a binding and `None` greys it out; `add_column(width=)` hard-clips with no ellipsis, and
+  `text-overflow` never reaches a cell because cells render through Rich; `RowHighlighted` fires
+  for every DataTable on screen at mount. Measured on textual 8.2.8.
+
+- **`coding-python-enforce-data-architecture-strict`: the recursive `TypeAlias` worked example.**
+  The third shape after the stub gap and the lambda. Quote the self-references and not the alias,
+  import the other names at runtime, and use `Mapping`/`Sequence` rather than `dict`/`list`,
+  whose invariance rejects an ordinary nested literal at a call site that looks correct. Verified
+  by running it: 0 pyright-strict errors at `pythonVersion` 3.10 against `reportArgumentType` for
+  the `dict`/`list` variant, both importing fine on 3.10.
+
 ## [5.295.2]
 
 ### Fixed
