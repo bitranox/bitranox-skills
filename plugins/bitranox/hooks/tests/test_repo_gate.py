@@ -715,6 +715,69 @@ def test_an_identical_pair_reports_nothing(tmp_path, monkeypatch):
     assert RG.mirror_failures(root, {"coding-python-thing"}) == []
 
 
+def test_a_drifted_reference_file_is_reported(tmp_path, monkeypatch):
+    """A mirrored skill is a DIRECTORY, and several pairs ship references/ or scripts/.
+
+    Comparing only SKILL.md let three changed files in one pair sit unreported while the gate
+    printed "in sync" - the worst shape a check can have, because the answer is the one you wanted.
+    """
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "references" / "api.md", "one\n")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "api.md", "TWO\n")
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert len(fails) == 1
+    assert "references/api.md" in fails[0]
+
+
+def test_a_file_present_on_only_one_side_is_reported(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "scripts" / "tool.py", "print(1)\n")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    fails = RG.mirror_failures(root, {"coding-python-thing"})
+
+    assert len(fails) == 1
+    assert "scripts/tool.py" in fails[0]
+
+
+def test_the_skillwriter_artifact_and_pycache_are_not_compared(tmp_path, monkeypatch):
+    """The review artifact is the marketplace's own commit receipt and never ships to the twin;
+    __pycache__ is build output. Comparing either would fail every pair permanently."""
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    here = root / "plugins" / "bitranox" / "skills" / "coding-python-thing"
+    write(here / "SKILL.md", MIRROR_BODY)
+    write(here / ".skillwriter" / "checklist-20260101.md", "- [x] done\n")
+    write(here / "scripts" / "__pycache__" / "tool.cpython-313.pyc", "bytes\n")
+    write(here / ".pytest_cache" / "v" / "cache" / "lastfailed", "{}\n")
+    write(here / ".ruff_cache" / "0.14.0" / "blob", "bytes\n")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
+def test_an_identical_directory_pair_reports_nothing(tmp_path, monkeypatch):
+    public = tmp_path / "public"
+    root = public / "KI" / "bitranox-skills"
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "SKILL.md", MIRROR_BODY)
+    write(root / "plugins" / "bitranox" / "skills" / "coding-python-thing" / "references" / "api.md", "same\n")
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "SKILL.md", TWIN_BODY)
+    write(public / "libs" / "thing" / "skills" / "python-thing" / "references" / "api.md", "same\n")
+    monkeypatch.setitem(RG.MIRRORED_SKILLS, "coding-python-thing", "libs/thing/skills/python-thing")
+
+    assert RG.mirror_failures(root, {"coding-python-thing"}) == []
+
+
 def test_a_twin_that_is_not_checked_out_is_skipped_not_failed(tmp_path, monkeypatch):
     # Another machine has the marketplace without the tool repos. Failing there would
     # block every commit for a contributor who cannot possibly fix it.

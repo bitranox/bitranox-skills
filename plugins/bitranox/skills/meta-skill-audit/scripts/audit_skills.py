@@ -462,6 +462,49 @@ def count_findings(text):
     return (text or "").count("FINDING:")
 
 
+# Written as the first line of a stored report whose reviewer never produced one, so the file is
+# self-describing and every later reader - the run summary, --skip-existing, a person - sees it.
+REPORT_MISSING_MARKER = "REPORT MISSING:"
+
+
+def report_is_complete(text):
+    """Does this stored text carry a reviewer REPORT, rather than whatever else was said last?
+
+    A report is `NO FINDINGS` or at least one `FINDING:` line. Nothing else counts, and the
+    marker below explicitly does not: a clobbered report is non-empty, which is the only thing
+    `--skip-existing` used to ask, so a resume skipped exactly the targets that were never
+    reviewed.
+    """
+    body = text or ""
+    if body.startswith(REPORT_MISSING_MARKER):
+        return False
+    return "FINDING:" in body or "NO FINDINGS" in body
+
+
+def store_report(path, name, out):
+    """Write a reviewer's output as the report for `name`, and say so when it is not one.
+
+    The decision-review Stop hook fires on each reviewer subagent, so its final stdout can be a
+    decision review instead of the report. Stored wholesale that text counts 0 findings and reads
+    exactly like a clean skill. Measured over one 47-target sweep: 6 clobbered, one of them a
+    target whose transcript carried 9 findings.
+
+    A missing report is itself a defect, so it is recorded as a finding: the run summary then
+    cannot call the target clean, and the raw reply is kept underneath because it is the only copy
+    outside the reviewer's transcript.
+    """
+    body = out or ""
+    if not report_is_complete(body):
+        body = (
+            "%s the reviewer's final message carried no report block (no FINDING: line, no "
+            "NO FINDINGS). A Stop-hook decision review replaces it. Raw reply kept below.\n"
+            "FINDING: REPORT-MISSING | %s | the reviewer produced no report; re-run this target\n\n"
+            % (REPORT_MISSING_MARKER, name)
+        ) + body
+    Path(path).write_text(body, encoding="utf-8")
+    return body
+
+
 def count_by_class(text):
     """Findings per class, so a prompt that stopped producing a class is visible."""
     out = {c: 0 for c in SCRIPT_CLASSES}
@@ -568,8 +611,8 @@ def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitr
     """Review one skill and write its report. `runner` is the injectable reviewer seam."""
     out = runner(build_prompt(name, prefix), room, model, timeout)
     path = Path(reports_dir) / ("%s.audit.txt" % name)
-    path.write_text(out, encoding="utf-8")
-    return name, count_findings(out)
+    stored = store_report(path, name, out)
+    return name, count_findings(stored)
 
 
 def audit_one_script(target, room, reports_dir, model="opus", timeout=1500, prefix="bitranox",
@@ -591,8 +634,8 @@ def audit_one_script(target, room, reports_dir, model="opus", timeout=1500, pref
     problems = evidence_problems(out, room)
     if problems:
         out = out + "\n\nUNVERIFIABLE EVIDENCE:\n" + "\n".join("  " + p for p in problems) + "\n"
-    Path(reports_dir).joinpath("%s.audit.txt" % report_stem(rel)).write_text(out, encoding="utf-8")
-    return rel, count_findings(out)
+    stored = store_report(Path(reports_dir) / ("%s.audit.txt" % report_stem(rel)), rel, out)
+    return rel, count_findings(stored)
 
 
 def prepare_room_from_skills(skills_dir, room_root, hooks_dir=None, reuse=False):
@@ -701,7 +744,9 @@ def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, onl
         keep = []
         for rel, kind in targets:
             report = reports / ("%s.audit.txt" % report_stem(rel))
-            if report.is_file() and report.stat().st_size > 0:
+            # Non-empty is not reviewed: a clobbered report is non-empty by construction, which is
+            # how a resume skipped precisely the targets that never got a report.
+            if report.is_file() and report_is_complete(report.read_text(encoding="utf-8")):
                 continue
             keep.append((rel, kind))
         log("resuming: %d of %d target(s) still need a reviewer" % (len(keep), len(targets)))

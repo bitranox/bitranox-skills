@@ -293,13 +293,25 @@ def test_normalize_still_rewrites_ordinary_prose():
 
 
 def test_normalize_agrees_with_the_hook_about_what_is_code():
-    """A file the sweep hook passes must survive the script unchanged - that is the whole point."""
+    """A file the sweep hook passes must survive the script unchanged - that is the whole point.
+
+    One codepoint cannot show this. The em dash alone kept passing while U+2028 inside a span was
+    rewritten, because that one also ends a line for `str.splitlines()` - so the pair is only
+    honestly tested with a sample from every CLASS in RANGES: dash, space, quote, ellipsis,
+    invisible format, line separator, verdict emoji, BOM.
+    """
     import sys as _sys, pathlib as _pathlib
     _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[3] / "hooks"))
     import tell_chars as TC
-    src = "clean prose here\n```\nfenced em%s\n```\nand `inline em%s` too\n" % (EM_DASH, EM_DASH)
-    assert TC.find_tell_lines(src) == []        # the hook says clean
-    assert mod.normalize(src) == src              # so the script must not touch it
+    classes = {
+        "dash": EM_DASH, "space": chr(0x00A0), "quote": chr(0x201C), "ellipsis": chr(0x2026),
+        "invisible": chr(0x200B), "line separator": chr(0x2028), "verdict": chr(0x2705),
+        "bom": chr(0xFEFF),
+    }
+    for name, ch in classes.items():
+        src = "clean prose here\n```\nfenced %s\n```\nand `inline %s` too\n" % (ch, ch)
+        assert TC.find_tell_lines(src) == [], name       # the hook says clean
+        assert mod.normalize(src) == src, name           # so the script must not touch it
 
 
 # ---- em dash: one space per side, and never whitespace at a line edge ------------------------

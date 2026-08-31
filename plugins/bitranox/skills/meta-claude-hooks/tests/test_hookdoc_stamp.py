@@ -9,6 +9,7 @@ prevent.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -570,3 +571,35 @@ def test_a_cli_ahead_of_the_docs_shortens_the_cache_window(tmp_path):
     two_days_later = 1000.0 + 2 * day
     assert H.read_cache(tmp_path, "abc", week, two_days_later) is not None, "the normal window still replays"
     assert H.read_cache(tmp_path, "abc", min(week, day), two_days_later) is None, "the shortened window expires"
+
+
+def test_a_cache_hit_reports_the_LIVE_cli_version_not_the_cached_one(tmp_path, monkeypatch, capsys):
+    """`check` prints "your CLI is X" in the present tense, and on a cache hit X came from the
+    stored payload - a version the reader may have upgraded past days ago.
+
+    The cache exists for the network fetch. The CLI probe is a local call with a 10s timeout, so
+    replaying it costs nothing, and the staleness verdict that matters (docs versus CLI) is
+    computed from that number.
+    """
+    stamp = FIXTURES / "stamp-sample.json"
+    H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
+                             "stamp_sha256": H.stamp_hash(stamp), "cli_version": "2.1.247",
+                             "docs_cover_up_to": "2.1.200"})
+    monkeypatch.setattr(H, "local_cli_version", lambda *a, **k: "2.1.250")
+
+    H.main(["check", "--stamp", str(stamp), "--source", "hooks-sample", "--json",
+            "--cache-dir", str(tmp_path)])
+    payload = json.loads(capsys.readouterr().out)["data"]
+
+    assert payload["cached"] is True, "the fetch must still be served from cache"
+    assert payload["cli_version"] == "2.1.250", "reported a stale CLI version as current"
+
+
+def test_a_cache_hit_with_no_cli_probe_does_not_invent_a_version(tmp_path, capsys):
+    stamp = FIXTURES / "stamp-sample.json"
+    H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
+                             "stamp_sha256": H.stamp_hash(stamp), "cli_version": "2.1.247"})
+    H.main(["check", "--stamp", str(stamp), "--source", "hooks-sample", "--json",
+            "--cache-dir", str(tmp_path), "--no-cli-probe"])
+    payload = json.loads(capsys.readouterr().out)["data"]
+    assert payload["cli_version"] is None

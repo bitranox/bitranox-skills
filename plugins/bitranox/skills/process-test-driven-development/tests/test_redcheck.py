@@ -251,16 +251,22 @@ def test_cli_still_emits_json_on_failure(tmp_path: Path) -> None:
 
 
 def test_cli_reads_scenario_from_stdin(tmp_path: Path) -> None:
-    proc = _run(["--scenario", "-", "--corpus", str(tmp_path), "--json"], stdin=CLEAN_SCENARIO)
+    """Subject is stdin, so no corpus flag: naming an empty dir is now an unchecked verdict."""
+    proc = _run(["--scenario", "-", "--json"], stdin=CLEAN_SCENARIO)
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["data"]["verdict"] == "clean"
 
 
 def test_warnings_go_to_stderr_and_into_the_skipped_field(tmp_path: Path) -> None:
-    """A missing corpus dir is a warning, not a crash - and it must be visible both ways."""
+    """A missing corpus dir is a warning, not a crash - and it must be visible both ways.
+
+    It is also an UNCHECKED verdict (exit 3) since the --corpus guard landed: naming a dir is the
+    caller promising a corpus. The warning behaviour under test here is unchanged - stdout stays a
+    parseable envelope and the reason appears in both channels.
+    """
     missing = tmp_path / "missing"
     proc = _run(["--scenario", "-", "--corpus", str(missing), "--json"], stdin=CLEAN_SCENARIO)
-    assert proc.returncode == 0
+    assert proc.returncode == 3
     payload = json.loads(proc.stdout)  # must parse: the warning must not corrupt stdout
     assert any("missing" in w.lower() for w in payload["skipped"])
     assert "missing" in proc.stderr.lower()
@@ -577,6 +583,47 @@ def test_cli_exits_unchecked_when_the_cascade_assembles_nothing(tmp_path: Path) 
     assert payload["data"]["corpus_empty"] is True
     assert "unchecked" in payload["data"]["verdict"]
     assert any("nope" in w for w in payload["skipped"])
+
+
+def test_cli_exits_unchecked_when_a_named_corpus_dir_assembles_nothing(tmp_path: Path) -> None:
+    """--corpus gets the same guard as --corpus-cascade, and for the same reason.
+
+    The docs steer readers to --corpus, which is the mistype-prone form (a path typed by hand, not
+    a directory walked from the cwd). Without the guard a nonexistent or empty dir warned on stderr
+    and still exited 0 with verdict "clean" - and a gate reads the exit code, so a scenario nothing
+    was checked against reads exactly like one that passed.
+    """
+    s = tmp_path / "scenario.txt"
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--corpus", str(tmp_path / "nope"), "--json"])
+
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["data"]["corpus_documents"] == 0
+    assert payload["data"]["corpus_empty"] is True
+    assert "unchecked" in payload["data"]["verdict"]
+
+
+def test_cli_exits_unchecked_when_an_EMPTY_corpus_dir_is_named(tmp_path: Path) -> None:
+    """An existing but empty dir is the other half: the path is right and there is nothing in it."""
+    s = tmp_path / "scenario.txt"
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = _run(["--scenario", str(s), "--corpus", str(empty), "--json"])
+
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["data"]["corpus_empty"] is True
+
+
+def test_cli_without_any_corpus_flag_still_exits_clean(tmp_path: Path) -> None:
+    """The direction the guard must NOT reach: no corpus asked for, so nothing was promised."""
+    s = tmp_path / "scenario.txt"
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--json"])
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["data"]["verdict"] == "clean"
 
 
 def test_cascade_help_names_the_files_it_reads() -> None:

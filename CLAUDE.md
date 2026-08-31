@@ -54,22 +54,27 @@ When a learning here applies beyond this repo (it usually does), it also belongs
 
 ## A skill that also ships from its own tool repo has a twin to keep in sync
 
-Nine skills exist twice: here, and in the repo of the tool they document (the map is
-`MIRRORED_SKILLS` in `hooks/repo-gate.py`; `--mirrors` also reports a twin the map does NOT list,
-which is how the ninth was found after going unchecked). Both copies are installed by real users, so drift is
+Some skills exist twice: here, and in the repo of the tool they document. The map is
+`MIRRORED_SKILLS` in `hooks/repo-gate.py`, and `--mirrors` prints the live list with a verdict per
+pair, so ask it rather than trusting a count written here (it also reports a twin the map does NOT
+list, which is how one was found after going unchecked). Both copies are installed by real users, so drift is
 not cosmetic - and it goes both ways. A marketplace edit that is never mirrored back leaves the
 tool repo's own installs a release behind; a repo edit that is never mirrored forward leaves this
 marketplace describing behaviour the tool no longer has. The second kind is the dangerous one: an
 absence claim that has gone stale ("it refuses to do X") does not merely fail to help, it steers an
 agent away from something that now works.
 
-Three differences are by convention and are never drift: the `name:` field, that same name echoed
-in the H1, and the tool repo's self-install blockquote (true there, nonsense here). Everything else
-must match.
+The comparison is the whole skill DIRECTORY, not just `SKILL.md`: several pairs ship `references/`
+and `scripts/`, and comparing one file let three changed files sit unreported under an "in sync"
+verdict. `.skillwriter/` and `__pycache__` are excluded - neither side ships them to the other.
+
+Three differences are by convention and are never drift, and all three are scoped to `SKILL.md`:
+the `name:` field, that same name echoed in the H1, and the tool repo's self-install blockquote
+(true there, nonsense here). Every other file must match byte for byte.
 
 - The commit gate checks the twin of any mirrored skill the current change touches. Pre-existing
   drift elsewhere does not block an unrelated commit.
-- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits all eight, changed or not, and
+- `python3 plugins/bitranox/hooks/repo-gate.py --mirrors` audits every pair, changed or not, and
   exits non-zero when any has drifted. This is local only: the twins are sibling repos that a CI
   clone does not have, so CI cannot run it.
 - `repo-gate.py --mirror-of <tool-repo>` asks the same question from the other side, about that one

@@ -17,6 +17,56 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.290.0]
+
+### Fixed
+
+- **`repo-gate.py --mirrors` compares the whole skill DIRECTORY, not just `SKILL.md`.** A mirrored
+  skill is a directory, and several pairs ship `references/` and `scripts/` beside their SKILL.md.
+  Comparing one file let three changed files in one pair sit unreported while the check printed
+  "in sync" - an absence claim that is wrong is worse than no check, because it is the answer the
+  reader hoped for. SKILL.md still goes through the three by-convention divergences (the `name:`
+  field, the H1 echo, the self-install blockquote), every other file must match byte for byte, and
+  `.skillwriter/` and `__pycache__` are excluded because neither side ships them to the other.
+  Measured over the live pairs: one compares 21 files, the rest ship only a SKILL.md, and all were
+  already in sync, so the widened gate blocks nothing that was clean.
+
+- **`redcheck.py` arms its unchecked verdict for `--corpus`, not only `--corpus-cascade`.** Naming
+  a directory is the caller promising a corpus; a missing or empty `--corpus` dir exited 0 with
+  verdict "clean" and only warned on stderr, and a gate reads the exit code. Both flags now yield
+  exit 3 when nothing is assembled. Passing no corpus flag promises nothing and still exits 0.
+  The skill's exit-code table and the module docstring stated the old behaviour and now state this.
+
+- **`tell_chars` gives its detector and its rewriter ONE line splitter.** `str.splitlines()` breaks
+  on U+2028, U+2029 and U+0085, and all three are themselves tells: the detector split AT the
+  separator, so it sat in no line and the file passed, while the rewriter kept it and rewrote
+  through an inline-code span it then read as unterminated. A file the sweep hook called clean
+  could be rewritten by the strip script, splitting the span across two lines. The agreement test
+  now covers a codepoint from each class in the tell set instead of the em dash alone - the em dash
+  passes either way, which is why one codepoint never showed this.
+
+- **`hookdoc_stamp.py check` reports the LIVE CLI version on a cache hit.** The line reads "your
+  CLI is X" in the present tense and X came from the cached payload, so it could name a version the
+  reader upgraded past days ago - and the docs-versus-CLI staleness verdict was computed from that
+  same stale number. The cache exists for the network fetch; the CLI probe is local, so it replays.
+
+- **`audit_skills.py` stores a report only when the reviewer produced one.** The decision-review
+  Stop hook fires on each reviewer subagent, so its final stdout can be a decision review rather
+  than the report; stored wholesale it counts zero findings and reads exactly like a clean target.
+  A reply carrying neither a `FINDING:` line nor `NO FINDINGS` is now stored under a
+  `REPORT MISSING:` marker with the raw reply kept beneath it, and counts as a finding of its own,
+  so a run summary cannot call it clean. `--skip-existing` asks whether a stored report is complete
+  rather than whether the file is non-empty, which is why a resume used to skip precisely the
+  targets that were never reviewed.
+
+### Changed
+
+- **`meta-self-improve` and `meta-dream-tree` say what an upsert actually needs.** "Rerun `add`
+  with the same slug/title - it upserts" is true only from the level that OWNS the pointer, and
+  only when the slug is passed explicitly: aimed elsewhere it is refused as a collision whose
+  suggested `<slug>-2` would create the duplicate the step exists to avoid, and a title-derived
+  slug mints a second fact silently whenever the fact was retitled since capture.
+
 ## [5.289.0]
 
 ### Changed

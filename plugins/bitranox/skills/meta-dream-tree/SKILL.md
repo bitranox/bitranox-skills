@@ -150,7 +150,9 @@ the success line, abort-and-show on a miss).
    check - would this line catch your attention at the right moment?). Do
    NOT rewrite a hook merely for exceeding the 350 SOFT cap - a complete trigger-first hook may run up
    to the hard cap, which the engine enforces by refusal. Queue offenders to a sonnet
-   rewrite (trigger-first, facts preserved, slug-stable via `add --slug`), propose-diff, apply.
+   rewrite (trigger-first, facts preserved, slug-stable via `add --slug <the stored slug>` aimed at
+   the level that OWNS the pointer - a title-derived slug mints a duplicate when the fact was
+   retitled, and any other level is refused as a collision), propose-diff, apply.
    Bodies missing the frame or the **Why:**/**How to apply:** sections get the same treatment.
 
 7. **Prune (content-based only, tree-wide).** Archive obsolete/superseded/task-state entries at

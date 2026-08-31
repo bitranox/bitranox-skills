@@ -128,8 +128,24 @@ judgement it is prompting for.
 
 Grep the pointer blocks (`CLAUDE.local.md`), the anchor's `facts/` bodies, the native memory dir,
 and the CLAUDE.md chain for each candidate's keywords. If a related entry exists, UPDATE it: rerun
-the engine `add` with the same slug/title - it upserts (merges provenance, keeps the pin). New
-entry only when nothing covers it.
+the engine `add` against the level that OWNS its pointer, passing `--slug <the stored slug>` - it
+then upserts (merges provenance, keeps the pin). New entry only when nothing covers it.
+
+**Both halves of that sentence are load-bearing, and each fails silently in its own direction.**
+
+- **The level.** The upsert branch searches only the entries at `--proj`. Aim it anywhere else and
+  the engine refuses with `SlugCollision`, which names the slug but not the level, so it reads as
+  "this fact already exists" - and its suggestion, `<slug>-2`, would create the duplicate you were
+  trying to avoid. A fact an earlier dream promoted can no longer be updated from the project it
+  came from. Find the owner first, and use `find`, because a session `grep -r` skips those files
+  as gitignored:
+
+      find <anchor> -name CLAUDE.local.md -not -path "*/.claude-memory/*" -exec grep -l "mem:<slug>" {} \;
+
+- **The slug.** Passing the current TITLE and no `--slug` derives a slug from that title, which is
+  NOT the stored one whenever the fact has been retitled since capture. There is no collision to
+  refuse - the derived slug is free - so `add` mints a SECOND fact, pointer and body, and says
+  nothing. Read the slug off the pointer line and pass it.
 
 ### 3b. Choose the altitude - by SCOPE, placed concretely
 

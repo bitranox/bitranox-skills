@@ -49,6 +49,33 @@ _INLINE = re.compile(r"`[^`]*`")
 _CONTINUATION = re.compile("[ \t]\u2190(?=\\S)|^[ \t]*\u2190-?[ \t]*$")
 
 
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def split_lines(text, keepends=False):
+    """Split `text` on REAL line breaks only - never on U+2028, U+2029 or U+0085.
+
+    `str.splitlines()` breaks on all three, and all three are themselves in `RANGES`. That single
+    fact made the detector and the rewriter disagree about the same file: `find_tell_lines` split
+    AT the separator, so the tell sat in no line and the file passed; `transform_outside_code`
+    split with `keepends=True`, so it KEPT the separator, read the inline-code span as unterminated
+    and rewrote through it. A file the sweep hook called clean could therefore still be rewritten,
+    splitting a code span across two lines.
+
+    Both halves share this one splitter so they can only ever answer the same question. On text
+    without those codepoints it is `str.splitlines()` exactly, including the empty-string and
+    trailing-newline cases.
+    """
+    src = text or ""
+    out, pos = [], 0
+    for m in _LINE_BREAK.finditer(src):
+        out.append(src[pos:m.end()] if keepends else src[pos:m.start()])
+        pos = m.end()
+    if pos < len(src):
+        out.append(src[pos:])
+    return out
+
+
 def transform_outside_code(text, fn):
     """Rebuild `text` with `fn` applied to every stretch that is NOT code, leaving inline-code
     spans and fenced blocks byte-identical.
@@ -60,7 +87,7 @@ def transform_outside_code(text, fn):
     once flattened into two identical halves."""
     out = []
     in_fence = False
-    for line in (text or "").splitlines(keepends=True):
+    for line in split_lines(text, keepends=True):
         stripped = line.lstrip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             in_fence = not in_fence
@@ -84,7 +111,7 @@ def find_tell_lines(text):
     fenced blocks. Empty list means clean."""
     hits = []
     in_fence = False
-    for n, line in enumerate((text or "").splitlines(), 1):
+    for n, line in enumerate(split_lines(text), 1):
         stripped = line.lstrip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             in_fence = not in_fence
@@ -104,5 +131,5 @@ def find_continuation_lines(text):
     not self-flag; that exemption is the blind spot this covers, because a wrapped token inside a
     fenced block is a command a reader copies and cannot run."""
     return ["%d: %s" % (n, line)
-            for n, line in enumerate((text or "").splitlines(), 1)
+            for n, line in enumerate(split_lines(text), 1)
             if _CONTINUATION.search(line)]

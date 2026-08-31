@@ -113,6 +113,56 @@ def test_audit_all_writes_one_report_per_skill_and_counts(tmp_path):
     assert (reports / "beta.audit.txt").read_text(encoding="utf-8") == "NO FINDINGS"
 
 
+DECISION_REVIEW = (
+    "Looking back over this review, the decisions I am least confident about are the scope of the\n"
+    "second pass and whether the third file needed re-reading. Nothing else is unsettled.\n"
+)
+
+
+def test_a_final_message_carrying_no_report_block_is_not_stored_as_a_clean_report(tmp_path):
+    """The decision-review Stop hook fires on each reviewer subagent, so its final stdout can be a
+    decision review rather than the report. Stored wholesale it counts 0 findings, which is exactly
+    what a clean skill looks like - measured on a real sweep, 6 of 47 targets and one of them had
+    9 findings in its transcript."""
+    src = _plugin(tmp_path, skills=("alpha",))
+
+    res = A.audit_all(src, tmp_path / "room", jobs=1, log=lambda *_a: None,
+                      runner=lambda *_a: DECISION_REVIEW)
+
+    body = (tmp_path / "room" / "reports" / "alpha.audit.txt").read_text(encoding="utf-8")
+    assert res["alpha"] != 0, "a report-less reply counted as a clean skill"
+    assert body.startswith(A.REPORT_MISSING_MARKER), body[:120]
+    assert "second pass" in body, "the raw reply must be kept for recovery"
+
+
+def test_a_real_report_is_still_stored_verbatim(tmp_path):
+    """The direction the marker must NOT reach."""
+    src = _plugin(tmp_path, skills=("alpha",))
+    A.audit_all(src, tmp_path / "room", jobs=1, log=lambda *_a: None,
+                runner=lambda *_a: "FINDING: WRONG | SKILL.md | x\nQUOTE: y")
+    body = (tmp_path / "room" / "reports" / "alpha.audit.txt").read_text(encoding="utf-8")
+    assert not body.startswith(A.REPORT_MISSING_MARKER)
+    assert body == "FINDING: WRONG | SKILL.md | x\nQUOTE: y"
+
+
+def test_a_trailing_decision_review_after_a_real_report_is_kept(tmp_path):
+    """A reply that carries the report AND then chats is fine - the report block is there."""
+    src = _plugin(tmp_path, skills=("alpha",))
+    A.audit_all(src, tmp_path / "room", jobs=1, log=lambda *_a: None,
+                runner=lambda *_a: "NO FINDINGS\n\n" + DECISION_REVIEW)
+    body = (tmp_path / "room" / "reports" / "alpha.audit.txt").read_text(encoding="utf-8")
+    assert not body.startswith(A.REPORT_MISSING_MARKER)
+
+
+def test_report_is_complete_rejects_a_clobbered_report_so_skip_existing_reruns_it(tmp_path):
+    """--skip-existing skipped a clobbered report precisely BECAUSE it is non-empty."""
+    assert A.report_is_complete("NO FINDINGS\n")
+    assert A.report_is_complete("FINDING: WRONG | a.py:1 | claim\n")
+    assert not A.report_is_complete(DECISION_REVIEW)
+    assert not A.report_is_complete(A.REPORT_MISSING_MARKER + " whatever\nFINDING: X | y | z\n")
+    assert not A.report_is_complete("")
+
+
 def test_every_reviewer_runs_with_the_room_as_cwd(tmp_path):
     """Never the live tree: that is the contamination the clean room exists to prevent."""
     src = _plugin(tmp_path)

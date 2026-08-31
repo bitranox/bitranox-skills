@@ -774,8 +774,37 @@ def normalise_mirror(text):
     return joined.strip() + "\n"
 
 
+# Neither side ships these to the other: `.skillwriter` is the marketplace's own commit receipt and
+# the rest are build or tool output. One of these appearing in a twin would otherwise block every
+# commit touching that skill, for a file no reader ever sees.
+MIRROR_IGNORED_DIRS = {".skillwriter", "__pycache__", ".pytest_cache", ".git", ".ruff_cache"}
+
+
+def mirror_files(skill_dir):
+    """Map every comparable file in a mirrored skill dir to its path, keyed by relative posix path."""
+
+    found = {}
+    for path in sorted(Path(skill_dir).rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(skill_dir)
+        if MIRROR_IGNORED_DIRS & set(rel.parts):
+            continue
+        found[rel.as_posix()] = path
+    return found
+
+
 def mirror_failures(root, names):
-    """Return a failure per mirrored skill in ``names`` whose twin has drifted."""
+    """Return a failure per mirrored skill in ``names`` whose twin has drifted.
+
+    A mirrored skill is a DIRECTORY. Several pairs ship `references/` and `scripts/` beside their
+    `SKILL.md`, and comparing only `SKILL.md` let three changed reference and script files sit
+    unreported while this check printed "in sync" - an absence claim that is wrong is worse than
+    no check, because it is the answer the reader hoped for.
+
+    `SKILL.md` is compared through `normalise_mirror`, which erases the three by-convention
+    divergences. Every other file must match byte for byte: nothing about them is per-repo.
+    """
 
     public = _public_tree(root)
     if public is None:
@@ -785,21 +814,36 @@ def mirror_failures(root, names):
         relative = MIRRORED_SKILLS.get(name)
         if relative is None:
             continue
-        here = Path(root) / "plugins" / "bitranox" / "skills" / name / "SKILL.md"
-        twin = public / relative / "SKILL.md"
-        if not here.exists() or not twin.exists():
+        here_dir = Path(root) / "plugins" / "bitranox" / "skills" / name
+        twin_dir = public / relative
+        if not (here_dir / "SKILL.md").exists() or not (twin_dir / "SKILL.md").exists():
             # The tool repo is not checked out on this machine, so there is nothing to
             # compare against. Silence is right: the audit mode reports the skip.
             continue
-        mine, theirs = normalise_mirror(here.read_text(encoding="utf-8")), normalise_mirror(twin.read_text(encoding="utf-8"))
-        if mine == theirs:
+        mine_files, their_files = mirror_files(here_dir), mirror_files(twin_dir)
+        differing, sample = [], []
+        for rel in sorted(set(mine_files) | set(their_files)):
+            mine, theirs = mine_files.get(rel), their_files.get(rel)
+            if mine is None:
+                differing.append("%s (only in the twin)" % rel)
+            elif theirs is None:
+                differing.append("%s (only in the marketplace)" % rel)
+            elif rel == "SKILL.md":
+                a = normalise_mirror(theirs.read_text(encoding="utf-8"))
+                b = normalise_mirror(mine.read_text(encoding="utf-8"))
+                if a != b:
+                    differing.append(rel)
+                    sample = [line for line in difflib.unified_diff(a.splitlines(), b.splitlines(), "twin", "marketplace", lineterm="", n=0) if line[:1] in "+-" and line[:3] not in ("---", "+++")]
+            elif mine.read_bytes() != theirs.read_bytes():
+                differing.append(rel)
+        if not differing:
             continue
-        sample = [line for line in difflib.unified_diff(theirs.splitlines(), mine.splitlines(), "twin", "marketplace", lineterm="", n=0) if line[:1] in "+-" and line[:3] not in ("---", "+++")]
+        detail = "\n      ".join(sample[:6]) if sample else "\n      ".join(differing[:6])
         fails.append(
-            "skills/%s has drifted from its twin at %s (%d differing lines). Regenerate the "
+            "skills/%s has drifted from its twin at %s (%d differing file(s): %s). Regenerate the "
             "stale side from the other, re-apply only the name/H1/self-install divergences, and "
             "bump that repo's plugin.json. First lines:\n      %s"
-            % (name, relative, len(sample), "\n      ".join(sample[:6]))
+            % (name, relative, len(differing), ", ".join(differing[:6]), detail)
         )
     return fails
 

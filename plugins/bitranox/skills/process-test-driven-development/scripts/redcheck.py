@@ -35,10 +35,10 @@ is giving you:
     names the file it is in.
   * CLEAN is WEAK. This compares distinctive terms, so it cannot see a paraphrase. "No hit" means
     NOT CAUGHT, never "absent from the agent's context" - a clean run is not a sealed fixture.
-A corpus of zero documents makes every scenario look clean, so for `--corpus-cascade` it is a
-distinct outcome (`unchecked`, exit 3), never a quiet pass. `--corpus` does NOT get that guard:
-an empty or mistyped `--corpus` directory exits 0 as `clean` and only warns, so read the
-printed document count when you pass one.
+A corpus of zero documents makes every scenario look clean, so asking for one and getting nothing
+is a distinct outcome (`unchecked`, exit 3), never a quiet pass. EITHER flag arms it: naming a
+directory is the caller promising a corpus, whether through `--corpus-cascade` or `--corpus`.
+Passing neither flag promises nothing and stays exit 0.
 
 Run:
   `uv run scripts/redcheck.py --scenario scenario.txt --corpus-cascade . --json`
@@ -47,8 +47,8 @@ Run:
 
 Exit codes: 0 = clean (neither leak found - this does NOT prove the RED can fail, only that
 these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 =
-usage/IO error, 3 = unchecked (`--corpus-cascade` was given and assembled nothing, so the
-inherited-coverage check never ran; `--corpus` alone never yields 3). `--json` emits the
+usage/IO error, 3 = unchecked (a corpus flag was given and assembled nothing, so the
+inherited-coverage check never ran; passing no corpus flag at all stays 0). `--json` emits the
 machine-readable envelope.
 
 Installed plugin/marketplace skills are deliberately NOT assembled: their on-disk location is a
@@ -557,6 +557,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         answer = _read(args.answer) if args.answer else None
         corpus = load_corpus([Path(d) for d in args.corpus], warn=warn)
         cascade_requested = bool(args.corpus_cascade)
+        # EITHER flag is the caller promising a corpus, so either one arms the unchecked verdict.
+        # --corpus is the mistype-prone form - a path typed by hand rather than a directory walked
+        # from the cwd - and without this it warned on stderr and still exited 0 verdict clean,
+        # which is what a gate reads.
+        corpus_requested = cascade_requested or bool(args.corpus)
         if cascade_requested:
             corpus += load_cascade_corpus(
                 args.corpus_cascade,
@@ -565,6 +570,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if not corpus and cascade_requested:
             warn("the cascade assembled 0 documents: the inherited-coverage check did not run.")
+        elif not corpus and corpus_requested:
+            warn("the named corpus dirs assembled 0 documents: the inherited-coverage check did not run.")
         elif not corpus:
             warn("no corpus given: the inherited-coverage check did not run.")
         result = audit(
@@ -573,7 +580,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             corpus=corpus,
             min_shared=args.min_shared,
             rarity_max_fraction=args.rarity_max_fraction,
-            require_corpus=cascade_requested,
+            require_corpus=corpus_requested,
         )
     except (OSError, ValueError) as exc:
         if args.json:

@@ -727,6 +727,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     if not args.force and not args.body:
         cached = read_cache(cache_dir, shash, max_age, now)
         if cached:
+            # The cache exists for the network FETCH. The CLI version is a local probe with a 10s
+            # timeout, so replay it rather than reprinting the one stored days ago: the human line
+            # says "your CLI is X" in the present tense, and the staleness verdict that matters
+            # (docs versus CLI) is computed from that same number.
+            cached = dict(cached, cli_version=cli, cli_ahead_of_docs=ahead)
             emit(args, "check", _EXIT[cached["verdict"]] == 0, cached, _human_check(cached))
             return _EXIT[cached["verdict"]]
 

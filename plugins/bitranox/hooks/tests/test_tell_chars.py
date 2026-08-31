@@ -136,3 +136,48 @@ def test_find_tell_lines_does_NOT_see_it_which_is_why_the_second_scanner_exists(
 
 def test_continuation_of_empty_and_none_is_empty():
     assert TC.find_continuation_lines("") == [] and TC.find_continuation_lines(None) == []
+
+
+# ---- the three separators that are tells AND break str.splitlines() ---------------------------
+
+LINE_SEP = chr(0x2028)
+PARA_SEP = chr(0x2029)
+NEL = chr(0x0085)
+
+
+def test_a_separator_outside_code_is_a_tell_not_a_line_break():
+    """U+2028/U+2029/U+0085 are in RANGES, and str.splitlines() breaks on all three.
+
+    Splitting there hands the scanner two clean lines and the tell is in NEITHER, so the file
+    passes while carrying it. One shared splitter that breaks only on real newlines is what makes
+    the detector able to see them at all.
+    """
+    for sep in (LINE_SEP, PARA_SEP, NEL):
+        hits = TC.find_tell_lines("prose%smore prose\n" % sep)
+        assert hits, "separator %04X is invisible to the scanner" % ord(sep)
+        assert hits[0].startswith("1: "), hits
+
+
+def test_a_separator_does_not_advance_the_reported_line_number():
+    hits = TC.find_tell_lines("first\nsecond%stail\n" % LINE_SEP)
+    assert [h.split(":")[0] for h in hits] == ["2"], hits
+
+
+def test_a_separator_inside_a_code_span_is_left_alone_by_both_halves():
+    """The detector and the rewriter must agree, and here they did not.
+
+    find_tell_lines split AT the separator, so the span looked like two lines and the tell was in
+    neither - clean. transform_outside_code splits with keepends=True, so it KEPT the separator,
+    saw an unterminated span, and rewrote through it. A file the hook passes could therefore still
+    be rewritten, splitting the span in two.
+    """
+    src = "text `code%sspan` tail\n" % LINE_SEP
+    assert TC.find_tell_lines(src) == []
+    assert TC.transform_outside_code(src, lambda s: s.replace(LINE_SEP, "!")) == src
+
+
+def test_the_shared_splitter_matches_splitlines_on_ordinary_text():
+    for src in ("", "a", "a\n", "a\nb", "a\r\nb\r\n", "a\n\nb", "\n"):
+        assert TC.split_lines(src) == src.splitlines(), repr(src)
+        assert TC.split_lines(src, keepends=True) == src.splitlines(keepends=True), repr(src)
+    assert TC.split_lines(None) == []
