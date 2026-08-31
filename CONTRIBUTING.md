@@ -31,6 +31,12 @@ distributed plugin (anything under `plugins/bitranox/`) MUST bump
 - **MINOR** - backward-compatible additions: a new skill, or a new capability in an existing one.
 - **PATCH** - backward-compatible fixes: bug fixes, wording/doc fixes inside a skill, test additions.
 
+**Bump `pyproject.toml`'s `version` to the SAME value in the same commit.** The two are one
+artifact - the wheel takes `pyproject.toml`, the CLI reports the manifest - so a mismatch makes the
+installed tool misreport its own version. `repo-gate` refuses the pair (`version drift:
+pyproject.toml says X, plugin.json says Y`) on commit, on push and in CI, so a change that bumps
+only the manifest cannot be pushed.
+
 Note the bump in the commit subject (`...; bump to X.Y.Z`), matching the existing history.
 Repo-meta changes outside the plugin tree (this file, the root `README`, CI) do not ship to
 installed copies and do not need a plugin bump.
