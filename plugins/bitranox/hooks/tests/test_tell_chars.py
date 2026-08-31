@@ -208,3 +208,48 @@ def test_find_tell_codepoints_reports_the_same_lines_as_find_tell_lines():
 def test_find_tell_codepoints_is_empty_on_clean_text():
     assert TC.find_tell_codepoints("Plain ASCII - no tells.\n") == []
     assert TC.find_tell_codepoints("") == [] and TC.find_tell_codepoints(None) == []
+
+
+def test_decode_utf8_returns_no_offset_for_valid_text():
+    assert TC.decode_utf8("plain %s text\n".encode("utf-8") % b"ascii") == ("plain ascii text\n", None)
+
+
+def test_decode_utf8_reports_the_first_bad_byte_and_keeps_the_rest():
+    text, bad = TC.decode_utf8(b"head" + b"\xff" + b"tail")
+    assert bad == 4
+    assert text == "headtail"          # the bad byte is dropped, never replaced with U+FFFD
+
+
+def test_decode_utf8_never_mints_a_replacement_character():
+    """The whole reason this function exists: U+FFFD is itself a tell, so a decoder that emits
+    one hands the detector a hit it created."""
+    text, _ = TC.decode_utf8(b"\xff\xfe\x00")
+    assert chr(0xFFFD) not in text
+    assert TC.find_tell_lines(text) == []
+
+
+def test_decode_utf8_keeps_a_genuinely_encoded_replacement_character():
+    """The direction the fix must NOT reach: real mojibake still decodes and still counts."""
+    text, bad = TC.decode_utf8(("a %s b" % chr(0xFFFD)).encode("utf-8"))
+    assert bad is None and chr(0xFFFD) in text
+    assert TC.find_tell_lines(text) != []
+
+
+def test_decode_utf8_forgives_a_character_the_caller_s_cap_sliced():
+    two_byte = chr(0x00E4).encode("utf-8")
+    assert len(two_byte) == 2
+    text, bad = TC.decode_utf8(b"head" + two_byte[:1], truncated=True)
+    assert (text, bad) == ("head", None)
+
+
+def test_decode_utf8_still_reports_a_bad_byte_away_from_the_cut():
+    """truncated=True forgives only the last three bytes; one earlier is the file's own fault."""
+    text, bad = TC.decode_utf8(b"\xff" + b"x" * 20, truncated=True)
+    assert bad == 0 and text == "x" * 20
+
+
+def test_decode_utf8_does_not_forgive_a_sliced_character_on_an_uncapped_read():
+    """An untruncated read reaching a partial character means the FILE is broken, not the reader."""
+    two_byte = chr(0x00E4).encode("utf-8")
+    _text, bad = TC.decode_utf8(b"head" + two_byte[:1], truncated=False)
+    assert bad == 4

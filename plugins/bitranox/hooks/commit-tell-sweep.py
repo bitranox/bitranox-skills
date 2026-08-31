@@ -18,9 +18,9 @@ Pure standard library. Reads the PreToolUse event JSON on stdin. Exit 2 blocks t
 shows stderr to the model; every other path (including any error) exits 0, so a broken guard
 never wedges a turn.
 """
+import collections
 import json
 import sys
-from pathlib import Path
 
 import shell_text
 import tell_chars
@@ -37,6 +37,12 @@ import tell_chars
 # needs a strategy or branch name containing a typographic tell, and commit is nearly all of the
 # traffic this hook sees. Splitting the set per subcommand means parsing the subcommand first.
 _VALUE_SHORT = "cCFmStu"
+
+# text plus the two facts that decide how a hit in it may be REPORTED: `from_file` (a -F file's
+# lines are never quoted back) and `bad_byte` (its own finding). Bundled so a new call site cannot
+# carry the text without them and silently pick the unsafe form. `path` is None for an inline -m
+# value; echoing a -F path is safe, the caller typed it in the command.
+Message = collections.namedtuple("Message", "text from_file bad_byte path")
 
 
 def _cluster(tok, toks, i):
@@ -72,21 +78,15 @@ _MAX_MESSAGE_BYTES = 64 * 1024
 
 
 def _read_message_file(path):
-    """The file's text, or None when it cannot be read - a path we cannot open carries no tell.
-
-    Decoded with errors="ignore", never "replace". U+FFFD is in `tell_chars.RANGES` on purpose -
-    it is mojibake and worth reporting - so "replace" MINTS the exact character the detector
-    hunts for, once per undecodable byte. Every file that is not UTF-8 was therefore reported as
-    carrying AI-writing tells and its commit blocked on a message naming a character the file
-    does not contain. "ignore" drops those bytes and still reports a U+FFFD that was genuinely
-    encoded in the file, which is the one that means something.
-    """
+    """A Message for the file, or None when it cannot be read - a path we cannot open carries no
+    tell. Capped: see `_MAX_MESSAGE_BYTES`."""
     try:
         with open(path, "rb") as fh:
             raw = fh.read(_MAX_MESSAGE_BYTES)
     except OSError:
         return None
-    return raw.decode("utf-8", errors="ignore")
+    text, bad_byte = tell_chars.decode_utf8(raw, truncated=len(raw) == _MAX_MESSAGE_BYTES)
+    return Message(text, True, bad_byte, path)
 
 
 def _messages(command, tool_name="Bash"):
@@ -111,29 +111,29 @@ def _messages(command, tool_name="Bash"):
     while i < len(toks):
         t = toks[i]
         if t == "--message" and i + 1 < len(toks):
-            msgs.append((toks[i + 1], False))
+            msgs.append(Message(toks[i + 1], False, None, None))
             i += 2
             continue
         if t == "--file" and i + 1 < len(toks):
-            text = _read_message_file(toks[i + 1])
-            if text is not None:
-                msgs.append((text, True))
+            found = _read_message_file(toks[i + 1])
+            if found is not None:
+                msgs.append(found)
             i += 2
             continue
         if t.startswith("--message="):
-            msgs.append((t.split("=", 1)[1], False))
+            msgs.append(Message(t.split("=", 1)[1], False, None, None))
         elif t.startswith("--file="):
-            text = _read_message_file(t.split("=", 1)[1])
-            if text is not None:
-                msgs.append((text, True))
+            found = _read_message_file(t.split("=", 1)[1])
+            if found is not None:
+                msgs.append(found)
         elif t.startswith("-") and not t.startswith("--") and len(t) > 1:
             kind, value, extra = _cluster(t, toks, i)
             if kind == "msg":
-                msgs.append((value, False))
+                msgs.append(Message(value, False, None, None))
             elif kind == "file":
-                text = _read_message_file(value)
-                if text is not None:
-                    msgs.append((text, True))
+                found = _read_message_file(value)
+                if found is not None:
+                    msgs.append(found)
             i += extra
         i += 1
     return msgs
@@ -145,13 +145,25 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    hits = []
-    for msg, from_file in _messages(command, event.get("tool_name") or "Bash"):
+    hits, mis_encoded = [], []
+    for msg in _messages(command, event.get("tool_name") or "Bash"):
+        if msg.bad_byte is not None:
+            mis_encoded.append(msg)
         # A -F file's lines are never quoted back: this hook runs BEFORE the call is approved, so
         # the path is still only a string the caller named, and exit 2 shows stderr to the model.
-        hits += tell_chars.find_tell_codepoints(msg) if from_file else tell_chars.find_tell_lines(msg)
-    if not hits:
+        hits += (tell_chars.find_tell_codepoints(msg.text) if msg.from_file
+                 else tell_chars.find_tell_lines(msg.text))
+    if not hits and not mis_encoded:
         return 0
+    for msg in mis_encoded:
+        sys.stderr.write(
+            "%s is not valid UTF-8 (first bad byte at byte %d). git assumes UTF-8 for a commit "
+            "message, so a tell saved in another encoding is invisible to this check - an em-dash "
+            "from a Windows editor is byte 0x97. Re-save the file as UTF-8.\n"
+            % (msg.path, msg.bad_byte)
+        )
+    if not hits:
+        return 2
     sys.stderr.write(
         "AI-writing tell(s) in the git message (em/en-dash, curly quote, ellipsis, NBSP, "
         "ZWSP, BOM, etc.). Rewrite with ASCII (use - , . : () ...) before committing:\n"

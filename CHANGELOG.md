@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.298.0]
+
+### Added
+
+- **Both tell hooks now report a file that is not valid UTF-8 as its own finding**, naming the
+  first bad byte, instead of scanning what decodes and saying nothing. Dropping those bytes
+  silently (5.297.6) closed a false block by opening a quiet miss: an em-dash saved by a Windows
+  editor is byte `0x97`, which is not valid UTF-8, so exactly the character these hooks exist to
+  catch would have been reported clean. git assumes UTF-8 for a commit message
+  (`i18n.commitEncoding`), so the encoding is worth reporting in its own right. This BLOCKS a case
+  that was not blocked before: a commit whose `-F` message file, or an edited `.md`/`.txt`, is in
+  another encoding. Re-save the file as UTF-8.
+- `tell_chars.decode_utf8(raw, truncated=False)`, the one decoder both hooks now read through, so
+  they cannot drift apart on how a file is read. On a capped read it forgives a failure in the
+  last three bytes, where the cap itself sliced a multi-byte character - reporting that would be
+  the reader inventing its own finding, which is the defect the 5.297.6 pair fixed.
+
 ## [5.297.6]
 
 ### Fixed

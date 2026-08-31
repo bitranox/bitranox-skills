@@ -38,22 +38,29 @@ def main() -> int:
     if not (low.endswith((".md", ".markdown", ".txt")) or low.endswith("claude.md")):
         return 0
     try:
-        # errors="ignore", never "replace": U+FFFD is in tell_chars.RANGES on purpose, so
-        # "replace" MINTS one per undecodable byte and this hook reports a tell it created
-        # itself. That is unfixable by the author, because it blocks the whole file until
-        # clean and the character is not in the file to edit out. The rewriter beside it
-        # (strip_typographic_tells) opens strict and skips such a file, so this keeps the
-        # detector and the rewriter answering the same question.
-        with open(fp, encoding="utf-8", errors="ignore") as fh:
-            text = fh.read()
+        with open(fp, "rb") as fh:
+            raw = fh.read()
     except Exception:
         return 0
+    # Read through the shared decoder, never errors="replace": that MINTS a U+FFFD per undecodable
+    # byte and U+FFFD is itself a tell, so this hook reported a tell it had created - and because
+    # it blocks the whole FILE until clean, a character the reader invents cannot be edited out and
+    # the file could never become clean. The rewriter beside it (strip_typographic_tells) opens
+    # strict and skips such a file, so this keeps the detector and the rewriter answering the same
+    # question.
+    text, bad_byte = tell_chars.decode_utf8(raw)
 
     hits = tell_chars.find_tell_lines(text)
     joins = tell_chars.find_continuation_lines(text)
-    if not hits and not joins:
+    if not hits and not joins and bad_byte is None:
         return 0
 
+    if bad_byte is not None:
+        sys.stderr.write(
+            "%s is not valid UTF-8 (first bad byte at byte %d). A tell saved in another encoding "
+            "is invisible to this check - an em-dash from a Windows editor is byte 0x97 - so "
+            "re-save the file as UTF-8.\n" % (fp, bad_byte)
+        )
     if hits:
         sys.stderr.write(
             "AI-writing tell(s) found in %s outside code spans "

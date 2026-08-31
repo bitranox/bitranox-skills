@@ -112,7 +112,7 @@ def test_sweep_allows_a_prose_arrow_followed_by_a_space(tmp_path, monkeypatch):
     assert _run(monkeypatch, {"tool_input": {"file_path": str(fp)}}) == 0
 
 
-def test_a_non_utf8_file_is_not_called_a_tell(tmp_path, monkeypatch):
+def test_a_non_utf8_file_is_blocked_for_its_encoding_not_as_a_tell(tmp_path, monkeypatch, capsys):
     """The same defect the commit-side guard had, in this sibling.
 
     U+FFFD is a tell on purpose - it is mojibake - so decoding with errors="replace" MINTS one
@@ -120,9 +120,24 @@ def test_a_non_utf8_file_is_not_called_a_tell(tmp_path, monkeypatch):
     that is worse than a single false block: this hook blocks the whole file until it is clean,
     and a manufactured character cannot be edited out, so the file can never become clean.
     """
+    head = "Plain ASCII prose - no tells.\n".encode("utf-8")
     f = tmp_path / "a.txt"
-    f.write_bytes("Plain ASCII prose - no tells.\n".encode("utf-8") + b"\xff\xfe\x00\n")
-    assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 0
+    f.write_bytes(head + b"\xff\xfe\x00\n")
+    assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 2
+    err = capsys.readouterr().err
+    assert "not valid UTF-8" in err
+    assert "byte %d" % len(head) in err
+    assert "AI-writing tell" not in err
+
+
+def test_a_cp1252_dash_no_longer_sails_through(tmp_path, monkeypatch, capsys):
+    """Why silently dropping the undecodable bytes is not the end state: an em-dash saved by a
+    Windows editor is byte 0x97, so a silent drop reports this file clean and misses exactly the
+    character the hook exists to catch."""
+    f = tmp_path / "a.md"
+    f.write_bytes("Prose with a real dash".encode("cp1252") + b"\x97 tail\n")
+    assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 2
+    assert "not valid UTF-8" in capsys.readouterr().err
 
 
 def test_a_genuine_replacement_character_is_still_a_tell(tmp_path, monkeypatch):

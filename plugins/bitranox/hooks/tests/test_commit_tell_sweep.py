@@ -165,17 +165,50 @@ def test_the_same_command_under_bash_is_not_second_guessed(monkeypatch, tmp_path
 REPLACEMENT = chr(0xFFFD)
 
 
-def test_a_non_utf8_message_file_is_not_called_a_tell(monkeypatch, tmp_path):
-    """The reader must not manufacture the character the detector hunts for.
+def test_a_non_utf8_message_file_is_blocked_for_its_encoding_not_as_a_tell(
+        monkeypatch, tmp_path, capsys):
+    """Two things at once, and the second is why the first is not simply "pass".
 
-    U+FFFD is in RANGES on purpose - it is mojibake and worth reporting. But decoding with
-    errors="replace" MINTS one for every undecodable byte, so any file that is not UTF-8 was
-    reported as carrying AI-writing tells and its commit blocked on a message that named a
-    character the file does not contain.
+    The reader must not manufacture the character the detector hunts for: U+FFFD is in RANGES on
+    purpose - it is mojibake and worth reporting - but decoding with errors="replace" MINTS one
+    per undecodable byte, so any file that is not UTF-8 was reported as carrying AI-writing tells
+    and blocked on a message naming a character the file does not contain.
+
+    Dropping those bytes silently would trade that loud wrong answer for a quiet one, so the
+    encoding is reported as its own finding, at the byte that failed. git assumes UTF-8 for a
+    commit message (i18n.commitEncoding), so this is a real problem in its own right.
     """
+    head = "Subject line, plain ASCII\n".encode("utf-8")
     f = tmp_path / "msg.txt"
-    f.write_bytes("Subject line, plain ASCII\n".encode("utf-8") + b"\xff\xfe\x00tail\n")
-    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 0
+    f.write_bytes(head + b"\xff\xfe\x00tail\n")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
+    err = capsys.readouterr().err
+    assert "not valid UTF-8" in err
+    assert "byte %d" % len(head) in err
+    assert "AI-writing tell" not in err
+
+
+def test_a_cp1252_dash_no_longer_sails_through(monkeypatch, tmp_path, capsys):
+    """The case that decides it. An em-dash written by a Windows editor is byte 0x97, which is
+    not valid UTF-8, so dropping undecodable bytes would report this file clean - missing exactly
+    the character the hook exists to catch. It is caught as an encoding fault instead."""
+    f = tmp_path / "msg.txt"
+    f.write_bytes("Subject with a real dash".encode("cp1252") + b"\x97 tail\n")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
+    assert "not valid UTF-8" in capsys.readouterr().err
+
+
+def test_a_valid_utf8_file_reports_no_encoding_fault(monkeypatch, tmp_path, capsys):
+    """The direction the encoding check must NOT reach: a clean UTF-8 file still passes, and one
+    with a real tell still blocks as a TELL, not as an encoding fault."""
+    clean = tmp_path / "clean.txt"
+    clean.write_text("Subject line - plain ASCII\n", encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F "%s"' % clean.as_posix()) == 0
+    telly = tmp_path / "telly.txt"
+    telly.write_text("Subject %s tail\n" % EM_DASH, encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F "%s"' % telly.as_posix()) == 2
+    err = capsys.readouterr().err
+    assert "AI-writing tell" in err and "not valid UTF-8" not in err
 
 
 def test_a_genuine_replacement_character_is_still_a_tell(monkeypatch, tmp_path):
@@ -216,3 +249,23 @@ def test_the_message_file_read_is_capped(tmp_path):
     f = tmp_path / "big.txt"
     f.write_text("x" * 200000, encoding="utf-8")
     assert len(C._read_message_file(str(f))) <= 65536
+
+
+def test_a_character_sliced_by_the_read_cap_is_not_an_encoding_fault(monkeypatch, tmp_path, capsys):
+    """The cap can cut a multi-byte character in half, and a fault reported there would be the
+    hook's own doing - the same class of defect as the manufactured tell it was built to stop."""
+    f = tmp_path / "big.txt"
+    two_byte = chr(0x00E4).encode("utf-8")          # 2 bytes; the cap lands between them
+    assert len(two_byte) == 2
+    f.write_bytes(b"x" * (C._MAX_MESSAGE_BYTES - 1) + two_byte + b"tail")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_a_real_bad_byte_in_a_capped_read_is_still_reported(monkeypatch, tmp_path, capsys):
+    """The direction the truncation exemption must NOT reach: only a failure in the last few
+    bytes of a full read is the cap's fault. One anywhere else is the file's."""
+    f = tmp_path / "big.txt"
+    f.write_bytes(b"head" + b"\xff" + b"x" * C._MAX_MESSAGE_BYTES)
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
+    assert "byte 4" in capsys.readouterr().err

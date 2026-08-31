@@ -106,6 +106,32 @@ def transform_outside_code(text, fn):
     return "".join(out)
 
 
+def decode_utf8(raw, truncated=False):
+    """(text, bad_byte): `raw` decoded, and the offset of the first byte that is not valid UTF-8,
+    or None when all of it decoded.
+
+    Shared by both tell hooks so they read a file the same way. Never errors="replace": U+FFFD is
+    in RANGES on purpose, because it is mojibake, so "replace" MINTS the exact character the
+    detector hunts for once per undecodable byte, and every file that is not UTF-8 gets reported
+    as carrying a tell it does not contain.
+
+    Dropping those bytes silently is not the end state either: an em-dash saved by a Windows
+    editor is byte 0x97, which is not valid UTF-8, so a silent drop reports such a file clean and
+    misses exactly the character these hooks exist to catch. The offset comes back so the caller
+    can report the ENCODING as its own finding.
+
+    Pass truncated=True when `raw` came from a capped read. A cap can slice a multi-byte character
+    in half, so a failure in the last three bytes of a truncated read is the READER's doing and is
+    dropped rather than reported - reporting it would be the very fault this function avoids.
+    """
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError as exc:
+        if truncated and exc.start >= len(raw) - 3:
+            return raw[:exc.start].decode("utf-8"), None
+        return raw.decode("utf-8", errors="ignore"), exc.start
+
+
 def _scannable(text):
     """Yield (lineno, line, scrubbed) for every line the tell scan is allowed to look at.
 
