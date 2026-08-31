@@ -15,6 +15,14 @@ a just-pushed commit takes seconds to have runs at all, so an empty first poll i
 an empty one two minutes later is a sha that will never match. That budget is a DURATION, so
 changing `--interval` does not silently move it.
 
+`gh` itself FAILING gets the same treatment (`--error-grace`, 120 seconds). One HTTP 502 from
+api.github.com used to end the wait outright, three times in one session, each time with twenty
+minutes still on the deadline and each time reading as an infrastructure problem rather than as
+one bad response. A waiter is the tool that must sit through its fetch failing, so a failure is
+retried on its own budget; the streak resets on any answered poll, and only a sustained outage
+ends the wait - reported as `error` with gh's own last message, never as a `timeout` that would
+blame CI for the API.
+
 Waits up to `--timeout` seconds (default 1500, so 25 minutes) polling every `--interval` (30).
 
 Run: `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD)`
@@ -46,7 +54,20 @@ class BadSha(ValueError):
 
 
 class GhFailed(RuntimeError):
-    """`gh` itself could not answer; nothing can be concluded about the runs."""
+    """`gh` answered, badly - a non-zero exit or output that is not a JSON list.
+
+    Retryable. Most of what lands here is the remote end having a bad minute (a 502 from
+    api.github.com), which is exactly what a WAITER should sit through rather than report.
+    """
+
+
+class GhUnavailable(RuntimeError):
+    """`gh` could not be run at all - not installed, or not executable.
+
+    Not retryable: this is the local machine, and it will answer the same way for the whole
+    process. Kept apart from :class:`GhFailed` so the retry budget is not spent on it, and so
+    a missing `gh` reports as "could not tell" rather than as a traceback.
+    """
 
 
 @dataclass(frozen=True)
@@ -54,7 +75,7 @@ class Verdict:
     """What one look at the run list means.
 
     Attributes:
-        state: ``success``, ``failed``, ``pending``, ``no-runs`` or ``timeout``.
+        state: ``success``, ``failed``, ``pending``, ``no-runs``, ``timeout`` or ``error``.
         summary: One human line naming the runs that decided it.
         runs: The rows the verdict was computed from.
     """
@@ -162,6 +183,7 @@ def wait_for(
     sleep: Callable[[float], None],
     interval_s: float = 30.0,
     appear_grace_s: float = 120.0,
+    error_grace_s: float = 120.0,
     report: Callable[[str], None] = lambda _m: None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
@@ -181,21 +203,59 @@ def wait_for(
     error on a push whose runs took twenty seconds to appear - the commonest path, reported as
     "no runs found for that sha", which points at the sha rather than at the grace.
 
+    ``fetch`` FAILING gets a third budget, on the same duration reasoning. Measured 2026-08-31:
+    `gh run list` answered HTTP 502 intermittently while the API was otherwise healthy, and one
+    bad response ended a wait that had twenty minutes left - three times running. A waiter is
+    the one tool that must sit through its fetch failing, because the alternative is the caller
+    re-running the whole wait by hand, which is the spin this tool exists to prevent. The streak
+    RESETS on any answered poll, so an intermittent fault is waited out however long it lasts
+    while a sustained one still ends inside ``error_grace_s``. Which budget ran out is always
+    named: gh failing for the whole deadline reports ``error`` with gh's own last message, never
+    ``timeout``, which would blame CI for the API.
+
+    Only :class:`GhFailed` is retried. :class:`GhUnavailable` - the OS refusing to spawn `gh` -
+    propagates at once, because it is a local fact that will not change during this process, and
+    spending the grace on it only delays the report. The line is drawn there, where it is
+    certain, rather than by reading gh's message for words like "transient": that would be a
+    guess about a remote system, and the first wrong guess puts this bug straight back.
+
     Args:
         fetch: Returns the run rows for the sha under test.
         deadline_polls: How many polls before giving up on runs that are still going.
         sleep: What to wait with between polls.
         interval_s: Seconds handed to ``sleep``.
         appear_grace_s: How long to keep tolerating an EMPTY match before reporting ``no-runs``.
+        error_grace_s: How long to keep tolerating CONSECUTIVE ``GhFailed`` before reporting
+            ``error``.
         report: Where a per-poll progress line goes.
 
     Returns:
-        The terminal verdict: ``success``, ``failed``, ``no-runs`` or ``timeout``.
+        The terminal verdict: ``success``, ``failed``, ``no-runs``, ``timeout`` or ``error``.
+
+    Raises:
+        GhUnavailable: `gh` cannot be run here; no budget can fix that.
     """
     empty_polls_allowed = max(1, int(appear_grace_s // max(interval_s, 0.001)))
+    error_polls_allowed = max(1, int(error_grace_s // max(interval_s, 0.001)))
     empty_seen = 0
+    errors_seen = 0
+    last_error = ""
+    last_summary = ""
     for poll in range(deadline_polls):
-        current = verdict(fetch())
+        try:
+            rows = fetch()
+        except GhFailed as exc:
+            errors_seen += 1
+            last_error = str(exc)
+            if errors_seen >= error_polls_allowed:
+                return _gh_gave_up(errors_seen, last_error)
+            report(f"poll {poll + 1}/{deadline_polls}: gh failed, retrying: {last_error}")
+            if poll + 1 < deadline_polls:
+                sleep(interval_s)
+            continue
+        errors_seen = 0
+        current = verdict(rows)
+        last_summary = current.summary
         if current.state == "no-runs":
             empty_seen += 1
             if empty_seen >= empty_polls_allowed:
@@ -208,7 +268,17 @@ def wait_for(
             report(f"poll {poll + 1}/{deadline_polls}: {current.summary}")
         if poll + 1 < deadline_polls:
             sleep(interval_s)
-    return Verdict("timeout", verdict(fetch()).summary)
+    # The deadline, reported from what the last ANSWERED poll saw. Re-fetching here to describe
+    # the timeout cost an extra request that could itself fail, turning a plain timeout into an
+    # error about the API - a report naming the wrong system entirely.
+    if errors_seen:
+        return _gh_gave_up(errors_seen, last_error)
+    return Verdict("timeout", last_summary)
+
+
+def _gh_gave_up(polls: int, message: str) -> Verdict:
+    """The verdict for gh failing on every poll of its budget, naming gh's own last words."""
+    return Verdict("error", f"gh failed {polls} polls running: {message}")
 
 
 def exit_code_for(state: str) -> int:
@@ -224,12 +294,17 @@ def gh_runs(sha: str, *, repo: str | None = None, limit: int = 30) -> list[dict[
     client-side one costs no second request.
 
     Raises:
-        GhFailed: `gh` exited non-zero or returned something that is not a JSON list.
+        GhFailed: `gh` exited non-zero or returned something that is not a JSON list. The
+            caller may retry this; a bad minute at the API arrives here.
+        GhUnavailable: `gh` could not be spawned at all - not installed, or not executable.
     """
     argv = ["gh", "run", "list", "--json", _FIELDS, "--limit", str(limit)]
     if repo:
         argv += ["--repo", repo]
-    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    except OSError as exc:
+        raise GhUnavailable(f"could not run gh: {exc}") from exc
     if proc.returncode != 0:
         raise GhFailed(f"gh exited {proc.returncode}: {(proc.stderr or '').strip()}")
     try:
@@ -253,6 +328,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="seconds to keep tolerating an EMPTY match before reporting no-runs (default 120); "
              "a just-pushed commit takes seconds to have runs at all. A DURATION, so changing "
              "--interval does not move it",
+    )
+    parser.add_argument(
+        "--error-grace", type=float, default=120.0,
+        help="seconds to keep tolerating CONSECUTIVE gh failures before giving up (default 120); "
+             "a 502 from the API is weather, not a verdict. The streak resets on any answered "
+             "poll. Also a DURATION",
     )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)
@@ -285,9 +366,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             sleep=time.sleep,
             interval_s=args.interval,
             appear_grace_s=args.appear_grace,
+            error_grace_s=args.error_grace,
             report=lambda line: print(line, file=sys.stderr, flush=True),
         )
-    except GhFailed as exc:
+    except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json)
     return _emit(result, as_json=args.json)
 

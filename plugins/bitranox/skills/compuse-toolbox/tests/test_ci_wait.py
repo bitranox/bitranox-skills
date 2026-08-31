@@ -263,3 +263,218 @@ class TestAnUnknownShaWarnsButStillPolls:
         ci_wait.main(["--sha", "a" * 40])
 
         assert "warning:" not in capsys.readouterr().err
+
+
+class TestATransientGhFailureIsRetried:
+    """A 5xx from the API is weather, not a verdict.
+
+    Measured 2026-08-31: `gh run list` answered HTTP 502 intermittently while the API was
+    otherwise healthy, and this tool exited 2 three times running - each time abandoning a wait
+    with twenty minutes left on its deadline, and each time reading as an infrastructure problem
+    rather than as one bad response. A WAITER is the one tool that must survive its fetch failing,
+    because the alternative is the caller re-running the whole wait by hand.
+    """
+
+    @staticmethod
+    def _fails_then(times: int, rows: list[dict[str, object]]):
+        """A fetch raising GhFailed ``times`` times, then answering ``rows``."""
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            seen.append(1)
+            if len(seen) <= times:
+                raise ci_wait.GhFailed("gh exited 1: HTTP 502 (api.github.com)")
+            return rows
+
+        return fetch, seen
+
+    def test_one_502_does_not_end_the_wait(self):
+        fetch, seen = self._fails_then(1, [run("CI", "completed", "success")])
+
+        result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None)
+
+        assert result.state == "success"
+        assert len(seen) == 2
+
+    def test_an_intermittent_failure_never_exhausts_the_budget(self):
+        """The streak resets on any answered poll, so 'every other poll 502s' waits it out.
+
+        Counted cumulatively rather than consecutively, the second failure here would end the
+        wait at `error` while CI was still running perfectly well.
+        """
+        script: list[object] = [
+            "fail", [run("CI", "in_progress", None)],
+            "fail", [run("CI", "in_progress", None)],
+            "fail", [run("CI", "completed", "success")],
+        ]
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            step = script[len(seen)]
+            seen.append(1)
+            if step == "fail":
+                raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+            return step  # type: ignore[return-value]
+
+        result = ci_wait.wait_for(
+            fetch, deadline_polls=20, sleep=lambda _s: None, interval_s=30.0, error_grace_s=60.0
+        )
+
+        assert result.state == "success"
+        assert len(seen) == 6
+
+    def test_a_sustained_outage_ends_in_error_naming_the_last_gh_message(self):
+        """Bounded, and it still says WHAT failed - `error: gh exited 1: HTTP 502`, not `timeout`."""
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            seen.append(1)
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502 (api.github.com)")
+
+        result = ci_wait.wait_for(
+            fetch, deadline_polls=100, sleep=lambda _s: None, interval_s=30.0, error_grace_s=90.0
+        )
+
+        assert result.state == "error"
+        assert "502" in result.summary
+        assert len(seen) == 3, "90s of grace at 30s a poll, not the 100-poll deadline"
+
+    def test_the_error_grace_is_a_DURATION_so_a_short_interval_cannot_shrink_it(self):
+        """The same defect the appear-grace carries a test for: as a poll COUNT, `--interval 5`
+        would cut a 90-second tolerance to 18 seconds and a blip would end the wait."""
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            seen.append(1)
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+
+        ci_wait.wait_for(
+            fetch, deadline_polls=100, sleep=lambda _s: None, interval_s=5.0, error_grace_s=90.0
+        )
+
+        assert len(seen) == 18
+
+    def test_it_sleeps_between_retries_rather_than_hammering_the_api(self):
+        """A retry loop with no wait turns one 502 into a burst against an API already struggling."""
+        slept: list[float] = []
+
+        def fetch() -> list[dict[str, object]]:
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+
+        ci_wait.wait_for(
+            fetch, deadline_polls=100, sleep=slept.append, interval_s=30.0, error_grace_s=90.0
+        )
+
+        assert slept == [30.0, 30.0], "between the three attempts, and none after the verdict"
+
+    def test_a_deadline_reached_while_gh_is_failing_reports_the_failure_not_a_timeout(self):
+        """Whichever budget runs out first, the report must name the cause it actually saw."""
+
+        def fetch() -> list[dict[str, object]]:
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+
+        result = ci_wait.wait_for(
+            fetch, deadline_polls=2, sleep=lambda _s: None, interval_s=30.0, error_grace_s=300.0
+        )
+
+        assert result.state == "error"
+        assert "502" in result.summary
+
+    def test_a_timeout_reports_the_last_seen_state_without_a_further_fetch(self):
+        """The extra fetch the timeout used to make could itself 502, turning a plain timeout
+        into an error about the API."""
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            seen.append(1)
+            return [run("CI", "in_progress", None)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=3, sleep=lambda _s: None)
+
+        assert result.state == "timeout"
+        assert "CI=in_progress" in result.summary
+        assert len(seen) == 3
+
+
+class TestGhBeingUnrunnableIsNotRetried:
+    """`gh` missing is permanent for this process; 502 is not. Retrying the first wastes the grace.
+
+    The distinction is drawn where it is CERTAIN - the OS refusing to spawn the binary - not by
+    reading gh's message for words like 'transient', which would be a guess about a remote system
+    and would put the 502 bug back the first time a guess was wrong.
+    """
+
+    def test_gh_not_on_path_is_a_typed_error_not_a_traceback(self, monkeypatch):
+        def boom(argv, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "gh")
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", boom)
+
+        with pytest.raises(ci_wait.GhUnavailable):
+            ci_wait.gh_runs("a" * 40)
+
+    def test_the_wait_gives_up_on_it_at_once(self):
+        seen: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            seen.append(1)
+            raise ci_wait.GhUnavailable("gh is not installed or not on PATH")
+
+        with pytest.raises(ci_wait.GhUnavailable):
+            ci_wait.wait_for(fetch, deadline_polls=100, sleep=lambda _s: None)
+
+        assert len(seen) == 1
+
+    def test_main_reports_it_as_could_not_tell_rather_than_crashing(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+
+        def boom(sha, **kw):
+            raise ci_wait.GhUnavailable("gh is not installed or not on PATH")
+
+        monkeypatch.setattr(ci_wait, "gh_runs", boom)
+
+        rc = ci_wait.main(["--sha", "a" * 40])
+
+        assert rc == 2
+        assert "gh is not installed" in capsys.readouterr().err
+
+
+class TestTheRetryReachesTheRealCommandLine:
+    """The loop tolerating a failure is worth nothing if `main` does not wire it that way."""
+
+    def test_a_502_on_the_first_poll_still_ends_green(self, monkeypatch, capsys):
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        calls: list[int] = []
+
+        def flaky(sha, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ci_wait.GhFailed("gh exited 1: HTTP 502 (api.github.com)")
+            return [run("CI", "completed", "success")]
+
+        monkeypatch.setattr(ci_wait, "gh_runs", flaky)
+
+        rc = ci_wait.main(["--sha", "a" * 40])
+
+        assert rc == 0, "a single 502 must not end a wait that had its whole deadline left"
+        assert len(calls) == 2
+
+    def test_the_error_grace_defaults_to_120_seconds(self):
+        assert ci_wait._parse_args(["--sha", "a" * 40]).error_grace == 120.0
+
+    def test_the_cli_value_reaches_the_wait_loop(self, monkeypatch):
+        """Parsed and then dropped is the shape a green suite cannot see: the flag exists, the
+        help text is right, and the loop keeps its default."""
+        seen: dict[str, object] = {}
+
+        def fake_wait(fetch, **kw):
+            seen.update(kw)
+            return ci_wait.Verdict("success", "CI=success")
+
+        monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
+        monkeypatch.setattr(ci_wait, "wait_for", fake_wait)
+
+        ci_wait.main(["--sha", "a" * 40, "--error-grace", "300"])
+
+        assert seen["error_grace_s"] == 300.0

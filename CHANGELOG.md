@@ -29,6 +29,43 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.294.0]
+
+### Fixed
+
+- **`ci_wait` no longer abandons a wait because one `gh run list` failed.** Measured 2026-08-31:
+  api.github.com answered HTTP 502 intermittently while it was otherwise healthy, and the tool
+  exited 2 three times running, each time with twenty minutes still on its deadline. `GhFailed`
+  was raised from inside the poll loop but caught OUTSIDE it, so the first bad response ended the
+  whole wait - and ended it as "could not tell", which reads as an infrastructure problem rather
+  than as one bad response, and invites exactly the by-hand re-run the tool exists to replace.
+
+  A failing fetch now gets its own budget, on the reasoning the empty-match grace already uses and
+  expressed the same way, as a DURATION (`--error-grace`, default 120 seconds), so `--interval`
+  cannot silently shrink it. The streak RESETS on any answered poll, so an intermittent fault is
+  waited out however long it lasts while a sustained one still ends inside the budget - reported
+  as `error` naming gh's own last message, never as a `timeout`, which would blame CI for the API.
+
+  The timeout report no longer costs an extra request either. It described itself by fetching once
+  more after the deadline, which could itself fail, turning a plain timeout into an error about
+  the API; it now reports what the last answered poll saw.
+
+- **A missing `gh` is reported instead of raising a traceback.** `subprocess.run` raises
+  `FileNotFoundError`, which `except GhFailed` never caught, so `ci_wait` on a machine with no
+  `gh` died with a stack trace instead of the documented exit 2. It is now `GhUnavailable`, and it
+  is deliberately NOT retried: the OS refusing to spawn the binary is a local fact that will not
+  change during the run, so spending the grace on it only delays the report. That is where the
+  retryable/fatal line is drawn - at a certainty, rather than at a guess about which of gh's
+  messages mean "transient", where the first wrong guess puts the 502 bug straight back.
+
+### Added
+
+- **`--error-grace` on `ci_wait`**, exposing that budget, and thirteen tests for it: that one 502
+  does not end the wait, that an intermittent fault never exhausts a CONSECUTIVE budget, that a
+  sustained one ends inside it rather than at the deadline, that the budget is a duration and not
+  a poll count, that the retry sleeps rather than hammering an API already struggling, and that
+  the flag reaches the loop instead of being parsed and dropped.
+
 ## [5.293.0]
 
 ### Added
