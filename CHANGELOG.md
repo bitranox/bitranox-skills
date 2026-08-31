@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.1]
+
+### Fixed
+
+- **`repo-gate`: the ragged-table finding named an absolute, native-separator path.** The detector
+  echoes back whatever path it is handed, so every finding carried the home directory of whoever
+  ran the gate - and on Windows it carried backslashes, which is what reddened
+  `tests (windows-latest, py3.13)` on 5.296.2 while the check itself was working correctly.
+  Findings now name the file the way git does, repo-relative with forward slashes, on every
+  platform. The added test asserts that relative form, so this class of defect fails on POSIX too
+  rather than only on a runner.
+
 ## [5.297.0]
 
 ### Added

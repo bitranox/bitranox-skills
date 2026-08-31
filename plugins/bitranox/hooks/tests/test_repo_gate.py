@@ -1586,12 +1586,30 @@ def test_ragged_tables_flags_a_long_row(tmp_path):
     root = _repo_with_table(tmp_path, "| a | b |\n|---|---|\n| 1 | 2 | 3 |\n")
     failures = RG.check_ragged_tables(root)
     assert failures, failures
-    assert "docs/page.md" in "\n".join(failures)
+    assert "docs/page.md:3:" in "\n".join(failures[1:]), failures
+
+
+def test_ragged_tables_names_the_file_the_way_git_does(tmp_path):
+    """The finding names a repo-relative POSIX path, on every platform.
+
+    The tool echoes back whatever path it is handed, so handing it an absolute one put the
+    runner's home directory into the message - and on Windows the native separator made the
+    assertion above fail while the check itself was working (CI, windows-latest py3.13,
+    2026-08-31). Asserting the RELATIVE form fails on POSIX too, so the platform bug is
+    reproducible here rather than only on a runner.
+    """
+    root = _repo_with_table(tmp_path, "| a | b |\n|---|---|\n| 1 | 2 | 3 |\n")
+    body = "\n".join(RG.check_ragged_tables(root)[1:])
+    assert body.strip().startswith("docs/page.md:"), body
+    assert str(root) not in body, body
+    assert "\\" not in body, body
 
 
 def test_ragged_tables_flags_a_short_row(tmp_path):
     root = _repo_with_table(tmp_path, "| a | b | c |\n|---|---|---|\n| 1 | 2 |\n")
-    assert RG.check_ragged_tables(root)
+    failures = RG.check_ragged_tables(root)
+    assert failures, failures
+    assert "docs/page.md:3:" in "\n".join(failures[1:]), failures
 
 
 def test_ragged_tables_passes_a_clean_table(tmp_path):

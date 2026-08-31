@@ -212,11 +212,20 @@ def check_ragged_tables(root):
     findings = []
     for rel in paths:
         warnings = []
+        absolute = root / rel
         try:
-            module.reformat_file(root / rel, check_only=True, warnings=warnings)
+            module.reformat_file(absolute, check_only=True, warnings=warnings)
         except (OSError, UnicodeDecodeError):
             continue
-        findings.extend(f"  {line}" for line in warnings)
+        # The tool echoes back the path it was handed, so report it the way git names it:
+        # repo-relative, forward slashes. An absolute path drags the runner's home into the
+        # message, and its separator is native - which is what made the Windows cell red while
+        # the check itself was working.
+        prefix = str(absolute)
+        findings.extend(
+            f"  {rel}{line[len(prefix):]}" if line.startswith(prefix) else f"  {line}"
+            for line in warnings
+        )
     return ["Ragged markdown table rows (cell count differs from the header):"] + findings \
         if findings else []
 
