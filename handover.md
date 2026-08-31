@@ -1,4 +1,4 @@
-# Handover - written 2026-08-31, nothing in flight
+# STALE - read 2026-08-31, work continued. The standing items it carried now live in OPEN-WORK.md, which is the file to read.
 
 ## State
 
