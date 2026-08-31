@@ -137,7 +137,11 @@ _OPEN_WORK_HEADER = (
     "plainly why a lower-ranked one goes first:\n"
 )
 _ESSENTIALS_CEILING_BYTES = 3300
-_OPEN_WORK_MIN_BUDGET_BYTES = 400
+#: When the other blocks have spent the ceiling, the backlog degrades to this one line rather
+#: than to nothing (hiding it is the failure the file exists to stop) or to a breach (going
+#: over makes the harness persist the WHOLE essentials block and preview ~2KB, which hides it
+#: anyway - a floor that protects the backlog by a mechanism that hides it is self-defeating).
+_OPEN_WORK_COMPACT = "%d OPEN-WORK ITEM(S) standing - read OPEN-WORK.md; no room to list them here."
 _OPEN_WORK_HEAD_CHARS = 96
 
 
@@ -197,8 +201,9 @@ def open_work_context(proj, today=None, budget=None):
         if not items:
             return None
         head = _OPEN_WORK_HEADER % len(items)
-        allowed = max(_OPEN_WORK_MIN_BUDGET_BYTES,
-                      (_ESSENTIALS_CEILING_BYTES if budget is None else budget))
+        allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
+        if allowed < len(head.encode("utf-8")) + _OPEN_WORK_HEAD_CHARS:
+            return _OPEN_WORK_COMPACT % len(items)
         lines, used = [], len(head.encode("utf-8"))
         for rank, raised, what in items:
             line = "- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])

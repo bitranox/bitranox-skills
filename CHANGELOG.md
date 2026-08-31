@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.5]
+
+### Fixed
+
+- **The backlog block's minimum-size floor could breach the ceiling it exists to respect.** It
+  guaranteed itself 400 bytes so the top-ranked item was always visible, but going over the
+  essentials ceiling makes the harness persist the WHOLE block and inject a ~2KB preview - so the
+  floor protected the backlog by a mechanism that hides it, along with everything sharing the
+  block. It now degrades to a single line naming the count and pointing at the file: 77 bytes
+  instead of 425, never nothing and never a breach.
+
+### Notes
+
+- Probing that floor measured a pre-existing defect in a different block: with the contribution
+  queue at its documented 100-entry cap, `contrib_context` renders **11,481 bytes on its own**,
+  against a 3300-byte ceiling for all the essentials together. It formats every entry with no
+  budget of its own, so a full queue buries the memory-retrieval rule, the backlog and itself.
+  Recorded rather than fixed here, to keep this change to one block.
+
 ## [5.297.4]
 
 ### Changed

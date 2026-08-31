@@ -124,3 +124,15 @@ without asking.
       blocks actually spent, and the real total is 3239 with 7 of 13 items shown.
 - [x] New test populates EVERY block that shares the ceiling, which is what the old one did not.
       Mutation-verified: raising the ceiling constant to 9000 fails it.
+
+## Follow-up, v5.297.5 - the floor that could breach the ceiling
+
+- [x] The 400-byte floor guaranteeing at least one visible item was reasoned through rather than
+      asked about: breaching the ceiling makes the harness persist the whole essentials block and
+      preview ~2KB, so a floor that protects the backlog by a mechanism that hides it is
+      self-defeating. Replaced by a compact one-line fallback, measured at 77 bytes against the
+      425 the floor produced.
+- [x] Probed at the contribution queue's documented 100-entry cap. Found a PRE-EXISTING defect in
+      a different block: contrib_context renders 11,481 bytes on its own against a 3300 ceiling.
+      Recorded as backlog item 65 rather than fixed here, to keep the change to one block.
+- [x] Real repo re-checked end to end after the change: 3239 bytes, 7 of 14 items, unchanged.

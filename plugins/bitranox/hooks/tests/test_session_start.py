@@ -669,3 +669,18 @@ def test_essentials_stay_under_budget_with_every_block_present(tmp_path, monkeyp
     ctx = _ctx(out)
     assert "OPEN-WORK ITEM(S)" in ctx and "PENDING UPSTREAM CONTRIBUTION" in ctx   # both present
     assert len(ctx.encode("utf-8")) < 3500
+
+
+def test_open_work_falls_back_to_a_compact_pointer_when_the_budget_is_gone(tmp_path, monkeypatch, capsys):
+    # When the other blocks have spent the ceiling there is no room for items, but the backlog
+    # must not vanish either - hiding it is the failure this whole file exists to stop. It
+    # degrades to one short line naming the count, never to nothing and never to a breach.
+    proj = tmp_path / "p11"
+    proj.mkdir()
+    _write_open_work(proj, "".join(
+        "- [ ] (2026-08-27) [%d] USER: a standing item with a long description number %d\n" % (i * 10, i)
+        for i in range(1, 15)))
+    block = S.open_work_context(str(proj), budget=50)
+    assert block is not None
+    assert "14" in block and "OPEN-WORK.md" in block
+    assert len(block.encode("utf-8")) < 200
