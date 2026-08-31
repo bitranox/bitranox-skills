@@ -181,3 +181,30 @@ def test_the_shared_splitter_matches_splitlines_on_ordinary_text():
         assert TC.split_lines(src) == src.splitlines(), repr(src)
         assert TC.split_lines(src, keepends=True) == src.splitlines(keepends=True), repr(src)
     assert TC.split_lines(None) == []
+
+
+def test_find_tell_codepoints_names_the_character_instead_of_quoting_the_line():
+    hits = TC.find_tell_codepoints("private content %s here\n" % EM_DASH)
+    assert hits == ["1: U+2014"]
+    assert "private content" not in hits[0]
+
+
+def test_find_tell_codepoints_dedupes_and_sorts_within_a_line():
+    """Same line, one codepoint twice and a second one out of order: one entry, ascending."""
+    src = "a%sb%sc%sd\n" % (NBSP, EM_DASH, NBSP)
+    assert TC.find_tell_codepoints(src) == ["1: U+00A0 U+2014"]
+
+
+def test_find_tell_codepoints_reports_the_same_lines_as_find_tell_lines():
+    """The two scanners share `_scannable`, so a code-span or fence exemption can never apply to
+    one and not the other. Compare the LINE NUMBERS they report, over text mixing both."""
+    src = "clean\nuse `%s` in code\n%s here\n```\n%s\n```\nand %s again\n" % (
+        EM_DASH, EM_DASH, EM_DASH, NBSP)
+    lines = [h.split(":", 1)[0] for h in TC.find_tell_lines(src)]
+    points = [h.split(":", 1)[0] for h in TC.find_tell_codepoints(src)]
+    assert lines == points == ["3", "7"]
+
+
+def test_find_tell_codepoints_is_empty_on_clean_text():
+    assert TC.find_tell_codepoints("Plain ASCII - no tells.\n") == []
+    assert TC.find_tell_codepoints("") == [] and TC.find_tell_codepoints(None) == []

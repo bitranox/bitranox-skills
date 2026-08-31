@@ -110,3 +110,21 @@ def test_sweep_allows_a_prose_arrow_followed_by_a_space(tmp_path, monkeypatch):
     fp = tmp_path / "doc.md"
     fp.write_text("git init runs in cwd() %s empty parameter\n" % LEFT_ARROW, encoding="utf-8")
     assert _run(monkeypatch, {"tool_input": {"file_path": str(fp)}}) == 0
+
+
+def test_a_non_utf8_file_is_not_called_a_tell(tmp_path, monkeypatch):
+    """The same defect the commit-side guard had, in this sibling.
+
+    U+FFFD is a tell on purpose - it is mojibake - so decoding with errors="replace" MINTS one
+    per undecodable byte and the reader manufactures exactly what the detector looks for. Here
+    that is worse than a single false block: this hook blocks the whole file until it is clean,
+    and a manufactured character cannot be edited out, so the file can never become clean.
+    """
+    f = tmp_path / "a.txt"
+    f.write_bytes("Plain ASCII prose - no tells.\n".encode("utf-8") + b"\xff\xfe\x00\n")
+    assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 0
+
+
+def test_a_genuine_replacement_character_is_still_a_tell(tmp_path, monkeypatch):
+    """The direction the fix must NOT reach: real mojibake encoded in the file still blocks."""
+    assert _run(monkeypatch, _md(tmp_path, "Subject %s tail\n" % chr(0xFFFD))) == 2

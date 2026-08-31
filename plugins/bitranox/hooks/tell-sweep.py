@@ -38,7 +38,13 @@ def main() -> int:
     if not (low.endswith((".md", ".markdown", ".txt")) or low.endswith("claude.md")):
         return 0
     try:
-        with open(fp, encoding="utf-8", errors="replace") as fh:
+        # errors="ignore", never "replace": U+FFFD is in tell_chars.RANGES on purpose, so
+        # "replace" MINTS one per undecodable byte and this hook reports a tell it created
+        # itself. That is unfixable by the author, because it blocks the whole file until
+        # clean and the character is not in the file to edit out. The rewriter beside it
+        # (strip_typographic_tells) opens strict and skips such a file, so this keeps the
+        # detector and the rewriter answering the same question.
+        with open(fp, encoding="utf-8", errors="ignore") as fh:
             text = fh.read()
     except Exception:
         return 0

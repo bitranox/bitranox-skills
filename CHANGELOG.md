@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.6]
+
+### Fixed
+
+- **`commit-tell-sweep` reported a tell it had manufactured itself.** It read the `-F`/`--file`
+  message file with `errors="replace"`, which mints U+FFFD once per undecodable byte, and U+FFFD
+  is in `tell_chars.RANGES` on purpose because it is mojibake. So every message file that was not
+  valid UTF-8 was blocked, on a message naming a character the file does not contain. The read is
+  now decoded with `errors="ignore"`, which drops those bytes and still reports a U+FFFD that was
+  genuinely encoded in the file.
+- **`commit-tell-sweep` quoted file content back to the model.** It is a PreToolUse guard, so it
+  runs before the command is approved and the `-F` path is still only a string the caller named;
+  it then echoed up to 20 matching lines on stderr, which exit 2 shows to the model, for a path
+  the Read tool's permission rules might refuse. The manufactured-tell defect above guaranteed a
+  hit, so no luck was needed. A hit in a FILE now names its codepoints (`1: U+2014`) through the
+  new `tell_chars.find_tell_codepoints`, and the read is capped at 64 KiB. An inline `-m` message
+  is still quoted back in full: the caller typed it, so quoting is what makes the block
+  actionable.
+- **`tell-sweep` had the same manufactured-tell defect, and it was worse there.** The same
+  `errors="replace"` read fed the same detector, but this hook blocks the whole file until it is
+  clean - and a character the reader invents cannot be edited out, so a non-UTF-8 `.txt` could
+  never become clean. Its rewriter twin `strip_typographic_tells` already opened strict and
+  skipped such a file, so the detector and the rewriter now answer the same question again.
+
 ## [5.297.5]
 
 ### Fixed

@@ -160,3 +160,59 @@ def test_the_same_command_under_bash_is_not_second_guessed(monkeypatch, tmp_path
     """
     f = _backslashed_file(tmp_path, "Subject %s tell\n" % EM_DASH)
     assert _run(monkeypatch, 'git commit -F %s' % f, tool_name="Bash") == 0
+
+
+REPLACEMENT = chr(0xFFFD)
+
+
+def test_a_non_utf8_message_file_is_not_called_a_tell(monkeypatch, tmp_path):
+    """The reader must not manufacture the character the detector hunts for.
+
+    U+FFFD is in RANGES on purpose - it is mojibake and worth reporting. But decoding with
+    errors="replace" MINTS one for every undecodable byte, so any file that is not UTF-8 was
+    reported as carrying AI-writing tells and its commit blocked on a message that named a
+    character the file does not contain.
+    """
+    f = tmp_path / "msg.txt"
+    f.write_bytes("Subject line, plain ASCII\n".encode("utf-8") + b"\xff\xfe\x00tail\n")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 0
+
+
+def test_a_genuine_replacement_character_is_still_a_tell(monkeypatch, tmp_path):
+    """The direction the fix must NOT reach: a U+FFFD that was really encoded in the file.
+
+    Without this the previous test is satisfied by deleting U+FFFD from the tell set, which
+    would silently stop reporting real mojibake.
+    """
+    f = tmp_path / "msg.txt"
+    f.write_text("Subject %s tail\n" % REPLACEMENT, encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
+
+
+def test_a_message_file_s_content_is_never_echoed_to_the_model(monkeypatch, tmp_path, capsys):
+    """PreToolUse runs BEFORE the Bash call is approved, so the path is still just a string the
+    model named. Quoting the matched lines back on exit 2 hands it up to 20 lines of a file the
+    Read tool's permission rules might refuse. A line number and a codepoint fix the message
+    just as well and carry nothing the model did not already have.
+    """
+    f = tmp_path / "msg.txt"
+    f.write_text("private-value-from-a-file %s\n" % EM_DASH, encoding="utf-8")
+    assert _run(monkeypatch, 'git commit -F "%s"' % f.as_posix()) == 2
+    err = capsys.readouterr().err
+    assert "private-value-from-a-file" not in err
+    assert "1: U+2014" in err
+
+
+def test_an_inline_message_is_still_quoted_back(monkeypatch, capsys):
+    """The direction the containment fix must NOT reach: the model typed this text itself, so
+    quoting the offending line is free and is what makes the block actionable."""
+    assert _run(monkeypatch, 'git commit -m "Fix the widget %s properly"' % EM_DASH) == 2
+    assert "Fix the widget" in capsys.readouterr().err
+
+
+def test_the_message_file_read_is_capped(tmp_path):
+    """A commit message file is small. Reading an unbounded one lets a guard that runs before
+    approval pull an arbitrary amount of a file into the hook."""
+    f = tmp_path / "big.txt"
+    f.write_text("x" * 200000, encoding="utf-8")
+    assert len(C._read_message_file(str(f))) <= 65536

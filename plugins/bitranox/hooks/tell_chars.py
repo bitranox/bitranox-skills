@@ -106,10 +106,12 @@ def transform_outside_code(text, fn):
     return "".join(out)
 
 
-def find_tell_lines(text):
-    """Return ['<lineno>: <line>', ...] for lines carrying a tell OUTSIDE inline-code spans and
-    fenced blocks. Empty list means clean."""
-    hits = []
+def _scannable(text):
+    """Yield (lineno, line, scrubbed) for every line the tell scan is allowed to look at.
+
+    `scrubbed` is the line with inline-code spans removed - the form to MATCH against; `line` is
+    the original, for quoting back. Fenced blocks are skipped entirely. Both public scanners are
+    built on this so they can never disagree about what counts as code."""
     in_fence = False
     for n, line in enumerate(split_lines(text), 1):
         stripped = line.lstrip()
@@ -118,8 +120,29 @@ def find_tell_lines(text):
             continue
         if in_fence:
             continue
-        if _TELL.search(_INLINE.sub("", line)):
-            hits.append("%d: %s" % (n, line))
+        yield n, line, _INLINE.sub("", line)
+
+
+def find_tell_lines(text):
+    """Return ['<lineno>: <line>', ...] for lines carrying a tell OUTSIDE inline-code spans and
+    fenced blocks. Empty list means clean."""
+    return ["%d: %s" % (n, line) for n, line, scrubbed in _scannable(text) if _TELL.search(scrubbed)]
+
+
+def find_tell_codepoints(text):
+    """Return ['<lineno>: U+XXXX U+YYYY', ...] - the same hits as `find_tell_lines`, naming the
+    offending codepoints INSTEAD of quoting the line.
+
+    For text a caller read out of a FILE rather than text it was handed. A guard that reports
+    before its command has been approved must not quote file content back, because the path is
+    still only a string somebody named; a line number and a codepoint locate the tell just as
+    well and carry nothing the reader did not already have. Codepoints are deduplicated and
+    sorted so the same line always reports the same way."""
+    hits = []
+    for n, _line, scrubbed in _scannable(text):
+        found = _TELL.findall(scrubbed)
+        if found:
+            hits.append("%d: %s" % (n, " ".join("U+%04X" % cp for cp in sorted({ord(c) for c in found}))))
     return hits
 
 

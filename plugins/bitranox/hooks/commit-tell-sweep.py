@@ -66,17 +66,36 @@ def _cluster(tok, toks, i):
     return None, None, 0
 
 
+# A commit message file is a few lines. The cap bounds how much of a file this guard pulls in
+# before its command has been approved, and no real message comes near it.
+_MAX_MESSAGE_BYTES = 64 * 1024
+
+
 def _read_message_file(path):
-    """The file's text, or None when it cannot be read - a path we cannot open carries no tell."""
+    """The file's text, or None when it cannot be read - a path we cannot open carries no tell.
+
+    Decoded with errors="ignore", never "replace". U+FFFD is in `tell_chars.RANGES` on purpose -
+    it is mojibake and worth reporting - so "replace" MINTS the exact character the detector
+    hunts for, once per undecodable byte. Every file that is not UTF-8 was therefore reported as
+    carrying AI-writing tells and its commit blocked on a message naming a character the file
+    does not contain. "ignore" drops those bytes and still reports a U+FFFD that was genuinely
+    encoded in the file, which is the one that means something.
+    """
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")
+        with open(path, "rb") as fh:
+            raw = fh.read(_MAX_MESSAGE_BYTES)
     except OSError:
         return None
+    return raw.decode("utf-8", errors="ignore")
 
 
 def _messages(command, tool_name="Bash"):
-    """Inline commit/merge/tag messages in a git command: the values of -m/--message and the
-    contents of the file named by -F/--file. Empty unless the command is a git command.
+    """Inline commit/merge/tag messages in a git command, as (text, from_file) pairs: the values
+    of -m/--message, and the contents of the file named by -F/--file. Empty unless the command is
+    a git command.
+
+    `from_file` travels with the text because it decides how a hit may be REPORTED. A -m value is
+    text the caller typed and already has; a -F file's content is not.
 
     `tool_name` picks the splitting language. It matters here because this function RESOLVES a
     token - it opens the `-F` path - so a separator eaten by the wrong splitter leaves a path that
@@ -92,29 +111,29 @@ def _messages(command, tool_name="Bash"):
     while i < len(toks):
         t = toks[i]
         if t == "--message" and i + 1 < len(toks):
-            msgs.append(toks[i + 1])
+            msgs.append((toks[i + 1], False))
             i += 2
             continue
         if t == "--file" and i + 1 < len(toks):
             text = _read_message_file(toks[i + 1])
             if text is not None:
-                msgs.append(text)
+                msgs.append((text, True))
             i += 2
             continue
         if t.startswith("--message="):
-            msgs.append(t.split("=", 1)[1])
+            msgs.append((t.split("=", 1)[1], False))
         elif t.startswith("--file="):
             text = _read_message_file(t.split("=", 1)[1])
             if text is not None:
-                msgs.append(text)
+                msgs.append((text, True))
         elif t.startswith("-") and not t.startswith("--") and len(t) > 1:
             kind, value, extra = _cluster(t, toks, i)
             if kind == "msg":
-                msgs.append(value)
+                msgs.append((value, False))
             elif kind == "file":
                 text = _read_message_file(value)
                 if text is not None:
-                    msgs.append(text)
+                    msgs.append((text, True))
             i += extra
         i += 1
     return msgs
@@ -127,8 +146,10 @@ def main() -> int:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
     hits = []
-    for msg in _messages(command, event.get("tool_name") or "Bash"):
-        hits += tell_chars.find_tell_lines(msg)
+    for msg, from_file in _messages(command, event.get("tool_name") or "Bash"):
+        # A -F file's lines are never quoted back: this hook runs BEFORE the call is approved, so
+        # the path is still only a string the caller named, and exit 2 shows stderr to the model.
+        hits += tell_chars.find_tell_codepoints(msg) if from_file else tell_chars.find_tell_lines(msg)
     if not hits:
         return 0
     sys.stderr.write(
