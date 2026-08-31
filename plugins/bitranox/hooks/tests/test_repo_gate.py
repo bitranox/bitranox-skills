@@ -1414,6 +1414,35 @@ def test_changelog_accepts_the_older_dated_heading_shape(tmp_path):
     assert RG.check_changelog_current_version(tmp_path) == []
 
 
+def test_version_sync_fires_when_pyproject_and_manifest_disagree(tmp_path):
+    """The drift this check exists for, in the direction that actually happened.
+
+    A wheel built at one version shipping a CLI that reports another: every test passed,
+    because nothing compared the two files.
+    """
+    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json",
+          json.dumps({"name": "bitranox", "version": "1.0.0"}))
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "1.1.0"\n')
+    failures = RG.check_version_sync(tmp_path)
+    assert any("1.1.0" in f and "1.0.0" in f for f in failures)
+
+
+def test_version_sync_is_quiet_when_they_match(tmp_path):
+    """It must be able to report the other answer, or the test above asserts nothing."""
+    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json",
+          json.dumps({"name": "bitranox", "version": "2.3.4"}))
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "2.3.4"\n')
+    assert RG.check_version_sync(tmp_path) == []
+
+
+def test_version_sync_skips_a_repo_with_no_pyproject(tmp_path):
+    """Not every checkout is a Python distribution; absence is not a violation."""
+    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json",
+          json.dumps({"name": "bitranox", "version": "2.3.4"}))
+    assert RG.pyproject_version(tmp_path) is None
+    assert RG.check_version_sync(tmp_path) == []
+
+
 def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
     """The discriminating case against the diff-shaped predecessor.
 

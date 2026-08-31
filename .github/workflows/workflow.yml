@@ -1,0 +1,176 @@
+name: workflow
+
+# Release on green CI.
+#
+# The filename is load-bearing: the PyPI Trusted Publisher for bitranox-skills is bound to
+# `workflow.yml`, so the publish step must live in THIS file. Renaming it breaks OIDC auth
+# with an error that talks about claims rather than about the name.
+#
+# Triggered by ci completing, rather than by a push, so a red suite cannot publish. The
+# version comes from plugin.json, which is the marketplace's own source of truth, and the
+# whole job is a no-op when that version already has a tag - so an ordinary push that does
+# not bump ships nothing, and a re-run cannot double-publish.
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    # Gate on the CI conclusion. workflow_run fires on completion of any kind, so without
+    # this a FAILED ci run would trigger a release.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The sha ci actually passed on, not whatever master points at now: master can
+          # have moved since, and releasing a tree that was never tested is the failure
+          # this whole trigger exists to avoid.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Read version and decide whether it is new
+        id: read
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import json;print(json.load(open("plugins/bitranox/.claude-plugin/plugin.json"))["version"])')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse --verify -q "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already tagged; nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$version is new; releasing."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist
+
+      - name: Verify the wheel actually carries the skills
+        # A wheel that builds but ships no package data installs a CLI with nothing to
+        # install, and it fails at the user's first run rather than here.
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          skills = {n.split("/")[3] for n in names
+                    if n.startswith("bitranox_skills/plugin/skills/") and n.count("/") > 3}
+          manifest = "bitranox_skills/plugin/.claude-plugin/plugin.json" in names
+          print(f"skills={len(skills)} manifest={manifest}")
+          if not skills or not manifest:
+              sys.exit("wheel is missing bundled plugin data")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: [decide, build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      # Required for the PyPI Trusted Publisher (OIDC). Harmless when PYPI_API_TOKEN is set,
+      # in which case the token path below runs instead.
+      id-token: write
+    steps:
+      - name: Select PyPI auth method
+        id: auth
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "PYPI_API_TOKEN is set; publishing with the API token."
+            echo "method=token" >> "$GITHUB_OUTPUT"
+          else
+            echo "No PYPI_API_TOKEN; publishing via OIDC Trusted Publisher."
+            echo "method=oidc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (API token)
+        if: steps.auth.outputs.method == 'token'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          attestations: false
+          skip-existing: true
+
+      - name: Publish to PyPI (Trusted Publisher / OIDC)
+        if: steps.auth.outputs.method == 'oidc'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+          skip-existing: true
+
+  github_release:
+    needs: [decide, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      # The tag and the Release are both writes to the repository.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Tag and create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.decide.outputs.version }}
+          # Through env rather than interpolated into the script: a ${{ }} expansion is
+          # substituted as raw text before the shell parses the line, so an expression that
+          # ever carries anything but a sha becomes shell input.
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Tag the tested sha, not a branch tip, for the same reason the checkout does.
+          git tag "v$VERSION" "$TESTED_SHA"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" dist/* \
+            --title "v$VERSION" \
+            --notes "See [CHANGELOG.md](https://github.com/bitranox/bitranox-skills/blob/master/CHANGELOG.md) for what changed in $VERSION."

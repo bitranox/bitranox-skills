@@ -29,6 +29,52 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.293.0]
+
+### Added
+
+- **The skills ship as a Python package, installable with `uv tool install bitranox-skills`.**
+  A second distribution channel for machines where a plugin marketplace is unwanted or a pinned
+  version matters. The wheel carries the WHOLE plugin tree as package data - all 82 skills and the
+  hooks - because a wheel holding only the CLI would install a tool with nothing to install.
+  `bitranox-skills install` copies the skills into `~/.claude/skills/`, leaving anything already
+  there alone unless `--force` is passed; `--dry-run` reports the plan and touches nothing, not
+  even creating the destination; `--dest` targets elsewhere. `list` and `path` answer what is
+  bundled and where it lives.
+
+  Two things the package route deliberately does not do, both documented where a reader meets it:
+  the hooks stay dormant, because wiring them means writing somebody's `settings.json`, and there
+  is no auto-update. The CLI has NO third-party dependencies: the hooks run under a bare
+  interpreter with nothing to provision them, and a tool install that has to resolve something can
+  fail for reasons unrelated to the skills.
+
+- **`workflow.yml` releases on green CI.** It triggers on the `ci` workflow completing
+  successfully on master, so a red suite cannot publish, and it reads the version from
+  `plugin.json` - the marketplace's own source of truth. When that version is already tagged the
+  whole run is a no-op, so an ordinary push ships nothing and a re-run cannot double-publish. It
+  builds, verifies the wheel actually contains bundled skills and a manifest before uploading,
+  publishes to PyPI (Trusted Publisher via OIDC, falling back to `PYPI_API_TOKEN` when that secret
+  exists), then tags and creates the GitHub Release. Both the checkout and the tag use the sha CI
+  passed on rather than the branch tip, because master can move in between and releasing an
+  untested tree is the failure the trigger exists to prevent. The filename is load-bearing: the
+  Trusted Publisher is bound to `workflow.yml`, and renaming it breaks OIDC with an error about
+  claims rather than about the name.
+
+- **`check_version_sync` in the commit gate.** `pyproject.toml` and `plugin.json` are two copies of
+  one number - the build backend cannot read the manifest, and the manifest is what the CLI reports
+  at runtime - so they drift silently. Measured while building this: a wheel built at 5.293.0
+  shipped a CLI whose `--version` answered 5.292.0, with every test passing, because nothing
+  compared the two files.
+
+### Fixed
+
+- **`--version` no longer reads the bundled manifest on every invocation.** argparse's
+  `action="version"` takes its string EAGERLY at parser construction, so passing the version there
+  made every command - `--help` included - open the manifest, and every command in a source
+  checkout crash on a path that only exists in an installed copy. A lazy action defers the read to
+  when the flag is actually used, and a missing bundle now reports what to do instead of surfacing
+  a traceback. Caught by its own test rather than in review.
+
 ## [5.292.0]
 
 ### Changed

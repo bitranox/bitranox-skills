@@ -55,3 +55,12 @@ config-*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].
 
 # render-graphs.js writes its SVGs beside the skill it rendered; they are generated, not shipped.
 plugins/bitranox/skills/*/diagrams/
+
+# Python build artifacts (pyproject/hatchling); the wheel bundles the whole plugin
+# tree, so dist/ is large and is rebuilt by the release workflow on every version.
+dist/
+build/
+*.egg-info/
+# The package declares no dependencies and pyproject carries floating floors, so a
+# lock adds nothing to resolve and only goes stale; the house convention is to omit it.
+uv.lock

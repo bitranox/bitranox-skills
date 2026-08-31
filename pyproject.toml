@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bitranox-skills"
+# Kept equal to plugins/bitranox/.claude-plugin/plugin.json by repo-gate.py
+# (check_version_sync). The plugin manifest is the source of truth; this is the copy
+# the build backend can read, and the gate is what stops the two drifting.
+version = "5.293.0"
+description = "The bitranox Claude Code skill collection: 82 skills and 64 hooks, installable without the plugin marketplace."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "bitranox" }]
+keywords = ["claude-code", "claude", "anthropic", "agent-skills", "ai-agents"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+]
+# Deliberately none. The hooks run under a bare interpreter with nothing to provision
+# them, so they are stdlib-only by design; the CLI keeps that property so
+# `uv tool install` cannot fail on a resolve.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/bitranox/bitranox-skills"
+Repository = "https://github.com/bitranox/bitranox-skills"
+Changelog = "https://github.com/bitranox/bitranox-skills/blob/master/CHANGELOG.md"
+
+[project.scripts]
+bitranox-skills = "bitranox_skills.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bitranox_skills"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# The whole plugin ships as package data: the skills ARE the product, and a wheel
+# carrying only the CLI would install a tool with nothing to install.
+"plugins/bitranox" = "bitranox_skills/plugin"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/bitranox_skills",
+    "plugins/bitranox",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]

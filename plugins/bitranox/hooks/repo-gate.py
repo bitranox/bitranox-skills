@@ -274,6 +274,52 @@ def changelog_documents(root, version):
     return bool(re.search(r"^## \[" + re.escape(version) + r"\]\s*(?:-.*)?$", text, re.M))
 
 
+def pyproject_version(root):
+    """The version declared in pyproject.toml, or None when it cannot be read.
+
+    tomllib is 3.11+. This repo declares requires-python >=3.11 and its CI matrix starts
+    there, so the check is enforced everywhere it matters; a hook running under an older
+    interpreter on somebody's machine skips it rather than blocking their commit.
+    """
+    pp = root / "pyproject.toml"
+    if not pp.is_file():
+        return None
+    try:
+        import tomllib  # noqa: PLC0415 - stdlib only from 3.11, and this check is optional below
+    except ImportError:
+        return None
+    try:
+        return tomllib.loads(pp.read_text(encoding="utf-8")).get("project", {}).get("version")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def check_version_sync(root):
+    """pyproject.toml and plugin.json must name the SAME version.
+
+    They are two copies because the build backend cannot read the plugin manifest, and the
+    manifest is what the CLI reports at runtime. Left ungated they drift silently and the
+    failure is invisible until a user runs it: measured the day this was written, a wheel
+    built at 5.293.0 shipped a CLI whose --version answered 5.292.0, and every test passed,
+    because nothing compared the two.
+    """
+    declared = pyproject_version(root)
+    if declared is None:
+        return []
+    pj = root / "plugins" / "bitranox" / ".claude-plugin" / "plugin.json"
+    try:
+        manifest = json.loads(pj.read_text(encoding="utf-8")).get("version")
+    except Exception:  # noqa: BLE001
+        return []
+    if declared == manifest:
+        return []
+    return [
+        f"version drift: pyproject.toml says {declared}, plugin.json says {manifest}.",
+        "They ship as one artifact - the wheel takes pyproject, the CLI reports the",
+        "manifest - so a mismatch means the installed tool misreports its own version.",
+    ]
+
+
 def check_changelog_current_version(root):
     """The version plugin.json NAMES must have a CHANGELOG entry - whatever put it there.
 
@@ -1051,6 +1097,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     # answer it on a push - which is the case the maintainer-only placement cannot cover, and the
     # one that lets a version ship undocumented from a clone with no hooks enabled.
     failures += check_changelog_current_version(root)
+    failures += check_version_sync(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
     # version decision away from the merge. So enforce it ONLY in the local pre-commit

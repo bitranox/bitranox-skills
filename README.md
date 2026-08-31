@@ -28,6 +28,25 @@ run everywhere. Then enable auto-update once via `/plugin` -> **Marketplaces** -
 Skills are invoked as `/bitranox:<skill>`, and Claude picks one up automatically whenever a task
 matches its description.
 
+### Without the plugin marketplace
+
+The same skills also ship as a Python package, for a machine where you would rather not add a
+marketplace, or where you want a pinned version:
+
+```bash
+uv tool install bitranox-skills
+bitranox-skills install
+```
+
+That copies all 82 skills into `~/.claude/skills/`, where Claude Code picks them up as personal
+skills. It leaves anything already there alone unless you pass `--force`, `--dry-run` reports the
+plan without writing, and `--dest` targets a different directory. `bitranox-skills path` prints
+where the bundled copy lives, including the `hooks/` directory - the hooks need entries in your
+`settings.json`, which this command deliberately does not write for you.
+
+The package version and the plugin version are the same number, so `uv tool install
+bitranox-skills==5.293.0` and the marketplace's 5.293.0 are the same skills.
+
 ## The book
 
 | Chapter                               | What it answers                                                                      |

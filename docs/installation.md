@@ -16,6 +16,32 @@ a cross-project rule higher up. That only works if the skills and their hooks ru
 project. A project-scoped install would confine the capture gate and the layered memory to a
 single repo, and cross-project learning would be lost.
 
+### Alternative: install the skills as a Python package
+
+For a machine where a marketplace is unwanted, or where a pinned version matters, the same skills
+ship on PyPI:
+
+```bash
+uv tool install bitranox-skills
+bitranox-skills install
+```
+
+`install` copies all 82 skills into `~/.claude/skills/`, where Claude Code loads them as personal
+skills. Existing directories are left alone unless you pass `--force`; `--dry-run` prints the plan
+and writes nothing; `--dest` points somewhere other than the default. `bitranox-skills list` names
+what is bundled and `bitranox-skills path` prints where it lives.
+
+Two things this route does NOT give you, both of which the marketplace install does:
+
+- **The hooks stay dormant.** They need entries in `settings.json`, and this command does not
+  write your settings. `bitranox-skills path` prints the bundled `hooks/` directory so you can
+  wire them deliberately.
+- **No auto-update.** A new version arrives when you run `uv tool upgrade bitranox-skills` and
+  then `bitranox-skills install --force`, not on its own.
+
+The package version equals the plugin version, so `bitranox-skills==5.293.0` and the
+marketplace's 5.293.0 are the same skills.
+
 ## Enable auto-update (recommended)
 
 By default the marketplace updates only when you run `/plugin marketplace update bitranox-skills`.
