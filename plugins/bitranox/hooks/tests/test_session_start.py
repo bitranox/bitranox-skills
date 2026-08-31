@@ -469,3 +469,127 @@ def test_decoy_context_is_throttled_after_it_runs(tmp_path):
 def test_decoy_context_never_raises_on_a_broken_tree(tmp_path):
     """A hook must never wedge a session: an unresolvable project is an empty string, not a raise."""
     assert S.decoy_context(str(tmp_path / "does-not-exist")) == ""
+
+
+# --------------------------------------------------------------------------
+# OPEN-WORK.md: the standing backlog. The handover describes ONE MOMENT and is overwritten
+# wholesale, so anything that outlives the session sinks a little on every rewrite - measured,
+# five tracked items lost their size and then their heading across three rewrites in one day.
+# The backlog is a separate artifact, and SessionStart re-surfaces it WITHOUT consuming it,
+# ordered by RANK so a fresh micro-task cannot outrank a standing one by being recent.
+# --------------------------------------------------------------------------
+
+
+def _write_open_work(proj, text):
+    p = Path(proj) / "OPEN-WORK.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_open_work_items_are_surfaced_and_not_consumed(tmp_path, monkeypatch, capsys):
+    proj = tmp_path / "p1"
+    proj.mkdir()
+    ow = _write_open_work(proj, "# Open work\n\n"
+                          "- [ ] (2026-08-27) [1] USER: review all skills one by one"
+                          " | size: 88 of 135 targets | next: pick a slice\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "review all skills one by one" in ctx
+    assert "88 of 135 targets" in ctx
+    assert ow.exists() and "review all skills one by one" in ow.read_text(encoding="utf-8")
+
+
+def test_open_work_orders_by_rank_not_by_recency(tmp_path, monkeypatch, capsys):
+    # The whole point: a rank-1 item raised days ago must print ABOVE a rank-2 item raised today.
+    proj = tmp_path / "p2"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (2026-08-31) [2] FOUND: pad the backup counter\n"
+                           "- [ ] (2026-08-27) [1] USER: review all skills one by one\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert ctx.index("review all skills") < ctx.index("pad the backup counter")
+
+
+def test_open_work_reports_the_age_of_an_item(tmp_path, monkeypatch, capsys):
+    # Ageing is the property that was missing: a long-carried item has to become conspicuous.
+    import datetime
+    old = (datetime.date.today() - datetime.timedelta(days=4)).isoformat()
+    proj = tmp_path / "p3"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (%s) [1] USER: review all skills one by one\n" % old)
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert "4 days" in _ctx(out)
+
+
+def test_open_work_skips_closed_items(tmp_path, monkeypatch, capsys):
+    proj = tmp_path / "p4"
+    proj.mkdir()
+    _write_open_work(proj, "- [x] (2026-08-20) [1] USER: done thing | closed: shipped in 5.1.0\n"
+                           "- [ ] (2026-08-27) [2] USER: open thing\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "open thing" in ctx and "done thing" not in ctx
+
+
+def test_open_work_caps_the_list_and_counts_the_rest(tmp_path, monkeypatch, capsys):
+    # The essentials block is byte-budgeted, so the list is capped - but a hidden item must
+    # still be COUNTED, or capping recreates the sinking it exists to stop.
+    proj = tmp_path / "p5"
+    proj.mkdir()
+    lines = "".join("- [ ] (2026-08-27) [%d] FOUND: item number %d\n" % (i, i) for i in range(1, 9))
+    _write_open_work(proj, lines)
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "item number 1" in ctx
+    assert "item number 8" not in ctx
+    assert "3 more" in ctx
+
+
+def test_open_work_absent_is_silent(tmp_path, monkeypatch, capsys):
+    proj = tmp_path / "p6"
+    proj.mkdir()
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert "OPEN-WORK" not in _ctx(out)
+
+
+def test_open_work_with_no_open_items_is_silent(tmp_path, monkeypatch, capsys):
+    proj = tmp_path / "p7"
+    proj.mkdir()
+    _write_open_work(proj, "- [x] (2026-08-20) [1] USER: done | closed: shipped\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert "OPEN-WORK" not in _ctx(out)
+
+
+def test_open_work_block_stays_within_the_persist_budget(tmp_path, monkeypatch, capsys):
+    # Same 3500-byte budget as the essentials test above, proven with a POPULATED backlog
+    # rather than an empty one: an unbounded block would bury the essentials in a file again.
+    anchor, proj, _u = _anchor_tree_with_fact(tmp_path)
+    _write_audit(str(proj), "<SELF-IMPROVE-AUDIT>\nsome candidate misses\n</SELF-IMPROVE-AUDIT>\n")
+    lines = "".join(
+        "- [ ] (2026-08-27) [%d] USER: a standing item with a fairly long description number %d"
+        " | size: %d targets | open: not started | next: do the thing\n" % (i, i, i * 11)
+        for i in range(1, 13))
+    _write_open_work(proj, lines)
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert ctx and len(ctx.encode("utf-8")) < 3500
+
+
+def test_open_work_accepts_an_uncertain_date(tmp_path, monkeypatch, capsys):
+    # The skill tells a writer with no real first-raised date to write today's with a "?" rather
+    # than invent one. A parser that drops that line would make the honest form the invisible one.
+    proj = tmp_path / "p8"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (2026-08-31?) [1] FOUND: date not known | open: first seen here\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert "date not known" in _ctx(out)

@@ -852,7 +852,8 @@
   "reports",
   "handover",
   "threshold",
-  "crossed"
+  "crossed",
+  "open-work.md"
  ],
  "meta-dream-crosstree": [
   "dream",

@@ -273,6 +273,10 @@ def _offer(detail) -> str:
         "invoke bitranox:meta-context-watcher, which says what the file must contain. If they "
         "decline, carry on - the next ask waits until context has grown another tenth of the "
         "window, so declining costs one interruption, not a stream of them."
+        "\n\n"
+        "The handover is written by OVERWRITING the outgoing one, and it is gitignored, so anything "
+        "still open that you do not first carry into `OPEN-WORK.md` is gone with no earlier version "
+        "to recover it from. Reconcile before you overwrite, not after."
     ) % {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
 
 

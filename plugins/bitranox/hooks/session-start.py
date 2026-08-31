@@ -17,8 +17,10 @@ json.dumps does the escaping (newlines/quotes), so no hand-rolled JSON escaping.
 Pure standard library. Every failure path emits nothing and exits 0, so a broken
 or slow hook never blocks or delays a session.
 """
+import datetime
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -113,6 +115,72 @@ def contrib_context(proj):
                 "that have NOT shipped yet. They persist until shipped, so pick them up when the "
                 "work suits (route via bitranox:meta-self-improve -> references/upstream-propagation.md; "
                 "a dream drains the queue once they land):\n%s" % (len(recs), "\n".join(lines)))
+    except Exception:  # noqa: BLE001 - never wedge a session start
+        return None
+
+
+#: One open backlog line: "- [ ] (YYYY-MM-DD) [rank] ORIGIN: text | field: value | ..."
+#: The trailing "?" is the honest form for a date nobody recorded, so it must parse: dropping it
+#: would make the admitted guess invisible and the invented date the only one that shows.
+_OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\((\d{4})-(\d{2})-(\d{2})\??\)\s*\[(\d+)\]\s*(\S.*)")
+_OPEN_WORK_MAX_ITEMS = 5     # the essentials block is byte-budgeted; see the size test
+_OPEN_WORK_HEAD_CHARS = 96
+
+
+def _parse_open_work(text, today=None):
+    """Open items from OPEN-WORK.md as (rank, raised_date, text), ordered by RANK then age.
+
+    Ordering by rank rather than by file order is the whole point: the failure this file exists
+    to stop is a fresh micro-task outranking a standing one purely by being recent.
+    """
+    today = today or datetime.date.today()
+    items = []
+    for raw in text.splitlines():
+        m = _OPEN_WORK_RX.match(raw.strip())
+        if not m:
+            continue                                  # closed "[x]" items and prose both land here
+        try:
+            raised = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:                            # a typo'd date must not drop the item
+            raised = today
+        items.append((int(m.group(4)), raised, m.group(5).strip()))
+    items.sort(key=lambda it: (it[0], it[1]))
+    return items
+
+
+def _age(raised, today):
+    days = (today - raised).days
+    if days <= 0:
+        return "raised today"
+    return "raised %d day%s ago" % (days, "" if days == 1 else "s")
+
+
+def open_work_context(proj, today=None):
+    """Surface the STANDING backlog, ranked, and - like the contribution queue - do NOT consume it.
+
+    `handover.md` describes one moment and is overwritten wholesale, so anything outliving the
+    session survives only by being retyped from memory, and shrinks on every rewrite: measured,
+    five tracked items lost their sizes and then their heading across three rewrites in one day.
+    This block is the durable half, and it prints rank-first so age cannot be mistaken for
+    priority. Fail-open: any problem reading or parsing it emits nothing.
+    """
+    try:
+        today = today or datetime.date.today()
+        raw = (Path(proj) / "OPEN-WORK.md").read_text(encoding="utf-8", errors="replace")
+        items = _parse_open_work(raw, today)
+        if not items:
+            return None
+        shown = items[:_OPEN_WORK_MAX_ITEMS]
+        lines = ["- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])
+                 for rank, raised, what in shown]
+        hidden = len(items) - len(shown)
+        if hidden:
+            lines.append("- ... and %d more in OPEN-WORK.md" % hidden)
+        return ("%d OPEN-WORK ITEM(S) - the standing backlog at OPEN-WORK.md, ordered by RANK and "
+                "NOT by what was touched last. It persists until an item is closed there, so "
+                "reading it does not clear it. Whatever you do next should be the top-ranked item, "
+                "or you should say plainly why a lower-ranked one goes first:\n%s"
+                % (len(items), "\n".join(lines)))
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
 
@@ -278,7 +346,8 @@ def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    parts = [retrieval_context(proj), audit_context(proj), contrib_context(proj), decoy_context(proj)]
+    parts = [retrieval_context(proj), audit_context(proj), open_work_context(proj),
+             contrib_context(proj), decoy_context(proj)]
     if _nudges_on():  # the user can switch session nudges off (recorded in config)
         parts += [dream_nudge(proj), newproject_nudge(proj)]
     ctx = [p for p in parts if p]

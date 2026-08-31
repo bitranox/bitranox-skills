@@ -29,6 +29,50 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.0]
+
+### Added
+
+- **The standing backlog is its own file, and a session cannot start without seeing it.**
+  `handover.md` describes ONE moment and is replaced wholesale every time, so anything that
+  outlived the session survived only by being retyped from the writing session's memory of it,
+  once per session. That re-encoding is weighted by how recently an item was TOUCHED, not by how
+  big it is or who asked for it, so an untouched item lost one attribute per rewrite: first its
+  method, then its count, then its own heading, until it was a clause in a sentence under a
+  heading that reads as decided. Measured across three rewrites in one day in this repo, five
+  tracked items - an 88-target audit the user had asked for, a reviewer pass, 206 unframed memory
+  bodies, 57 flagged candidates and 5 queued contributions - went from named bullets with counts
+  to absent, with no line recording that any had been closed.
+
+  `meta-context-watcher` now owns two artifacts with opposite lifetimes. `OPEN-WORK.md` is the
+  ranked standing backlog, edited line by line and never rewritten; the handover keeps the moment
+  and points at it. A new procedure step reconciles the outgoing handover into the backlog BEFORE
+  overwriting it, because what is not carried across goes silently - a missing item looks exactly
+  like a closed one, and nobody diffs a handover against its predecessor looking for absences.
+
+- **`session-start.py` surfaces the backlog every session, ranked and aged, without consuming it.**
+  The same property that makes the contribution queue survive a session end. Rank ordering is the
+  point: a `USER:` item outranks every `FOUND:` one whatever the counts say, a user-deferred item
+  still outranks internal work, and size is a tiebreak rather than the first key - ranking by size
+  alone put a 206-item internal sweep above the user's own 88-target request in testing, which is
+  the same failure in a new costume. The block is capped at five items and counts the rest, so the
+  essentials context stays inside its byte budget: 2058 bytes against 3500 with a 12-item backlog.
+
+- **`The exact next action` must now be the top-ranked open item, or say plainly why not.**
+  Recency is not a reason, and the four excuses that get written instead are named in the text.
+
+### Changed
+
+- **`Deliberately not done` splits into `Decided against, and why` and `Still open, untouched`.**
+  One heading was carrying both a settled decision and an untouched item, which is what let work
+  nobody had decided about sit under a heading that reads as decided.
+
+- **`handover.md`, `OPEN-WORK.md` and the review log are no longer gitignored.** Tracking them
+  costs one diff per session and buys a history for the one file that is destroyed on purpose
+  every time. The skill now says to check for secrets, internal hostnames and private addresses
+  before committing either, because a tracked file in a public repo publishes all three
+  permanently.
+
 ## [5.296.2]
 
 ### Fixed
