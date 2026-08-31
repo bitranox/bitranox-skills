@@ -86,3 +86,28 @@ and re-surfaced every session by `session-start.py`.
       3500-byte budget.
 - [x] No session narrative, operator instructions or scratch paths in the skill or this artifact.
 - [x] No address, MAC, hostname or private path added to the skill.
+
+## Follow-up in the same day, v5.297.3
+
+Two calls put to the user in a decision review after the first release, plus one defect fixed
+without asking.
+
+- [x] **Ranks go in tens.** Contiguous integers made every mid-list insertion renumber the tail,
+      which puts a reorder into the diff of an unrelated change and collides two sessions editing
+      the file on lines neither meant to touch. Alternatives offered: keep contiguous, or drop the
+      number and use file order. The user chose tens.
+- [x] **The reconcile step stays prose, unenforced.** Alternatives offered: a Stop-hook gate
+      comparing the outgoing handover against the backlog, or removing the handover's still-open
+      section entirely. Left as prose because the failure needed BOTH halves to be invisible and
+      the read side is now covered; recorded as backlog item 135 so the assumption gets tested
+      against real handovers rather than assumed.
+- [x] **The parser accepted only one of the two honest undated forms.** A GREEN arm wrote
+      `(unknown)` unprompted in preference to the prescribed `(2026-08-31?)`, and the regex matched
+      neither that nor anything else non-ISO, so the admitted-unknown line vanished from the
+      injected block while an INVENTED date would have shown. Both forms parse now; an undated item
+      sorts last within its rank on a `date.max` sentinel because it makes no age claim. Two tests,
+      RED-verified against the previous regex.
+- [x] Two claims in the skill went stale within the session and are corrected: it described
+      `OPEN-WORK.md` as gitignored after the user reversed that, and it still said `size` is "the
+      count that decides rank", which is the exact reading that made a test arm rank a 206-item
+      internal sweep above the user's own request.

@@ -120,9 +120,11 @@ def contrib_context(proj):
 
 
 #: One open backlog line: "- [ ] (YYYY-MM-DD) [rank] ORIGIN: text | field: value | ..."
-#: The trailing "?" is the honest form for a date nobody recorded, so it must parse: dropping it
-#: would make the admitted guess invisible and the invented date the only one that shows.
-_OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\((\d{4})-(\d{2})-(\d{2})\??\)\s*\[(\d+)\]\s*(\S.*)")
+#: The date field is taken loosely and parsed after, because every honest form for "nobody
+#: recorded this" must survive - a trailing "?" and the bare word "unknown" both. A parser that
+#: drops them makes the admitted guess invisible and leaves only the invented date showing.
+_OPEN_WORK_RX = re.compile(r"-\s*\[ \]\s*\(([^)]*)\)\s*\[(\d+)\]\s*(\S.*)")
+_ISO_DATE_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})\??$")
 _OPEN_WORK_MAX_ITEMS = 5     # the essentials block is byte-budgeted; see the size test
 _OPEN_WORK_HEAD_CHARS = 96
 
@@ -139,16 +141,28 @@ def _parse_open_work(text, today=None):
         m = _OPEN_WORK_RX.match(raw.strip())
         if not m:
             continue                                  # closed "[x]" items and prose both land here
-        try:
-            raised = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:                            # a typo'd date must not drop the item
-            raised = today
-        items.append((int(m.group(4)), raised, m.group(5).strip()))
-    items.sort(key=lambda it: (it[0], it[1]))
+        raised = _parse_raised(m.group(1))
+        items.append((int(m.group(2)), raised, m.group(3).strip()))
+    # An undated item sorts last within its rank: it makes no age claim, so it cannot displace one
+    # that does. datetime.date.max is the sentinel because None will not compare against a date.
+    items.sort(key=lambda it: (it[0], it[1] or datetime.date.max))
     return items
 
 
+def _parse_raised(token):
+    """The date a line claims, or None when it admits it does not have one."""
+    m = _ISO_DATE_RX.match(token.strip())
+    if not m:
+        return None                                   # "unknown", empty, anything unparseable
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:                                # a typo'd date must not drop the item
+        return None
+
+
 def _age(raised, today):
+    if raised is None:
+        return "date unknown"
     days = (today - raised).days
     if days <= 0:
         return "raised today"

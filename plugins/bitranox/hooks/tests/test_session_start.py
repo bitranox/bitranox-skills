@@ -593,3 +593,28 @@ def test_open_work_accepts_an_uncertain_date(tmp_path, monkeypatch, capsys):
     root = make_plugin_root(tmp_path)
     rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
     assert "date not known" in _ctx(out)
+
+
+def test_open_work_accepts_an_unknown_date(tmp_path, monkeypatch, capsys):
+    # "(unknown)" is what an agent writes unprompted when no date was recorded - measured in a
+    # test arm that reached for it over the prescribed "?" form. A parser that drops it makes the
+    # honest line the invisible one, which is the failure this file exists to stop.
+    proj = tmp_path / "p9"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (unknown) [1] FOUND: nobody recorded when this started\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert "nobody recorded when this started" in ctx
+    assert "date unknown" in ctx
+
+
+def test_open_work_sorts_a_dated_item_above_an_undated_one_of_equal_rank(tmp_path, monkeypatch, capsys):
+    proj = tmp_path / "p10"
+    proj.mkdir()
+    _write_open_work(proj, "- [ ] (unknown) [1] FOUND: undated item\n"
+                           "- [ ] (2026-08-27) [1] FOUND: dated item\n")
+    root = make_plugin_root(tmp_path)
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    ctx = _ctx(out)
+    assert ctx.index("dated item") < ctx.index("undated item")

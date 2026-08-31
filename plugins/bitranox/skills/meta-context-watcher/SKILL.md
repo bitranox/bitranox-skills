@@ -44,16 +44,20 @@ been closed.
 | decisions this session took, with the reason | work that is blocked, and on whom               |
 | the one next action                          | the ranked list that next action is drawn from  |
 
-`OPEN-WORK.md` sits at the repo root, gitignored, one item per line:
+`OPEN-WORK.md` sits at the repo root, tracked, one item per line:
 
 ```
 - [ ] (YYYY-MM-DD) [rank] ORIGIN: what it is | size: how much is left | open: why | next: the action
 ```
 
 The date is when it was FIRST raised and never changes. `ORIGIN` is `USER:` (their own words where
-they gave any) or `FOUND:`. `size` is the count that decides rank, and it is the field that
-disappears first when a list is retyped, so it is not optional. Closing an item is `- [x]` plus
+they gave any) or `FOUND:`. `size` is how much is left; it is the field that disappears first when
+a list is retyped, and it breaks ties within an origin, so it is not optional. It is NOT the first
+ranking key - see below, where reading it as one is a named failure. Closing an item is `- [x]` plus
 `| closed: <reason>`; the line stays. A SessionStart hook prints the top ranks with their age.
+
+**Rank in TENS** - 10, 20, 30. An insertion is then a new number instead of a renumbering of
+every line below it, which keeps a reorder out of the diff of an unrelated change.
 
 **How rank is decided, in this order:**
 
@@ -73,8 +77,9 @@ disappears first when a list is retyped, so it is not optional. Closing an item 
    third puts the item in a category nothing sorts.
 
 **Never infer a date you do not have.** When the source does not say when an item was first
-raised, write TODAY's date with a question mark - `(2026-08-31?)` - and say `first seen here` in
-the `open:` field. An estimated date is worse than an admitted unknown: age is the entire signal
+raised, write TODAY's date with a question mark - `(2026-08-31?)` - or the bare word
+`(unknown)`, and say `first seen here` in the `open:` field. Both parse, and an undated item
+sorts last within its rank because it makes no age claim. An estimated date is worse than an admitted unknown: age is the entire signal
 that makes a long-carried item conspicuous, and a plausible guess silently resets it. The same
 goes for `size`: `size: unknown` is a usable line, an invented count is not.
 

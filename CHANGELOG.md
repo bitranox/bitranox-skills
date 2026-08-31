@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.297.3]
+
+### Fixed
+
+- **`OPEN-WORK.md` silently dropped every honest "I do not know when this started".** The skill
+  tells a writer with no recorded date to admit it rather than invent one, but the parser accepted
+  only `(2026-08-31?)`, so the other natural form - the bare word `(unknown)`, which a test arm
+  reached for unprompted over the prescribed one - matched nothing and the line vanished from the
+  injected block. That made the honest form the invisible one, which is the exact failure the file
+  exists to stop. Both forms parse now, and an undated item sorts last within its rank because it
+  makes no age claim.
+
+### Changed
+
+- **Ranks go in tens.** Contiguous integers made every mid-list insertion renumber the whole tail,
+  so a reorder landed in the diff of an unrelated change and two sessions editing the file
+  collided on lines neither meant to touch.
+
 ## [5.297.2]
 
 ### Fixed
