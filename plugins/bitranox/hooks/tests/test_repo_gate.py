@@ -1348,3 +1348,80 @@ def test_version_bumped_fires_when_a_plugin_file_changes_without_a_bump(tmp_path
     assert any("still 1.0.0" in f for f in RG.check_version_bumped(tmp_path))
     (tmp_path / pj).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
     assert RG.check_version_bumped(tmp_path) == []
+
+
+PJ_REL = "plugins/bitranox/.claude-plugin/plugin.json"
+
+
+def bumped_repo(tmp_path, changelog):
+    """A repo whose plugin.json is bumped past origin/master, carrying `changelog` as its
+    CHANGELOG.md. Pass None to ship no changelog at all."""
+    files = {PJ_REL: '{"version": "1.0.0"}\n', "plugins/bitranox/hooks/x.py": "x = 1\n"}
+    if changelog is not None:
+        files["CHANGELOG.md"] = changelog
+    git_repo_with_origin(tmp_path, files)
+    (tmp_path / PJ_REL).write_text('{"version": "1.0.1"}\n', encoding="utf-8")
+    return tmp_path
+
+
+def test_changelog_entry_fires_when_a_bump_ships_without_an_entry(tmp_path):
+    """The motivating case: a version reaches installs with nothing recorded about it.
+
+    This is the direction that actually happened - 153 shipped versions had no entry when the
+    check was written - so it is the one that must stay covered.
+    """
+    bumped_repo(tmp_path, "# Changelog\n\n## [1.0.0]\n\n- the previous one\n")
+    failures = RG.check_changelog_entry(tmp_path)
+    assert any("1.0.1" in f and "no `## [1.0.1]` heading" in f for f in failures)
+
+
+def test_changelog_entry_is_quiet_once_the_entry_exists(tmp_path):
+    """The check must be able to report the other answer, or it asserts nothing above."""
+    bumped_repo(tmp_path, "# Changelog\n\n## [1.0.1]\n\n- the new one\n\n## [1.0.0]\n")
+    assert RG.check_changelog_entry(tmp_path) == []
+
+
+def test_changelog_entry_accepts_the_older_dated_heading_shape(tmp_path):
+    """Two heading shapes ship in the real file: `## [5.290.0]` and `## [5.207.0] - 2026-08-16`.
+
+    264 of the historical headings carry the dated suffix. A matcher built only against the
+    current shape passes every recent version and rejects every old one, so it would fire on a
+    correct entry the day anyone wrote one in the older style.
+    """
+    bumped_repo(tmp_path, "# Changelog\n\n## [1.0.1] - 2026-08-31\n\n- dated shape\n")
+    assert RG.check_changelog_entry(tmp_path) == []
+
+
+def test_changelog_entry_does_not_fire_without_a_bump(tmp_path):
+    """No bump means nothing shipped, and check_version_bumped owns that verdict. Without this
+    the check would demand an entry for the version already on origin/master, on every commit."""
+    git_repo_with_origin(tmp_path, {PJ_REL: '{"version": "1.0.0"}\n',
+                                    "CHANGELOG.md": "# Changelog\n"})
+    (tmp_path / "plugins" / "bitranox").mkdir(parents=True, exist_ok=True)
+    assert RG.check_changelog_entry(tmp_path) == []
+
+
+def test_changelog_entry_reports_a_missing_changelog_file(tmp_path):
+    """A tree with no CHANGELOG.md at all is a violation, not a skip - otherwise deleting the
+    file is the way to silence the check."""
+    bumped_repo(tmp_path, None)
+    assert any("no CHANGELOG.md" in f for f in RG.check_changelog_entry(tmp_path))
+
+
+def test_changelog_entry_skips_when_there_is_no_origin_master(tmp_path):
+    """Fail-open where the gate cannot answer: being unable to read origin/master is not
+    evidence of a violation, and a contributor clone may legitimately lack the ref."""
+    git_repo(tmp_path, {PJ_REL: '{"version": "1.0.1"}\n', "CHANGELOG.md": "# Changelog\n"})
+    assert RG.check_changelog_entry(tmp_path) == []
+
+
+def test_changelog_heading_matcher_rejects_a_version_that_merely_appears(tmp_path):
+    """A prose mention of the version is not an entry.
+
+    `changelog_documents` anchors on a heading, so a body line naming 1.0.1 - which is what a
+    "still missing" note looks like - must not satisfy the requirement it is complaining about.
+    """
+    body = "# Changelog\n\n## [1.0.0]\n\n- 1.0.1 is still missing and not covered here\n"
+    bumped_repo(tmp_path, body)
+    assert RG.changelog_documents(tmp_path, "1.0.1") is False
+    assert RG.check_changelog_entry(tmp_path) != []

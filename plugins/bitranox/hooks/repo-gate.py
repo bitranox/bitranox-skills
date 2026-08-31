@@ -30,6 +30,10 @@ Checks:
                     match that twin apart from the documented divergences. Local only,
                     because the twins are sibling repos that a CI clone does not have.
                     Run `repo-gate.py --mirrors` to audit every pair, changed or not.
+  7. changelog    - HOOK MODE ONLY: a bumped plugin.json version must arrive with its
+                    `## [version]` CHANGELOG.md heading in the SAME commit. Paired with
+                    version-bump: that one makes a shipped change carry a version, this one
+                    makes a version carry its entry.
 
 Pure standard library; shells out to git and pytest via subprocess.
 """
@@ -207,26 +211,43 @@ def check_duplicate_basenames(root):
     return lines
 
 
-def check_version_bumped(root):
+CHANGELOG_NAME = "CHANGELOG.md"
+
+
+def _plugin_version_pair(root):
+    """`(old, new)` plugin.json version across origin/master, or None when undecidable.
+
+    None means "cannot answer" - no origin/master to compare against, or a manifest that will
+    not parse on either side - and every caller treats that as skip-do-not-block, which is the
+    gate's standing rule: being unable to read something is not evidence of a violation.
+    """
     rc, _, _ = _git(root, "rev-parse", "--verify", "origin/master")
     if rc != 0:
-        return []  # no origin/master reference available -> skip, do not block
-    _, changed = _git_paths(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
-    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
-    plugin_changed = bool(changed) or bool(untracked)
-    if not plugin_changed:
-        return []
+        return None
     pj_rel = "plugins/bitranox/.claude-plugin/plugin.json"
     try:
         new_v = json.loads((root / pj_rel).read_text(encoding="utf-8")).get("version")
     except Exception:  # noqa: BLE001
-        return []
+        return None
     rc, old_blob, _ = _git(root, "show", f"origin/master:{pj_rel}")
     if rc != 0:
-        return []
+        return None
     try:
         old_v = json.loads(old_blob).get("version")
     except Exception:  # noqa: BLE001
+        return None
+    return old_v, new_v
+
+
+def check_version_bumped(root):
+    pair = _plugin_version_pair(root)
+    if pair is None:
+        return []  # no origin/master reference available -> skip, do not block
+    old_v, new_v = pair
+    _, changed = _git_paths(root, "diff", "--name-only", "origin/master", "--", "plugins/bitranox")
+    _, untracked = _git_paths(root, "ls-files", "--others", "--exclude-standard", "plugins/bitranox")
+    plugin_changed = bool(changed) or bool(untracked)
+    if not plugin_changed:
         return []
     if new_v == old_v:
         return [
@@ -234,6 +255,49 @@ def check_version_bumped(root):
             "Bump the version (the marketplace is append-only; updates ship via a version bump).",
         ]
     return []
+
+
+def changelog_documents(root, version):
+    """Whether CHANGELOG.md carries a heading for `version`; None when there is no changelog.
+
+    Two heading shapes ship in this file - the current `## [5.290.0]` and the older
+    `## [5.207.0] - 2026-08-16` - so match the version INSIDE the brackets and allow a dated
+    suffix. Looking for one literal string would pass every recent version and fail every
+    historical one, which is the kind of check that reads as working because the cases you
+    happen to test are all one shape.
+    """
+    try:
+        text = (root / CHANGELOG_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return bool(re.search(r"^## \[" + re.escape(version) + r"\]\s*(?:-.*)?$", text, re.M))
+
+
+def check_changelog_entry(root):
+    """A bumped version must arrive WITH its CHANGELOG entry, in the same commit.
+
+    Maintainer-only for the same reason version-bump is (see run_checks). The bump is the act
+    that makes a version reach installs, so the entry has to land with it: written afterwards it
+    is never written at all, or it is reconstructed months later from a diff by whoever notices
+    the hole. Measured on this repo the day the check was added: 153 shipped versions had no
+    entry, and the file's own two "still missing" notes had themselves gone stale.
+    """
+    pair = _plugin_version_pair(root)
+    if pair is None:
+        return []
+    old_v, new_v = pair
+    if new_v == old_v:
+        return []  # no bump -> nothing shipped, and check_version_bumped owns that verdict
+    documented = changelog_documents(root, new_v)
+    if documented is None:
+        return [f"plugin.json is bumped to {new_v} but there is no {CHANGELOG_NAME} to record it."]
+    if documented:
+        return []
+    return [
+        f"plugin.json is bumped to {new_v} but {CHANGELOG_NAME} has no `## [{new_v}]` heading.",
+        "Add the entry in THIS commit. A version reaches installs the moment it is pushed, and",
+        "an entry deferred to later is reconstructed from a diff by whoever notices it missing.",
+    ]
 
 
 def check_skills_index(root):
@@ -982,6 +1046,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     # push), never in CI on a contributor's PR.
     if not ci:
         failures += check_version_bumped(root)
+        failures += check_changelog_entry(root)
         failures += check_skill_review(root)
         failures += check_skill_mirrors(root)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway

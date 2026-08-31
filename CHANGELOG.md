@@ -17,6 +17,46 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## [5.291.0]
+
+### Added
+
+- **The commit gate refuses a version bump that arrives without its CHANGELOG entry.**
+  `repo-gate.py` gains `check_changelog_entry`, sitting beside `check_version_bumped` and
+  maintainer-only for the same reason: it runs in the local pre-commit and pre-push hook and never
+  in CI on a contributor's PR, because an entry is a merge/release concern and forcing one on every
+  PR causes the conflicts a forced bump does. When `plugin.json` moves past `origin/master`,
+  `CHANGELOG.md` must carry a `## [<new version>]` heading in the SAME commit.
+
+  The pairing is the point: `check_version_bumped` makes a shipped change carry a version, and this
+  makes a version carry its entry. Neither alone closes the hole. The versioning rule at the top of
+  this file has asked for both since it was written, and prose is exactly what 153 versions got
+  past - a rule with no gate behind it is a rule that holds only while somebody remembers it.
+
+  Two heading shapes ship in this file, the current `## [5.290.0]` and the older
+  `## [5.207.0] - 2026-08-16` that 264 headings carry, so the matcher reads the version from inside
+  the brackets and allows a dated tail; built against the current shape alone it would reject every
+  historical one. It anchors on a heading, so a body line merely naming the version - which is what
+  a "still missing" note looks like - does not satisfy the requirement it is complaining about.
+
+### Fixed
+
+- **Five shipped versions had no entry and now have one:** `5.268.0`, `5.269.1`, `5.270.0`,
+  `5.270.1` and `5.271.0`, reconstructed from each bump commit and the diff it carried, describing
+  what changed for a reader of the skill rather than restating the commit subject. `5.269.1` was on
+  no list of known gaps; it surfaced only because `5.270.0` opens by overturning the verdict
+  recorded in it, which would otherwise have pointed at a version this file never mentioned.
+
+- **The two "versions with no entry" notes no longer name versions that are now present.** The note
+  under `5.270.2` and the closing line of the `5.269.0` backfill both still listed `5.268.0` as
+  missing. Both are statements about this file's completeness rather than about what those releases
+  shipped, so leaving them would have the file contradict itself two screens further down.
+
+- **The real size of the gap is now recorded: 153 versions remain undocumented.** Measured by
+  comparing every value `plugin.json` has ever held against the headings in this file, rather than
+  by reading the notes, which between them named eight and so left the file reading as very nearly
+  complete. The remainder are older, back to `5.18.0`, and are not backfilled here.
+
 ## [5.290.0]
 
 ### Fixed
@@ -1045,6 +1085,44 @@ Rank 7 continued - four more hooks read DATA as if the shell would run it.
   arm and leaves the Bash arm passing, so the pair discriminates rather than both keying on one
   thing.
 
+## [5.271.0]
+
+### Fixed
+
+- **`arbitrary-sleep-nudge` keys its polling exemption on the loop BODY, not on a keyword found
+  anywhere in the command.** The exemption was a command-wide keyword search, so a bare `done`,
+  `while` or `until` anywhere in the text silenced the nudge, a comment included. That covered the
+  exact shape the hook exists to catch: `sleep 300 && echo done`, `sleep 120; echo done` and
+  `sleep 900 && tail build.log | grep -i done` were all silent. The docstring had always scoped the
+  exemption to a `sleep` INSIDE a `do`/`done` body; the code now agrees, matching the keywords only
+  at a command position so `/tmp/done` is not read as a terminator, and tracking nesting. A `sleep`
+  sitting outside a real loop is no longer exempted by it.
+
+  Priced by replaying the real transcript corpus, control arm first: 185 to 221 firings over 67,533
+  Bash commands (0.274% to 0.327%). Six sampled new firings were all genuine clock waits, which
+  shows the shapes it now catches and not a proportion. The harness precision figure is not
+  meaningful for this guard, which fires on commands that succeed. Found by the script-wave audit
+  (hook slice, reviewer report 1 of 47); all four defects were confirmed against the live tree
+  before acting.
+
+- **The detector reads `Start-Sleep`, so the hook is no longer silent on Windows.** `hooks.json`
+  registers it on a `Bash|PowerShell` matcher while the detector knew only the POSIX spelling, so
+  on Windows it ran and found nothing, which is as silent as never firing. It now handles
+  `-Seconds`/`-s` and `-Milliseconds`, the latter not being seconds and so not scaled as if it
+  were. Brace-block bodies are exempted alongside `do`/`done`, because PowerShell paces a poll with
+  a brace block; without that, teaching the detector `Start-Sleep` would have begun nudging every
+  Windows polling loop.
+
+- **An absurd sleep literal still nudges.** `int(longest)` raised `OverflowError` once a literal
+  overflowed float to `inf`, and the top-level fail-open turned that into a silently lost nudge.
+  The value is formatted instead.
+
+### Added
+
+- **A direct envelope test, and the parity `TRIGGERS` entry that drives `main()`.** No test reached
+  `main()`, so the stdin parse, the tool gate and the envelope keys all shipped unexercised. The
+  parity entry runs it through the real shim on both tool arms with the vacuity guard.
+
 ## [5.270.2]
 
 ### Fixed
@@ -1057,9 +1135,63 @@ Rank 7 continued - four more hooks read DATA as if the shell would run it.
   no evidence that the row's wording was shaped by watching an agent fail without it.
 
 - Versions with no entry, recorded so this file does not read as complete: 5.254.0 through 5.262.0
-  were backfilled under 5.269.0, and 5.264.0, 5.265.0, 5.265.1, 5.265.2, 5.266.1, 5.268.0, 5.270.0
-  and 5.270.1 are still missing. The last two shipped while this entry was being written and belong
-  to whoever made them.
+  were backfilled under 5.269.0, and 5.268.0, 5.269.1, 5.270.0, 5.270.1 and 5.271.0 have since been
+  backfilled into their own slots. 5.264.0, 5.265.0, 5.265.1, 5.265.2 and 5.266.1 are still missing,
+  as are 148 older ones: comparing every value `plugin.json` has ever held against the headings in
+  this file puts the remaining total at 153.
+
+## [5.270.1]
+
+### Changed
+
+- **The 5.270.0 matrix is completed on sonnet, the tier that writes handovers in live sessions.**
+  5.270.0 was verified on two haiku cells. The defect is closed on both tiers: every cell now names
+  a file the reader can find, and the bare-name-for-another-session's-file case does not recur. The
+  tiers pick different path FORMS for the same situation, relative against absolute-from-home, both
+  unambiguous, so the form stays judgment rather than something step 6 specifies.
+
+- **An accepted drift is recorded rather than hidden.** The over-trigger control, that an
+  unambiguous single checkout must still send the bare `handover.md`, passes on haiku and FAILS on
+  sonnet, which sends the full path. Accepted: the failure modes are asymmetric, a
+  longer-but-correct path is a blemish where naming another session's file is a bug, and the
+  wording that would restore the bare name is the wording that produced that bug. The template is
+  therefore less literal in practice than step 6 implies, and the checklist now says so. No skill
+  text changed.
+
+## [5.270.0]
+
+### Fixed
+
+- **`meta-context-watcher` step 6 states that the filename in its nudge template is a path slot,
+  not a literal.** This overturns the verdict recorded in 5.269.1, which rested on two sonnet arms
+  and said the verbatim template does not get parroted. Re-run on haiku, a more literal tier, the
+  worktree arm sent a bare "Handover written to `handover.md`" for a file inside a worktree while
+  the main checkout held its own, naming somebody else's file. Three of four arms adapted, which is
+  why one tier read as a clean pass. A bare basename is now stated to be for the unambiguous case
+  only.
+
+  Verified: the failing arm now sends `rate-limiting/handover.md`, which resolves from either
+  checkout. Control against over-triggering, a single ordinary checkout with no other
+  `handover.md`, still sends the bare name unchanged. The method note is in the checklist: a pass
+  measured on one model tier is not a pass when the failure under test is following a template too
+  literally.
+
+## [5.269.1]
+
+### Changed
+
+- **The parroted-filename thread is settled, with no change to the skill.** 5.268.0 fixed step 6's
+  wording verbatim and left one risk open: an agent emitting `handover.md` when the file is
+  somewhere else. Tested with two arms where the bare basename is insufficient, a monorepo package
+  with an unrelated `handover.md` at the root and a worktree beside its main checkout, neither
+  telegraphing what was measured. Both substituted the real path and kept the rest of the line
+  verbatim, including the arm where the literal would have named another session's file, so the
+  predicted defect did not reproduce and the text is unchanged.
+
+  Recorded as residual rather than closed: both arms reached the right answer by inference and said
+  so, so the prose reads as ambiguous even though the behaviour is right, and the entry asked for it
+  to be re-opened if a run were seen emitting the bare literal for a file elsewhere. 5.270.0 did
+  re-open it, on a more literal model tier.
 
 ## [5.269.0]
 
@@ -1123,7 +1255,25 @@ Rank 7 continued - four more hooks read DATA as if the shell would run it.
   reconstructed above from each bump commit and the diff it carried, describing what changed for a
   reader of the skill rather than restating the commit subject - several of those subjects name the
   process rather than the change, and one undercounts its own findings. `5.264.0`, `5.265.0`,
-  `5.265.1`, `5.265.2`, `5.266.1` and `5.268.0` are still missing and are not covered here.
+  `5.265.1`, `5.265.2`, `5.266.1` and `5.268.0` are not covered here; `5.268.0` was backfilled
+  later, into its own slot.
+
+## [5.268.0]
+
+### Fixed
+
+- **`meta-context-watcher` step 6 carries the `/clear` nudge message to send, and requires it to be
+  the last line.** The step named the nudge but specified no message, so the wording was rebuilt on
+  every run. Measured with paired subagent arms on the same model and scenarios: one baseline wrote
+  "Type /clear when you're ready", an invitation rather than an instruction, and never said it
+  cannot run the command, though the step required saying so plainly - while its own gaps section
+  claimed it had. The other put a parenthetical after the nudge, so the nudge was not last. Both
+  called the wording their own construction.
+
+  Refactor: with the message alone, a re-run LOST a baseline result. It dropped the user's pending
+  question in silence, quoting "Nothing follows it ... not a question" as its reason. Step 5 sends
+  the user back to re-ask, which fails if they never learn the question was heard, so what is owed
+  now goes before the nudge in one sentence and the nudge stays last.
 
 ## [5.267.3]
 
