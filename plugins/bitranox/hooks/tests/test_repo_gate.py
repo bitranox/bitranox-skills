@@ -30,10 +30,16 @@ def write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
-def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False, demo_only=False):
+def make_repo(root, *, version="1.6.0", good_skill=True, bad_skill=False,
+              demo_only=False, changelog=True):
     write(root / "plugins/bitranox/.claude-plugin/plugin.json",
           json.dumps({"name": "bitranox", "version": version}))
     write(root / ".claude-plugin/marketplace.json", json.dumps({"name": "bitranox-skills"}))
+    # A clean tree now includes an entry for the version the manifest names: the changelog check
+    # is an invariant, so it fires on any tree whose version is undocumented, not only on a bump.
+    # Callers that want the violation pass changelog=False.
+    if changelog:
+        write(root / "CHANGELOG.md", f"# Changelog\n\n## [{version}]\n\n- fixture\n")
     write(root / "plugins/bitranox/hooks/hooks.json", json.dumps({"hooks": {}}))
     # A hook package that ships a script + a test (always conforms).
     write(root / "plugins/bitranox/hooks/somehook.py", "x = 1\n")
@@ -259,6 +265,22 @@ def test_pre_push_mode_passes_a_clean_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     assert RG.main() == 0
+
+
+def test_pre_push_blocks_a_tree_whose_version_has_no_entry(tmp_path, monkeypatch, capsys):
+    """End to end through main(), not just the check in isolation.
+
+    The sibling above proves a clean tree passes; without this one, nothing proves the changelog
+    check is REACHED by the pre-push path rather than merely defined. It also gives make_repo's
+    changelog=False a caller - an unused knob is a knob nobody has run.
+    """
+    make_repo(tmp_path, good_skill=True, changelog=False)
+    monkeypatch.setattr(RG, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(RG, "check_pytest", lambda root, paths, **kw: [])
+    monkeypatch.setattr(sys, "argv", ["repo-gate.py", "--pre-push"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert RG.main() != 0
+    assert "1.6.0" in capsys.readouterr().err
 
 
 def test_pre_push_runs_pytest_over_the_whole_repo(tmp_path, monkeypatch):
@@ -1364,24 +1386,24 @@ def bumped_repo(tmp_path, changelog):
     return tmp_path
 
 
-def test_changelog_entry_fires_when_a_bump_ships_without_an_entry(tmp_path):
+def test_changelog_fires_when_a_bump_ships_without_an_entry(tmp_path):
     """The motivating case: a version reaches installs with nothing recorded about it.
 
     This is the direction that actually happened - 153 shipped versions had no entry when the
     check was written - so it is the one that must stay covered.
     """
     bumped_repo(tmp_path, "# Changelog\n\n## [1.0.0]\n\n- the previous one\n")
-    failures = RG.check_changelog_entry(tmp_path)
+    failures = RG.check_changelog_current_version(tmp_path)
     assert any("1.0.1" in f and "no `## [1.0.1]` heading" in f for f in failures)
 
 
-def test_changelog_entry_is_quiet_once_the_entry_exists(tmp_path):
+def test_changelog_is_quiet_once_the_entry_exists(tmp_path):
     """The check must be able to report the other answer, or it asserts nothing above."""
     bumped_repo(tmp_path, "# Changelog\n\n## [1.0.1]\n\n- the new one\n\n## [1.0.0]\n")
-    assert RG.check_changelog_entry(tmp_path) == []
+    assert RG.check_changelog_current_version(tmp_path) == []
 
 
-def test_changelog_entry_accepts_the_older_dated_heading_shape(tmp_path):
+def test_changelog_accepts_the_older_dated_heading_shape(tmp_path):
     """Two heading shapes ship in the real file: `## [5.290.0]` and `## [5.207.0] - 2026-08-16`.
 
     264 of the historical headings carry the dated suffix. A matcher built only against the
@@ -1389,30 +1411,40 @@ def test_changelog_entry_accepts_the_older_dated_heading_shape(tmp_path):
     correct entry the day anyone wrote one in the older style.
     """
     bumped_repo(tmp_path, "# Changelog\n\n## [1.0.1] - 2026-08-31\n\n- dated shape\n")
-    assert RG.check_changelog_entry(tmp_path) == []
+    assert RG.check_changelog_current_version(tmp_path) == []
 
 
-def test_changelog_entry_does_not_fire_without_a_bump(tmp_path):
-    """No bump means nothing shipped, and check_version_bumped owns that verdict. Without this
-    the check would demand an entry for the version already on origin/master, on every commit."""
+def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
+    """The discriminating case against the diff-shaped predecessor.
+
+    Nothing changed here - the version on disk equals the one on origin/master - and the check
+    must STILL fire, because the invariant is about what the manifest NAMES, not about what
+    moved. The diff form went quiet on exactly this state, which is why it was inert in CI on a
+    push to master: by then the commit that made the bump IS origin/master.
+    """
     git_repo_with_origin(tmp_path, {PJ_REL: '{"version": "1.0.0"}\n',
-                                    "CHANGELOG.md": "# Changelog\n"})
-    (tmp_path / "plugins" / "bitranox").mkdir(parents=True, exist_ok=True)
-    assert RG.check_changelog_entry(tmp_path) == []
+                                    "CHANGELOG.md": "# Changelog\n\n## [0.9.0]\n"})
+    assert RG._plugin_version_pair(tmp_path) == ("1.0.0", "1.0.0"), "fixture must show NO bump"
+    assert any("1.0.0" in f for f in RG.check_changelog_current_version(tmp_path))
 
 
-def test_changelog_entry_reports_a_missing_changelog_file(tmp_path):
+def test_changelog_reports_a_missing_changelog_file(tmp_path):
     """A tree with no CHANGELOG.md at all is a violation, not a skip - otherwise deleting the
     file is the way to silence the check."""
     bumped_repo(tmp_path, None)
-    assert any("no CHANGELOG.md" in f for f in RG.check_changelog_entry(tmp_path))
+    assert any("no CHANGELOG.md" in f for f in RG.check_changelog_current_version(tmp_path))
 
 
-def test_changelog_entry_skips_when_there_is_no_origin_master(tmp_path):
-    """Fail-open where the gate cannot answer: being unable to read origin/master is not
-    evidence of a violation, and a contributor clone may legitimately lack the ref."""
-    git_repo(tmp_path, {PJ_REL: '{"version": "1.0.1"}\n', "CHANGELOG.md": "# Changelog\n"})
-    assert RG.check_changelog_entry(tmp_path) == []
+def test_changelog_needs_no_origin_master(tmp_path):
+    """It must answer in a repo with no remote-tracking ref at all.
+
+    A CI checkout need not have one, and dropping the diff is precisely what frees the check
+    from depending on a ref being fetched. The predecessor returned [] here, which reads as a
+    pass on a tree that is actually undocumented.
+    """
+    git_repo(tmp_path, {PJ_REL: '{"version": "2.0.0"}\n', "CHANGELOG.md": "# Changelog\n"})
+    assert RG._plugin_version_pair(tmp_path) is None, "fixture must have no origin/master"
+    assert any("2.0.0" in f for f in RG.check_changelog_current_version(tmp_path))
 
 
 def test_changelog_heading_matcher_rejects_a_version_that_merely_appears(tmp_path):
@@ -1424,4 +1456,4 @@ def test_changelog_heading_matcher_rejects_a_version_that_merely_appears(tmp_pat
     body = "# Changelog\n\n## [1.0.0]\n\n- 1.0.1 is still missing and not covered here\n"
     bumped_repo(tmp_path, body)
     assert RG.changelog_documents(tmp_path, "1.0.1") is False
-    assert RG.check_changelog_entry(tmp_path) != []
+    assert RG.check_changelog_current_version(tmp_path) != []

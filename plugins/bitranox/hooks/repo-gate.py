@@ -30,10 +30,11 @@ Checks:
                     match that twin apart from the documented divergences. Local only,
                     because the twins are sibling repos that a CI clone does not have.
                     Run `repo-gate.py --mirrors` to audit every pair, changed or not.
-  7. changelog    - HOOK MODE ONLY: a bumped plugin.json version must arrive with its
-                    `## [version]` CHANGELOG.md heading in the SAME commit. Paired with
-                    version-bump: that one makes a shipped change carry a version, this one
-                    makes a version carry its entry.
+  7. changelog    - BOTH MODES: the version plugin.json names must have a `## [version]`
+                    CHANGELOG.md heading. Stated as an invariant rather than a diff, because a
+                    diff against origin/master is inert in CI on a push (by then the bump IS
+                    origin/master). Pairs with version-bump: that one makes a shipped change
+                    carry a version, this one makes a version carry its entry.
 
 Pure standard library; shells out to git and pytest via subprocess.
 """
@@ -273,28 +274,35 @@ def changelog_documents(root, version):
     return bool(re.search(r"^## \[" + re.escape(version) + r"\]\s*(?:-.*)?$", text, re.M))
 
 
-def check_changelog_entry(root):
-    """A bumped version must arrive WITH its CHANGELOG entry, in the same commit.
+def check_changelog_current_version(root):
+    """The version plugin.json NAMES must have a CHANGELOG entry - whatever put it there.
 
-    Maintainer-only for the same reason version-bump is (see run_checks). The bump is the act
-    that makes a version reach installs, so the entry has to land with it: written afterwards it
-    is never written at all, or it is reconstructed months later from a diff by whoever notices
-    the hole. Measured on this repo the day the check was added: 153 shipped versions had no
-    entry, and the file's own two "still missing" notes had themselves gone stale.
+    Deliberately not a diff: it asks nothing about what changed, so it cannot go quiet for want
+    of something to compare against. The first form of this check did compare the working tree
+    to origin/master, and measured 2026-08-31 with a control arm, that form is INERT in CI on a
+    push to master - by the time CI runs, the commit that made the bump IS origin/master, the
+    pair reads ('1.1.0', '1.1.0'), and a check that cannot see the bump reads exactly like one
+    that looked and found nothing wrong.
+
+    Stating the invariant instead makes it true everywhere the gate runs: the local pre-commit
+    and pre-push hooks, CI on a push, and CI on a pull request, with no fetch-depth requirement.
+    It also subsumes the diff form - a bump to an undocumented version fails this too - which is
+    why there is one check here and not two reporting the same defect twice.
     """
-    pair = _plugin_version_pair(root)
-    if pair is None:
+    pj = root / "plugins" / "bitranox" / ".claude-plugin" / "plugin.json"
+    try:
+        version = json.loads(pj.read_text(encoding="utf-8")).get("version")
+    except Exception:  # noqa: BLE001
+        return []  # a manifest that will not parse is check_json_valid's verdict, not ours
+    if not version:
         return []
-    old_v, new_v = pair
-    if new_v == old_v:
-        return []  # no bump -> nothing shipped, and check_version_bumped owns that verdict
-    documented = changelog_documents(root, new_v)
+    documented = changelog_documents(root, version)
     if documented is None:
-        return [f"plugin.json is bumped to {new_v} but there is no {CHANGELOG_NAME} to record it."]
+        return [f"plugin.json names {version} but there is no {CHANGELOG_NAME} to record it."]
     if documented:
         return []
     return [
-        f"plugin.json is bumped to {new_v} but {CHANGELOG_NAME} has no `## [{new_v}]` heading.",
+        f"plugin.json names {version}, which has no `## [{version}]` heading in {CHANGELOG_NAME}.",
         "Add the entry in THIS commit. A version reaches installs the moment it is pushed, and",
         "an entry deferred to later is reconstructed from a diff by whoever notices it missing.",
     ]
@@ -1039,6 +1047,10 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     failures += check_cso(root)
     failures += check_frontmatter(root)
     failures += check_secrets(root)
+    # Runs in BOTH modes, unlike version-bump below. It compares nothing across refs, so CI can
+    # answer it on a push - which is the case the maintainer-only placement cannot cover, and the
+    # one that lets a version ship undocumented from a clone with no hooks enabled.
+    failures += check_changelog_current_version(root)
     # Version-bump is a release/merge concern owned by the maintainer, not a per-PR
     # gate: forcing contributors to bump causes plugin.json conflicts and takes the
     # version decision away from the merge. So enforce it ONLY in the local pre-commit
@@ -1046,7 +1058,6 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     # push), never in CI on a contributor's PR.
     if not ci:
         failures += check_version_bumped(root)
-        failures += check_changelog_entry(root)
         failures += check_skill_review(root)
         failures += check_skill_mirrors(root)
     # Preflight the dependencies, and run pytest only when they are all there. Running it anyway

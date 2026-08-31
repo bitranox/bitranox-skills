@@ -17,6 +17,46 @@ when that version changes, so every change under `plugins/bitranox/` must bump i
 Repo-meta outside the plugin tree (this file, `README`, `CONTRIBUTING.md`, CI) does not ship to
 installed copies and needs no bump.
 
+## Completeness
+
+Entries are complete from `5.266.2` onward, and `repo-gate.py` keeps them that way: the version
+`plugin.json` names must have a `## [version]` heading here, checked on every commit, every push
+and every CI run. 153 earlier versions have no entry, back to `5.18.0`; what they changed is in
+`git log -- plugins/bitranox/.claude-plugin/plugin.json`.
+
+That is a stated boundary, not a backlog. Several of those commit subjects name the process rather
+than the change, so entries reconstructed from them would read like coverage without being it, and
+a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
+two "versions with no entry" notes came to sit in this file disagreeing with it.
+
+## [5.292.0]
+
+### Changed
+
+- **The changelog check is stated as an invariant, and now runs in CI as well as locally.**
+  5.291.0 compared the working tree against `origin/master`, which is INERT in CI on a push to
+  master: by the time CI runs, the commit that made the bump IS `origin/master`, so the version
+  pair reads `('X', 'X')` and the check goes quiet on the very state it exists to catch. Measured
+  with a control arm rather than reasoned about - the same fixture with `origin/master` one commit
+  behind fires correctly, so the silence was the comparison and not the code.
+
+  `check_changelog_current_version` replaces `check_changelog_entry`: it asks whether the version
+  `plugin.json` NAMES has a heading, which is answerable in any checkout, needs no `fetch-depth`,
+  and holds on a push, on a pull request and in a bare clone alike. It subsumes the diff form - a
+  bump to an undocumented version fails it too - so there is one check rather than two reporting
+  the same defect twice. Running in both modes closes the case the maintainer-only placement could
+  not: a push from a clone with `core.hooksPath` unset.
+
+  The two tests that asked diff-shaped questions were replaced rather than deleted, by the two that
+  discriminate an invariant from a diff: it must fire on an undocumented version with NO bump, and
+  with no `origin/master` in the repo at all. Both were assertions the old design passed by being
+  silent.
+
+### Added
+
+- **A completeness floor, stated at the top of this file.** Entries are complete from `5.266.2`
+  onward; the 153 older versions are recorded as a closed boundary rather than an open backlog.
+
 ## [5.291.0]
 
 ### Added
