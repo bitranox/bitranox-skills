@@ -143,3 +143,15 @@ def test_a_cp1252_dash_no_longer_sails_through(tmp_path, monkeypatch, capsys):
 def test_a_genuine_replacement_character_is_still_a_tell(tmp_path, monkeypatch):
     """The direction the fix must NOT reach: real mojibake encoded in the file still blocks."""
     assert _run(monkeypatch, _md(tmp_path, "Subject %s tail\n" % chr(0xFFFD))) == 2
+
+
+def test_the_encoding_message_names_a_remedy_the_model_can_perform(tmp_path, monkeypatch, capsys):
+    """This hook is PostToolUse, so the party it blocks is the MODEL, mid-turn, on a file it just
+    wrote - not a person at an editor. "Re-save the file as UTF-8" was carried over from the
+    commit-side guard, where the reader is a person and that is exactly the right advice. A block
+    whose stated remedy the reader cannot perform gets worked around rather than fixed.
+    """
+    f = tmp_path / "a.md"
+    f.write_bytes("Prose".encode("cp1252") + b"\x97 tail\n")
+    assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 2
+    assert "Write tool" in capsys.readouterr().err

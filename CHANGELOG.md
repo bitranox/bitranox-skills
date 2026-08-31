@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.298.1]
+
+### Fixed
+
+- **`tell-sweep`'s encoding message named a remedy its reader cannot perform.** It said "re-save
+  the file as UTF-8", carried over from the commit-side guard where the reader is a person at an
+  editor. This hook is PostToolUse: it blocks the model, mid-turn, on a file it just wrote. It now
+  says to read the file, replace the mis-encoded characters with ASCII, and rewrite the whole file
+  as UTF-8 with the Write tool. A block whose stated remedy the reader cannot carry out gets
+  worked around rather than fixed.
+
 ## [5.298.0]
 
 ### Added

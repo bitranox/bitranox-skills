@@ -58,8 +58,9 @@ def main() -> int:
     if bad_byte is not None:
         sys.stderr.write(
             "%s is not valid UTF-8 (first bad byte at byte %d). A tell saved in another encoding "
-            "is invisible to this check - an em-dash from a Windows editor is byte 0x97 - so "
-            "re-save the file as UTF-8.\n" % (fp, bad_byte)
+            "is invisible to this check - an em-dash from a Windows editor is byte 0x97. Read the "
+            "file, replace the mis-encoded characters with ASCII, and rewrite the whole file as "
+            "UTF-8 with the Write tool.\n" % (fp, bad_byte)
         )
     if hits:
         sys.stderr.write(
