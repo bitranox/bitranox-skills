@@ -83,9 +83,12 @@ given the table, does an agent facing the chore find and name the right tool?
 - [x] A second run overwrote the `.bak`, replacing the original with the state after the first
       edit. Because that file is one git cannot restore, the `.bak` is the only copy, so the
       overwrite destroyed the original outright. Probed on real files before the fix.
-- [x] First write wins now: an existing `.bak` is kept, and the run SAYS it kept one, because a
-      pre-existing copy may predate the session and must not be read as the state from just
-      before this edit.
+- [x] Superseded: every run now writes its OWN copy - `.bak` for the original, then `.bak.1`,
+      `.bak.2` upward - so no state is lost in either direction. First-write-wins protected the
+      original but discarded every state after it, which is only half the property. A `.bak` left
+      by some other tool is stepped over for the same reason it is not overwritten: this tool did
+      not put it there. Unbounded on purpose - a safety copy that deletes itself after N runs is
+      not one - so a long-lived gitignored file accumulates copies, which is the accepted cost.
 
 ## Verification
 

@@ -33,9 +33,9 @@ insertion onto the anchor's line.
 
 A file git could not restore is copied to `<name>.bak` first - untracked, gitignored, or tracked
 but carrying uncommitted work. Tracked alone is not enough: `git checkout -- <file>` restores from
-HEAD, so for a dirty file it discards precisely the content nobody else has. An existing `.bak` is
-KEPT rather than overwritten, so a second run cannot replace the original with an already-edited
-state; the run says when it kept one, because that copy may predate this session.
+HEAD, so for a dirty file it discards precisely the content nobody else has. Every run gets its
+OWN copy - `.bak`, then `.bak.1`, `.bak.2` upward, higher number newer - so no run can destroy the
+state another one recorded, and the run prints the exact path it wrote.
 
 Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error.
 """
@@ -160,18 +160,15 @@ def replace_span(text: str, start: str, end: str, new: str, *, expect_removed_li
 class EditResult:
     """What an edit did, named rather than returned as an anonymous tuple."""
 
-    def __init__(self, path: Path, line_delta: int, backup: Path | None, written: bool,
-                 backup_reused: bool = False):
+    def __init__(self, path: Path, line_delta: int, backup: Path | None, written: bool):
         self.path = path
         self.line_delta = line_delta
         self.backup = backup
         self.written = written
-        self.backup_reused = backup_reused
 
     def as_data(self) -> dict:
         return {"path": str(self.path), "line_delta": self.line_delta,
-                "backup": str(self.backup) if self.backup else None,
-                "backup_reused": self.backup_reused, "written": self.written}
+                "backup": str(self.backup) if self.backup else None, "written": self.written}
 
 
 def _git(path: Path, *args):
@@ -205,6 +202,27 @@ def is_recoverable_from_git(path: Path) -> bool:
     return status is not None and status.returncode == 0 and not status.stdout.strip()
 
 
+def next_backup_path(path: Path) -> Path:
+    """The first FREE backup name: `<name>.bak`, then `<name>.bak.1`, `.bak.2`, and upward.
+
+    Nothing is ever overwritten. Each copy is the only record of the state before its own edit,
+    and the file is being backed up at all precisely because git cannot restore it, so reusing a
+    name would destroy a state no other copy holds. `.bak` is the original and a higher number is
+    newer; the run prints the exact path it wrote, so nobody has to sort these by name.
+
+    A `.bak` some other tool left behind is skipped for the same reason - it is somebody's only
+    copy of something, and this tool did not put it there.
+
+    The count is unbounded on purpose: a safety copy that deletes itself after N runs is not one.
+    """
+    candidate = path.with_name(path.name + ".bak")
+    index = 0
+    while candidate.exists():
+        index += 1
+        candidate = path.with_name(f"{path.name}.bak.{index}")
+    return candidate
+
+
 def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
     """Read, transform, and write the file, backing it up first when git does not track it."""
     path = Path(path)
@@ -216,18 +234,12 @@ def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool 
     delta = len(after.splitlines()) - len(before.splitlines())
     if dry_run:
         return EditResult(path, delta, None, written=False)
-    saved, reused = None, False
+    saved = None
     if backup and not is_recoverable_from_git(path):
-        saved = path.with_name(path.name + ".bak")
-        # FIRST WRITE WINS. This backup is written only for a file git cannot restore, so it is
-        # the only copy that exists; overwriting it on a second run would replace the original
-        # with an already-edited state and leave nothing holding the original. The earliest state
-        # is also the one worth having when a chain of edits goes wrong.
-        reused = saved.exists()
-        if not reused:
-            saved.write_text(before, encoding="utf-8")
+        saved = next_backup_path(path)
+        saved.write_text(before, encoding="utf-8")
     path.write_text(after, encoding="utf-8")
-    return EditResult(path, delta, saved, written=True, backup_reused=reused)
+    return EditResult(path, delta, saved, written=True)
 
 
 def _text_from(inline, file_arg, label):
@@ -319,10 +331,9 @@ def main(argv=None) -> int:
                           "data": result.as_data()}, indent=2))
     else:
         verb = "would change" if args.dry_run else "changed"
-        # Says KEPT rather than staying silent: a pre-existing .bak may predate this session, so
-        # a reader must not assume it holds the state from just before this edit.
-        kept = " (kept from an earlier run)" if result.backup_reused else ""
-        note = f", backup {result.backup}{kept}" if result.backup else ""
+        # The exact path, because a later run writes .bak.1, .bak.2 and so on - printing a bare
+        # "backup written" would leave the reader to guess which of them this run produced.
+        note = f", backup {result.backup}" if result.backup else ""
         print(f"anchor_edit: {verb} {result.path} ({result.line_delta:+d} lines){note}")
     return 0
 

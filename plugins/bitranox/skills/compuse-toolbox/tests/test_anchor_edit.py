@@ -202,21 +202,46 @@ def test_a_gitignored_file_is_backed_up(tmp_path):
     assert result.backup is not None, "a gitignored file is not in git and must be backed up"
 
 
-def test_a_second_run_keeps_the_first_backup(tmp_path):
+def test_every_run_keeps_its_own_backup(tmp_path):
     """The .bak is written only for a file git cannot restore, so it IS the only copy.
 
-    Overwriting it on the second run replaces the original with the state after the first edit,
-    and nothing anywhere else holds the original. First write wins, so the surviving copy is the
-    earliest state - the one worth having when a chain of edits goes wrong.
+    Each run therefore gets its own: `.bak` holds the original, and `.bak.1`, `.bak.2` ... hold
+    the state before each later edit, higher number newer. Nothing is ever overwritten, so no run
+    can destroy the state another run recorded.
     """
     target = tmp_path / "notes.md"
     target.write_text(SAMPLE, encoding="utf-8")
-    first = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
-    assert first.backup_reused is False
-    second = AE.apply_to_file(target, lambda s: s.replace("return 1", "return 11"))
-    assert second.backup.read_text(encoding="utf-8") == SAMPLE, (
-        "the second run must not overwrite the original with an already-edited state")
-    assert second.backup_reused is True, "a kept backup must be reported as kept, not as fresh"
+
+    first = AE.apply_to_file(target, lambda s: s.replace("return 1", "return 11"))
+    after_first = target.read_text(encoding="utf-8")
+    assert first.backup.name == "notes.md.bak"
+    assert first.backup.read_text(encoding="utf-8") == SAMPLE
+
+    second = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert second.backup.name == "notes.md.bak.1", "a later run must not reuse the .bak name"
+    assert second.backup.read_text(encoding="utf-8") == after_first
+    assert (tmp_path / "notes.md.bak").read_text(encoding="utf-8") == SAMPLE, (
+        "the original must survive every later run")
+
+
+def test_backups_number_upward_without_a_gap(tmp_path):
+    """It must be able to go past the second run, or the numbering is untested beyond one step."""
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    for replacement in ("return 11", "return 22", "return 33"):
+        AE.apply_to_file(target, lambda s, r=replacement: s.replace("return 1", r))
+    assert sorted(p.name for p in tmp_path.glob("notes.md.bak*")) == [
+        "notes.md.bak", "notes.md.bak.1", "notes.md.bak.2"]
+
+
+def test_a_pre_existing_bak_from_another_tool_is_not_overwritten(tmp_path):
+    """A `.bak` this tool did not write is still somebody's only copy of something."""
+    target = tmp_path / "notes.md"
+    target.write_text(SAMPLE, encoding="utf-8")
+    (tmp_path / "notes.md.bak").write_text("SOMEBODY ELSE'S BACKUP\n", encoding="utf-8")
+    result = AE.apply_to_file(target, lambda s: s.replace("return 1", "return 11"))
+    assert result.backup.name == "notes.md.bak.1"
+    assert (tmp_path / "notes.md.bak").read_text(encoding="utf-8") == "SOMEBODY ELSE'S BACKUP\n"
 
 
 def test_a_dry_run_does_not_touch_the_file(tmp_path):

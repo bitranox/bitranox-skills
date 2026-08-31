@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.296.1]
+
+### Changed
+
+- **`anchor_edit` now keeps a NUMBERED backup per run**, replacing the first-write-wins rule from
+  5.295.2. `.bak` holds the original, then `.bak.1`, `.bak.2` and upward, higher number newer, and
+  each run prints the exact path it wrote so nobody has to sort these by name.
+
+  First-write-wins protected the original and discarded every state after it, which is half the
+  property: with a chain of edits, the state before the third one was recoverable from nothing.
+  Now no run can destroy what another recorded, in either direction.
+
+  A `.bak` some other tool left behind is stepped over rather than counted as this tool's own -
+  it is somebody's only copy of something, and this tool did not put it there.
+
+  The count is UNBOUNDED on purpose: a safety copy that deletes itself after N runs is not one.
+  A long-lived gitignored file edited many times therefore accumulates copies, which is the
+  accepted cost of never losing a state.
+
+- **`backup_reused` is gone from the `--json` envelope.** It reported whether an existing `.bak`
+  had been kept, which is a question the numbering rule cannot ask - every run writes its own,
+  and `backup` already names it. Removed rather than left always-false, which would be a field
+  that reads as an answer.
+
 ## [5.296.0]
 
 ### Added
