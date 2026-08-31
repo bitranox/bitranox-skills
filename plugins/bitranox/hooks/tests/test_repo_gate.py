@@ -1443,6 +1443,86 @@ def test_version_sync_skips_a_repo_with_no_pyproject(tmp_path):
     assert RG.check_version_sync(tmp_path) == []
 
 
+def test_version_sync_fires_when_pyproject_carries_no_readable_version(tmp_path):
+    """A pyproject that is PRESENT but whose version cannot be read is a finding, not a pass.
+
+    Absence of the file means "not a distribution" and is the legitimate skip tested above. A
+    file that is there and unreadable is a different answer: reporting no failures asserts the
+    two versions AGREE, which is the one thing this check cannot know when it never learned
+    either of them.
+    """
+    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json",
+          json.dumps({"name": "bitranox", "version": "2.3.4"}))
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\n')
+    failures = RG.check_version_sync(tmp_path)
+    assert failures, "a present pyproject with no readable version must be reported"
+    assert any("pyproject.toml" in f for f in failures)
+
+
+def test_version_sync_fires_when_the_manifest_cannot_be_read(tmp_path):
+    """The same argument from the manifest's side.
+
+    plugin.json is what the installed CLI reports at runtime, so a malformed one is exactly the
+    state that ships a tool misreporting its own version - the defect this check was written for.
+    """
+    write(tmp_path / "plugins/bitranox/.claude-plugin/plugin.json", "{ not json")
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "2.3.4"\n')
+    failures = RG.check_version_sync(tmp_path)
+    assert failures, "an unreadable manifest must be reported, not skipped"
+    assert any("plugin.json" in f for f in failures)
+
+
+def test_version_sync_fires_when_the_manifest_is_missing_beside_a_pyproject(tmp_path):
+    """run_checks only ever runs against the marketplace root, where the manifest is not optional.
+
+    The --mirror-of entry point returns before run_checks, so no tool repo reaches this check
+    and an absent manifest here means the marketplace checkout is incomplete.
+    """
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "2.3.4"\n')
+    failures = RG.check_version_sync(tmp_path)
+    assert failures, "a missing manifest must be reported, not skipped"
+
+
+def test_scan_project_version_agrees_with_tomllib_on_the_shipped_pyproject():
+    """The no-dependency scanner must answer what tomllib answers, on the file that ships.
+
+    The scanner exists so this check has no interpreter floor: tomllib is 3.11+, and a hook
+    launched by run-python.sh takes whatever python3 resolves to on the reader's machine. A
+    fallback that disagreed with tomllib would trade a silent skip for a silent WRONG answer,
+    which is worse, so the real file is the fixture.
+    """
+    tomllib = pytest.importorskip("tomllib")
+    text = (Path(__file__).resolve().parents[4] / "pyproject.toml").read_text(encoding="utf-8")
+    assert RG.scan_project_version(text) == tomllib.loads(text)["project"]["version"]
+
+
+def test_scan_project_version_ignores_a_version_key_outside_the_project_table():
+    """A `version` belonging to some tool's table is not the distribution's version.
+
+    This is the failure mode a bare line scan has: it answers with whichever `version =` it
+    meets first, so a tool table declared above [project] silently becomes the answer.
+    """
+    text = '[tool.somelinter]\nversion = "9.9.9"\n\n[project]\nname = "x"\nversion = "1.2.3"\n'
+    assert RG.scan_project_version(text) == "1.2.3"
+
+
+def test_scan_project_version_returns_none_when_the_project_table_has_no_version():
+    """It must be able to answer 'I could not tell', or the check above cannot fire."""
+    assert RG.scan_project_version('[project]\nname = "x"\n') is None
+
+
+def test_pyproject_version_still_answers_on_an_interpreter_without_tomllib(tmp_path, monkeypatch):
+    """The floor is gone: below 3.11 the scanner answers rather than the check going quiet.
+
+    Interpreter feature availability is a true external edge - there is no way to inject "this
+    Python has no tomllib" - so the absence is staged the way the import system itself reports
+    it: a None in sys.modules makes `import tomllib` raise ImportError.
+    """
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\nversion = "7.8.9"\n')
+    assert RG.pyproject_version(tmp_path) == "7.8.9"
+
+
 def test_changelog_fires_on_an_undocumented_version_with_no_bump(tmp_path):
     """The discriminating case against the diff-shaped predecessor.
 

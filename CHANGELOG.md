@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.294.2]
+
+### Fixed
+
+- **`check_version_sync` now reports every state in which it could not read a version, instead
+  of returning the value that means "the two agree".** It went quiet four ways, not the one
+  recorded as a known limitation: an interpreter below 3.11 with no `tomllib`, ANY parse failure
+  of `pyproject.toml`, and an unreadable, missing or version-less `plugin.json`. Each returned an
+  empty failure list, which is the same answer the check gives when it has read both files and
+  found them equal, so a corrupt manifest passed the check whose whole job is reading it.
+
+  Only one skip was ever legitimate and it stays: a checkout with no `pyproject.toml` is not a
+  distribution and has no second version to disagree with. That case is now decided by asking
+  whether the file EXISTS, which is a different question from whether a version could be read
+  out of it, and the two had been collapsed into one `None`.
+
+  This is the shape `check_changelog_current_version` was deliberately rewritten to avoid, one
+  function below it in the same file: a check that cannot fail reads exactly like a check that
+  looked and found nothing wrong.
+
+- **The check no longer has an interpreter floor.** `scan_project_version` reads the `[project]`
+  version without `tomllib`, so a hook launched by `run-python.sh` under whatever `python3`
+  resolves to on a contributor's machine still gets an answer rather than a silent pass. It is
+  scoped to the `[project]` table, because a bare line scan answers with whichever `version =` it
+  meets first and a tool's table declared above `[project]` would silently become the answer. A
+  test pins it to agree with `tomllib` on the real shipped `pyproject.toml`, so the fallback
+  cannot trade a silent skip for a silent wrong answer.
+
 ## [5.294.1]
 
 ### Changed

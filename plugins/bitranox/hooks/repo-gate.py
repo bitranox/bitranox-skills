@@ -274,22 +274,51 @@ def changelog_documents(root, version):
     return bool(re.search(r"^## \[" + re.escape(version) + r"\]\s*(?:-.*)?$", text, re.M))
 
 
-def pyproject_version(root):
-    """The version declared in pyproject.toml, or None when it cannot be read.
+def scan_project_version(text):
+    """The [project] version read WITHOUT tomllib, or None when the table declares none.
 
-    tomllib is 3.11+. This repo declares requires-python >=3.11 and its CI matrix starts
-    there, so the check is enforced everywhere it matters; a hook running under an older
-    interpreter on somebody's machine skips it rather than blocking their commit.
+    tomllib is 3.11+ and a hook runs under whatever interpreter run-python.sh resolved on the
+    reader's machine, so parsing only with tomllib gives this check an interpreter floor and
+    makes it go quiet below it. Scoped to the [project] table because a `version` key in some
+    tool's table is a different key entirely, and a bare line scan answers with whichever one
+    it meets first. Covers the shape pyproject uses for this key: a quoted single-line value.
+    """
+    in_project = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            in_project = line == "[project]"
+            continue
+        if not in_project:
+            continue
+        match = re.match(r"""version\s*=\s*(["'])(.*?)\1\s*(?:#.*)?$""", line)
+        if match:
+            return match.group(2)
+    return None
+
+
+def pyproject_version(root):
+    """The version declared in pyproject.toml, or None when the file has none to give.
+
+    None no longer doubles as "this interpreter cannot parse TOML": below 3.11 the scanner
+    above answers instead, so the only Nones left mean there is no file or its [project] table
+    declares no readable version. check_version_sync separates those two by asking whether the
+    file exists, because they are different answers - one is not a distribution at all, the
+    other is a distribution nobody can learn the version of.
     """
     pp = root / "pyproject.toml"
     if not pp.is_file():
         return None
     try:
-        import tomllib  # noqa: PLC0415 - stdlib only from 3.11, and this check is optional below
-    except ImportError:
+        text = pp.read_text(encoding="utf-8")
+    except OSError:
         return None
     try:
-        return tomllib.loads(pp.read_text(encoding="utf-8")).get("project", {}).get("version")
+        import tomllib  # noqa: PLC0415 - stdlib only from 3.11; scan_project_version covers below
+    except ImportError:
+        return scan_project_version(text)
+    try:
+        return tomllib.loads(text).get("project", {}).get("version")
     except Exception:  # noqa: BLE001
         return None
 
@@ -302,15 +331,33 @@ def check_version_sync(root):
     failure is invisible until a user runs it: measured the day this was written, a wheel
     built at 5.293.0 shipped a CLI whose --version answered 5.292.0, and every test passed,
     because nothing compared the two.
+
+    Stated as an INVARIANT, for the reason check_changelog_current_version above is: every way
+    of failing to learn a version is reported, because returning no failures is what this check
+    says when the two versions AGREE, and a reader cannot tell that apart from never having
+    read either file. The one legitimate skip is a checkout with no pyproject.toml, which is
+    not a distribution and has no second version to disagree with.
     """
+    if not (root / "pyproject.toml").is_file():
+        return []  # not a Python distribution; there is no second version to disagree with
     declared = pyproject_version(root)
     if declared is None:
-        return []
+        return [
+            "pyproject.toml is present but no [project] version could be read from it.",
+            "The wheel takes its version from that key, so skipping here would report that",
+            "the two versions agree having learned neither of them.",
+        ]
     pj = root / "plugins" / "bitranox" / ".claude-plugin" / "plugin.json"
     try:
         manifest = json.loads(pj.read_text(encoding="utf-8")).get("version")
     except Exception:  # noqa: BLE001
-        return []
+        manifest = None
+    if manifest is None:
+        return [
+            "plugin.json could not be read, or names no version: %s" % pj,
+            "It is what the installed CLI reports at runtime, so an unreadable manifest is",
+            "exactly the state that ships a tool misreporting its own version.",
+        ]
     if declared == manifest:
         return []
     return [
