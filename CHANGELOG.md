@@ -29,6 +29,32 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.294.1]
+
+### Changed
+
+- **`ci_wait --error-grace` defaults to 300 seconds rather than 120.** The two costs are
+  asymmetric, and 5.294.0 took the shorter side for the wrong reason. A budget too short reproduces
+  the abandoned-wait defect on any API wobble that outlasts it, which is the failure the budget
+  exists to remove; one too long only delays reporting a setup that was broken anyway. 120 came
+  from matching `--appear-grace`, which is a consistency argument rather than an outcome one. It
+  remains a fifth of the default deadline, and the streak still resets on any answered poll, so it
+  bounds only a CONSECUTIVE outage.
+
+### Fixed
+
+- **A `gh` with no credentials fails at once instead of spending the grace.** Measured on gh
+  2.92.0: with no token and no config, `gh run list` exits 4 and says to run `gh auth login`. That
+  is local configuration and permanent for the run, so it now raises `GhUnavailable` alongside a
+  `gh` that cannot be spawned, rather than being polled at for five minutes.
+
+  Its LIMIT is recorded as an executable test rather than left implicit. A REJECTED credential is
+  NOT exit 4: gh exits 1 with `HTTP 401: Bad credentials`, which no exit code separates from the
+  502 this tool retries, so a revoked token still costs the grace before it is reported. Telling
+  the two apart needs gh's MESSAGE, and reading a remote system's wording for its meaning is the
+  guess that produced the original defect. If gh ever starts exiting 4 for a rejected credential,
+  that test fails and says so.
+
 ## [5.294.0]
 
 ### Fixed

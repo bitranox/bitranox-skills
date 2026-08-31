@@ -164,7 +164,7 @@ class TestGhRuns:
     def test_a_nonzero_gh_exit_is_raised_not_read_as_no_runs(self, monkeypatch):
         """Otherwise a broken `gh` reads as 'this sha has no runs', which exits 2 for the wrong
         reason and points at the sha instead of at the tool that failed."""
-        self._fake_gh(monkeypatch, stdout="", returncode=4)
+        self._fake_gh(monkeypatch, stdout="", returncode=1)
 
         with pytest.raises(ci_wait.GhFailed):
             ci_wait.gh_runs("a" * 40)
@@ -425,6 +425,46 @@ class TestGhBeingUnrunnableIsNotRetried:
 
         assert len(seen) == 1
 
+    def test_gh_with_no_credentials_is_fatal_rather_than_retried(self, monkeypatch):
+        """Measured against gh 2.92.0: with no token and no config, `gh run list` exits 4 and says
+        to run `gh auth login`. That is a local configuration fact, so no amount of waiting fixes
+        it and the grace must not be spent on it."""
+        import subprocess as sp
+
+        def fake_run(argv, **kwargs):
+            return sp.CompletedProcess(
+                argv, 4, stdout="",
+                stderr="To get started with GitHub CLI, please run:  gh auth login",
+            )
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake_run)
+
+        with pytest.raises(ci_wait.GhUnavailable):
+            ci_wait.gh_runs("a" * 40)
+
+    def test_a_rejected_credential_is_still_retried_because_gh_exits_1_for_it(self, monkeypatch):
+        """The MEASURED LIMIT of the exit-code split, kept as an executable fact.
+
+        A revoked or mistyped token is not exit 4. gh 2.92.0 exits 1 with `HTTP 401: Bad
+        credentials`, which no exit code distinguishes from the 502 this tool retries, so it stays
+        retryable and costs the grace before it is reported. Separating it would mean reading gh's
+        message for its meaning, which is the guess this design refuses - the same guess that would
+        put the 502 defect back. If this test ever fails because gh started exiting 4 for a
+        rejected credential, that is the moment to widen the split, not before.
+        """
+        import subprocess as sp
+
+        def fake_run(argv, **kwargs):
+            return sp.CompletedProcess(
+                argv, 1, stdout="",
+                stderr="failed to get runs: HTTP 401: Bad credentials (https://api.github.com/...)",
+            )
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake_run)
+
+        with pytest.raises(ci_wait.GhFailed):
+            ci_wait.gh_runs("a" * 40)
+
     def test_main_reports_it_as_could_not_tell_rather_than_crashing(self, monkeypatch, capsys):
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
 
@@ -460,8 +500,11 @@ class TestTheRetryReachesTheRealCommandLine:
         assert rc == 0, "a single 502 must not end a wait that had its whole deadline left"
         assert len(calls) == 2
 
-    def test_the_error_grace_defaults_to_120_seconds(self):
-        assert ci_wait._parse_args(["--sha", "a" * 40]).error_grace == 120.0
+    def test_the_error_grace_defaults_to_300_seconds(self):
+        """Longer than --appear-grace on purpose. The costs are asymmetric: too short reproduces
+        the abandoned-wait defect on any API wobble outlasting it, while too long only delays
+        reporting a setup that was broken anyway."""
+        assert ci_wait._parse_args(["--sha", "a" * 40]).error_grace == 300.0
 
     def test_the_cli_value_reaches_the_wait_loop(self, monkeypatch):
         """Parsed and then dropped is the shape a green suite cannot see: the flag exists, the

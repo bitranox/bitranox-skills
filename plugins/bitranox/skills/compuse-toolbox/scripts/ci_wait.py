@@ -15,7 +15,7 @@ a just-pushed commit takes seconds to have runs at all, so an empty first poll i
 an empty one two minutes later is a sha that will never match. That budget is a DURATION, so
 changing `--interval` does not silently move it.
 
-`gh` itself FAILING gets the same treatment (`--error-grace`, 120 seconds). One HTTP 502 from
+`gh` itself FAILING gets the same treatment (`--error-grace`, 300 seconds). One HTTP 502 from
 api.github.com used to end the wait outright, three times in one session, each time with twenty
 minutes still on the deadline and each time reading as an infrastructure problem rather than as
 one bad response. A waiter is the tool that must sit through its fetch failing, so a failure is
@@ -46,6 +46,10 @@ FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 _FIELDS = "headSha,workflowName,status,conclusion,databaseId"
 _TERMINAL = "completed"
+#: gh's documented exit code for "authentication required" (measured on 2.92.0: no token and no
+#: config gives 4 and tells you to run `gh auth login`). Local configuration, so it is fatal here
+#: rather than retried. A REJECTED credential is exit 1, not this - see GhUnavailable.
+_GH_EXIT_AUTH_REQUIRED = 4
 _EXIT_CODES = {"success": 0, "failed": 1, "timeout": 2, "no-runs": 2, "error": 2}
 
 
@@ -62,11 +66,18 @@ class GhFailed(RuntimeError):
 
 
 class GhUnavailable(RuntimeError):
-    """`gh` could not be run at all - not installed, or not executable.
+    """`gh` cannot give an answer in this process - not installed, or not logged in.
 
-    Not retryable: this is the local machine, and it will answer the same way for the whole
-    process. Kept apart from :class:`GhFailed` so the retry budget is not spent on it, and so
-    a missing `gh` reports as "could not tell" rather than as a traceback.
+    Not retryable: both are local configuration, and they will answer the same way for the whole
+    run. Kept apart from :class:`GhFailed` so the retry budget is not spent on them, and so a
+    missing `gh` reports as "could not tell" rather than as a traceback.
+
+    The split is drawn on the exit code and nowhere else. Note its measured limit: a REJECTED
+    credential does not land here. Against gh 2.92.0, no credentials at all exits 4 ("please run
+    gh auth login") while a revoked or mistyped token exits 1 with `HTTP 401: Bad credentials` -
+    the same code as a 502. So a dead token is retried and costs the grace before it is reported.
+    Telling those apart needs gh's MESSAGE, and reading a remote system's wording for its meaning
+    is the guess that produced the abandoned-wait defect in the first place.
     """
 
 
@@ -183,7 +194,7 @@ def wait_for(
     sleep: Callable[[float], None],
     interval_s: float = 30.0,
     appear_grace_s: float = 120.0,
-    error_grace_s: float = 120.0,
+    error_grace_s: float = 300.0,
     report: Callable[[str], None] = lambda _m: None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
@@ -305,6 +316,8 @@ def gh_runs(sha: str, *, repo: str | None = None, limit: int = 30) -> list[dict[
         proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     except OSError as exc:
         raise GhUnavailable(f"could not run gh: {exc}") from exc
+    if proc.returncode == _GH_EXIT_AUTH_REQUIRED:
+        raise GhUnavailable(f"gh is not authenticated: {(proc.stderr or '').strip()}")
     if proc.returncode != 0:
         raise GhFailed(f"gh exited {proc.returncode}: {(proc.stderr or '').strip()}")
     try:
@@ -330,10 +343,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "--interval does not move it",
     )
     parser.add_argument(
-        "--error-grace", type=float, default=120.0,
-        help="seconds to keep tolerating CONSECUTIVE gh failures before giving up (default 120); "
+        "--error-grace", type=float, default=300.0,
+        help="seconds to keep tolerating CONSECUTIVE gh failures before giving up (default 300); "
              "a 502 from the API is weather, not a verdict. The streak resets on any answered "
-             "poll. Also a DURATION",
+             "poll. Also a DURATION. Longer than --appear-grace because the costs are asymmetric: "
+             "too short abandons a wait that had its whole deadline left, too long only delays "
+             "reporting a setup that was broken anyway",
     )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)
