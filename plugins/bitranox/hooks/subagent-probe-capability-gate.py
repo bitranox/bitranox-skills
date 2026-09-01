@@ -52,12 +52,17 @@ _DECLARATION_RX = re.compile("|".join(_DECLARATIONS), re.I)
 # by this module's own negative test before it ever shipped.
 _SENTENCE_SPLIT = re.compile(r"[.!?\n]+")
 
-# A declaration still OPENS the line when a list bullet or a short label comes first: one "- " was
-# enough to let through exactly the dispatch this gate exists to deny. Stripped conservatively -
-# at most one bullet and one SHORT label that ends in a colon - because widening a matcher is the
-# direction that manufactures false positives, and prose merely discussing tool use carries
-# neither. "Explain the rule that says do not use any tools" has no colon and is still not a match.
-_BULLET_OR_LABEL = re.compile(r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]{0,22}:\s+)?")
+# A declaration still OPENS the line when a list bullet or a label comes first: one "- " was enough
+# to let through exactly the dispatch this gate exists to deny. At most ONE bullet and ONE label
+# that ends in a colon are stripped, so prose merely discussing tool use is untouched - "Explain
+# the rule that says do not use any tools" has no colon and is still not a match.
+#
+# The label is deliberately NOT length-capped. A cap is an arbitrary number deciding a
+# security-shaped verdict, and it fails by MISSING - the direction nobody notices. The accepted
+# cost is the other way: a sentence whose subject ends in a colon ("The rule we broke last week
+# was: do not use any tools") now reads as a label and DENIES. That is loud, the caller can
+# reword, and there is a test pinning it so it is not rediscovered as a bug.
+_BULLET_OR_LABEL = re.compile(r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]*:\s+)?")
 
 # "Do not use any tools OTHER THAN Read and Grep" says the opposite of a text-only declaration: the
 # dispatch needs tools and names them. Denying it sends the caller to an inert type that has none

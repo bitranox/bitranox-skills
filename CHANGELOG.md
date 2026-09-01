@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.299.1]
+
+### Fixed
+
+- **The declaration matcher's label prefix is no longer length-capped.** 5.299.0 stripped a leading
+  label of at most 22 characters, which is an arbitrary number deciding a security-shaped verdict,
+  and it failed by MISSING: `Instructions for this dispatch: Do not use any tools.` escaped the
+  gate exactly as the bare bullet used to. The accepted cost runs the other way and is pinned by
+  its own test - a sentence whose subject ends in a colon now reads as a label and denies, which is
+  the loud direction and can be reworded.
+
+The `{{` template discriminator added in 5.299.0 is unchanged, and now has a measurement behind it:
+across 24,112 `.json`/`.yaml`/`.yml`/`.xml` files on the authoring machine, zero would be validated
+by the new rule that were skipped by the old one. That is evidence from one machine, not a proof
+about every repo.
+
 ## [5.299.0]
 
 ### Fixed

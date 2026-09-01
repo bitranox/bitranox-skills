@@ -152,3 +152,25 @@ def test_the_plain_declaration_still_denies():
     action, _ = G.assess("Agent", {"subagent_type": "general-purpose",
                                    "prompt": "Answer from this prompt alone. Do not use any tools."})
     assert action == "deny"
+
+
+@pytest.mark.parametrize("prompt", [
+    "Instructions for this dispatch: Do not use any tools.",
+    "Context you should know before starting: reply with text only.",
+    "What I need from you here: answer from this prompt alone.",
+])
+def test_a_long_label_does_not_escape_the_matcher(prompt):
+    """The label prefix carried a 22-character cap picked by hand, and it failed by MISSING - the
+    direction nobody notices. A label is a label whatever its length."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose", "prompt": prompt})
+    assert action == "deny"
+
+
+def test_an_accepted_cost_of_stripping_any_label_length():
+    """The trade this widening makes, recorded as a test rather than left to be rediscovered: a
+    sentence whose subject happens to end in a colon now reads as a label, so discussion prose in
+    that shape DENIES. That is the loud direction, and the caller can reword; the alternative was
+    an arbitrary length silently deciding a security-shaped verdict."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose",
+                                   "prompt": "The rule we broke last week was: do not use any tools."})
+    assert action == "deny"
