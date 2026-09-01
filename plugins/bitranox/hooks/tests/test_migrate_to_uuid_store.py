@@ -75,7 +75,7 @@ def test_migrate_writes_bodies_and_pointers_for_every_fact(tmp_path):
     assert us.body_path(anchor, "global-rule").read_text(encoding="utf-8") == "A" * 400 + "\n"
     assert us.body_path(anchor, "tiny-fact").read_text(encoding="utf-8") == "small body\n"
     _s, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert ptrs[0].slug == "tiny-fact" and ptrs[0].pin is True and ptrs[0].source == {"p"}
+    assert ptrs[0].slug == "tiny-fact" and ptrs[0].pin is True and ptrs[0].source == set()
     assert not ptrs[0].legacy                          # migrated straight into the current format
 
 

@@ -65,7 +65,8 @@ def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     scope, entries, bodies = E.read_store(proj)
     assert scope == "lvl"
     e = entries[0]
-    assert e.slug == "feedback-no-em-dashes" and e.source == {"s"} and not e.legacy
+    assert e.slug == "feedback-no-em-dashes" and not e.legacy
+    assert e.source == set()                     # provenance is no longer persisted
     assert "Always ASCII." in bodies[e.slug]
     # body landed at the slug-named central path, framed as a native memory entry
     disk = us.body_path(proj, e.slug).read_text(encoding="utf-8")
@@ -77,12 +78,13 @@ def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     assert not (sig.claude_memory_dir(proj)).exists()  # no legacy .claude-bx-selflearning store
 
 
-def test_update_merges_source_and_pin_and_body(proj):
+def test_update_merges_pin_and_body_and_does_not_persist_source(proj):
     E.add_or_update_entry(proj, "Rule", "hook", body="b", source=["s1"], scope_default="lvl")
     E.add_or_update_entry(proj, "Rule", "hook2", body="b2", source=["s2"], pin=True)
     scope, entries, bodies = E.read_store(proj)
     e = entries[0]
-    assert e.source == {"s1", "s2"} and e.pin is True and e.hook == "hook2"
+    assert e.pin is True and e.hook == "hook2"
+    assert e.source == set()                     # merged in memory, never written back
     assert bodies[e.slug].endswith("b2") and "b\n" not in bodies[e.slug]
 
 
@@ -161,7 +163,7 @@ def test_cli_add_prints_slug(proj, capsys):
     out = capsys.readouterr().out
     assert out.splitlines()[0] == "feedback-no-em-dashes"    # warnings may follow the slug
     scope, entries, _b = E.read_store(proj)
-    assert entries[0].source == {"a", "b"} and scope == "lvl"
+    assert entries[0].source == set() and scope == "lvl"   # source is not persisted
 
 
 def test_cli_add_body_file(proj, tmp_path):
@@ -259,15 +261,15 @@ def test_add_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
     assert disk.startswith("---\nname: feedback-no-em-dashes\n") and disk.endswith("Always ASCII.\n")
     scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert scope == "proj scope"
-    assert ptrs[0].slug == "feedback-no-em-dashes" and ptrs[0].source == {"s"}
+    assert ptrs[0].slug == "feedback-no-em-dashes" and ptrs[0].source == set()
 
 
-def test_add_is_idempotent_and_merges_source(tmp_path):
+def test_add_is_idempotent_and_does_not_persist_source(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
     E.add_or_update_entry(proj, "Fact", "h", body="B", source=["a"])
     E.add_or_update_entry(proj, "Fact", "h", body="B", source=["b"])  # re-run: no dupe, merge source
     _scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert len(ptrs) == 1 and ptrs[0].source == {"a", "b"}
+    assert len(ptrs) == 1 and ptrs[0].source == set()      # idempotent; source not written
 
 
 def test_add_refuses_slug_collision_across_levels(tmp_path):
@@ -342,7 +344,8 @@ def test_move_up_relocates_pointer_only_body_untouched(tmp_path):
     assert "shared-rule" not in {p.slug for p in ptrs_from}      # gone at source
     _s, ptrs_to = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     got = {p.slug: p for p in ptrs_to}
-    assert "shared-rule" in got and got["shared-rule"].pin and got["shared-rule"].source == {"cap"}
+    assert "shared-rule" in got and got["shared-rule"].pin       # pin survives a move
+    assert got["shared-rule"].source == set()                    # provenance is not persisted
     assert {r.slug for r in us.resolve(proj)} == {"shared-rule"}  # still visible from below
 
 
@@ -391,7 +394,8 @@ def test_move_completes_after_crash_duplicate(tmp_path):
     assert rep["moved"] is True
     _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     got = {p.slug: p for p in ptrs}
-    assert got["f"].source == {"s1", "s2"}                       # merged, single line
+    assert len([p for p in ptrs if p.slug == "f"]) == 1          # merged to a single line
+    assert got["f"].source == set()                              # provenance is not persisted
     assert "f" not in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 
@@ -423,7 +427,7 @@ def test_move_force_dedup_keeps_longer_hook_when_source_is_richer(tmp_path):
     assert rep["moved"] is True and rep["warnings"]
     tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
     assert tgt["fact"].hook.startswith("a much longer richer hook")       # longer hook won
-    assert tgt["fact"].source == {"s1", "s2"}                             # provenance unioned
+    assert tgt["fact"].source == set()                                    # not persisted
     assert "fact" not in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 

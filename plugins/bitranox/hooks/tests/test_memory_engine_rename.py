@@ -58,7 +58,7 @@ def test_rename_moves_the_pointer_and_the_body_keeping_content(tmp_path):
     _scope, pointers = us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     kept = next(p for p in pointers if p.slug == "right-name")
     assert kept.title == "Wrong name" and kept.hook == "hook text" and kept.pin
-    assert "cap" in kept.source, "provenance must survive a rename"
+    assert kept.source == set(), "provenance is not persisted on the line any more"
 
 
 def test_the_body_frontmatter_name_follows_the_slug(tmp_path):

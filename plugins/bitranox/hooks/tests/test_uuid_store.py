@@ -107,8 +107,9 @@ def test_render_then_parse_round_trips_pointers_and_scope():
     assert scope == "what this level is for"
     got = sorted(got, key=lambda p: p.slug != "root-cause")   # pinned renders first; order by intent
     assert [(p.slug, p.title, p.hook, sorted(p.source), p.pin) for p in got] == [
-        ("root-cause", "Root cause", "fix the root, never a patch", ["prov:x"], True),
-        ("no-em-dashes", "No em-dashes", "ASCII only", ["a", "b"], False),
+        # source is NOT rendered (see Pointer.meta_comment), so it does not survive a round trip
+        ("root-cause", "Root cause", "fix the root, never a patch", [], True),
+        ("no-em-dashes", "No em-dashes", "ASCII only", [], False),
     ]
 
 
@@ -217,7 +218,8 @@ def test_legacy_pointer_renders_bx_slug_token():
     p = us.Pointer(uuid="aaaaaaaa-0000-5000-8000-000000000000", title="Root cause", hook="h",
                    source={"x"}, pin=True, slug="root-cause", legacy=True)
     line = p.index_line()
-    assert "bx:slug=root-cause" in line and "bx:src=x" in line and "bx:pin" in line
+    assert "bx:slug=root-cause" in line and "bx:pin" in line
+    assert "bx:src" not in line                       # provenance is no longer rendered
     assert "uuid:aaaaaaaa" in line                    # legacy lines keep their uuid link
 
 
@@ -227,10 +229,14 @@ def test_parse_reads_slug_from_mem_link():
     assert ptrs[0].slug == "my-slug"
 
 
-def test_slug_round_trips_with_source_and_pin():
+def test_source_is_not_rendered_but_pin_survives():
+    # provenance was dropped from the always-loaded line: nothing read it, and it cost 14.9
+    # percent of this machine's cascade. `pin` is a write-permission gate and stays.
     ptrs = [us.Pointer(slug="feedback-a", title="A", hook="h", source={"a", "b"}, pin=True)]
-    _s, got = us.parse_pointer_index(us.render_pointer_index("s", ptrs))
-    assert (got[0].slug, sorted(got[0].source), got[0].pin) == ("feedback-a", ["a", "b"], True)
+    rendered = us.render_pointer_index("s", ptrs)
+    assert "bx:src" not in rendered
+    _s, got = us.parse_pointer_index(rendered)
+    assert (got[0].slug, sorted(got[0].source), got[0].pin) == ("feedback-a", [], True)
 
 
 def test_missing_bx_slug_derives_slug_from_title():
@@ -272,7 +278,8 @@ def test_body_path_is_slug_named_flat():
 def test_render_emits_mem_link_without_bx_slug():
     line = us.Pointer(slug="root-cause", title="Root cause", hook="fix the root",
                       source={"x"}, pin=True).index_line()
-    assert "(mem:root-cause)" in line and "bx:src=x" in line and "bx:pin" in line
+    assert "(mem:root-cause)" in line and "bx:pin" in line
+    assert "bx:src" not in line                       # provenance is no longer rendered
     assert "bx:slug" not in line and "uuid:" not in line
 
 

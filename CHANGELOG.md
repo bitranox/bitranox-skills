@@ -29,6 +29,31 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.0]
+
+### Removed
+
+- **`bx:src` provenance is no longer written to the pointer line, and is not stored anywhere
+  else.** It was added in 2026-07 when the entry line sat behind a `CLAUDE.md` `@import` and cost
+  nothing per session; two days later the slug-store pivot made the pointer block inline
+  always-loaded text and nobody re-priced it. Measured before removal on this machine: the
+  always-loaded cascade was 50,262 tokens for the pointer files alone and 7,931 of them (15.8
+  percent) were `bx:src`. Nothing read the value - every touch in the engine was a set union or a
+  re-emit, never a decision, and the promotion corroboration gate deliberately uses a separate
+  out-of-store file. The old values are NOT migrated or archived: dropping them is the deliberate
+  choice, taken knowing the pointer files are in no git repository.
+- `--source` on `add` and `amend-pinned` is still ACCEPTED so no caller breaks, and `bx:src=` is
+  still PARSED off an older line without error, but neither is persisted. A line keeps its token
+  until the next re-render of that level, which drops it.
+
+### Notes
+
+- `bx:pin` is unaffected. It shares the same HTML comment but the tokeniser is order-independent,
+  and the comment is emitted with `bx:pin` alone. The pin remains a write-permission gate.
+- The 1024-character frontmatter cap that prompted a look at alternatives applies to a SKILL's
+  `description` (`harness_checks.DESCRIPTION_CAP`, because the injected skill listing truncates
+  it), not to memory fact bodies. Recorded here so the two are not conflated again.
+
 ## [5.299.3]
 
 ### Fixed

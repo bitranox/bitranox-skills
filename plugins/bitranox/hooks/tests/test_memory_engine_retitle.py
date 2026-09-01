@@ -66,7 +66,7 @@ def test_retitle_changes_the_title_and_nothing_else_on_the_pointer(tmp_path):
     ptr = _pointer(proj, "stale-title")
     assert ptr.title == "Accurate title"
     assert ptr.hook == "When testing, do the thing."
-    assert ptr.source == {"cap-one"}
+    assert ptr.source == set()            # provenance is not persisted on the line
     assert ptr.pin is False
 
 
@@ -268,7 +268,7 @@ def test_amend_pinned_title_changes_the_title_and_keeps_everything_else(tmp_path
     assert ptr.title == "Accurate iron rule"
     assert ptr.hook == "When testing, do the thing."
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
-    assert ptr.source == {"cap-one"}
+    assert ptr.source == set()            # provenance is not persisted on the line
     assert us.body_path(anchor, slug).read_bytes() == before
 
 

@@ -212,9 +212,14 @@ class Pointer:
         self.legacy = bool(legacy)
 
     def meta_comment(self):
+        # `bx:src` provenance is NOT rendered. It was introduced when the entry line sat behind a
+        # CLAUDE.md @import and cost nothing per session; the slug-store pivot then made the pointer
+        # block inline always-loaded text and nobody re-priced it. Measured before removal: 8,022
+        # tokens, 14.9 percent of this machine's always-loaded cascade, for data nothing reads -
+        # every touch of it in the engine was a set union or a re-emit, never a decision. `source`
+        # is still PARSED (see `_parse_meta`) so an older line is read without error; it simply
+        # stops being written back. Dropping it is deliberate and the old values are not kept.
         parts = []
-        if self.source:
-            parts.append("bx:src=%s" % ",".join(sorted(self.source)))
         if self.pin:
             parts.append("bx:pin")
         if self.legacy and self.slug:                # legacy lines keep their bx:slug token

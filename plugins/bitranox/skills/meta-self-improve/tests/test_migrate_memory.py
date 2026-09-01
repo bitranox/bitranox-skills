@@ -102,8 +102,10 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     rep = M.migrate_store(slug, dry_run=False)
     assert rep["placed"] == 2 and not rep["parked"]
     scope, entries, bodies = ME.read_store(str(proj))
-    srcs = set().union(*(e.source for e in entries))
-    assert {"project-a", "project-b"} <= srcs                # provenance carried
+    # provenance is no longer persisted anywhere (5.300.0); the migration still PLACES both
+    # facts, which is what this test is for
+    assert set().union(*(e.source for e in entries)) == set()
+    assert {e.slug for e in entries} == {"project-a", "project-b"}
     assert (sig.claude_memory_dir(str(proj)) / "facts").glob("*.md")   # heavy body placed
     # receipt written; a backup exists out of tree
     assert M._receipt_path(str(proj)).is_file()
@@ -181,7 +183,7 @@ def test_migrate_redirect_forces_target(env):
     rep = M.migrate_store(slug, dry_run=False, redirect=str(target))
     assert rep["redirected"] and rep["placed"] == 1 and not rep["parked"]
     _, entries, _ = ME.read_store(str(target))
-    assert entries and entries[0].source == {"project-a"}
+    assert entries and entries[0].source == set()           # provenance is not persisted
 
 
 def test_the_platform_temp_root_is_excluded_however_it_resolves():

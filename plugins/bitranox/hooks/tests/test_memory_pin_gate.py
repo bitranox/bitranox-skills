@@ -112,15 +112,14 @@ def test_amend_pinned_changes_the_hook_and_the_fact_stays_pinned(proj, capsys):
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
 
 
-def test_amend_pinned_merges_a_new_source_into_the_stored_provenance_set(proj, capsys):
-    """With the gate in place, `amend-pinned` is the ONLY path left that can record provenance on
-    an iron rule (`add` refuses a pinned target). A pinned fact carries several merged `bx:src`
-    keys, so this must merge like `add` does - replacing or dropping would erase the fact's
-    history the first time a new key is recorded."""
+def test_amend_pinned_accepts_a_source_but_no_longer_persists_it(proj, capsys):
+    """`--source` is still ACCEPTED so no caller breaks, but provenance is no longer stored
+    anywhere: it was dropped from the pointer line and given no other home. This locks that in,
+    because a flag that silently does nothing is worth being explicit about."""
     slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
                                  body="B", pin=True,
                                  source=["session-first-2026-08-01", "user-directive-original"])
-    assert _pointer(proj, slug).source == {"session-first-2026-08-01", "user-directive-original"}
+    assert _pointer(proj, slug).source == set()
 
     rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug,
                 "--source", "session-second-2026-08-15"])
@@ -128,8 +127,7 @@ def test_amend_pinned_merges_a_new_source_into_the_stored_provenance_set(proj, c
 
     assert rc == 0, out
     ptr = _pointer(proj, slug)
-    assert ptr.source == {"session-first-2026-08-01", "user-directive-original",
-                          "session-second-2026-08-15"}
+    assert ptr.source == set()                                  # accepted, not persisted
     assert ptr.pin is True
     assert ptr.hook == "When testing, do the original thing."   # source-only amend keeps the hook
 
@@ -143,7 +141,7 @@ def test_amend_pinned_accepts_several_comma_separated_sources(proj, capsys):
     out = capsys.readouterr().out
 
     assert rc == 0, out
-    assert _pointer(proj, slug).source == {"first", "second", "third"}
+    assert _pointer(proj, slug).source == set()      # the flag parses; nothing is stored
 
 
 def test_amend_pinned_reads_the_hook_from_a_file(tmp_path, proj, capsys):
