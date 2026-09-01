@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.299.2]
+
+### Fixed
+
+- **The decoy-anchor check no longer calls a live memory store a decoy, and no longer walks an
+  unbounded tree.** `decoy_context` took its walk root from `memory_engine._anchor`, which falls
+  back to the project directory itself when no ancestor carries a `CLAUDE.md`. That breaks the
+  precondition `find_decoy_anchors` documents, in both directions. A session started in a plain
+  parent directory reported every healthy per-tree store beneath it as a decoy, under a message
+  that says to verify each is drained and then remove it - advice that destroys real fact bodies.
+  The same fallback made the walk root the working directory, so a session started in a home
+  directory walked all of it inside a hook whose docstring promises it never delays a session
+  (`find /home/<user> -type d` did not finish in 20 seconds here). It now resolves the anchor the
+  way `retrieval_context` beside it already did, and returns nothing when there is none.
+- **The decoy check's throttle is keyed per project rather than per machine.** The stamp lived at
+  one path for the whole machine, so whichever project started a session first each day consumed
+  every other tree's daily check, and a tree that really did carry a decoy was warned about only
+  if it won that race. It is now keyed with `proj_key`, like `audit_file` beside it. The two fixes
+  ship together deliberately: the machine-wide stamp was what limited the first defect to one
+  firing per machine per day, so correcting the throttle alone would have made it fire more often.
+
 ## [5.299.1]
 
 ### Fixed

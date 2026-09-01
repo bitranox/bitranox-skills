@@ -408,13 +408,13 @@ def test_session_banner_missing_skill_emits_nothing(tmp_path, monkeypatch, capsy
 # ---------------------------------------------------------------------------
 
 
-def _tree(tmp_path, *, decoy: bool):
+def _tree(tmp_path, *, decoy: bool, name: str = "tree"):
     """Build a minimal tree: CLAUDE.md + a store at the top, a project level under it.
 
     With ``decoy=True`` a SECOND store is planted below the top, which is what the walk-up
     retrieval resolves to FIRST - the whole reason this check exists.
     """
-    top = tmp_path / "tree"
+    top = tmp_path / name
     (top / ".claude-memory" / "facts").mkdir(parents=True)
     (top / "CLAUDE.md").write_text("# top\n", encoding="utf-8")
     proj = top / "proj"
@@ -426,9 +426,11 @@ def _tree(tmp_path, *, decoy: bool):
 
 
 def _clear_stamp():
-    stamp = SIG._audit_dir() / "decoy-check.stamp"
-    if stamp.exists():
-        stamp.unlink()
+    """Drop every decoy stamp, whatever the naming scheme, so a test starts un-throttled."""
+    d = SIG._audit_dir()
+    if d.is_dir():
+        for stamp in d.glob("*decoy-check.stamp"):
+            stamp.unlink()
 
 
 def test_decoy_context_is_silent_on_a_healthy_tree(tmp_path):
@@ -464,6 +466,49 @@ def test_decoy_context_is_throttled_after_it_runs(tmp_path):
 
     assert "decoy anchor" in first
     assert second == ""
+
+
+def test_decoy_context_throttle_is_per_project_not_machine_wide(tmp_path):
+    """One tree's daily check must not consume every other tree's.
+
+    The stamp used to live at a single machine-wide path, so whichever project started a session
+    first each day silenced the decoy warning for every other tree on the machine - and a tree
+    that really does carry a decoy was checked only if it happened to win that race.
+    """
+    healthy = _tree(tmp_path, decoy=False, name="healthy")
+    carries_decoy = _tree(tmp_path, decoy=True, name="carries-decoy")
+    _clear_stamp()
+
+    first = S.decoy_context(str(healthy))
+    second = S.decoy_context(str(carries_decoy))
+
+    assert first == ""
+    assert "decoy anchor" in second
+
+
+def test_decoy_context_is_silent_when_no_ancestor_carries_a_claude_md(tmp_path):
+    """A session started in a plain parent dir must not call the trees BELOW it decoys.
+
+    ``find_decoy_anchors`` requires an anchor resolved from a CLAUDE.md-bearing ancestor; with no
+    such ancestor the walk root used to fall back to the cwd itself, so every live per-tree store
+    underneath read as a decoy and the message told the user to remove it. Following that advice
+    deletes real fact bodies. The same fallback made the walk root unbounded - a session started
+    in a home directory walked the whole of it inside a hook that promises not to delay a session.
+    """
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    repo = parent / "repoA"
+    (repo / ".claude-memory" / "facts").mkdir(parents=True)
+    (repo / "CLAUDE.md").write_text("# repoA top\n", encoding="utf-8")
+    _clear_stamp()
+
+    # Non-vacuous: the whole point is that no ancestor carries a CLAUDE.md. If one did (a stray
+    # /tmp/CLAUDE.md has hijacked this walk before), the assertion below would pass for the
+    # wrong reason.
+    import uuid_store as us
+    assert us.resolve_anchor(str(parent)) is None
+
+    assert S.decoy_context(str(parent)) == ""
 
 
 def test_decoy_context_never_raises_on_a_broken_tree(tmp_path):

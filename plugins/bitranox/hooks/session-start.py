@@ -353,15 +353,25 @@ def decoy_context(proj):
     """
     try:
         import self_improve_signals as sig
+        import uuid_store as us
 
-        stamp = sig._audit_dir() / "decoy-check.stamp"
+        # find_decoy_anchors is only meaningful below a RESOLVED anchor - a CLAUDE.md-bearing
+        # ancestor. memory_engine._anchor falls back to `proj` itself when there is none, which
+        # breaks the precondition in both directions: every live per-tree store underneath then
+        # reads as a decoy and the message tells the reader to remove it, and the walk root
+        # becomes the cwd, so a session started in a home directory walks the whole of it.
+        anchor = us.resolve_anchor(proj)
+        if anchor is None:
+            return ""
+        # Keyed per PROJECT, like audit_file beside it. One machine-wide stamp let whichever
+        # project started a session first each day consume every other tree's daily check, so a
+        # tree that really did carry a decoy was warned about only if it won that race.
+        stamp = sig._audit_dir() / (sig.proj_key(proj) + ".decoy-check.stamp")
         if stamp.exists() and (time.time() - stamp.stat().st_mtime) < _DECOY_CHECK_INTERVAL_S:
             return ""
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "meta-self-improve"))
-        import memory_engine
         import reconcile_memory_index as rmi
 
-        anchor = memory_engine._anchor(str(proj))
         found = rmi.find_decoy_anchors(anchor)
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
