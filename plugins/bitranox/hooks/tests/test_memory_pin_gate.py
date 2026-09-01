@@ -112,36 +112,19 @@ def test_amend_pinned_changes_the_hook_and_the_fact_stays_pinned(proj, capsys):
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
 
 
-def test_amend_pinned_accepts_a_source_but_no_longer_persists_it(proj, capsys):
-    """`--source` is still ACCEPTED so no caller breaks, but provenance is no longer stored
-    anywhere: it was dropped from the pointer line and given no other home. This locks that in,
-    because a flag that silently does nothing is worth being explicit about."""
+def test_source_flag_is_gone_from_both_verbs(proj, capsys):
+    """Provenance was removed in 5.300.0 and `--source` went with it, on `add` and `amend-pinned`
+    alike. Asserted as a REJECTION rather than a no-op: a flag that silently accepts and discards
+    is the shape this change exists to remove, so 'gone' has to mean argparse refuses it."""
     slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
-                                 body="B", pin=True,
-                                 source=["session-first-2026-08-01", "user-directive-original"])
-    assert _pointer(proj, slug).source == set()
-
-    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug,
-                "--source", "session-second-2026-08-15"])
-    out = capsys.readouterr().out
-
-    assert rc == 0, out
-    ptr = _pointer(proj, slug)
-    assert ptr.source == set()                                  # accepted, not persisted
-    assert ptr.pin is True
-    assert ptr.hook == "When testing, do the original thing."   # source-only amend keeps the hook
-
-
-def test_amend_pinned_accepts_several_comma_separated_sources(proj, capsys):
-    """`--source` splits on commas exactly as `add`'s does, so the two verbs take one syntax."""
-    slug = E.add_or_update_entry(proj, "Iron rule", "When testing, do the original thing.",
-                                 body="B", pin=True, source=["first"])
-
-    rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--source", "second, third"])
-    out = capsys.readouterr().out
-
-    assert rc == 0, out
-    assert _pointer(proj, slug).source == set()      # the flag parses; nothing is stored
+                                 body="B", pin=True)
+    for argv in (["amend-pinned", "--proj", proj, "--slug", slug, "--source", "x"],
+                 ["add", "--proj", proj, "--title", "T", "--hook", "When x, do y.",
+                  "--body", "B", "--source", "x"]):
+        with pytest.raises(SystemExit) as exc:      # argparse exits 2 on an unknown option
+            E.main(argv)
+        assert exc.value.code == 2, "%s must reject --source" % argv[0]
+    assert _pointer(proj, slug).pin is True         # the fact is untouched by the refusal
 
 
 def test_amend_pinned_reads_the_hook_from_a_file(tmp_path, proj, capsys):

@@ -200,13 +200,12 @@ class Pointer:
     migration moves its body - the renderer re-emits legacy lines unchanged so a heal round-trip
     can never break an unmigrated store."""
 
-    __slots__ = ("slug", "title", "hook", "source", "pin", "uuid", "legacy")
+    __slots__ = ("slug", "title", "hook", "pin", "uuid", "legacy")
 
-    def __init__(self, slug="", title="", hook="", source=None, pin=False, uuid="", legacy=False):
+    def __init__(self, slug="", title="", hook="", pin=False, uuid="", legacy=False):
         self.slug = slug or ""
         self.title = title or ""
         self.hook = hook or ""
-        self.source = set(source or ())
         self.pin = bool(pin)
         self.uuid = str(uuid or "")
         self.legacy = bool(legacy)
@@ -255,15 +254,16 @@ def _slug_from_title(title):
 
 
 def _parse_meta(meta):
-    source, pin, slug = set(), False, ""
+    """(pin, slug) from a meta comment. A `bx:src=` token is CONSUMED AND DISCARDED: provenance
+    was removed in 5.300.0, and an older line must still parse without error until the next
+    re-render of its level drops the token."""
+    pin, slug = False, ""
     for tok in (meta or "").split():
         if tok == "bx:pin":
             pin = True
-        elif tok.startswith("bx:src="):
-            source |= {s for s in tok[len("bx:src="):].split(",") if s}
         elif tok.startswith("bx:slug="):
             slug = tok[len("bx:slug="):]
-    return source, pin, slug
+    return pin, slug
 
 
 def render_pointer_index(scope, pointers):
@@ -294,15 +294,14 @@ def parse_pointer_index(text):
         m = _PTR_RX.match(raw)
         if not m:
             continue
-        source, pin, slug_tok = _parse_meta(m.group("meta"))
+        pin, slug_tok = _parse_meta(m.group("meta"))
         title = m.group("title")
         hook = m.group("hook").strip()
         if m.group("scheme") == "mem":
-            pointers.append(Pointer(slug=m.group("target"), title=title, hook=hook,
-                                    source=source, pin=pin))
+            pointers.append(Pointer(slug=m.group("target"), title=title, hook=hook, pin=pin))
         else:
             pointers.append(Pointer(slug=slug_tok or _slug_from_title(title), title=title,
-                                    hook=hook, source=source, pin=pin,
+                                    hook=hook, pin=pin,
                                     uuid=m.group("target"), legacy=True))
     return scope, pointers
 
@@ -376,7 +375,7 @@ def put_body(anchor_dir, slug, body):
     return write_if_changed(body_path(anchor_dir, slug), (body or "").rstrip("\n") + "\n")
 
 
-def add_pointer(altitude_dir, slug, title, hook, source=None, pin=False, scope_default=""):
+def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     """Upsert one pointer line (keyed by SLUG) into `<altitude_dir>/CLAUDE.local.md`'s managed block
     (merging the provenance set + pin on update), under a lock, mtime-neutral. Sets the scope
     descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
@@ -394,11 +393,10 @@ def add_pointer(altitude_dir, slug, title, hook, source=None, pin=False, scope_d
         if slug in by_slug:
             p = by_slug[slug]
             p.title, p.hook = title, (hook or p.hook)
-            p.source |= set(source or ())
             p.pin = p.pin or pin
             p.legacy, p.uuid = False, ""             # updated fact now lives at the slug path
         else:
-            pointers.append(Pointer(slug=slug, title=title, hook=hook, source=source, pin=pin))
+            pointers.append(Pointer(slug=slug, title=title, hook=hook, pin=pin))
         write_if_changed(local, upsert_pointer_block(text, scope or scope_default, pointers))
     return slug
 

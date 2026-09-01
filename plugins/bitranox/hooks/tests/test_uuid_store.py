@@ -98,18 +98,17 @@ def test_resolve_anchor_returns_none_when_no_claude_md_anywhere(tmp_path):
 def test_render_then_parse_round_trips_pointers_and_scope():
     ptrs = [
         us.Pointer(slug="root-cause", title="Root cause",
-                   hook="fix the root, never a patch", source={"prov:x"}, pin=True),
+                   hook="fix the root, never a patch", pin=True),
         us.Pointer(slug="no-em-dashes", title="No em-dashes",
-                   hook="ASCII only", source={"a", "b"}, pin=False),
+                   hook="ASCII only", pin=False),
     ]
     block = us.render_pointer_index("what this level is for", ptrs)
     scope, got = us.parse_pointer_index(block)
     assert scope == "what this level is for"
     got = sorted(got, key=lambda p: p.slug != "root-cause")   # pinned renders first; order by intent
-    assert [(p.slug, p.title, p.hook, sorted(p.source), p.pin) for p in got] == [
-        # source is NOT rendered (see Pointer.meta_comment), so it does not survive a round trip
-        ("root-cause", "Root cause", "fix the root, never a patch", [], True),
-        ("no-em-dashes", "No em-dashes", "ASCII only", [], False),
+    assert [(p.slug, p.title, p.hook, p.pin) for p in got] == [
+        ("root-cause", "Root cause", "fix the root, never a patch", True),
+        ("no-em-dashes", "No em-dashes", "ASCII only", False),
     ]
 
 
@@ -162,7 +161,7 @@ def test_put_body_writes_to_the_slug_named_path(tmp_path):
 def test_add_pointer_upserts_a_pointer_into_the_altitude_claude_local_md(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     s = us.add_pointer(str(tmp_path), slug="a-fact", title="Fact", hook="a hook",
-                       source={"s"}, scope_default="lvl scope")
+                       scope_default="lvl scope")
     assert s == "a-fact"
     local = (tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8")
     assert "(mem:a-fact)" in local
@@ -187,7 +186,7 @@ def _build_tree(prefix):
     for level, slug in ((anchor, "root-fact"), (mid, "mid-fact"), (proj, "proj-fact")):
         body = "BODY_%s" % slug
         us.put_body(str(anchor), slug, body)
-        us.add_pointer(str(level), slug=slug, title=slug, hook="h", source={"x"})
+        us.add_pointer(str(level), slug=slug, title=slug, hook="h")
         bodies[slug] = body
     return proj, bodies
 
@@ -216,7 +215,7 @@ def test_resolve_returns_empty_when_no_anchor(tmp_path):
 
 def test_legacy_pointer_renders_bx_slug_token():
     p = us.Pointer(uuid="aaaaaaaa-0000-5000-8000-000000000000", title="Root cause", hook="h",
-                   source={"x"}, pin=True, slug="root-cause", legacy=True)
+                   pin=True, slug="root-cause", legacy=True)
     line = p.index_line()
     assert "bx:slug=root-cause" in line and "bx:pin" in line
     assert "bx:src" not in line                       # provenance is no longer rendered
@@ -232,11 +231,10 @@ def test_parse_reads_slug_from_mem_link():
 def test_source_is_not_rendered_but_pin_survives():
     # provenance was dropped from the always-loaded line: nothing read it, and it cost 14.9
     # percent of this machine's cascade. `pin` is a write-permission gate and stays.
-    ptrs = [us.Pointer(slug="feedback-a", title="A", hook="h", source={"a", "b"}, pin=True)]
+    ptrs = [us.Pointer(slug="feedback-a", title="A", hook="h", pin=True)]
     rendered = us.render_pointer_index("s", ptrs)
     assert "bx:src" not in rendered
     _s, got = us.parse_pointer_index(rendered)
-    assert (got[0].slug, sorted(got[0].source), got[0].pin) == ("feedback-a", [], True)
 
 
 def test_missing_bx_slug_derives_slug_from_title():
@@ -248,7 +246,7 @@ def test_missing_bx_slug_derives_slug_from_title():
 
 def test_add_pointer_persists_slug(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
-    us.add_pointer(str(tmp_path), slug="the-slug", title="Fact", hook="h", source={"s"})
+    us.add_pointer(str(tmp_path), slug="the-slug", title="Fact", hook="h")
     _s, ptrs = us.parse_pointer_index((tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert ptrs[0].slug == "the-slug"
 
@@ -277,7 +275,7 @@ def test_body_path_is_slug_named_flat():
 
 def test_render_emits_mem_link_without_bx_slug():
     line = us.Pointer(slug="root-cause", title="Root cause", hook="fix the root",
-                      source={"x"}, pin=True).index_line()
+                      pin=True).index_line()
     assert "(mem:root-cause)" in line and "bx:pin" in line
     assert "bx:src" not in line                       # provenance is no longer rendered
     assert "bx:slug" not in line and "uuid:" not in line
@@ -300,7 +298,6 @@ def test_render_pinned_first_under_iron_rules_heading():
 
 def test_parse_new_mem_line():
     _s, ptrs = us.parse_pointer_index("- [T](mem:my-slug) - h <!-- bx:src=x bx:pin -->\n")
-    assert ptrs[0].slug == "my-slug" and ptrs[0].pin and ptrs[0].source == {"x"}
     assert not ptrs[0].legacy
 
 
@@ -327,7 +324,6 @@ def test_trailing_garbage_after_meta_comment_is_dropped():
     line = ("- [T](mem:my-slug) - a hook <!-- bx:src=x -->ajnd <!-- bx:slug=other -->\n")
     _s, ptrs = us.parse_pointer_index(line)
     p = ptrs[0]
-    assert p.slug == "my-slug" and p.hook == "a hook" and p.source == {"x"}
     assert "ajnd" not in p.index_line() and "other" not in p.index_line()
 
 
@@ -372,7 +368,7 @@ def test_put_body_and_add_pointer_slug_native(tmp_path):
     (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     assert us.put_body(str(tmp_path), "a-slug", "BODY") is True
     assert (tmp_path / ".claude-memory" / "facts" / "a-slug.md").read_text(encoding="utf-8") == "BODY\n"
-    us.add_pointer(str(tmp_path), slug="a-slug", title="A", hook="h", source={"s"})
+    us.add_pointer(str(tmp_path), slug="a-slug", title="A", hook="h")
     _s, ptrs = us.parse_pointer_index((tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert ptrs[0].slug == "a-slug" and not ptrs[0].legacy
 
@@ -387,7 +383,6 @@ def test_hook_may_contain_angle_brackets_meta_still_parsed():
     p = ptrs[0]
     assert p.slug == "prune-plugin-cache-after-publish"       # bx:slug honored, not title-derived
     assert "<mkt>/<plugin>/" in p.hook                        # hook intact incl. angle brackets
-    assert p.source == {"global-rules:prune"}
 
 
 def test_mem_line_hook_with_angle_brackets():

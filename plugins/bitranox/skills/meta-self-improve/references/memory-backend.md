@@ -32,10 +32,10 @@ Each altitude's `CLAUDE.local.md` carries ONE managed, fenced pointer block:
     (retrieval recipe line - teaches walking UP to the anchor and Reading facts/<slug>.md)
 
     ## Iron rules
-    - [Title](mem:<slug>) - hook <!-- bx:src=<sources> bx:pin -->
+    - [Title](mem:<slug>) - hook <!-- bx:pin -->
 
     ## Memory index
-    - [Title](mem:<slug>) - hook <!-- bx:src=<sources> -->
+    - [Title](mem:<slug>) - hook
     <!-- BITRANOX-MEMORY-INDEX:END -->
 
 - **The slug IS the identity** and the body-file key. Every body lives centrally at
@@ -136,8 +136,8 @@ Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass
 
 | Command                                                                                                                                                                                                                                                 | Success line to REQUIRE               |
 |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--source S] [--pin] [--scope TEXT] [--slug S]`                                                                                               | the printed slug                      |
-| `amend-pinned --proj D --slug S [--title T] [--hook H\|--hook-file F] [--body-file F] [--source S]` (the deliberate way through - an ordinary `add` REFUSES a pinned slug, and so does `retitle`; human use only, no autonomous pass invokes this verb) | the printed slug                      |
+| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]`                                                                                               | the printed slug                      |
+| `amend-pinned --proj D --slug S [--title T] [--hook H\|--hook-file F] [--body-file F]` (the deliberate way through - an ordinary `add` REFUSES a pinned slug, and so does `retitle`; human use only, no autonomous pass invokes this verb) | the printed slug                      |
 | `heal --proj D`                                                                                                                                                                                                                                         | `healed N file(s) across M level(s)`  |
 | `set-scope --proj D --scope TEXT\|--scope-file F`                                                                                                                                                                                                       | `scope updated:` / `scope unchanged:` |
 | `move --from-level A --to-level B --slug S [--slug S2 ...] [--force]` (several slugs move as ONE set; see below)                                                                                                                                        | `moved <slug>: A -> B (up\|down)`     |
@@ -167,7 +167,7 @@ instead (the file wins if both forms are given, matching `--body-file`); either 
 scaffolds the level, so a rejected call leaves nothing behind.
 
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
-merges provenance (`bx:src`) and pin, keeps the existing body when `--body` is empty, frames a bare
+keeps the pin, keeps the existing body when `--body` is empty, frames a bare
 body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amend-pinned` is the
 deliberate way through). `move` relocates only a pointer LINE (the body never moves); if the
 target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -

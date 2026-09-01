@@ -29,18 +29,17 @@ _LEGACY_ENTRY = re.compile(r"^- \[(?P<title>[^\]]*)\]\((?P<target>[^)]+)\) - (?P
 
 
 def _parse_legacy_meta(meta):
-    source, pin = set(), False
+    """`pin` from a legacy meta comment. A `bx:src=` token is consumed and discarded: provenance
+    was removed in 5.300.0, so a legacy store migrates without it."""
     for tok in (meta or "").split():
         if tok == "bx:pin":
-            pin = True
-        elif tok.startswith("bx:src="):
-            source |= {s for s in tok[len("bx:src="):].split(",") if s}
-    return source, pin
+            return True
+    return False
 
 
 def read_legacy_store(store_dir):
     """Parse a legacy `.claude-bx-selflearning/` store dir -> (scope, [fact dict]). Each fact:
-    {slug, title, hook, body, source, pin}. Tiny bodies are inlined under an `(#slug)` entry; heavy
+    {slug, title, hook, body, pin}. Tiny bodies are inlined under an `(#slug)` entry; heavy
     bodies live in `facts/<slug>.md`. Missing store -> ("", [])."""
     store = Path(store_dir)
     try:
@@ -52,12 +51,12 @@ def read_legacy_store(store_dir):
     for raw in text.splitlines():
         m = _LEGACY_ENTRY.match(raw)
         if m:
-            source, pin = _parse_legacy_meta(m.group("meta"))
+            pin = _parse_legacy_meta(m.group("meta"))
             target = m.group("target")
             heavy = target.endswith(".md")
             slug = target.rsplit("/", 1)[-1][:-3] if heavy else target.lstrip("#")
             cur = {"slug": slug, "title": m.group("title"), "hook": m.group("hook"),
-                   "body": "", "source": source, "pin": pin, "heavy": heavy}
+                   "body": "", "pin": pin, "heavy": heavy}
             facts.append(cur)
             continue
         if cur is not None and not cur["heavy"] and (raw.startswith("  ") or not raw.strip()):
@@ -111,7 +110,7 @@ def migrate_store(altitude, dry_run):
         if not dry_run:
             us.put_body(str(anchor), slug, f["body"])
             us.add_pointer(altitude, slug=slug, title=f["title"], hook=f["hook"],
-                           source=f["source"], pin=f["pin"], scope_default=scope)
+                           pin=f["pin"], scope_default=scope)
             written = True
         results.append((slug, written, collided))
     return results

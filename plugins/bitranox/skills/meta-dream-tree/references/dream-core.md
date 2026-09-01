@@ -161,7 +161,7 @@ Commit the store's git repo (durability) so the pre-run state is one `git diff` 
 ## Dedup semantics
 
 Fold near-duplicates into ONE sharpened entry (engine `add`, same slug); the surviving entry
-merges provenance; cross-link related entries with `[[slug]]` (UPWARD only). Dedup compares
+cross-link related entries with `[[slug]]` (UPWARD only). Dedup compares
 across the WHOLE scope of the running skill, and runs AGAIN after any placement (placement
 creates new overlap).
 

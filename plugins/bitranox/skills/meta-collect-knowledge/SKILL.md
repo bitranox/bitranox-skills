@@ -47,11 +47,10 @@ unknown, defer - a blind gather pulls noise.
      (engine `move`/`add` at that level; honor the promotion corroboration gate; keep it
      concrete).
    - **Same tree, only relevant here** -> self-contained COPY into this project's memory (engine
-     `add`), marked as gathered (`--source gathered:<origin-slug>`) so a later dream does not
-     re-promote it as a fresh discovery.
-   - **ANOTHER tree** -> ALWAYS a self-contained, labeled COPY (`--source
-     gathered-cross-tree:<top>`); trees share no ancestor, so lifting is impossible and a
-     cross-tree `[[reference]]` would dangle. Never link across trees.
+     `add`).
+   - **ANOTHER tree** -> ALWAYS a self-contained, labeled COPY; trees share no ancestor, so
+     lifting is impossible and a cross-tree `[[reference]]` would dangle. Never link across
+     trees.
 4. **Privacy scrub on anything crossing a boundary.** Scrub secrets/PII before writing; never
    carry a credential across. Concrete operational detail (paths, hostnames) is the useful part -
    keep it.
@@ -71,7 +70,7 @@ unknown, defer - a blind gather pulls noise.
 
 - [ ] A topic/descriptor stated BEFORE scanning (no blind gather).
 - [ ] Stage-1 candidate list with per-tree `TREE:` labels (or a one-line "nothing matched").
-- [ ] Every import via the engine, marked `gathered:`/`gathered-cross-tree:` in its provenance.
+- [ ] Every import via the engine.
 - [ ] Privacy scrub applied to everything copied across a boundary (no credential carried across).
 - [ ] Zero cross-tree or downward `[[references]]` introduced (reconcile 0 problems).
 - [ ] The lifted-vs-copied report.
@@ -89,6 +88,8 @@ unknown, defer - a blind gather pulls noise.
 
 - Gathering without a topic (blind, irrelevant pulls).
 - A cross-tree reference instead of a labeled copy (dangles on deletion).
-- Re-promoting a gathered copy on the next dream (the `gathered:` provenance mark prevents it).
+- Re-promoting a gathered copy on the next dream. The debounce is `gather_scan.py`'s own
+  `gathered-topics.tsv`, kept OUT of the store so a dream does not tidy it away. A provenance
+  mark never prevented this: nothing read it, and provenance was removed in 5.300.0.
 - Importing an ancestor's knowledge the cascade already provides (the scan groups it under this
   tree's top - check before copying).

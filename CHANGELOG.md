@@ -42,9 +42,17 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   re-emit, never a decision, and the promotion corroboration gate deliberately uses a separate
   out-of-store file. The old values are NOT migrated or archived: dropping them is the deliberate
   choice, taken knowing the pointer files are in no git repository.
-- `--source` on `add` and `amend-pinned` is still ACCEPTED so no caller breaks, and `bx:src=` is
-  still PARSED off an older line without error, but neither is persisted. A line keeps its token
-  until the next re-render of that level, which drops it.
+- **`--source` is REMOVED from `add` and `amend-pinned`**, along with `Entry.source`,
+  `Pointer.source` and the merge logic. It is a REJECTION, not a silent no-op: a flag that
+  accepts a value and discards it is the same dead-contract shape this release removes
+  elsewhere, so argparse refuses it and a test asserts the exit code.
+- `bx:src=` on an EXISTING line is still parsed and discarded, so a store written by an
+  earlier version loads without error; the token disappears on the next re-render of that
+  level.
+- The dead `gathered:` contract is removed from `meta-collect-knowledge`. It claimed a
+  provenance mark prevented re-promotion on a later dream; no fact ever carried the mark,
+  nothing read it, and the real debounce is `gather_scan.py`'s out-of-store
+  `gathered-topics.tsv`.
 
 ### Notes
 

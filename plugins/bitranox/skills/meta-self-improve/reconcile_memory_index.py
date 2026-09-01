@@ -2,7 +2,7 @@
 """Reference-check + reconcile a curated memory altitude (UUID-native).
 
 A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointer block
-(`- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->`); the fact bodies live centrally at
+(`- [Title](mem:<slug>) - hook <!-- bx:pin -->`); the fact bodies live centrally at
 `<anchor>/.claude-memory/facts/<slug>.md`. Slug is the identity, unique per tree. This tool:
   * `--check`: verifies `[[wikilink]]` integrity across an ordered altitude chain (upward-only, no
     dangling), and emits an ADVISORY warning when a level's always-loaded pointer block grows large;

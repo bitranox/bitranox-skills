@@ -16,7 +16,7 @@ Each fact has two parts:
   `CLAUDE.local.md` of the level (altitude) the fact applies to:
 
   ```markdown
-  - [Title](mem:<slug>) - trigger-first hook <!-- bx:src=<provenance> bx:pin -->
+  - [Title](mem:<slug>) - trigger-first hook <!-- bx:pin -->
   ```
 
   The block also carries the level's **scope descriptor** (what belongs at this level versus

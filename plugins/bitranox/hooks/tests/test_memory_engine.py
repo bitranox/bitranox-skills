@@ -52,7 +52,7 @@ def test_slugify():
 
 
 def test_entry_carries_slug_and_uuid_no_heavy_flag():
-    e = E.Entry("s", "t", "h", body="b", source={"x"}, pin=True, uuid="u")
+    e = E.Entry("s", "t", "h", body="b", pin=True, uuid="u")
     assert (e.slug, e.title, e.hook, e.body, e.pin, e.uuid) == ("s", "t", "h", "b", True, "u")
     assert not hasattr(e, "heavy")                     # the inline-vs-heavy split is gone
 
@@ -61,12 +61,11 @@ def test_entry_carries_slug_and_uuid_no_heavy_flag():
 
 def test_add_writes_pointer_and_central_body_and_reads_back(proj):
     E.add_or_update_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
-                          type_="feedback", source=["s"], scope_default="lvl")
+                          type_="feedback", scope_default="lvl")
     scope, entries, bodies = E.read_store(proj)
     assert scope == "lvl"
     e = entries[0]
     assert e.slug == "feedback-no-em-dashes" and not e.legacy
-    assert e.source == set()                     # provenance is no longer persisted
     assert "Always ASCII." in bodies[e.slug]
     # body landed at the slug-named central path, framed as a native memory entry
     disk = us.body_path(proj, e.slug).read_text(encoding="utf-8")
@@ -79,12 +78,11 @@ def test_add_writes_pointer_and_central_body_and_reads_back(proj):
 
 
 def test_update_merges_pin_and_body_and_does_not_persist_source(proj):
-    E.add_or_update_entry(proj, "Rule", "hook", body="b", source=["s1"], scope_default="lvl")
-    E.add_or_update_entry(proj, "Rule", "hook2", body="b2", source=["s2"], pin=True)
+    E.add_or_update_entry(proj, "Rule", "hook", body="b", scope_default="lvl")
+    E.add_or_update_entry(proj, "Rule", "hook2", body="b2", pin=True)
     scope, entries, bodies = E.read_store(proj)
     e = entries[0]
     assert e.pin is True and e.hook == "hook2"
-    assert e.source == set()                     # merged in memory, never written back
     assert bodies[e.slug].endswith("b2") and "b\n" not in bodies[e.slug]
 
 
@@ -109,10 +107,10 @@ def test_hook_only_update_resyncs_body_description(proj):
 
 
 def test_mtime_neutral_noop(proj):
-    E.add_or_update_entry(proj, "Rule", "h", body="b", source=["s"], scope_default="lvl")
+    E.add_or_update_entry(proj, "Rule", "h", body="b", scope_default="lvl")
     local = sig.claude_local_md_path(proj)
     mt1 = local.stat().st_mtime_ns
-    E.add_or_update_entry(proj, "Rule", "h", body="b", source=["s"])   # identical -> no write
+    E.add_or_update_entry(proj, "Rule", "h", body="b")   # identical -> no write
     assert local.stat().st_mtime_ns == mt1
 
 
@@ -158,12 +156,11 @@ def test_ensure_level_moves_legacy_scope_block_out_of_claude_md(proj):
 
 def test_cli_add_prints_slug(proj, capsys):
     rc = E.main(["add", "--proj", proj, "--type", "feedback", "--title", "No em dashes",
-                 "--hook", "use ASCII", "--body", "Always ASCII.", "--source", "a,b", "--scope", "lvl"])
+                 "--hook", "use ASCII", "--body", "Always ASCII.", "--scope", "lvl"])
     assert rc == 0
     out = capsys.readouterr().out
     assert out.splitlines()[0] == "feedback-no-em-dashes"    # warnings may follow the slug
     scope, entries, _b = E.read_store(proj)
-    assert entries[0].source == set() and scope == "lvl"   # source is not persisted
 
 
 def test_cli_add_body_file(proj, tmp_path):
@@ -255,21 +252,20 @@ def _anchored_tree(tmp_path):
 def test_add_writes_body_to_anchor_store_and_pointer_to_altitude(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
     slug = E.add_or_update_entry(proj, "No em dashes", "use ASCII", body="Always ASCII.",
-                                 type_="feedback", source=["s"], scope_default="proj scope")
+                                 type_="feedback", scope_default="proj scope")
     assert slug == "feedback-no-em-dashes"
     disk = us.body_path(anchor, slug).read_text(encoding="utf-8")   # body at the anchor, framed
     assert disk.startswith("---\nname: feedback-no-em-dashes\n") and disk.endswith("Always ASCII.\n")
     scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
     assert scope == "proj scope"
-    assert ptrs[0].slug == "feedback-no-em-dashes" and ptrs[0].source == set()
 
 
 def test_add_is_idempotent_and_does_not_persist_source(tmp_path):
     anchor, proj = _anchored_tree(tmp_path)
-    E.add_or_update_entry(proj, "Fact", "h", body="B", source=["a"])
-    E.add_or_update_entry(proj, "Fact", "h", body="B", source=["b"])  # re-run: no dupe, merge source
+    E.add_or_update_entry(proj, "Fact", "h", body="B")
+    E.add_or_update_entry(proj, "Fact", "h", body="B")   # re-run must not duplicate the pointer
     _scope, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert len(ptrs) == 1 and ptrs[0].source == set()      # idempotent; source not written
+    assert len(ptrs) == 1 and ptrs[0].slug == "fact"
 
 
 def test_add_refuses_slug_collision_across_levels(tmp_path):
@@ -334,7 +330,7 @@ def _three_levels(tmp_path):
 def test_move_up_relocates_pointer_only_body_untouched(tmp_path):
     anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Shared rule", "applies to the whole dept", body="B",
-                          source=["cap"], pin=True, scope_default="proj")
+                          pin=True, scope_default="proj")
     body = us.body_path(anchor, "shared-rule")
     before = body.read_text(encoding="utf-8")
     rep = E.move_entry(proj, mid, "shared-rule")
@@ -345,7 +341,6 @@ def test_move_up_relocates_pointer_only_body_untouched(tmp_path):
     _s, ptrs_to = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     got = {p.slug: p for p in ptrs_to}
     assert "shared-rule" in got and got["shared-rule"].pin       # pin survives a move
-    assert got["shared-rule"].source == set()                    # provenance is not persisted
     assert {r.slug for r in us.resolve(proj)} == {"shared-rule"}  # still visible from below
 
 
@@ -388,14 +383,13 @@ def test_move_completes_after_crash_duplicate(tmp_path):
     # add-then-remove crash residue: the pointer exists at BOTH levels; re-running the move
     # merges at the target and drops the source line (never a lost fact).
     anchor, mid, proj = _three_levels(tmp_path)
-    E.add_or_update_entry(proj, "F", "h", body="B", source=["s1"], scope_default="p")
-    us.add_pointer(mid, slug="f", title="F", hook="h", source={"s2"})   # simulated crash residue
+    E.add_or_update_entry(proj, "F", "h", body="B", scope_default="p")
+    us.add_pointer(mid, slug="f", title="F", hook="h")   # simulated crash residue
     rep = E.move_entry(proj, mid, "f")
     assert rep["moved"] is True
     _s, ptrs = us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     got = {p.slug: p for p in ptrs}
     assert len([p for p in ptrs if p.slug == "f"]) == 1          # merged to a single line
-    assert got["f"].source == set()                              # provenance is not persisted
     assert "f" not in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 
@@ -418,16 +412,15 @@ def test_move_refuses_divergent_duplicate_target_no_silent_overwrite(tmp_path):
 
 def test_move_force_dedup_keeps_longer_hook_when_source_is_richer(tmp_path):
     # --force dedups a divergent duplicate by keeping the LONGER (information-richer) hook regardless
-    # of move direction, unioning provenance, and dropping the other pointer. Source is the rich one.
+    # of move direction, dropping the other pointer. Source is the rich one.
     anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Fact", "a much longer richer hook with the load-bearing detail",
-                          body="B", source=["s1"], scope_default="p")
-    us.add_pointer(mid, slug="fact", title="Fact", hook="thin", source={"s2"})
+                          body="B", scope_default="p")
+    us.add_pointer(mid, slug="fact", title="Fact", hook="thin")
     rep = E.move_entry(proj, mid, "fact", force=True)
     assert rep["moved"] is True and rep["warnings"]
     tgt = {p.slug: p for p in us.parse_pointer_index((Path(mid) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
     assert tgt["fact"].hook.startswith("a much longer richer hook")       # longer hook won
-    assert tgt["fact"].source == set()                                    # not persisted
     assert "fact" not in {p.slug for p in us.parse_pointer_index(
         (Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))[1]}
 

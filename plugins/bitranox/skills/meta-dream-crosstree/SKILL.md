@@ -176,8 +176,8 @@ Create one todo per step.
 A second global dream on an already-converged set of stores must write nothing: corroboration / gather
 counters live OUT of the dreamed stores; an item already present up the ancestor chain is caught by the
 ancestor-overlap check, not by any content-hash (none exists - a duplicate is always a CANDIDATE the
-dream adjudicates, per dream-core.md's "Dedup semantics"); gathered copies are marked exempt from
-re-promotion AND re-gather. If a run keeps
+dream adjudicates, per dream-core.md's "Dedup semantics"); re-gather is debounced by
+`gather_scan.py`'s own `gathered-topics.tsv`, kept OUT of the store. If a run keeps
 re-moving the same item, stop and treat it as a bug (the circle-breaker), do not loop.
 
 ## Boundaries

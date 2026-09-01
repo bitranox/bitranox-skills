@@ -101,8 +101,8 @@ the success line, abort-and-show on a miss).
    misses exactly where duplicates and misplaced facts live: the siblings.
 
 3b. **De-double the tiers.** A fact lives in exactly ONE tier. Per native entry: already curated
-   (by `bx:src` provenance or title/hook match) -> drop the native duplicate; native-only and
-   worthwhile -> PROMOTE via engine `add` (merge its slug into `--source`); some-value -> leave in
+   (by title/hook match) -> drop the native duplicate; native-only and
+   worthwhile -> PROMOTE via engine `add`; some-value -> leave in
    native. There is NO "native-only backend" mode - an absent pointer block is the trigger to
    create one, not evidence of one. The only reasons a worthwhile fact stays native: some-value,
    or the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage

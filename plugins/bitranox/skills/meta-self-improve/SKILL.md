@@ -129,7 +129,7 @@ judgement it is prompting for.
 Grep the pointer blocks (`CLAUDE.local.md`), the anchor's `facts/` bodies, the native memory dir,
 and the CLAUDE.md chain for each candidate's keywords. If a related entry exists, UPDATE it: rerun
 the engine `add` against the level that OWNS its pointer, passing `--slug <the stored slug>` - it
-then upserts (merges provenance, keeps the pin). New entry only when nothing covers it.
+then upserts (keeps the pin). New entry only when nothing covers it.
 
 **Both halves of that sentence are load-bearing, and each fails silently in its own direction.**
 
@@ -210,7 +210,7 @@ Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/memory_engine.py add \
       --proj "<cwd>" --type feedback|project|reference|user \
-      --title "..." --hook "When ..., ..." --body-file <tmpfile> [--source <key>] [--pin] [--slug s]
+      --title "..." --hook "When ..., ..." --body-file <tmpfile> [--pin] [--slug s]
 
 Risk ladder: engine `add` at the project level is additive - auto-apply. Rewriting/deleting an
 existing entry, restructuring or editing any CLAUDE.md, pruning - propose-first

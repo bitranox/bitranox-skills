@@ -4,7 +4,7 @@
 A fact's identity is its SLUG, unique per knowledge TREE; its body lives exactly once at
 `<anchor>/.claude-memory/facts/<slug>.md`. The always-loaded per-altitude index is a POINTER BLOCK
 inline in `<altitude>/CLAUDE.local.md`: a scope descriptor, the retrieval RECIPE, and one
-`- [Title](mem:<slug>) - hook <!-- bx:src=.. bx:pin -->` line per fact. The model reads the block as
+`- [Title](mem:<slug>) - hook <!-- bx:pin -->` line per fact. The model reads the block as
 cascade text and fetches bodies per the recipe; `uuid_store.resolve` is the programmatic resolver.
 
 Every memory mutation (per-turn capture, migration, reconcile) goes through here - NEVER hand-write
@@ -12,8 +12,12 @@ the pointer block or a central body via the Write/Edit tools (the store-edit-gua
 module writes directly with `Path.write_text`, mtime-neutral). See `uuid_store.py` for the on-disk
 format, anchor resolution, the resolver, and the legacy-line transition rules.
 
-Provenance is a `<!-- bx:src=<comma-list> [bx:pin] -->` comment on the pointer line; `source` is a
-SET (merged on update). `bx:pin` is a WRITE-PERMISSION gate, not just render-ordering advice: an
+The meta comment on a pointer line carries `bx:pin` ONLY. Provenance (`bx:src`) was removed in
+5.300.0: nothing read the value and it cost about 15 percent of the always-loaded cascade. An older
+line's token is still parsed, then discarded, so a store written by an earlier version loads
+without error until the next re-render of that level drops it.
+
+`bx:pin` is a WRITE-PERMISSION gate, not just render-ordering advice: an
 ordinary `add` targeting an already-pinned slug raises `PinnedEntry` before any write (see
 `add_or_update_entry`); the only way through is the separate `amend-pinned` verb. The movers (`move`,
 `relocate`, `rename`) are unaffected - they carry pin through untouched, never refuse. All output is
@@ -50,20 +54,19 @@ _ALTITUDE_MARKER = ("<!-- bitranox memory altitude: scope + fact pointers live i
 
 class Entry:
     """One curated fact. Identity is `slug` (unique per TREE); the body lives centrally at
-    `<anchor>/.claude-memory/facts/<slug>.md`. `source` is the provenance set; `pin` marks it as one
+    `<anchor>/.claude-memory/facts/<slug>.md`. `pin` marks it as one
     of the iron rules the dream must not silently archive/move/reword AND gates ordinary `add`
     against overwriting it (see `PinnedEntry`). A LEGACY entry (pre-pivot pointer) still reads its
     body from the old sharded uuid path until the migration moves it; the engine flips an entry to
     the current format the first time it is UPDATED (and archives the old body)."""
 
-    __slots__ = ("slug", "title", "hook", "body", "source", "pin", "uuid", "legacy")
+    __slots__ = ("slug", "title", "hook", "body", "pin", "uuid", "legacy")
 
-    def __init__(self, slug, title, hook, body="", source=None, pin=False, uuid="", legacy=False):
+    def __init__(self, slug, title, hook, body="", pin=False, uuid="", legacy=False):
         self.slug = slug
         self.title = title
         self.hook = hook or ""
         self.body = body or ""
-        self.source = set(source or ())
         self.pin = bool(pin)
         self.uuid = uuid or ""
         self.legacy = bool(legacy)
@@ -159,7 +162,7 @@ def read_store(proj):
         except OSError:
             body = ""
         entries.append(Entry(slug=p.slug, title=p.title, hook=p.hook, body=body,
-                             source=p.source, pin=p.pin, uuid=p.uuid, legacy=p.legacy))
+                             pin=p.pin, uuid=p.uuid, legacy=p.legacy))
         bodies[p.slug] = body
     return scope, entries, bodies
 
@@ -174,7 +177,7 @@ def _commit_store(proj, scope, entries, bodies):
         if not e.legacy:                             # a legacy body stays at its old path until the
             changed |= us.put_body(str(anchor), e.slug, bodies.get(e.slug, e.body))  # migration moves it
         pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
-                                   source=e.source, pin=e.pin, uuid=e.uuid, legacy=e.legacy))
+                                   pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
     try:
         text = local.read_text(encoding="utf-8")
@@ -200,12 +203,12 @@ def _framed_body(slug, hook, type_, body):
             % (slug, desc, type_, body or ""))
 
 
-def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin=False,
+def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
                         scope_default="", slug=None, allow_over_cap_hook=False,
                         allow_pinned_overwrite=False):
     """Upsert a curated fact into `<proj>`'s pointer block + the anchor's central store (the single write
-    path). Merges the provenance `source` set on update, ensures the level's pointer block + scope, and
-    writes under a lock, mtime-neutral. Returns the slug.
+    path). Ensures the level's pointer block + scope, and writes under a lock, mtime-neutral.
+    Returns the slug.
 
     An over-cap hook raises `HookTooLong` BEFORE anything is written, so a refusal never half-writes
     or clobbers the entry it was updating. `allow_over_cap_hook` exists for the movers only (rehome,
@@ -219,7 +222,6 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     hook = (hook or "").strip()
     if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
         raise HookTooLong(len(hook))
-    src = set(source or ())
     anchor = _anchor(proj)
     # An empty body is the documented UPDATE path ("keep the stored one"), but on a CREATE there is
     # nothing to keep: it writes the frontmatter frame and stops, leaving a convincing always-loaded
@@ -260,7 +262,6 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
                 e.body = _framed_body(slug, e.hook, type_, body)
             elif e.hook != old_hook:
                 e.body = _reframe_description(e.body, e.hook)   # keep body description in sync with the pointer
-            e.source |= src
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
@@ -271,7 +272,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
             if us.body_path(anchor, slug).is_file():
                 raise SlugCollision(slug, _free_slug(anchor, slug))
             e = Entry(slug=slug, title=title, hook=hook,
-                      body=_framed_body(slug, hook, type_, body), source=src, pin=pin)
+                      body=_framed_body(slug, hook, type_, body), pin=pin)
             entries.append(e)
         bodies[slug] = e.body
         _commit_store(proj, scope or scope_default, entries, bodies)
@@ -281,7 +282,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, source=None, pin
     return slug
 
 
-def amend_pinned_entry(proj, slug, hook=None, body=None, source=None, title=None):
+def amend_pinned_entry(proj, slug, hook=None, body=None, title=None):
     """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
     Keeps the existing pin state (this never unpins - `bx:pin` is untouched, only content changes);
     an empty/absent `title`, `hook` or `body` keeps the stored one, matching `add_or_update_entry`'s
@@ -292,10 +293,7 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, source=None, title=None
     only route to it: `retitle_entry` refuses a pinned fact by design, so that the pin gate keeps
     exactly one deliberate way through. It is normalised the same way a retitle normalises it.
 
-    `source` MERGES into the stored provenance set exactly as `add` does (never replaces it): with
-    the pin gate in place this is the only remaining path that can record a new `bx:src` key or a
-    bumped recurrence on an iron rule, and a pinned fact typically carries several merged keys that
-    a replace would discard."""
+    There is no `source` parameter: provenance was removed in 5.300.0 and is not stored."""
     _scope, entries, _bodies = read_store(proj)
     by_slug = {e.slug: e for e in entries}
     if slug not in by_slug:
@@ -303,7 +301,7 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, source=None, title=None
     wanted = _normalised_title(title)
     return add_or_update_entry(proj, title=wanted or by_slug[slug].title,
                                hook=hook or "", body=body or "",
-                               source=source, slug=slug, allow_pinned_overwrite=True)
+                               slug=slug, allow_pinned_overwrite=True)
 
 
 def _slug_owned_elsewhere(anchor, proj, slug):
@@ -354,7 +352,7 @@ def _entry_from_body(anchor, slug):
         text = us.body_path(anchor, slug).read_text(encoding="utf-8").rstrip("\n")
     except OSError:
         return None
-    return Entry(slug=slug, title=slug, hook=_body_description(text), body=text, source=set())
+    return Entry(slug=slug, title=slug, hook=_body_description(text), body=text)
 
 
 def _free_slug(anchor, slug):
@@ -604,14 +602,13 @@ def _dangling_inbound_after_move(src, dst, slugs):
 
 def _dedup_pick(entry, dst_entry):
     """Forced dedup of a divergent duplicate pointer: keep the information-richer (LONGER) hook
-    regardless of move DIRECTION, union provenance + pin. Direction-independent by construction, so
-    it can never discard the richer hook the way a plain overwrite did. Returns ((title, hook,
-    source, pin), warning)."""
+    regardless of move DIRECTION, OR the pin. Direction-independent by construction, so it can
+    never discard the richer hook the way a plain overwrite did. Returns ((title, hook, pin),
+    warning)."""
     keep = entry if len(entry.hook or "") >= len(dst_entry.hook or "") else dst_entry
-    fields = (keep.title, keep.hook,
-              set(entry.source) | set(dst_entry.source), entry.pin or dst_entry.pin)
-    warning = ("duplicate at target: kept the longer hook (%d vs %d chars), unioned provenance, "
-               "dropped the shorter source line" % (len(keep.hook or ""),
+    fields = (keep.title, keep.hook, entry.pin or dst_entry.pin)
+    warning = ("duplicate at target: kept the longer hook (%d vs %d chars), "
+               "dropped the shorter line" % (len(keep.hook or ""),
                                                     min(len(entry.hook or ""), len(dst_entry.hook or ""))))
     return fields, warning
 
@@ -722,12 +719,12 @@ def move_entry(from_level, to_level, slug, force=False):
         else:
             # No duplicate, or an IDENTICAL one (crash residue): the normal add-then-remove. An
             # identical duplicate merges provenance/pin and completes a crash-interrupted move.
-            fields = (entry.title, entry.hook, entry.source, entry.pin)
+            fields = (entry.title, entry.hook, entry.pin)
         plan.append((entry.slug, fields))
 
-    for s, (title, hook, source, pin) in plan:
+    for s, (title, hook, pin) in plan:
         try:
-            us.add_pointer(str(dst), slug=s, title=title, hook=hook, source=source, pin=pin)
+            us.add_pointer(str(dst), slug=s, title=title, hook=hook, pin=pin)
             _drop_pointer(str(src), s)
         except OSError as exc:
             rep["refused"] = (
@@ -987,7 +984,7 @@ def relocate_entry(from_level, to_level, slug, force=False):
         rep["refused"] = "could not write the body into the target tree: %s" % exc
         return rep
     us.add_pointer(str(dst), slug=slug, title=entry.title, hook=entry.hook,
-                   source=set(entry.source) | {"relocated-cross-tree"}, pin=entry.pin)
+                   pin=entry.pin)
     _drop_pointer(str(src), slug)
 
     # Archive the source body only once nothing in the source tree points at the slug any more.
@@ -1060,7 +1057,7 @@ def _rewrite_inbound_refs(anchor, old_slug, new_slug):
             hook = _retarget_refs(e.hook, canon_old, new_slug)
             if hook != e.hook:
                 us.add_pointer(str(level), slug=e.slug, title=e.title, hook=hook,
-                               source=set(e.source), pin=e.pin)
+                               pin=e.pin)
                 touched.append((str(level), e.slug, "hook"))
             body = us.body_path(anchor, e.slug)
             try:
@@ -1146,7 +1143,7 @@ def rename_entry(level, slug, to_slug):
         return rep
 
     us.add_pointer(str(lvl), slug=to_slug, title=entry.title, hook=entry.hook,
-                   source=set(entry.source) | {"renamed"}, pin=entry.pin)
+                   pin=entry.pin)
     _drop_pointer(str(lvl), slug)
 
     # A slug carried by more than one level is a pre-existing violation (`heal` and the chain-only
@@ -1162,7 +1159,7 @@ def rename_entry(level, slug, to_slug):
         if dup is None:
             continue
         us.add_pointer(str(other), slug=to_slug, title=dup.title, hook=dup.hook,
-                       source=set(dup.source) | {"renamed"}, pin=dup.pin)
+                       pin=dup.pin)
         _drop_pointer(str(other), slug)
         rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
                                "renamed there too, dedup it deliberately" % other)
@@ -1241,7 +1238,7 @@ def retitle_entry(level, slug, to_title):
         return rep
 
     us.add_pointer(str(lvl), slug=slug, title=title, hook=entry.hook,
-                   source=entry.source, pin=entry.pin)
+                   pin=entry.pin)
     rep["levels"].append(str(lvl))
 
     # A slug carried by more than one level is a pre-existing violation, but leaving the OTHER
@@ -1262,7 +1259,7 @@ def retitle_entry(level, slug, to_title):
                                    "pointer - left alone; migrate it, then retitle there" % other)
             continue
         us.add_pointer(str(other), slug=slug, title=title, hook=dup.hook,
-                       source=dup.source, pin=dup.pin)
+                       pin=dup.pin)
         rep["levels"].append(str(other))
         rep["warnings"].append("slug was ALSO pointed at from %s - a pre-existing duplicate; "
                                "retitled there too, dedup it deliberately" % other)
@@ -1424,7 +1421,6 @@ def main(argv=None):
                    choices=[None, "feedback", "project", "reference", "user"])
     a.add_argument("--body", default="", help="the fact body (stored in the central sharded store)")
     a.add_argument("--body-file", default=None, help="read the body from a file (multi-line safe)")
-    a.add_argument("--source", default="", help="comma-separated provenance keys")
     a.add_argument("--pin", action="store_true",
                    help="force-keep in the always-loaded pointer index; once set, an ordinary add "
                         "refuses to overwrite this fact - use amend-pinned to change it deliberately")
@@ -1449,10 +1445,6 @@ def main(argv=None):
                      help="read the hook from a file - same reason as on add: a 500-char hook via "
                           "--hook \"$(cat f)\" is a shell command substitution the guard denies")
     ap_.add_argument("--body-file", default=None)
-    ap_.add_argument("--source", default="",
-                     help="comma-separated provenance keys, MERGED into the stored set (never "
-                          "replacing it) - with the pin gate this is the only path that can record "
-                          "a new bx:src key or a bumped recurrence on an iron rule")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -1654,10 +1646,9 @@ def main(argv=None):
             if err:
                 print(err)
                 return 1
-        source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
             slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
-                                       type_=args.type_, source=source, pin=args.pin,
+                                       type_=args.type_, pin=args.pin,
                                        scope_default=scope_default, slug=args.slug)
         except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry) as c:
             print("! refused: %s" % c)
@@ -1703,10 +1694,9 @@ def main(argv=None):
         body = None
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
-        source = [x.strip() for x in args.source.split(",") if x.strip()]
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
-                                      source=source, title=args.title)
+                                      title=args.title)
         except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
             print("! refused: %s" % c)
             return 1

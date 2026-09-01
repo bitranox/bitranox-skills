@@ -336,7 +336,7 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
         # allow_over_cap_hook: migration carries pre-pivot text verbatim; a refusal here would strand
         # a legacy fact in a store that is being retired.
         ME.add_or_update_entry(proj, title=e["title"], hook=e["hook"], body=e["body"],
-                               type_=e["type"], source=[e["source"]], scope_default=scope_default,
+                               type_=e["type"], scope_default=scope_default,
                                allow_over_cap_hook=True)
         done.add(e["source"])
         rep["placed"] += 1

@@ -47,7 +47,7 @@ def _slugs_at(level):
 def test_rename_moves_the_pointer_and_the_body_keeping_content(tmp_path):
     """The name changes; the fact does not."""
     anchor, _mid, proj = _three_levels(tmp_path)
-    E.add_or_update_entry(proj, "Wrong name", "hook text", body="the body", source=["cap"], pin=True)
+    E.add_or_update_entry(proj, "Wrong name", "hook text", body="the body", pin=True)
 
     rep = E.rename_entry(proj, "wrong-name", "right-name")
 
@@ -58,7 +58,6 @@ def test_rename_moves_the_pointer_and_the_body_keeping_content(tmp_path):
     _scope, pointers = us.parse_pointer_index((Path(proj) / "CLAUDE.local.md").read_text(encoding="utf-8"))
     kept = next(p for p in pointers if p.slug == "right-name")
     assert kept.title == "Wrong name" and kept.hook == "hook text" and kept.pin
-    assert kept.source == set(), "provenance is not persisted on the line any more"
 
 
 def test_the_body_frontmatter_name_follows_the_slug(tmp_path):
@@ -152,7 +151,7 @@ def test_a_duplicate_pointer_at_another_level_is_renamed_too_not_orphaned(tmp_pa
     _anchor, mid, proj = _three_levels(tmp_path)
     E.add_or_update_entry(proj, "Target", "the good one", body="B")
     # a second level pointing at the SAME slug, carrying its own older wording
-    us.add_pointer(mid, slug="target", title="Stale copy", hook="an older hook", source={"old"})
+    us.add_pointer(mid, slug="target", title="Stale copy", hook="an older hook")
 
     rep = E.rename_entry(proj, "target", "renamed")
 

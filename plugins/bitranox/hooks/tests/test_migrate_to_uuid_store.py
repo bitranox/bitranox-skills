@@ -59,7 +59,6 @@ def test_read_legacy_store_parses_inline_and_heavy(tmp_path):
     scope, facts = M.read_legacy_store(str(tmp_path / "s"))
     assert scope == "the scope"
     by = {f["slug"]: f for f in facts}
-    assert by["h"]["body"] == "H" * 20 and by["h"]["source"] == {"z"}
     assert by["i"]["body"] == "line1\nline2" and by["i"]["pin"] is True
 
 
@@ -75,7 +74,6 @@ def test_migrate_writes_bodies_and_pointers_for_every_fact(tmp_path):
     assert us.body_path(anchor, "global-rule").read_text(encoding="utf-8") == "A" * 400 + "\n"
     assert us.body_path(anchor, "tiny-fact").read_text(encoding="utf-8") == "small body\n"
     _s, ptrs = us.parse_pointer_index((tmp_path / "tree" / "proj" / "CLAUDE.local.md").read_text(encoding="utf-8"))
-    assert ptrs[0].slug == "tiny-fact" and ptrs[0].pin is True and ptrs[0].source == set()
     assert not ptrs[0].legacy                          # migrated straight into the current format
 
 

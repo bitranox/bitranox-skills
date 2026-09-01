@@ -57,8 +57,7 @@ def _pointer(level, slug):
 
 def test_retitle_changes_the_title_and_nothing_else_on_the_pointer(tmp_path):
     _anchor, _mid, proj = _three_levels(tmp_path)
-    E.add_or_update_entry(proj, "Stale title", "When testing, do the thing.", body="B",
-                          source=["cap-one"])
+    E.add_or_update_entry(proj, "Stale title", "When testing, do the thing.", body="B")
 
     rep = E.retitle_entry(proj, "stale-title", "Accurate title")
 
@@ -66,7 +65,6 @@ def test_retitle_changes_the_title_and_nothing_else_on_the_pointer(tmp_path):
     ptr = _pointer(proj, "stale-title")
     assert ptr.title == "Accurate title"
     assert ptr.hook == "When testing, do the thing."
-    assert ptr.source == set()            # provenance is not persisted on the line
     assert ptr.pin is False
 
 
@@ -143,8 +141,7 @@ def test_a_legacy_pointer_is_refused(tmp_path):
     local = Path(proj) / "CLAUDE.local.md"
     local.write_text(
         local.read_text(encoding="utf-8").replace("](mem:stale-title)", "](uuid:%s)" % ("a" * 36)),
-        encoding="utf-8",
-    )
+        encoding="utf-8")
 
     rep = E.retitle_entry(proj, "stale-title", "Accurate title")
 
@@ -257,7 +254,7 @@ def test_cli_retitle_emits_no_hook_advisory(tmp_path, capsys):
 def test_amend_pinned_title_changes_the_title_and_keeps_everything_else(tmp_path, capsys):
     anchor, _mid, proj = _three_levels(tmp_path)
     slug = E.add_or_update_entry(proj, "Stale iron rule", "When testing, do the thing.",
-                                 body="the body", pin=True, source=["cap-one"])
+                                 body="the body", pin=True)
     before = us.body_path(anchor, slug).read_bytes()
 
     rc = E.main(["amend-pinned", "--proj", proj, "--slug", slug, "--title", "Accurate iron rule"])
@@ -268,7 +265,6 @@ def test_amend_pinned_title_changes_the_title_and_keeps_everything_else(tmp_path
     assert ptr.title == "Accurate iron rule"
     assert ptr.hook == "When testing, do the thing."
     assert ptr.pin is True, "amend-pinned must not silently unpin the fact"
-    assert ptr.source == set()            # provenance is not persisted on the line
     assert us.body_path(anchor, slug).read_bytes() == before
 
 
