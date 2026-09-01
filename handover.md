@@ -1,73 +1,92 @@
-# STALE - read 2026-08-31, work continued
+# Handover - written 2026-09-01, nothing in flight
 
 ## In flight
 
-Nothing. Every piece of this session's work is committed, pushed, released and CI-green.
+Nothing. Five commits, each gated and CI-green before the next started.
 
 ## Committed, or not
 
-`HEAD == origin/master == d091c17`, working tree clean. Plugin `5.297.5`, tagged, GitHub release
-published, on PyPI. Nothing uncommitted anywhere.
+`HEAD == origin/master == ce5f856`, working tree clean, plugin `5.299.1`. Nothing uncommitted.
 
-## The change, in one paragraph, because the repo cannot tell you WHY
+The session's commits, oldest first: `d165a3a` `212b9a7` `d190494` (the tell hooks) and `448f207`
+`ce5f856` (the guard slice), plus `93a71a3` recording progress against the backlog.
 
-`handover.md` used to hold both the moment and the standing backlog. It is rewritten wholesale
-every session, so the backlog was re-encoded from the writing session's memory once per session,
-weighted by how recently each item was touched rather than by size or by who asked. Untouched items
-lost one attribute per rewrite until they were a clause, then absent. Five real items went that way
-in one day. The backlog now lives in `OPEN-WORK.md`, edited line by line and never rewritten, and
-`session-start.py` prints its top ranks with their age at every session start.
+## What was done, in one paragraph, because the repo cannot tell you WHY
+
+Two pieces of the same audit. First, the `commit-tell-sweep` finding from report 20 of the
+2026-08-28 script wave: both tell hooks decoded with `errors="replace"`, which mints U+FFFD per
+undecodable byte, and U+FFFD is itself a tell - so the reader manufactured what the detector hunts
+for. Fixing that opened a silent miss (a Windows-editor em-dash is byte `0x97`, dropped and
+reported clean), so the encoding is now its own finding. Second, the seven gate and guard reports
+of that same wave were adjudicated against the live tree: 38 claims, 24 drivable, five under-blocks
+shipped.
 
 ## Decided, and why - do not reopen
 
-- **Two files, not one.** They have opposite lifetimes: the moment must be replaced wholesale, the
-  backlog must never be. That is the whole fix; merging them again reintroduces it.
-- **Rank by ORIGIN before size.** A `USER:` item outranks every `FOUND:` one whatever the counts
-  say. Ranking by size alone made a test arm put a 206-item internal sweep above the user's own
-  88-target request, which is the same failure wearing different arithmetic.
-- **Ranks go in tens.** Contiguous integers made every mid-list insertion renumber the tail.
-- **Never infer a first-raised date.** `(2026-08-31?)` or `(unknown)`; both parse, and an undated
-  item sorts last within its rank. A guessed date silently resets the only signal that makes a
-  long-carried item conspicuous.
-- **The shared-ceiling budget is computed from what the other blocks actually spent**, not a fixed
-  share and not a guaranteed floor. A fixed share passed its fixture and overran production by 429
-  bytes; a floor breached the ceiling it existed to respect, which hides the content it protects.
-- **`handover.md`, `OPEN-WORK.md` tracked, not gitignored** (user decision). Check both for
-  secrets, internal hostnames and private addresses before committing - this repo is public.
-  `EXECUTION-USER-REVIEW.md` was removed for that reason and never entered git history.
+- **`errors="ignore"` plus an explicit encoding finding, not one or the other.** Dropping the bytes
+  silently trades a loud wrong answer for a quiet one; both tell hooks now name the first bad byte.
+- **A `-F` file's hits report codepoints (`1: U+2014`), never the line.** PreToolUse runs before the
+  call is approved, so the path is only a string the caller named. An inline `-m` message is still
+  quoted in full: the caller typed it. Uniform, deliberately - keying it on where the path lives
+  would put a security property behind a path comparison inside a fail-open hook.
+- **One shared `tell_chars.decode_utf8`.** The detector and its rewriter twin had drifted on how a
+  file is read; one function is what stops that recurring.
+- **`{{` is a template marker only when not followed by `"` or `{`.** Measured before keeping it:
+  across 24,112 structured files on this machine, zero would be newly validated. That is evidence
+  from one machine, not a proof about every repo.
+- **No length cap on the probe gate's label prefix.** An arbitrary number deciding a
+  security-shaped verdict fails in the silent direction; the newly-accepted false positive is
+  pinned by its own test instead.
+- **The exception phrase list stays short** (`other than`, `except`, `besides`, `apart from`). It
+  fails toward DENY, and `but`/`only` in that list would silently disarm the gate.
 
 ## Decided against, and why
 
-- **A gate enforcing the reconcile step.** It stays prose deliberately. The original failure needed
-  BOTH halves to be invisible, and the read side is now covered mechanically. Recorded as
-  `OPEN-WORK.md` item 135 so the assumption gets tested rather than assumed.
+- **Keying the template skip on path or directory layout.** Considered and rejected: it encodes
+  layout assumptions into a hook shipped to other people's repos, and fails loudly for a template
+  that lives outside the convention.
+- **Fixing the four confirmed findings outside the chosen scope.** They are backlog item 85 now,
+  with their mechanisms written down, rather than half-done here.
 
 ## Still open, untouched
 
-Fifteen items in `OPEN-WORK.md`, ranked, with sizes and next actions. Read that file; a summary
-here is the re-encoding this change exists to stop.
+Fifteen items in `OPEN-WORK.md`, ranked. Read that file; summarising it here is the re-encoding
+that file exists to prevent.
 
 ## The exact next action
 
-**`OPEN-WORK.md` item 10, the top-ranked open item and the oldest** - the user's 2026-08-27
-request, "review all skills and scripts one by one, each in its own subagent and ask when smth is
-to change". 88 of 135 targets remain across 4 slices, and no decision has been recorded on it since
-2026-08-28.
+**`OPEN-WORK.md` item 10** - still the top-ranked open item and the oldest, the user's 2026-08-27
+audit directive. The seven gate/guard reports are done. Next are the six reports never mentioned
+anywhere in `TRIAGE.md`:
 
-First step, before any reviewing: the prior work is in `/tmp/scriptwave-2026-08-28/TRIAGE.md`, and
-`/tmp` does not survive a reboot. Copy that directory into the repo, then pick a slice.
+    self-improve-audit  warn-inline-powershell  session-start
+    subagent-backstop-nudge  subagent-brief  session-banner
+
+in `/media/srv-main-softdev/projects/public/KI/scriptwave-2026-08-28/reports/`, about 55 KB.
+
+Two things that pass are worth carrying:
+
+- Extract claims with `^\s*[*_#>\-\s]*FINDING:\s*([A-Z][A-Z-]*)\s*\|` - seven reviewers wrote
+  `**FINDING: BUG | ...**`, which a `^FINDING` anchor misses entirely, and that undercount was
+  filed as "clean" three times in the original session.
+- Adjudicate by DRIVING the hook with a JSON event against the live tree, and give every probe a
+  control that must answer the opposite. Several 2026-08-28 claims are already fixed, and two of my
+  own instruments were wrong before they were right.
+
+A report of 2-4 KB is CLOBBERED, not clean - the Stop hook overwrote it with a capture summary.
+Its real content is the sibling `.recovered` file.
 
 If you do something else instead, say so in the next handover and why - recency is not a reason.
 
 ## Files that matter
 
-- `OPEN-WORK.md` - the backlog. Its own header states the line format and the ranking rules.
-- `plugins/bitranox/skills/meta-context-watcher/SKILL.md` - the procedure, including the reconcile
-  step that must run BEFORE this file is overwritten.
-- `plugins/bitranox/hooks/session-start.py` - `open_work_context`, `_parse_open_work`, and the
-  remaining-budget arithmetic in `main()`.
-- `plugins/bitranox/skills/meta-context-watcher/.skillwriter/checklist-20260831-open-work.md` -
-  what was tested and what was declined, with the measurements.
+- `OPEN-WORK.md` - the backlog; its header states the line format and ranking rules.
+- `/media/srv-main-softdev/projects/public/KI/scriptwave-2026-08-28/TRIAGE.md` - the audit record.
+  Its `GUARD SLICE ADJUDICATED 2026-09-01` section lists what was refuted, so it is not re-filed.
+  This directory is beside the repo, not inside it: it is 19 MB and the repo is public.
+- `plugins/bitranox/hooks/tell_chars.py` - `decode_utf8`, `find_tell_codepoints`, `_scannable`.
+- `plugins/bitranox/hooks/subagent-probe-capability-gate.py` - `_BULLET_OR_LABEL`, `_EXCEPTION`,
+  `_APOSTROPHES`, `_declares_text_only`.
 
 ## How to verify this still stands
 
@@ -77,21 +96,15 @@ env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defused
   --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
 ```
 
-Expect `repo-gate: all checks passed`; it was 4135 passed / 13 skipped / 1 xfailed at `d091c17`.
-To see what a new session will actually be shown, run the hook itself:
+`repo-gate: all checks passed`; 4211 passed / 13 skipped / 1 xfailed at `ce5f856`.
 
-```bash
-echo '{"cwd":"'"$PWD"'"}' | CLAUDE_PLUGIN_ROOT="$PWD/plugins/bitranox" \
-  bash plugins/bitranox/hooks/run-python.sh plugins/bitranox/hooks/session-start.py
-```
+## Two traps this session paid for
 
-3239 bytes at `d091c17`, 7 of 15 items listed, remainder counted.
-
-## One trap that cost an hour and is not in the repo
-
-The Skill tool serves the INSTALLED plugin cache, which lags this checkout. Invoking
-`bitranox:meta-context-watcher` here returned the 5.296.2 text - no reconcile step, and still
-saying the handover must be gitignored. Read the repo copy when working on a skill in this repo.
+- **A version bump needs BOTH `plugins/bitranox/.claude-plugin/plugin.json` AND `pyproject.toml`.**
+  The gate catches the drift, but only after you have written the changelog entry.
+- **Do not put `git fetch` in the same Bash call as the commit or push.** The PreToolUse gate reads
+  its answer before any statement runs, so that shape can never satisfy it, and a block discards
+  the prep with it.
 
 ---
 
