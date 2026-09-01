@@ -9,8 +9,12 @@ and the title/hook match, which is what has been doing the work, is stated alone
 
 - [x] Skill type: technique (a procedure step with a recognition rule).
 - [x] Test approach: coverage check against the skill FILE plus a ground-truth check of the data
-      the step reads. Recorded here as the chosen route, because the behavioural arm for this
-      clause would be testing the engine's render output rather than the skill's teaching.
+      the step reads. Recorded as the chosen route, and a behavioural arm WAS available - an
+      agent given the old clause and a pointer block would show what it matches on. It is not
+      the better instrument here: the clause tells the reader to key on a token, and whether
+      that token appears in the text the step loads is a deterministic property of the
+      rendered line, settled by reading it. An agent run would be probabilistic evidence for
+      a fact a text check decides outright.
 - [x] Scope: one clause; the invocation it references is owned by meta-self-improve's checklist.
 
 ## RED

@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.2]
+
+### Fixed
+
+- **A skill-writer checklist stated a reason its author did not stand behind.** The
+  `meta-dream-tree` receipt for 5.300.0 justified skipping the behavioural test by claiming such a
+  test "would be testing the engine's render output rather than the skill's teaching". That was
+  not true - the arm was available - and the route was taken partly because it was cheaper. The
+  receipt now states the accurate reason: the clause keys on a token, and whether that token
+  appears in the text the step loads is deterministic, so a text check decides it outright while an
+  agent run would only be probabilistic evidence. No skill text changes; the correction is to the
+  review artifact, whose whole value is being trustworthy later.
+
 ## [5.300.1]
 
 ### Fixed
