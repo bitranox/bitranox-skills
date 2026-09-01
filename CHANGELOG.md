@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.3]
+
+### Fixed
+
+- **The gate enforced half of Anthropic's front-matter contract.** That contract caps `name` at 64
+  characters and `description` at 1024; only the second was checked, so an over-long name could
+  ship unremarked. `frontmatter_file_problems` now measures the name against a new `NAME_CAP`
+  alongside the existing directory-agreement check, and reports both when both fail rather than
+  stopping at the first. It runs through `frontmatter_failures`, which sweeps every shipped
+  SKILL.md on every gate run, so an over-cap name cannot arrive through an untouched file either.
+  Nothing shipped is over the cap today (longest name: 46), which makes this prevention rather than
+  repair - and the reason to hold the documented line is that what the harness does past it is not
+  measured here, unlike the description's truncation, which was observed directly.
+
 ## [5.300.2]
 
 ### Fixed

@@ -227,6 +227,13 @@ def frontmatter_name(path):
 #: warns, which is why this is a gate rather than a rule someone remembers.
 DESCRIPTION_CAP = 1024
 
+#: Claude Code's documented cap on a skill's front-matter `name`. Unlike `DESCRIPTION_CAP`, whose
+#: truncation was observed directly, what the harness does past this one is NOT measured here - so
+#: the gate holds the documented line rather than a measured one. The name is what the router keys
+#: on and what the loader matches against the directory, so a name the harness alters is not a
+#: cosmetic problem.
+NAME_CAP = 64
+
 
 def cso_failures_for(label, description):
     """Why `description` fails the CSO rules, at most one message, empty when it passes.
@@ -936,9 +943,17 @@ def frontmatter_file_problems(md, label, expect_name=None):
     name = frontmatter_name(md)
     if name is None:
         problems.append("%s: SKILL.md has no `name:` in its front matter." % label)
-    elif expect_name is not None and name != expect_name:
-        problems.append("%s: front-matter name is %r but the directory is %r - the router "
-                        "keys on one and the loader on the other." % (label, name, expect_name))
+    else:
+        # Both, not one or the other: an over-cap name that ALSO disagrees with its directory has
+        # two separate things to fix, and reporting only the first sends the author back twice.
+        if len(name) > NAME_CAP:
+            problems.append("%s: front-matter name is %d characters, over the %d cap - the name "
+                            "is what the router keys on and what the loader matches against the "
+                            "directory, so shorten it (and the directory with it)."
+                            % (label, len(name), NAME_CAP))
+        if expect_name is not None and name != expect_name:
+            problems.append("%s: front-matter name is %r but the directory is %r - the router "
+                            "keys on one and the loader on the other." % (label, name, expect_name))
     description = frontmatter_description(md)
     if description is None:
         problems.append("%s: SKILL.md has no `description:` - nothing can route to it." % label)

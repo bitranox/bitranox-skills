@@ -332,6 +332,42 @@ def test_every_shipped_skill_description_is_within_the_cap():
     assert not over, "descriptions over the %d cap: %s" % (hc.DESCRIPTION_CAP, ", ".join(over))
 
 
+def test_frontmatter_problems_flags_a_name_over_the_cap(tmp_path):
+    """Anthropic's contract caps `name` at 64 as well as `description` at 1024; only the second
+    was enforced, so an over-long name shipped unremarked."""
+    long_name = "a" * (hc.NAME_CAP + 1)
+    skills = _skills(tmp_path / "p", long_name)
+    (skills / long_name / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: Use when parsing gitignore files and filtering paths.\n---\n"
+        % long_name, encoding="utf-8")
+    fails = hc.frontmatter_problems(skills)
+    assert len(fails) == 1
+    assert "over the 64 cap" in fails[0]
+    assert str(hc.NAME_CAP + 1) in fails[0]
+
+
+def test_a_name_exactly_at_the_cap_is_not_flagged(tmp_path):
+    """The boundary in the direction that must NOT fire - a cap is not an off-by-one."""
+    name = "a" * hc.NAME_CAP
+    skills = _skills(tmp_path / "p", name)
+    (skills / name / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: Use when parsing gitignore files and filtering paths.\n---\n"
+        % name, encoding="utf-8")
+    assert hc.frontmatter_problems(skills) == []
+
+
+def test_every_shipped_skill_name_is_within_the_cap():
+    """Same reason as the description sweep: the commit gate only sees CHANGED skills, so an
+    over-cap name in a skill nobody edits again would never be reported."""
+    skills = Path(__file__).resolve().parents[2] / "skills"
+    over = []
+    for skill_md in sorted(skills.glob("*/SKILL.md")):
+        name = hc.frontmatter_name(skill_md)
+        if name is not None and len(name) > hc.NAME_CAP:
+            over.append("%s (%d)" % (skill_md.parent.name, len(name)))
+    assert not over, "names over the %d cap: %s" % (hc.NAME_CAP, ", ".join(over))
+
+
 # --- hook registrations -----------------------------------------------------------------------
 
 def _settings(tmp_path, command, event="PreToolUse"):
