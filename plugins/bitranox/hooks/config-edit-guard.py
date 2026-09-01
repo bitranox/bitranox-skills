@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -89,6 +90,11 @@ def targets_config(file_path) -> bool:
     edit would proceed exactly as if the hook had found nothing.
     """
     normalised = str(file_path or "").replace("\\", "/")
+    # Collapse "." and ".." before matching, or the same settings.json spelled with an interior
+    # "/./" reads as a different file and this guard goes quiet on it. posixpath, not os.path:
+    # the separators are already forward slashes and os.path would put Windows ones back.
+    # Swept here after the identical shape was fixed in skill-edit-guard.
+    normalised = posixpath.normpath(normalised) if normalised else normalised
     return bool(_CONFIG_PATHS.search(normalised))
 
 

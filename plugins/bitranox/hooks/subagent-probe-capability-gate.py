@@ -52,6 +52,23 @@ _DECLARATION_RX = re.compile("|".join(_DECLARATIONS), re.I)
 # by this module's own negative test before it ever shipped.
 _SENTENCE_SPLIT = re.compile(r"[.!?\n]+")
 
+# A declaration still OPENS the line when a list bullet or a short label comes first: one "- " was
+# enough to let through exactly the dispatch this gate exists to deny. Stripped conservatively -
+# at most one bullet and one SHORT label that ends in a colon - because widening a matcher is the
+# direction that manufactures false positives, and prose merely discussing tool use carries
+# neither. "Explain the rule that says do not use any tools" has no colon and is still not a match.
+_BULLET_OR_LABEL = re.compile(r"^\s*(?:[-*+\u2022]\s+|\d+[.)]\s+)?(?:[A-Za-z][A-Za-z ]{0,22}:\s+)?")
+
+# "Do not use any tools OTHER THAN Read and Grep" says the opposite of a text-only declaration: the
+# dispatch needs tools and names them. Denying it sends the caller to an inert type that has none
+# of what the prompt just asked for. Only phrases that introduce a named exception count - "but" is
+# deliberately absent, because it also opens clauses that grant nothing, and a wrong ALLOW here is
+# the silent direction.
+_EXCEPTION = re.compile(r"\b(other than|except|besides|apart from)\b", re.I)
+
+# `don'?t` covered U+0027 alone, so the apostrophe every word processor produces walked past it.
+_APOSTROPHES = {ord(c): "'" for c in (chr(0x2019), chr(0x02BC), chr(0xFF07))}
+
 _DENY = (
     "TEXT-ONLY PROBE ON A TOOL-CAPABLE AGENT. This dispatch's prompt declares it needs no tools, "
     "but '{atype}' can still reach the filesystem - and that instruction is prose, which does not "
@@ -68,9 +85,14 @@ _DENY = (
 
 
 def _declares_text_only(prompt):
-    """Pure: True when a SENTENCE of the prompt opens with a no-tools declaration."""
-    return any(_DECLARATION_RX.match(chunk.strip())
-               for chunk in _SENTENCE_SPLIT.split(prompt or ""))
+    """Pure: True when a SENTENCE of the prompt opens with a no-tools declaration, allowing for a
+    leading list bullet or short label, and not counting one that goes on to name an exception."""
+    for chunk in _SENTENCE_SPLIT.split((prompt or "").translate(_APOSTROPHES)):
+        opening = _BULLET_OR_LABEL.sub("", chunk, count=1).strip()
+        hit = _DECLARATION_RX.match(opening)
+        if hit and not _EXCEPTION.search(opening[hit.end():]):
+            return True
+    return False
 
 
 def assess(tool_name, tool_input=None):

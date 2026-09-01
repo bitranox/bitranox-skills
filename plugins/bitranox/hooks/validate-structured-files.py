@@ -35,11 +35,20 @@ error - exits 0, so a broken validator never wedges a turn.
 """
 import json
 import os
+import re
 import sys
 
 # Template markers: a file carrying these is a template, not strict data. ${VAR}
 # (shell/compose interpolation) is deliberately NOT here - it is valid in a string.
-TEMPLATE_MARKERS = ("{{", "{%", "<%")
+# A template is not strict data, so this hook stays out of its way. But `{{` opens a Jinja/Helm
+# tag AND is how an Edit most often breaks a JSON file - by doubling its opening brace - so the
+# bare digraph skipped exactly the corruption this hook exists to catch. A template EXPRESSION
+# never opens on a JSON string quote or on another brace, which separates the two.
+#
+# The trade-off is deliberate and one-directional: the Jinja spelling `{{"literal"}}`, written
+# with no space, is now validated instead of skipped. That direction is a LOUD false block on a
+# rare spelling; the other ships a corrupted manifest in silence.
+TEMPLATE_RX = re.compile(r"\{\{(?![\"{])|\{%|<%")
 
 JSON_EXTS = (".json",)
 YAML_EXTS = (".yml", ".yaml")
@@ -173,7 +182,7 @@ def main() -> int:
 
     if not text.strip():
         return 0  # empty / whitespace-only stub: intentional, not the failure class we guard
-    if any(marker in text for marker in TEMPLATE_MARKERS):
+    if TEMPLATE_RX.search(text):
         return 0  # Helm / Jinja / Go / ERB template: not strict data
 
     result, detail = validator(path, text)

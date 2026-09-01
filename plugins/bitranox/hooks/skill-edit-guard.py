@@ -18,6 +18,7 @@ launched via run-python.sh so it works on Windows too.
 """
 import json
 import os
+import posixpath
 import re
 import sys
 
@@ -30,7 +31,11 @@ def decide(event, env):
     """Pure: (event, env) -> a block-reason string (deny the tool call), or None to allow silently."""
     if (event.get("tool_name") or "") not in _TOOLS:
         return None
-    path = ((event.get("tool_input") or {}).get("file_path") or "").replace("\\", "/")
+    # posixpath.normpath, not os.path: the separators are already forward slashes, and
+    # os.path would put Windows ones back. Without collapsing "." and ".." first, the
+    # tail-anchored regex missed .../skills/<name>/./SKILL.md - the same file, unguarded.
+    raw = ((event.get("tool_input") or {}).get("file_path") or "").replace("\\", "/")
+    path = posixpath.normpath(raw) if raw else raw
     if not _SKILL_MD.search(path):
         return None
     if env.get(_BYPASS_ENV):

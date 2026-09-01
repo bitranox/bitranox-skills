@@ -187,3 +187,32 @@ def test_an_echo_of_the_footgun_does_not_block(monkeypatch):
 
 def test_a_real_invocation_after_an_echo_of_one_still_blocks(monkeypatch):
     assert run_main(monkeypatch, "echo 'do not' && ssh host 'pkill -f \"iperf3 -s\"'") == 2
+
+
+
+# --- finding 4 from the 2026-08-28 script-wave audit of this hook -------------------------------
+
+def test_an_empty_dash_f_pattern_is_blocked(monkeypatch, capsys):
+    """The empty pattern matches EVERY command line, so it is the worst self-match there is: it
+    matches the shell running it, and with pkill it kills that shell along with everything else the
+    user owns. It was the one pattern the loop explicitly skipped."""
+    assert run_main(monkeypatch, 'pkill -f ""') == 2
+    err = capsys.readouterr().err
+    assert "EVERY process" in err
+
+
+def test_plain_f_patterns_reports_the_empty_pattern():
+    assert B.plain_f_patterns('pkill -f ""') == [""]
+    assert B.plain_f_patterns("pkill -f ''") == [""]
+
+
+def test_a_dash_f_with_no_pattern_at_all_is_not_blocked(monkeypatch):
+    """The direction the fix must NOT reach. `-f` with nothing after it is a malformed command,
+    not a footgun, and the guard has no pattern to reason about - skipping an UNPARSEABLE call is
+    right, which is why the old empty-skip looked correct."""
+    assert run_main(monkeypatch, "pgrep -f") == 0
+
+
+def test_the_bracket_form_still_passes(monkeypatch):
+    """The case this guard was built to allow, kept beside the widening."""
+    assert run_main(monkeypatch, 'pgrep -f "[n]ginx"') == 0

@@ -71,3 +71,37 @@ def test_main_fail_open_on_bad_stdin(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     assert G.main() == 0                              # allow, never wedge
     assert capsys.readouterr().err == ""
+
+
+# --- finding 5 from the 2026-08-28 script-wave audit of this hook -------------------------------
+
+@pytest.mark.parametrize("path", [
+    "/repo/plugins/bitranox/skills/demo/./SKILL.md",
+    "/repo/plugins/bitranox/skills/demo/././SKILL.md",
+    "/repo/plugins/bitranox/skills/./demo/SKILL.md",
+    "/repo/plugins/bitranox/skills/demo/../demo/SKILL.md",
+    "/repo/plugins/bitranox//skills/demo/SKILL.md",
+])
+def test_an_uncanonical_spelling_of_a_skill_md_still_denies(path):
+    """The regex is tail-anchored, so an interior `/./` right before SKILL.md left it unmatched
+    and the edit went through unguarded. `./` at the front and `..` earlier in the path happen to
+    survive the tail anchor, which is why the first spellings anyone tries look safe."""
+    assert G.decide({"tool_name": "Edit", "tool_input": {"file_path": path}}, {}) is not None
+
+
+def test_the_canonical_path_still_denies():
+    """Control: the case the guard was built for, beside the widening."""
+    assert G.decide({"tool_name": "Edit",
+                     "tool_input": {"file_path": "/repo/skills/demo/SKILL.md"}}, {}) is not None
+
+
+@pytest.mark.parametrize("path", [
+    "/repo/skills/demo/README.md",
+    "/repo/skills/demo/scripts/SKILL.md.bak",
+    "/repo/docs/SKILL.md",
+    "/repo/skills/demo/nested/SKILL.md",
+])
+def test_a_path_that_is_not_a_skill_md_still_passes(path):
+    """The direction the canonicalisation must NOT reach: normalising a path must not turn a
+    non-SKILL.md into one. `skills/<name>/SKILL.md` is exactly one directory deep by design."""
+    assert G.decide({"tool_name": "Edit", "tool_input": {"file_path": path}}, {}) is None

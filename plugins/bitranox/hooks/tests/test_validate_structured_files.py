@@ -236,3 +236,49 @@ def test_subprocess_invalid_exit_2(tmp_path):
     res = _run_via_shim({"tool_input": {"file_path": fp}})
     assert res.returncode == 2
     assert "BLOCKED" in res.stderr
+
+
+
+# --- finding 3 from the 2026-08-28 script-wave audit of this hook -------------------------------
+
+def _write(tmp_path, name, text):
+    f = tmp_path / name
+    f.write_text(text, encoding="utf-8")
+    return str(f)
+
+
+@pytest.mark.parametrize("text", [
+    '{{"a": 1}}',
+    '{{"name": "x", "version": "1.0"}}',
+    '{{{"a": 1}}}',
+])
+def test_a_doubled_brace_corruption_is_not_a_template(tmp_path, monkeypatch, text):
+    """`{{` opens a Jinja/Helm tag AND is the signature of the commonest way an Edit breaks a JSON
+    file - doubling its opening brace. Treating the bare digraph as a template marker meant the
+    corruption skipped validation entirely, which is the one file shape this hook exists to catch.
+    """
+    fp = _write(tmp_path, "plugin.json", text)
+    assert run_main(monkeypatch, {"tool_input": {"file_path": fp}}) == 2
+
+
+@pytest.mark.parametrize("name,text", [
+    ("values.json", '{"image": {{ .Values.image }}}'),
+    ("values.yaml", "image: {{ .Values.image }}\ntag: {{- .Values.tag }}\n"),
+    ("t.json", '{"greeting": {{name}}}'),
+    ("t.yaml", "a: {% if x %}1{% endif %}\n"),
+    ("t.json", '{"a": <%= b %>}'),
+])
+def test_a_real_template_is_still_skipped(tmp_path, monkeypatch, name, text):
+    """The direction the discrimination must NOT reach. A template is not strict data and this
+    hook must stay out of its way; the marker still counts whenever the tag opens on anything a
+    template expression can start with."""
+    fp = _write(tmp_path, name, text)
+    assert run_main(monkeypatch, {"tool_input": {"file_path": fp}}) == 0
+
+
+def test_plain_valid_and_plain_broken_json_are_unaffected(tmp_path, monkeypatch):
+    """Control on both sides, so the narrowing cannot be satisfied by breaking the ordinary path."""
+    assert run_main(monkeypatch, {"tool_input": {
+        "file_path": _write(tmp_path, "ok.json", '{"a": 1}')}}) == 0
+    assert run_main(monkeypatch, {"tool_input": {
+        "file_path": _write(tmp_path, "bad.json", '{"a": 1,,}')}}) == 2

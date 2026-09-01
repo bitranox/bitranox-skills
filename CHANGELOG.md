@@ -29,6 +29,39 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.299.0]
+
+### Fixed
+
+Five guard defects from the 2026-08-28 script-wave audit, plus one sibling the audit did not
+report. All five were cases where a guard allowed exactly what it exists to deny, so each fix
+BLOCKS something that previously passed.
+
+- **`subagent-probe-capability-gate` missed a declaration behind a list bullet or a label.** The
+  matcher anchored on the raw sentence, so `- Do not use any tools.` or `IMPORTANT: Do not use any
+  tools.` walked past a gate whose whole job is routing text-only probes onto the inert
+  `baseline-probe` type. One character of list syntax was enough.
+- **The same gate missed a typographic apostrophe.** `don'?t` covered U+0027 only, so the
+  apostrophe every word processor produces bypassed it. Apostrophes are normalised before matching.
+- **The same gate denied a prompt that says it DOES need tools.** `Do not use any tools other than
+  Read and Grep` matched the declaration and was refused, pointing the caller at an agent type with
+  none of what the prompt just asked for. A named exception clause (`other than`, `except`,
+  `besides`, `apart from`) now disqualifies the match. `but` is deliberately not in that list.
+- **`validate-structured-files` skipped the commonest way an Edit breaks a JSON file.** `{{` was
+  treated as a Jinja/Helm template marker on sight, so `{{"a": 1}}` - a doubled opening brace -
+  skipped validation entirely. A template expression never opens on a string quote or another
+  brace, which separates the two. The Jinja spelling `{{"literal"}}` written with no space is now
+  validated rather than skipped: a loud false block on a rare spelling, against silently shipping a
+  corrupted manifest.
+- **`block-pgrep-self-match` allowed an empty `-f` pattern** - the one pattern that matches every
+  command line on the box, including the shell running it. The loop's `if not pattern: continue`
+  could only ever skip the explicitly-empty quoted form, because the regex guarantees a match has
+  a pattern.
+- **`skill-edit-guard` and `config-edit-guard` matched paths without canonicalising them.** The
+  tail-anchored regexes missed an interior `/./`, so `skills/<name>/./SKILL.md` and
+  `~/.claude/./settings.json` named the same files unguarded. Both now normalise first. The
+  `config-edit-guard` half was found by sweeping the shape after fixing the first, not by a report.
+
 ## [5.298.1]
 
 ### Fixed

@@ -91,3 +91,64 @@ def test_explore_is_not_accepted_as_safe():
     """Explore has no Write and still wrote a file via Bash - it is not an inert type."""
     action, _ = G.assess("Agent", _dispatch(TEXT_ONLY_PROMPTS[0], subagent_type="Explore"))
     assert action == "deny"
+
+
+# --- findings 1, 2 and 8 from the 2026-08-28 script-wave audit of this hook ---------------------
+
+RIGHT_SINGLE_QUOTE = chr(0x2019)
+
+
+@pytest.mark.parametrize("prompt", [
+    "- Do not use any tools.",
+    "* Do not use any tools.",
+    "1. Do not use any tools.",
+    "IMPORTANT: Do not use any tools.",
+    "Note: reply with text only.",
+    "  - Answer from this prompt alone.",
+])
+def test_a_declaration_behind_a_bullet_or_label_still_denies(prompt):
+    """A declaration still OPENS the line when a list bullet or a short label precedes it. The
+    matcher anchored on the raw stripped chunk, so one character of list syntax was enough to let
+    through exactly the dispatch this gate exists to deny."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose", "prompt": prompt})
+    assert action == "deny"
+
+
+def test_a_typographic_apostrophe_still_denies():
+    """`don'?t` covered U+0027 only, so the apostrophe any word processor produces bypassed it."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose",
+                                   "prompt": "Don%st use any tools." % RIGHT_SINGLE_QUOTE})
+    assert action == "deny"
+
+
+@pytest.mark.parametrize("prompt", [
+    "Do not use any tools other than Read and Grep. Investigate the parser.",
+    "Do not use any tools except Read.",
+    "Do not use any tools besides Bash.",
+    "Do not use any tools apart from Read and Glob.",
+])
+def test_a_declaration_with_an_exception_clause_is_not_text_only(prompt):
+    """It says the opposite: this dispatch DOES need tools, and names them. Denying it points the
+    caller at an inert agent type that has none of what the prompt just asked for."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose", "prompt": prompt})
+    assert action is None
+
+
+@pytest.mark.parametrize("prompt", [
+    "It changes how we do not use tools that reach the network.",
+    "The reviewer explained why teams do not use tools like this.",
+    "Explain the rule that says do not use any tools during a probe.",
+])
+def test_prose_that_merely_discusses_tool_use_still_passes(prompt):
+    """The direction the widening must NOT reach. A guard that fires on text MENTIONING the
+    footgun it guards is the classic failure, and these are the cases the bullet and label
+    stripping could plausibly have broken."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose", "prompt": prompt})
+    assert action is None
+
+
+def test_the_plain_declaration_still_denies():
+    """The case the gate was built for, kept as a permanent control beside every widening."""
+    action, _ = G.assess("Agent", {"subagent_type": "general-purpose",
+                                   "prompt": "Answer from this prompt alone. Do not use any tools."})
+    assert action == "deny"

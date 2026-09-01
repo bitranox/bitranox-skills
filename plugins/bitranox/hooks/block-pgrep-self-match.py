@@ -125,8 +125,12 @@ def plain_f_patterns(cmd):
     for call in _INVOCATION.findall(cmd):
         for m in _DASH_F_PATTERN.finditer(call):
             pattern = next((g for g in m.groups() if g is not None), "")
-            if not pattern:
-                continue
+            # An EMPTY pattern is not "no pattern" - it is the worst one there is, matching every
+            # command line on the box including this shell's. The regex requires one of its three
+            # alternatives to match, so a match always has exactly one non-None group and the ""
+            # default is unreachable; the old `if not pattern: continue` therefore skipped nothing
+            # BUT the explicitly-empty quoted form. A `-f` with no pattern at all does not match
+            # the regex in the first place, so it never reaches here.
             if "$" in pattern:
                 continue  # variable: argv holds the unexpanded text, cannot self-match
             if _BRACKET_TOKEN.search(pattern):
@@ -174,7 +178,9 @@ def main() -> int:
             "PLAIN `-f` PATTERN. `-f` matches /proc/*/cmdline, and this shell's own",
             "cmdline contains the pattern literal, so it always matches itself:",
         ]
-        msg += [f"  -f {p}" for p in plain]
+        msg += [f"  -f {p}" if p else
+                '  -f ""   <- EMPTY pattern: matches EVERY process, including this shell'
+                for p in plain]
     if leaked:
         msg += [
             "",

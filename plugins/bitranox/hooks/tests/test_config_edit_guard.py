@@ -246,3 +246,36 @@ def test_end_to_end_is_silent_for_an_unrelated_file():
 def test_malformed_input_fails_open(payload):
     rc, out, _err = _run(payload)
     assert (rc, out) == (0, "")
+
+
+# --- the same uncanonical-path shape found in skill-edit-guard, swept per fix-shared-bug ---------
+
+@pytest.mark.parametrize("path", [
+    "/home/u/.claude/./settings.json",
+    "/home/u/.claude/././settings.json",
+    "/home/u/./.claude/settings.json",
+    "/home/u/.claude/hooks/../settings.json",
+    "/repo/.claude/./settings.local.json",
+])
+def test_an_uncanonical_spelling_of_a_config_path_still_targets_config(path):
+    """`_CONFIG_PATHS` is a regex over the raw string, so an interior `/./` made the same file
+    read as a different one and the guard on Claude Code's own settings went quiet. Found by
+    sweeping the shape after fixing it in skill-edit-guard, not by an audit report."""
+    assert G.targets_config(path) is True
+
+
+def test_the_canonical_path_still_targets_config():
+    """Control beside the widening."""
+    assert G.targets_config("/home/u/.claude/settings.json") is True
+
+
+@pytest.mark.parametrize("path", [
+    "/home/u/notes.json",
+    "/home/u/.claude-memory/facts/x.md",
+    "/repo/package.json",
+    "/home/u/claude/settings.json",
+])
+def test_a_path_that_is_not_config_still_passes(path):
+    """The direction the canonicalisation must NOT reach: normalising must not turn an unrelated
+    file into a config file."""
+    assert G.targets_config(path) is False
