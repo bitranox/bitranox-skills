@@ -9,7 +9,7 @@ Layout:
   * ONE central body-store per tree anchor: `<anchor>/.claude-memory/facts/<slug>.md` - flat,
     human-readable, greppable. The SLUG is the fact's identity, unique per TREE.
   * A POINTER index per altitude, INLINE in that level's `CLAUDE.local.md` (plain cascade text, never
-    `@import`): `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` inside a managed fenced
+    `@import`): `- [Title](mem:<slug>) - hook <!-- bx:pin -->` inside a managed fenced
     block whose header carries the RETRIEVAL RECIPE (how to walk up and Read a body mid-reasoning -
     the recipe is the experimentally proven retrieval channel, and it reaches Task subagents, which
     never see the SessionStart inject).
@@ -144,7 +144,7 @@ def recurrence_count(body):
 SCOPE_BEGIN = sig.SCOPE_MARK_BEGIN               # reuse the existing scope markers (same grammar the
 SCOPE_END = sig.SCOPE_MARK_END                   # model already knows from the legacy index.md)
 
-# `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->` (new) or the pre-pivot
+# `- [Title](mem:<slug>) - hook <!-- bx:pin -->` (new) or the pre-pivot
 # `- [Title](uuid:<uuid>) - hook <!-- ... bx:slug=s -->` (legacy). The hook runs to the FIRST
 # `<!--` (a hook may legitimately contain bare `<placeholders>`, so a tempered scan is used, never
 # a plain `[^<]` class - that truncated real hooks); anything after the first meta comment is

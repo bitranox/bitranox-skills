@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.4]
+
+### Fixed
+
+- **Three docstrings still taught a line grammar the code no longer writes.** `uuid_store.py`'s
+  layout note and its `_PTR_RX` comment both gave the pointer line as
+  `- [Title](mem:<slug>) - hook <!-- bx:src=a,b bx:pin -->`, and `test_memory_engine.py`'s module
+  docstring described the whole pre-pivot format (`uuid:X` links, sharded `facts/<shard>/<uuid>.md`
+  bodies) as the format under test. Provenance has not been rendered since 5.300.0 and the slug
+  pivot predates that, so all three documented a mechanism that is gone - the shape a later reader
+  trusts precisely because it sits next to the code. Corrected to the shipped grammar; the
+  deliberate `bx:src` mentions stay where they explain the absorption inlet (a legacy token is
+  consumed and discarded) and in `migrate_to_uuid_store.py`, which reads genuinely old data.
+
 ## [5.300.3]
 
 ### Fixed

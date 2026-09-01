@@ -1,8 +1,13 @@
-"""Tests for memory_engine.py (the single write path, UUID-native). All content ASCII.
+"""Tests for memory_engine.py (the single write path). All content ASCII.
 
 Store format under test: a per-altitude pointer block inline in `CLAUDE.local.md`
-(`- [Title](uuid:X) - hook <!-- bx:src=.. bx:pin bx:slug=s -->`) + central bodies at
-`<anchor>/.claude-memory/facts/<shard>/<uuid>.md`. Slug is the logical identity; uuid is the body key.
+(`- [Title](mem:<slug>) - hook <!-- bx:pin -->`) + central bodies at
+`<anchor>/.claude-memory/facts/<slug>.md`. The slug IS the identity, unique per tree.
+
+Pre-pivot lines (`- [Title](uuid:X) - hook <!-- bx:slug=s -->`, bodies sharded at
+`facts/<2-hex>/<uuid>.md`) are still parsed and are exercised here too, so the legacy shapes below
+are deliberate. A `bx:src=` token on such a line is consumed and discarded: provenance is no longer
+rendered on any line.
 """
 
 import json
