@@ -468,6 +468,25 @@ def test_decoy_context_is_throttled_after_it_runs(tmp_path):
     assert second == ""
 
 
+def test_decoy_context_sweeps_the_superseded_machine_wide_stamp(tmp_path):
+    """Upgrading to the per-project stamp must not strand the old one in the audit dir.
+
+    The machine-wide `decoy-check.stamp` is dead the moment the key becomes per-project, but it
+    is a file in the user's audit dir with no owner left to remove it, and nothing in it says
+    why it is there. Swept on the next run that writes a per-project stamp.
+    """
+    proj = _tree(tmp_path, decoy=False)
+    _clear_stamp()
+    legacy = SIG._audit_dir() / "decoy-check.stamp"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("2026-01-01T00:00:00", encoding="utf-8")
+
+    S.decoy_context(str(proj))
+
+    assert not legacy.exists()
+    assert (SIG._audit_dir() / (SIG.proj_key(str(proj)) + ".decoy-check.stamp")).exists()
+
+
 def test_decoy_context_throttle_is_per_project_not_machine_wide(tmp_path):
     """One tree's daily check must not consume every other tree's.
 

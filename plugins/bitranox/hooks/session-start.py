@@ -375,6 +375,13 @@ def decoy_context(proj):
         found = rmi.find_decoy_anchors(anchor)
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
+        # The pre-5.299.2 machine-wide stamp is dead once the key is per-project, but it is a file
+        # in the user's audit dir with no owner left to remove it and nothing in it saying why it
+        # is there. Swept on the first run that writes a per-project one; missing is the normal case.
+        try:
+            (sig._audit_dir() / "decoy-check.stamp").unlink()
+        except OSError:
+            pass
         if not found:
             return ""
         listed = "\n".join(f"  {d}" for d in found[:5])

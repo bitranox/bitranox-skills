@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.299.3]
+
+### Fixed
+
+- **The superseded machine-wide decoy stamp is swept on upgrade.** 5.299.2 keyed the decoy
+  check's throttle per project, which left the old `~/.claude/self-improve-audit/decoy-check.stamp`
+  stranded: a file with no owner left to remove it and nothing in it saying why it is there. The
+  first run that writes a per-project stamp now unlinks it, fail-open, since missing is the normal
+  case. Note for anyone upgrading from 5.299.1 or earlier: because no per-project stamp exists
+  yet, each project runs the decoy scan once on its next session start. That is the corrected
+  behaviour rather than a side effect - one tree's check consuming every other tree's is the
+  defect 5.299.2 fixed.
+
 ## [5.299.2]
 
 ### Fixed

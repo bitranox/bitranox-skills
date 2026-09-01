@@ -2,79 +2,75 @@
 
 ## In flight
 
-Nothing. Five commits, each gated and CI-green before the next started.
+Nothing. One commit, gated before the push.
 
 ## Committed, or not
 
-`HEAD == origin/master == ce5f856`, working tree clean, plugin `5.299.1`. Nothing uncommitted.
-
-The session's commits, oldest first: `d165a3a` `212b9a7` `d190494` (the tell hooks) and `448f207`
-`ce5f856` (the guard slice), plus `93a71a3` recording progress against the backlog.
+Code and backlog are at `48b616b`, plugin `5.299.2`. This file and its companion backlog edit are
+the only things after it.
 
 ## What was done, in one paragraph, because the repo cannot tell you WHY
 
-Two pieces of the same audit. First, the `commit-tell-sweep` finding from report 20 of the
-2026-08-28 script wave: both tell hooks decoded with `errors="replace"`, which mints U+FFFD per
-undecodable byte, and U+FFFD is itself a tell - so the reader manufactured what the detector hunts
-for. Fixing that opened a silent miss (a Windows-editor em-dash is byte `0x97`, dropped and
-reported clean), so the encoding is now its own finding. Second, the seven gate and guard reports
-of that same wave were adjudicated against the live tree: 38 claims, 24 drivable, five under-blocks
-shipped.
+`OPEN-WORK.md` item 10, continued: the six non-guard reports of the 2026-08-28 script wave, the
+ones never mentioned anywhere in `TRIAGE.md`. All 22 claims were driven against the LIVE tree, not
+read - a JSON event or an in-process call, each paired with a control that had to answer the
+opposite. 15 confirmed, 6 refuted because they were already fixed (all of
+`warn-inline-powershell`'s first five, which was rewritten after the report, plus the
+`self-improve-audit` injection hole closed by `inert_snippet`), and 1 split. Of the 15, ten are
+behavioural and five are untested-but-correct coverage gaps. The user chose one of four scoped
+options: fix the two `session-start` decoy-check findings, together. That shipped as `5.299.2`.
 
 ## Decided, and why - do not reopen
 
-- **`errors="ignore"` plus an explicit encoding finding, not one or the other.** Dropping the bytes
-  silently trades a loud wrong answer for a quiet one; both tell hooks now name the first bad byte.
-- **A `-F` file's hits report codepoints (`1: U+2014`), never the line.** PreToolUse runs before the
-  call is approved, so the path is only a string the caller named. An inline `-m` message is still
-  quoted in full: the caller typed it. Uniform, deliberately - keying it on where the path lives
-  would put a security property behind a path comparison inside a fail-open hook.
-- **One shared `tell_chars.decode_utf8`.** The detector and its rewriter twin had drifted on how a
-  file is read; one function is what stops that recurring.
-- **`{{` is a template marker only when not followed by `"` or `{`.** Measured before keeping it:
-  across 24,112 structured files on this machine, zero would be newly validated. That is evidence
-  from one machine, not a proof about every repo.
-- **No length cap on the probe gate's label prefix.** An arbitrary number deciding a
-  security-shaped verdict fails in the silent direction; the newly-accepted false positive is
-  pinned by its own test instead.
-- **The exception phrase list stays short** (`other than`, `except`, `besides`, `apart from`). It
-  fails toward DENY, and `but`/`only` in that list would silently disarm the gate.
+- **The two decoy findings ship together or not at all.** The machine-wide stamp was what limited
+  the `_anchor` bug to one firing per machine per day. Correcting the throttle alone would have
+  made the destructive advice fire MORE often, not less. Anyone reopening either half needs to
+  hold both.
+- **`decoy_context` resolves its own anchor rather than borrowing `memory_engine._anchor`.**
+  `_anchor` deliberately falls back to the project dir for bootstrap callers;
+  `find_decoy_anchors` cannot accept that fallback. `retrieval_context` in the same file already
+  had the correct shape, so this makes two neighbours agree rather than inventing a third rule.
+- **The timing claim in `self-improve-audit` report finding 1 was not treated as urgent, and
+  that verdict is deliberately scoped.** The double read is real. The claimed consequence does not
+  reproduce HERE: worst 0.54 s across all 15 real transcripts over 9 MB, median 0.35 s, against
+  the documented 1.5 s SessionEnd budget. But host speed was never controlled - the report's
+  4.85 s came from its own room and I never ran its fixture on this host, so shape and machine
+  speed stay confounded. Read it as "does not occur on this machine with real data", not as "the
+  report was wrong". One pass would buy back about 15 percent, not the claimed half.
 
 ## Decided against, and why
 
-- **Keying the template skip on path or directory layout.** Considered and rejected: it encodes
-  layout assumptions into a hook shipped to other people's repos, and fails loudly for a template
-  that lives outside the convention.
-- **Fixing the four confirmed findings outside the chosen scope.** They are backlog item 85 now,
-  with their mechanisms written down, rather than half-done here.
+- **Fixing the other eight confirmed behavioural findings.** Out of the scope the user chose. They
+  are named on item 10 with their mechanisms, and in full in the wave's `TRIAGE.md`.
+- **Chasing the five untested-but-correct coverage gaps now.** Every one behaves correctly today;
+  they are regression exposure, not defects.
 
 ## Still open, untouched
 
-Fifteen items in `OPEN-WORK.md`, ranked. Read that file; summarising it here is the re-encoding
+Sixteen items in `OPEN-WORK.md`, ranked. Read that file; summarising it here is the re-encoding
 that file exists to prevent.
 
 ## The exact next action
 
-**`OPEN-WORK.md` item 10** - still the top-ranked open item and the oldest, the user's 2026-08-27
-audit directive. The seven gate/guard reports are done. Next are the six reports never mentioned
-anywhere in `TRIAGE.md`:
+**`OPEN-WORK.md` item 10 again** - the eight remaining confirmed behavioural findings. The two
+worth taking first, because both silently corrupt measurements rather than merely misinforming:
 
-    self-improve-audit  warn-inline-powershell  session-start
-    subagent-backstop-nudge  subagent-brief  session-banner
+- `subagent-brief` injects 718 characters at the start of a clean-room dispatch whenever the
+  agent_type is tool-capable, and emits the full envelope for an event whose `agent_type` it
+  cannot identify at all. It fails OPEN against the fail-CLOSED asymmetry its own docstring states.
+- `subagent-backstop-nudge` tells a named `baseline-probe` to call `SendMessage`, a tool its
+  definition does not give it, and keys its background test on `name` when the live Agent tool
+  schema says `isolation: "remote"` is what "always runs in background".
 
-in `/media/srv-main-softdev/projects/public/KI/scriptwave-2026-08-28/reports/`, about 55 KB.
+Three things that pass are worth carrying:
 
-Two things that pass are worth carrying:
-
-- Extract claims with `^\s*[*_#>\-\s]*FINDING:\s*([A-Z][A-Z-]*)\s*\|` - seven reviewers wrote
-  `**FINDING: BUG | ...**`, which a `^FINDING` anchor misses entirely, and that undercount was
-  filed as "clean" three times in the original session.
-- Adjudicate by DRIVING the hook with a JSON event against the live tree, and give every probe a
-  control that must answer the opposite. Several 2026-08-28 claims are already fixed, and two of my
-  own instruments were wrong before they were right.
-
-A report of 2-4 KB is CLOBBERED, not clean - the Stop hook overwrote it with a capture summary.
-Its real content is the sibling `.recovered` file.
+- Adjudicate against the LIVE tree, never the report. Six of 22 claims here were already fixed.
+- Pair every probe with a control that must answer the opposite. One of mine fed the contribution
+  queue IDENTICAL records, which deduped to a constant 601 chars and read exactly like a bounded
+  function; distinct records showed 26,951.
+- Ground truth this room has and the reviewers did not: real transcripts settle shape questions
+  (list-form `tool_result.content` is 1101 of 38389, so that untested branch is a production
+  path), and the Agent tool schema in the session prompt settles the backgrounding question.
 
 If you do something else instead, say so in the next handover and why - recency is not a reason.
 
@@ -82,11 +78,10 @@ If you do something else instead, say so in the next handover and why - recency 
 
 - `OPEN-WORK.md` - the backlog; its header states the line format and ranking rules.
 - `/media/srv-main-softdev/projects/public/KI/scriptwave-2026-08-28/TRIAGE.md` - the audit record.
-  Its `GUARD SLICE ADJUDICATED 2026-09-01` section lists what was refuted, so it is not re-filed.
-  This directory is beside the repo, not inside it: it is 19 MB and the repo is public.
-- `plugins/bitranox/hooks/tell_chars.py` - `decode_utf8`, `find_tell_codepoints`, `_scannable`.
-- `plugins/bitranox/hooks/subagent-probe-capability-gate.py` - `_BULLET_OR_LABEL`, `_EXCEPTION`,
-  `_APOSTROPHES`, `_declares_text_only`.
+  Its `NON-GUARD SLICE ADJUDICATED 2026-09-01` section holds all 22 verdicts with their evidence,
+  so nothing here is re-derived. Beside the repo, not inside it: 19 MB, and this repo is public.
+- `plugins/bitranox/hooks/session-start.py` - `decoy_context`, and `retrieval_context` above it
+  for the anchor shape it now matches.
 
 ## How to verify this still stands
 
@@ -96,15 +91,17 @@ env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defused
   --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
 ```
 
-`repo-gate: all checks passed`; 4211 passed / 13 skipped / 1 xfailed at `ce5f856`.
+`repo-gate: all checks passed`; 4213 passed / 13 skipped / 1 xfailed at `48b616b`.
 
-## Two traps this session paid for
+## Three traps this session paid for
 
+- **`meta-claude-hooks` is no longer exhaustive.** `hookdoc_stamp.py check` returns STRUCTURAL:
+  upstream added `PreModelSwitch` and `PostModelSwitch` (31 to 33 events). Filed as item 95. Run
+  that check before quoting the skill as authoritative.
 - **A version bump needs BOTH `plugins/bitranox/.claude-plugin/plugin.json` AND `pyproject.toml`.**
-  The gate catches the drift, but only after you have written the changelog entry.
-- **Do not put `git fetch` in the same Bash call as the commit or push.** The PreToolUse gate reads
-  its answer before any statement runs, so that shape can never satisfy it, and a block discards
-  the prep with it.
+- **Do not write a commit message file in the same Bash call as the commit.** The gate judges the
+  whole command before any statement runs, so a block discards the prep with it. It did not fire
+  this time; the nudge did.
 
 ---
 
