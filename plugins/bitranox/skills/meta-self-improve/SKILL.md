@@ -206,6 +206,13 @@ Compose the entry per the specs in references/memory-backend.md:
 - **Body: framed prose with reasoning.** The fact, then `**Why:**` and `**How to apply:**` lines
   (the engine adds the frontmatter frame).
 
+**Resolving `<plugin>`**, used in every command in this skill: it is the installed plugin
+directory. Inside a HOOK, Claude Code exports it as `$CLAUDE_PLUGIN_ROOT`. **In an ordinary
+session that variable is NOT set** - derive the path instead from the base directory this skill
+announces when it is invoked, dropping the trailing `/skills/meta-self-improve`. Never hardcode a
+version directory: the cache holds one per installed version, so a pasted path silently targets an
+old copy after the next bump. In the source repo the same path is `plugins/bitranox`.
+
 Then ONE engine call per fact, and REQUIRE its success line (the printed slug):
 
     bash <plugin>/hooks/run-python.sh <plugin>/hooks/memory_engine.py add \

@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.1]
+
+### Fixed
+
+- **`meta-self-improve` now says how to resolve `<plugin>`.** The placeholder appears in six
+  commands in that skill and was defined nowhere in it, so a reader had no way to turn any of them
+  into something runnable. Two probe agents given the old text both failed: one left `<plugin>`
+  literal, the other resolved it to `$CLAUDE_PLUGIN_ROOT` - which Claude Code exports for HOOKS and
+  which is NOT set in an ordinary session, so the command would have failed there. The skill now
+  states both halves, and says to derive the path from the base directory it announces on
+  invocation rather than hardcoding a version directory, since the cache holds one per installed
+  version and a pasted path silently targets an old copy after the next bump.
+
 ## [5.300.0]
 
 ### Removed
