@@ -42,6 +42,21 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   that clause was written for always reads. The word-order twin
   `(hook|guard|gate) ... (caught|blocked|...)` is unchanged, so "the gate blocked me" still fires.
 
+  Measured against the real corpus before shipping, because a hand-written case list shares the
+  blind spot of whoever narrowed the clause. Over 200 transcripts the old clause fired 3 times:
+  "its push was blocked by the repo gate" and "push BLOCKED by the mirror gate", both real and
+  both kept, and "reading the recorded `RC=` from the log is what stopped a red-gate push", which
+  the narrowing drops and which is correct - the actor there is the log-reading, not a gate. The
+  alternative shape, a negative lookahead excluding "blocked on", would have kept that one. This
+  bounds rather than samples: any non-"by" phrasing inside the 30-character window would still
+  have tripped the old clause and appeared here, so the corpus shows zero real firings phrased
+  without "by". Do not widen it back without re-running that scan.
+
+  The first run of that scan was contaminated and read 7 dropped firings. It included the session
+  doing the work, where the failing sentence and several invented counter-examples had been
+  written into the transcript repeatedly; 6 of the 7 were that discussion of the bug. A corpus
+  that contains the investigation is not a control for it.
+
 ## [5.303.1]
 
 ### Fixed
