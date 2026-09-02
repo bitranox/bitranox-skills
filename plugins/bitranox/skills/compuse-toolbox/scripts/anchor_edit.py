@@ -314,6 +314,14 @@ def _parser():
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
     target = Path(args.file)
+    if not target.is_absolute():
+        # Which file a relative path names depends on the cwd, and a cwd persists across calls.
+        # The absent-anchor check does NOT cover this: a sibling repo is exactly where the anchor
+        # is most likely to be PRESENT in the wrong file - template-copied docs, a section
+        # duplicated across repos - so the edit lands elsewhere and exits 0.
+        print(f"anchor_edit: refusing a relative path, pass an absolute one: {target}",
+              file=sys.stderr)
+        return 2
     if not target.is_file():
         print(f"anchor_edit: no such file: {target}", file=sys.stderr)
         return 2

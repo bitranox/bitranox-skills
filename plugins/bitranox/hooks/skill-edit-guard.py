@@ -42,7 +42,10 @@ def decide(event, env):
         return None                                    # emergency bypass (env at session launch)
     try:
         import skill_receipt
-        if skill_receipt.is_fresh("meta-skill-writer"):
+        # The EVENT's session id, so the receipt must belong to THIS session. Without it the
+        # check answered "somebody on this machine started the procedure recently" - a different
+        # claim, and routinely true on a machine running several sessions at once.
+        if skill_receipt.is_fresh("meta-skill-writer", session_id=event.get("session_id")):
             return None                                # the skill-writer procedure was ENTERED
     except Exception:  # noqa: BLE001 - a broken receipt store must not wedge; fall through to deny
         pass

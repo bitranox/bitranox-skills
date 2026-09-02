@@ -15,11 +15,21 @@ Receipts live under ~/.claude/self-improve-audit/skill-receipts/, keyed by skill
 (machine-local; a receipt is a session-scale token, not a per-repo ledger). Pure standard library.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 TTL_SECONDS = 8 * 3600
+# Claude Code sets this in a Bash tool call, and its value is the session's own transcript name -
+# the same id a PreToolUse event carries. That equality is what lets the writer (a Bash call) and
+# the reader (the hook) agree on which session holds the receipt.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+
+
+def current_session_id(env=None):
+    """This session's id, or "" when the surface does not supply one."""
+    return ((env if env is not None else os.environ).get(SESSION_ENV) or "").strip()
 
 
 def receipt_path(skill):
@@ -27,10 +37,12 @@ def receipt_path(skill):
     return Path.home() / ".claude" / "self-improve-audit" / "skill-receipts" / (safe + ".json")
 
 
-def start(skill):
+def start(skill, session_id=None):
     p = receipt_path(skill)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"skill": skill, "ts": time.time()}), encoding="utf-8")
+    sid = session_id if session_id is not None else current_session_id()
+    p.write_text(json.dumps({"skill": skill, "ts": time.time(), "session_id": sid}),
+                 encoding="utf-8")
     return p
 
 
@@ -43,10 +55,26 @@ def end(skill):
         return False
 
 
-def is_fresh(skill, ttl=TTL_SECONDS):
+def is_fresh(skill, ttl=TTL_SECONDS, session_id=None):
+    """Whether a receipt is armed FOR THIS SESSION.
+
+    Session identity is the primary bound and the TTL is the secondary one. Without the id, this
+    answered "somebody on this machine started the procedure recently", which is a different
+    claim - and on a machine routinely running several sessions at once it is routinely true
+    while this session never entered the skill at all.
+
+    A receipt carrying no session id fails CLOSED whenever an id is demanded: not being able to
+    say which session wrote it is precisely the hole, so it is not grandfathered. Where the
+    caller has no id to offer (a surface that does not supply one), the TTL-only contract stands
+    rather than denying every edit there.
+    """
     try:
         data = json.loads(receipt_path(skill).read_text(encoding="utf-8"))
-        return (time.time() - float(data.get("ts", 0))) < ttl
+        if (time.time() - float(data.get("ts", 0))) >= ttl:
+            return False
+        if session_id:
+            return str(data.get("session_id") or "") == str(session_id)
+        return True
     except (OSError, ValueError):
         return False
 

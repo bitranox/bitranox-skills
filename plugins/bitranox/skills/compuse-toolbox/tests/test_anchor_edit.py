@@ -290,3 +290,34 @@ def test_cli_json_stays_parseable_on_a_refusal(tmp_path):
 def test_cli_usage_error_exits_two(tmp_path):
     proc = _run("replace", str(tmp_path / "missing.py"), "--anchor", "a", "--new-text", "b")
     assert proc.returncode == 2
+
+
+def test_a_relative_path_is_refused_because_it_names_a_different_file_per_directory(tmp_path):
+    """Which file `notes.md` names depends on the cwd, and a cwd persists across calls. The
+    measured failure is not a crash: the edit lands in a SIBLING repo's file of the same name
+    and exits 0.
+
+    The absent-anchor check does not cover this. Sibling repos are the case where the anchor is
+    most likely to be PRESENT in the wrong file - template-copied docs, a section duplicated
+    across repos, a shared heading - so the one guard that would catch it is refusing to accept
+    a path whose meaning depends on where you happen to be standing.
+    """
+    (tmp_path / "notes.md").write_text("alpha\nbravo\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(TOOL), "replace", "notes.md",
+                        "--anchor", "alpha", "--new-text", "charlie"],
+                       capture_output=True, text=True, check=False, cwd=str(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "absolute" in (r.stderr + r.stdout).lower()
+    # Control: the file is untouched, so the refusal really did happen before any write.
+    assert (tmp_path / "notes.md").read_text(encoding="utf-8") == "alpha\nbravo\n"
+
+
+def test_an_absolute_path_is_accepted(tmp_path):
+    """Control for the refusal above: it must reject the relative form only, not every path."""
+    target = tmp_path / "notes.md"
+    target.write_text("alpha\nbravo\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(TOOL), "replace", str(target),
+                        "--anchor", "alpha", "--new-text", "charlie", "--no-backup"],
+                       capture_output=True, text=True, check=False, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "charlie" in target.read_text(encoding="utf-8")

@@ -95,12 +95,19 @@ the success line, abort-and-show on a miss).
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
    complete store.
 
-2. **Back up + manifest.** Copy the anchor's `.claude-memory/` AND each level's `CLAUDE.local.md`
-   to `~/.claude/self-improve-audit/backups/<key>-<ts>/curated` (+ the native tier to `/native`),
-   and record an ORDER-INDEPENDENT manifest: the set of (level, slug, title, pin) tuples. The
-   post-dream check (step 8) re-derives it; placement legitimately changes `level`, nothing else
-   changes without an explicit merge/prune decision. Commit the store's git repo (Durability pass)
-   so the pre-dream state is one `git diff` away.
+2. **Back up + manifest.** Run `store_manifest.py backup` (home: `<plugin>/skills/meta-dream-tree/`,
+   launch via `hooks/run-python.sh`) with `--scope tree` (a nap uses `--scope chain`):
+
+       store_manifest.py backup --from <anchor> --scope tree \
+         --out ~/.claude/self-improve-audit/backups/<key>-<ts>
+
+   It copies the anchor's `.claude-memory/` AND each in-scope `CLAUDE.local.md`, and records the
+   ORDER-INDEPENDENT manifest of (level, slug, title, pin) tuples that step 8 re-derives. Do not
+   hand-roll the walk: a gitignore-aware `grep -r` SKIPS the pointer files, and an exact-match
+   prune of `.venv` misses `.venv-win` and `venv-<user>`, so vendored copies read as real levels.
+   An empty scope is a REFUSAL, because a manifest of nothing verifies clean against anything.
+   Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
+   away.
 
 3. **Load both tiers TREE-WIDE** - every level's pointer block under the anchor (the cwd's chain
    AND every sibling project/department; the central bodies are one store) plus the native raw
@@ -115,11 +122,23 @@ the success line, abort-and-show on a miss).
    or the SECRETS carve-out (curated stores are git-tracked; the native tier is not - never stage
    credentials into a repo).
 
-4. **Dedup / merge ACROSS THE TREE.** Fold near-duplicates into one sharpened entry (engine
-   `add`, same slug) - comparing across ALL levels, especially SIBLING projects (the classic
-   duplicate is the same lesson captured independently in two sibling projects; it merges at
-   their common parent). Cross-link related entries with `[[slug]]`. Dedup runs TWICE - here,
-   and again in step 8, because placement creates new overlap.
+4. **Dedup / merge ACROSS THE TREE.** Get the candidate pairs from `dedup_scan.py` (home:
+   `<plugin>/skills/meta-dream-tree/`, launch via `hooks/run-python.sh`):
+
+       dedup_scan.py --from <anchor> --threshold 0.45
+
+   READ ITS CONTROL LINE FIRST. Every run plants a paraphrase of a real fact and scores it through
+   the same path; if that did not fire, the run is an INSTRUMENT FAILURE and its empty candidate
+   list means nothing - a scorer that cannot fire and a clean tree both report zero. Read the
+   printed DISTRIBUTION too: a pair just under the threshold is the one most worth a look, and a
+   threshold is otherwise a way of not looking.
+
+   The output is CANDIDATES, not duplicates - it scores words, so read BOTH bodies before folding
+   anything. Fold near-duplicates into one sharpened entry (engine `add`, same slug), comparing
+   across ALL levels, especially SIBLING projects (the classic duplicate is the same lesson
+   captured independently in two siblings; it merges at their common parent). Cross-link related
+   entries with `[[slug]]`. Dedup runs TWICE - here, and again in step 8, because placement
+   creates new overlap.
 
 5. **PLACEMENT (re-level every entry, pinned included; up AND down).** Route each fact through
    THE routing prompt in references/dream-core.md against the descriptor ladder (leaf -> anchor);
@@ -178,8 +197,12 @@ the success line, abort-and-show on a miss).
       labelling it unsolved? If so, relabel it as unsolved.
 
 8. **Re-dedup, then verify.** Sweep the entries placement touched (a lifted general now overlaps
-   its origin and siblings) and normalize. Then: re-derive the manifest and diff against step 2
-   (only `level` may differ, plus explicitly-decided merges/prunes/rewords); run
+   its origin and siblings) and normalize - re-run `dedup_scan.py` from step 4, whose control line
+   applies again. Then re-derive the manifest and diff against step 2 with
+   `store_manifest.py verify --out <the same backup dir>`: exit 0 is identical, exit 1 NAMES what
+   was added, removed, changed or moved. Only `level` may differ (reported as `moved`), plus
+   explicitly-decided merges/prunes/rewords; anything else is a loss to explain before finishing.
+   Then run
    `reconcile_memory_index.py --check <altitude chain, narrow->broad>` (home:
    `<plugin>/skills/meta-self-improve/reconcile_memory_index.py`) and require `TOTAL problems: 0`,
    AND `reconcile_memory_index.py --check-tree "<cwd>"` for `TOTAL tree problems: 0` (the cross-sibling

@@ -29,6 +29,64 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.301.0]
+
+### Added
+
+- **`compuse-toolbox`: `pushcheck` - would this push publish something private?** Resolves the
+  repository's visibility from its REMOTE, never from the directory name, and scans the pending
+  range's ADDED lines for local paths, internal hostnames, usernames and RFC1918 addresses,
+  refusing a PUBLIC repo whose range carries any. The directory name is not evidence: a folder
+  named `public/` can hold a private repo, and the guess is wrong in the other direction too,
+  calling a public repo private and waving the scan through. Every non-answer fails CLOSED -
+  unknown visibility, an unreadable range and an EMPTY range are refusals - and the report always
+  states how many lines it read, because no findings after examining nothing is indistinguishable
+  from a clean result. Documentation-safe values (RFC5737 ranges, `example.com`, loopback,
+  placeholder home paths) are deliberately not findings, since a report a reader learns to skim is
+  how the one real finding gets waved through; supply your own infrastructure names with
+  `--denylist-file`, which never ships. `--exclude` skips a path's findings, because a project
+  holding SECURITY FIXTURES necessarily contains private-looking values - run this tool on its own
+  repository and it refuses on its own test file, and a gate that has to be bypassed routinely is
+  the failure it exists to prevent arriving by another route. An exclusion matching nothing is
+  reported rather than ignored, since the quiet direction is a caller believing a path is covered
+  by a pattern that never applied.
+- **`compuse-toolbox`: `backstop`, `enforced`, `confound` and `transcript_index`.** Arm a deadline
+  that alerts only on non-completion and REFUSES to arm when its exit signal is already true;
+  answer whether a config value is actually DECIDED on or merely declared, parsed and read; report
+  which pairwise comparison in a results table may carry a causal claim and which is CONFOUNDED;
+  and search narrated prose across every past session transcript at once rather than one at a time.
+- **`meta-dream-tree`: `store_manifest.py` and `dedup_scan.py`.** Steps 2, 4 and 8 called for a
+  backup with an order-independent manifest and for near-duplicate detection, and each run
+  re-implemented both. `store_manifest backup|verify` copies the in-scope stores, records the
+  (level, slug, title, pin) manifest at `--scope tree` or `chain`, and diffs it back, reporting a
+  re-levelled fact as `moved` rather than as an unrelated add and remove. `dedup_scan` reports
+  CANDIDATES with a PLANTED CONTROL scored through the same path: a scorer that cannot fire and a
+  clean tree both return zero, so a run whose control did not fire is an instrument failure rather
+  than a clean bill of health, and the score distribution is printed so a pair just under the
+  threshold stays visible.
+
+### Fixed
+
+- **`skill-edit-guard`: the receipt now proves WHICH session entered the procedure.** It carried a
+  timestamp and no session id, so its freshness check answered "somebody on this machine started
+  the skill-writer procedure in the last 8 hours" rather than "this session did". On a machine
+  running several sessions at once those are different claims, and the first is routinely true
+  while the editing session never entered the skill - measured, two shipped SKILL.md files were
+  edited in a session that had not. `start` records the session id and the guard requires the
+  event's id to match; a receipt carrying none fails closed rather than being grandfathered, and
+  the TTL stays as a secondary bound. Where a surface supplies no session id the previous
+  TTL-only contract stands, so the procedure remains usable there.
+- **`compuse-toolbox`: `anchor_edit` refuses a relative path.** Which file a relative path names
+  depends on the cwd, and a cwd persists across calls, so the edit lands in a sibling repo's file
+  of the same name and exits 0. The absent-anchor check does not cover this - a sibling is exactly
+  where the anchor is most likely to be PRESENT in the wrong file, through template-copied docs or
+  a shared heading.
+- **`compuse-toolbox`: `mem_levels` prunes suffixed virtualenvs.** The prune set matched `.venv`
+  exactly, so `.venv-win`, `.venv-3.13`, `venv-<user>` and `venv_<project>` were walked. The
+  plugin vendors `CLAUDE.local.md` into site-packages, so an install into any of them turns a
+  vendored copy into an apparent memory level. `srccount` in the same skill already carried these
+  shapes, tested; the two now agree.
+
 ## [5.300.8]
 
 ### Fixed

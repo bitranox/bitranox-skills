@@ -141,3 +141,27 @@ def test_json_still_emitted_on_failure(tmp_path, capsys):
 
     assert rc == 2
     assert _json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_a_suffixed_venv_is_pruned_like_a_plain_one(tmp_path):
+    """`.venv-win`, `.venv-3.13`, `venv-<user>` and `venv_<project>` are all real names on this
+    fleet, and an exact-match prune set covers none of them.
+
+    The plugin vendors CLAUDE.local.md into site-packages, so an install into any of those makes
+    a vendored copy read as a real memory level - inflating the level count with files nobody
+    can edit. srccount.py in this same skill already carries the tested filter for these shapes;
+    this keeps its sibling from disagreeing with it.
+    """
+    real = tmp_path / "proj"
+    real.mkdir()
+    (real / "CLAUDE.local.md").write_text("- [T](mem:a-slug) - hook\n", encoding="utf-8")
+    for venv in (".venv", ".venv-win", ".venv-3.13", "venv-alice", "venv_thing"):
+        vendored = tmp_path / venv / "lib" / "site-packages" / "pkg"
+        vendored.mkdir(parents=True)
+        (vendored / "CLAUDE.local.md").write_text("- [V](mem:vendored) - hook\n",
+                                                  encoding="utf-8")
+    report = mem_levels.scan(tmp_path)
+    levels = sorted(report.levels)
+    assert [lvl for lvl in levels if "venv" in lvl] == [], f"vendored copies leaked in: {levels}"
+    # Control: exactly one level survives, so a filter that pruned EVERYTHING cannot pass this.
+    assert len(levels) == 1, levels

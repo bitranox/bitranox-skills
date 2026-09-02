@@ -40,8 +40,18 @@ POINTER_RX = re.compile(r"\]\(mem:([^)\s]+)\)")
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIR = ".claude-memory"
 PRUNE = {".git", "node_modules", ".venv", "__pycache__", "target"}
+# A venv is routinely named for its python or its project, so exact names cannot cover them:
+# `.venv-win`, `.venv-3.13`, `venv-<user>` and `venv_<project>` all occur on real trees. The
+# plugin vendors CLAUDE.local.md into site-packages, so an unpruned one turns a vendored copy
+# into an apparent memory level. srccount.py in this skill carries the same shapes, tested.
+PRUNE_PREFIXES = (".venv", "venv-", "venv_")
 
 __all__ = ["Report", "scan", "main"]
+
+
+def is_pruned_dir(name: str) -> bool:
+    """Whether a directory name is one a curated memory tree never keeps levels in."""
+    return name in PRUNE or name.startswith(PRUNE_PREFIXES)
 
 
 @dataclass
@@ -78,7 +88,7 @@ def _iter_level_files(root: Path):
         except OSError:
             continue
         for e in entries:
-            if e.is_dir() and not e.is_symlink() and e.name not in PRUNE:
+            if e.is_dir() and not e.is_symlink() and not is_pruned_dir(e.name):
                 stack.append(e)
             elif e.is_file() and e.name == LEVEL_FILE:
                 yield e
