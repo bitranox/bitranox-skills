@@ -29,6 +29,36 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.303.0]
+
+### Added
+
+- **Four tools move out of a personal toolbox and ship with the plugin.** `mdwrap` (reflow ONE
+  markdown paragraph by anchor, without rewrapping its neighbours) and `renamescope` (before a
+  `sed` rename, which FUNCTION does each hit land in - the hits outside the ones you named are the
+  finding, because there the substitution changes meaning rather than breaking) join
+  `compuse-toolbox`. `statusrot` (pointer lines still claiming shipped/deployed/TODO long after
+  that stopped being true, reported as CANDIDATES needing confirmation) and `factedit` (reword a
+  fact's hook or body through the engine, the only path allowed to write the store) join
+  `meta-dream-tree`, whose subject they are. Their 131 tests come with them, and the local copies
+  were deleted so there is one source of truth.
+
+- **An exemption from the routing gate must now carry EVIDENCE, not just a reason.**
+  `NO_COMMAND_SHAPE` maps each tool to a `(reason, evidence)` pair and the gate rejects an entry
+  missing either half. An exemption is the lazy path out of writing a rule, so it has to cost
+  something: `evidence` states what was actually tried - the candidate pattern and what it
+  measured over the real corpus, or why no command shape can exist for that chore. A gate
+  satisfied by an opinion is advice, which is the failure the check itself exists to prevent.
+
+### Fixed
+
+- **A rule naming a tool kept at a skill's ROOT resolved nowhere and said nothing.** The resolver
+  globbed `*/scripts/<tool>.py` only, but the catalogue uses both layouts - `compuse-toolbox` keeps
+  tools in `scripts/` while `meta-dream-tree` keeps them beside its `SKILL.md`. It now tries both,
+  and takes the owning skill from the component directly under `skills/`: `parent.parent` names the
+  skill only in the `scripts/` layout and resolves to `skills` itself for the other, which would
+  have told a reader to run `bitranox:skills`.
+
 ## [5.302.0]
 
 ### Added

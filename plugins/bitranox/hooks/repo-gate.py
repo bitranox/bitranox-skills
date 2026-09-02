@@ -956,6 +956,18 @@ def toolbox_rule_coverage_failures(root):
             "toolbox-nudge.py NO_COMMAND_SHAPE exempts '%s', which no longer ships under "
             "skills/compuse-toolbox/scripts - drop the entry, or point it at the tool's new "
             "name." % tool)
+    # An exemption is the lazy path out of writing a rule, so it has to cost something: the entry
+    # must say what was TRIED, not only why the author was not keen. A gate satisfied by an
+    # opinion is advice, which is the failure this whole check exists to avoid one level up.
+    for tool in sorted(exempt):
+        entry = exempt[tool]
+        if not (isinstance(entry, tuple) and len(entry) == 2 and all(
+                isinstance(part, str) and part.strip() for part in entry)):
+            fails.append(
+                "toolbox-nudge.py NO_COMMAND_SHAPE['%s'] must be a (reason, evidence) pair with "
+                "both parts non-empty. `evidence` states what was actually tried - the candidate "
+                "pattern and what it measured over the real corpus, or why no command shape can "
+                "exist for this chore." % tool)
     return fails
 
 

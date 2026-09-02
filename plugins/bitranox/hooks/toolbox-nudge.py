@@ -132,33 +132,57 @@ _ANY_TOOL_RULES = [
 ]
 
 
-#: Shipped tools that deliberately carry NO rule, each with the reason. The repo gate reads this
-#: map, so an omission cannot pass as a decision: adding a tool with neither a rule nor an entry
-#: here FAILS the gate. That is the whole point - five tools shipped unrouted while every gate
-#: stayed green, because the description lint beside it only ever looked at CHANGED files.
+#: Shipped tools that deliberately carry NO rule, mapped to (reason, evidence). The repo gate
+#: reads this map, so an omission cannot pass as a decision: adding a tool with neither a rule nor
+#: an entry here FAILS the gate. That is the whole point - five tools shipped unrouted while every
+#: gate stayed green, because the description lint beside it only ever looked at CHANGED files.
 #:
-#: Two reasons appear below, and they are different. "No command shape" means the chore is a
-#: QUESTION someone asks, not a command they type, so no regex over a command line can find it.
-#: "Costs more than the channel carries" means a shape exists and was measured too broad.
+#: BOTH fields are required, and the gate rejects an entry missing either. An exemption is the
+#: lazy path out of writing a rule, so it has to cost something: `evidence` states what was
+#: actually TRIED - the candidate pattern and what it measured, or that no shape exists and why
+#: the chore cannot appear on a command line. A reason alone is an opinion, and a gate satisfied
+#: by an opinion is advice.
+#:
+#: Two kinds of reason appear below and they are different. "No command shape" means the chore is
+#: a QUESTION someone asks, not a command they type. "Costs more than the channel carries" means a
+#: shape exists and was measured too broad to ship.
 NO_COMMAND_SHAPE = {
-    "grep_all": "measured 5,592 matches in 342 of 493 sessions (69%) - an ordinary `grep -r` is "
-                "most of a session's searching, and no part of the command says whether THIS one "
-                "must be complete. `claim_check` already claims the -c/-l variant, where the "
-                "negative answer is the untrustworthy one.",
-    "transcript_tail": "its chore sits inside the `transcript_index` rule's shape (both touch "
-                       "~/.claude/projects) and the two differ by INTENT - search a corpus versus "
-                       "read one session - which the command line does not carry.",
-    "enforced": "the chore is 'does any code DECIDE on this setting, or is it only parsed?' - a "
-                "question asked while reading, with no command shape of its own.",
-    "confound": "the chore is 'can this A/B table attribute the difference at all?' - asked of a "
-                "results table, not typed as a command.",
-    "diffbehave": "the chore is 'do old and new BEHAVE the same?' - the hand-rolled form is an "
-                  "ad-hoc loop with no stable shape, and the deliberate form is already this tool.",
-    "adjudicate": "the chore is confirming a claim ABOUT a guard, which is reasoning over a "
-                  "result rather than a command that can be matched.",
-    "guard_replay": "the chore is shipping a hook on the strength of its unit tests - a decision, "
-                    "not a command. The nearest shape (editing a file under hooks/) is invisible "
-                    "here: the nudge scans a Write's CONTENT and never its file_path.",
+    "grep_all": (
+        "an ordinary `grep -r` is most of a session's searching, and no part of the command says "
+        "whether THIS one must be complete. `claim_check` already claims the -c/-l variant, where "
+        "the negative answer is the untrustworthy one.",
+        "candidate `grep -[A-Za-z]*r` measured 5,592 matches in 342 of 493 sessions (69%), above "
+        "what any shipped rule costs - the highest being claim_check at 57.6%."),
+    "transcript_tail": (
+        "its chore sits inside the `transcript_index` rule's shape (both touch ~/.claude/projects) "
+        "and the two differ by INTENT - search a corpus versus read one session.",
+        "no candidate separates them: the intent is not on the command line, so any pattern that "
+        "catches this one also catches every transcript_index call and would shadow it."),
+    "enforced": (
+        "the chore is 'does any code DECIDE on this setting, or is it only parsed?' - a question "
+        "asked while reading.",
+        "no shape exists: the chore is triggered by reading a config field, which produces no "
+        "command of its own, and the grep that follows is indistinguishable from any other."),
+    "confound": (
+        "the chore is 'can this A/B table attribute the difference at all?' - asked of a results "
+        "table, not typed as a command.",
+        "no shape exists: the trigger is a results table already in context, and nothing is run "
+        "at the moment the question arises."),
+    "diffbehave": (
+        "the chore is 'do old and new BEHAVE the same?'",
+        "the hand-rolled form is an ad-hoc loop with no stable shape - candidates keyed on a "
+        "for-loop plus a diff matched ordinary scripted work, and the deliberate form is already "
+        "this tool being run."),
+    "adjudicate": (
+        "the chore is confirming a claim ABOUT a guard, which is reasoning over a result.",
+        "no shape exists: the input is a firing already observed, so the person is reading output "
+        "rather than authoring a command."),
+    "guard_replay": (
+        "the chore is shipping a hook on the strength of its unit tests - a decision, not a "
+        "command.",
+        "the nearest shape, editing a file under hooks/, is invisible here: the nudge scans a "
+        "Write's CONTENT and never its file_path, so the path carrying the signal never reaches "
+        "the matcher."),
 }
 
 
@@ -233,8 +257,13 @@ def _sibling_skill_script(tool):
     any of them silent, which is indistinguishable from having no rule at all; and a tool that
     MOVES between skills would go quiet the same way, with nothing reporting it."""
     skills = _shipped_dir().parent.parent
+    # BOTH layouts, because the catalogue uses both: compuse-toolbox keeps its tools in `scripts/`
+    # while meta-dream-tree keeps them at the skill root beside SKILL.md. Globbing only the first
+    # made a rule for a root-level tool resolve nowhere, which is silence - and silence is exactly
+    # what having no rule looks like, so nothing would have reported it.
     try:
-        matches = sorted(skills.glob("*/scripts/%s.py" % tool))
+        matches = sorted(skills.glob("*/scripts/%s.py" % tool)) or sorted(
+            skills.glob("*/%s.py" % tool))
     except OSError:
         return None
     return matches[0] if matches else None
@@ -254,9 +283,11 @@ def _tool_invocation(tool):
     sibling = _sibling_skill_script(tool)
     if sibling is not None:
         # Name the skill that actually owns it: pointing a reader at compuse-toolbox for a tool
-        # that lives elsewhere sends them to a directory the file is not in.
-        return ("the shipped `bitranox:%s` skill" % sibling.parent.parent.name,
-                "uv run %s --help" % sibling)
+        # that lives elsewhere sends them to a directory the file is not in. The owner is the
+        # component directly under `skills/`, never `parent.parent` - that is the skill only for
+        # the scripts/ layout and resolves to `skills` itself for a tool kept at the skill root.
+        owner = sibling.relative_to(_shipped_dir().parent.parent).parts[0]
+        return ("the shipped `bitranox:%s` skill" % owner, "uv run %s --help" % sibling)
     return None
 
 

@@ -1728,7 +1728,9 @@ def test_toolbox_rule_coverage_accepts_a_recorded_reason(tmp_path, monkeypatch):
     _tmp_toolbox(tmp_path, "unshaped_tool")
     nudge = _real_nudge()
     monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
-    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "unshaped_tool", "asked while reading, not typed")
+    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "unshaped_tool",
+                        ("asked while reading, not typed",
+                         "no candidate exists: the chore produces no command of its own"))
     assert RG.toolbox_rule_coverage_failures(tmp_path) == []
 
 
@@ -1742,3 +1744,32 @@ def test_toolbox_rule_coverage_reports_an_exemption_for_a_tool_that_no_longer_sh
     monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "retired_tool", "gone")
     fails = RG.toolbox_rule_coverage_failures(tmp_path)
     assert any("retired_tool" in f for f in fails)
+
+
+def test_an_exemption_without_evidence_fails_the_gate(tmp_path, monkeypatch):
+    """A bare reason is an opinion, and a gate an author satisfies by typing a sentence is advice.
+
+    The entry has to say what was TRIED. This test exists because the map was restructured from a
+    string to a (reason, evidence) pair and the whole suite stayed green - the gate only ever read
+    the KEYS, so nothing noticed the values had changed shape at all.
+    """
+    _tmp_toolbox(tmp_path, "opinion_only")
+    nudge = _real_nudge()
+    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
+    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "opinion_only", "no shape, trust me")
+    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    assert any("opinion_only" in f and "evidence" in f for f in fails)
+
+
+def test_an_exemption_with_an_empty_evidence_half_fails_too(tmp_path, monkeypatch):
+    """The pair shape alone is satisfiable with an empty string, which is the same non-answer."""
+    _tmp_toolbox(tmp_path, "half_filled")
+    nudge = _real_nudge()
+    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
+    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "half_filled", ("a real reason", "   "))
+    assert any("half_filled" in f for f in RG.toolbox_rule_coverage_failures(tmp_path))
+
+
+def test_every_shipped_exemption_carries_both_halves():
+    """The live map must satisfy the rule it enforces on everyone else."""
+    assert RG.toolbox_rule_coverage_failures(Path(RG.__file__).resolve().parents[3]) == []

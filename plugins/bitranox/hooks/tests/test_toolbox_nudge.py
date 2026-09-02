@@ -440,3 +440,21 @@ def test_an_identifier_rename_routes_to_renamescope_not_anchor_edit():
     measured, all 23 firings of the rename shape were already claimed by anchor_edit."""
     assert N.match_tool("sed -i 's/old_name/new_name/g' src/mod.py", "Bash")[0] == "renamescope"
     assert N.match_tool("sed -i '3d' notes.md", "Bash")[0] == "anchor_edit"
+
+
+def test_a_tool_kept_at_a_skill_root_resolves_and_names_that_skill(home, monkeypatch, capsys):
+    """The catalogue uses BOTH layouts: compuse-toolbox keeps tools in scripts/, meta-dream-tree
+    keeps them beside its SKILL.md. Globbing only the first made a root-level tool resolve
+    nowhere, and the owner must come from the component under skills/ - `parent.parent` names
+    the skill only in the scripts/ layout and yields `skills` itself for the other.
+    """
+    (home / ".claude" / "skills" / "toolbox" / "tools").mkdir(parents=True)
+    skills = home / "plugin" / "skills"
+    (skills / "compuse-toolbox" / "scripts").mkdir(parents=True)
+    (skills / "meta-dream-tree").mkdir(parents=True)
+    (skills / "meta-dream-tree" / "statusrot.py").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(N, "_shipped_dir", lambda: skills / "compuse-toolbox" / "scripts")
+    _feed(monkeypatch, _ev("grep -rn shipped /srv/.claude-memory/facts/", "s-root"))
+    N.main()
+    out = capsys.readouterr().out
+    assert "statusrot" in out and "bitranox:meta-dream-tree" in out

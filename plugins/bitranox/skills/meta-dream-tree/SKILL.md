@@ -23,6 +23,13 @@ current tree; cross-tree work is `bitranox:meta-dream-crosstree`.
 | The behavioral pass catalog - removal policy, contradiction/override, CLAUDE.md reconciliation, skill/hook pointing, filler words, model review, skill-gap, gate-coverage, durability/squash, backup reminder | references/dream-passes.md |
 | Acceptance harness - planted-fixture test that proves a dream run works                                                                                                                                       | tests/README-acceptance.md |
 
+Tools shipped here, runnable outside a dream run too: `dream_state.py` (mode + due state),
+`store_manifest.py` (backup and verify), `dedup_scan.py` (candidate pairs), `statusrot.py` (status
+claims that shipped and were never updated - reports CANDIDATES, never verdicts) and `factedit.py`
+(reword a fact's hook or body through the engine, the only path allowed to write the store). The
+last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
+answer, so they surface without this file being open.
+
 Use the Read tool to load a referenced file when running its passes.
 
 ## Mode
