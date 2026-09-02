@@ -37,6 +37,11 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 1. **Capture first** (unconditional; the audit/salvage candidates plus this session's signals) -
    via `bitranox:meta-self-improve`, at the project level.
 2. **Back up + manifest** the CHAIN's levels only (per the core).
+2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
+   READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
+   HERE, before steps 3-5, because those are the passes whose scans a shipped tool has often
+   already implemented and calibrated - check the names before hand-rolling any scan below.
+   Deferring "the toolbox pass" defers the CONSOLIDATE half only, never this read.
 3. **Dedup within the chain**: fold near-duplicates among the chain's entries (engine `add`,
    same slug). Do not chase sibling duplicates - out of scope, the full dream's job.
 4. **Chain-internal placement only**: route entries whose EVIDENCE is already clear through the
@@ -49,7 +54,8 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
    reconcile `TOTAL problems: 0` over the chain), then report counts AND an explicit
    "deferred to the full dream" list (sibling dedup, tree-wide placement, descriptor synthesis,
    behavioral passes, unshipped skill/hook contributions (skill-fit) queued but not delivered, and
-   the toolbox pass per dream-core.md - machine-global, outside the nap's chain-only budget). A nap is PARTIAL BY DESIGN and says so - never silently incomplete.
+   the toolbox CONSOLIDATE half per dream-core.md - machine-global, outside the nap's chain-only
+   budget; its READ half already ran at step 2b). A nap is PARTIAL BY DESIGN and says so - never silently incomplete.
    Run `dream_state.py done` (home: `<plugin>/skills/meta-dream-tree/dream_state.py`, via
    `hooks/run-python.sh` - see dream-core.md "Script homes") ONLY if the nudge that triggered
    you asked for a nap; a consolidation-due nudge still needs the full dream.
@@ -58,6 +64,7 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 
 - [ ] Capture ran (or a verified "nothing durable" line).
 - [ ] Backup + manifest of the chain's levels recorded.
+- [ ] Toolbox inventory read BEFORE the dedup/placement/prune passes (or the path confirmed absent).
 - [ ] Chain-internal dedup/placement/prune applied via the engine (fail-loud success lines).
 - [ ] Sibling branches and other trees untouched (nothing outside the chain was read or written).
 - [ ] Manifest diff clean; reconcile `TOTAL problems: 0` over the chain.
@@ -65,12 +72,14 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 
 ## Rationalizations (these do not fly)
 
-| Excuse                                                      | Reality                                                                                         |
-|-------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
-| "While I'm here, that sibling duplicate is one quick merge" | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream. |
-| "No time even for a nap - skip consolidation"               | The nap exists precisely for this budget; capture + chain dedup is minutes.                     |
-| "I'll just cherry-pick the full dream's steps"              | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated.    |
-| "The nap ran, so consolidation is done"                     | A nap is partial by design; the consolidation-due nudge still means the full dream.             |
+| Excuse                                                      | Reality                                                                                                        |
+|-------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| "While I'm here, that sibling duplicate is one quick merge" | Out of scope by design - the sibling snapshot assertion fails and the nap becomes a slow dream.                |
+| "No time even for a nap - skip consolidation"               | The nap exists precisely for this budget; capture + chain dedup is minutes.                                    |
+| "I'll just cherry-pick the full dream's steps"              | That is the silent-partial trap the nap replaces: run the nap, get the DEFERRED list stated.                   |
+| "The nap ran, so consolidation is done"                     | A nap is partial by design; the consolidation-due nudge still means the full dream.                            |
+| "The toolbox pass is deferred, so skip the list"            | Deferred means the CONSOLIDATE half. The READ is step 2b and guards steps 3-5. One command.                    |
+| "A quick regex is faster than finding the right tool"       | Measured twice: the hand-rolled scan missed state the tool persists, and its clean result read as reassurance. |
 
 ## Common mistakes
 

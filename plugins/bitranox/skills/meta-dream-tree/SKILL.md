@@ -84,6 +84,13 @@ the success line, abort-and-show on a miss).
     agent RETURNED; keep each agent's returned text (the only restore source - the backup holds just
     the stale version).
 
+0c. **Read the toolbox inventory (one command, and it belongs HERE, not at the end).**
+    `uv run ~/.claude/skills/toolbox/tools/toolbox.py list` - the READ half of the toolbox pass per
+    references/dream-core.md "Toolbox pass"; skip only if that path does not exist. This is a
+    PREREQUISITE of steps 4, 5 and 7, whose scans a shipped tool has often already implemented and
+    calibrated: read the names now and check them before hand-rolling any scan below. The
+    CONSOLIDATE judgement is a separate half and stays at step 10b.
+
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
    complete store.
@@ -201,12 +208,13 @@ the success line, abort-and-show on a miss).
     ONLY when it genuinely needs user input or the mode is `off` - a deliverable one left pending
     evaporates the intent until a manual re-prompt.
 
-10b. **Toolbox pass (consolidate; PROPOSE-ONLY).** Run the CONSOLIDATE delta per
-    references/dream-core.md "Toolbox pass": `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`,
-    then PROPOSE merging near-duplicate tools and flagging any stale/superseded one (no usage-based
-    prune - `forgetting-is-usage-based-only`). Detect + propose ONLY; the actual merge is a TDD change
-    through `bitranox:meta-self-improve`'s tool endpoint, never edited here. Skip if the toolbox path
-    does not exist.
+10b. **Toolbox pass, CONSOLIDATE half (PROPOSE-ONLY).** Run the CONSOLIDATE delta per
+    references/dream-core.md "Toolbox pass" over the inventory step 0c already read - this half is
+    judgement about the tools, so it belongs at the end; the READ that the earlier passes depend on
+    does not, which is why it is not repeated here. PROPOSE merging near-duplicate tools and flagging
+    any stale/superseded one (no usage-based prune - `forgetting-is-usage-based-only`). Detect +
+    propose ONLY; the actual merge is a TDD change through `bitranox:meta-self-improve`'s tool
+    endpoint, never edited here. Skip if the toolbox path does not exist.
 
 11. **Done + report + /clear nudge.** `dream_state.py done` (records the fact signature). Report
     counts + one line each: merges, placements (with direction), voice rewrites, prunes, skill

@@ -234,6 +234,19 @@ the live inventory with `uv run ~/.claude/skills/toolbox/tools/toolbox.py list` 
 purpose) - the same set regardless of which tree the dream runs in. If that path does not exist,
 there is no toolbox yet: skip this pass.
 
+**This pass is SPLIT, and its two halves run at OPPOSITE ENDS of the run. The inventory READ comes
+FIRST, before dedup, placement and prune; only the CONSOLIDATE/CONTRIBUTE judgement below is
+end-of-run work.** Those three passes are precisely the ones whose scans a shipped tool usually
+already implements, so scheduling the whole pass late means hand-rolling in one step the tool the
+next step would have named. Measured twice on one machine: 2026-08-21 (tree dream) and 2026-09-02
+(nap), a status-claim scan was hand-rolled during the prune pass while `statusrot` already answered
+that exact question. The second time cost more than roughness - the hand-rolled version had no
+access to the tool's PERSISTENT BASELINE of which claims were already cleared against their owners,
+so it reported 10 uncategorised hits, all dismissed, against the tool's 19 categorised candidates of
+which 9 were unexamined since that baseline. A hand-rolled scan's clean result reads as reassurance
+whether or not it could ever have found anything. So run the `list` at the START and keep the names
+in view; each skill schedules it as an early numbered step for this reason.
+
 **PROPOSE-ONLY.** The dream DETECTS and PROPOSES; it never edits tool code. A merge/enhance/removal is
 a TDD code change and runs through `meta-self-improve`'s propose-first build (which owns the RED-test
 + fix + the tool's local git repo). The dream's job is to surface the candidate, honoring the mode
@@ -250,6 +263,9 @@ knob (propose: list; auto: queue via `contrib_queue`; off: skip).
   the tool analogue of the skill-fit step. ALSO surface a chore that recurred across MANY sessions
   (visible to the cross-session view, missed by a single turn) -> propose a NEW tool. Default stays
   LOCAL; contribution is never automatic.
-- **`nap` delta**: a cheap glance only; DEFER the full toolbox pass to the tree/crosstree dream (add
-  "toolbox consolidation" to nap's reported deferred list) - it is machine-global work, outside nap's
-  chain-only, minutes budget.
+- **`nap` delta**: run the inventory READ like everyone else - it is one command and the nap's own
+  dedup/placement/prune passes are what it protects - then DEFER only the CONSOLIDATE/CONTRIBUTE
+  judgement to the tree/crosstree dream (add "toolbox consolidation" to nap's reported deferred
+  list); that half is machine-global work, outside nap's chain-only, minutes budget. "Defer the
+  toolbox pass" has never meant "skip the inventory": a nap that reads it late hand-rolls exactly
+  like a dream that does.

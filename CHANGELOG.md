@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.5]
+
+### Fixed
+
+- **The dream family read its tool inventory after the passes that needed it.** The toolbox pass
+  sat at the very end of both procedures - step 10b in `meta-dream-tree`, and in `meta-dream-nap`
+  only as a line in the deferred list, so a nap following its numbered steps never read the
+  inventory at all. Dedup, placement and prune are precisely the passes whose scans a shipped tool
+  has usually already implemented and calibrated, so scheduling the whole pass late meant
+  hand-rolling in one step the tool the next step would have named. Measured twice: a status-claim
+  scan hand-rolled during the prune pass while `statusrot` already answered that exact question,
+  and the second time the hand-rolled version had no access to the tool's persistent baseline of
+  which claims were already cleared against their owners - it reported 10 uncategorised hits, all
+  dismissed, against the tool's 19 categorised candidates of which 9 were unexamined since that
+  baseline. A hand-rolled scan's clean result reads as reassurance whether or not it could ever
+  have found anything. The pass is now explicitly SPLIT: the inventory READ is a prerequisite
+  scheduled early (new step `0c` in the tree dream, new step `2b` in the nap), while the
+  CONSOLIDATE/CONTRIBUTE judgement stays at the end where it belongs. `dream-core.md` carries the
+  split and states that deferring "the toolbox pass" has never meant skipping the inventory. Step
+  numbers are letter-suffixed so no existing step reference shifts.
+
 ## [5.300.4]
 
 ### Fixed
