@@ -57,6 +57,7 @@ _HOOK_MODULES = {
     "jig-repetition-nudge": "jig_repetition_nudge",
     "toolbox-nudge": "toolbox_nudge",
     "skill-edit-guard": "skill_edit_guard",
+    "skill-listing-budget": "skill_listing_budget",
     "skill-router": "skill_router",
     "store-edit-guard": "store_edit_guard",
     "venv-guard": "venv_guard",

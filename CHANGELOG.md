@@ -29,6 +29,37 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.304.0]
+
+### Added
+
+- **`skill-listing-budget.py` (SessionStart): size `skillListingBudgetFraction` to the installed
+  catalogue.** Claude Code injects the available-skills listing under a budget of
+  `context_tokens * chars_per_token * skillListingBudgetFraction`, and that fraction defaults to
+  0.01. Over budget, every non-bundled entry drops to its bare NAME and the harness then restores
+  descriptions greedily in descending `usageCount * 0.5^(days_since_last_use / 7)` order. A skill
+  that has never been invoked scores 0, so it loses its description first: the skill nobody has
+  found is exactly the one whose triggers stop reaching the router.
+
+  Measured on a live session's own `skill_listing` attachment before writing the hook: 126 entries,
+  29,998 chars, 63 of them reduced to a bare name, 38 of those from this plugin. Scoring all 82
+  installed bitranox skills by that formula predicted the split exactly - the 44 that kept a
+  description are the top 44 by score, the 38 that lost one are the bottom 38, zero inversions,
+  crossing at 1.182 against 1.174 - and every skill scoring 0 was dropped. The per-field
+  description cap was not involved: all 82 sit under it, and nothing was truncated.
+
+  Installing skills is what pushes the listing over, so the default degrades precisely as a
+  catalogue grows. The hook measures what is installed on disk, adds an allowance for the bundled
+  skills that live in the CLI binary, and raises the fraction to the smallest two-decimal value
+  whose budget covers it with a 1.25 margin. It is sized against the smallest context worth
+  serving (200k tokens at 3 chars per token) because the same fraction buys five times less there
+  than on a 1M-context model. The budget is a CEILING and not a reservation - the listing only
+  ever contains the entries that exist - so an over-large fraction costs nothing on a small
+  catalogue, which is why the hook only ever raises the value and never lowers it.
+
+  The settings file is round-tripped through `json` so no unrelated key is disturbed, and is left
+  untouched when it does not parse. Every failure path emits nothing and exits 0.
+
 ## [5.303.2]
 
 ### Fixed
