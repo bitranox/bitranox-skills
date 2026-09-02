@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.301.1]
+
+### Fixed
+
+- **`compuse-toolbox`: `mutation_arm` gains `--timeout`, so a spinning mutation is reported
+  instead of hanging the battery.** A mutation can make a test loop forever rather than fail,
+  when the test's only exit is the behaviour being mutated. `run_arm` called `subprocess.run`
+  with no timeout, so such an arm ran until it was killed by hand - and killing it skipped the
+  `finally` restore, leaving a mutated file on disk. Measured twice in one sweep against a
+  slot-filling loop bounded only by the token ceiling the arm existed to test.
+
+  A timeout is its own verdict, never `killed`: folding it in would credit the arm with catching
+  a mutation it never reached, the same false all-clear `verdict_for` already refuses for pytest
+  exit 5. The restore still runs when the bound fires, and `TimeoutExpired.stdout` is decoded
+  defensively because it is bytes even when the call asked for text and either stream can be
+  None - a bare concatenation would raise inside the handler and lose the verdict. The envelope
+  gains `timeout_s`; the index row and docstring name the symptom.
+
 ## [5.301.0]
 
 ### Added

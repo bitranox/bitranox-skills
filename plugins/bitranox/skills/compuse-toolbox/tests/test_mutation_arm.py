@@ -153,3 +153,64 @@ def test_several_anchors_mutate_together_in_one_arm(tmp_path):
     data = json.loads(proc.stdout)["data"]
     assert len(data["mutations"]) == 2
     assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+SPINNING_TEST = '''\
+import sys
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+from src import classify
+
+
+def test_spins_until_classify_reports_zero():
+    """Bounded only by the behaviour under test, so a mutation makes it loop forever."""
+    seen = []
+    while "zero" not in seen:
+        seen.append(classify(0))
+    assert seen == ["zero"]
+'''
+
+
+def test_a_mutation_that_makes_the_arm_SPIN_is_reported_not_waited_on(tmp_path):
+    """The failure this tool exists to prevent, in the tool itself.
+
+    A mutation can make the arm loop forever rather than fail: the test's only exit is the
+    behaviour being mutated. Measured 2026-09-02 in agentswarm, twice in one sweep - the arm ran
+    at 97% CPU until it was killed by hand, and killing it skipped the restore, leaving a mutated
+    file on disk. An unbounded `subprocess.run` here turns one hanging arm into a hanging battery
+    and reports nothing at all, which is strictly worse than a wrong verdict.
+    """
+    p = make_project(tmp_path)
+    (p / "test_src.py").write_text(SPINNING_TEST, encoding="utf-8")
+    before = (p / "src.py").read_bytes()
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_spins_until_classify_reports_zero",
+               "--timeout", "5", "--json")
+
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "timeout", data
+    assert data["pytest_returncode"] is None, "a killed run has no exit code to report"
+    assert data["restored"] is True, "the restore must run even when the arm is killed"
+    assert (p / "src.py").read_bytes() == before
+
+
+def test_a_timeout_is_not_reported_as_the_arm_noticing(tmp_path):
+    """The control. A hang says the arm could not answer, never that it answered no - folding it
+    into `killed` would report an untested mutation as a covered one, which is the same false
+    all-clear `verdict_for` already refuses for pytest's exit 5."""
+    assert M.verdict_for(None) == "timeout"
+    assert M.exit_code_for("timeout") == 2
+
+
+def test_an_arm_inside_the_timeout_is_unaffected(tmp_path):
+    """A bound set where it can fire during a healthy arm is not a bound, it is a flaky tool."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--timeout", "120", "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["data"]["verdict"] == "killed"

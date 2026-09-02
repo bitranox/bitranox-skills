@@ -22,13 +22,20 @@ restores from HEAD and so discards any uncommitted work in that file. The restor
 happens, and the bytes are compared afterwards - a failed restore is reported loudly, because it
 is the one outcome worse than a wrong verdict.
 
+* **The arm SPUN instead of failing.** A mutation can make a test loop forever rather than go
+  red, when the test's only exit is the behaviour being mutated. Unbounded, that hangs this tool
+  and the whole battery behind it, and killing it by hand skips the restore. `--timeout` bounds
+  the arm and reports the hang as its own verdict, never as `killed`. The restore still runs when
+  the timeout fires: the copy is taken before the first edit and put back in a `finally`.
+
 Run:
-  `uv run scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y`
+  `uv run scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
   `... --mutate a.py o1.txt n1.txt --mutate b.py o2.txt n2.txt --test tests/t.py::test_y`
   add `--json` for an envelope
 
 Exit codes: 0 = KILLED (the arm noticed the mutation), 1 = SURVIVED (it did not - the finding),
-2 = INCONCLUSIVE or usage error (an absent anchor, or a test that never ran).
+2 = INCONCLUSIVE, TIMEOUT, a failed restore, or a usage error (an absent anchor, a test that never
+ran, or an arm still running at --timeout).
 """
 from __future__ import annotations
 
@@ -43,6 +50,20 @@ from pathlib import Path
 from anchor_edit import AnchorError, replace_exact, require_unique
 
 _SUMMARY_HEADER = "short test summary info"
+
+
+def _partial_output(expired) -> str:
+    """Whatever a killed run managed to emit, as text.
+
+    `TimeoutExpired.stdout` is bytes even when the call asked for text, and either stream can be
+    None, so a bare concatenation raises inside the timeout handler and loses the verdict.
+    """
+    parts = []
+    for stream in (expired.stdout, expired.stderr):
+        if stream is None:
+            continue
+        parts.append(stream.decode("utf-8", "replace") if isinstance(stream, bytes) else stream)
+    return "".join(parts)
 
 
 def failure_reason(output: str) -> str | None:
@@ -65,13 +86,20 @@ def failure_reason(output: str) -> str | None:
     return None
 
 
-def verdict_for(returncode: int) -> str:
+def verdict_for(returncode: int | None) -> str:
     """What a pytest exit code means for a mutation arm.
 
     5 is the one that matters: pytest collected NOTHING, so the arm never ran. Folding that into
     "passed" would report an untested line as a covered one, which is the exact false all-clear a
     mutation battery exists to prevent.
+
+    `None` means the arm was KILLED at the timeout, which is its own verdict and not a failure to
+    notice: a mutation can make a test loop forever rather than fail, when the test's only exit is
+    the behaviour being mutated. Reporting that as "killed" would credit the arm with catching
+    something it never reached.
     """
+    if returncode is None:
+        return "timeout"
     return {0: "survived", 1: "killed"}.get(returncode, "inconclusive")
 
 
@@ -98,8 +126,15 @@ def plan_mutations(specs):
     return planned
 
 
-def run_arm(planned, nodeid, *, runner=None):
-    """Apply every mutation, run the arm, restore from copies taken first. Returns a report."""
+def run_arm(planned, nodeid, *, runner=None, timeout=None):
+    """Apply every mutation, run the arm, restore from copies taken first. Returns a report.
+
+    `timeout` bounds the arm in SECONDS. Without one a mutation that makes the test spin hangs
+    this tool instead of being reported, and a battery of arms stops dead on the first such
+    mutation - measured 2026-09-02, where killing the hung run by hand also skipped the restore
+    and left a mutated file on disk. The restore is in a `finally`, so a killed arm still
+    restores.
+    """
     runner = runner or [sys.executable, "-m", "pytest"]
     with tempfile.TemporaryDirectory(prefix="mutation-arm-") as tmp:
         saved = {}
@@ -113,23 +148,31 @@ def run_arm(planned, nodeid, *, runner=None):
             for path, old, new in planned:
                 text = path.read_text(encoding="utf-8")
                 path.write_text(replace_exact(text, old, new), encoding="utf-8")
-            proc = subprocess.run(
-                [*runner, nodeid, "-q", "--no-header", "-rfE", "--tb=no",
-                 "-p", "no:cacheprovider"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-            )
+            try:
+                proc = subprocess.run(
+                    [*runner, nodeid, "-q", "--no-header", "-rfE", "--tb=no",
+                     "-p", "no:cacheprovider"],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=timeout,
+                )
+                returncode, output = proc.returncode, proc.stdout + proc.stderr
+            except subprocess.TimeoutExpired as expired:
+                # A killed run has no exit code. Its partial output is bytes when the process was
+                # killed before the text wrapper saw it, so it is decoded defensively rather than
+                # concatenated blindly.
+                returncode, output = None, _partial_output(expired)
         finally:
             restored = True
             for path, copy in saved.items():
                 shutil.copy2(copy, path)
                 if path.read_bytes() != copy.read_bytes():
                     restored = False
-    output = proc.stdout + proc.stderr
-    verdict = verdict_for(proc.returncode)
+    verdict = verdict_for(returncode)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
         "test": nodeid,
-        "pytest_returncode": proc.returncode,
+        "pytest_returncode": returncode,
+        "timeout_s": timeout,
         "verdict": verdict,
         "failure": failure_reason(output),
         "restored": restored,
@@ -142,6 +185,8 @@ def main(argv=None) -> int:
     ap.add_argument("--mutate", nargs=3, action="append", metavar=("FILE", "OLD_FILE", "NEW_FILE"),
                     help="repeatable; every mutation is applied together as ONE arm")
     ap.add_argument("--test", required=True, metavar="NODEID", help="the pytest node id to run")
+    ap.add_argument("--timeout", type=float, default=None, metavar="SECONDS",
+                    help="bound the arm; a mutation can make a test SPIN rather than fail")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     args = ap.parse_args(argv)
 
@@ -155,7 +200,7 @@ def main(argv=None) -> int:
         print(f"mutation_arm: refused, nothing written - {exc}", file=sys.stderr)
         return 2
 
-    report = run_arm(planned, args.test)
+    report = run_arm(planned, args.test, timeout=args.timeout)
 
     if not report["restored"]:
         print("mutation_arm: RESTORE FAILED - the files on disk are NOT the originals",
@@ -168,6 +213,10 @@ def main(argv=None) -> int:
             print(f"  reason: {report['failure']}")
         if report["verdict"] == "inconclusive":
             print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
+                  file=sys.stderr)
+        if report["verdict"] == "timeout":
+            print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
+                  "nothing about whether it would have noticed; the mutation may make it SPIN",
                   file=sys.stderr)
     return 2 if not report["restored"] else exit_code_for(report["verdict"])
 
