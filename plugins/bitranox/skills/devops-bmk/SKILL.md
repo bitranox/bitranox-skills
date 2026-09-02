@@ -325,6 +325,34 @@ bmk runs pytest in **this project's own `.venv`** (section 1), which it syncs wi
 helpers) are present. That is the same venv pyright and pip-audit resolve, so the suite, the type
 check and the audit all describe one environment.
 
+## Proving a gate actually ENFORCES (two wrong readings of a green `make test`)
+
+Two independent readings of a green `make test` are wrong, and both come from bmk's stage table
+rather than from your code.
+
+**1. `ruff --fix` rewrites the tree before any checker runs.** In the stage registry
+`ruff_fix_apply` is order **30**, while `bandit`, `lint_imports`, `pip_audit`, `pyright`, `pytest`
+and `ruff_lint` are ALL order **40**. So a probe you plant to prove a checker fires can be DELETED
+before that checker ever sees it: a bare unused `import` is removed at stage 30 and the gate greens
+having never examined it. To plant a probe that survives, BIND the imported name so `--fix` cannot
+remove it, and keep the binding after the last import or `E402` fires instead.
+
+**2. An undeclared tool does NOT mean its stage is skipped.** The registry lists every stage
+unconditionally, and `context._prepend_tool_bin_to_path` deliberately puts bmk's OWN venv bin dir
+first on the child `PATH` so bare-name stages resolve to bmk's pinned toolchain rather than to
+whatever sits first on your `PATH`. `lint_imports_argv` returns a bare `["lint-imports"]`. So a
+floor declared in your `pyproject.toml` never governs the gate, and a genuinely missing tool fails
+LOUDLY with `FileNotFoundError` rather than silently skipping. Do not file a defect against a stage
+on the theory that it was skipped.
+
+The pinning differs per tool, which decides which environment a stage actually used: `pytest` runs
+on `ctx.python_cmd`, `pyright` is pinned via `--pythonpath`, and `lint-imports` is pinned to
+nothing.
+
+**Prove it rather than reasoning about it:** run the arm where the check must FAIL, and require the
+gate to go red. A gate that has only ever passed has not been shown to gate. See
+`bitranox:process-test-design`.
+
 ## Troubleshooting
 
 | Symptom                                                                             | Cause / fix                                                                                                                                                                                                                                                        |

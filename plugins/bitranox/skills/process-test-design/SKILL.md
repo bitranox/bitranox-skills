@@ -85,6 +85,29 @@ enough to prove the contract while staying offline, deterministic and fast, so i
 DEFAULT run. "Uses the real implementation" and "must be marked and skipped" are different
 questions; answer them separately.
 
+## Injecting a callable as a seam: two traps a green suite cannot show
+
+Injecting a stdlib callable so a test can substitute it is the right shape. Two things about it
+fail silently.
+
+**Annotate the attribute with YOUR contract, not the stdlib's.** A bare assignment makes pyright
+strict infer the library function's exact signature, and an honest double is then rejected:
+
+```python
+self._sleep = time.sleep                              # infers (seconds: _SupportsFloatOrIndex, /) -> None
+self._sleep: Callable[[float], None] = time.sleep     # infers YOUR contract
+```
+
+Under `typeCheckingMode: strict`, assigning a double declared `(_seconds: float) -> None` to the
+first form is an error - the parameter is positional-only and `_SupportsFloatOrIndex` is not
+assignable to `float`. The second form accepts it. The failure lands on the TEST, so it reads as a
+bad double rather than as a missing annotation.
+
+**After adding a wait or retry to a shared path, read the test file's WALL CLOCK, not its pass
+count.** Every pre-existing test that goes through that path now pays the real delay. One 30-second
+settle took a file from 0.07s to 90.05s while staying fully green. A slow suite never fails; it
+decays until someone stops running it. Assert on elapsed time in CI, or inject the clock too.
+
 ## Adversarial inputs at the boundary (the test side of sanitization)
 
 For any function/endpoint at an application or facing-API boundary, test the input battery, not just

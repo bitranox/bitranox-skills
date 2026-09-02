@@ -117,6 +117,28 @@ Upstream, for detail beyond these files: <https://code.claude.com/docs/en/hooks.
 - **A guard judges the whole pending command.** A `PreToolUse` Bash hook sees the entire command string and the
   state as it was before any of it ran.
 
+## A PreToolUse hook reads files the call has NOT been approved to read
+
+`PreToolUse` runs BEFORE approval. A guard that RESOLVES a path out of the pending command - a
+`git commit -F <file>`, a `--config <file>`, any file argument - and opens it is reading a file the
+user never approved, and one the Read tool's own permission rules never saw. The path is only a
+string the model named.
+
+That is tolerable for a guard that must inspect the content to decide. What is not tolerable is
+ECHOING it back: printing the matching lines on `exit 2` hands the model content it may not be
+allowed to read, and it is the model, not the user, that the hook is talking to.
+
+**Report a hit in a resolved file by POSITION and CHARACTER, never by quoting the line:**
+
+```
+line 1, col 34: U+2014 EM DASH          <- safe: says where and what
+line 1: The report - written last week  <- leaks the content of an unapproved read
+```
+
+Cap the read as well (a size limit and a line limit), since the path may name something enormous.
+Quoting back is safe only for text the CALLER typed inline in the command itself, which the user
+approved by typing it.
+
 ## Before you escalate a nudge to a block, price it
 
 A guard that only warns is easy to escalate on the argument that it demonstrably does not bind: the

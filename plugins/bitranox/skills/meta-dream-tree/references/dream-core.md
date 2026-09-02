@@ -201,6 +201,24 @@ project defaults to the cwd, which is wrong for a fan-out reading other projects
 `dream_state.py promoted <slug>` to clear every project's sighting at once. HOLD keeps the fact at
 the project level until a SECOND project sights it.
 
+**The corroboration gate answers a PROMOTION question, never a MISPLACEMENT one.** Promotion asks
+"does this project-level fact generalise?", and holding it until a second project sights it is
+right. Re-homing asks something else: a fact captured by cwd ACCIDENT, already written generally,
+sitting at a level whose PLACE-HERE excludes it, is not a promotion candidate - it is misfiled.
+Gating that on corroboration parks a general rule where its hook can never fire, and the gate
+returns `hold` correctly by its own rule, so the reading looks careful while it preserves the
+defect it was asked to fix.
+
+Decide which question you are asking from the fact's HOOK and the level's PLACE-HERE:
+
+| hook names the project | PLACE-HERE covers it | what it is     | what to do                                 |
+|------------------------|----------------------|----------------|--------------------------------------------|
+| yes                    | yes                  | a promotion    | honour the hold                            |
+| no                     | no                   | a misplacement | re-home it, and record the sighting anyway |
+
+Record the sighting in the re-home case too - it costs nothing, and the fact may still be a
+genuine promotion candidate later.
+
 ## Verification contract (every run ends with this)
 
 Fail-loud engine calls throughout (strict env, require each command's success line, abort-and-show

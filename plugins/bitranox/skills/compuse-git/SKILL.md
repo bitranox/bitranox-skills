@@ -108,6 +108,28 @@ So before `git push` / `gh pr create` / a release, review what will ACTUALLY lea
 - A deterministic secret/denylist gate (pre-commit / CI) catches the unambiguous cases, but the
   judgement call - a real internal IP vs a generic example - is yours. Do it BEFORE the push.
 
+## Private tooling in a fork belongs in .git/info/exclude, never a tracked .gitignore
+
+When a checkout pushes to a FOREIGN remote - a fork, an upstream PR branch, anyone else's repo -
+keep per-clone tooling (agent instruction files, editor config, scratch notes) out of the TRACKED
+`.gitignore`. A tracked ignore line is not protection. It is what makes the file committable: the
+private file then sits beside a tracked line asserting it belongs, and the next `git add -A` or
+`git commit -a` takes both.
+
+Use `.git/info/exclude` instead. It is per-clone and never pushed, so it removes the file's
+ability to be committed rather than relying on a human reading the push range.
+
+**Verify the exclude FIRES rather than merely existing** - `git status --porcelain` must print
+nothing while the files are on disk:
+
+```bash
+printf '%s\n' CLAUDE.md .claude/ >> .git/info/exclude
+git status --porcelain      # must print NOTHING; any line here means the file is still committable
+```
+
+If such a commit already exists and is unpushed, `git reset --hard <upstream-ref>` and restore the
+files untracked.
+
 ## Committing safely when sessions/agents share a checkout
 
 Running more than one agent or session in the SAME working copy (or you alongside an automation) means
@@ -138,6 +160,32 @@ git commit -m "msg" -- path/to/your/file ...          # commit ONLY your paths (
   work, where you are ahead), while the louder "not on the default branch" check is OFF by default and
   enabled per-repo via `GIT_GUARD_STRICT_REPOS="repoA,repoB"` (basenames) - turn it on only for repos you
   work on a single branch directly, since "not on the default branch" is normal in a feature-branch flow.
+
+## A push from a linked worktree exports GIT_DIR to your hooks
+
+The per-session `git worktree` recommended above has one sharp edge. `git push` FROM a linked
+worktree exports `GIT_DIR` into the environment of every hook it runs; a push from an ordinary
+checkout does not, with or without `core.hooksPath`. Measured on git 2.53.0:
+
+```
+push from an ordinary checkout   GIT_DIR=unset
+push from a linked worktree      GIT_DIR=<main>/.git/worktrees/<name>
+```
+
+So a hook that runs a TEST SUITE hands those tests the real repository. A fixture built the normal
+way - `git init` a temp dir, then `git add`, then `git commit` - writes into the repo the hook is
+guarding instead of into its own fixture, because the inherited `GIT_DIR` outranks the fixture's
+cwd. Every git call still exits 0, so nothing reports it; you find out when origin has moved onto
+a fixture commit.
+
+**A hook must clear the repo-scoping variables before running anything that shells out to git:**
+
+```bash
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+```
+
+In Python, DELETE those keys from a copy of `os.environ` for the child rather than passing a fresh
+`env=` dict - a fresh dict replaces the whole environment and breaks the child in other ways.
 
 ## Tools
 

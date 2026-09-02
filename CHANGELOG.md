@@ -29,6 +29,42 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.7]
+
+### Added
+
+- **`compuse-git`: a push from a linked worktree exports `GIT_DIR` to its hooks.** Measured on git
+  2.53.0 with a control arm: an ordinary checkout push leaves `GIT_DIR` unset, a worktree push sets
+  it to `<main>/.git/worktrees/<name>`. Any hook that runs a test suite therefore hands those tests
+  the real repository, so a fixture built with `git init` / `add` / `commit` writes into the repo
+  the hook is guarding while every git call still exits 0. The section names the variables to clear
+  and sits directly after the advice to give each session its own worktree, since that advice is
+  what creates the trap.
+- **`compuse-git`: private tooling in a fork belongs in `.git/info/exclude`.** On a checkout that
+  pushes to a foreign remote, a tracked `.gitignore` line is not protection - it is what makes the
+  file committable, because the private file then sits beside a tracked line asserting it belongs.
+  Includes the check that the exclude FIRES rather than merely existing.
+- **`meta-claude-hooks`: a `PreToolUse` hook reads files the call has not been approved to read.**
+  A guard that resolves a path out of the pending command opens a file the Read tool's permission
+  rules never saw. Report a hit by POSITION and CHARACTER rather than quoting the line back, since
+  the audience is the model; quoting stays safe for text the caller typed inline.
+- **`devops-bmk`: how to prove a gate actually enforces.** Two readings of a green `make test` that
+  are wrong, both verified against the installed source. `ruff_fix_apply` is stage order 30 while
+  `bandit`, `lint_imports`, `pip_audit`, `pyright`, `pytest` and `ruff_lint` are all 40, so a
+  planted probe can be deleted before the checker sees it. And an undeclared tool does NOT mean its
+  stage was skipped: `context._prepend_tool_bin_to_path` pins stages to bmk's own toolchain and
+  `lint_imports_argv` returns a bare argv, so a missing tool fails loudly instead.
+- **`process-test-design`: injecting a callable as a seam.** Annotate the attribute with your own
+  contract - measured under pyright strict with both arms, a bare `self._sleep = time.sleep`
+  rejects a double declared `(_seconds: float) -> None` while
+  `self._sleep: Callable[[float], None]` accepts it, and the error lands on the test so it reads as
+  a bad double. Also: read the test file's wall clock after adding a wait to a shared path.
+- **`meta-dream-tree`: the corroboration gate answers promotion, not misplacement.** `dream-core`
+  now separates the two questions with a mechanical test. A fact captured by cwd accident, written
+  generally, at a level whose PLACE-HERE excludes it is misfiled rather than a promotion candidate,
+  and the gate returns `hold` correctly by its own rule - so honouring it there preserves the
+  never-fires defect the move was meant to fix.
+
 ## [5.300.6]
 
 ### Fixed
