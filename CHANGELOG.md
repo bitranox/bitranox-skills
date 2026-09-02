@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.0.0]
+
+### Changed
+
+- **Re-cut of 5.306.0 at the tier its own rule requires.** 5.306.0 shipped a new BLOCK as a minor,
+  reasoning that a guard is an addition. What it adds is a REFUSAL: a backgrounded gate that does
+  not go through `gate.py` - `make test`, `make push`, `pytest`, `ci_wait`, `gh run watch` - is
+  now denied, and that is a command which worked before the update. This file's own versioning
+  section calls that MAJOR ("changing a skill's invocation or behaviour incompatibly"), and the
+  tier is the only signal an installer gets that a habitual command will start failing.
+
+  Nothing about the guard changed between 5.306.0 and this. 5.306.0 is left in place below rather
+  than rewritten, because it was pushed and a published version reaches installs the moment it
+  lands.
+
+  **If the refusal is unwanted**, run the gate in the FOREGROUND, where the exit status you see is
+  the gate's own, or route it through the jig:
+  `uv run <plugin>/skills/compuse-toolbox/scripts/gate.py --gate '<the gate>' [--then '<action>']`.
+
 ## [5.306.0]
 
 ### Added
