@@ -250,9 +250,14 @@ def _fact(pin):
 
 
 def test_an_unpinned_fact_uses_add_and_carries_the_stored_title():
-    argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
+    engine = Path("/e/memory_engine.py")
+    argv = FE.engine_argv(_fact(False), engine, hook_path=Path("/s/h.txt"),
                           body_path=None, title=None, python="py")
-    assert argv[:3] == ["py", "/e/memory_engine.py", "add"]
+    # str(engine), never the literal: a Path renders with the PLATFORM separator, so a hard-coded
+    # "/e/memory_engine.py" passes on POSIX and fails on Windows as "\\e\\memory_engine.py".
+    # This test was written in a toolbox that only ever ran on Linux; its first CI run reddened
+    # windows-latest alone, which is the shape every Linux-only suite hits on its first Windows cell.
+    assert argv[:3] == ["py", str(engine), "add"]
     assert "--title" in argv and argv[argv.index("--title") + 1] == "A Title"
     assert "--hook-file" in argv and "--body-file" not in argv
 

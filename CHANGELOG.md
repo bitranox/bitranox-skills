@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.303.1]
+
+### Fixed
+
+- **A migrated test compared a `Path` against its POSIX rendering, and reddened windows-latest
+  alone.** `test_factedit.py` asserted `argv[:3] == ["py", "/e/memory_engine.py", "add"]` while
+  the code builds that element with `str(engine)`, which renders `\e\memory_engine.py` on Windows.
+  The test now compares against `str(engine)` for the object it passes in. It came from a personal
+  toolbox that had only ever run on Linux, so its first CI run was also its first Windows run -
+  the shape every Linux-only suite hits on its first Windows cell, and one a green local gate
+  cannot see.
+
 ## [5.303.0]
 
 ### Added
