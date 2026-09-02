@@ -24,9 +24,12 @@ current tree; cross-tree work is `bitranox:meta-dream-crosstree`.
 | Acceptance harness - planted-fixture test that proves a dream run works                                                                                                                                       | tests/README-acceptance.md |
 
 Tools shipped here, runnable outside a dream run too: `dream_state.py` (mode + due state),
-`store_manifest.py` (backup and verify), `dedup_scan.py` (candidate pairs), `statusrot.py` (status
-claims that shipped and were never updated - reports CANDIDATES, never verdicts) and `factedit.py`
-(reword a fact's hook or body through the engine, the only path allowed to write the store). The
+`store_manifest.py` (backup and verify), `dedup_scan.py` (candidate pairs), `statusrot.py` (pointer
+lines still asserting a STATUS that shipped and was never updated; a hit is a CANDIDATE to check
+against its owner, and only a SELF-CONTRADICTION - a slug saying one thing under a hook saying
+another - is a defect on its own and sets exit 1) and `factedit.py` (reword a fact's hook or body
+by recomposing it through `memory_engine.py`, since a Write or Edit on a pointer block or a body
+is denied by the store-edit guard). The
 last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
 answer, so they surface without this file being open.
 
