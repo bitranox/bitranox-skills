@@ -62,17 +62,18 @@ class TestWaitLoop:
             [run("CI", "in_progress", None)],
             [run("CI", "in_progress", None)],
             [run("CI", "completed", "success")],
+            [run("CI", "completed", "success")],
         ]
         calls: list[int] = []
 
         def fetch() -> list[dict[str, object]]:
             calls.append(1)
-            return polls[len(calls) - 1]
+            return polls[min(len(calls) - 1, len(polls) - 1)]
 
         result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None)
 
         assert result.state == "success"
-        assert len(calls) == 3
+        assert len(calls) == 4  # three to go green, a fourth confirming no run is still appearing
 
     def test_it_stops_at_the_deadline_and_says_it_timed_out(self):
         result = ci_wait.wait_for(
@@ -84,12 +85,12 @@ class TestWaitLoop:
     def test_runs_that_have_not_been_created_yet_are_waited_for_briefly(self):
         """A push does not create its runs instantly - measured, they take seconds to appear. An
         empty list on the first poll is that race, not a verdict."""
-        polls = [[], [], [run("CI", "completed", "success")]]
+        polls = [[], [], [run("CI", "completed", "success")], [run("CI", "completed", "success")]]
         calls: list[int] = []
 
         def fetch() -> list[dict[str, object]]:
             calls.append(1)
-            return polls[len(calls) - 1]
+            return polls[min(len(calls) - 1, len(polls) - 1)]
 
         result = ci_wait.wait_for(
             fetch, deadline_polls=10, sleep=lambda _s: None, interval_s=30.0, appear_grace_s=120.0
@@ -128,6 +129,67 @@ class TestWaitLoop:
         )
 
         assert len(calls) == 18  # 90s of grace at 5s per poll, NOT 3 polls
+
+
+class TestSettleBeforeCallingItGreen:
+    """A run that has not been CREATED yet is indistinguishable from one that does not exist.
+
+    Measured 2026-09-02 on a real push: the first poll saw only `ci`, which went green, and the
+    waiter reported success while a second workflow for the same sha was still being created. The
+    verdict was computed over a partial set and read as the whole set - the same not-yet-versus-
+    absent confusion the appear-grace closes for an EMPTY match, one level up.
+    """
+
+    def test_a_run_created_after_the_first_green_poll_is_still_waited_for(self):
+        polls = [
+            [run("ci", "completed", "success")],
+            [run("ci", "completed", "success"), run("workflow", "in_progress", None)],
+            [run("ci", "completed", "success"), run("workflow", "completed", "success")],
+            [run("ci", "completed", "success"), run("workflow", "completed", "success")],
+        ]
+        calls: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            calls.append(1)
+            return polls[min(len(calls) - 1, len(polls) - 1)]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None)
+
+        assert result.state == "success"
+        assert "workflow=success" in result.summary   # the late run is IN the verdict
+        assert len(calls) >= 3                        # it did not answer from the first poll
+
+    def test_settle_zero_keeps_the_old_answer_on_the_first_poll(self):
+        calls: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            calls.append(1)
+            return [run("ci", "completed", "success")]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None, settle_s=0.0)
+
+        assert result.state == "success"
+        assert len(calls) == 1
+
+    def test_confirming_can_never_turn_a_green_into_a_timeout(self):
+        """The settle is a confirmation, not another way to fail: with one poll left it reports
+        what it saw rather than spending the last poll and calling it a timeout."""
+        result = ci_wait.wait_for(
+            lambda: [run("ci", "completed", "success")], deadline_polls=1, sleep=lambda _s: None
+        )
+        assert result.state == "success"
+
+    def test_a_failure_is_reported_at_once_because_a_later_run_cannot_rescue_it(self):
+        calls: list[int] = []
+
+        def fetch() -> list[dict[str, object]]:
+            calls.append(1)
+            return [run("ci", "completed", "failure")]
+
+        result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None)
+
+        assert result.state == "failed"
+        assert len(calls) == 1
 
 
 class TestExitCodes:
@@ -240,7 +302,7 @@ class TestAnUnknownShaWarnsButStillPolls:
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: False)
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
 
-        rc = ci_wait.main(["--sha", "a" * 40])
+        rc = ci_wait.main(["--sha", "a" * 40, "--settle", "0"])
         out, err = capsys.readouterr()
 
         assert rc == 0, "an unfetched sha whose runs are green must not be refused"
@@ -251,7 +313,7 @@ class TestAnUnknownShaWarnsButStillPolls:
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: False)
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
 
-        ci_wait.main(["--sha", "a" * 40])
+        ci_wait.main(["--sha", "a" * 40, "--settle", "0"])
 
         assert "success" in capsys.readouterr().out
 
@@ -260,7 +322,7 @@ class TestAnUnknownShaWarnsButStillPolls:
         monkeypatch.setattr(ci_wait, "sha_is_known_locally", lambda sha, **kw: True)
         monkeypatch.setattr(ci_wait, "gh_runs", lambda sha, **kw: [run("CI", "completed", "success")])
 
-        ci_wait.main(["--sha", "a" * 40])
+        ci_wait.main(["--sha", "a" * 40, "--settle", "0"])
 
         assert "warning:" not in capsys.readouterr().err
 
@@ -294,7 +356,7 @@ class TestATransientGhFailureIsRetried:
         result = ci_wait.wait_for(fetch, deadline_polls=10, sleep=lambda _s: None)
 
         assert result.state == "success"
-        assert len(seen) == 2
+        assert len(seen) == 3  # the 502, the green poll, and the one confirming it
 
     def test_an_intermittent_failure_never_exhausts_the_budget(self):
         """The streak resets on any answered poll, so 'every other poll 502s' waits it out.
@@ -306,6 +368,7 @@ class TestATransientGhFailureIsRetried:
             "fail", [run("CI", "in_progress", None)],
             "fail", [run("CI", "in_progress", None)],
             "fail", [run("CI", "completed", "success")],
+            [run("CI", "completed", "success")],   # the poll confirming no run is still appearing
         ]
         seen: list[int] = []
 
@@ -321,7 +384,7 @@ class TestATransientGhFailureIsRetried:
         )
 
         assert result.state == "success"
-        assert len(seen) == 6
+        assert len(seen) == 7  # six scripted, then the poll confirming no run is still appearing
 
     def test_a_sustained_outage_ends_in_error_naming_the_last_gh_message(self):
         """Bounded, and it still says WHAT failed - `error: gh exited 1: HTTP 502`, not `timeout`."""
@@ -498,7 +561,7 @@ class TestTheRetryReachesTheRealCommandLine:
         rc = ci_wait.main(["--sha", "a" * 40])
 
         assert rc == 0, "a single 502 must not end a wait that had its whole deadline left"
-        assert len(calls) == 2
+        assert len(calls) == 3  # the 502, the green poll, and the one confirming it
 
     def test_the_error_grace_defaults_to_300_seconds(self):
         """Longer than --appear-grace on purpose. The costs are asymmetric: too short reproduces

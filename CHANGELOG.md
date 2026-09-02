@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.304.1]
+
+### Fixed
+
+- **`ci_wait` could call a sha green over a partial set of its runs.** The waiter returned on the
+  first poll where every run it could see was terminal, and the runs for one push are not created
+  at the same instant, so a subset that is entirely finished is indistinguishable from the whole
+  set being done. Measured on a real push: the first poll saw only `ci`, it went green, and the
+  verdict came back `success` while a second workflow for that sha was still being created - the
+  same not-yet-versus-absent confusion the appear-grace already closes for an EMPTY match, one
+  level up where the match is non-empty but INCOMPLETE. An all-green result is now CONFIRMED
+  after `--settle` seconds (default 20, `0` disables) and must show the same SET of runs, keyed on
+  `(databaseId, workflowName)`, before it is returned; a set that grew starts the confirmation
+  again. Only a success is confirmed, since a later run cannot rescue a failure, and running out
+  of deadline mid-confirmation reports the green rather than a timeout, so the check can never
+  turn a passing verdict into a failing one.
+
+  The confirmation costs one extra poll on every green wait, which is what the five existing
+  call-count assertions in `test_ci_wait.py` had to move by. Three tests driving `main()` now pass
+  `--settle 0`: they are about the unknown-sha warning rather than about confirming, and without
+  it each sat through a real 20 seconds, taking the module from 0.05s to 60s.
+
 ## [5.304.0]
 
 ### Added

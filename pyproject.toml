@@ -7,7 +7,7 @@ name = "bitranox-skills"
 # Kept equal to plugins/bitranox/.claude-plugin/plugin.json by repo-gate.py
 # (check_version_sync). The plugin manifest is the source of truth; this is the copy
 # the build backend can read, and the gate is what stops the two drifting.
-version = "5.304.0"
+version = "5.304.1"
 description = "The bitranox Claude Code skill collection: 82 skills and 64 hooks, installable without the plugin marketplace."
 readme = "README.md"
 requires-python = ">=3.11"

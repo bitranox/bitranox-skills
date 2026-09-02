@@ -23,6 +23,13 @@ retried on its own budget; the streak resets on any answered poll, and only a su
 ends the wait - reported as `error` with gh's own last message, never as a `timeout` that would
 blame CI for the API.
 
+An all-green answer is CONFIRMED before it is returned (`--settle`, 20 seconds), for the same
+reason one level up: the runs for a push are not all created at the same instant, so the first
+poll can see a SUBSET of them, and a subset that is entirely terminal is indistinguishable from
+the whole set being done. Measured: a push whose `ci` workflow went green while a second workflow
+for the same sha was still being created was reported as success. A failure is still reported at
+once, since a later run cannot rescue it.
+
 Waits up to `--timeout` seconds (default 1500, so 25 minutes) polling every `--interval` (30).
 
 Run: `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD)`
@@ -182,6 +189,16 @@ def verdict(runs: Sequence[dict[str, object]]) -> Verdict:
     return Verdict("success", _named(runs, "conclusion"), tuple(runs))
 
 
+def _run_key(row: dict[str, object]) -> tuple[object, object]:
+    """Identity for one run, for asking whether the SET of runs changed between two polls.
+
+    Pairs the id with the workflow name rather than trusting either alone: a re-run gets a fresh
+    ``databaseId`` under the same name, and a row missing the field would otherwise collapse
+    every run to one key and make a growing set look stable.
+    """
+    return (row.get("databaseId"), row.get("workflowName"))
+
+
 def _named(runs: Iterable[dict[str, object]], field: str) -> str:
     """Render `workflow=value` for each run, so a report names WHICH run decided it."""
     return " ".join(f"{r.get('workflowName')}={r.get(field)}" for r in runs)
@@ -195,6 +212,7 @@ def wait_for(
     interval_s: float = 30.0,
     appear_grace_s: float = 120.0,
     error_grace_s: float = 300.0,
+    settle_s: float = 20.0,
     report: Callable[[str], None] = lambda _m: None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
@@ -224,6 +242,16 @@ def wait_for(
     named: gh failing for the whole deadline reports ``error`` with gh's own last message, never
     ``timeout``, which would blame CI for the API.
 
+    An all-green result is CONFIRMED rather than returned at once, because a run that has not
+    been CREATED yet is indistinguishable from one that does not exist - the same confusion the
+    appear-grace closes for an EMPTY match, one level up, where the match is non-empty but
+    INCOMPLETE. Measured 2026-09-02 on a real push: the first poll saw one workflow, it went
+    green, and the wait reported success while a second workflow for that sha was still being
+    created. So a success re-polls after ``settle_s`` and must see the same SET of runs (by
+    :func:`_run_key`) before it is returned; a set that grew starts the confirmation again. Only
+    a success is confirmed - a failure is returned at once, because a later run cannot rescue it -
+    and running out of deadline mid-confirmation reports the green, never a timeout.
+
     Only :class:`GhFailed` is retried. :class:`GhUnavailable` - the OS refusing to spawn `gh` -
     propagates at once, because it is a local fact that will not change during this process, and
     spending the grace on it only delays the report. The line is drawn there, where it is
@@ -238,6 +266,8 @@ def wait_for(
         appear_grace_s: How long to keep tolerating an EMPTY match before reporting ``no-runs``.
         error_grace_s: How long to keep tolerating CONSECUTIVE ``GhFailed`` before reporting
             ``error``.
+        settle_s: How long to wait before CONFIRMING an all-green result, so a run created after
+            the first all-terminal poll is still counted. ``0`` returns on the first one.
         report: Where a per-poll progress line goes.
 
     Returns:
@@ -252,6 +282,8 @@ def wait_for(
     errors_seen = 0
     last_error = ""
     last_summary = ""
+    settled: frozenset[tuple[object, object]] | None = None
+    last_success: Verdict | None = None
     for poll in range(deadline_polls):
         try:
             rows = fetch()
@@ -272,16 +304,35 @@ def wait_for(
             if empty_seen >= empty_polls_allowed:
                 return current
             report(f"poll {poll + 1}/{deadline_polls}: no runs yet for that sha")
+        elif current.state == "success":
+            empty_seen = 0
+            last_success = current
+            seen = frozenset(_run_key(r) for r in rows)
+            if settle_s <= 0 or settled == seen:
+                return current
+            report(f"poll {poll + 1}/{deadline_polls}: {current.summary}; confirming no run for "
+                   f"this sha is still being created")
+            settled = seen
+            if poll + 1 < deadline_polls:
+                sleep(settle_s)
+            continue
         elif current.state != "pending":
             return current
         else:
             empty_seen = 0
+            settled = None
+            last_success = None
             report(f"poll {poll + 1}/{deadline_polls}: {current.summary}")
         if poll + 1 < deadline_polls:
             sleep(interval_s)
     # The deadline, reported from what the last ANSWERED poll saw. Re-fetching here to describe
     # the timeout cost an extra request that could itself fail, turning a plain timeout into an
     # error about the API - a report naming the wrong system entirely.
+    # Confirming must never turn a green into a timeout. If every run was terminal and successful
+    # and only the confirming poll ran out of deadline, report what was actually seen - which is
+    # exactly what this function returned before the confirmation existed.
+    if last_success is not None:
+        return last_success
     if errors_seen:
         return _gh_gave_up(errors_seen, last_error)
     return Verdict("timeout", last_summary)
@@ -350,6 +401,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "too short abandons a wait that had its whole deadline left, too long only delays "
              "reporting a setup that was broken anyway",
     )
+    parser.add_argument(
+        "--settle", type=float, default=20.0,
+        help="seconds to wait before CONFIRMING an all-green result (default 20; 0 disables). A "
+             "run that has not been created yet looks exactly like one that does not exist, so a "
+             "verdict from the first all-terminal poll can be computed over a partial set. Only "
+             "a success is confirmed: a failure is reported at once, since a later run cannot "
+             "rescue it",
+    )
     parser.add_argument("--json", action="store_true", help="emit a JSON envelope instead of text")
     return parser.parse_args(argv)
 
@@ -382,6 +441,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             interval_s=args.interval,
             appear_grace_s=args.appear_grace,
             error_grace_s=args.error_grace,
+            settle_s=args.settle,
             report=lambda line: print(line, file=sys.stderr, flush=True),
         )
     except (GhFailed, GhUnavailable) as exc:
