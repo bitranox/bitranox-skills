@@ -21,6 +21,11 @@ skill's stated alternative: a text check of the artifact, which inherited contex
 The check asserts ten properties across the three changed files and is run twice - against the
 pre-change revision and against the change - requiring the first to FAIL and the second to PASS.
 
+- [x] An OBSERVED behavioural RED stands behind the change: running the pre-change procedure, the
+      prune step was reached and a status-claim scan hand-rolled while `statusrot` already answered
+      it - 10 uncategorised hits, all dismissed, against the tool's 19 categorised candidates and 9
+      unexamined since its baseline. This is an unprimed baseline rather than a probe, which is why
+      no synthetic arm replaces it.
 - [x] RED: the pre-change revision fails all 10 assertions.
 - [x] GREEN: the change passes all 10.
 - [x] The check discriminates: a run where the pre-change revision passes is reported as INVALID

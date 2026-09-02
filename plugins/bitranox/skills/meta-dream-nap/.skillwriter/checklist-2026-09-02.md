@@ -21,6 +21,11 @@ skill's stated alternative: a text check of the artifact, which inherited contex
 The check asserts ten properties across the three changed files and is run twice - against the
 pre-change revision and against the change - requiring the first to FAIL and the second to PASS.
 
+- [x] An OBSERVED behavioural RED stands behind the change: running the pre-change procedure, the
+      prune step was reached and a status-claim scan hand-rolled while `statusrot` already answered
+      it - 10 uncategorised hits, all dismissed, against the tool's 19 categorised candidates and 9
+      unexamined since its baseline. This is an unprimed baseline rather than a probe, which is why
+      no synthetic arm replaces it.
 - [x] RED: the pre-change revision fails all 10 assertions.
 - [x] GREEN: the change passes all 10.
 - [x] The check discriminates: a run where the pre-change revision passes is reported as INVALID
@@ -50,6 +55,29 @@ Assertions covering this skill:
 - [x] Structural gate green: `repo-gate.py --ci --no-pytest`.
 - [x] No script is shipped or changed by this edit, so the bundled-script test requirement does not
       apply.
+
+## Second change: the capture carve-out in Scope
+
+The scope rule said a nap "never reads or writes" a sibling, while step 1 (capture) routes by
+SUBJECT and `meta-self-improve`'s dedup rule requires upserting an existing fact at the level that
+OWNS its pointer - sometimes a sibling. The two rules could not both be obeyed, and the conflict was
+silent: it appears only when a nap actually learns something about a sibling-owned fact, and the
+readings diverge into either a forbidden duplicate or a dropped signal.
+
+- [x] Scope now carves out capture explicitly, bounded to the owning level, with steps 2b-6 still
+      chain-only and reading a sibling's entries to consolidate them still forbidden.
+- [x] Cross-tree stays closed even to capture, because `move` cannot cross trees and a misfiled
+      fact there cannot be re-homed by any later pass.
+- [x] Step 1 names the carve-out at the point of use, so a reader following the numbered steps meets
+      it where the decision is made rather than only in the Scope section.
+- [x] The deliverables line no longer contradicts it: it now scopes "siblings untouched" to steps
+      2b-6 and requires any capture write outside the chain to be named in the report.
+- [x] Checked against the acceptance harness rather than assumed: `fixture_asserter.py`'s `nap`
+      profile hashes sibling POINTER trees, which cannot distinguish a capture from a consolidation
+      touch. It does not contradict the carve-out because `fixture_builder.py` plants no
+      sibling-owned capture, so only a consolidation pass can move those hashes. The skill records
+      that constraint and says to narrow the assertion, not delete it, if the fixture gains one.
+- [x] The scope rung marker the family contract test requires (`ALTITUDE CHAIN ONLY`) is unchanged.
 
 ## Gaps, decided
 

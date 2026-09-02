@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.6]
+
+### Fixed
+
+- **A nap could not obey both its scope rule and its capture step.** `meta-dream-nap` said a nap
+  "never reads or writes" a sibling project, while step 1 routes capture by SUBJECT and
+  `meta-self-improve`'s dedup rule requires an existing fact to be upserted at the level that OWNS
+  its pointer - which is sometimes a sibling. A nap that learned something about a sibling-owned
+  fact therefore had only choices the rules forbid: mint a duplicate at the cwd, which the dedup
+  rule bans, or drop the signal. The conflict was silent because it surfaces only in that case.
+  Scope now carves out capture explicitly, bounded to the owning level; steps 2b-6 stay chain-only,
+  reading a sibling's entries to consolidate them stays forbidden, and cross-tree stays closed even
+  to capture because `move` cannot cross trees. Step 1 names the carve-out at the point of use and
+  the deliverables line no longer asserts the contradiction. The acceptance harness does not
+  disagree: its `nap` profile hashes sibling pointer trees, but its fixture plants no sibling-owned
+  capture, so only a consolidation pass can move those hashes - recorded in the skill, with the
+  instruction to narrow that assertion rather than delete it if the fixture ever gains one.
+
+### Changed
+
+- The `.skillwriter` review artifacts for the toolbox reorder now record the OBSERVED behavioural
+  baseline behind it - the pre-change procedure reaching its prune step and hand-rolling a scan
+  `statusrot` already answered - rather than reporting only that no synthetic arm was run.
+
 ## [5.300.5]
 
 ### Fixed

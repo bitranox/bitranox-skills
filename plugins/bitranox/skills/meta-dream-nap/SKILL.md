@@ -23,6 +23,21 @@ reads or writes them (the acceptance harness asserts they stay byte-identical). 
 cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 `bitranox:meta-dream-crosstree`.
 
+**The one carve-out is CAPTURE (step 1), and only at the level that OWNS the fact's pointer.**
+Capture routes by SUBJECT, and `meta-self-improve`'s dedup rule requires an existing fact to be
+upserted at its owning level - which is sometimes a sibling. Without the carve-out a nap that
+learns something about a sibling-owned fact has only bad options: mint a duplicate at the cwd,
+which that same rule forbids, or drop the signal. Neither is what "chain-only" is protecting. So
+capture may write at a sibling; steps 2b through 6 may not, and nothing here licenses READING a
+sibling's entries to consolidate them. Cross-tree stays closed even to capture - `move` cannot
+cross trees, so a misfiled fact there is unrecoverable.
+
+The acceptance harness's `SIBLINGS` assertion hashes sibling POINTER files, which cannot tell a
+capture from a consolidation touch. It does not contradict the carve-out because its fixture plants
+no sibling-owned capture, so the only thing that can move those hashes is a consolidation pass. Keep
+it that way: if the fixture ever gains one, narrow the assertion to the consolidation steps rather
+than deleting it.
+
 ## When to run
 
 - Around a context compaction: the PreCompact hook salvaged candidate learnings; nap them into
@@ -35,7 +50,8 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 ## Procedure (all semantics per dream-core.md)
 
 1. **Capture first** (unconditional; the audit/salvage candidates plus this session's signals) -
-   via `bitranox:meta-self-improve`, at the project level.
+   via `bitranox:meta-self-improve`, at the level that OWNS each fact's pointer (see the Scope
+   carve-out: this is the one step that may write a sibling, and only for that reason).
 2. **Back up + manifest** the CHAIN's levels only (per the core).
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
@@ -66,7 +82,8 @@ cross-sibling belongs to `bitranox:meta-dream-tree`; everything cross-tree to
 - [ ] Backup + manifest of the chain's levels recorded.
 - [ ] Toolbox inventory read BEFORE the dedup/placement/prune passes (or the path confirmed absent).
 - [ ] Chain-internal dedup/placement/prune applied via the engine (fail-loud success lines).
-- [ ] Sibling branches and other trees untouched (nothing outside the chain was read or written).
+- [ ] Sibling branches and other trees untouched by steps 2b-6 (the capture carve-out is the only
+      write allowed outside the chain, and only at a fact's owning level - name it in the report).
 - [ ] Manifest diff clean; reconcile `TOTAL problems: 0` over the chain.
 - [ ] The report ends with the explicit DEFERRED list for the next full dream.
 
