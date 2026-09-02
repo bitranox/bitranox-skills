@@ -118,6 +118,106 @@ def _has_workflows(cwd: str) -> bool:
         return False
 
 
+_SCP_LIKE = re.compile(r"^[^/]+@([^:/]+):")
+
+
+def _gh_hosts() -> set[str]:
+    """The forges `gh` can actually query: github.com plus any enterprise host it holds auth for.
+
+    Read with a regex rather than a YAML parser because a hook may not provision dependencies.
+    Only the top-level keys are wanted and they are the sole unindented lines in hosts.yml, so
+    the shapes a regex gets wrong are not present in this file.
+    """
+    hosts = {"github.com"}
+    base = os.environ.get("GH_CONFIG_DIR") or str(Path.home() / ".config" / "gh")
+    try:
+        text = (Path(base) / "hosts.yml").read_text(encoding="utf-8", errors="replace")
+    except (OSError, RuntimeError, ValueError):
+        return hosts
+    hosts.update(m.group(1) for m in re.finditer(r"^([A-Za-z0-9._-]+):", text, re.M))
+    return hosts
+
+
+def _url_host(url: str) -> str | None:
+    """The host named by a git remote URL, or None when it names none (a filesystem path)."""
+    scp = _SCP_LIKE.match(url)
+    if scp:
+        return scp.group(1)
+    if "://" not in url:
+        return None
+    authority = url.split("://", 1)[1].split("/", 1)[0]
+    return authority.rsplit("@", 1)[-1].split(":", 1)[0] or None
+
+
+def _ssh_hostname(alias: str) -> str | None:
+    """What ssh resolves an alias to, so a `Host gh` block is not mistaken for a foreign forge.
+
+    Offline: `ssh -G` only reads the config, it opens no connection.
+    """
+    try:
+        done = subprocess.run(["ssh", "-G", alias], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    for line in done.stdout.splitlines():
+        if line.lower().startswith("hostname "):
+            return line.split(None, 1)[1].strip() or None
+    return None
+
+
+def _push_remote(command: str, repo: str) -> str | None:
+    """The remote this push targets: the first bare word after `push`, else the branch's
+    configured remote, else `origin`, which is git's own fallback."""
+    rest = _AFTER_PUSH.search(commands_only(command))
+    if rest:
+        span = rest.span("rest")
+        words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
+        if words and not any(ch in words[0] for ch in _UNRESOLVABLE):
+            return words[0]
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo)
+    if branch and branch != "HEAD":
+        configured = _git(["config", "--get", "branch.%s.remote" % branch], repo)
+        if configured:
+            return configured
+    return "origin"
+
+
+def _targets_a_watchable_forge(command: str, repo: str) -> bool:
+    """Will the forge this push LANDED on actually run the workflows `_has_workflows` found?
+
+    `_has_workflows` asks whether the repo has CI files, which a fork that vendors upstream's
+    `.github/workflows` passes even when its own pushes go to a forge with no Actions at all.
+    The nudge then points at `gh`, which resolves the checkout through its remotes and asks a
+    repository that has never seen the sha, so the watch can never terminate and the gate can
+    never be satisfied. Measured on a fork that vendors upstream's workflows and pushes to a
+    private Gitea, while `gh repo view` answers the UPSTREAM repository: the API returns 422
+    "No commit found for SHA" and `gh run list --commit` returns zero rows.
+
+    Fails toward KEEPING the nudge. Only a host we positively resolved AND that `gh` cannot
+    query counts as a skip, because a lost nudge is silent while a spurious one is only noise.
+    A remote naming no host at all (a filesystem path) keeps the nudge: it is what the tests
+    use to stand in for a real remote, so reading it as "no CI" would decide semantics from a
+    fixture's convenience.
+    """
+    remote = _push_remote(command, repo)
+    if not remote:
+        return True
+    looks_like_url = "://" in remote or bool(_SCP_LIKE.match(remote))
+    url = remote if looks_like_url else _git(["remote", "get-url", remote], repo)
+    if not url:
+        return True
+    host = _url_host(url)
+    if host is None:
+        return True
+    known = _gh_hosts()
+    if host in known:
+        return True
+    resolved = _ssh_hostname(host)
+    return bool(resolved) and resolved in known
+
+
 def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
     """(sha, display) for a ref name, tags before branches. None when it does not resolve."""
     for prefix, kind in (("refs/tags/", "tag"), ("refs/heads/", "branch")):
@@ -196,6 +296,9 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
         return None
     repo = _repo_dir(command, cwd) if cwd else None
     if not repo or not _has_workflows(repo):
+        return None
+    # Having workflow FILES is not the same as pushing somewhere that runs them.
+    if not _targets_a_watchable_forge(command, repo):
         return None
     pushed = _pushed_ref(command, repo)
     if pushed:

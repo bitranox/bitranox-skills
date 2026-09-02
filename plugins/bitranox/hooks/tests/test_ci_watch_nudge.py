@@ -304,3 +304,52 @@ def test_the_statement_around_a_lone_dry_run_still_contains_it():
     """The direction where it must NOT apply."""
     cmd = "git push --dry-run origin master"
     assert "--dry-run" in hook._statement_around(cmd, cmd.index("git push"))
+
+
+# --- which FORGE the push landed on -------------------------------------------------------
+# `_has_workflows` asks whether the repo has CI files. A fork that vendors upstream's
+# `.github/workflows` passes that while its own pushes go to a forge running no Actions, so the
+# nudge points `gh` at a repository that has never seen the sha and the watch cannot terminate.
+
+
+def test_a_push_to_a_non_github_forge_is_not_recorded(repo, capsys):
+    """Measured on a fork whose pushes go to a private Gitea while `gh` resolves the checkout to
+    the upstream repository, whose API answers 422 'No commit found for SHA'."""
+    _git(repo, "remote", "add", "forge", "ssh://git.example.invalid/team/thing.git")
+    assert hook.main(_event("git push forge master", repo)) == 0
+    assert capsys.readouterr().out == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_push_to_github_is_still_recorded(repo, capsys):
+    """The control. Without it, a skip-everything bug would pass the test above."""
+    _git(repo, "remote", "add", "gh", "https://github.com/owner/thing.git")
+    assert hook.main(_event("git push gh master", repo)) == 0
+    assert "ci_wait.py" in capsys.readouterr().out
+    assert len(state.pending_for(str(repo), "sess-1")) == 1
+
+
+def test_an_scp_style_github_remote_is_still_recorded(repo, capsys):
+    """`git@github.com:owner/thing.git` names no scheme, so a URL parser that only splits on
+    `://` reads it as a path and would skip a real GitHub push."""
+    _git(repo, "remote", "add", "gh", "git@github.com:owner/thing.git")
+    assert hook.main(_event("git push gh master", repo)) == 0
+    assert "ci_wait.py" in capsys.readouterr().out
+
+
+def test_an_enterprise_host_gh_holds_auth_for_is_recorded(repo, capsys, tmp_path, monkeypatch):
+    """GitHub Enterprise has an arbitrary hostname, so github.com alone is not the whole set."""
+    cfg = tmp_path / "ghcfg"
+    cfg.mkdir()
+    (cfg / "hosts.yml").write_text("github.example.invalid:\n    user: someone\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
+    _git(repo, "remote", "add", "ent", "https://github.example.invalid/owner/thing.git")
+    assert hook.main(_event("git push ent master", repo)) == 0
+    assert "ci_wait.py" in capsys.readouterr().out
+
+
+def test_a_local_path_remote_keeps_the_nudge(repo, capsys):
+    """A remote naming no host is what every fixture here uses to stand in for a real one, so
+    reading it as 'no CI' would decide semantics from a test's convenience."""
+    assert hook.main(_event("git push", repo)) == 0
+    assert "ci_wait.py" in capsys.readouterr().out

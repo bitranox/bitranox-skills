@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.300.8]
+
+### Fixed
+
+- **`ci-watch-nudge` / `ci-watch-gate`: a push to a forge with no GitHub Actions no longer demands
+  a CI watch.** `_has_workflows` asks whether the repo holds CI files, which a fork that vendors
+  upstream's `.github/workflows` passes even when its own pushes go somewhere that runs none. The
+  nudge then pointed `gh` at a repository that had never seen the sha, so `ci_wait.py` could not
+  terminate and the Stop gate could not be satisfied - only the bypass env var cleared it.
+  `notice()` now also asks whether the remote the push LANDED on is one `gh` can query: github.com
+  plus any enterprise host in `gh`'s own `hosts.yml`, with an ssh alias resolved through `ssh -G`
+  so a `Host gh` block is not read as a foreign forge. Measured on a fork whose pushes go to a
+  private Gitea while `gh repo view` answers `microsoft/openvmm`, where the API returns 422 "No
+  commit found for SHA" and `gh run list --commit` returns zero rows. It fails toward KEEPING the
+  nudge: a remote naming no host at all (a filesystem path) still records, because that is what
+  the fixtures use to stand in for a real remote and reading it as "no CI" would take semantics
+  from a test's convenience.
+
 ## [5.300.7]
 
 ### Added
