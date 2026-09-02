@@ -85,6 +85,19 @@ def test_strict_asst_hit_guard_blocked_named():
     assert not S.strict_asst_hit("I refactored the guard clause for clarity")  # no verb adjacent
 
 
+def test_strict_asst_hit_blocked_on_a_guard_is_not_a_guard_blocking_me():
+    # "blocked ON x" is waiting for x; only "blocked BY a guard" is the guard acting on me.
+    # Measured 2026-09-02: summarising a backlog whose SUBJECT is a guard fired the live gate.
+    assert not S.strict_asst_hit(
+        "The other nine are found-items nobody is blocked on: the containment guard "
+        "being a substring check rather than a sandbox"
+    )
+    assert not S.strict_asst_hit("rank 30 is blocked on the guard question")
+    # the passive that names the actor must still fire, in both word orders
+    assert S.strict_asst_hit("the push was stopped by the repo gate")
+    assert S.strict_asst_hit("the repo gate stopped my push")
+
+
 def test_strict_asst_hit_hindsight_miss():
     # "I should have ..." and sibling hindsight admissions are STRICT live-gate signals
     assert S.strict_asst_hit("I should have run the tests first.")

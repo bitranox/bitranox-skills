@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.303.2]
+
+### Fixed
+
+- **The self-improve gate read "blocked ON a guard" as a guard blocking me.** `ASST_PATTERN`
+  carried the verb-first clause `(caught|blocked|stopped|flagged|rejected) ... (hook|guard|gate)`
+  to catch "my commit was blocked by the tell-sweep hook". English also uses "blocked on X" for
+  waiting on X, so summarising a backlog whose SUBJECT is a guard fired the live Stop gate: the
+  measured case was "nobody is blocked on: the containment guard being a substring check". The
+  clause now requires the actor to be named with an intervening "by", which is how the passive
+  that clause was written for always reads. The word-order twin
+  `(hook|guard|gate) ... (caught|blocked|...)` is unchanged, so "the gate blocked me" still fires.
+
 ## [5.303.1]
 
 ### Fixed

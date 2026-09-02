@@ -1814,7 +1814,9 @@ ASST_PATTERN = re.compile(
     r"|\b(from now on|going forward|next time)\b[^.\n]{0,20}\bi('?ll| will| should)\b"
     r"|\bi('?ll| will) (make sure|remember) (to|not)\b"
     r"|\b(hook|guard|gate)\b[^.\n]{0,30}\b(caught|blocked|stopped|flagged|rejected)\b"
-    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,30}\b(hook|guard|gate)\b"
+    # Verb-first order needs the actor named with "by": "blocked ON a guard" is waiting FOR it,
+    # and a backlog item whose SUBJECT is a guard otherwise fires the live gate on every summary.
+    r"|\b(caught|blocked|stopped|flagged|rejected)\b[^.\n]{0,20}\bby\b[^.\n]{0,20}\b(hook|guard|gate)\b"
     r"|self.?match(ed|ing|es)?",
     re.IGNORECASE,
 )
