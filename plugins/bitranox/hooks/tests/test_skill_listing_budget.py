@@ -264,3 +264,149 @@ class TestBuildMessage:
 @pytest.mark.parametrize("demand", [1, 600, 53_475, 250_000])
 def test_required_fraction_always_covers_its_demand(demand):
     assert budget.required_fraction(demand) * budget.DENOMINATOR_FLOOR >= min(demand * budget.SAFETY, 300_000)
+
+
+def write_listing(config, session, content, mtime=None):
+    """Write a transcript carrying one skill_listing attachment, and return its path."""
+    project = config / "projects" / "proj"
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / f"{session}.jsonl"
+    path.write_text(
+        json.dumps({"type": "other"}) + "\n"
+        + json.dumps({"type": "attachment", "attachment": {"type": "skill_listing", "content": content}}) + "\n",
+        encoding="utf-8",
+    )
+    if mtime is not None:
+        import os
+
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+class TestStoredFraction:
+    def test_reads_a_configured_value(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"skillListingBudgetFraction": 0.2}), encoding="utf-8")
+        assert budget.stored_fraction(path) == 0.2
+
+    def test_falls_back_to_the_harness_default_when_unset(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({}), encoding="utf-8")
+        assert budget.stored_fraction(path) == budget.HARNESS_DEFAULT_FRACTION
+
+    def test_falls_back_for_an_unreadable_or_unparsable_file(self, tmp_path):
+        path = tmp_path / "settings.json"
+        assert budget.stored_fraction(path) == budget.HARNESS_DEFAULT_FRACTION
+        path.write_text("{nope", encoding="utf-8")
+        assert budget.stored_fraction(path) == budget.HARNESS_DEFAULT_FRACTION
+
+
+class TestNewestListing:
+    def test_separates_bare_entries_from_described_ones(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "s1", "- a:one: has a description\n- b:two\n- c:three")
+        found = budget.newest_listing(config)
+        assert found["bare"] == ["b:two", "c:three"]
+        assert found["total"] == len("- a:one: has a description\n- b:two\n- c:three")
+
+    def test_reads_the_newest_transcript_not_the_first(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "old", "- x:stale\n- y:stale", mtime=1_000_000)
+        write_listing(config, "new", "- z:fresh", mtime=2_000_000)
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_accepts_content_delivered_as_a_list(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "s1", ["- a:one: described\n- b:two"])
+        assert budget.newest_listing(config)["bare"] == ["b:two"]
+
+    def test_returns_none_when_no_transcript_has_a_listing(self, tmp_path):
+        config = make_config(tmp_path)
+        (config / "projects" / "proj").mkdir(parents=True)
+        (config / "projects" / "proj" / "s.jsonl").write_text(json.dumps({"type": "other"}) + "\n", encoding="utf-8")
+        assert budget.newest_listing(config) is None
+
+    def test_returns_none_when_there_are_no_transcripts_at_all(self, tmp_path):
+        assert budget.newest_listing(make_config(tmp_path)) is None
+
+
+class TestObservedRequirement:
+    def test_scales_the_current_fraction_by_what_was_owed(self):
+        listing = {"total": 10_000, "bare": ["x"]}   # >= DENOMINATOR_FLOOR * 0.01, so not stale
+        got = budget.observed_requirement(listing, {"x": "d" * 998}, 0.01)
+        assert got == pytest.approx(0.01 * 11_000 / 10_000 * budget.SAFETY)
+
+    def test_a_listing_from_before_the_last_raise_is_ignored(self):
+        # the real case this guard exists for: a 29,998-char listing produced at 0.01, read back
+        # when the setting has since become 0.13. Scaling 0.13 by that shortfall gave 0.29.
+        listing = {"total": 29_998, "bare": ["x"]}
+        assert budget.observed_requirement(listing, {"x": "d" * 400}, 0.13) is None
+
+    def test_the_same_listing_is_trusted_at_the_fraction_that_produced_it(self):
+        listing = {"total": 29_998, "bare": ["x"]}
+        assert budget.observed_requirement(listing, {"x": "d" * 400}, 0.01) is not None
+
+    def test_a_listing_with_nothing_bare_asks_for_no_correction(self):
+        assert budget.observed_requirement({"total": 1000, "bare": []}, {"x": "d"}, 0.10) is None
+
+    def test_no_listing_at_all_asks_for_no_correction(self):
+        assert budget.observed_requirement(None, {"x": "d"}, 0.10) is None
+
+    def test_a_bare_entry_we_cannot_resolve_is_treated_as_bundled(self):
+        # a bundled skill has no SKILL.md on disk, and is exempt from the rationing anyway
+        assert budget.observed_requirement({"total": 10_000, "bare": ["mystery"]}, {}, 0.01) is None
+
+    def test_the_correction_does_not_depend_on_context_size_or_chars_per_token(self):
+        # both cancel in the ratio, which is the whole point: it holds on any model
+        listing = {"total": 20_000, "bare": ["x"]}
+        assert budget.observed_requirement(listing, {"x": "d" * 998}, 0.01) == pytest.approx(
+            0.01 * 21_000 / 20_000 * budget.SAFETY
+        )
+
+    def test_an_owed_description_over_the_cap_is_charged_at_the_cap(self):
+        listing = {"total": 20_000, "bare": ["x"]}
+        owed = 2 + budget.MAX_DESC_CHARS
+        assert budget.observed_requirement(listing, {"x": "d" * 5_000}, 0.01) == pytest.approx(
+            0.01 * (20_000 + owed) / 20_000 * budget.SAFETY
+        )
+
+
+class TestWantedFraction:
+    def test_uses_the_disk_estimate_when_there_is_no_listing_to_learn_from(self, tmp_path):
+        config = make_config(tmp_path, plugin_skills=[("one", "Use when one")])
+        wanted, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.01)
+        assert wanted == budget.required_fraction(budget.listing_demand(budget.installed_skills(config)))
+        assert dropped == 0
+
+    def test_an_observed_shortfall_can_raise_above_the_disk_estimate(self, tmp_path):
+        long_desc = "Use when " + "q" * 900
+        config = make_config(tmp_path, plugin_skills=[("one", long_desc)])
+        # a listing big enough to have been produced at 0.20, still dropping demo:one
+        write_listing(config, "s1", "- demo:one\n- filler:x: " + "y" * 130_000)
+        entries = budget.installed_skills(config)
+        estimate = budget.required_fraction(budget.listing_demand(entries))
+        wanted, dropped = budget.wanted_fraction(config, entries, 0.20)
+        assert dropped == 1
+        assert wanted > estimate
+
+    def test_it_reports_how_many_descriptions_were_dropped(self, tmp_path):
+        config = make_config(tmp_path, plugin_skills=[("one", "Use when one"), ("two", "Use when two")])
+        write_listing(config, "s1", "- demo:one\n- demo:two\n- filler:x: " + "y" * 7_000)
+        _, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.01)
+        assert dropped == 2
+
+    def test_it_never_exceeds_the_cap(self, tmp_path):
+        config = make_config(tmp_path, plugin_skills=[("one", "Use when " + "q" * 900)])
+        write_listing(config, "s1", "- demo:one\n- filler:x: " + "y" * 300_000)
+        wanted, _ = budget.wanted_fraction(config, budget.installed_skills(config), 0.49)
+        assert wanted <= budget.FRACTION_CAP
+
+
+class TestBuildMessageEvidence:
+    def test_names_the_dropped_count_when_the_listing_showed_one(self):
+        message = budget.build_message([("a", "b")], 500, (0.01, 0.13), dropped=38)
+        assert "dropped 38 description(s)" in message
+
+    def test_falls_back_to_the_disk_estimate_wording(self):
+        message = budget.build_message([("a", "b")] * 7, 500, (0.01, 0.13), dropped=0)
+        assert "7 installed skills" in message

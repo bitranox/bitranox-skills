@@ -33,13 +33,17 @@ MAX_DESC_CHARS = 1536
 # a ceiling is free.
 BUNDLED_ALLOWANCE = 12_000
 
-# budget = context_tokens * chars_per_token * fraction. Both factors vary per model, so the
-# fraction is sized against the SMALLEST context worth serving (a 200k-token model at 3 chars per
-# token). A larger context then gets a ceiling far above its listing, which costs nothing.
-DENOMINATOR_FLOOR = 600_000
+# budget = context_tokens * chars_per_token * fraction. chars_per_token is read from the harness
+# rather than guessed: it returns 4 for a known set of models and 3 for every other, so 3 is the
+# floor across all of them. The fraction is therefore sized against the smallest context worth
+# serving (a 200k-token model) at that floor. A larger context gets a ceiling far above its
+# listing, which costs nothing.
+CHARS_PER_TOKEN_FLOOR = 3
+DENOMINATOR_FLOOR = 200_000 * CHARS_PER_TOKEN_FLOOR
 
 SAFETY = 1.25
 FRACTION_CAP = 0.5  # refuse to run away if a catalogue is pathologically large
+HARNESS_DEFAULT_FRACTION = 0.01
 
 _FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n", re.S)
 _DESCRIPTION = re.compile(r"^description:\s*(.*(?:\n(?![A-Za-z_-]+:).*)*)", re.M)
@@ -122,6 +126,18 @@ def required_fraction(demand, floor=DENOMINATOR_FLOOR, safety=SAFETY, cap=FRACTI
     return min(cap, math.ceil(wanted * 100) / 100)
 
 
+def stored_fraction(settings_path):
+    """Return the configured fraction, or the harness default when it is unset or unreadable."""
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return HARNESS_DEFAULT_FRACTION
+    if not isinstance(settings, dict):
+        return HARNESS_DEFAULT_FRACTION
+    value = settings.get("skillListingBudgetFraction")
+    return value if isinstance(value, (int, float)) else HARNESS_DEFAULT_FRACTION
+
+
 def raise_fraction(settings_path, wanted):
     """Raise `skillListingBudgetFraction` to `wanted` if it is currently lower.
 
@@ -139,7 +155,7 @@ def raise_fraction(settings_path, wanted):
     if not isinstance(settings, dict):
         return None
     current = settings.get("skillListingBudgetFraction")
-    current = current if isinstance(current, (int, float)) else 0.01  # harness default
+    current = current if isinstance(current, (int, float)) else HARNESS_DEFAULT_FRACTION
     if wanted <= current:
         return None
     settings["skillListingBudgetFraction"] = wanted
@@ -150,14 +166,97 @@ def raise_fraction(settings_path, wanted):
     return current, wanted
 
 
-def build_message(entries, demand, change):
+def newest_listing(config, max_files=5):
+    """Return the most recent injected listing as {"total", "bare"}, or None if none is readable.
+
+    The listing is the OUTCOME the estimate is trying to predict, so reading it back closes the
+    loop: any entry that arrived as a bare `- name` is a description the router never saw. Only
+    the newest few transcripts are opened, and the attachment sits near the start of a session, so
+    the scan stops almost immediately.
+    """
+    try:
+        files = sorted(config.glob("projects/*/*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for path in files[:max_files]:
+        try:
+            handle = path.open(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if '"skill_listing"' not in line:
+                    continue
+                try:
+                    attachment = (json.loads(line).get("attachment") or {})
+                except ValueError:
+                    break
+                if attachment.get("type") != "skill_listing":
+                    break
+                content = attachment.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(str(part) for part in content)
+                if not isinstance(content, str) or not content:
+                    break
+                lines = [ln for ln in content.splitlines() if ln.startswith("- ")]
+                return {"total": len(content), "bare": [ln[2:].strip() for ln in lines if ": " not in ln]}
+    return None
+
+
+def observed_requirement(listing, descriptions, current):
+    """Return the fraction the LAST listing shows was needed, or None when it shows no shortfall.
+
+    A listing that is over budget is packed to within one entry of it, so `total` stands in for the
+    budget that produced it. Scaling the fraction by (what was needed / what was delivered) needs
+    neither the context size nor chars_per_token - both cancel - so this correction holds on any
+    model, including one whose constants the estimate got wrong.
+
+    That cancellation only works while `current` is the fraction that PRODUCED this listing. A
+    listing from before the last raise was produced under a smaller one, and scaling today's value
+    by yesterday's shortfall compounds the two into a wild over-correction. Such a listing is
+    recognisable without recording any history: whatever the model, its budget is at least
+    DENOMINATOR_FLOOR * current, so a total below that cannot have come from the current setting.
+    """
+    if not listing or not listing["bare"]:
+        return None
+    if listing["total"] < DENOMINATOR_FLOOR * current:
+        return None  # produced under an older, smaller fraction: it says nothing about this one
+    owed = sum(2 + min(len(descriptions[name]), MAX_DESC_CHARS) for name in listing["bare"] if descriptions.get(name))
+    if owed <= 0 or listing["total"] <= 0:
+        return None  # every bare entry is a bundled skill or has no description to restore
+    return (current * (listing["total"] + owed) / listing["total"]) * SAFETY
+
+
+def build_message(entries, demand, change, dropped=0):
     """Return the one-line user-facing message for a fraction that was raised."""
     old, new = change
-    return (
-        f"skillListingBudgetFraction raised {old} -> {new}: {len(entries)} installed skills need "
-        f"about {demand:,} chars of skill listing, which the old value could not cover, so "
-        f"descriptions were being dropped to bare names. Takes effect next session."
+    evidence = (
+        f"the last listing dropped {dropped} description(s) to a bare name"
+        if dropped
+        else f"{len(entries)} installed skills need about {demand:,} chars of skill listing"
     )
+    return (
+        f"skillListingBudgetFraction raised {old} -> {new}: {evidence}, which the old value could "
+        f"not cover, so those skills reached the router as a name with no triggers. "
+        f"Takes effect next session."
+    )
+
+
+def wanted_fraction(config, entries, current):
+    """Return the fraction to aim for, and how many descriptions the last listing dropped.
+
+    Two independent readings, and the larger wins: an ESTIMATE from what is installed on disk,
+    which works on a machine with no history, and a CORRECTION from the listing the harness
+    actually produced, which is the outcome the estimate is guessing at and needs none of its
+    constants to be right.
+    """
+    estimate = required_fraction(listing_demand(entries))
+    listing = newest_listing(config)
+    observed = observed_requirement(listing, dict(entries), current)
+    if observed is None:
+        return estimate, 0
+    corrected = min(FRACTION_CAP, math.ceil(observed * 100) / 100)
+    return max(estimate, corrected), len(listing["bare"])
 
 
 def main():
@@ -165,11 +264,13 @@ def main():
     entries = installed_skills(config)
     if not entries:
         return  # nothing measured means nothing to conclude; never guess a fraction
-    demand = listing_demand(entries)
-    change = raise_fraction(config / "settings.json", required_fraction(demand))
+    settings_path = config / "settings.json"
+    wanted, dropped = wanted_fraction(config, entries, stored_fraction(settings_path))
+    change = raise_fraction(settings_path, wanted)
     if change is None:
         return
-    json.dump({"systemMessage": build_message(entries, demand, change)}, sys.stdout)
+    message = build_message(entries, listing_demand(entries), change, dropped)
+    json.dump({"systemMessage": message}, sys.stdout)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,39 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.305.0]
+
+### Added
+
+- **`skill-listing-budget` now verifies the outcome instead of only predicting it.** The estimate
+  it shipped with is open-loop: it measures the catalogue on disk and computes a fraction from
+  `chars_per_token`, a per-model constant it cannot see. The hook now also reads back the listing
+  the harness actually produced (`attachment.type == "skill_listing"` in the newest transcripts),
+  counts the entries that arrived as a bare `- name`, and raises until none do. Both readings run
+  and the larger wins, so a machine with no history still gets the estimate and every other
+  machine gets the correction.
+
+  The correction needs none of the estimate's constants. A listing that is over budget is packed
+  to within one entry of it, so its total stands in for the budget that produced it, and scaling
+  the fraction by `(needed / delivered)` cancels both the context size and `chars_per_token`. That
+  is what makes it hold on a model whose constants the estimate got wrong.
+
+- **`chars_per_token` is now read rather than inferred.** The harness returns 4 for a known set of
+  models and 3 for every other, so 3 is the floor across all of them, which is what
+  `DENOMINATOR_FLOOR` is built from. The previous value was correct but rested on a single
+  observation.
+
+### Fixed
+
+- **The correction no longer compounds a stale listing with the current fraction.** Scaling only
+  cancels while the fraction being scaled is the one that PRODUCED the listing. Reading back a
+  listing from before the last raise scaled today's value by yesterday's shortfall: measured on a
+  real machine, a 29,998-char listing produced at 0.01, read back at 0.13, asked for 0.29. Such a
+  listing is now recognised without recording any history, because whatever the model its budget
+  is at least `DENOMINATOR_FLOOR * current`, so a total below that cannot have come from the
+  current setting. Caught by running the hook against the real machine rather than by its own
+  tests, which had agreed with the arithmetic.
+
 ## [5.304.1]
 
 ### Fixed
