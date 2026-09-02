@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.306.0]
+
+### Added
+
+- **`block-masked-gate-exit` now BLOCKS a backgrounded gate that does not go through
+  `gate.py`.** A background job's completion is announced as `completed (exit code N)`, and N
+  belongs to the compound's LAST command, never to the gate inside it. Measured 2026-09-02 in
+  agentdag: the safe redirect form was written correctly, the notice said exit code 0, that
+  sentence was relayed to the user as "the gate passed", and the log said `RC=2` with a failing
+  test.
+
+  It is a block rather than another advisory, and the reason is evidence from that same session.
+  The rule was already in the always-loaded memory index and already said in as many words never
+  to treat the completion notice as the gate's verdict. An hour later the sibling pipe form fired
+  this hook's own masked-status advisory, which was read, quoted in the reply, and stepped past
+  anyway. Both the strongest prose channel and the advisory channel lost to momentum inside one
+  session, so a third wording is not the fix.
+
+  `BACKGROUND_GATE` is wider than `GATE`, because a backgrounded `make push`, `ci_wait` or
+  `gh run watch` is read for its verdict the same way and none of them match `GATE`'s build-tool
+  vocabulary.
+
+  It degrades quiet rather than loud. Only a literal `True` in `run_in_background` triggers, so a
+  harness that stops sending that field, or sends something else, stops the guard firing rather
+  than starting to refuse every gate anyone runs. The field is doc-verified from the hooks page's
+  own Bash `tool_input` example and was not probed live here; a test pins the degradation
+  direction so the conservative reading cannot drift.
+
 ## [5.305.0]
 
 ### Added

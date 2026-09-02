@@ -247,3 +247,58 @@ def test_a_real_masked_gate_is_still_blocked(monkeypatch):
     assert _rc(monkeypatch, "pytest -q " + chr(124) + " tail -3 && echo OK") == 2
     assert _rc(monkeypatch, "cat > n.md <<'EOF'\nprose\nEOF\npytest -q "
                + chr(124) + " tail -3 && echo OK") == 2
+
+
+# ---------------------------------------------------------------------------
+# Blocks: a BACKGROUNDED gate that does not go through the jig
+# ---------------------------------------------------------------------------
+
+
+def run_main_bg(monkeypatch, command, background):
+    """Drive main() with run_in_background set, as the Bash tool_input carries it."""
+    payload = json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": command, "run_in_background": background}}
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    return B.main()
+
+
+@pytest.mark.parametrize(
+    ("label", "command"),
+    [
+        ("make test with the safe redirect", 'make test > log 2>&1; echo "RC=$?" >> log; tail log'),
+        ("make push", "make push ARGS='fix: x'"),
+        ("ci_wait", "uv run ci_wait.py --sha deadbeef"),
+        ("gh run watch", "gh run watch 123"),
+        ("pytest", "pytest tests/ -q > out.log"),
+    ],
+)
+def test_a_backgrounded_gate_without_the_jig_is_blocked(monkeypatch, capsys, label, command):
+    """The completion notice reports the compound's last command, and that is what gets believed.
+
+    The safe-redirect case is deliberately in this list. It is the form the memory entry
+    recommends, and it is the exact command that produced the 2026-09-02 miss: written
+    correctly, then misreported from the notice before the log was ever opened. Backgrounding
+    is what makes the notice the thing you read, so the redirect does not rescue it.
+    """
+    assert run_main_bg(monkeypatch, command, True) == 2
+    assert "BLOCKED: a backgrounded gate" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("label", "command", "background"),
+    [
+        ("the jig itself", "uv run scripts/gate.py --gate 'make test' --then 'git push'", True),
+        ("foreground gate", 'make test > log 2>&1; echo "RC=$?" >> log', False),
+        ("field absent entirely", "make test", None),
+        ("backgrounded non-gate", "rsync -a src/ dst/ > sync.log 2>&1", True),
+    ],
+)
+def test_what_the_background_block_must_never_refuse(monkeypatch, label, command, background):
+    """The allow-cases, which matter more than the block-cases for a hook that denies.
+
+    `field absent entirely` pins the degradation direction: this guard reads a field that is
+    doc-verified rather than probed here, so if a harness stops sending it the guard must go
+    quiet, never start refusing every gate anyone runs.
+    """
+    assert run_main_bg(monkeypatch, command, background) == 0

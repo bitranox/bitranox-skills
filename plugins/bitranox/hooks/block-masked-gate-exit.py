@@ -57,6 +57,53 @@ CONSUMER = re.compile(
 # The correct handlings - if any is present the author is not making this mistake.
 HANDLED = re.compile(r"pipefail|PIPESTATUS")
 
+# A gate whose verdict a BACKGROUND job's completion notice will misreport. Broader than
+# GATE: a backgrounded `make push` or `ci_wait` is read for its verdict the same way, and
+# neither matches GATE's build-tool vocabulary.
+BACKGROUND_GATE = re.compile(
+    r"\b(?:"
+    r"make\s+\S*(?:test|check|lint|push|release)"
+    r"|ci_wait(?:\.py)?"
+    r"|gh\s+run\s+watch"
+    r")\b"
+    r"|" + GATE.pattern
+)
+
+# The jig that returns the GATE's own status and can chain the follow-up itself.
+JIG = re.compile(r"\bgate\.py\b")
+
+
+def backgrounded_gate_without_the_jig(command: str, *, background: object) -> str | None:
+    """Name the gate in a BACKGROUNDED command that does not go through gate.py.
+
+    A background job's completion is announced as `completed (exit code 0)`, and that code
+    belongs to the compound's LAST command, not to the gate inside it. Measured 2026-09-02:
+    the safe redirect form was written correctly, the harness said exit code 0, that
+    sentence was relayed as "the gate passed", and the log said RC=2 with a failing test.
+    The rule against it was already loaded and correctly worded, and an advisory on the
+    sibling pipe form was read, quoted and stepped past in the same message - so this is a
+    BLOCK. Prose has failed twice; a third wording is not the fix.
+
+    ``background`` is ``tool_input["run_in_background"]`` as it arrives, untyped on purpose.
+    Only a literal ``True`` triggers, so a harness that stops sending the field, or sends
+    something else, degrades to not firing rather than to blocking every gate. That field is
+    DOC-VERIFIED (the hooks page documents it in the Bash ``tool_input`` example) and was not
+    probed live here; the conservative reading is the price of that.
+
+    Args:
+        command: The pending Bash command.
+        background: Whatever the event carried for ``run_in_background``.
+
+    Returns:
+        The matched gate text, or ``None`` when nothing should be blocked.
+    """
+    if background is not True:
+        return None
+    if JIG.search(command):
+        return None
+    found = BACKGROUND_GATE.search(command)
+    return found.group(0) if found else None
+
 # Split into statements on ; && || and newlines, keeping it simple and syntactic.
 SPLIT = re.compile(r"\s*(?:;|&&|\|\||\n)\s*")
 
@@ -152,6 +199,31 @@ def main() -> int:
                 "`cmd > out 2>&1; rc=$?` and read the file, or gate.py for a real gate."
             ),
         }}) + "\n")
+
+    # A backgrounded gate that does not go through the jig: the completion notice will report
+    # the compound's last command, and that is what gets believed. Checked BEFORE the heredoc
+    # strip because the whole command is what runs in the background, body included.
+    backgrounded = backgrounded_gate_without_the_jig(
+        cmd, background=(data.get("tool_input") or {}).get("run_in_background")
+    )
+    if backgrounded is not None:
+        print("\n".join([
+            "BLOCKED: a backgrounded gate whose verdict you will be told wrongly.",
+            "",
+            f"  gate: {backgrounded}",
+            "",
+            "The completion notice says `completed (exit code N)`, and N is the LAST command of",
+            "the compound - `tail`, `echo`, whatever ended it - never the gate's own. Measured",
+            "2026-09-02: the redirect form was written correctly, the notice said exit code 0,",
+            "that was relayed as `the gate passed`, and the log said RC=2 with a failing test.",
+            "",
+            "Run it through the jig, which returns the GATE's status and can chain the action:",
+            "  uv run <plugin>/skills/compuse-toolbox/scripts/gate.py \\",
+            "      --log /tmp/gate.log --gate '<the gate>' [--then '<the action>']",
+            "",
+            "Or run it in the FOREGROUND, where the exit status you see is the gate's own.",
+        ]), file=sys.stderr)
+        return 2
 
     # A heredoc BODY is stdin data, so a doc that WRITES an example of the footgun is not one.
     # Measured live: that shape blocked a real command while this guard was under investigation.
