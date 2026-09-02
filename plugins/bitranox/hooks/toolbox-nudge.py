@@ -31,7 +31,10 @@ _RULES = [
     (re.compile(r"\.jsonl\b.*(?:json\.loads|json\.load|for line in)"
                 r"|(?:json\.loads|json\.load).*\.jsonl", re.S), "jsonl_grep",
      "parsing a JSONL transcript by hand"),
-    (re.compile(r"\bssh\b[^|]*(?:StrictHostKeyChecking|anyhost_nopass|BatchMode=)"), "sshf",
+    # Names the SHIPPED tool, not the local `sshf.py` twin it was contributed from: the gate
+    # below sweeps shipped scripts, so a rule naming only the local name left `fleet_ssh`
+    # reading as unrouted forever, and anyone without that local file got silence.
+    (re.compile(r"\bssh\b[^|]*(?:StrictHostKeyChecking|anyhost_nopass|BatchMode=)"), "fleet_ssh",
      "building an ssh fleet one-liner"),
     (re.compile(r"(?:cargo (?:build|test|clippy)|gh run (?:view|watch))\b.*(?:\|\s*(?:grep|sed|awk)|2>&1)",
                 re.S), "ci_triage", "hand-piping a build/CI log for errors"),
@@ -52,10 +55,129 @@ _RULES = [
      "deciding whether text is PRESENT from a raw grep count/list, whose negative cannot be trusted"),
 ]
 
+# Rules for the tools that shipped without one. Kept in a second list so the measured, long-lived
+# rules above are not reshuffled by an addition, and appended AFTER them so none of those loses its
+# own shape. Every pattern here was priced over a frozen corpus of 79,052 authored calls from 493
+# sessions and adjudicated against the calls it fires on - a match count cannot say whether a rule
+# is right, because every hit matches by construction. The bar is the shipped `claim_check` rule,
+# which already speaks in 57.6% of sessions: what disqualifies a rule is PRECISION, not volume
+# (`newest` fired 2,591 times and none of the sampled firings was a which-is-latest question, so
+# it ships narrowed to the sort-by-name shape that actually goes wrong).
+#
+# ORDER IS BEHAVIOUR: first match wins. `pushcheck` precedes `gate` because publishing something
+# private outranks a masked exit status, and `ci_wait` precedes `backstop` because a CI poll loop
+# carries both shapes and only one of them answers the question being asked.
+#
+# SHELL-ONLY is this LIST, not a field on the rule: every entry here describes a command being
+# RUN, so the same words inside an authored file are a script being written rather than the chore
+# itself. Unscoped, `git push` sitting in a Write body was the dominant firing of the pushcheck
+# rule. A chore that is equally real when authored belongs in `_ANY_TOOL_RULES` below.
+_SHELL_ONLY_RULES = [
+    (re.compile(r"(?:^|[;&|]\s*|\bdo\s+|&&\s*)git\s+push\b|\bmake\s+push\b|\bgh\s+pr\s+create\b"),
+     "pushcheck", "about to push - whether this repo is public, and what the push would publish"),
+    (re.compile(r"\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b"), "ci_wait",
+     "waiting on CI for the commit you just pushed"),
+    (re.compile(r"\bsleep\s+\d{2,}\b|\bnohup\b|\bsetsid\b"), "backstop",
+     "a long job with a hand-rolled wait loop that cannot tell hung from finished"),
+    # Before anchor_edit, which claims every `sed -i`: measured, all 23 firings of this shape were
+    # swallowed by that broader rule, so listed after it this one would be dead on arrival.
+    (re.compile(r"\bsed\s+-i[^\n]*s/[A-Za-z_][A-Za-z0-9_]{3,}/"), "renamescope",
+     "renaming an identifier across a file, without knowing which functions the hits land in"),
+    (re.compile(r"\bsed\s+-i\b"), "anchor_edit",
+     "editing a file in place, where a computed span or a double-apply goes wrong silently"),
+    (re.compile(r"\bfind\b[^|\n]*-name[^|\n]*\|\s*wc\s+-l"), "srccount",
+     "counting a codebase's source files, where the exclusion list is what goes wrong"),
+    (re.compile(r"\bls\b[^|\n]*\|\s*sort\b[^|\n]*\|\s*(?:tail|head)\b"
+                r"|\bls\b[^|\n]*\|\s*(?:tail|head)\s+-n?\s*1\b"), "newest",
+     "picking the latest by NAME, where a longer name sharing the prefix sorts after a newer one"),
+    (re.compile(r"\biconv\b|\bstrings\s+-e\b"), "winlog",
+     "reading a Windows log whose encoding grep cannot search"),
+    (re.compile(r"--limit-rate\b|--bwlimit\b"), "transfer",
+     "a rate-capped transfer whose unit means something different per tool"),
+    (re.compile(r"\bgit\s+worktree\s+(?:remove|prune)\b|\bdu\b[^|\n]*\|\s*sort\s+-[a-z]*h"),
+     "wtclean", "reclaiming the disk a deleted worktree never gave back"),
+    (re.compile(r"\bgit\s+stash\b[^\n]*&&[^\n]*pytest|pytest[^\n]*&&[^\n]*git\s+checkout\s+--"),
+     "mutation_arm", "proving a test is not vacuous by breaking the code under it"),
+    # LAST of the shell-only rules: its shape is broad (5.2% of calls), so every more specific
+    # rule above keeps its own. Adjudicated 8 of 8 - each firing really did read a filter's exit
+    # status instead of the gate's.
+    (re.compile(r"(?:make\s+(?:test|push|release)|pytest|ruff\s+check|pyright)\b[^\n;]*"
+                r"(?:\|\s*(?:grep|tail|head)|&&)"), "gate",
+     "running a gate then acting on the result, where the pipe's exit status is not the gate's"),
+]
 
-def match_tool(command):
-    """(tool, why) for the first rule matching `command`, else None. PURE - unit-testable."""
-    for rx, tool, why in _RULES:
+# Chores that are just as real when AUTHORED into a file as when typed, so these are not
+# shell-only: a script walking the transcript corpus or the memory levels by hand is exactly the
+# hand-roll the tool replaces.
+_ANY_TOOL_RULES = [
+    (re.compile(r"\.claude/projects\b"), "transcript_index",
+     "walking past Claude Code transcripts by hand"),
+    (re.compile(r"(?:grep|find|glob|rglob)[^\n]*CLAUDE\.local\.md"
+                r"|CLAUDE\.local\.md[^\n]*\bmem:"), "mem_levels",
+     "walking the curated memory levels with a hand-rolled mem: regex"),
+    # LOCAL tools. Their rules ship here like `guestip` and `ovmlog` already do: the resolver
+    # falls back to silence for anyone without the file, and the alternative - keeping the rule
+    # only on the machine that has the tool - is a rule nobody can review. statusrot in
+    # particular was hand-rolled twice in sessions where it existed and nothing named it.
+    (re.compile(r"\.claude-memory[^\n]*(?:shipped|deployed|TODO|not started)"
+                r"|(?:shipped|deployed)[^\n]*\.claude-memory"), "statusrot",
+     "sweeping the fact store for status claims that shipped and were never updated"),
+    (re.compile(r"\.claude-memory/facts/[^\n]*\.md"), "factedit",
+     "editing a memory fact by hand - which level owns the slug, and is the hook under the cap"),
+    (re.compile(r"\bfold\s+-[sw]|textwrap\.(?:fill|wrap)"), "mdwrap",
+     "reflowing one markdown paragraph without touching the rest of the file"),
+    (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
+                r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
+     "finding duplicated CLAUDE.md sections by hand"),
+]
+
+
+#: Shipped tools that deliberately carry NO rule, each with the reason. The repo gate reads this
+#: map, so an omission cannot pass as a decision: adding a tool with neither a rule nor an entry
+#: here FAILS the gate. That is the whole point - five tools shipped unrouted while every gate
+#: stayed green, because the description lint beside it only ever looked at CHANGED files.
+#:
+#: Two reasons appear below, and they are different. "No command shape" means the chore is a
+#: QUESTION someone asks, not a command they type, so no regex over a command line can find it.
+#: "Costs more than the channel carries" means a shape exists and was measured too broad.
+NO_COMMAND_SHAPE = {
+    "grep_all": "measured 5,592 matches in 342 of 493 sessions (69%) - an ordinary `grep -r` is "
+                "most of a session's searching, and no part of the command says whether THIS one "
+                "must be complete. `claim_check` already claims the -c/-l variant, where the "
+                "negative answer is the untrustworthy one.",
+    "transcript_tail": "its chore sits inside the `transcript_index` rule's shape (both touch "
+                       "~/.claude/projects) and the two differ by INTENT - search a corpus versus "
+                       "read one session - which the command line does not carry.",
+    "enforced": "the chore is 'does any code DECIDE on this setting, or is it only parsed?' - a "
+                "question asked while reading, with no command shape of its own.",
+    "confound": "the chore is 'can this A/B table attribute the difference at all?' - asked of a "
+                "results table, not typed as a command.",
+    "diffbehave": "the chore is 'do old and new BEHAVE the same?' - the hand-rolled form is an "
+                  "ad-hoc loop with no stable shape, and the deliberate form is already this tool.",
+    "adjudicate": "the chore is confirming a claim ABOUT a guard, which is reasoning over a "
+                  "result rather than a command that can be matched.",
+    "guard_replay": "the chore is shipping a hook on the strength of its unit tests - a decision, "
+                    "not a command. The nearest shape (editing a file under hooks/) is invisible "
+                    "here: the nudge scans a Write's CONTENT and never its file_path.",
+}
+
+
+def ruled_tools():
+    """Every tool name any rule can name. The gate's source of truth, so it cannot drift."""
+    return {tool for _rx, tool, _why in _RULES + _SHELL_ONLY_RULES + _ANY_TOOL_RULES}
+
+
+def match_tool(command, tool_name=None):
+    """(tool, why) for the first rule matching `command`, else None. PURE - unit-testable.
+
+    `tool_name` decides whether the shell-only rules apply. It defaults to None meaning "treat
+    this as a command", which is what every caller before the scope existed meant - so a rule
+    that must not fire on authored text has to be listed as shell-only AND be given the real
+    tool name by its caller.
+    """
+    scanning_a_command = tool_name is None or is_shell_tool(tool_name)
+    ordered = _RULES + (_SHELL_ONLY_RULES if scanning_a_command else []) + _ANY_TOOL_RULES
+    for rx, tool, why in ordered:
         if rx.search(command or ""):
             return tool, why
     return None
@@ -102,6 +224,22 @@ def _shipped_dir():
     return Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox" / "scripts"
 
 
+def _sibling_skill_script(tool):
+    """The tool's path under ANY shipped skill's `scripts/`, or None. Owner-agnostic on purpose.
+
+    compuse-toolbox's own table documents tools that live in a sibling skill - `wtclean` under
+    git-worktrees, `claudemd_variance` under meta-consolidate-claude-md, `redcheck` under
+    process-test-driven-development. Resolving only against compuse-toolbox made a rule naming
+    any of them silent, which is indistinguishable from having no rule at all; and a tool that
+    MOVES between skills would go quiet the same way, with nothing reporting it."""
+    skills = _shipped_dir().parent.parent
+    try:
+        matches = sorted(skills.glob("*/scripts/%s.py" % tool))
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
 def _tool_invocation(tool):
     """How to run `tool`: the local copy if there is one, else the shipped one, else None.
 
@@ -113,6 +251,12 @@ def _tool_invocation(tool):
     if (_shipped_dir() / (tool + ".py")).is_file():
         return ("the shipped `bitranox:compuse-toolbox` skill",
                 "uv run %s/%s.py --help" % (_shipped_dir(), tool))
+    sibling = _sibling_skill_script(tool)
+    if sibling is not None:
+        # Name the skill that actually owns it: pointing a reader at compuse-toolbox for a tool
+        # that lives elsewhere sends them to a directory the file is not in.
+        return ("the shipped `bitranox:%s` skill" % sibling.parent.parent.name,
+                "uv run %s --help" % sibling)
     return None
 
 
@@ -148,7 +292,7 @@ def main():
     if not isinstance(event, dict) or event.get("tool_name") not in _SCANNED_TOOLS:
         return 0
     text = extract_text(event.get("tool_name"), event.get("tool_input") or {})
-    hit = match_tool(text)
+    hit = match_tool(text, event.get("tool_name"))
     if not hit:
         return 0
     tool, why = hit

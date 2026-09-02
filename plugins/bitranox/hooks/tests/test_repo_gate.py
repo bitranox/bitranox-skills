@@ -1679,3 +1679,66 @@ def test_ragged_tables_fails_open_without_the_tool(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
     assert RG.check_ragged_tables(tmp_path) == []
+
+
+# ---- a shipped tool must be routable, or say why it is not ---------------------------------------
+
+def _real_nudge():
+    return RG._toolbox_nudge_module(Path(RG.__file__).resolve().parents[3])
+
+
+def _tmp_toolbox(tmp_path, *tools):
+    """A tree holding a compuse-toolbox scripts dir, with every exempt tool present.
+
+    Two things this fixture has to get right, both learned by getting them wrong. The hook must be
+    INJECTED by the caller, because the check loads it from the tree it is given and a tmp tree has
+    no hooks dir - without that, these tests all pass by degrading to silence, asserting nothing
+    while looking exactly like tests that work. And every currently-exempt tool must EXIST here,
+    or the stale-exemption arm fires seven times and drowns the finding under test.
+    """
+    scripts = tmp_path / "plugins" / "bitranox" / "skills" / "compuse-toolbox" / "scripts"
+    scripts.mkdir(parents=True)
+    for tool in (*_real_nudge().NO_COMMAND_SHAPE, *tools):
+        (scripts / (tool + ".py")).write_text("x", encoding="utf-8")
+    return scripts
+
+
+def test_toolbox_rule_coverage_passes_on_the_shipped_tree():
+    """The real tree must satisfy the gate, or it would block every commit from now on."""
+    assert RG.toolbox_rule_coverage_failures(Path(RG.__file__).resolve().parents[3]) == []
+
+
+def test_toolbox_rule_coverage_fails_for_a_tool_with_neither_a_rule_nor_a_reason(tmp_path,
+                                                                                monkeypatch):
+    """The whole point of the sweep: adding a tool must not be able to leave it unroutable.
+
+    Five tools shipped with no trigger at all while every gate stayed green, because the check
+    beside this one lints CHANGED paths only and nothing ever re-examined the rest.
+    """
+    _tmp_toolbox(tmp_path, "brand_new_tool")
+    nudge = _real_nudge()
+    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
+    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    assert len(fails) == 1 and "brand_new_tool" in fails[0]
+
+
+def test_toolbox_rule_coverage_accepts_a_recorded_reason(tmp_path, monkeypatch):
+    """A tool whose chore is a QUESTION has no command shape, and forcing a rule would invent a
+    bad one. An explicit, committed reason is the escape hatch - and it must be explicit."""
+    _tmp_toolbox(tmp_path, "unshaped_tool")
+    nudge = _real_nudge()
+    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
+    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "unshaped_tool", "asked while reading, not typed")
+    assert RG.toolbox_rule_coverage_failures(tmp_path) == []
+
+
+def test_toolbox_rule_coverage_reports_an_exemption_for_a_tool_that_no_longer_ships(tmp_path,
+                                                                                    monkeypatch):
+    """A stale exemption stops meaning anything and nothing says so - the same silent rot the
+    gate exists to prevent, one level up."""
+    _tmp_toolbox(tmp_path)
+    nudge = _real_nudge()
+    monkeypatch.setattr(RG, "_toolbox_nudge_module", lambda _root: nudge)
+    monkeypatch.setitem(nudge.NO_COMMAND_SHAPE, "retired_tool", "gone")
+    fails = RG.toolbox_rule_coverage_failures(tmp_path)
+    assert any("retired_tool" in f for f in fails)

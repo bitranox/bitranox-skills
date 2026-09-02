@@ -65,3 +65,35 @@ def test_search_returns_empty_not_error_on_malformed_query(tmp_path):
     db = sqlite3.connect(":memory:")
     ti.ensure_schema(db)
     assert ti.search(db, '"unterminated') == []
+
+
+def test_indexes_a_subagent_transcript_nested_below_the_session(tmp_path):
+    """Subagent transcripts live at <project>/<session>/subagents/agent-*.jsonl.
+
+    A `*/*.jsonl` walk reaches only the main-session files one level down, so it silently indexed
+    878 of 2,090 transcripts on this machine and a search for work a subagent narrated came back
+    empty - which reads exactly like "never happened", the one conclusion this tool warns against.
+    """
+    nested = tmp_path / "-proj-a" / "8ce95402" / "subagents"
+    nested.mkdir(parents=True)
+    (nested / "agent-abc.jsonl").write_text(
+        json.dumps({"type": "assistant", "message": {"content": "the modulejail whitelist was it"}})
+        + "\n", encoding="utf-8")
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    assert ti.index_dir(tmp_path, db) == 1
+    assert ti.search(db, "modulejail")
+
+
+def test_the_project_label_survives_a_nested_transcript(tmp_path):
+    """The label must stay the PROJECT, not the session dir a nested file happens to sit in."""
+    nested = tmp_path / "-proj-b" / "sess1" / "subagents"
+    nested.mkdir(parents=True)
+    (nested / "agent-x.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"content": "xyzneedle"}}) + "\n",
+        encoding="utf-8")
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    ti.index_dir(tmp_path, db)
+    hits = ti.search(db, "xyzneedle")
+    assert hits and hits[0]["project"] == "-proj-b"

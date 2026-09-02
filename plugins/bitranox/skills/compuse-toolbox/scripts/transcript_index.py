@@ -74,8 +74,15 @@ def _text_of(obj: dict) -> str:
 def index_dir(root: pathlib.Path, db: sqlite3.Connection) -> int:
     """Index every .jsonl under root. Returns the count of NEW messages."""
     added = 0
-    for path in sorted(root.glob("*/*.jsonl")):
-        project = path.parent.name
+    # rglob, not `*/*.jsonl`: a SUBAGENT's transcript sits two levels deeper, at
+    # <project>/<session>/subagents/agent-*.jsonl. The shallow walk reached only the main-session
+    # files - 878 of 2,090 on the machine this was measured on - so work a subagent narrated came
+    # back as no match, which reads exactly like "it never happened". That is the one conclusion
+    # this tool's own docstring warns a reader not to draw from a miss.
+    for path in sorted(root.rglob("*.jsonl")):
+        # The label is the PROJECT, so take the component directly under root, never the parent
+        # dir: for a nested transcript that parent is `subagents`, which names no project.
+        project = path.relative_to(root).parts[0]
         with path.open(encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh):
                 line = line.strip()

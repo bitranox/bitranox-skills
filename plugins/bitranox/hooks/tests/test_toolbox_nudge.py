@@ -18,7 +18,7 @@ def test_match_jsonl_parse():
 
 
 def test_match_ssh_fleet():
-    assert N.match_tool("ssh -o StrictHostKeyChecking=no -i k host uptime")[0] == "sshf"
+    assert N.match_tool("ssh -o StrictHostKeyChecking=no -i k host uptime")[0] == "fleet_ssh"
 
 
 def test_match_ci_triage():
@@ -159,12 +159,12 @@ def test_main_nudges_on_hand_rolled_write(home, monkeypatch, capsys):
 
 
 def test_main_nudges_on_edit_new_string(home, monkeypatch, capsys):
-    _with_tool(home, "sshf")
+    _with_tool(home, "fleet_ssh")
     _feed(monkeypatch, {"tool_name": "Edit", "session_id": "e1",
                         "tool_input": {"file_path": "/tmp/f.sh", "old_string": "x",
                                        "new_string": "ssh -o StrictHostKeyChecking=no -i k host uptime"}})
     assert N.main() == 0
-    assert "sshf" in capsys.readouterr().out
+    assert "fleet_ssh" in capsys.readouterr().out
 
 
 def test_main_silent_on_write_without_matching_content(home, monkeypatch, capsys):
@@ -304,3 +304,139 @@ def test_a_flag_from_a_later_statement_is_not_greps():
 def test_a_real_grep_count_flag_is_still_nudged():
     """The direction where it must NOT apply."""
     assert N.match_tool('grep -c "needle" src/') is not None
+
+
+# ---- rules for the tools that shipped without one ------------------------------------------------
+# Every pattern below was priced over a frozen corpus of 79,052 authored calls from 493 sessions
+# and adjudicated against the calls it fires on, never against its own match count. The bar is the
+# shipped claim_check rule, which already speaks in 57.6% of sessions: what disqualifies a rule
+# here is precision, not volume.
+
+def test_match_pushcheck_on_a_real_push():
+    """The moment to ask "does this repo publish something private" is the push itself."""
+    assert N.match_tool("git push origin main", "Bash")[0] == "pushcheck"
+    assert N.match_tool("cd /repo && make push", "Bash")[0] == "pushcheck"
+
+
+def test_pushcheck_is_shell_only_so_authoring_a_script_is_not_a_push():
+    """A Write body containing `git push` is a script being AUTHORED, not a push being run.
+
+    Measured: this shape dominated the rule's firings before it was scoped, so the nudge would
+    have spoken while writing a release doc and stayed useful only by accident."""
+    body = "#!/usr/bin/env bash\nset -e\ngit push origin main\n"
+    matched = N.match_tool(N.extract_text("Write", {"content": body}), "Write")
+    assert matched is None or matched[0] != "pushcheck"
+
+
+def test_match_ci_wait_on_a_run_poll():
+    assert N.match_tool("gh run list --limit 1", "Bash")[0] == "ci_wait"
+    assert N.match_tool("gh pr checks 12", "Bash")[0] == "ci_wait"
+
+
+def test_match_gate_when_a_pipe_hides_the_exit_status():
+    """`pytest ... | tail` reports the FILTER's status; that is the whole point of `gate`."""
+    assert N.match_tool("pytest tests/ -q 2>&1 | tail -15", "Bash")[0] == "gate"
+    assert N.match_tool("make test && ./deploy.sh", "Bash")[0] == "gate"
+
+
+def test_a_gated_push_routes_to_pushcheck_not_gate():
+    """`make test && git push` carries both shapes. The push is the irreversible half - what it
+    publishes cannot be unpublished - so pushcheck is listed first and wins."""
+    assert N.match_tool("make test && git push", "Bash")[0] == "pushcheck"
+
+
+def test_match_backstop_on_a_hand_rolled_wait_loop():
+    assert N.match_tool("sleep 300; cat /tmp/job.log", "Bash")[0] == "backstop"
+    assert N.match_tool("nohup ./long-job.sh &", "Bash")[0] == "backstop"
+
+
+def test_a_ci_poll_loop_routes_to_ci_wait_not_backstop():
+    """Both shapes sit in `for ...; do sleep 30; gh run list; done`, and the tool answering the
+    actual question - did CI finish on MY commit - is the better nudge, so ci_wait is listed
+    first. Ordering is behaviour here, not tidiness: the rules are first-match-wins."""
+    loop = "for i in $(seq 1 8); do sleep 30; gh run list --json headSha; done"
+    assert N.match_tool(loop, "Bash")[0] == "ci_wait"
+
+
+def test_match_transcript_index_on_a_hand_walk_over_past_sessions():
+    assert N.match_tool("grep -rn needle ~/.claude/projects/", "Bash")[0] == "transcript_index"
+
+
+def test_match_anchor_edit_on_sed_in_place():
+    assert N.match_tool("sed -i 's/a/b/' pyproject.toml", "Bash")[0] == "anchor_edit"
+
+
+def test_match_srccount_on_find_piped_to_wc():
+    assert N.match_tool("find src -name '*.py' | wc -l", "Bash")[0] == "srccount"
+
+
+def test_match_newest_only_on_the_pick_the_latest_shape():
+    """`ls | sort | tail -1` picks by NAME, so a longer name sharing the date prefix wins.
+
+    A bare `ls dir/ | head` is a listing, not a latest-of question: measured, the unnarrowed
+    rule fired 2,591 times and 0 of 8 sampled firings were about picking the latest."""
+    assert N.match_tool("ls -d ~/.claude/plugins/cache/x/*/ | tail -1", "Bash")[0] == "newest"
+    assert N.match_tool("ls backups/*.tgz | sort | tail -1", "Bash")[0] == "newest"
+    for listing in ("ls tests/ | head -80", "ls -la | head -40"):
+        matched = N.match_tool(listing, "Bash")
+        assert matched is None or matched[0] != "newest", listing
+
+
+def test_match_winlog_transfer_and_wtclean():
+    assert N.match_tool("iconv -f UTF-16 -t UTF-8 cbs.log", "Bash")[0] == "winlog"
+    assert N.match_tool("curl --limit-rate 8M -O http://h/f.iso", "Bash")[0] == "transfer"
+    assert N.match_tool("git worktree remove ../wt-x", "Bash")[0] == "wtclean"
+
+
+def test_plain_commands_still_nudge_about_nothing():
+    """The rules added above must not turn ordinary work into a nudge."""
+    for cmd in ("ls -la", "cd /repo && git status", "echo hello", "cat README.md",
+                "python3 -m pytest -q", "git commit -F msg.txt"):
+        assert N.match_tool(cmd, "Bash") is None, cmd
+
+
+def test_a_tool_owned_by_a_sibling_skill_resolves_and_names_its_owner(home, monkeypatch, capsys):
+    """compuse-toolbox's table documents tools that ship under a DIFFERENT skill.
+
+    Resolving only against compuse-toolbox/scripts made those rules silent, which reads exactly
+    like having no rule at all. The nudge must find the file and name the skill that owns it -
+    pointing a reader at compuse-toolbox for a file that is not there is worse than silence.
+    """
+    (home / ".claude" / "skills" / "toolbox" / "tools").mkdir(parents=True)
+    skills = home / "plugin" / "skills"
+    (skills / "compuse-toolbox" / "scripts").mkdir(parents=True)
+    (skills / "git-worktrees" / "scripts").mkdir(parents=True)
+    (skills / "git-worktrees" / "scripts" / "wtclean.py").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(N, "_shipped_dir", lambda: skills / "compuse-toolbox" / "scripts")
+    _feed(monkeypatch, _ev("git worktree remove ../wt-x", "s-sibling"))
+    N.main()
+    out = capsys.readouterr().out
+    assert "wtclean" in out and "bitranox:git-worktrees" in out
+    assert "compuse-toolbox" not in out
+
+
+# ---- rules for LOCAL jigs -------------------------------------------------------------------------
+# These ship here like `guestip` and `ovmlog` already do, even though the tools live only in a
+# personal ~/.claude/skills/toolbox. The resolver falls back to silence for anyone without the
+# file, and a rule kept only on the machine that has the tool is a rule nobody can review.
+
+def test_match_statusrot_on_a_status_sweep_of_the_fact_store():
+    """Hand-rolled twice in sessions where statusrot already existed and nothing named it."""
+    assert N.match_tool(
+        "grep -rn 'shipped' /media/srv-main-softdev/.claude-memory/facts/", "Bash")[0] == "statusrot"
+
+
+def test_match_factedit_on_editing_a_fact_by_hand():
+    assert N.match_tool(
+        "vim /media/srv-main-softdev/.claude-memory/facts/no-em-dashes.md", "Bash")[0] == "factedit"
+
+
+def test_match_mdwrap_on_reflowing_a_paragraph():
+    assert N.match_tool("fold -s -w 100 TODO.md", "Bash")[0] == "mdwrap"
+
+
+def test_an_identifier_rename_routes_to_renamescope_not_anchor_edit():
+    """Both rules match `sed -i`, and the more specific one has to be listed first or it is dead:
+    measured, all 23 firings of the rename shape were already claimed by anchor_edit."""
+    assert N.match_tool("sed -i 's/old_name/new_name/g' src/mod.py", "Bash")[0] == "renamescope"
+    assert N.match_tool("sed -i '3d' notes.md", "Bash")[0] == "anchor_edit"

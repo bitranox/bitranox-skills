@@ -908,6 +908,61 @@ def check_frontmatter(root):
     return frontmatter_failures(root)
 
 
+def _toolbox_nudge_module(root):
+    """The shipped `toolbox-nudge.py`, loaded from its path (the filename is hyphenated).
+
+    Loaded rather than restated: the rules and the exemptions are the hook's own data, so the gate
+    cannot drift from the thing it checks. Returns None on a tree with no such hook, so the check
+    degrades to silence rather than to a false failure."""
+    hook = root / "plugins" / "bitranox" / "hooks" / "toolbox-nudge.py"
+    if not hook.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_gate_toolbox_nudge", hook)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def toolbox_rule_coverage_failures(root):
+    """Every shipped toolbox tool must have a nudge rule, or a RECORDED reason it has none.
+
+    Like `frontmatter_failures` this sweeps the WHOLE scripts dir rather than the changed paths,
+    and for the same reason: `check_cso` next door lints changed files only, so a tool added in one
+    commit is never looked at again. That is exactly how five tools shipped with no trigger while
+    every gate stayed green - and the PreToolUse nudge, not the prompt router, is the channel that
+    does the work here (measured over 2,090 transcripts: 917 firings against the router's 3).
+
+    A STALE exemption fails too: it names a tool nobody ships any more, so it quietly stops meaning
+    anything, which is the same silent rot one level up.
+    """
+    nudge = _toolbox_nudge_module(root)
+    if nudge is None:
+        return []
+    scripts_dir = root / _SKILLS_DIR / "compuse-toolbox" / "scripts"
+    shipped = {p.stem for p in sorted(scripts_dir.glob("*.py")) if not p.stem.startswith("_")}
+    ruled = nudge.ruled_tools()
+    exempt = nudge.NO_COMMAND_SHAPE
+    fails = []
+    for tool in sorted(shipped - ruled - set(exempt)):
+        fails.append(
+            "skills/compuse-toolbox/scripts/%s.py ships with no PreToolUse nudge rule and no "
+            "recorded reason. Add a rule to toolbox-nudge.py - price it over the real corpus with "
+            "scripts/guard_replay.py and adjudicate the firings - or add an entry to "
+            "NO_COMMAND_SHAPE saying why no command shape identifies this chore." % tool)
+    for tool in sorted(set(exempt) - shipped):
+        fails.append(
+            "toolbox-nudge.py NO_COMMAND_SHAPE exempts '%s', which no longer ships under "
+            "skills/compuse-toolbox/scripts - drop the entry, or point it at the tool's new "
+            "name." % tool)
+    return fails
+
+
+def check_toolbox_rule_coverage(root):
+    return toolbox_rule_coverage_failures(root)
+
+
 def check_cso(root):
     changed = _changed_vs_origin(root)
     if changed is None:
@@ -1194,6 +1249,7 @@ def run_checks(root, ci, full_pytest=None, run_pytest=True, baseline=0):
     failures += check_skill_naming(root)
     failures += check_cso(root)
     failures += check_frontmatter(root)
+    failures += check_toolbox_rule_coverage(root)
     failures += check_secrets(root)
     # Runs in BOTH modes, unlike version-bump below. It compares nothing across refs, so CI can
     # answer it on a push - which is the case the maintainer-only placement cannot cover, and the

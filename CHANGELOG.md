@@ -29,6 +29,73 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [5.302.0]
+
+### Added
+
+- **A shipped tool cannot go unrouted again: the repo gate now sweeps every toolbox script for a
+  PreToolUse nudge rule.** Five tools shipped in `5.301.0` with no trigger of any kind while every
+  gate stayed green, because the description lint beside this one (`check_cso`) looks at CHANGED
+  paths only, so a tool added in one commit is never re-examined. The new check sweeps the whole
+  `skills/compuse-toolbox/scripts` dir like `frontmatter_failures` and fails unless each tool has
+  either a rule or an entry in `toolbox-nudge.NO_COMMAND_SHAPE` recording why no command shape
+  identifies its chore. It reads the hook's own rules and exemptions rather than restating them,
+  so the gate cannot drift from what it checks, and a STALE exemption - one naming a tool that no
+  longer ships - fails too.
+
+- **Ten new nudge rules, priced against real history rather than proposed.** `pushcheck`,
+  `ci_wait`, `gate`, `backstop`, `anchor_edit`, `srccount`, `newest`, `winlog`, `transfer`,
+  `wtclean`, `mutation_arm`, `transcript_index`, `mem_levels` and `claudemd_variance` now have
+  signatures, taking the toolbox from 7 tools with a rule to 19 (the remaining 7 carry a recorded
+  reason). Each pattern was measured over a frozen corpus of 79,052 authored calls from 493
+  sessions and adjudicated against the calls it fires on - a match count says nothing, because
+  every hit matches by construction. The bar came from the shipped `claim_check` rule, which
+  already speaks in 57.6% of sessions: what disqualifies a rule here is precision, not volume.
+  `newest` fired 2,591 times with none of the sampled firings being a which-is-latest question,
+  so it ships narrowed to the sort-by-name shape that actually goes wrong.
+
+  Four LOCAL jigs gain rules on the same evidence - `statusrot`, `factedit`, `mdwrap` and
+  `renamescope` - which ship here exactly as `guestip` and `ovmlog` already do: the resolver falls
+  back to silence for anyone without the file, and a rule kept only on the machine that has the
+  tool is a rule nobody can review. `statusrot` earns its place twice over, having been hand-rolled
+  in sessions where it existed and nothing named it. `renamescope` is listed BEFORE `anchor_edit`
+  because both match `sed -i` and all 23 firings of the rename shape were otherwise swallowed by
+  the broader rule. Note the gate cannot enforce this half: local tools live outside the repo, so
+  their coverage is a recorded judgement rather than an invariant.
+
+  Measured after the change: 27 tools fire where 9 did, and a session receives a median of 2
+  distinct nudges (mean 3.9).
+
+  Why this channel and not the prompt router: over 2,090 transcripts the PreToolUse nudge surfaced
+  `compuse-toolbox` 917 times and the UserPromptSubmit router 3. Of 1,428 typed prompts, 40 name
+  any shipped tool and most are the ordinary English word, so adding tool names to the trigger map
+  would have bought about ten prompts while admitting `gate`, `backstop`, `newest` and `transfer`
+  as triggers.
+
+### Fixed
+
+- **A rule is now scoped to where its chore actually lives.** The rules describing a command being
+  RUN no longer match the same words inside an authored file: unscoped, `git push` sitting in a
+  Write body was the dominant firing of the `pushcheck` rule, nudging while a release script was
+  being written. Chores equally real when authored - a script walking the transcript corpus or the
+  memory levels - stay unscoped.
+
+- **A nudge naming a tool that ships under a SIBLING skill is no longer silent.** `_tool_invocation`
+  resolved only against `compuse-toolbox/scripts`, so a rule for `wtclean`, `claudemd_variance` or
+  `redcheck` - all documented in the toolbox's own table but owned by another skill - found nothing
+  and said nothing, which is indistinguishable from having no rule. It now finds the tool under any
+  shipped skill and names the skill that owns it, rather than sending a reader to a directory the
+  file is not in. The ssh rule likewise names the shipped `fleet_ssh` instead of the local `sshf`
+  twin it was contributed from.
+
+- **`compuse-toolbox`: `transcript_index` indexed 42% of the corpus and reported nothing missing.**
+  `index_dir` walked `*/*.jsonl`, which reaches only main-session transcripts; a SUBAGENT's sits two
+  levels deeper at `<project>/<session>/subagents/agent-*.jsonl`. Measured on this machine, 878 of
+  2,090 transcripts were indexed, so work a subagent narrated came back as no match - which reads
+  exactly like "it never happened", the one conclusion the tool's own docstring warns against. It
+  now walks with `rglob` and takes the project label from the component directly under the root,
+  never the parent dir, which for a nested file is `subagents`.
+
 ## [5.301.1]
 
 ### Fixed
