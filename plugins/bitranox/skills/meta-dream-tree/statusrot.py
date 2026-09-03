@@ -35,6 +35,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,6 +189,70 @@ def new_or_changed(result: "ScanResult", cleared: dict[str, dict[str, str]]) -> 
                   if s not in cleared or cleared[s].get("hook_sha256") != d)
 
 
+
+
+def _sweep_dates_by_level(cleared: dict[str, dict[str, str]]) -> dict[str, str]:
+    """The most recent clear date recorded per level - i.e. when that level was last swept."""
+    newest: dict[str, str] = {}
+    for rec in cleared.values():
+        level, when = rec.get("level"), rec.get("cleared")
+        if not level or not when:
+            continue
+        if when > newest.get(level, ""):
+            newest[level] = when
+    return newest
+
+
+def fact_added_on(store: Path | None, slug: str) -> str | None:
+    """ISO date this fact's body first entered the store's git history, or None if unanswerable.
+
+    None covers every failure alike - no store, not a repo, no git, a body whose add-commit sits
+    under a pre-rename path - and the caller must read it as "still to check". An age nobody can
+    establish must never buy an entry its way off the worklist.
+    """
+    if store is None or not (store / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(store), "log", "--follow", "--diff-filter=A",
+             "--format=%ad", "--date=short", "--", f"facts/{slug}.md"],
+            capture_output=True, text=True, timeout=20, check=False,
+            encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    dates = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    return dates[-1] if dates else None
+
+
+def triage_pending(result: "ScanResult", cleared: dict[str, dict[str, str]],
+                   pending: list[str], store: Path | None) -> dict[str, list[str]]:
+    """Split the unexamined list into the three situations that all answer "nobody checked this".
+
+    A flat UNEXAMINED list is accurate and its SHAPE misleads: a fact WRITTEN since the last sweep
+    reads identically to one that has sat unchecked for months, so a reader sizes a backlog from a
+    number that is mostly freshness. Measured 2026-09-03 on the softdev tree: of 22 pending, 7 were
+    re-surfaced edits and 10 were written after the baseline, leaving 4 genuinely unchecked.
+
+    Ties are broken toward MORE work: an entry whose age git cannot answer lands in never_checked.
+    Keeping a sound entry on the worklist costs one re-read; filing an unchecked claim as freshness
+    hides it permanently, which is the failure this whole file exists to prevent.
+    """
+    level_of: dict[str, str] = {}
+    for ptrs in result.by_kind.values():
+        for p in ptrs:
+            level_of[p.slug] = p.level
+    swept = _sweep_dates_by_level(cleared)
+    buckets: dict[str, list[str]] = {"resurfaced": [], "written_since": [], "never_checked": []}
+    for slug in pending:
+        if slug in cleared:
+            buckets["resurfaced"].append(slug)
+            continue
+        sweep = swept.get(level_of.get(slug, ""))
+        added = fact_added_on(store, slug) if sweep is not None else None
+        fresh = added is not None and sweep is not None and added > sweep
+        buckets["written_since" if fresh else "never_checked"].append(slug)
+    return buckets
+
 def chain_levels(start: Path) -> list[Path]:
     """Every CLAUDE.local.md from `start` upward, narrowest first (the altitude chain)."""
     found: list[Path] = []
@@ -235,7 +300,18 @@ def _do_clear(result: "ScanResult", bl_path: Path | None, args: argparse.Namespa
     return 0
 
 
-def _render(result: ScanResult, pending: list[str], bl_path: Path | None) -> str:
+PENDING_KINDS: tuple[tuple[str, str, str], ...] = (
+    ("resurfaced", "RE-SURFACED",
+     "cleared once, hook EDITED since - re-read the edit, not the whole claim"),
+    ("written_since", "WRITTEN SINCE the sweep",
+     "newer than the last clear at its level - freshness, not rot"),
+    ("never_checked", "NEVER CHECKED",
+     "predates the sweep, or its age is unanswerable - the real backlog"),
+)
+
+
+def _render(result: ScanResult, pending: list[str], bl_path: Path | None,
+            triage: dict[str, list[str]]) -> str:
     lines = [f"scanned {result.total_pointers} pointer line(s)", ""]
     if result.contradictions:
         lines.append(f"== SELF-CONTRADICTORY ({len(result.contradictions)}) - rot, no lookup needed ==")
@@ -256,7 +332,12 @@ def _render(result: ScanResult, pending: list[str], bl_path: Path | None) -> str
                      "After checking them, record it with: statusrot.py clear --chain <dir>")
     elif pending:
         lines += ["", f"== UNEXAMINED since the baseline: {len(pending)} =="]
-        lines += [f"   {s}" for s in pending]
+        for key, head, gloss in PENDING_KINDS:
+            group = triage.get(key, [])
+            if not group:
+                continue
+            lines.append(f"  -- {head}: {len(group)} - {gloss}")
+            lines += [f"     {s}" for s in group]
         lines.append("The rest were cleared against their owners and their hooks are unchanged.")
     else:
         lines.append(f"Nothing new: every candidate was cleared and no hook has changed since. "
@@ -308,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cleared = load_baseline(bl_path)
     pending = new_or_changed(result, cleared)
+    triage = triage_pending(result, cleared, pending, bl_path.parent if bl_path else None)
 
     if args.json:
         print(json.dumps({
@@ -325,11 +407,12 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 "baseline": str(bl_path) if bl_path and bl_path.is_file() else None,
                 "new_or_changed": pending,
+                "pending_triage": triage,
             },
             "skipped": [],
         }, indent=2))
     else:
-        print(_render(result, pending, bl_path))
+        print(_render(result, pending, bl_path, triage))
     return 1 if result.contradictions else 0
 
 

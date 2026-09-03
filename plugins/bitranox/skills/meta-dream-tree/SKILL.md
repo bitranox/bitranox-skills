@@ -27,7 +27,9 @@ Tools shipped here, runnable outside a dream run too: `dream_state.py` (mode + d
 `store_manifest.py` (backup and verify), `dedup_scan.py` (candidate pairs), `statusrot.py` (pointer
 lines still asserting a STATUS that shipped and was never updated; a hit is a CANDIDATE to check
 against its owner, and only a SELF-CONTRADICTION - a slug saying one thing under a hook saying
-another - is a defect on its own and sets exit 1) and `factedit.py` (reword a fact's hook or body
+another - is a defect on its own and sets exit 1; its UNEXAMINED list is split into RE-SURFACED,
+WRITTEN SINCE the sweep and NEVER CHECKED, and only the last is a backlog of unchecked claims -
+read the count for that group, never the total) and `factedit.py` (reword a fact's hook or body
 by recomposing it through `memory_engine.py`, since a Write or Edit on a pointer block or a body
 is denied by the store-edit guard). The
 last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they

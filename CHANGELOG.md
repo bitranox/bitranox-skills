@@ -29,6 +29,33 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.1.0]
+
+### Added
+
+- **`statusrot.py scan` now says WHICH KIND of unexamined each pending entry is.** The baseline
+  answers one question - has anybody checked this hook - and reported every "no" in one flat list
+  headed `UNEXAMINED since the baseline`. Three unrelated situations answer no, and the flat list
+  rendered them identically: a hook cleared and then EDITED, a fact WRITTEN after its level was
+  last swept, and a fact that predates the sweep with no verdict ever recorded. Only the third is
+  a backlog of unchecked claims.
+
+  Measured 2026-09-03 on the softdev tree: 22 entries reported unexamined, splitting 7
+  re-surfaced / 10 written-since / 5 never-checked. A session read the flat 22 as "22 claims
+  actively misleading every session", ranked a day of work on it, and a pre-registered
+  three-entry sample found nothing stale. The list was accurate; its SHAPE was the lie.
+
+  `scan` gains a `pending_triage` object in the JSON envelope and three labelled groups in the
+  text report; empty groups are omitted. Ages come from the store's own git history
+  (`--diff-filter=A` on the fact body) and the comparison is per level, against the newest clear
+  recorded for that level - so a tree whose levels were swept on different days is not judged
+  against one global date.
+
+  Ties break toward MORE work: an entry whose age git cannot answer - no store, not a repo, or a
+  body whose add-commit sits under a pre-rename path - lands in `NEVER CHECKED`. Keeping a sound
+  entry on the worklist costs one re-read, while filing an unchecked claim as freshness hides it
+  for good, which is the failure the baseline exists to prevent.
+
 ## [6.0.0]
 
 ### Changed
