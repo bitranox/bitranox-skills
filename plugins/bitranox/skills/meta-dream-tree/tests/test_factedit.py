@@ -531,3 +531,60 @@ def test_body_description_matches_the_engine_on_a_real_stored_fact():
     for path in sorted(store.glob("*.md"))[:5]:
         text = path.read_text(encoding="utf-8")
         assert FE.body_description(text), f"no description parsed from {path.name}"
+
+
+# ---- the stored type: visible in `show`, changeable only on purpose ------------------------------
+
+def test_engine_argv_forwards_an_explicit_type_for_an_unpinned_fact():
+    argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
+                          body_path=None, title=None, type_="reference", python="py")
+    assert "--type" in argv and argv[argv.index("--type") + 1] == "reference"
+
+
+def test_engine_argv_carries_no_type_when_the_caller_asks_for_none():
+    # Not an omission to tidy up later: passing a DERIVED type would re-introduce the guess this
+    # exists to avoid. No --type means "leave the stored kind alone", which the engine honours.
+    argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
+                          body_path=None, title=None, python="py")
+    assert "--type" not in argv
+
+
+def test_show_reports_the_stored_type_so_an_amend_can_see_what_it_would_rewrite(tmp_path):
+    r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(make_tree(tmp_path))], tmp_path)
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["data"]["type"] == "feedback"
+
+
+def test_apply_forwards_the_type_to_the_engine(tmp_path):
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    body = tmp_path / "b.md"
+    body.write_text("new prose\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
+    assert r.returncode == 0
+    called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
+    assert "'--type', 'reference'" in called
+
+
+def test_apply_refuses_a_type_change_on_a_pinned_fact_rather_than_dropping_it(tmp_path):
+    # `amend-pinned` has no --type, so forwarding one there would silently do nothing - the exact
+    # shape of the defect this flag exists to close. Refuse before staging or invoking anything.
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path, pin=True)
+    body = tmp_path / "b.md"
+    body.write_text("new prose\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
+    assert r.returncode == 2
+    assert json.loads(r.stdout)["error"].startswith("BadInput:")
+    assert not (eng.parent / "memory_engine.py.called").exists()
+
+
+def test_a_type_the_engine_does_not_know_is_refused_before_anything_is_staged(tmp_path):
+    r = run_cli(["apply", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(make_tree(tmp_path)),
+                 "--type", "notatype"], tmp_path)
+    assert r.returncode == 2
+    assert json.loads(r.stdout)["error"].startswith("BadInput:")

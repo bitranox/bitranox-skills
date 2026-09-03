@@ -29,6 +29,55 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.3.0]
+
+### Fixed
+
+- **An update that rewrites a fact's body no longer re-classifies it.** `memory_engine.py`
+  re-framed a body on every update and took the `metadata: type:` from the SLUG when the caller
+  passed no `--type`, so a prefix-less slug always landed on `project`. 71 of one tree's
+  prefix-less facts record `feedback` or `reference`, and for those the body is the only record of
+  the kind, so any body amend silently rewrote it. Nothing reported it: `store_manifest verify`
+  compares (level, slug, title, pin), `lint --tree` looks for UNFRAMED bodies rather than
+  mis-framed ones, and the write printed its usual success line - the flip was caught only by
+  diffing a dream against its pre-run backup. An update with no explicit type now keeps the type
+  the stored body records; an explicit `--type` still wins, so a deliberate re-classification is
+  unaffected. Fixed in the engine rather than in one caller, because every caller that passes a
+  body without a type had the same defect, `amend-pinned` has no `--type` to pass, and the
+  documented direct `add --body-file` route is one of them.
+
+### Added
+
+- **`factedit apply --type` re-classifies a fact deliberately, and `show` reports the stored
+  kind.** With the engine preserving the type, changing it needs a way to say so. `--type` is
+  forwarded only when asked (a derived one would re-introduce the guess above), is refused for a
+  type the live engine does not know rather than passed through, and is refused on a PINNED fact,
+  whose `amend-pinned` verb takes no such flag - forwarding it there would silently do nothing,
+  which is the shape of the defect being fixed. `show` and the JSON envelope now carry `type`, so
+  the kind an amend would rewrite is visible before the amend.
+
+- **`statusrot clear --slug <s>` (repeatable) records a PARTIAL adjudication.** `clear` certified
+  every candidate in scope, so a human who checked 5 of 40 could either bulk-clear and falsely
+  certify the other 35, or record nothing and re-do the work next sweep - and the tool's own
+  guidance against bulk-clearing forces the second. A slug that is not a flagged candidate in
+  scope is REFUSED with nothing written, so a typo cannot report a clean sweep while certifying
+  neither the name it missed nor the entry it was aimed at.
+
+### Changed
+
+- **`compuse-toolbox`'s `anchor_edit` row now states the insert DIRECTION.** It showed
+  `insert ... --after` as though `--after` were a choice being made; `--after` is the DEFAULT, so a
+  reader who wanted to precede an anchor omitted the flag and landed one line INSIDE the block they
+  meant to precede, with a clean line delta reported both times. The row shows `--before` (the flag
+  you have to type) and says which way an omitted direction goes.
+
+- **`meta-self-improve` reads the tool inventory as step 0, not at the chore ladder.** Its step 6
+  said to build or enhance a tool but never to LIST the existing ones first, so a capture run
+  hand-rolled scripts for jobs already shipped (measured: a fact strip-and-append while `factedit`
+  ships, and the local `filepatch` while `anchor_edit` ships in `compuse-toolbox`). The step covers
+  the LOCAL toolbox and the SHIPPED table, since the misses came from both, and it is on the
+  deliverables checklist. Mirrors `meta-dream-tree`'s step 0c.
+
 ## [6.2.1]
 
 ### Fixed

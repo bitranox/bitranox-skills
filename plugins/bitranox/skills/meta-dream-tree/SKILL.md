@@ -29,9 +29,14 @@ lines still asserting a STATUS that shipped and was never updated; a hit is a CA
 against its owner, and only a SELF-CONTRADICTION - a slug saying one thing under a hook saying
 another - is a defect on its own and sets exit 1; its UNEXAMINED list is split into RE-SURFACED,
 WRITTEN SINCE the sweep and NEVER CHECKED, and only the last is a backlog of unchecked claims -
-read the count for that group, never the total) and `factedit.py` (reword a fact's hook or body
-by recomposing it through `memory_engine.py`, since a Write or Edit on a pointer block or a body
-is denied by the store-edit guard). The
+read the count for that group, never the total; `clear` records an adjudication, which is what
+stops an entry being re-reported until its hook changes, and takes
+`--slug <s>` REPEATABLY - a bare `clear` certifies every candidate in scope, so name the ones you
+actually checked, and a slug that is not a flagged candidate is refused rather than recorded) and
+`factedit.py` (reword a fact's hook or body by recomposing it through `memory_engine.py`, since a
+Write or Edit on a pointer block or a body is denied by the store-edit guard; `show` reports the
+stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify -
+refused on a pinned fact, whose `amend-pinned` verb has no such flag). The
 last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
 answer, so they surface without this file being open.
 

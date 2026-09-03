@@ -266,21 +266,42 @@ def chain_levels(start: Path) -> list[Path]:
         cur = cur.parent
 
 
+def _clear_error(msg: str, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps({"ok": False, "command": "clear", "error": msg}, indent=2))
+    else:
+        print(f"error: {msg}", file=sys.stderr)
+    return 2
+
+
 def _do_clear(result: "ScanResult", bl_path: Path | None, args: argparse.Namespace) -> int:
-    """Record every currently-flagged entry as verified. Explicit by design: nothing enters the
-    baseline as a side effect of scanning, because a verdict nobody made is the one that misleads."""
+    """Record the currently-flagged entries as verified - all of them, or the ones `--slug` names.
+
+    Explicit by design: nothing enters the baseline as a side effect of scanning, because a verdict
+    nobody made is the one that misleads. `--slug` exists for the normal mature-chain case, where a
+    human adjudicates a SUBSET: without it the only moves are a bulk clear that falsely certifies
+    the candidates nobody read, or losing the work. A name that matches no flagged candidate is
+    REFUSED and nothing is written - a selector that silently records nothing reports a clean sweep
+    while certifying neither the typo nor the entry it was aimed at.
+    """
     if bl_path is None:
-        msg = "no .claude-memory store above the given level; nothing to record against"
-        if args.json:
-            print(json.dumps({"ok": False, "command": "clear", "error": msg}, indent=2))
-        else:
-            print(f"error: {msg}", file=sys.stderr)
-        return 2
+        return _clear_error("no .claude-memory store above the given level; "
+                            "nothing to record against", args.json)
+    wanted = set(getattr(args, "slug", []) or [])
+    flagged = {p.slug for ptrs in result.by_kind.values() for p in ptrs}
+    if wanted:
+        missing = sorted(wanted - flagged)
+        if missing:
+            return _clear_error(
+                "not a flagged candidate in this scope: " + ", ".join(missing)
+                + " (nothing was written; run scan to see the candidates)", args.json)
     cleared = load_baseline(bl_path)
     today = dt.date.today().isoformat()
     added = 0
     for ptrs in result.by_kind.values():
         for p in ptrs:
+            if wanted and p.slug not in wanted:
+                continue
             digest = hook_digest(p.hook)
             prior = cleared.get(p.slug)
             if prior and prior.get("hook_sha256") == digest:
@@ -361,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
     cl = sub.add_parser("clear", help="record every currently-flagged entry as verified")
     _add_level_args(cl)
     cl.add_argument("--note", default="", help="one line on what the check established")
+    cl.add_argument("--slug", action="append", default=[],
+                    help="record only this slug (repeatable); omit to record every flagged entry "
+                         "in scope. A slug that is not a flagged candidate is refused")
     args = ap.parse_args(argv)
 
     levels: list[Path] = list(args.level)

@@ -135,3 +135,53 @@ class TestKnownNegative:
         changed = _scan_json(root)["new_or_changed"]
         assert unchanged == [] and changed == ["alpha"], \
             f"detector must say different things: {unchanged!r} vs {changed!r}"
+
+
+class TestAPartialAdjudicationIsRecordable:
+    """A scan reports N candidates and a human adjudicates a SUBSET of them - the normal case once
+    a chain is mature. Without a per-slug selector the only two moves are a bulk clear that falsely
+    certifies the candidates nobody read, or leaving the baseline untouched and re-doing the work
+    next time; the tool's own guidance (never bulk-clear) forces the second.
+    """
+
+    def test_clearing_one_slug_leaves_the_others_flagged(self, tmp_path: Path):
+        root = _tree(tmp_path, SHIPPED, OTHER)
+        out = _run("clear", "--chain", str(root), "--slug", "alpha", "--json",
+                   "--note", "checked against TODO.md")
+        assert out.returncode == 0, out.stderr
+        assert json.loads(out.stdout)["data"]["recorded"] == 1
+        cleared = json.loads((root / ".claude-memory" / "statusrot-baseline.json")
+                             .read_text(encoding="utf-8"))["cleared"]
+        assert set(cleared) == {"alpha"}
+        assert _scan_json(root)["new_or_changed"] == ["beta"]
+
+    def test_the_selector_is_repeatable(self, tmp_path: Path):
+        root = _tree(tmp_path, SHIPPED, OTHER)
+        out = _run("clear", "--chain", str(root), "--slug", "alpha", "--slug", "beta", "--json")
+        assert out.returncode == 0, out.stderr
+        assert json.loads(out.stdout)["data"]["recorded"] == 2
+        assert _scan_json(root)["new_or_changed"] == []
+
+    def test_a_slug_that_is_not_a_candidate_is_refused_and_nothing_is_written(self, tmp_path: Path):
+        # A name that records nothing is the failure this selector exists to avoid: it exits 0,
+        # reports a clean sweep, and certifies neither the typo nor the entry it was aimed at.
+        root = _tree(tmp_path, SHIPPED, OTHER, CLEAN)
+        out = _run("clear", "--chain", str(root), "--slug", "alpha", "--slug", "aplha", "--json")
+        assert out.returncode == 2
+        payload = json.loads(out.stdout)
+        assert payload["ok"] is False and "aplha" in payload["error"]
+        assert not (root / ".claude-memory" / "statusrot-baseline.json").exists()
+
+    def test_an_unflagged_slug_is_refused_too_not_silently_recorded(self, tmp_path: Path):
+        # `gamma` is a real pointer that the scan did NOT flag. Recording it would put a verdict in
+        # the baseline for a claim nobody was asked about.
+        root = _tree(tmp_path, SHIPPED, CLEAN)
+        out = _run("clear", "--chain", str(root), "--slug", "gamma", "--json")
+        assert out.returncode == 2
+        assert "gamma" in json.loads(out.stdout)["error"]
+
+    def test_no_selector_still_clears_every_flagged_entry(self, tmp_path: Path):
+        root = _tree(tmp_path, SHIPPED, OTHER)
+        out = _run("clear", "--chain", str(root), "--json")
+        assert out.returncode == 0
+        assert json.loads(out.stdout)["data"]["recorded"] == 2

@@ -1046,3 +1046,32 @@ def test_move_refusal_still_names_the_hook_when_the_hook_differs(tmp_path):
     rep = E.move_entry(proj, mid, "fact")
     assert rep["moved"] is False
     assert "HOOK" in (rep["refused"] or ""), rep["refused"]
+
+
+def test_update_with_a_new_body_keeps_the_stored_type(proj):
+    # A slug carries a type only when it was minted WITH one ("feedback-..."). 71 of the tree's
+    # prefix-less facts record a non-project type, and for those the body's frontmatter is the ONLY
+    # record of it - so re-deriving the type from the slug on an update silently rewrites the fact's
+    # kind. Nothing downstream reports it: store_manifest verify reads (level, slug, title, pin),
+    # lint --tree looks for UNFRAMED bodies, and the engine prints its usual success line.
+    slug = E.add_or_update_entry(proj, "A configured gate can enforce nothing",
+                                 "When you add a tool to a gate, verify what it ENFORCES.",
+                                 body="the prose", type_="feedback",
+                                 slug="a-configured-gate-can-enforce-nothing", scope_default="lvl")
+    assert "type: feedback" in us.body_path(proj, slug).read_text(encoding="utf-8")
+    E.add_or_update_entry(proj, "A configured gate can enforce nothing",
+                          "When you add a tool to a gate, verify what it ENFORCES, not that it runs.",
+                          body="the amended prose", slug=slug)      # no type_ -> must not re-derive
+    body = us.body_path(proj, slug).read_text(encoding="utf-8")
+    assert "type: feedback" in body and "type: project" not in body
+    assert "the amended prose" in body
+
+
+def test_an_explicit_type_still_wins_on_update(proj):
+    # The preservation above must not freeze the type: a caller that PASSES one is changing it
+    # deliberately, and that is the one route to a re-classification.
+    slug = E.add_or_update_entry(proj, "Note", "When X, do Y.", body="b", type_="feedback",
+                                 slug="note-under-test", scope_default="lvl")
+    E.add_or_update_entry(proj, "Note", "When X, do Y.", body="b2", type_="reference", slug=slug)
+    body = us.body_path(proj, slug).read_text(encoding="utf-8")
+    assert "type: reference" in body and "type: feedback" not in body

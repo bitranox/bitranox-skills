@@ -70,6 +70,8 @@ _MARKETPLACE = ".claude/plugins/marketplaces/bitranox-skills/plugins/bitranox/ho
 
 # Mirrors the engine's own frontmatter reader: the body's `description:` IS the hook.
 _DESC_RX = re.compile(r"(?m)^description:[ \t]*(.*)$")
+# `metadata:\n  type: <t>` - indented, so it cannot be confused with the top-level keys above it.
+_TYPE_RX = re.compile(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*$")
 
 
 class FactEditError(Exception):
@@ -109,6 +111,7 @@ class EngineRules:
     advise: Callable[[str, str], list]
     recurrence: Callable[[str], int | None]
     parse_index: Callable[[str], tuple]
+    types: tuple[str, ...] = ()
     engine_path: Path | None = None
 
 
@@ -141,6 +144,15 @@ class Fact:
         return body_description(self.body)
 
     @property
+    def type_(self) -> str:
+        """The kind the BODY records (`metadata: type:`), or '' when it has none.
+
+        The slug carries the kind only when it was minted with a type prefix, so for a prefix-less
+        slug this is the ONLY record of it - which is why `apply` must never let it be re-derived.
+        """
+        return body_type(self.body)
+
+    @property
     def hook_in_sync(self) -> bool:
         """Whether the pointer hook and the body's `description:` still say the same thing."""
         return " ".join(self.hook.split()) == " ".join(self.body_description.split())
@@ -152,6 +164,20 @@ def body_description(text: str) -> str:
     """The `description:` value from a framed body's frontmatter, or '' when it has none. PURE."""
     m = _DESC_RX.search(text or "")
     return m.group(1).strip() if m else ""
+
+
+def body_type(text: str) -> str:
+    """The `metadata: type:` value from a framed body's frontmatter, or '' when it has none. PURE.
+
+    Scoped to the LEADING frontmatter block, so an indented `type:` line in the prose below cannot
+    answer for it.
+    """
+    head = (text or "").lstrip()
+    if not head.startswith("---"):
+        return ""
+    end = head.find("\n---", 3)
+    m = _TYPE_RX.search(head[:end] if end > 0 else head)
+    return m.group(1) if m else ""
 
 
 def judge_hook(hook: str, body: str, rules: EngineRules) -> Verdict:
@@ -270,6 +296,7 @@ def load_rules(engine: Path) -> EngineRules:
         advise=cc.advise,
         recurrence=us.recurrence_count,
         parse_index=us.parse_pointer_index,
+        types=tuple(us.TYPE_PREFIXES),
         engine_path=Path(engine).resolve(),
     )
 
@@ -353,7 +380,8 @@ def default_python(path_env: str | None = None) -> str:
 
 
 def engine_argv(fact: Fact, engine: Path, *, hook_path: Path | None, body_path: Path | None,
-                title: str | None, python: str | None = None) -> list[str]:
+                title: str | None, type_: str | None = None,
+                python: str | None = None) -> list[str]:
     """The exact engine invocation for this recomposition. PURE.
 
     The VERB comes from the stored pin flag, never from the caller: an ordinary `add` against a
@@ -372,6 +400,10 @@ def engine_argv(fact: Fact, engine: Path, *, hook_path: Path | None, body_path: 
         argv += ["--hook-file", str(hook_path)]
     if body_path:
         argv += ["--body-file", str(body_path)]
+    if type_:
+        # Only when the caller ASKED. A derived one would re-introduce the guess this closes: with
+        # no --type the engine keeps the kind the stored body records.
+        argv += ["--type", type_]
     return argv
 
 
@@ -392,6 +424,7 @@ def _fact_data(fact: Fact, verdict: Verdict, rules: EngineRules) -> dict:
         "level": str(fact.level),
         "anchor": str(fact.anchor),
         "title": fact.title,
+        "type": fact.type_,
         "pinned": fact.pin,
         "engine_verb": "amend-pinned" if fact.pin else "add",
         "hook": fact.hook,
@@ -413,6 +446,7 @@ def _render_fact(data: dict, body: str, show_body: bool) -> str:
         f"slug        {data['slug']}",
         f"level       {data['level']}",
         f"title       {data['title']}",
+        f"type        {data['type'] or '(none recorded)'}",
         f"pinned      {data['pinned']}  (engine verb: {data['engine_verb']})",
         (f"hook        {data['hook_chars']} chars "
          f"(soft {data['soft_max']}, hard {data['hard_max']})"),
@@ -484,8 +518,21 @@ def cmd_apply(args, rules: EngineRules) -> int:
                      level=Path(args.level) if args.level else None)
     hook = _resolve_text(args.hook, args.hook_file, "--hook")
     body = _resolve_text(None, args.body_file, "--body")
-    if hook is None and body is None and not args.title:
-        raise BadInput("nothing to change: give --hook/--hook-file, --body-file or --title")
+    if hook is None and body is None and not args.title and not args.type_:
+        raise BadInput("nothing to change: give --hook/--hook-file, --body-file, --title or --type")
+    if args.type_:
+        # Refuse rather than drop: `amend-pinned` has no --type, so forwarding one for a pinned
+        # fact would silently change nothing, which is the shape of defect this flag exists to
+        # close. Fail closed on an unknown vocabulary too - a tool that cannot check is not a tool
+        # that passes.
+        if not rules.types:
+            raise BadInput("the engine did not report its known types; refusing to guess")
+        if args.type_ not in rules.types:
+            raise BadInput(f"unknown type {args.type_!r}; the engine knows "
+                           + ", ".join(rules.types))
+        if fact.pin:
+            raise BadInput(f"{fact.slug} is pinned, and amend-pinned takes no --type; "
+                           "re-type it with the engine directly, deliberately")
     hook = fact.hook if hook is None else hook.strip()
     verdict = judge_hook(hook, body if body is not None else fact.body, rules)
     if not verdict.accepted:
@@ -507,7 +554,7 @@ def cmd_apply(args, rules: EngineRules) -> int:
     else:
         body_path = stage_text(stage, f"{fact.slug}.body.md", body)
     argv = engine_argv(fact, rules.engine_path, hook_path=hook_path, body_path=body_path,
-                       title=args.title, python=args.python)
+                       title=args.title, type_=args.type_, python=args.python)
 
     data = {"slug": fact.slug, "level": str(fact.level), "pinned": fact.pin,
             "engine_verb": "amend-pinned" if fact.pin else "add",
@@ -578,6 +625,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap_.add_argument("--body-file", default=None,
                      help="the new body (omit to keep the stored one)")
     ap_.add_argument("--title", default=None, help="a new title (omit to keep the stored one)")
+    ap_.add_argument("--type", dest="type_", default=None,
+                     help="re-classify the fact (feedback/project/reference/user); omit to keep "
+                          "the stored kind, which the engine preserves")
     ap_.add_argument("--stage-dir", default=None,
                      help="where to write the staged hook/body files (default: a temp dir)")
     ap_.add_argument("--dry-run", action="store_true",

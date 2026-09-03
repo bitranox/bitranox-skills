@@ -89,6 +89,22 @@ goes to the dream's skill-gap pass.
 
 Create one todo per step.
 
+### 0. Read the tool inventory FIRST (before hand-rolling anything)
+
+`uv run ~/.claude/skills/toolbox/tools/toolbox.py list` (skip only if that path does not exist),
+and skim the row table of the SHIPPED `bitranox:compuse-toolbox`. This belongs HERE, not beside
+the chore ladder at step 6: a capture run hand-rolls its scripts DURING the capture - reading a
+fact and recomposing it, patching a file by anchor, tallying a corpus - and by the time step 6
+asks whether a recurring chore deserves a tool, the throwaway one is already written. The dream
+schedules the same read as its step 0c for the same reason.
+
+Both halves matter, because the misses come from both: the LOCAL list covers your own jigs, and
+the SHIPPED table covers the ones that were contributed upstream and no longer live locally
+(measured 2026-09-02: `factedit` was re-implemented as a strip-and-append script, and `filepatch`
+was reached for while `anchor_edit` ships in compuse-toolbox). When the PreToolUse nudge names a
+tool for the command you are about to run, it has already done this lookup - use what it names
+rather than the command it interrupted.
+
 ### 1. Gather candidates
 
 Reflect on the just-finished work. List the concrete, reusable things it surfaced, one sentence
@@ -364,6 +380,8 @@ scaffolding when the goal is met.
 
 ## Deliverables (a completed capture run has ALL of these)
 
+- [ ] The tool inventory (local `toolbox list` + the shipped `bitranox:compuse-toolbox` table) was
+      read BEFORE any script was hand-rolled - step 0, not step 6.
 - [ ] Dedup grep ran over the pointer blocks + `facts/` bodies + native tier BEFORE any write.
 - [ ] ONE engine `add` per fact; its printed slug captured (fail-loud - no silent results).
 - [ ] Every hook trigger-first ("When <situation>, <directive>.") and self-sufficient. The 350-char

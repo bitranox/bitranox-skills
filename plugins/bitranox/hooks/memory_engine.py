@@ -259,7 +259,10 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
             old_hook = e.hook
             e.title, e.hook = title, (hook or e.hook)
             if body:
-                e.body = _framed_body(slug, e.hook, type_, body)
+                # No explicit --type on an UPDATE means "leave the kind alone": re-deriving it from
+                # the slug discards what the stored body already records, and for a prefix-less slug
+                # that always lands on "project".
+                e.body = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
             elif e.hook != old_hook:
                 e.body = _reframe_description(e.body, e.hook)   # keep body description in sync with the pointer
             e.pin = e.pin or pin
@@ -329,6 +332,23 @@ def _body_description(text):
     """The `description:` value (the hook) from a framed body's frontmatter, or '' if absent."""
     m = re.search(r"(?m)^description:[ \t]*(.*)$", text or "")
     return m.group(1).strip() if m else ""
+
+
+def _body_type(text):
+    """The `metadata: type:` value from a framed body's frontmatter, or '' if absent.
+
+    A slug records the type only when it was minted with one (`feedback-...`); for a prefix-less
+    slug the body IS the only record, so an update that reframes the body has to read it here or
+    it silently re-classifies the fact - and nothing downstream reports that (`store_manifest
+    verify` reads level/slug/title/pin, `lint --tree` looks for UNFRAMED bodies, and the write
+    prints its usual success line). Scoped to the LEADING frontmatter block so a `  type:` line in
+    the prose below cannot answer for it."""
+    head = (text or "").lstrip()
+    if not head.startswith("---"):
+        return ""
+    end = head.find("\n---", 3)
+    m = re.search(r"(?m)^[ \t]+type:[ \t]*(\S+)[ \t]*$", head[:end] if end > 0 else head)
+    return m.group(1) if m else ""
 
 
 def _reframe_description(text, hook):
