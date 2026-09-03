@@ -5,9 +5,15 @@ tool is what pytest actually reports, so a stubbed runner would test the wrong t
 """
 
 import json
+import os
+import py_compile
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 import mutation_arm as M
 
@@ -214,3 +220,129 @@ def test_an_arm_inside_the_timeout_is_unaffected(tmp_path):
                "--test", "test_src.py::test_zero", "--timeout", "120", "--json")
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert json.loads(proc.stdout)["data"]["verdict"] == "killed"
+
+
+# --------------------------------------------------------------------------
+# Bytecode: the arm must not read a cache older than the mutation, nor leave
+# one holding the mutant behind
+# --------------------------------------------------------------------------
+
+
+LENGTH_PRESERVING = ('return "negative"', 'return "positive"')
+
+
+def _at_the_start_of_a_second():
+    """Wait until a second has just ticked over.
+
+    The whole hazard is an mtime SECOND collision, so a trial that begins mid-second sometimes
+    straddles the tick and stops reproducing. Starting fresh gives the compile and the arm's write
+    the better part of a second to land together, which is what a fast edit-then-verify loop does
+    anyway.
+    """
+    time.sleep(1.0 - (time.time() % 1.0))
+
+
+def test_the_arm_leaves_no_bytecode_for_a_mutated_source(tmp_path):
+    """Measured 2026-09-03 against the unpatched tool: the arm left `src.cpython-314.pyc` holding
+    the MUTANT's constants beside a restored source that reads correctly. It is served whenever the
+    source's mtime second equals the arm's write second, which a fast edit-then-verify loop
+    produces routinely, and then a later run fails against bytecode no source file contains while
+    grep and inspect.getsource both agree the code is right."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    leftovers = list((p / "__pycache__").glob("src.*.pyc"))
+    assert leftovers == [], f"cached mutant left behind: {leftovers}"
+
+
+def test_a_cache_predating_the_mutation_is_not_served_in_place_of_it(tmp_path):
+    """The opposite direction, and the worse one: a valid cache whose recorded mtime and size still
+    match the mutant is served INSTEAD of it, the test passes, and the arm reports SURVIVED - it
+    says the test is vacuous when the mutation never ran. Interleaved A/B, 2026-09-03: 6 of 6
+    trials SURVIVED before the purge and 6 of 6 KILLED after."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text(LENGTH_PRESERVING[0], encoding="utf-8")
+    (p / "new.txt").write_text(LENGTH_PRESERVING[1], encoding="utf-8")
+    assert len(LENGTH_PRESERVING[0]) == len(LENGTH_PRESERVING[1]), "the hazard needs an equal size"
+
+    for _ in range(2):
+        shutil.rmtree(p / "__pycache__", ignore_errors=True)
+        _at_the_start_of_a_second()
+        now = int(time.time())
+        os.utime(p / "src.py", (now, now))
+        py_compile.compile(str(p / "src.py"), doraise=True)
+        cached = list((p / "__pycache__").glob("src.*.pyc"))
+        assert cached, "the trial needs a cache to be at risk of serving"
+
+        proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+                   "--test", "test_src.py::test_negative", "--json")
+
+        data = json.loads(proc.stdout)["data"]
+        assert data["verdict"] == "killed", f"the mutant never ran: {data}"
+        assert [Path(c).name for c in data["bytecode_purged"]] == [c.name for c in cached]
+
+
+def test_the_child_runs_with_bytecode_writing_off(tmp_path):
+    """The braces to the purge's belt. Removing the cache afterwards still leaves a window where
+    the mutant is on disk for anything else to import; not writing it is what closes that."""
+    p = make_project(tmp_path)
+    seen = p / "seen.txt"
+    probe = (f"import os, pathlib; pathlib.Path({str(seen)!r}).write_text("
+             "os.environ.get('PYTHONDONTWRITEBYTECODE', 'UNSET')); raise SystemExit(1)")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+
+    M.run_arm(planned, "test_src.py::test_zero", runner=[sys.executable, "-c", probe])
+
+    assert seen.read_text() == "1"
+
+
+def test_the_cache_search_uses_the_files_real_name_and_covers_every_tag(tmp_path):
+    """The miss that deepened the original trap: the cache is named for the SOURCE FILE, so a
+    hyphenated hook module caches as `ci-watch-nudge.cpython-314.pyc` while a search by its
+    underscored import alias matches only a sibling and reads as "no stale cache present"."""
+    source = tmp_path / "ci-watch-nudge.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+    cache = tmp_path / "__pycache__"
+    cache.mkdir()
+    mine = {"ci-watch-nudge.cpython-313.pyc", "ci-watch-nudge.cpython-314.pyc",
+            "ci-watch-nudge.cpython-314.opt-1.pyc"}
+    for name in mine | {"ci_watch_nudge.cpython-314.pyc"}:
+        (cache / name).write_bytes(b"")
+
+    found = {c.name for c in M.bytecode_caches(source)}
+
+    assert found == mine, "every tag and opt level of THIS file, and no neighbour's"
+    assert M.bytecode_caches(tmp_path / "claims.toml") == [], "a data file has no bytecode"
+
+
+def test_a_cache_that_cannot_be_removed_refuses_the_arm(tmp_path):
+    """Refusing beats proceeding: the guarantee is about the state, not about the unlink call, and
+    an arm that may be running bytecode nobody wrote answers nothing."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    cache = p / "__pycache__"
+    cache.mkdir()
+    (cache / "src.cpython-314.pyc").write_bytes(b"")
+    before = (p / "src.py").read_bytes()
+    cache.chmod(0o555)
+    try:
+        try:
+            (cache / "src.cpython-314.pyc").unlink()
+            pytest.skip("this user can unlink inside a read-only directory, so there is no refusal to test")
+        except OSError:
+            pass
+
+        proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "refused before mutating" in proc.stderr
+        assert (p / "src.py").read_bytes() == before, "the refusal must precede the mutation"
+    finally:
+        cache.chmod(0o755)

@@ -22,6 +22,15 @@ restores from HEAD and so discards any uncommitted work in that file. The restor
 happens, and the bytes are compared afterwards - a failed restore is reported loudly, because it
 is the one outcome worse than a wrong verdict.
 
+* **The arm's bytecode outlived the arm.** CPython validates a `.pyc` against the source's
+  mtime SECOND and SIZE, so a length-preserving mutation applied in the same second the file was
+  last edited leaves a cached mutant that the RESTORED source does not invalidate: the next run
+  executes bytecode no source file contains, while grep and `inspect.getsource` agree the code is
+  correct. That agreement is the trap - it reads as confirmation and sends you looking at fixtures
+  and test isolation. Every arm therefore runs with bytecode writing OFF and purges the cache for
+  each mutated source both before and after, so neither a stale read nor a leftover mutant is
+  possible; a cache that cannot be removed REFUSES the arm rather than risking it.
+
 * **The arm SPUN instead of failing.** A mutation can make a test loop forever rather than go
   red, when the test's only exit is the behaviour being mutated. Unbounded, that hangs this tool
   and the whole battery behind it, and killing it by hand skips the restore. `--timeout` bounds
@@ -40,7 +49,9 @@ ran, or an arm still running at --timeout).
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -107,6 +118,51 @@ def exit_code_for(verdict: str) -> int:
     return {"killed": 0, "survived": 1}.get(verdict, 2)
 
 
+def bytecode_caches(path):
+    """Every cached-bytecode file that could be served for `path`.
+
+    Globbed on the SOURCE file's real stem, so it covers every interpreter tag and optimisation
+    level rather than only the one running now, and it finds a hyphenated name: a hook module
+    loaded from `ci-watch-nudge.py` caches as `ci-watch-nudge.cpython-314.pyc`, which a search by
+    the underscored import alias misses while reading as "no stale cache present".
+    """
+    if path.suffix != ".py":
+        return []
+    # PYTHONPYCACHEPREFIX relocates the cache and drops the __pycache__ component entirely, so the
+    # sibling directory alone is not the whole answer; cache_from_source resolves whichever layout
+    # is in force, and both are swept because the ambient setting need not match the arm's.
+    directories = {
+        path.parent / "__pycache__",
+        Path(importlib.util.cache_from_source(str(path.resolve()))).parent,
+    }
+    found = []
+    for directory in sorted(directories):
+        found.extend(sorted(directory.glob(f"{path.stem}.*.pyc")))
+    return found
+
+
+def purge_bytecode(paths):
+    """Remove the cached bytecode for each source, then REFUSE if any survived.
+
+    The check is on the resulting state rather than on the unlink calls: a cache left behind by a
+    read-only directory or a permission error would silently defeat the guarantee, and an arm that
+    may be running bytecode nobody wrote is worth refusing outright.
+    """
+    removed = []
+    for path in paths:
+        for cache in bytecode_caches(path):
+            try:
+                cache.unlink()
+            except OSError:
+                continue
+            removed.append(str(cache))
+    remaining = [str(cache) for path in paths for cache in bytecode_caches(path)]
+    if remaining:
+        raise AnchorError(
+            "cached bytecode survived removal, the arm could run it: " + ", ".join(remaining))
+    return removed
+
+
 def plan_mutations(specs):
     """Validate every anchor BEFORE writing anything, returning (path, old, new) triples.
 
@@ -136,6 +192,10 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
     restores.
     """
     runner = runner or [sys.executable, "-m", "pytest"]
+    # Before anything is written: a cache predating the mutation can be served IN PLACE of it when
+    # the mutation preserves the file's size and lands in the same second, which reports a test as
+    # SURVIVED though the mutant never ran.
+    purged = purge_bytecode([path for path, _, _ in planned])
     with tempfile.TemporaryDirectory(prefix="mutation-arm-") as tmp:
         saved = {}
         for index, (path, _, _) in enumerate(planned):
@@ -154,6 +214,9 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
                      "-p", "no:cacheprovider"],
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=timeout,
+                    # Merged onto the real environment, never a fresh dict: on Windows a child
+                    # without SystemRoot loses Winsock and dies with EMPTY output.
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                 )
                 returncode, output = proc.returncode, proc.stdout + proc.stderr
             except subprocess.TimeoutExpired as expired:
@@ -167,6 +230,9 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
                 shutil.copy2(copy, path)
                 if path.read_bytes() != copy.read_bytes():
                     restored = False
+            # Belt and braces: the flag above stops this arm writing bytecode, but a caller
+            # supplying its own runner can put the writing back.
+            purged += purge_bytecode(list(saved))
     verdict = verdict_for(returncode)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
@@ -176,6 +242,7 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
         "verdict": verdict,
         "failure": failure_reason(output),
         "restored": restored,
+        "bytecode_purged": purged,
     }
 
 
@@ -200,7 +267,11 @@ def main(argv=None) -> int:
         print(f"mutation_arm: refused, nothing written - {exc}", file=sys.stderr)
         return 2
 
-    report = run_arm(planned, args.test, timeout=args.timeout)
+    try:
+        report = run_arm(planned, args.test, timeout=args.timeout)
+    except AnchorError as exc:
+        print(f"mutation_arm: refused before mutating - {exc}", file=sys.stderr)
+        return 2
 
     if not report["restored"]:
         print("mutation_arm: RESTORE FAILED - the files on disk are NOT the originals",
