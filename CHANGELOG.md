@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.2.0]
+
+### Added
+
+- **`guard_replay` can price a guard on what gets WRITTEN, not only on what gets run.** `--tool`
+  accepted any name while `extract_calls` only ever read `input.command`, which only Bash has, so
+  `--tool Write` reported an empty corpus. It was not silent - it exited 3 with "read N file(s) and
+  found no Write calls - nothing was replayed" - but that sentence blames the CORPUS for an
+  emptiness the EXTRACTOR caused, and a reader takes it as "my history holds no writes".
+
+  Measured 2026-09-03 with an always-true control over the same 2332 files: 76649 firings on Bash,
+  0 on Write and 0 on Edit. After the fix the same control reports 3350 Write calls and 5521 Edit
+  calls. `Edit` contributes `new_string`, because a guard judges the text about to land, not the
+  text it replaces.
+
+### Changed
+
+- **An unreadable `--tool` name is now a refusal that names the tools it knows** (exit 2), instead
+  of falling through to "found no X calls". No working invocation starts failing: `--tool Glob`
+  already exited non-zero, it just blamed the wrong thing, and the tools that did work are
+  unchanged. Kept MINOR on that reasoning rather than MAJOR - the 6.0.0 re-cut below applies to a
+  guard that made a PASSING command fail, which this is not.
+
 ## [6.1.0]
 
 ### Added

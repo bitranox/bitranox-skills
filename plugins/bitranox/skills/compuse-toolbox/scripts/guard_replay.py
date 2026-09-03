@@ -96,12 +96,43 @@ def is_gate_block(error_text, pattern: str = DEFAULT_BLOCK_PATTERN) -> bool:
     return bool(re.search(pattern, error_text))
 
 
+class UnsupportedTool(ValueError):
+    """A tool name whose payload field the extractor does not know.
+
+    Raised rather than answered with an empty list, because the caller cannot tell those apart and
+    reports the wrong one: before this existed, `--tool Write` exited 3 saying "found no Write
+    calls", which blames the corpus for an emptiness the extractor caused.
+    """
+
+
+# Which field of a tool_use `input` carries the text a guard would judge. A guard about what gets
+# WRITTEN is judged on the text about to land, so Edit contributes `new_string` and not the text
+# it replaces.
+TOOL_PAYLOAD = {
+    "Bash": "command",
+    "Write": "content",
+    "Edit": "new_string",
+}
+
+
+def payload_field(tool: str) -> str:
+    """The input field to read for `tool`, or refuse naming what is known."""
+    try:
+        return TOOL_PAYLOAD[tool]
+    except KeyError:
+        raise UnsupportedTool(
+            "cannot read %r calls: no payload field is known for that tool. Known tools: %s."
+            % (tool, ", ".join(sorted(TOOL_PAYLOAD)))
+        ) from None
+
+
 def extract_calls(text: str, tool: str = "Bash"):
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
 
     A malformed line is skipped rather than fatal: a transcript being written while it is read
     routinely ends mid-line, and aborting there would silently truncate the corpus.
     """
+    field = payload_field(tool)
     calls, errors = [], {}
     for line in text.splitlines():
         if not line.strip():
@@ -120,7 +151,7 @@ def extract_calls(text: str, tool: str = "Bash"):
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use" and block.get("name") == tool:
-                command = (block.get("input") or {}).get("command")
+                command = (block.get("input") or {}).get(field)
                 if isinstance(command, str):
                     calls.append({"id": block.get("id"), "command": command,
                                   "cwd": cwd, "error": None})
@@ -369,8 +400,16 @@ def main(argv=None) -> int:
         if args.json:
             print(_dumps({"ok": False, "command": "replay", "skipped": [str(exc)], "data": None}))
         return 2
-    report = replay(args.root, predicate, tool=args.tool, sample=args.sample,
-                    block_pattern=args.block_pattern)
+    try:
+        report = replay(args.root, predicate, tool=args.tool, sample=args.sample,
+                        block_pattern=args.block_pattern)
+    except UnsupportedTool as exc:
+        # A refusal the caller can read, not a traceback: the whole point of raising here is that
+        # an unreadable tool must not be reported as an empty corpus.
+        print("guard_replay: %s" % exc, file=sys.stderr)
+        if args.json:
+            print(_dumps({"ok": False, "command": "replay", "skipped": [str(exc)], "data": None}))
+        return 2
     rc = exit_code(report)
     if rc == 3:
         print("guard_replay: read %d file(s) and found no %s calls - nothing was replayed"

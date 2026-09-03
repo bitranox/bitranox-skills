@@ -317,3 +317,95 @@ def test_the_warning_is_emitted_once_not_per_call():
     with contextlib.redirect_stderr(buf):
         G.classify(calls, lambda cmd, haystack=None: False)
     assert buf.getvalue().count("haystack") == 1
+
+
+# --- payload per tool -------------------------------------------------------------------------
+# `--tool` used to accept any name while the extractor only ever read `input.command`, which only
+# Bash has. The run does not go quiet - it exits 3 saying "read 2332 file(s) and found no Write
+# calls - nothing was replayed" - but that sentence blames the CORPUS for an emptiness the
+# EXTRACTOR caused, so the reader concludes their history holds no writes rather than that the
+# question could not be asked. Measured 2026-09-03: an always-true control over the same corpus
+# fired 76649 times on Bash and 0 times on Write and on Edit.
+
+
+def _use_write(tid, content, cwd="/repo"):
+    return {"type": "assistant", "cwd": cwd,
+            "message": {"content": [{"type": "tool_use", "id": tid, "name": "Write",
+                                     "input": {"file_path": "/repo/x.md", "content": content}}]}}
+
+
+def _use_edit(tid, new_string, cwd="/repo"):
+    return {"type": "assistant", "cwd": cwd,
+            "message": {"content": [{"type": "tool_use", "id": tid, "name": "Edit",
+                                     "input": {"file_path": "/repo/x.md",
+                                               "old_string": "before", "new_string": new_string}}]}}
+
+
+def test_a_write_call_yields_the_text_it_would_write():
+    calls = G.extract_calls(_mk([_use_write("t1", "39 of 40 candidates")]), tool="Write")
+    assert [c["command"] for c in calls] == ["39 of 40 candidates"]
+
+
+def test_an_edit_call_yields_the_replacement_text_not_the_replaced_text():
+    calls = G.extract_calls(_mk([_use_edit("t1", "the new claim")]), tool="Edit")
+    assert [c["command"] for c in calls] == ["the new claim"], \
+        "a guard judges what is about to be written, so the payload is new_string"
+
+
+def test_the_bash_path_is_unchanged():
+    calls = G.extract_calls(_mk([_use("t1", "git status")]), tool="Bash")
+    assert [c["command"] for c in calls] == ["git status"]
+
+
+def test_a_write_still_carries_its_cwd_and_its_error():
+    text = _mk([_use_write("t1", "body", cwd="/srv/p"), _result("t1", "denied by hook")])
+    call = G.extract_calls(text, tool="Write")[0]
+    assert call["cwd"] == "/srv/p" and call["error"] == "denied by hook"
+
+
+def test_a_call_missing_its_payload_field_is_skipped_not_fatal():
+    rec = {"type": "assistant", "cwd": "/repo",
+           "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Write",
+                                    "input": {"file_path": "/repo/x.md"}}]}}
+    assert G.extract_calls(_mk([rec, _use_write("t2", "kept")]), tool="Write") != []
+
+
+def test_an_unsupported_tool_is_a_REFUSAL_not_an_empty_result():
+    """The property that stops this defect recurring under a different tool name.
+
+    Returning [] for a tool nobody taught the extractor about is indistinguishable from a corpus
+    that genuinely contains none, and the caller reports the second. A name it cannot read must
+    say so instead of answering zero.
+    """
+    try:
+        G.extract_calls(_mk([_use("t1", "git status")]), tool="Glob")
+    except G.UnsupportedTool as exc:
+        assert "Glob" in str(exc) and "Bash" in str(exc), \
+            "the refusal must name the tool asked for and the tools it does know"
+    else:
+        raise AssertionError("an unreadable tool name must refuse, never answer 0")
+
+
+def test_every_supported_tool_actually_extracts_something():
+    """A control: each entry in the payload map must be reachable, or the map documents a tool
+    the extractor still cannot read - the same silent zero wearing a table."""
+    builders = {"Bash": lambda: _use("t", "cmd"),
+                "Write": lambda: _use_write("t", "text"),
+                "Edit": lambda: _use_edit("t", "text")}
+    for tool in G.TOOL_PAYLOAD:
+        assert tool in builders, f"no fixture for supported tool {tool}"
+        assert G.extract_calls(_mk([builders[tool]()]), tool=tool), \
+            f"{tool} is listed as supported but extracted nothing"
+
+
+def test_the_cli_refuses_an_unknown_tool_with_exit_2_not_a_traceback(tmp_path, capsys):
+    """A library-level raise is only half the fix: uncaught, the CLI dies with a traceback, which
+    is a worse answer than the wrong one it replaced. Exit 2 and a readable line on stderr."""
+    mod = tmp_path / "p.py"
+    mod.write_text("def notice(command):\n    return True\n", encoding="utf-8")
+    corpus = tmp_path / "c.jsonl"
+    corpus.write_text("", encoding="utf-8")
+    rc = G.main(["--module", str(mod), "--tool", "Glob", "--root", str(corpus)])
+    assert rc == 2, "an unreadable tool name is a usage refusal"
+    err = capsys.readouterr().err
+    assert "Glob" in err and "Bash" in err, err
