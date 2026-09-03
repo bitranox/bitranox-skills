@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.2.1]
+
+### Fixed
+
+- **A `mutation_arm` arm no longer leaves its bytecode behind, nor reads a cache older than the
+  mutation.** CPython validates a `.pyc` against the source's mtime SECOND and SIZE, so a
+  length-preserving mutation applied in the same second the file was last edited produces a cache
+  the restore does not invalidate. Both directions were reproduced against the tool on 2026-09-03:
+
+  - the arm left `src.cpython-314.pyc` holding the mutant's constants beside a correctly restored
+    source, so a later run failed against bytecode no source file contained while `grep` and
+    `inspect.getsource` both agreed the code was right;
+  - a cache predating the mutation was served IN PLACE of it. Interleaved A/B over 6 trials per
+    arm: SURVIVED 6 of 6 before the fix, KILLED 6 of 6 after. That direction is the worse one, since
+    SURVIVED is the tool's word for "this test asserts nothing" and the mutation had never run.
+
+  Every arm now runs with `PYTHONDONTWRITEBYTECODE` set and purges the cached bytecode for each
+  mutated source before and after, globbing the SOURCE file's real stem so a hyphenated hook module
+  (`ci-watch-nudge.cpython-314.pyc`) is found rather than its underscored import alias. A cache
+  that cannot be removed refuses the arm before anything is written: the guarantee is about the
+  resulting state, not about the unlink call. Five tests, each verified to fail against the pre-fix
+  tool. PATCH, not MINOR - the verdicts that change are the wrong ones, and the added refusal
+  fires only on an unremovable cache, never on a working invocation.
+
 ## [6.2.0]
 
 ### Added
