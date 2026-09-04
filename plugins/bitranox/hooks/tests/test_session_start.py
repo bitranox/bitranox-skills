@@ -127,7 +127,7 @@ def test_pending_contributions_are_surfaced_and_NOT_consumed(tmp_path, monkeypat
     # The intent-to-ship must outlive the session: surfacing a pending contribution must NOT clear
     # it (that is the difference from the audit). It stands until it actually ships.
     root = make_plugin_root(tmp_path, skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
-    cwd = "/proj/contrib"
+    cwd = _marketplace(tmp_path, "contrib")   # the listing is shown where a dream is run from
     SIG.add_contribution(cwd, {"what": "check-tree misses sideways refs",
                                "target": "skill:meta-self-improve", "why": "real gap"})
     rc, out = run_with_stdin(monkeypatch, capsys, root, cwd)
@@ -748,3 +748,95 @@ def test_open_work_falls_back_to_a_compact_pointer_when_the_budget_is_gone(tmp_p
     assert block is not None
     assert "14" in block and "OPEN-WORK.md" in block
     assert len(block.encode("utf-8")) < 200
+
+
+# --------------------------------------------------------------------------
+# A dream is the dream's job: outside a dream room the maintenance nudges collapse to one line
+# --------------------------------------------------------------------------
+
+
+def _marketplace(tmp_path, name="mkt"):
+    """A cwd that is a Claude Code plugin marketplace - the room a dream is run from."""
+    root = tmp_path / name
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "marketplace.json").write_text('{"name": "x", "plugins": []}',
+                                                              encoding="utf-8")
+    return str(root)
+
+
+def _work_project(tmp_path, name="work"):
+    root = tmp_path / name
+    root.mkdir()
+    return str(root)
+
+
+def _memory_with_facts(cwd):
+    mem = SIG.memory_dir(cwd)
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "a.md").write_text("x", encoding="utf-8")   # facts exist, no last-dream -> due
+
+
+def _dream_block(ctx):
+    return ctx.split("<BITRANOX-DREAM-DUE>")[1].split("</BITRANOX-DREAM-DUE>")[0].strip()
+
+
+def test_dream_due_in_a_work_project_is_one_line_that_defers(tmp_path, monkeypatch, capsys):
+    """Measured over three weeks of transcripts: the full ask at the start of an ordinary session is
+    where a consolidation gets run inline, in a project whose work it is not."""
+    cwd = _work_project(tmp_path)
+    _memory_with_facts(cwd)
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    ctx = _ctx(out)
+    assert "BITRANOX-DREAM-DUE" in ctx and "meta-dream-tree" in ctx
+    assert "session of its own" in ctx, "the deferral must be stated, not implied"
+    assert "dedup / merge" not in ctx and "say 'skip'" not in ctx, "the full ask must not appear"
+    assert "\n" not in _dream_block(ctx), "one line"
+
+
+def test_dream_due_in_a_marketplace_repo_is_the_full_ask(tmp_path, monkeypatch, capsys):
+    cwd = _marketplace(tmp_path)
+    _memory_with_facts(cwd)
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    ctx = _ctx(out)
+    assert "BITRANOX-DREAM-DUE" in ctx and "dedup / merge" in ctx
+
+
+def test_dream_due_in_the_memory_store_is_the_full_ask(tmp_path, monkeypatch, capsys):
+    store = tmp_path / SIG.MEMORY_DIRNAME
+    (store / "facts").mkdir(parents=True)
+    cwd = str(store)
+    _memory_with_facts(cwd)
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    assert "dedup / merge" in _ctx(out)
+
+
+def test_dream_due_in_auto_mode_is_the_full_ask_anywhere(tmp_path, monkeypatch, capsys):
+    """auto is the user saying the dream needs no asking - so the nudge that starts it stays whole."""
+    cwd = _work_project(tmp_path)
+    _memory_with_facts(cwd)
+    SIG.save_config({"dream_mode": "auto"})
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    assert "dedup / merge" in _ctx(out)
+
+
+def test_pending_contributions_in_a_work_project_show_the_count_only(tmp_path, monkeypatch, capsys):
+    """The listing is an invitation to pick a queued tooling change up NOW; in a work project the
+    count says a dream has work waiting, and the entries stay in the queue for it."""
+    cwd = _work_project(tmp_path)
+    SIG.add_contribution(cwd, {"what": "check-tree misses sideways refs",
+                               "target": "skill:meta-self-improve", "why": "real gap"})
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    ctx = _ctx(out)
+    assert "1 PENDING UPSTREAM CONTRIBUTION" in ctx
+    assert "check-tree misses sideways refs" not in ctx, "the entry is the dream's to read"
+    assert "dream" in ctx.split("PENDING UPSTREAM CONTRIBUTION")[1][:400].lower()
+    assert len(SIG.read_contributions(cwd)) == 1
+
+
+def test_pending_contributions_in_a_marketplace_repo_are_listed(tmp_path, monkeypatch, capsys):
+    cwd = _marketplace(tmp_path)
+    SIG.add_contribution(cwd, {"what": "check-tree misses sideways refs",
+                               "target": "skill:meta-self-improve", "why": "real gap"})
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    ctx = _ctx(out)
+    assert "check-tree misses sideways refs" in ctx and "skill:meta-self-improve" in ctx

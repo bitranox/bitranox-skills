@@ -26,8 +26,10 @@ import time
 from pathlib import Path
 
 from self_improve_signals import (
+    MEMORY_DIRNAME,
     audit_file,
     dream_due,
+    dream_mode,
     knowledge_store_empty,
     load_config,
     mark_seeded,
@@ -95,6 +97,29 @@ def audit_context(proj):
     return text or None
 
 
+def dream_room(proj):
+    """True where a memory consolidation is the session's own business: a plugin marketplace repo,
+    the memory store itself, or any cwd once `dream_mode` is `auto`.
+
+    Everywhere else the session is doing some project's work, and the maintenance nudges below
+    collapse to one line there. Measured over three weeks of transcripts (2026-09-04): the full
+    dream ask and the full contribution listing at the start of an ordinary session were where a
+    consolidation, or a queued tooling change, got run INLINE in a project whose work it was not -
+    one of the triggers behind instrumentation growing from a sixth to over a quarter of
+    work-session time. The room test is structural, never a directory name: a marketplace is a
+    repo with `.claude-plugin/marketplace.json`, and the store is the dir named MEMORY_DIRNAME.
+    """
+    try:
+        if dream_mode(proj) == "auto":
+            return True
+        p = Path(proj)
+        if p.name == MEMORY_DIRNAME:
+            return True
+        return (p / ".claude-plugin" / "marketplace.json").is_file()
+    except Exception:  # noqa: BLE001 - a room test must never wedge a session start
+        return False
+
+
 def contrib_context(proj):
     """Surface PENDING upstream contributions - and, unlike the audit, do NOT consume them.
 
@@ -102,11 +127,18 @@ def contrib_context(proj):
     authored the self-PR before the session ended: nothing recorded the INTENT, so it died with the
     context while the private fact survived. The queue is that missing state, so it must SURVIVE
     being read - it stands until it actually ships and is drained.
+
+    Outside a dream room only the COUNT is shown: the listing reads as an invitation to pick an
+    entry up now, and the entries are the dream's to read.
     """
     try:
         recs = read_contributions(proj)
         if not recs:
             return None
+        if not dream_room(proj):
+            return ("%d PENDING UPSTREAM CONTRIBUTION(S) wait in the queue for a dream - not this "
+                    "session's work. They persist until a dream drains them; `contrib_queue.py "
+                    "list` shows them." % len(recs))
         lines = ["- %s%s%s" % (r.get("what") or "",
                                " -> %s" % r["target"] if r.get("target") else "",
                                " (%s)" % r["why"] if r.get("why") else "")
@@ -269,15 +301,26 @@ _DREAM_NUDGE = (
     "</BITRANOX-DREAM-DUE>"
 )
 
+#: The same fact, stated as a deferral rather than an ask. One line, and it names the room a dream
+#: is run from, because the ask in a work session is where a consolidation got run inline.
+_DREAM_DEFERRED = (
+    "<BITRANOX-DREAM-DUE>A memory consolidation is due - not in this session, which has a project's "
+    "work to do: run bitranox:meta-dream-tree in a session of its own (say 'dream' there), or set "
+    "dream_mode via bitranox:meta-memory-settings.</BITRANOX-DREAM-DUE>"
+)
+
 
 def dream_nudge(proj):
-    """Self-silencing nudge to run meta-dream-tree when a consolidation is due (off when mode=off)."""
+    """Self-silencing nudge to run meta-dream-tree when a consolidation is due (off when mode=off).
+
+    The full ask only in a dream room (see `dream_room`); elsewhere the one-line deferral.
+    """
     try:
         if not dream_due(proj):
             return None
     except Exception:  # noqa: BLE001 - detection must never wedge the session
         return None
-    return _DREAM_NUDGE
+    return _DREAM_NUDGE if dream_room(proj) else _DREAM_DEFERRED
 
 
 _NEWPROJECT_NUDGE = (

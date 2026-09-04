@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.8.0]
+
+### Changed
+
+- **The session-start maintenance nudges collapse to one line outside a dream room.**
+  `session-start.py` gains `dream_room(proj)`: a plugin marketplace repo (a
+  `.claude-plugin/marketplace.json` at the cwd), the memory store itself, or any cwd once
+  `dream_mode` is `auto`. There the DREAM-DUE block is the full ask and the pending
+  contributions are listed as before. In any other project the dream-due block is one line
+  deferring the consolidation to a session of its own, and the contribution block shows only the
+  count, because the listing reads as an invitation to pick a queued tooling change up now.
+  Measured over 21 days of transcripts: a session start after `/clear` or `/reload-plugins` began
+  184 instrumentation episodes in work projects, 446 minutes, 65% of it memory-store work.
+  `docs/usage.md` states the two forms.
+
 ## [6.7.0]
 
 ### Changed
