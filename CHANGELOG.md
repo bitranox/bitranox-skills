@@ -29,6 +29,42 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.9.0]
+
+### Added
+
+- **`tooling-detour-nudge`: a work session about to fix the plugin source in place is told to
+  queue the symptom instead.** PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash,
+  PowerShell and Skill. It fires when the session's cwd is outside the repo that ships THIS
+  plugin (the marketplace whose `.claude-plugin/marketplace.json` carries the name two levels
+  above `CLAUDE_PLUGIN_ROOT`; a linked worktree of it is the same room) and outside the memory
+  store, and a call writes into that repo: an Edit or Write path inside it, or a Bash write verb
+  naming a path inside it (`sed -i`, a redirect judged on its own target with quoted regions
+  masked, `tee`, `cp`/`mv`, a Python heredoc calling `write_text`, or a `git commit`/`push`/`add`
+  run there, `cd` tracked across the command). Non-blocking, once per session, silent in a
+  session that invoked a `meta-dream-*` skill. A repo that merely ships its own usage skill is
+  ordinary work, not the plugin's source. Priced on the corpus with every firing classified:
+  550 of 81,492 Bash calls (0.67%), 142 of 3,495 Writes (4.1%), 695 of 5,765 Edits (12.1%) -
+  every one a write into the plugin source from another project's session, so the rate is the
+  size of the habit; the nudge would speak once in 34 of the 379 work sessions of the last three
+  weeks. Two shapes were removed by measurement before shipping: `git merge-base` read as a
+  merge, and a redirect to a scratch log or a `>` inside a quoted `python3 -c` string.
+- **`guard_replay.py --field`** hands the predicate a named input field instead of the tool's
+  written payload, so a guard about WHERE a write lands is priced on `file_path` rather than on
+  content.
+
+### Changed
+
+- **The pathfinder rule has its one exception.** `meta-using-bitranox-skills` (the standing
+  instruction) and `meta-self-improve`'s Pathfinder section say that a bitranox hook, skill,
+  guard or memory-engine call misbehaving during another project's work is NOT adjacent rot:
+  `contrib_queue.py add` in one line, then back to the work; the dream fixes the tool from its
+  own repo, unless the user asks for the fix in so many words. RED on haiku against the old
+  paragraph: run the plugin's tests, worktree, fix, resume, each step quoting the old text; GREEN:
+  queue and return. Measured over 21 days: 2,096 minutes of such detours from work sessions, a
+  third of all instrumentation time there, and 12% of all Edit calls from work-project sessions
+  landed in the plugin source. The same rule is a tree-top memory fact.
+
 ## [6.8.0]
 
 ### Changed

@@ -126,13 +126,17 @@ def payload_field(tool: str) -> str:
         ) from None
 
 
-def extract_calls(text: str, tool: str = "Bash"):
+def extract_calls(text: str, tool: str = "Bash", field: str = None):
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
+
+    `field` overrides which input field is handed to the predicate. The default is the tool's
+    WRITTEN payload; a guard about WHERE a write lands is judged on `file_path` instead, and
+    pricing it on the content would measure the wrong question while reporting a confident rate.
 
     A malformed line is skipped rather than fatal: a transcript being written while it is read
     routinely ends mid-line, and aborting there would silently truncate the corpus.
     """
-    field = payload_field(tool)
+    field = field or payload_field(tool)
     calls, errors = [], {}
     for line in text.splitlines():
         if not line.strip():
@@ -311,7 +315,7 @@ def load_predicate(path: str, func_name: str):
 
 
 def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
-           block_pattern: str = DEFAULT_BLOCK_PATTERN):
+           block_pattern: str = DEFAULT_BLOCK_PATTERN, field: str = None):
     """Walk every *.jsonl below `root` and classify every DISTINCT call of `tool` found in them.
 
     Distinct matters: resuming or forking a session copies the earlier transcript into a new file,
@@ -328,7 +332,7 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
             skipped.append("%s: %s" % (f, exc))
             continue
         files_read += 1
-        for call in extract_calls(text, tool=tool):
+        for call in extract_calls(text, tool=tool, field=field):
             if call["id"] is not None:
                 if call["id"] in seen:
                     duplicates += 1
@@ -357,6 +361,9 @@ def _parse(argv):
     ap.add_argument("--func", default="notice", help="predicate name in that module (default: notice)")
     ap.add_argument("--root", default="~/.claude/projects", help="corpus dir or a single .jsonl")
     ap.add_argument("--tool", default="Bash", help="tool_use name to replay (default: Bash)")
+    ap.add_argument("--field", default=None,
+                    help="input field handed to the predicate instead of the tool's written "
+                         "payload (e.g. file_path, to price a guard on WHERE a write lands)")
     ap.add_argument("--sample", type=int, default=0,
                     help="print N example firings, spread evenly across the corpus "
                          "(not the first N). A sample cannot establish a RATIO - "
@@ -402,7 +409,7 @@ def main(argv=None) -> int:
         return 2
     try:
         report = replay(args.root, predicate, tool=args.tool, sample=args.sample,
-                        block_pattern=args.block_pattern)
+                        block_pattern=args.block_pattern, field=args.field)
     except UnsupportedTool as exc:
         # A refusal the caller can read, not a traceback: the whole point of raising here is that
         # an unreadable tool must not be reported as an empty corpus.

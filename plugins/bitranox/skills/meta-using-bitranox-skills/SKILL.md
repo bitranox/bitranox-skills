@@ -126,7 +126,11 @@ user-facing message -> `write-humanize-en`/`-de`; touching a Proxmox host -> `in
 Beyond finding and using skills: while you work, leave every file better than you found it, accept NO
 technical debt (point mistakes out clearly, never "works anyway"), put an out-of-scope fix in its own
 worktree (`bitranox:git-worktrees`) instead of bolting it on, and clean up temporary scaffolding when
-done. The full discipline is in `bitranox:meta-self-improve` ("Pathfinder discipline").
+done. One thing is NOT adjacent rot: a bitranox hook, skill or memory-engine call misbehaving while
+you work on some other project. Queue the symptom in one line (`contrib_queue.py add`, home
+`<plugin>/skills/meta-self-improve/`) and keep working; the dream fixes the tool, unless the user
+asks for the fix in so many words. The full discipline is in `bitranox:meta-self-improve`
+("Pathfinder discipline").
 
 ## Skill Types
 

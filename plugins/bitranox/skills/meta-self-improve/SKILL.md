@@ -378,6 +378,19 @@ Fix the adjacent rot you touch and can verify; surface mistakes clearly, never w
 out-of-scope fixes go in their own worktree (`bitranox:git-worktrees`); remove temporary
 scaffolding when the goal is met.
 
+**The one rot you do NOT fix on the way is the tooling.** When a bitranox hook, skill, guard or
+the memory engine misbehaves during a session whose work is some other project, record the
+symptom in one line - `contrib_queue.py add --what <symptom, with the transcript line> --target
+<hook|skill> --why <what it cost>` (home: `<plugin>/skills/meta-self-improve/`, launch via
+`hooks/run-python.sh`) - and return to the work. The dream drains the queue, from the repo that
+ships the plugin, with the tests and the bump that a fix needs. Measured over three weeks of
+transcripts: a tool fixed in place from a work session was then gated, bumped, pushed and
+CI-watched from that project, 2,096 minutes of it - a third of all instrumentation time in work
+sessions - and the share grew week on week. The exception is the user asking for the fix in so
+many words; "it is broken" is a symptom to queue, "fix it" is a request to honour, in a worktree
+of the plugin's repo. A PreToolUse nudge (`tooling-detour-nudge`) says this once per session
+when a write is about to land in the plugin source from elsewhere.
+
 ## Deliverables (a completed capture run has ALL of these)
 
 - [ ] The tool inventory (local `toolbox list` + the shipped `bitranox:compuse-toolbox` table) was

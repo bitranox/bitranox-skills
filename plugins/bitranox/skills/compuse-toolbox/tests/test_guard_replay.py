@@ -409,3 +409,17 @@ def test_the_cli_refuses_an_unknown_tool_with_exit_2_not_a_traceback(tmp_path, c
     assert rc == 2, "an unreadable tool name is a usage refusal"
     err = capsys.readouterr().err
     assert "Glob" in err and "Bash" in err, err
+
+
+def test_a_field_override_replays_the_named_input_field():
+    """A guard about WHERE a write lands is judged on the path, not on the text: `--field` picks
+    the input field, and the tool's default payload stays the default."""
+    text = _mk([_use_edit("t1", "the new claim")])
+    assert [c["command"] for c in G.extract_calls(text, tool="Edit", field="file_path")] == ["/repo/x.md"]
+    assert [c["command"] for c in G.extract_calls(text, tool="Edit")] == ["the new claim"]
+
+
+def test_a_field_override_reaches_the_replay(tmp_path):
+    (tmp_path / "s.jsonl").write_text(_mk([_use_edit("t1", "body", cwd="/srv/p")]), encoding="utf-8")
+    report = G.replay(str(tmp_path), lambda cmd: cmd.endswith(".md"), tool="Edit", field="file_path")
+    assert report["fires"] == 1
