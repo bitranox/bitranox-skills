@@ -93,6 +93,8 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
   summary of the backlog: a summary is the re-encoding, and re-encoding is what loses it. These two
   were one heading once, and merging them is what let an undecided item sit under a heading that
   reads as decided.
+- **Lessons for the next nap** - ONE LINE each, trigger-first ("When <situation>, <directive>"),
+  under a heading of exactly that name. The nap captures them; this session does not.
 - **The exact next action** - the command or edit to start with, not a direction of travel. **It
   must be the top-ranked open item in `OPEN-WORK.md`, or the file must say plainly why a
   lower-ranked one goes first.** Recency is not a reason. "It is what I was working on", "it is
@@ -104,18 +106,23 @@ goes for `size`: `size: unknown` is a usable line, an invented count is not.
 
 ## What does NOT belong
 
-| Excuse for including it              | Why it is wrong                                                            |
-|--------------------------------------|----------------------------------------------------------------------------|
-| "The conventions are important"      | CLAUDE.md loads automatically. Restating it wastes the handover.           |
-| "Recent commits give context"        | `git log` re-derives that in one command. Say what is UNCOMMITTED.         |
-| "Explain how this file was produced" | Provenance is narrative. The reader needs state, not a session story.      |
-| "Include the lessons we learned"     | Durable learnings go to the memory store via `bitranox:meta-self-improve`. |
-| "Summarise everything, to be safe"   | A handover nobody finishes reading is a handover that failed.              |
+| Excuse for including it                 | Why it is wrong                                                                                                                                                                                                                                                                                                                                                      |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "The conventions are important"         | CLAUDE.md loads automatically. Restating it wastes the handover.                                                                                                                                                                                                                                                                                                     |
+| "Recent commits give context"           | `git log` re-derives that in one command. Say what is UNCOMMITTED.                                                                                                                                                                                                                                                                                                   |
+| "Explain how this file was produced"    | Provenance is narrative. The reader needs state, not a session story.                                                                                                                                                                                                                                                                                                |
+| "Capture the lessons into memory first" | A lesson is ONE LINE under `## Lessons for the next nap`, and the nap captures it. An engine call at the end of a full session is where the tool gets fixed instead of the work: measured over three weeks of transcripts, that capture was the bridge from every handover into an engine fix and a plugin release shipped from whatever project the session was in. |
+| "Summarise everything, to be safe"      | A handover nobody finishes reading is a handover that failed.                                                                                                                                                                                                                                                                                                        |
 
 ## Procedure
 
-1. **Capture learnings first** with `bitranox:meta-self-improve`, so durable facts reach the store
-   rather than dying in a file that is about to be superseded.
+1. **Record the lessons, do not capture them.** Each durable thing this session learned goes into
+   the handover as ONE line under `## Lessons for the next nap`, worded trigger-first, with no slug
+   and no engine call. Do NOT invoke `bitranox:meta-self-improve` here and do not run
+   `memory_engine.py`: the file is committed, so the line has reached the store's front door, and
+   `bitranox:meta-dream-nap` / `bitranox:meta-dream-tree` walk it in from there. A lesson about
+   the TOOLING (a hook, a skill, the engine) is the same one line, prefixed `tooling:`, and it is
+   NOT a reason to open the tool now.
 2. **RECONCILE the outgoing handover into `OPEN-WORK.md` BEFORE you overwrite it.** Read the file
    you are about to destroy and take every item in it that is not finished. Each one either
    already has a line in `OPEN-WORK.md`, or you add it now with its first-raised date, its size
@@ -206,6 +213,7 @@ ignored because a threshold nothing can reach looks exactly like a watcher that 
 
 - `bitranox:meta-dream-nap` - consolidates MEMORY after a compaction; it prunes task state as noise.
 - `bitranox:meta-dream-tree` - the periodic store consolidation, which also ends by nudging `/clear`.
-- `bitranox:meta-self-improve` - durable facts. Run it BEFORE the handover, not instead of it.
+- `bitranox:meta-self-improve` - durable facts. The NAP runs it on the handover's lessons; this
+  session records them and stops.
 
 This skill is the only one that preserves TASK state, and it runs BEFORE the wall, not after.

@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.7.0]
+
+### Changed
+
+- **The handover records its lessons; the nap captures them.** `meta-context-watcher`'s procedure
+  step 1 no longer invokes `bitranox:meta-self-improve` or the memory engine. Each durable
+  lesson goes into `handover.md` as ONE trigger-first line under `## Lessons for the next nap`
+  (a tooling lesson prefixed `tooling:`, and not a reason to open the tool), and
+  `meta-dream-nap` / `meta-dream-tree` step 1 now name that heading as capture input. Measured
+  over 21 days of transcripts: the handover watcher's block began 131 instrumentation episodes
+  in sessions outside this repo, 461 minutes, and inside them `meta-self-improve` was invoked 31
+  times, `memory_engine.py add` followed, then fixes to the engine - the capture step was the
+  bridge from a handover into an engine fix and a plugin release shipped from whatever project
+  the session was in. RED on sonnet made that capture its first action, quoting the old table
+  row; GREEN on haiku wrote both lessons under the heading and touched no engine.
+
 ## [6.6.0]
 
 ### Changed

@@ -111,7 +111,10 @@ the success line, abort-and-show on a miss).
 
 1. **Capture first (unconditional on a manual dream).** Enumerate this session's durable learnings
    and capture via `bitranox:meta-self-improve` BEFORE consolidating, so the dream works on a
-   complete store.
+   complete store. Read the `## Lessons for the next nap` heading of every `handover.md` on the
+   chain as capture input too (repo roots under the anchor; `git log -p -- handover.md` reaches
+   ones already overwritten since the last dream): a work session RECORDS its lessons there and
+   does not capture them itself, so a dream that skips the heading drops them.
 
 2. **Back up + manifest.** Run `store_manifest.py backup` (home: `<plugin>/skills/meta-dream-tree/`,
    launch via `hooks/run-python.sh`) with `--scope tree` (a nap uses `--scope chain`):

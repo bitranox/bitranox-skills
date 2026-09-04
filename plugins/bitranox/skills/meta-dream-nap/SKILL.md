@@ -49,9 +49,12 @@ than deleting it.
 
 ## Procedure (all semantics per dream-core.md)
 
-1. **Capture first** (unconditional; the audit/salvage candidates plus this session's signals) -
-   via `bitranox:meta-self-improve`, at the level that OWNS each fact's pointer (see the Scope
-   carve-out: this is the one step that may write a sibling, and only for that reason).
+1. **Capture first** (unconditional; the audit/salvage candidates plus this session's signals,
+   plus every line under `## Lessons for the next nap` in the repo's `handover.md` - a work
+   session records its lessons there and does NOT capture them itself, so this is where they
+   enter the store) - via `bitranox:meta-self-improve`, at the level that OWNS each fact's
+   pointer (see the Scope carve-out: this is the one step that may write a sibling, and only for
+   that reason).
 2. **Back up + manifest** the CHAIN's levels only (per the core).
 2b. **Read the toolbox inventory** - `uv run ~/.claude/skills/toolbox/tools/toolbox.py list`, the
    READ half of the toolbox pass (per the core); skip only if that path does not exist. It runs
