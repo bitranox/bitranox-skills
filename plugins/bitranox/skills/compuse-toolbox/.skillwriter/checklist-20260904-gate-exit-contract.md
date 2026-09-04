@@ -5,11 +5,18 @@
       proves nothing - a background completion notification reports the RUNNER's status, not the
       gate's. The row previously stated two such ways and no exit contract at all.
 - [x] Receipt held (skill_receipt.py, this session)
-- [x] RED, measured rather than simulated: an agent reading the previous row treated a runner exit
-      of 1 as the gate's own code, concluded a shipped tool violated its documented "exit 2 =
-      regressed" contract, and spent four tool calls tracing an exit-plumbing defect that does not
-      exist. Verbatim: "exit code 1, not 2 - that's an error, not a regression verdict." The row it
-      read carried no exit contract to consult, which is the gap this closes.
+- [ ] RED, dispatched baseline: NOT RUN. Stated plainly because a checklist nobody can trust is
+      worse than none: no baseline subagent was dispatched for this edit and `redcheck` was not
+      run, so this artifact does not record an Iron-Law RED/GREEN cycle.
+- [x] Baseline evidence, OBSERVED rather than dispatched: an agent reading the previous row treated
+      a runner exit of 1 as the gate's own code, concluded a shipped tool violated its documented
+      "exit 2 = regressed" contract, and spent four tool calls tracing an exit-plumbing defect that
+      does not exist. Verbatim: "exit code 1, not 2 - that's an error, not a regression verdict."
+      The row it read carried no exit contract to consult, which is the gap this closes. This is a
+      production failure on the real text, collected before there was any intent to edit the skill
+      - stronger than a simulated scenario in what it shows, weaker in that the author of the fix
+      is also the agent that failed and graded the result. Treat the accuracy check below as the
+      load-bearing verification, not this line.
 - [x] Accuracy check (table -> behaviour) by EXECUTION, not review. Every claim in the row run
       against the shipped script:
       single gate exiting 2 -> runner exits 2;

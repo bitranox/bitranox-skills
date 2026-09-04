@@ -29,6 +29,19 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.5.1]
+
+### Fixed
+
+- **The 6.5.0 review artifact claimed an Iron-Law RED it did not run.** Its checklist recorded the
+  baseline as "RED, measured rather than simulated", which reads as a dispatched baseline run. No
+  baseline subagent was dispatched and `redcheck` was not run. The evidence itself is real and is
+  kept - a production failure on the previous row's text, with the verbatim misreading - but it is
+  now labelled as OBSERVED rather than dispatched, the un-run RED is an explicit unchecked box, and
+  the artifact says which check is load-bearing: the accuracy check, which executed every claim in
+  the row against the shipped script. A compliance record that overstates its own rigour is worth
+  less than none, because the next reader counts it.
+
 ## [6.5.0]
 
 ### Fixed
