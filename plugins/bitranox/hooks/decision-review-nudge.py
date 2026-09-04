@@ -17,9 +17,15 @@ to ask, which is exactly what does not happen at the end of a long session.
    Waiting for it costs a whole turn, and a session that ends there never gets asked at all.
    Since the ask happens once per session, the choice is between sometimes-early and
    sometimes-never, and early is the better failure.
-2. No goal in play - then a commit, a push, or an opened PR is the conclusion. A file-count
-   threshold was tried first and is a worse proxy in both directions: it fires mid-edit on a
-   session that has concluded nothing, and stays silent on a one-line fix that shipped.
+2. No goal in play - then an OPENED PR is the conclusion, and a commit or a push is not. Two
+   proxies were tried before this and both were wrong. A file-count threshold fires mid-edit on a
+   session that has concluded nothing and stays silent on a one-line fix that shipped. Firing on
+   every commit or push was measured over three weeks of transcripts (2026-09-04): it was the
+   single largest trigger of instrumentation work at the END of ordinary work sessions - the walk
+   raised tooling decisions, each walk ended in a memory capture, an engine fix and a plugin
+   release from a project that had nothing to do with the tool, and the share grew week on week
+   while the hook itself never changed. A commit is a checkpoint the author still owns; a PR is
+   the moment the choices become somebody else's to live with.
 
 Blocking during a running goal is safe, which an earlier version of this hook got wrong. The CLI
 string "Stop hook prevented continuation" belongs to a hook setting `preventContinuation`, a
@@ -28,8 +34,9 @@ carries on. Measured: the self-improve gate blocked during an active goal in a r
 the goal still completed. The once-per-session flag also keeps this far below the consecutive-block
 cap that would end a turn by override.
 
-The command detection is `shell_text.is_gated_command`, the same predicate the repo gate blocks
-on, so the two cannot disagree about what counts.
+The command detection is `shell_text.opens_a_pr`, segmented and anchored exactly like the
+predicate the repo gate blocks on (`is_gated_command`), so the two cannot disagree about what a
+statement is - only about which verbs conclude.
 
 It asks ONCE per session. The flag is keyed by session id, so a flag left behind by an earlier
 session can never satisfy this one (a per-PROJECT flag would, and has - it demanded work for a
@@ -158,15 +165,16 @@ def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
     would stop for good.
 
     A goal scores 1 while running and 2 once met, so the running-to-met transition registers as a
-    new conclusion even though no command was run.
+    new conclusion even though no command was run. A commit or a push scores nothing - see the
+    module docstring for the measurement behind that.
     """
     goal_delta = max(0, _GOAL_SCORE[signals.goal_state] - _GOAL_SCORE[previous_goal])
-    commits = sum(1 for c in signals.commands if shell_text.is_gated_command(c))
-    return previous + goal_delta + commits
+    prs = sum(1 for c in signals.commands if shell_text.opens_a_pr(c))
+    return previous + goal_delta + prs
 
 
 def reached_a_conclusion(signals):
-    """True once the work is somebody else's to live with - a goal in play, or a commit."""
+    """True once the work is somebody else's to live with - a goal in play, or an opened PR."""
     return conclusion_score(signals) > 0
 
 
@@ -228,17 +236,19 @@ def write_state(session, state):
 
 
 _REASON = (
-    "Work concluded this session - a /goal objective was met, or something was committed, pushed "
-    "or opened as a PR - so the choices behind it are now somebody else's to live with. Before "
-    'you stop, invoke the decision-review skill (Skill tool, name '
-    '"process-review-uncertain-decisions") and answer its question: which important decisions did '
-    "you make that you are NOT confident about, what alternative did you not take, and what would "
-    "settle it. Leave OUT every decision that is already clearly right - the suppression is the "
-    "point, and a list that includes the settled ones puts the sorting back on the reader. Then "
-    "WALK the ones you did surface: one AskUserQuestion call per point, hardest-to-reverse first, "
-    "each option carrying its upside AND its downside and the recommended one first - never a "
-    "batch of questions, and never the next before this one is answered. If nothing is genuinely "
-    "unsettled, say so in one line and stop."
+    "Work concluded this session - a /goal objective was met, or a PR was opened - so the choices "
+    "behind it are now somebody else's to live with. Before you stop, invoke the decision-review "
+    'skill (Skill tool, name "process-review-uncertain-decisions") and answer its question: which '
+    "important decisions did you make that you are NOT confident about, what alternative did you "
+    "not take, and what would settle it. Leave OUT every decision that is already clearly right - "
+    "the suppression is the point, and a list that includes the settled ones puts the sorting back "
+    "on the reader. Leave out as well every decision about the TOOLING - a bitranox hook, skill, "
+    "guard or the memory engine - however unsettled: those are not this project's work, so write "
+    "each as one line with `contrib_queue.py add` and let the dream decide; walking them here is "
+    "how a work session ends by shipping a plugin release. Then WALK the ones you did surface: one "
+    "AskUserQuestion call per point, hardest-to-reverse first, each option carrying its upside AND "
+    "its downside and the recommended one first - never a batch of questions, and never the next "
+    "before this one is answered. If nothing is genuinely unsettled, say so in one line and stop."
 )
 
 # The repeat. Non-blocking, so it rides along next to the turn's result instead of stopping it -

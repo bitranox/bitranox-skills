@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.6.0]
+
+### Changed
+
+- **The decision review no longer fires on a commit or a push, and it no longer walks tooling
+  decisions.** `decision-review-nudge.py` counts a `/goal` and an opened PR as work concluding;
+  a commit or a push scores nothing. Measured over 21 days of transcripts, sessions outside this
+  repo spent 778 minutes in instrumentation episodes that began with this hook's block - the
+  largest single trigger, growing from 1% to 39% of weekly instrumentation minutes - and those
+  episodes were 36% skills-repo edits, 32% memory-store work and 188 minutes of `AskUserQuestion`
+  walks about tooling; on 2026-09-02 they ended in 29 plugin releases pushed from four unrelated
+  projects. The block reason and `process-review-uncertain-decisions` now say that a decision
+  about a bitranox hook, skill, guard or the memory engine is NOT walked: it goes to
+  `contrib_queue.py add` in one line, and the dream decides. `shell_text.opens_a_pr` is the
+  PR-only half of `is_gated_command`, segmented the same way; the repo gate is unchanged.
+
 ## [6.5.1]
 
 ### Fixed

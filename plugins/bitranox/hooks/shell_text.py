@@ -407,6 +407,23 @@ def is_gated_command(command, tool_name=None):
     return False
 
 
+def opens_a_pr(command, tool_name=None):
+    """True when a statement in `command` is a `gh pr create` - the PR half of is_gated_command.
+
+    Segmented and anchored exactly like is_gated_command, so the two cannot disagree about what a
+    statement is; only the verb set differs. It exists because the decision-review nudge counts a
+    PR as work concluding and a commit or push as NOT concluding - measured over three weeks of
+    transcripts, firing the review on every commit walked tooling decisions at the end of ordinary
+    work sessions, and each walk ended in a memory capture, an engine fix and a plugin release from
+    a project that had nothing to do with the tool.
+    """
+    for _at, seg in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
+        seg = seg.strip().lstrip("(").strip()
+        if PR_RE.match(seg):
+            return True
+    return False
+
+
 def commands_only(command: str) -> str:
     """`command` with every DATA region removed, leaving only text the shell will EXECUTE.
 

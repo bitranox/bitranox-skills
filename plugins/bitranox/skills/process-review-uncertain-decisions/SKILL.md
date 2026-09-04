@@ -48,6 +48,15 @@ Name the alternative you did not take, and what would settle it. If nothing is g
 unsettled, say that in one line - a short honest answer is the correct output, not a failure to
 find anything.
 
+**A decision about the TOOLING is not on the list, however unsettled.** A bitranox hook that fired
+oddly, a skill whose text you doubted, a guard you worked around, a memory-engine call that refused
+you - none of that is this project's work, and walking it here is the entry point of a measured
+spiral: the walk raises the tool, the fix gets made in place, and an ordinary work session ends by
+shipping a plugin release. Write each such point as ONE line with `contrib_queue.py add --what
+... --target <hook|skill> --why ...` (home: `<plugin>/skills/meta-self-improve/`, launch via
+`hooks/run-python.sh`) and let the dream decide. Mention in one sentence that you queued it; do
+not ask about it.
+
 ## Then walk them, one at a time
 
 Your answer is a list of open questions, and a list is still work for the reader. So do BOTH, in
@@ -84,10 +93,12 @@ questions breaks the run, and the answers interact. If they stop early, name the
 
 ## When it fires on its own
 
-A Stop hook watches for work concluding: a `/goal` in play, or - with no goal - a commit, a push,
-or an opened PR. A goal counts whether or not it has reported met yet, because the verdict is
-written while the Stop hooks are already running, so at the moment the hook looks the record still
-says not-met and waiting for it costs a whole turn a finished session may never take.
+A Stop hook watches for work concluding: a `/goal` in play, or - with no goal - an opened PR. A
+goal counts whether or not it has reported met yet, because the verdict is written while the Stop
+hooks are already running, so at the moment the hook looks the record still says not-met and
+waiting for it costs a whole turn a finished session may never take. A commit or a push does NOT
+count: a commit is a checkpoint the author still owns, and firing on every one of them was
+measured to be the largest single source of end-of-session tooling work in ordinary projects.
 
 It stops the session ONCE, on the first conclusion, because an ask that can be scrolled past is one
 that gets scrolled past. Every conclusion after that only reminds, without blocking. That split is

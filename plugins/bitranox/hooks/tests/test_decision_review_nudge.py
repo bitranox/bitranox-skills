@@ -76,15 +76,19 @@ def signals(commands=(), goal_state=DRN.GOAL_NONE, offset=0):
 # --------------------------------------------------------------------------
 
 
-def test_a_commit_concludes_the_work():
-    assert DRN.reached_a_conclusion(signals(["git commit -F msg.txt -- src/"])) is True
+def test_a_commit_alone_does_not_conclude_the_work():
+    """A commit is a checkpoint, not a conclusion: measured over three weeks of transcripts, firing
+    on every commit walked tooling decisions in work projects and each walk ended in a memory
+    capture, an engine fix and a plugin release from a project that had nothing to do with it."""
+    assert DRN.reached_a_conclusion(signals(["git commit -F msg.txt -- src/"])) is False
 
 
-def test_a_push_concludes_the_work():
-    assert DRN.reached_a_conclusion(signals(["git push origin master"])) is True
+def test_a_push_alone_does_not_conclude_the_work():
+    assert DRN.reached_a_conclusion(signals(["git push origin master"])) is False
 
 
 def test_an_opened_pr_concludes_the_work():
+    """A PR is the moment the choices become somebody else's to live with."""
     assert DRN.reached_a_conclusion(signals(["gh pr create --fill"])) is True
 
 
@@ -126,9 +130,20 @@ def test_a_goal_going_from_running_to_met_counts_as_new():
         signals([], DRN.GOAL_ACTIVE))
 
 
-def test_each_further_commit_raises_the_score():
-    assert DRN.conclusion_score(signals(["git commit -m a", "git push"])) > DRN.conclusion_score(
-        signals(["git commit -m a"]))
+def test_each_further_pr_raises_the_score():
+    assert DRN.conclusion_score(signals(["gh pr create --fill", "gh pr create -f"])) > (
+        DRN.conclusion_score(signals(["gh pr create --fill"])))
+
+
+def test_commits_and_pushes_never_raise_the_score():
+    assert DRN.conclusion_score(signals(["git commit -m a", "git push", "git push -u origin x"])) == 0
+
+
+def test_the_block_reason_sends_tooling_decisions_to_the_queue():
+    """The walk is for the work's decisions. A tooling, memory or skill decision walked here is
+    the entry point of the spiral: it goes to the contribution queue, and the dream decides."""
+    assert "contrib_queue" in DRN._REASON
+    assert "dream" in DRN._REASON
 
 
 def test_ordinary_commands_never_raise_the_score():
@@ -283,7 +298,7 @@ def test_a_commit_past_the_size_cap_is_still_reached_on_a_later_run(tmp_path):
 
 def test_the_score_accumulates_across_windows():
     """Recomputing per window instead would let the score FALL, and a fallen score never fires."""
-    window = signals(["git commit -m new"])
+    window = signals(["gh pr create --fill"])
     assert DRN.conclusion_score(window, previous=5) == 6
 
 
@@ -305,11 +320,19 @@ def test_non_bash_tool_uses_are_ignored(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_a_session_that_committed_is_asked_before_it_stops(scratch_home, monkeypatch, capsys):
-    path = transcript(scratch_home, bash_line("pytest -q"), bash_line("git commit -m 'ship it'"))
+def test_a_session_that_opened_a_pr_is_asked_before_it_stops(scratch_home, monkeypatch, capsys):
+    path = transcript(scratch_home, bash_line("pytest -q"), bash_line("gh pr create --fill"))
     rc, out = run_main({"session_id": "s1", "transcript_path": path}, monkeypatch, capsys)
     assert rc == 0
     assert json.loads(out)["decision"] == "block"
+
+
+def test_a_session_that_only_committed_and_pushed_is_never_asked(scratch_home, monkeypatch, capsys):
+    """The commit-only session is the ordinary one, and it is where the walk did its damage."""
+    path = transcript(scratch_home, bash_line("pytest -q"), bash_line("git commit -m 'ship it'"),
+                      bash_line("git push origin master"))
+    rc, out = run_main({"session_id": "s1c", "transcript_path": path}, monkeypatch, capsys)
+    assert rc == 0 and out == ""
 
 
 def test_a_session_still_in_progress_stays_silent(scratch_home, monkeypatch, capsys):
@@ -334,18 +357,18 @@ def test_a_one_turn_goal_is_asked_without_waiting_a_turn(scratch_home, monkeypat
 
 
 def test_a_session_is_blocked_once_not_after_every_later_turn(scratch_home, monkeypatch, capsys):
-    path = transcript(scratch_home, bash_line("git commit -m one"))
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
     _, first = run_main({"session_id": "s5", "transcript_path": path}, monkeypatch, capsys)
     _, second = run_main({"session_id": "s5", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(first)["decision"] == "block"
-    assert second == "", "the same commit must not re-fire on every later turn"
+    assert second == "", "the same PR must not re-fire on every later turn"
 
 
-def test_a_later_commit_reminds_without_blocking(scratch_home, monkeypatch, capsys):
+def test_a_later_pr_reminds_without_blocking(scratch_home, monkeypatch, capsys):
     """The repeat channel: non-blocking, so it rides next to the result instead of stopping it."""
-    one = transcript(scratch_home, bash_line("git commit -m one"), name="a.jsonl")
+    one = transcript(scratch_home, bash_line("gh pr create --fill"), name="a.jsonl")
     _, first = run_main({"session_id": "s8", "transcript_path": one}, monkeypatch, capsys)
-    two = transcript(scratch_home, bash_line("git commit -m one"), bash_line("git push"),
+    two = transcript(scratch_home, bash_line("gh pr create --fill"), bash_line("gh pr create -f"),
                      name="b.jsonl")
     _, second = run_main({"session_id": "s8", "transcript_path": two}, monkeypatch, capsys)
     assert json.loads(first)["decision"] == "block"
@@ -358,7 +381,7 @@ def test_a_later_commit_reminds_without_blocking(scratch_home, monkeypatch, caps
 def test_another_sessions_flag_does_not_suppress_this_one(scratch_home, monkeypatch, capsys):
     """A per-PROJECT flag outlives its session and silences the next one; a session-keyed flag cannot."""
     DRN.write_state("an-older-session", DRN.State(0, 99, DRN.GOAL_NONE))
-    path = transcript(scratch_home, bash_line("git commit -m x"))
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
     _, out = run_main({"session_id": "s6", "transcript_path": path}, monkeypatch, capsys)
     assert json.loads(out)["decision"] == "block"
 

@@ -473,3 +473,31 @@ def test_an_unknown_script_behind_a_launcher_is_not_a_sink():
     """The launcher step must not make every scripted command inert."""
     cmd = 'bash /p/run-python.sh /p/deploy.py add --hook "sed 1,/^---$/d"'
     assert S.strip_data_sink_statements(cmd, "Bash") == cmd
+
+
+# --------------------------------------------------------------------------
+# opens_a_pr: the PR half of is_gated_command on its own
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        ("gh pr create --fill", True),
+        ("git push -u origin x && gh pr create --fill", True),
+        ("FOO=bar gh pr create -t x", True),
+        ("(gh pr create --fill)", True),
+        # a commit or a push is the OTHER half of the gate, and this predicate must not see it
+        ("git commit -m x", False),
+        ("git push origin master", False),
+        ("git add -A && git commit -m x && git push", False),
+        # data, not a command: the same two shapes that fooled the gate before the heredoc strip
+        ('echo "then gh pr create --fill"', False),
+        ("cat > d.md <<'EOF'\nrun gh pr create afterwards\nEOF\nls", False),
+        ("cat > m <<'EOF'\nsubject\nEOF\ngh pr create -F m", True),
+        ("gh pr list", False),
+        ("gh pr view 12", False),
+    ],
+)
+def test_opens_a_pr(cmd, expected):
+    assert S.opens_a_pr(cmd) is expected
