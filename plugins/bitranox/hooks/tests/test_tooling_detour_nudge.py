@@ -196,6 +196,16 @@ def test_a_heredoc_that_merely_names_the_path_is_silent(rooms):
     assert TDN.notice_bash(cmd, str(work)) is None
 
 
+def test_a_windows_drive_path_is_a_path_token():
+    """Git Bash on Windows hands the hook `C:\\...` paths; a scanner that knows only `/` never sees
+    the marketplace there. Measured: three tests green on POSIX and red on the windows-latest cell."""
+    found = [m.group(1) for m in TDN._PATH_TOKEN.finditer("sed -i 's/a/b/' C:\\Users\\me\\mkt\\plugins\\a.py")]
+    assert found == ["C:\\Users\\me\\mkt\\plugins\\a.py"]
+    found = [m.group(1) for m in TDN._PATH_TOKEN.finditer("p = Path('C:\\\\Users\\\\me\\\\mkt\\\\plugins\\\\a.py')")]
+    assert found == ["C:\\\\Users\\\\me\\\\mkt\\\\plugins\\\\a.py"]
+    assert [m.group(1) for m in TDN._PATH_TOKEN.finditer("git -C D:/work/mkt push")] == ["D:/work/mkt"]
+
+
 def test_a_commit_in_the_work_project_is_silent(rooms):
     _, work = rooms
     assert TDN.notice_bash("git commit -F m -- src/", str(work)) is None

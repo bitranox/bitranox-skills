@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.9.1]
+
+### Fixed
+
+- **`tooling-detour-nudge` never saw a Windows path.** The path-token scanner knew `/...`, `~/`
+  and `./` forms only, so on the windows-latest cell three tests went red: a `git -C C:\...\mkt
+  push`, a `sed -i` on `C:\...\a.py` and a Python heredoc writing a repr'd `C:\\...` path all
+  read as no path at all, and the hook stayed silent on exactly the writes it exists for. A
+  drive-letter form is now a path token; a repr'd path's doubled backslashes collapse in
+  `Path()`. Covered by a unit test on the scanner; the behavioural tests are the ones CI ran.
+
 ## [6.9.0]
 
 ### Added

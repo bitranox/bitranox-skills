@@ -57,7 +57,14 @@ _WRITE_VERB = re.compile(
 _REDIRECT_TARGET = re.compile(r"(?<![<>=-])>>?\s*(?!&)['\"]?(?!\$)([^\s'\";|&()<>]+)")
 # Inside a heredoc body, a Python or shell write to a path is the shape that edits a shipped file.
 _BODY_WRITE = re.compile(r"write_text\(|write_bytes\(|open\([^)]*['\"][wa]|\.write\(|sed\s+-i|>\s*['\"]?/")
-_PATH_TOKEN = re.compile(r"(?<![\w./-])(/[^\s'\";|&()<>]+|~/[^\s'\";|&()<>]+|\.{0,2}/[^\s'\";|&()<>]+)")
+#: A path token is POSIX-absolute, home-relative, dot-relative, or a Windows drive path - the last
+#: because a Bash tool on Windows (Git Bash) still carries `C:\...` paths, and a scanner that knows
+#: only `/` never sees the marketplace there: measured as three green-on-POSIX tests red on the
+#: windows-latest cell. A repr'd path doubles the backslashes; Path() collapses them.
+_PATH_TOKEN = re.compile(
+    r"(?<![\w./-])(/[^\s'\";|&()<>]+|~/[^\s'\";|&()<>]+|\.{0,2}/[^\s'\";|&()<>]+"
+    r"|[A-Za-z]:[\\/][^\s'\";|&()<>]+)"
+)
 _CD = re.compile(r"cd\s+(['\"]?[^\s'\";|&]+)")
 _GIT_VERB = re.compile(r"(?:^|[\s;&|(])git\b")
 
