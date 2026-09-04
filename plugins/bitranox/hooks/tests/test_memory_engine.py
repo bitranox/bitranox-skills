@@ -1075,3 +1075,26 @@ def test_an_explicit_type_still_wins_on_update(proj):
     E.add_or_update_entry(proj, "Note", "When X, do Y.", body="b2", type_="reference", slug=slug)
     body = us.body_path(proj, slug).read_text(encoding="utf-8")
     assert "type: reference" in body and "type: feedback" not in body
+
+
+def test_amend_pinned_keeps_the_stored_type_when_none_is_given(proj):
+    slug = E.add_or_update_entry(proj, "Iron rule", "When X happens, do Y.", body="prose",
+                                 type_="feedback", pin=True, slug="iron-rule-under-test",
+                                 scope_default="lvl")
+    E.amend_pinned_entry(proj, slug, body="amended prose")
+    body = us.body_path(proj, slug).read_text(encoding="utf-8")
+    assert "type: feedback" in body and "type: project" not in body
+
+
+def test_amend_pinned_can_change_the_type_deliberately(proj):
+    # A pinned fact is exactly the kind whose classification matters most - the always-loaded iron
+    # rules - and `add` refuses a pinned entry, so this verb is the ONLY route to its type. Without
+    # it a pinned fact captured under the wrong kind is frozen for good.
+    slug = E.add_or_update_entry(proj, "Iron rule", "When X happens, do Y.", body="prose",
+                                 type_="project", pin=True, slug="iron-rule-retype-test",
+                                 scope_default="lvl")
+    E.amend_pinned_entry(proj, slug, body="amended prose", type_="feedback")
+    body = us.body_path(proj, slug).read_text(encoding="utf-8")
+    assert "type: feedback" in body and "type: project" not in body
+    _s, entries, _b = E.read_store(proj)
+    assert [e for e in entries if e.slug == slug][0].pin is True    # re-typing never unpins

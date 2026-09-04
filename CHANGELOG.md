@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.4.0]
+
+### Added
+
+- **`amend-pinned --type` re-classifies a pinned fact, the only route to its kind.** `add` refuses
+  a pinned entry outright, so before this there was no way to change one: `amend-pinned` had no
+  `--type`, and 6.3.0 removed the only accidental route by making an update preserve the stored
+  kind. A pinned fact captured under the wrong kind was frozen for good - and pinned facts are the
+  always-loaded rules, where the kind decides how the entry is weighed. Omitting the flag keeps the
+  stored kind; re-typing never unpins.
+
+### Fixed
+
+- **`factedit apply --type` no longer refuses a pinned fact, and its message no longer names a
+  route that does not exist.** 6.3.0 refused with "re-type it with the engine directly,
+  deliberately", which was not possible: `--type` was on `add` alone, and `add` raises
+  `PinnedEntry`. With `amend-pinned` carrying the flag, `factedit` forwards for a pinned fact like
+  any other. The unknown-type refusal is unchanged, and still fires before anything is staged or
+  invoked. The `meta-dream-tree` entry stating the old behaviour as fact is corrected with it.
+
 ## [6.3.0]
 
 ### Fixed

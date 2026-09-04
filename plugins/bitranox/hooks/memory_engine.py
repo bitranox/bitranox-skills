@@ -285,7 +285,7 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
     return slug
 
 
-def amend_pinned_entry(proj, slug, hook=None, body=None, title=None):
+def amend_pinned_entry(proj, slug, hook=None, body=None, title=None, type_=None):
     """The escape hatch for a pinned fact: the same upsert as `add`, with the pinned refusal skipped.
     Keeps the existing pin state (this never unpins - `bx:pin` is untouched, only content changes);
     an empty/absent `title`, `hook` or `body` keeps the stored one, matching `add_or_update_entry`'s
@@ -296,6 +296,12 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, title=None):
     only route to it: `retitle_entry` refuses a pinned fact by design, so that the pin gate keeps
     exactly one deliberate way through. It is normalised the same way a retitle normalises it.
 
+    `type_` is here for the same reason and it is the ONLY route to a pinned fact's kind, since
+    `add` refuses a pinned entry outright. Omitting it keeps the stored kind. A pinned fact is the
+    one whose classification matters most - these are the always-loaded rules - so leaving it
+    unreachable would freeze a fact captured under the wrong kind for good. Re-typing never
+    unpins.
+
     There is no `source` parameter: provenance was removed in 5.300.0 and is not stored."""
     _scope, entries, _bodies = read_store(proj)
     by_slug = {e.slug: e for e in entries}
@@ -303,7 +309,7 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, title=None):
         raise UnknownSlug(slug)
     wanted = _normalised_title(title)
     return add_or_update_entry(proj, title=wanted or by_slug[slug].title,
-                               hook=hook or "", body=body or "",
+                               hook=hook or "", body=body or "", type_=type_,
                                slug=slug, allow_pinned_overwrite=True)
 
 
@@ -1465,6 +1471,10 @@ def main(argv=None):
                      help="read the hook from a file - same reason as on add: a 500-char hook via "
                           "--hook \"$(cat f)\" is a shell command substitution the guard denies")
     ap_.add_argument("--body-file", default=None)
+    ap_.add_argument("--type", dest="type_", default=None,
+                     help="re-classify the fact (feedback/project/reference/user) - the only route "
+                          "to a PINNED fact's kind, since add refuses a pinned entry; omit it to "
+                          "keep the stored kind")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -1716,7 +1726,7 @@ def main(argv=None):
             body = Path(args.body_file).read_text(encoding="utf-8")
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
-                                      title=args.title)
+                                      title=args.title, type_=args.type_)
         except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
             print("! refused: %s" % c)
             return 1

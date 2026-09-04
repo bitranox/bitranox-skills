@@ -568,18 +568,19 @@ def test_apply_forwards_the_type_to_the_engine(tmp_path):
     assert "'--type', 'reference'" in called
 
 
-def test_apply_refuses_a_type_change_on_a_pinned_fact_rather_than_dropping_it(tmp_path):
-    # `amend-pinned` has no --type, so forwarding one there would silently do nothing - the exact
-    # shape of the defect this flag exists to close. Refuse before staging or invoking anything.
+def test_apply_forwards_the_type_on_a_pinned_fact_too(tmp_path):
+    # `amend-pinned` is the ONLY route to a pinned fact's kind - `add` refuses a pinned entry - so
+    # this must forward rather than refuse. A pinned fact is the one whose classification matters
+    # most, and leaving it unreachable freezes a fact captured under the wrong kind for good.
     eng = make_engine_dir(tmp_path)
     level = make_tree(tmp_path, pin=True)
     body = tmp_path / "b.md"
     body.write_text("new prose\n", encoding="utf-8")
     r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
                  "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
-    assert r.returncode == 2
-    assert json.loads(r.stdout)["error"].startswith("BadInput:")
-    assert not (eng.parent / "memory_engine.py.called").exists()
+    assert r.returncode == 0
+    called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
+    assert "'amend-pinned'" in called and "'--type', 'reference'" in called
 
 
 def test_a_type_the_engine_does_not_know_is_refused_before_anything_is_staged(tmp_path):

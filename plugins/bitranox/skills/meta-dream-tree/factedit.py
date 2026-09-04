@@ -521,18 +521,14 @@ def cmd_apply(args, rules: EngineRules) -> int:
     if hook is None and body is None and not args.title and not args.type_:
         raise BadInput("nothing to change: give --hook/--hook-file, --body-file, --title or --type")
     if args.type_:
-        # Refuse rather than drop: `amend-pinned` has no --type, so forwarding one for a pinned
-        # fact would silently change nothing, which is the shape of defect this flag exists to
-        # close. Fail closed on an unknown vocabulary too - a tool that cannot check is not a tool
-        # that passes.
+        # Fail closed on an unknown vocabulary - a tool that cannot check is not a tool that
+        # passes. A PINNED fact is forwarded like any other: `amend-pinned` carries --type and is
+        # the only route to a pinned fact's kind, since `add` refuses a pinned entry outright.
         if not rules.types:
             raise BadInput("the engine did not report its known types; refusing to guess")
         if args.type_ not in rules.types:
             raise BadInput(f"unknown type {args.type_!r}; the engine knows "
                            + ", ".join(rules.types))
-        if fact.pin:
-            raise BadInput(f"{fact.slug} is pinned, and amend-pinned takes no --type; "
-                           "re-type it with the engine directly, deliberately")
     hook = fact.hook if hook is None else hook.strip()
     verdict = judge_hook(hook, body if body is not None else fact.body, rules)
     if not verdict.accepted:
@@ -626,8 +622,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="the new body (omit to keep the stored one)")
     ap_.add_argument("--title", default=None, help="a new title (omit to keep the stored one)")
     ap_.add_argument("--type", dest="type_", default=None,
-                     help="re-classify the fact (feedback/project/reference/user); omit to keep "
-                          "the stored kind, which the engine preserves")
+                     help="re-classify the fact (feedback/project/reference/user), pinned ones "
+                          "included; omit to keep the stored kind, which the engine preserves")
     ap_.add_argument("--stage-dir", default=None,
                      help="where to write the staged hook/body files (default: a temp dir)")
     ap_.add_argument("--dry-run", action="store_true",

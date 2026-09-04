@@ -35,8 +35,9 @@ stops an entry being re-reported until its hook changes, and takes
 actually checked, and a slug that is not a flagged candidate is refused rather than recorded) and
 `factedit.py` (reword a fact's hook or body by recomposing it through `memory_engine.py`, since a
 Write or Edit on a pointer block or a body is denied by the store-edit guard; `show` reports the
-stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify -
-refused on a pinned fact, whose `amend-pinned` verb has no such flag). The
+stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify, a
+PINNED fact included - `amend-pinned` carries `--type` and is the only route to a pinned fact's
+kind, since `add` refuses a pinned entry outright). The
 last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
 answer, so they surface without this file being open.
 
