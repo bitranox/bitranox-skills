@@ -391,6 +391,30 @@ def format_report(report: GateReport, log_path) -> str:
     return "\n".join(out)
 
 
+def red_status(report: GateReport) -> int:
+    """The exit code for a red report: the failing gate's OWN code where that is unambiguous.
+
+    Collapsing every failure to 1 would re-create, one layer out, the masking this tool exists to
+    prevent - a pipe masks with its last element's status, a runner with its own. It costs most on
+    a gate whose codes are a TAXONOMY rather than pass/fail (the provmm Leg 3 perf gate: 0 clean,
+    2 a metric regressed, 1 no metrics measured), where a reported 1 reads as "the measurement
+    crashed" instead of "it returned a verdict". Not hypothetical: a background task's completion
+    notification carries THIS process's code, not the gate's, so the collapse is what a caller
+    actually sees.
+
+    Ambiguity falls back to 1, and one case must never propagate: a gate that EXITED 0 and is red
+    anyway (it ran zero tests). Handing back its 0 would report success for the single failure
+    mode an exit code cannot express, which is the reason that refusal exists.
+
+    Note the overlap with argparse's usage exit of 2: a usage error prints argparse's message and
+    no report at all, so the two stay distinguishable in the output though the code is shared.
+    """
+    codes = {r.returncode for r in report.results if not r.ok}
+    if len(codes) == 1 and 0 not in codes:
+        return codes.pop()
+    return 1
+
+
 def main(argv=None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(description="run gates, keep their real exit status")
@@ -468,7 +492,7 @@ def main(argv=None) -> int:
     report = run_gates(gates, log_path, args.summary)
     print(format_report(report, log_path))
     if not report.ok:
-        return 1
+        return red_status(report)
     if args.then:
         # The follow-up runs through a SHELL, unlike the gates. That is deliberate: a
         # follow-up is routinely compound ("git add X && git commit"), and shlex-splitting

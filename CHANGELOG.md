@@ -29,6 +29,29 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.5.0]
+
+### Fixed
+
+- **`gate.py` hands back the failing gate's OWN exit code instead of collapsing every failure to
+  1.** Wrapping a gate did not remove the masked-status problem this tool exists to prevent, it
+  moved it one layer out: a pipe masks with its last element's status, the runner masked with its
+  own. That is what a caller actually sees, because a background task's completion notification
+  carries the RUNNER's code, not the gate's. It costs most on a gate whose codes are a taxonomy
+  rather than pass/fail - the provmm Leg 3 perf gate uses 0 clean, 2 a metric regressed, 1 no
+  metrics measured - where a reported 1 reads as "the measurement crashed" instead of "it returned
+  a verdict". Measured 2026-09-04: four tool calls went into hunting a defect in the gate's exit
+  plumbing that did not exist, and it briefly produced a confident wrong claim that a shipped tool
+  violated its documented contract.
+
+  Propagation happens only where it is unambiguous. Several gates failing with DIFFERENT codes
+  fall back to 1, and a gate that exited 0 while being red anyway - the zero-test refusal - never
+  hands back its 0, since that would report success for the one failure mode an exit code cannot
+  express. `--then` is unaffected: it still runs only when every gate passed.
+
+  Filed as MINOR rather than MAJOR deliberately: the published contract was "non-zero is red",
+  which is unchanged, and the specific codes were never documented before this release. The
+  `compuse-toolbox` row now states the contract, so from here it is one.
 ## [6.4.0]
 
 ### Added
