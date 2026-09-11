@@ -255,3 +255,55 @@ def test_stray_claude_md_at_tempdir_does_not_hijack_workspace(monkeypatch, capsy
     (ws / "cur" / "CLAUDE.md").write_text("cur", encoding="utf-8")
     root = GS._workspace_root(str(ws / "cur"))
     assert root == ws                          # NOT fake_tmp, despite its CLAUDE.md
+
+
+# --- credential-bearing bodies are not spread into unrelated sessions -------------------------
+# Recall injects another project's memory body on a keyword match. A body holding real service
+# passwords therefore reaches every session whose prompt happens to match, and its transcript.
+# Measured on a real store: a native memory note carried test AND production URLs and passwords.
+
+def test_a_credential_bearing_body_is_withheld(monkeypatch, capsys):
+    _mem("/p/other", "gizmo-deploy.md",
+         "Gizmo deploy runbook\n"
+         "- URL: https://gizmo.example.invalid/admin\n"
+         "- Password: fake-not-a-real-secret\n")
+    rc, out = run(monkeypatch, capsys, "gizmo deploy runbook")
+    assert rc == 0
+    assert out, "the planted note did not match at all; the fixture, not the hook, is wrong"
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "fake-not-a-real-secret" not in ctx
+    assert "gizmo-deploy" in ctx                     # still NAMED, so it can be opened deliberately
+    assert "withheld" in ctx.lower()
+
+
+def test_a_url_with_inline_credentials_is_withheld(monkeypatch, capsys):
+    _mem("/p/other", "widget-sync.md",
+         "Widget sync endpoint\npostgres://widgetuser:fake-inline-pw@db.example.invalid/widgets\n")
+    rc, out = run(monkeypatch, capsys, "widget sync endpoint")
+    assert rc == 0
+    assert out, "the planted note did not match at all; the fixture, not the hook, is wrong"
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "fake-inline-pw" not in ctx
+    assert "withheld" in ctx.lower()
+
+
+# The two controls below must pass BEFORE and AFTER the fix: they prove the detector
+# discriminates rather than suppressing anything that says "password".
+
+def test_a_note_merely_discussing_passwords_is_still_injected(monkeypatch, capsys):
+    _mem("/p/other", "gadget-policy.md",
+         "Gadget policy: never commit a password to the repository, load it at runtime instead\n")
+    rc, out = run(monkeypatch, capsys, "gadget policy")
+    assert rc == 0
+    assert out, "the planted note did not match at all; the fixture, not the hook, is wrong"
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "never commit a password" in ctx
+
+
+def test_an_ordinary_note_is_unaffected(monkeypatch, capsys):
+    _mem("/p/other", "sprocket-build.md", "Sprocket build runs with VIRTUAL_ENV unset\n")
+    rc, out = run(monkeypatch, capsys, "sprocket build")
+    assert rc == 0
+    assert out, "the planted note did not match at all; the fixture, not the hook, is wrong"
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "VIRTUAL_ENV unset" in ctx

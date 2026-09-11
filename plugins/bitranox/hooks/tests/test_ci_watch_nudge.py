@@ -353,3 +353,49 @@ def test_a_local_path_remote_keeps_the_nudge(repo, capsys):
     reading it as 'no CI' would decide semantics from a test's convenience."""
     assert hook.main(_event("git push", repo)) == 0
     assert "ci_wait.py" in capsys.readouterr().out
+
+
+# --- what counts as "the CI was watched" -------------------------------------------------------
+# The clearing half asks "did this command RUN a watcher". Two shapes it missed, both measured:
+# a Monitor tool call (the hook only ever looked at shell tools), and a watch wrapped in
+# compuse-toolbox gate.py, whose command sits inside a double-quoted --gate argument and is
+# therefore erased by the data-region masking before the pattern is applied.
+
+def test_a_monitor_running_the_watcher_clears_the_record(repo, capsys):
+    hook.main(_event("git push", repo))
+    capsys.readouterr()
+    assert state.pending_for(str(repo), "sess-1") != []
+    assert hook.main(_event("uv run scripts/ci_wait.py --sha deadbeef", repo, tool="Monitor")) == 0
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_monitor_never_records_a_push(repo, capsys):
+    """Only a shell tool records. Widening the clear half must not widen the record half."""
+    assert hook.main(_event("git push", repo, tool="Monitor")) == 0
+    assert capsys.readouterr().out == ""
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_gate_wrapped_watch_clears_the_record(repo, capsys):
+    hook.main(_event("git push", repo))
+    capsys.readouterr()
+    wrapped = 'python3 /p/gate.py --gate "uv run /p/ci_wait.py --sha deadbeef" --name ci'
+    assert hook.main(_event(wrapped, repo)) == 0
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+def test_a_gate_wrapped_watch_after_a_double_dash_still_clears(repo, capsys):
+    hook.main(_event("git push", repo))
+    capsys.readouterr()
+    assert hook.main(_event("python3 /p/gate.py -- uv run /p/ci_wait.py --sha deadbeef", repo)) == 0
+    assert state.pending_for(str(repo), "sess-1") == []
+
+
+# The control: it must pass BEFORE and AFTER. A command that merely QUOTES the watcher's name
+# runs nothing, so reading the raw text unconditionally would silently disarm the gate.
+
+def test_a_command_merely_quoting_the_watcher_does_not_clear(repo, capsys):
+    hook.main(_event("git push", repo))
+    capsys.readouterr()
+    assert hook.main(_event('echo "uv run ci_wait.py --sha deadbeef"', repo)) == 0
+    assert state.pending_for(str(repo), "sess-1") != []

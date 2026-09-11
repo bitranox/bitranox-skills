@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.10.0]
+
+### Added
+
+- **Recall withholds a credential-bearing body instead of injecting it.** The cross-project recall
+  hook injects another project's memory body on a keyword match, so a note holding a live service
+  password reached every session whose prompt happened to match, and was written into that
+  session's transcript. Measured on a real store: one note carried test AND production URLs with
+  their passwords beside them and surfaced in a session about an unrelated tool. Such a body is
+  now replaced by a one-line pointer naming the file, so it stays reachable but is never quoted.
+  The test is a VALUE, not a word - a labelled value, URL userinfo, or a token shape - so a note
+  that merely says "never commit a password" is still injected in full; that discrimination is
+  pinned by two controls beside the two RED tests.
+
+### Fixed
+
+- **A watched push stayed pending when the watch ran under Monitor or under `gate.py`.** Two
+  shapes of "the CI was watched" were invisible, so a correctly verified push kept drawing Stop
+  blocks until the gate gave up. The hook only ever read shell tools, so a Monitor call running
+  `ci_wait.py` was never seen; and the watch pattern was applied to the masked command, where a
+  `gate.py --gate "uv run ci_wait.py --sha X"` argument has been erased - measured, that form
+  matches in the raw text and not after masking, while the `-- <cmd ...>` form already matched
+  because its tokens are real argv. Clearing now accepts any tool carrying a command, and reads
+  the raw text for a known execute-a-string wrapper only. Recording stays shell-only. The
+  PostToolUse matcher names `Monitor` too, since widening the code alone leaves the hook off for
+  the tool it was widened for; a test pins the matcher, because that defect is invisible to every
+  test of the script itself. `echo "ci_wait.py ..."` still clears nothing, under a control test.
+
 ## [6.9.1]
 
 ### Fixed

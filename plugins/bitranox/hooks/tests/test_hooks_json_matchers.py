@@ -84,3 +84,19 @@ def test_every_handler_points_at_a_script_that_exists():
             script = re.search(r"hooks/([\w.-]+\.py)", handler["command"])
             assert script, f"{event}: cannot find a script name in {handler['command']!r}"
             assert (hooks_dir / script.group(1)).is_file(), f"{event}: missing {script.group(1)}"
+
+
+def test_the_ci_watch_nudge_matcher_names_monitor():
+    """The clear half reads a Monitor call's command, so the matcher must let Monitor through.
+
+    Widening only the code leaves the hook switched off for the tool it was widened for - the
+    trap `is_shell_tool`'s own docstring names.
+    """
+    groups = [g for e, g in GROUPS
+              if e == "PostToolUse"
+              and any("ci-watch-nudge" in str(h.get("command", "")) for h in g.get("hooks", []))]
+    assert groups, "ci-watch-nudge is not registered on PostToolUse at all"
+    tools = groups[0]["matcher"].split("|")
+    assert "Monitor" in tools, (
+        "PostToolUse matcher %r does not name Monitor, so a Monitor call that watches CI never "
+        "reaches the hook and the pushed sha is never cleared" % groups[0]["matcher"])

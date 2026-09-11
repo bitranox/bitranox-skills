@@ -12,6 +12,7 @@ Pure standard library. Fail-open: every error path exits 0, so a broken or slow 
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -28,6 +29,35 @@ MAX_HITS = 4
 MAX_BODY = 1800
 SPECIFIC_MAX = 6  # a keyword matching <= this many candidate notes is a specific (strong) signal
 COMMON_FRACTION = 0.25  # a keyword in > this fraction of the whole store is a corpus-stopword (no signal)
+
+
+# A body carrying a live credential must never be injected into an unrelated session. Recall
+# reaches EVERY session whose prompt happens to match, and what it injects is written into that
+# session's transcript, so one note holding a service password spreads it silently and durably.
+# Measured on a real store: a note carried test AND production URLs with their passwords beside
+# them, and reached a session about an unrelated tool.
+#
+# The test is a VALUE, not a word. "never commit a password" names the concept and carries
+# nothing; `Password: <value>` and `scheme://user:pw@host` are the secret itself. The shapes that
+# matter are the ones a human writes in a runbook - a labelled value and URL userinfo - because
+# the token-shape patterns (ghp_..., AKIA...) are NOT what this leak looked like, though they are
+# matched too.
+_CRED_LABEL = re.compile(
+    r"(?im)^[^\n]*\b(pass(?:word|phrase)?|pwd|secret|api[ _-]?key|access[ _-]?key|token"
+    r"|credentials?)\b\s*[:=]\s*\S")
+_CRED_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
+_CRED_TOKEN = re.compile(
+    r"ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}|\bsk-ant-[A-Za-z0-9_-]{24,}"
+    r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}")
+
+
+def holds_a_credential(body):
+    """True when this body carries a secret rather than merely discussing one.
+
+    Deliberately conservative: a false positive costs one withheld note, which the reader can
+    still open by name, while a false negative publishes a live credential into a transcript.
+    """
+    return bool(_CRED_LABEL.search(body) or _CRED_URL.search(body) or _CRED_TOKEN.search(body))
 
 
 def _state_file(cwd, sid):
@@ -167,8 +197,14 @@ def main():
     blocks = []
     for p in fresh:
         body = _snippet(p, hits.get(p, keywords), MAX_BODY)
-        if body:
-            blocks.append("### %s\n%s" % (_label(p), body))
+        if not body:
+            continue
+        if holds_a_credential(body):
+            # Named, never quoted: the reader can open it deliberately if they truly need it.
+            blocks.append("### %s\n(body withheld - it looks credential-bearing. Open %s "
+                          "yourself if you need it.)" % (_label(p), p))
+            continue
+        blocks.append("### %s\n%s" % (_label(p), body))
     if not blocks:
         return 0
 

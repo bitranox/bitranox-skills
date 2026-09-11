@@ -47,6 +47,13 @@ _PUSH = re.compile(r"\bgit\s+(?:(?:-C|-c|--git-dir|--work-tree)[= ]\S+\s+)*push\
 _NOT_A_BUILD = re.compile(r"--dry-run\b|--delete\b|\bpush\s+--delete\b")
 # What looking at CI actually looks like in the record.
 _WATCHING = re.compile(r"ci_wait\.py|ci_triage\.py|\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b")
+# A wrapper that EXECUTES a quoted command string. The watcher then sits INSIDE the quotes, which
+# the data-region masking erases, so the watch was never counted: measured, `gate.py --gate "uv run
+# ci_wait.py --sha X"` matches the pattern in the raw text and not after masking, and a correctly
+# watched push kept drawing Stop blocks. The `-- <cmd ...>` form was already seen, because those
+# tokens are real argv rather than a quoted string. This is the exception `commands_only` names in
+# its own docstring: for an execute-this-string form, the quoted argument IS a command.
+_WRAPPER = re.compile(r"\bgate\.py\b")
 
 _CI_WAIT = Path(__file__).resolve().parent.parent / "skills" / "compuse-toolbox" / "scripts" / "ci_wait.py"
 
@@ -274,6 +281,19 @@ def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
     return None
 
 
+def _watching(command: str) -> bool:
+    """Did this command RUN a watcher, as opposed to merely naming one?
+
+    The MASKED form is the default, so `echo "ci_wait.py ..."` still clears nothing. A known
+    execute-a-string wrapper is the one exception, and it is checked on the masked form too, so
+    the exception cannot itself be opened by quoting the wrapper's name.
+    """
+    masked = commands_only(command)
+    if _WATCHING.search(masked):
+        return True
+    return bool(_WRAPPER.search(masked) and _WATCHING.search(command))
+
+
 def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
     """The (text, sha, branch, repo) to record for this command, or None if it is not a landed push.
 
@@ -323,7 +343,7 @@ def main(raw: str | None = None) -> int:
         event = json.loads(raw if raw is not None else sys.stdin.read() or "{}")
     except (ValueError, TypeError, OSError):
         return 0
-    if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
+    if not isinstance(event, dict):
         return 0
     if os.environ.get(_BYPASS_ENV):
         return 0
@@ -337,9 +357,13 @@ def main(raw: str | None = None) -> int:
         return 0
 
     try:
-        masked = commands_only(command)
-        if _WATCHING.search(masked):
+        if _watching(command):
             state.clear_session(key, session)
+            return 0
+        # Only a shell tool can have MADE a push. The clear half above is deliberately wider: a
+        # Monitor call watching CI is the commonest way this record is satisfied, and a hook that
+        # cannot see it leaves a watched push pending until the gate gives up.
+        if not is_shell_tool(event.get("tool_name")):
             return 0
         found = notice(command, cwd)
         if not found:
