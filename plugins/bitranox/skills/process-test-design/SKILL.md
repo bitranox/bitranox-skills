@@ -171,6 +171,34 @@ enforced by the suite rather than remembered by a person.
   (marked, opt-in), not the unit suite. The unit suite runs offline and identically every time.
 - A flaky test is a bug in the test or the code, never "just re-run it" - fix the determinism.
 
+## Wait on whatever lands LAST
+
+When a test waits for A and then asserts on B, read the PRODUCER's order. If B is written after
+A, the wait is satisfied while B is still absent, and the test is a race that only a slow machine
+loses - so it passes locally for months and fails on one CI cell. Wait on the last thing the
+producer emits, or on a signal it writes only when finished, never on the first thing that
+happens to be observable.
+
+## Reproducing a flake: starve it, or slow the clock it races
+
+A flake reproduces under the pressure that matches its MECHANISM, and the two mechanisms need
+opposite apparatus. Repetition alone is the weakest option and is what most runs reach for first.
+
+- **A race between tasks** reproduces under CPU STARVATION. Pin the suite to one cpu (read the
+  allowed set from the process's own status rather than assuming cpu 0) and run N busy
+  competitors on that cpu, interleaved with an unstarved arm. It has a working range: past
+  roughly 2.3x competitors it also reports margin failures that are not defects, so a finding
+  there needs checking against the unstarved arm before you believe it. Measured: 45 unstarved
+  runs found nothing, while the starved arm found two real ordering defects on every run.
+- **A race against a TIMER** does not reproduce that way, because contention reschedules tasks
+  and the timer keeps its own time. Find the clock the race is against and slow THAT - a UI
+  framework's update tick, an animation rate, a poll interval - which widens the window the test
+  samples in. Measured: 16 busy competitors reproduced a UI flake 0 times in 400 runs, while
+  dropping the framework's tick reproduced it in 10 of 80, and 0 of 80 after the fix.
+
+Both arms must run through the REAL test entry point. A standalone probe that reconstructs the
+setup can stub out the very path that fails, and then passes whatever the code does.
+
 ## Run in a clean, project-correct environment
 
 **The rule in any language: run against the project's OWN pinned toolchain, resolved from a lockfile,

@@ -106,6 +106,37 @@ the field for the concrete subclasses you actually expect, and diff the emitted 
 pre-change baseline whichever fix you take - the wire format is the only thing that shows an empty
 payload.
 
+### A discriminated union tags on the Enum MEMBER, not a copy of its value
+
+When a Pydantic 2 discriminated union switches on a StrEnum field, write the tag as
+`Literal[MyEnum.MEMBER]`. A plain value string is validated INTO the member, in lax and strict
+mode alike and from `validate_python` and `validate_json` equally, so JSON arriving over the wire
+needs no duplicate string literal and no coercing before-validator:
+
+```python
+class Kind(StrEnum):
+    WIDGET = "widget"
+    GADGET = "gadget"
+
+class Widget(BaseModel):
+    kind: Literal[Kind.WIDGET]          # accepts the JSON value "widget"
+    teeth: int
+
+class Gadget(BaseModel):
+    kind: Literal[Kind.GADGET]
+    volts: float
+
+Payload = Annotated[Widget | Gadget, Field(discriminator="kind")]
+```
+
+What it refuses is the member NAME (`"WIDGET"`), which is the right way round: the name is an
+implementation detail of the Python side and was never the wire format.
+
+The belief that an enum literal cannot validate from JSON is what keeps a stringly-typed
+duplicate alive next to the enum - `Literal["widget"]` beside `Kind.WIDGET` - and once there are
+two spellings of one tag, nothing makes them move together. Probe it rather than carrying the
+fear: construct the union, call `validate_json` with the value string, and read the result back.
+
 ### Anti-Patterns to Eliminate
 
 ```python

@@ -29,6 +29,36 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.11.0]
+
+### Added
+
+- **`coding-python-layered-config`: a `--set` override keeps the provenance of the layer it
+  replaced.** The merge returns the new value with the ORIGINAL provenance map by design, so the
+  displayed source names the file that used to supply the value. The value is right and the
+  answer to "where did this come from" is wrong, which is the one question provenance exists to
+  answer. The skill now says to rebuild provenance for exactly the overridden keys, names the two
+  details that decide whether that lands (the dotted key is section plus key path, because a
+  parsed override's key path excludes its section; and a key no file defined must still record a
+  source), and says to assert it by running the command rather than unit-testing the merge.
+
+- **`coding-python-enforce-data-architecture-strict`: a discriminated union tags on the Enum
+  member.** `Literal[MyEnum.MEMBER]` validates from the plain value string in lax and strict mode
+  alike, and from both `validate_python` and `validate_json`, so JSON over the wire needs no
+  duplicate string literal and no coercing before-validator; what it refuses is the member NAME,
+  which was never the wire format. The belief that it cannot is what keeps a stringly-typed
+  duplicate alive beside the enum, after which nothing makes the two spellings move together.
+
+- **`process-test-design`: wait on whatever lands LAST, and reproduce a flake by the mechanism.**
+  A test that waits for A and asserts on B is a race whenever the producer writes B after A.
+  Separately, the two flake mechanisms need opposite apparatus: a race between tasks reproduces
+  under CPU starvation (with a working range, past which it reports margin failures that are not
+  defects), while a race against a timer does not reproduce that way at all and needs the clock
+  it races slowed instead. Measured: 45 unstarved runs found nothing where the starved arm found
+  two real ordering defects every run; and 16 busy competitors reproduced a UI flake 0 times in
+  400 runs where slowing the framework tick reproduced it 10 times in 80, and 0 in 80 after the
+  fix.
+
 ## [6.10.0]
 
 ### Added
