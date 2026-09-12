@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) hook: auto-realign markdown tables after a write.
+"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Monitor) hook: auto-realign markdown tables after a write.
 
 Formatter-on-save for markdown tables (Mode A). When a markdown file is written or edited, reuse the
 docs-md-table-formatting skill's `reformat_tables.reformat_file()` to realign its tables in place, so a
@@ -9,6 +9,10 @@ Bash is covered too, and that is the point: Write and Edit declare their target,
 for them, while a heredoc, a `python3 -` script or `sed -i` wrote markdown with no declared path
 and slipped past entirely. For a Bash event the hook looks at which markdown actually changed
 under the working directory instead of parsing the command, which cannot see a runtime path.
+Monitor is registered for the same reason: it carries a shell command too, so it can write markdown
+with no declared path in exactly the same way. The scan never parses the command - it reads what
+changed on disk - so it keys on the event CARRYING a command rather than on the tool being a shell,
+and any command-carrying tool the matcher admits is covered.
 
 Silent by design: it just fixes the file. `reformat_tables` is safe-by-design (it bails on tables
 with inconsistent column counts and skips non-markdown fenced code blocks), so a normal edit is left
@@ -22,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-from shell_text import is_git_verb, is_shell_tool, iter_segments, strip_heredoc_bodies
+from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
 
 _MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
 
@@ -87,10 +91,10 @@ def _reformat_file_fn():
     return mod.reformat_file
 
 
-def _markdown_paths_from_bash(event) -> list[str]:
-    """Return markdown files a Bash command just wrote, newest-first.
+def _markdown_paths_from_a_command(event) -> list[str]:
+    """Return markdown files a shell command just wrote, newest-first.
 
-    Write and Edit announce their target in ``file_path``; Bash does not. A
+    Write and Edit announce their target in ``file_path``; a command does not. A
     heredoc, a ``python3 -`` script or a ``sed -i`` writes markdown with no
     declared path at all, so the formatter-on-save silently did not apply to any
     of them and a table written that way shipped misaligned.
@@ -145,8 +149,8 @@ def main():
     path = (event.get("tool_input") or {}).get("file_path") or ""
     if path.lower().endswith(_MD_SUFFIXES) and Path(path).is_file():
         targets = [path]
-    elif is_shell_tool(event.get("tool_name")):
-        targets = _markdown_paths_from_bash(event)
+    elif isinstance((event.get("tool_input") or {}).get("command"), str):
+        targets = _markdown_paths_from_a_command(event)
     else:
         return 0  # not a markdown file -> nothing to align
     for target in targets:

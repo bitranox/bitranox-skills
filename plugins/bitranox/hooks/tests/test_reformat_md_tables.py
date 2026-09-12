@@ -67,12 +67,42 @@ def test_malformed_stdin_returns_zero(monkeypatch):
     assert H.main() == 0
 
 
-def run_bash(monkeypatch, cwd, command="cat > doc.md"):
+def run_bash(monkeypatch, cwd, command="cat > doc.md", tool_name="Bash"):
     """Drive main() with a Bash event, which declares no file_path at all."""
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    event = {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": command}}
+    event = {"tool_name": tool_name, "cwd": str(cwd), "tool_input": {"command": command}}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
     return H.main()
+
+
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell", "Monitor"])
+def test_every_command_carrying_tool_the_matcher_admits_is_realigned(tmp_path, monkeypatch, tool_name):
+    """hooks.json registers this hook for Bash|PowerShell|Monitor, and all three carry a command.
+
+    Monitor was added to that matcher for the sibling hook in the same group, and this one kept
+    testing the tool NAME against the two shell tools - so it fired on a Monitor event and did
+    nothing, a registration wider than the behaviour. The scan never parses the command, so
+    carrying one is the whole requirement.
+    """
+    f = tmp_path / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+
+    assert run_bash(monkeypatch, tmp_path, tool_name=tool_name) == 0
+
+    assert "| longer | z   |" in f.read_text(encoding="utf-8"), tool_name
+
+
+def test_an_event_carrying_no_command_is_left_alone(tmp_path, monkeypatch):
+    """Control: the widening keys on the command, so an event without one still does nothing."""
+    f = tmp_path / "doc.md"
+    f.write_text(MISALIGNED, encoding="utf-8")
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    event = {"tool_name": "Monitor", "cwd": str(tmp_path), "tool_input": {"shellCommand": "cat > doc.md"}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+
+    assert H.main() == 0
+
+    assert f.read_text(encoding="utf-8") == MISALIGNED
 
 
 def test_rewrites_the_tree_ignores_a_git_verb_appearing_as_data():
