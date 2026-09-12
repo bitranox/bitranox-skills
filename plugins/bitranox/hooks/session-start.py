@@ -120,7 +120,7 @@ def dream_room(proj):
         return False
 
 
-def contrib_context(proj):
+def contrib_context(proj, budget=None):
     """Surface PENDING upstream contributions - and, unlike the audit, do NOT consume them.
 
     A learning that warrants a skill/hook change used to reach the marketplace only if the model
@@ -129,7 +129,10 @@ def contrib_context(proj):
     being read - it stands until it actually ships and is drained.
 
     Outside a dream room only the COUNT is shown: the listing reads as an invitation to pick an
-    entry up now, and the entries are the dream's to read.
+    entry up now, and the entries are the dream's to read. Inside one the listing gets `budget`
+    bytes, what the other essentials left: unbounded, a full queue measured 11481 bytes against
+    the 3300 ceiling, and over the ceiling the harness persists the WHOLE essentials block and
+    injects a ~2KB preview, so every other block went with it.
     """
     try:
         recs = read_contributions(proj)
@@ -139,16 +142,81 @@ def contrib_context(proj):
             return ("%d PENDING UPSTREAM CONTRIBUTION(S) wait in the queue for a dream - not this "
                     "session's work. They persist until a dream drains them; `contrib_queue.py "
                     "list` shows them." % len(recs))
+        head = ("%d PENDING UPSTREAM CONTRIBUTION(S) - learnings already judged skill/hook-worthy "
+                "that have NOT shipped yet. They persist until shipped, so pick them up when the "
+                "work suits (route via bitranox:meta-self-improve -> references/upstream-propagation.md; "
+                "a dream drains the queue once they land):\n" % len(recs))
         lines = ["- %s%s%s" % (r.get("what") or "",
                                " -> %s" % r["target"] if r.get("target") else "",
                                " (%s)" % r["why"] if r.get("why") else "")
                  for r in recs]
-        return ("%d PENDING UPSTREAM CONTRIBUTION(S) - learnings already judged skill/hook-worthy "
-                "that have NOT shipped yet. They persist until shipped, so pick them up when the "
-                "work suits (route via bitranox:meta-self-improve -> references/upstream-propagation.md; "
-                "a dream drains the queue once they land):\n%s" % (len(recs), "\n".join(lines)))
+        allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
+        if allowed < _listing_floor(head, lines, _CONTRIB_MORE):
+            return _fitting_pointer(contrib_pointer(proj), allowed)
+        return _fit_listing(head, lines, allowed, _CONTRIB_MORE)
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
+
+
+def contrib_pointer(proj):
+    """The one line the contribution block degrades to, or None when the queue is empty.
+
+    Its own size is what `main` holds back before sizing the backlog, so the two are the same
+    string: measured as a `budget=0` probe instead, a pointer that stops fitting stops being
+    reserved, and the reservation silently becomes zero.
+    """
+    try:
+        recs = read_contributions(proj)
+        return (_CONTRIB_COMPACT % len(recs)) if recs else None
+    except Exception:  # noqa: BLE001 - never wedge a session start
+        return None
+
+
+def _fitting_pointer(pointer, allowed):
+    """A degraded pointer only while it fits: the queue's line yields before the backlog's.
+
+    Two pointers that each fit ALONE still breached the ceiling together, and over the ceiling the
+    harness persists the whole essentials block and previews ~2KB of it - which hides the backlog,
+    the one block that must survive. So the queue's pointer goes rather than both being cut.
+    """
+    if pointer is None or len(pointer.encode("utf-8")) > allowed:
+        return None
+    return pointer
+
+
+_CONTRIB_MORE = "- ... and %d more; `contrib_queue.py list` shows them"
+_CONTRIB_COMPACT = ("%d PENDING UPSTREAM CONTRIBUTION(S) - no room to list them here; "
+                    "`contrib_queue.py list` shows them.")
+
+
+def _listing_floor(head, lines, more):
+    """Bytes a listing needs to show its first line plus the line counting the rest."""
+    need = len(head.encode("utf-8")) + len(lines[0].encode("utf-8")) + 1
+    if len(lines) > 1:
+        need += len((more % (len(lines) - 1)).encode("utf-8")) + 1
+    return need
+
+
+def _fit_listing(head, lines, allowed, more):
+    """`head` plus as many `lines` as fit in `allowed` bytes, then one line counting the rest.
+
+    The count line is reserved BEFORE a line is admitted, never appended after the loop: appended
+    after, a listing cut close to its limit overran it by the count line's own length. The first
+    line is always admitted, so one oversized entry cannot shrink a block to its bare header.
+    """
+    shown, used = [], len(head.encode("utf-8"))
+    for index, line in enumerate(lines):
+        left = len(lines) - index - 1
+        reserve = len((more % left).encode("utf-8")) + 1 if left else 0
+        cost = len(line.encode("utf-8")) + 1
+        if shown and used + cost + reserve > allowed:
+            break
+        shown.append(line)
+        used += cost
+    hidden = len(lines) - len(shown)
+    if hidden:
+        shown.append(more % hidden)
+    return head + "\n".join(shown)
 
 
 #: One open backlog line: "- [ ] (YYYY-MM-DD) [rank] ORIGIN: text | field: value | ..."
@@ -174,6 +242,7 @@ _ESSENTIALS_CEILING_BYTES = 3300
 #: over makes the harness persist the WHOLE essentials block and preview ~2KB, which hides it
 #: anyway - a floor that protects the backlog by a mechanism that hides it is self-defeating).
 _OPEN_WORK_COMPACT = "%d OPEN-WORK ITEM(S) standing - read OPEN-WORK.md; no room to list them here."
+_OPEN_WORK_MORE = "- ... and %d more in OPEN-WORK.md"
 _OPEN_WORK_HEAD_CHARS = 96
 
 
@@ -234,22 +303,16 @@ def open_work_context(proj, today=None, budget=None):
             return None
         head = _OPEN_WORK_HEADER % len(items)
         allowed = _ESSENTIALS_CEILING_BYTES if budget is None else budget
-        if allowed < len(head.encode("utf-8")) + _OPEN_WORK_HEAD_CHARS:
+        # The first item is always shown, however long: one oversized item must not reduce the
+        # whole block to a bare count, which would hide the very item ranked most urgent.
+        lines = ["- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])
+                 for rank, raised, what in items]
+        # Measured against the REAL first line and the REAL count line, not against a head-plus-96
+        # estimate: the estimate let a budget through that the always-shown first line and the
+        # count line then overran together, by up to that count line's own length.
+        if allowed < _listing_floor(head, lines, _OPEN_WORK_MORE):
             return _OPEN_WORK_COMPACT % len(items)
-        lines, used = [], len(head.encode("utf-8"))
-        for rank, raised, what in items:
-            line = "- [%d] (%s) %s" % (rank, _age(raised, today), what[:_OPEN_WORK_HEAD_CHARS])
-            cost = len(line.encode("utf-8")) + 1
-            # Always emit the first, however long: one oversized item must not reduce the whole
-            # block to a bare count, which would hide the very item ranked most urgent.
-            if lines and used + cost > allowed:
-                break
-            lines.append(line)
-            used += cost
-        hidden = len(items) - len(lines)
-        if hidden:
-            lines.append("- ... and %d more in OPEN-WORK.md" % hidden)
-        return head + "\n".join(lines)
+        return _fit_listing(head, lines, allowed, _OPEN_WORK_MORE)
     except Exception:  # noqa: BLE001 - never wedge a session start
         return None
 
@@ -439,17 +502,26 @@ def decoy_context(proj):
         return ""
 
 
+def _joined_bytes(blocks):
+    """Bytes these blocks cost once joined into the essentials, separators included."""
+    return sum(len(p.encode("utf-8")) + 2 for p in blocks if p)
+
+
 def main():
     event = _read_event()
     proj = _proj(event)
     _self_heal(proj)
-    # Everything else is assembled FIRST so the backlog can be given what is actually left. Sized
-    # against a fixture instead, it overran the ceiling on the real repo while its test stayed green.
-    retrieval, audit = retrieval_context(proj), audit_context(proj)
-    contrib, decoy = contrib_context(proj), decoy_context(proj)
+    # Everything else is assembled FIRST so the two listings can be given what is actually left.
+    # Sized against a fixture instead, the backlog overran the ceiling on the real repo while its
+    # test stayed green. The backlog is ranked work someone is waiting on, so it is sized before the
+    # contribution listing, which is the dream's business and degrades to its count line - and that
+    # line's size is held back first, so the backlog cannot spend it.
+    retrieval, audit, decoy = retrieval_context(proj), audit_context(proj), decoy_context(proj)
     tail = [dream_nudge(proj), newproject_nudge(proj)] if _nudges_on() else []
-    spent = sum(len(p.encode("utf-8")) + 2 for p in [retrieval, audit, contrib, decoy] + tail if p)
-    open_work = open_work_context(proj, budget=_ESSENTIALS_CEILING_BYTES - spent)
+    left = _ESSENTIALS_CEILING_BYTES - _joined_bytes([retrieval, audit, decoy] + tail)
+    contrib_floor = _joined_bytes([contrib_pointer(proj)])
+    open_work = open_work_context(proj, budget=left - contrib_floor)
+    contrib = contrib_context(proj, budget=left - _joined_bytes([open_work]))
     ctx = [p for p in [retrieval, audit, open_work, contrib, decoy] + tail if p]
     nudge = autoupdate_nudge(proj)
     if not ctx and not nudge:

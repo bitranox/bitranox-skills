@@ -735,6 +735,92 @@ def test_essentials_stay_under_budget_with_every_block_present(tmp_path, monkeyp
     assert len(ctx.encode("utf-8")) < 3500
 
 
+def _fill_queue(cwd, count):
+    for i in range(count):
+        SIG.add_contribution(cwd, {"what": "queued contribution %03d that describes its change at length" % i,
+                                   "target": "skill:some-skill-%03d" % i,
+                                   "why": "measured on the corpus, run %03d" % i})
+
+
+def test_a_full_contribution_queue_in_a_dream_room_stays_under_the_ceiling(tmp_path, monkeypatch, capsys):
+    # contrib_context formatted every queued entry with no budget of its own. At the queue's
+    # 100-entry cap that measured 11481 bytes against the 3300 ceiling, and over the ceiling the
+    # harness persists the WHOLE essentials block and injects a ~2KB preview, so every other block
+    # went with it. A dream room is where the entries are listed, so that is the case to pin.
+    cwd = _marketplace(tmp_path, "fullqueue")
+    _fill_queue(cwd, 100)
+    assert len(SIG.read_contributions(cwd)) == 100            # the fixture really is a full queue
+    _write_open_work(cwd, "".join(
+        "- [ ] (2026-08-27) [%d] USER: a standing item number %d | size: %d | open: x | next: y\n"
+        % (i * 10, i, i) for i in range(1, 6)))
+    _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+    ctx = _ctx(out)
+    assert len(ctx.encode("utf-8")) <= S._ESSENTIALS_CEILING_BYTES
+    assert "100 PENDING UPSTREAM CONTRIBUTION" in ctx          # the count survives
+    assert "OPEN-WORK ITEM(S)" in ctx                          # and the backlog is not crowded out
+
+
+def test_a_contribution_listing_that_does_not_fit_says_how_many_it_left_out(tmp_path):
+    cwd = _marketplace(tmp_path, "partial")
+    _fill_queue(cwd, 30)
+    block = S.contrib_context(cwd, budget=1500)
+    assert len(block.encode("utf-8")) <= 1500
+    assert block.startswith("30 PENDING UPSTREAM CONTRIBUTION")
+    assert "queued contribution 000" in block                  # it lists what fits, not nothing
+    assert "more" in block and "contrib_queue.py list" in block
+
+
+def test_a_contribution_budget_too_small_for_one_entry_leaves_the_count(tmp_path):
+    cwd = _marketplace(tmp_path, "tiny")
+    _fill_queue(cwd, 3)
+    block = S.contrib_context(cwd, budget=200)
+    assert block and "3 PENDING UPSTREAM CONTRIBUTION" in block
+    assert "queued contribution" not in block
+    assert len(block.encode("utf-8")) <= 200          # the count line respects the budget it was given
+
+
+def test_a_contribution_budget_too_small_even_for_the_count_yields_nothing(tmp_path):
+    # This budget once returned the count line anyway, over the budget and so over the ceiling, which
+    # makes the harness hide the WHOLE essentials block - the backlog with it. The queue yields first.
+    cwd = _marketplace(tmp_path, "tiny")
+    _fill_queue(cwd, 3)
+    assert S.contrib_context(cwd, budget=40) is None
+    assert len(S.contrib_pointer(cwd).encode("utf-8")) > 40    # control: it is the SIZE that refused it
+
+
+@pytest.mark.parametrize("budget", list(range(396, 426)) + list(range(520, 1200, 11)))
+def test_a_truncated_open_work_listing_stays_within_its_budget(tmp_path, budget):
+    # The line counting the items left out was appended AFTER the loop had spent the budget, so a
+    # listing cut close to the limit overran it by that line's own length. Many budgets, because
+    # whether one lands inside the overrun window depends on where the last admitted line ends.
+    proj = tmp_path / ("ow%d" % budget)
+    _write_open_work(proj, "".join(
+        "- [ ] (2026-08-27) [%d] USER: a standing item with a long description number %d | size: 9\n"
+        % (i * 10, i) for i in range(1, 40)))
+    block = S.open_work_context(str(proj), budget=budget)
+    assert "more in OPEN-WORK.md" in block or block == S._OPEN_WORK_COMPACT % 39
+    assert len(block.encode("utf-8")) <= budget
+
+
+def test_two_compact_pointers_never_push_the_essentials_past_the_ceiling(tmp_path, monkeypatch, capsys):
+    # With little room left, the backlog and the queue each degrade to a one-line pointer, and two
+    # pointers that each fit alone can still breach the ceiling together. Only the backlog pointer
+    # may stand over it; the queue pointer goes first.
+    cwd = _marketplace(tmp_path, "tight")
+    _fill_queue(cwd, 5)
+    _write_open_work(cwd, "".join("- [ ] (2026-08-27) [%d] USER: item %d | size: 1 | open: x | next: y\n"
+                                  % (i * 10, i) for i in range(1, 6)))
+    seen_listed = False
+    for filler in range(2700, 3200, 7):
+        _write_audit(cwd, "<SELF-IMPROVE-AUDIT>\n" + "x" * filler + "\n</SELF-IMPROVE-AUDIT>\n")
+        _, out = run_with_stdin(monkeypatch, capsys, make_plugin_root(tmp_path), cwd)
+        ctx = _ctx(out)
+        seen_listed = seen_listed or "5 PENDING UPSTREAM CONTRIBUTION" in ctx
+        if len(ctx.encode("utf-8")) > S._ESSENTIALS_CEILING_BYTES:
+            assert "PENDING UPSTREAM CONTRIBUTION" not in ctx, filler
+    assert seen_listed, "control: the queue pointer must appear while there is room for it"
+
+
 def test_open_work_falls_back_to_a_compact_pointer_when_the_budget_is_gone(tmp_path, monkeypatch, capsys):
     # When the other blocks have spent the ceiling there is no room for items, but the backlog
     # must not vanish either - hiding it is the failure this whole file exists to stop. It
