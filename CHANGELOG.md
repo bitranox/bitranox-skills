@@ -29,6 +29,89 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.12.0]
+
+### Added
+
+- **`subagent-probe-capability-gate` refuses a NAMED dispatch of a probe.** A named probe can
+  neither deliver nor stay clean: its final text is not returned to the caller, and SubagentStart
+  receives the NAME as `agent_type`, so `subagent-brief` cannot recognise the probe and briefs it.
+  Measured on Claude Code 2.1.268 with one named and one unnamed probe: the unnamed reply arrived
+  in its completion notification within 6 s with no brief in its transcript; the named reply never
+  arrived and its transcript carried the brief. The recorded corpus held two more named probes,
+  both briefed, against 0 of 276 unnamed ones. The refusal names the form that works: the same
+  `subagent_type`, unnamed.
+- **A test pins hook prose to `hooks.json`.** `test_hook_docstring_registrations.py` fails when a
+  hook's first docstring line (`Event(Matcher)`) or a skill's `(PreToolUse on X)` citation names
+  fewer tools than `hooks.json` registers - the direction that invites narrowing the registration
+  back to match the prose. Each scan carries a check that it READ every claim of its kind, because
+  a spelling the pattern cannot read drops out of the comparison rather than failing it.
+
+### Fixed
+
+- **`self-improve-audit` hid real tool signals beside test data, and reported test data as
+  signals.** The discount judged a whole BLOCK (any pytest marker in it discarded everything) or a
+  whole LINE (anything not naming a test file was kept), and those are wrong in opposite
+  directions: a genuine `fatal:` on the line after `12 passed in 0.40s` never surfaced, while the
+  phrases a test file's own diff hunk or heredoc body writes did. It now discounts by REGION - a
+  pytest run up to its TIMED summary, a diff section belonging to the file its header names, a
+  heredoc body, a numbered file listing, and a line that BEGINS with a test path. An error that
+  merely names a test file (`fatal: pathspec 'tests/test_x.py' did not match any files`) is a real
+  gap and counts. Replayed through the audit over the 250 most recent transcripts: 654 tool
+  candidates against the old rule's 765, 20 transcripts reporting more and 74 fewer. Eight of the
+  newly reported rows were adjudicated against their source transcripts, which is what caught six
+  as noise and produced four of the region rules above; of the three that remain in that sample,
+  two are a real `git push` failure the old rule had hidden behind a passing test count.
+- **`self-improve-audit` called a compacted session "the previous session".** It runs on PreCompact
+  as well as SessionEnd, and SessionStart surfaces the report after a compaction into the same
+  session. The wording now follows `hook_event_name`.
+- **The SessionStart contribution listing had no budget.** In a dream room it listed every queued
+  entry: 11481 bytes at the queue's 100-entry cap against the 3300-byte essentials ceiling, over
+  which the harness persists the whole block and injects a ~2 KB preview. The backlog is sized
+  first with the contribution count line held back, the listing gets what is left, and it falls
+  back to the count line when not one entry fits.
+- **A truncated listing overran its budget, and the backlog measured its floor by estimate.** The
+  "... and N more" line was appended after the budget was spent, so a listing cut close to its
+  limit exceeded it by that line's length; both listings now reserve the line before admitting an
+  entry. The backlog then decided whether a listing fits at all from head-plus-96-characters while
+  always admitting the first item, so every budget from 396 to 425 bytes produced 426 on a 39-item
+  fixture. It measures against the real first line and the real count line, as the contribution
+  listing already did.
+- **Two compact pointers could breach the ceiling together.** Both blocks degrade to a one-line
+  pointer, and two that each fit alone did not fit together. The queue's pointer now yields when it
+  no longer fits; only the backlog's may stand over the ceiling, because a breach hides the whole
+  essentials block and the backlog is the part that must survive. The floor `main` holds back for
+  the queue is the pointer string itself rather than a `budget=0` probe: with the pointer able to
+  decline, the probe would have returned nothing and the reservation would have become zero.
+- **The three hooks that recognise a probe disagreed about what one is.** `subagent-brief` matched
+  the markers as a substring so a `-strict` or `probe-effort-` variant fails closed and stays
+  clean; the probe gate and `subagent-backstop-nudge` compared against an exact two-name set. A
+  named `bitranox:baseline-probe-strict` or `probe-effort-low` was therefore let through the gate,
+  told to call SendMessage, and briefed under its name. All three now carry the same
+  `CLEAN_ROOM_MARKERS`, character-identical, pinned equal by a shared test: they are standalone
+  scripts with hyphenated filenames and cannot import one another.
+- **`subagent-backstop-nudge` told the caller to have a probe call SendMessage**, a tool the inert
+  type does not have, beside a refusal from the gate that already applies. Its premise is corrected
+  too: `name` is the delivery tell because a named agent's text stays in its own transcript, not
+  because an unnamed dispatch blocks.
+- **`subagent-brief` briefed an event with no readable `agent_type`**, fail-open on the one input
+  its own stated asymmetry says must get silence, and said a "backgrounded" subagent loses its
+  final text, which holds only for a named one.
+- **Three Task|Agent hooks raised on a malformed `tool_name`.** A list or a dict is unhashable, so
+  the set-membership test raised inside `assess()` and `main()` and the `__main__` catch-all turned
+  it into the exit those functions should have returned themselves. No verdict was at stake - a
+  list is never Task or Agent - so the defect is the exception escaping the pure functions.
+- **`reformat-md-tables` was registered for `Monitor` and ignored it.** Monitor was added to that
+  PostToolUse matcher group for the sibling hook in it, while this one still tested the tool NAME
+  against the two shell tools, so a Monitor event reached it and nothing happened: a registration
+  wider than the behaviour, which the new registration test cannot see. It keys on the event
+  CARRYING a command, which is the actual requirement - the scan reads which markdown changed under
+  the working directory and never parses the command.
+- **Hook registrations were stated narrower than registered** in 28 hook docstrings, three skill
+  citations (`compuse-bash`, `compuse-git`, `compuse-ssh`), `repo-gate`'s mode note and three test
+  docstrings: Bash where Bash|PowerShell is registered, and edit guards missing MultiEdit or
+  NotebookEdit. Re-driven against 6.9.1 the count was 36 stale claims, not the 3 first recorded.
+
 ## [6.11.1]
 
 ### Fixed

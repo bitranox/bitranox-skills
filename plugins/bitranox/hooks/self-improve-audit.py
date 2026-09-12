@@ -123,7 +123,8 @@ def _tool_signal(blocks):
 
     There is no strict counterpart: the gate never looks at tool blocks, so every tool signal is by
     definition a miss - EXCEPT test data, which tool_matches_outside_fixtures discounts one block at
-    a time (a pytest run as a whole, a line naming a test file on its own).
+    a time and by REGION within it: a pytest run up to its timed summary, a test file's diff hunk,
+    a heredoc body, a numbered file listing.
     """
     matched, shown = set(), ""
     for block in blocks:
