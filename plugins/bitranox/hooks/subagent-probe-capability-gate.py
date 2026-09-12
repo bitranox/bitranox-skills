@@ -33,6 +33,14 @@ SUBAGENT_TOOLS = {"Task", "Agent"}
 # is addressed namespaced, and a bare local copy is accepted too.
 INERT_AGENT_TYPES = {"baseline-probe", "bitranox:baseline-probe"}
 
+# What every hook that decides "is this a probe" matches on. Kept character-identical to the copies
+# in subagent-brief and subagent-backstop-nudge, which a shared test pins: these are standalone
+# hook scripts with hyphenated filenames and cannot import one another, so the constant is
+# duplicated on purpose and the test is what keeps the three from drifting. A substring test, so a
+# `-strict` or `probe-effort-` variant is recognised as a probe rather than silently treated as an
+# ordinary agent - which is how the naming defect below reached two probe types unguarded.
+CLEAN_ROOM_MARKERS = ("baseline-probe", "probe-effort")
+
 # Only an explicit, first-person DECLARATION that this dispatch needs no tools. Prose that merely
 # discusses tool use must not match, or the gate blocks ordinary review work - the classic guard
 # failure is firing on text that MENTIONS the footgun it guards.
@@ -100,13 +108,52 @@ def _declares_text_only(prompt):
     return False
 
 
+# A NAMED dispatch of a PROBE type is refused whatever its prompt says, because the name alone
+# breaks both things a probe exists for. Its final text never reaches the caller (a named agent
+# delivers only by SendMessage, and an inert type has no such tool), and SubagentStart receives the
+# NAME as `agent_type`, so subagent-brief cannot recognise the probe and briefs it. Measured
+# 2026-09-11 on Claude Code 2.1.268 with one named and one unnamed baseline-probe: the unnamed
+# reply arrived within 6 s and its transcript held no brief; the named reply never arrived and its
+# transcript carried the brief under the hook record `SubagentStart:<name>`. The recorded corpus
+# held two more named probes, both briefed, against 0 of 276 unnamed ones.
+#
+# Keyed on the probe MARKERS, not on the inert set: contamination by the brief follows from the
+# name, so it reaches a tool-capable probe type exactly as it reaches an inert one, and keying on
+# the two inert spellings left `-strict` and `probe-effort-` variants to fall through to the
+# tool-capable refusal, which never names the form that works.
+_DENY_NAMED_PROBE = (
+    "NAMED PROBE. '{atype}' is dispatched with name='{name}', and naming a probe breaks both "
+    "things it exists for: its final text is not returned to you (a named agent delivers only by "
+    "SendMessage, which an inert probe type does not have), and SubagentStart sees the name "
+    "instead of the type, so the probe is briefed like an ordinary agent and its baseline is "
+    "contaminated. Re-dispatch it UNNAMED, with the same subagent_type."
+)
+
+
+def is_clean_room(agent_type) -> bool:
+    """True when this agent type is a probe. PURE.
+
+    Case-insensitive substring match, so `bitranox:baseline-probe` and a bare `baseline-probe`
+    both count and an unknown probe-shaped name errs toward being guarded.
+    """
+    return any(marker in str(agent_type or "").lower() for marker in CLEAN_ROOM_MARKERS)
+
+
 def assess(tool_name, tool_input=None):
-    """Pure: ('deny', message) for a text-only probe on a tool-capable type, else (None, '')."""
-    if tool_name not in SUBAGENT_TOOLS:
+    """Pure: ('deny', message) for a probe that cannot do its job, else (None, '').
+
+    Denied: a text-only declaration on a tool-capable type, and ANY named dispatch of a probe
+    type. A tool name that is not a string is a malformed event and passes silently: testing it
+    against the set would raise, and the fail-open wrapper would turn that into a lost verdict.
+    """
+    if not isinstance(tool_name, str) or tool_name not in SUBAGENT_TOOLS:
         return (None, "")
     if not isinstance(tool_input, dict):
         return (None, "")
     atype = str(tool_input.get("subagent_type") or "").strip()
+    name = str(tool_input.get("name") or "").strip()
+    if name and is_clean_room(atype):
+        return ("deny", _DENY_NAMED_PROBE.format(atype=atype, name=name))
     if atype.lower() in {t.lower() for t in INERT_AGENT_TYPES}:
         return (None, "")
     if not _declares_text_only(str(tool_input.get("prompt") or "")):

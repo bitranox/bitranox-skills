@@ -79,13 +79,14 @@ def test_reminder_is_ascii():
     W.assess("Task").encode("ascii")  # raises if any non-ASCII char slipped in
 
 
-# --- the SendMessage delivery warning (named == background == mailbox) -------------------
+# --- the SendMessage delivery warning (named == final text stays in its own transcript) ----
 #
-# A NAMED dispatch runs in the background: its final text is never returned as the tool
-# result, only an idle/completion notification arrives. Without an explicit "SendMessage"
-# instruction in its prompt, the report sits unread in the agent's transcript. Observed
-# twice (2026-07 roster review: 9 of 9 silent; 2026-07-15 bmk review: 8 of 9 silent), which
-# is why the prose rule was escalated to this guard.
+# A NAMED dispatch's final text never reaches the caller: only an idle notification arrives.
+# Without an explicit "SendMessage" instruction in its prompt, the report sits unread in the
+# agent's transcript. Observed twice (2026-07 roster review: 9 of 9 silent; 2026-07-15 bmk
+# review: 8 of 9 silent), which is why the prose rule was escalated to this guard, and
+# re-measured 2026-09-11 on Claude Code 2.1.268 against an unnamed control whose reply did
+# arrive, in its completion notification.
 
 
 def test_named_dispatch_without_sendmessage_gets_the_delivery_warning():
@@ -101,8 +102,8 @@ def test_named_dispatch_that_already_says_sendmessage_is_not_warned():
 
 
 def test_unnamed_dispatch_is_not_warned():
-    # An unnamed dispatch blocks and returns its final message as the tool result, so the
-    # delivery trap does not apply - warning would be a false positive.
+    # An unnamed dispatch's final text arrives in its completion notification, so the delivery
+    # trap does not apply - warning would be a false positive.
     msg = W.assess("Agent", {"prompt": "Return ONLY: SCORE."})
     assert "does not mention" not in msg.lower()
 

@@ -12,9 +12,10 @@ Both are recorded in the store as things that actually happened, repeatedly:
   * the harness refuses a subagent's `Write` by FILENAME - `findings_batch1.md` and `report.md`
     were refused while `notes.txt` in the same directory was written fine. A subagent that plans to
     hand back a report file discovers this only after doing the work.
-  * a NAMED background subagent's final text is NOT returned to the main session. Only a
-    SendMessage reaches it; otherwise the report sits unread in the subagent's own transcript and
-    the main agent sees nothing but an idle notification.
+  * a NAMED subagent's final text is NOT returned to the main session. Only a SendMessage reaches
+    it; otherwise the report sits unread in the subagent's own transcript and the main agent sees
+    nothing but an idle notification. An UNNAMED subagent's final text does arrive, in the caller's
+    completion notification (both re-measured 2026-09-11 on Claude Code 2.1.268).
 
 WHY A HOOK AND NOT PROSE. Prose in a skill only works for a subagent that loads that skill, and the
 one skill every session loads is the one that tells subagents to stop reading. `SubagentStart` puts
@@ -28,6 +29,14 @@ baseline is measured. Its inertness bounds TOOLS, not CONTEXT, and the store alr
 RED can falsely pass because the environment fed the agent the answer. A hook that injects text
 into every subagent would contaminate exactly the agent whose value is an uncontaminated context,
 and the failure would be silent: the probe would simply start passing.
+
+The exclusion can only key on `agent_type`, the one identity SubagentStart carries - the event has
+no prompt and no `subagent_type`. For a NAMED dispatch that field holds the NAME: measured
+2026-09-11, a named baseline-probe's hook record read `SubagentStart:<name>` and the probe was
+briefed. A named probe therefore cannot be recognised here, and subagent-probe-capability-gate
+refuses to dispatch one. A probe sent to an ordinary agent type is briefed like any other agent.
+An `agent_type` that is missing, blank or not a string gets silence: all 1213 recorded subagents
+carried a non-empty type, so only a malformed event reaches that branch.
 
 Cannot block: `SubagentStart` ignores the exit code (stderr surfaces in the subagent's own
 transcript, and Claude does not see it). Emits `additionalContext` and exits 0, fail-open on any
@@ -54,9 +63,10 @@ BRIEF = (
     "findings_batch1.md - are refused, while an ordinary name such as notes.txt in the same "
     "directory is written normally. The final TEXT returned is the reliable channel, so results "
     "belong there rather than in a file the caller is told to open.\n"
-    "2. A named or backgrounded subagent's final text is not returned to the main session. It is "
-    "delivered only by SendMessage to the caller; without that the report stays in this "
-    "subagent's own transcript and the main session sees an idle notification and nothing else."
+    "2. A NAMED subagent's final text is not returned to the main session (an unnamed one's is). "
+    "A named subagent's result is delivered only by SendMessage to the caller; without that the "
+    "report stays in this subagent's own transcript and the main session sees an idle "
+    "notification and nothing else."
 )
 
 
@@ -70,7 +80,14 @@ def is_clean_room(agent_type) -> bool:
 
 
 def brief_for(agent_type):
-    """The text to inject for this agent type, or None to stay silent. PURE."""
+    """The text to inject for this agent type, or None to stay silent. PURE.
+
+    An agent type that is missing, blank or not a string is silent rather than briefed: without
+    one the exclusion cannot tell a probe from anything else, and briefing a probe is the mistake
+    that costs a believed baseline.
+    """
+    if not isinstance(agent_type, str) or not agent_type.strip():
+        return None
     return None if is_clean_room(agent_type) else BRIEF
 
 

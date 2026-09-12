@@ -38,17 +38,33 @@ def test_a_clean_room_agent_is_never_briefed(agent_type):
 
 @pytest.mark.parametrize("agent_type", [
     "general-purpose", "Explore", "Plan", "claude", "code-reviewer",
-    "bitranox:something-else", "", None,
+    "bitranox:something-else",
 ])
 def test_an_ordinary_agent_is_briefed(agent_type):
     assert B.is_clean_room(agent_type) is False
     assert B.brief_for(agent_type) == B.BRIEF
 
 
+@pytest.mark.parametrize("agent_type", ["", "   ", None, 7], ids=repr)
+def test_an_agent_type_that_cannot_be_read_fails_closed(agent_type):
+    """The file's own asymmetry: wrongly speaking contaminates a RED baseline, wrongly staying silent
+    costs one subagent a repeat. All 1213 recorded subagents carried a non-empty type (measured
+    2026-09-11), so only a malformed event lands here - and it gets silence, not the brief."""
+    assert B.brief_for(agent_type) is None
+
+
 def test_the_brief_names_both_delivery_facts():
     """Either fact alone leaves a subagent's work undelivered, so both must survive an edit."""
     assert "Write is refused by FILENAME" in B.BRIEF
     assert "SendMessage" in B.BRIEF
+
+
+def test_the_brief_confines_lost_final_text_to_named_subagents():
+    """Measured 2026-09-11 on Claude Code 2.1.268: an UNNAMED subagent's final text arrived in the
+    caller's completion notification; a NAMED one replied in its own transcript and nothing reached
+    the caller. Every subagent runs in the background, so 'named or backgrounded' overstated it."""
+    assert "named" in B.BRIEF.lower()
+    assert "backgrounded" not in B.BRIEF.lower()
 
 
 # ---------------------------------------------------------------- end to end through the shim
@@ -79,6 +95,15 @@ def test_end_to_end_emits_additional_context_for_an_ordinary_agent():
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
 def test_end_to_end_is_silent_for_a_baseline_probe():
     assert _run(_event("bitranox:baseline-probe")) == (0, "", "")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+@pytest.mark.parametrize("payload", [{}, {"hook_event_name": "SubagentStart", "agent_id": "a1"},
+                                     {"agent_type": ""}], ids=["empty", "no-agent-type", "blank"])
+def test_end_to_end_an_event_that_names_no_agent_type_is_silent(payload):
+    """An event with no readable agent_type got the whole brief: fail-OPEN on exactly the input the
+    file's stated asymmetry says must fail CLOSED."""
+    assert _run(payload) == (0, "", "")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")

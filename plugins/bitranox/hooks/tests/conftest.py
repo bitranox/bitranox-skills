@@ -47,6 +47,7 @@ _HOOK_MODULES = {
     "reformat-md-tables": "reformat_md_tables",
     "recall-memory": "recall_memory",
     "subagent-model-gate": "subagent_model_gate",
+    "subagent-probe-capability-gate": "subagent_probe_capability_gate",
     "subagent-backstop-nudge": "subagent_backstop_nudge",
     "touched-paths": "touched_paths",
     "subagent-capture": "subagent_capture",

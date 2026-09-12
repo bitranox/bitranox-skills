@@ -56,9 +56,11 @@ def assess(tool_name, tool_input, plan_armed=False):
     """Pure: return (action, message) with action in {'deny', 'warn', None}.
 
     A missing/blank `model` on a non-fork subagent dispatch warns - or denies while a plan
-    execution is armed. Everything else passes silently.
+    execution is armed. Everything else passes silently, including a tool name that is not a
+    string: testing that against the set would raise, and the fail-open wrapper would turn the
+    exception into a lost verdict.
     """
-    if tool_name not in SUBAGENT_TOOLS:
+    if not isinstance(tool_name, str) or tool_name not in SUBAGENT_TOOLS:
         return (None, "")
     if not isinstance(tool_input, dict):
         return (None, "")
