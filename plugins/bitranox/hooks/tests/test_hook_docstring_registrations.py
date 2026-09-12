@@ -62,7 +62,10 @@ def _skill_citations():
     for md in _skill_markdown():
         for hook, named in SKILL_CITATION.findall(md.read_text(encoding="utf-8")):
             cited = {t for t in TOOLS if re.search(r"\b%s\b" % t, named)}
-            cites.append((str(md.relative_to(SKILLS_DIR)), hook, cited))
+            # as_posix, not str: on Windows str(Path) separates with a backslash, so the sentinel
+            # below looked for a citation that was read and reported as "compuse-ssh\\SKILL.md".
+            # The whole check then failed on windows-latest alone and passed everywhere else.
+            cites.append((md.relative_to(SKILLS_DIR).as_posix(), hook, cited))
     return cites
 
 
@@ -87,6 +90,9 @@ def test_the_skill_citation_scan_reads_every_citation():
     total = sum(len(re.findall(r"\(PreToolUse\s+on\b", md.read_text(encoding="utf-8"))) for md in _skill_markdown())
     cites = _skill_citations()
     assert total == len(cites), "%d '(PreToolUse on' citations, %d read" % (total, len(cites))
+    # Reported with forward slashes on every platform, so the sentinel below means the same thing
+    # on windows-latest as here. Asserted rather than assumed: this failed CI once as a backslash.
+    assert not [s for s, _, _ in cites if "\\" in s], [s for s, _, _ in cites if "\\" in s]
     assert ("compuse-ssh/SKILL.md", "warn-inline-powershell") in {(s, h) for s, h, _ in cites}
 
 

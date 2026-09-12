@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.12.1]
+
+### Fixed
+
+- **The new registration test compared a Windows path against its POSIX spelling.** Its control
+  ("the scan read the `compuse-ssh` citation") built the key with `str(Path)`, which separates with
+  a backslash on Windows, so the citation was read and reported and the sentinel still missed it:
+  green on Linux and macOS, red on the windows-latest cell alone. Keys are built with `as_posix()`,
+  and a second assertion now requires every reported path to be free of backslashes, so the same
+  mistake fails as itself rather than as a missing citation.
+
 ## [6.12.0]
 
 ### Added
