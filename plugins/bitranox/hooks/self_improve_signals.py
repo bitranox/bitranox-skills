@@ -1944,24 +1944,91 @@ def tool_matches(text):
 
 # The tool branch of the audit has NO strict gate - every TOOL_SIGNAL_PATTERN hit is a miss. That
 # floods the audit when the SESSION'S OWN WORK is signal-detection code: reading a test_*.py or a
-# RED pytest tail puts those very phrases into tool text as literal DATA, not a live failure. Key on
-# STRONG pytest/test-file fingerprints only, so a genuine gap in ordinary tool output still surfaces
-# (a real "command not found" outside a test run is not fixture-shaped and is kept).
-_TEST_FIXTURE_PATTERN = re.compile(
-    r"\b\d+ (?:passed|failed|xfailed|xpassed|deselected|errors?)\b"   # a pytest run summary line
-    r"|\bno tests ran\b|\bshort test summary\b"
-    r"|=+ (?:FAILURES|ERRORS|test session starts) =+"
+# RED pytest tail puts those very phrases into tool text as literal DATA, not a live failure. So
+# test data is discounted, by REGION rather than by whole block or whole line - the two coarser
+# rules are wrong in opposite directions. Discarding a block that holds one pytest summary throws
+# away the NEXT command's genuine error; keeping every line that does not itself name a test file
+# keeps the phrases that file's own diff hunk or heredoc body writes.
+#
+# A pytest run is data from its first marker to its summary line, and the summary is TERMINAL: so
+# "12 passed in 0.40s" followed by "fatal: ..." leaves the fatal counted, and another tool's
+# "Found 2 errors." discounts only itself.
+_RUN_OPENS = re.compile(
+    r"=+ (?:FAILURES|ERRORS|test session starts|short test summary)"
     r"|\bcollected \d+ item"
     r"|::test_\w+"                                                    # a pytest node id
-    r"|\btest_\w*\.py\b"                                              # a test-file path token (a Read/grep/write of one)
     r"|-{2,} (?:RED|GREEN) -{2,}",                                    # the repo's own TDD-cycle markers
     re.IGNORECASE,
 )
+_RUN_CLOSES = re.compile(
+    r"\b\d+ (?:passed|failed|xfailed|xpassed|deselected|errors?)\b|\bno tests ran\b",
+    re.IGNORECASE,
+)
+# A diff's file header: every line until the next header belongs to the file this one names.
+_DIFF_FILE_HEADER = re.compile(r"^\s*(?:diff --git \S+ |--- |\+\+\+ )(\S+)")
+_HEREDOC_OPENS = re.compile(r"<<-?\s*[\"']?(\w+)[\"']?")
+_TEST_FILE_TOKEN = re.compile(r"\btest_\w*\.py\b", re.IGNORECASE)
+# A line that BEGINS with a test file's path is a grep hit or a listing, so what follows is that
+# file's content. A line that merely NAMES one ("fatal: pathspec 'tests/test_x.py' did not match")
+# is an error ABOUT the file and is exactly the kind of gap the audit exists to surface.
+_TEST_FILE_LINE = re.compile(r"^\s*[\w./\\-]*\btest_\w*\.py\b", re.IGNORECASE)
 
 
-def is_test_fixture_noise(text):
-    """True when tool text is pytest output or test-file CONTENT, not a live tooling failure."""
-    return bool(_TEST_FIXTURE_PATTERN.search(text or ""))
+class _FixtureScan:
+    """Walks one tool block line by line, deciding which lines sit inside test data."""
+
+    def __init__(self):
+        self.in_run = False
+        self.in_test_diff = False
+        self.heredoc_end = None
+
+    def is_data(self, line):
+        """True when this line is test data rather than live tool output.
+
+        Ordered and deliberately short-circuiting: a heredoc body and a diff hunk are verbatim
+        content, so a pytest marker quoted inside one must not open a run that outlives it.
+        """
+        return (self._in_heredoc(line) or self._in_test_diff(line) or self._in_run(line)
+                or bool(_TEST_FILE_LINE.match(line)))
+
+    def _in_heredoc(self, line):
+        """A heredoc that writes a test file; its body ends at the delimiter line."""
+        if self.heredoc_end is not None:
+            if line.strip() == self.heredoc_end:
+                self.heredoc_end = None
+            return True
+        opener = _HEREDOC_OPENS.search(line)
+        if opener is None or not _TEST_FILE_TOKEN.search(line):
+            return False
+        self.heredoc_end = opener.group(1)
+        return True
+
+    def _in_test_diff(self, line):
+        """A diff section whose file header names a test file."""
+        header = _DIFF_FILE_HEADER.match(line)
+        if header is not None:
+            self.in_test_diff = bool(_TEST_FILE_TOKEN.search(header.group(1)))
+        return self.in_test_diff
+
+    def _in_run(self, line):
+        """A pytest run, from its first marker up to and including its summary line."""
+        if _RUN_CLOSES.search(line):
+            self.in_run = False
+            return True
+        if _RUN_OPENS.search(line):
+            self.in_run = True
+        return self.in_run
+
+
+def tool_matches_outside_fixtures(block):
+    """TOOL-signal matches in ONE tool block, discounting only what is test data.
+
+    Judge one block at a time: a message carries several (parallel tool calls), and judging their
+    joined text let a single test-file name anywhere switch off every signal in the message.
+    """
+    scan = _FixtureScan()
+    live = [line for line in (block or "").splitlines() if not scan.is_data(line)]
+    return tool_matches("\n".join(live))
 
 
 # Invoking a skill (the Skill tool, or a /slash-command) injects the WHOLE SKILL.md as a

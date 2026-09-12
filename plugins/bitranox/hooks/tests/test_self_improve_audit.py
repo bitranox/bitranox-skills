@@ -95,6 +95,75 @@ def test_candidates_are_capped(tmp_path, monkeypatch):
     assert "30 message(s)" in body  # the total count is still reported honestly
 
 
+# ---- the report names the moment it describes: PreCompact is not SessionEnd ---------------
+
+def run_audit_for(monkeypatch, transcript, cwd, event_name):
+    event = {"transcript_path": transcript, "cwd": cwd, "hook_event_name": event_name}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    return A.main()
+
+
+def test_a_precompact_report_does_not_call_the_session_previous(tmp_path, monkeypatch):
+    """The hook is registered on PreCompact as well as SessionEnd, and SessionStart surfaces the file
+    after a compaction - into the SAME session, where 'the previous session' is false."""
+    tp = make_transcript(tmp_path, [("assistant", "let me reconsider the parser approach")])
+    run_audit_for(monkeypatch, tp, "/proj/compact", "PreCompact")
+    body = S.audit_file("/proj/compact").read_text(encoding="utf-8").lower()
+    assert "previous session" not in body and "last session" not in body
+    assert "compact" in body
+
+
+def test_a_precompact_report_does_not_call_the_skill_roster_last_session():
+    cand = {"role": "assistant", "matched": ["reconsider"], "snippet": "let me reconsider",
+            "escaped": False}
+    body = A.render_report([cand], {"bitranox:meta-self-improve": 1}, event="PreCompact").lower()
+    assert "last session" not in body and "previous session" not in body
+    assert "bitranox:meta-self-improve" in body
+
+
+def test_a_sessionend_report_still_names_the_previous_session(tmp_path, monkeypatch):
+    """Control: the SessionEnd wording was right for SessionEnd and must stay."""
+    tp = make_transcript(tmp_path, [("assistant", "let me reconsider the parser approach")])
+    run_audit_for(monkeypatch, tp, "/proj/ended", "SessionEnd")
+    assert "previous session" in S.audit_file("/proj/ended").read_text(encoding="utf-8").lower()
+
+
+# ---- fixture suppression is per tool block, and a test-file name hides only its own line ----
+
+def _tool_results(tmp_path, *contents):
+    return write_raw(tmp_path, [{"type": "user", "message": {"content": [
+        {"type": "tool_result", "content": c} for c in contents]}}])
+
+
+def test_a_test_file_name_elsewhere_in_the_block_does_not_hide_a_real_gap(tmp_path):
+    """The suppression was all-or-nothing over the message: one test_*.py token anywhere switched
+    off every tool signal in it. A line naming a test file is data; the line after it is not."""
+    t = _tool_results(tmp_path, "tests/test_alpha.py\ntests/test_beta.py\nbash: pct: command not found")
+    cands = A.find_candidates(str(t))
+    assert any("command not found" in m for c in cands for m in c["matched"]), cands
+
+
+def test_pytest_output_in_one_result_does_not_hide_a_gap_in_another(tmp_path):
+    """Blocks are judged independently. Current transcripts write one tool_result per record, so
+    this pins the block boundary rather than a shape seen in practice."""
+    t = _tool_results(tmp_path, "1 failed, 41 passed in 2.10s", "bash: pct: command not found")
+    cands = A.find_candidates(str(t))
+    assert any("command not found" in m for c in cands for m in c["matched"]), cands
+
+
+def test_a_signal_on_the_same_line_as_a_test_file_name_is_still_data(tmp_path):
+    """grep output over test files puts the phrase and the file name on one line: that stays quiet."""
+    t = _tool_results(tmp_path, 'tests/test_x.py:12:    assert "command not found" in err')
+    assert A.find_candidates(str(t)) == []
+
+
+def test_a_candidate_snippet_shows_the_block_that_matched(tmp_path):
+    """With several blocks in one message, the snippet must quote the signal, not the fixture."""
+    t = _tool_results(tmp_path, "1 failed, 41 passed in 2.10s " + "x" * 200, "bash: pct: command not found")
+    cands = [c for c in A.find_candidates(str(t)) if c["role"] == "tool"]
+    assert cands and "command not found" in cands[0]["snippet"], cands
+
+
 # ---- P2: tool-block scanning + skill tally ---------------------------------------------
 
 def write_raw(tmp_path, objs):

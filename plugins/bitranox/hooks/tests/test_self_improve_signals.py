@@ -1120,33 +1120,55 @@ def test_tool_matches_ignores_ordinary_tool_output():
         assert not S.tool_matches(text), text
 
 
-def test_is_test_fixture_noise_flags_pytest_and_test_file_content():
-    """When a session's work is signal-detection code, reading test_*.py or RED pytest output puts
-    TOOL_SIGNAL_PATTERN phrases into tool text as literal DATA - not a live tooling gap. The audit
-    tool branch has no strict gate, so without this every such occurrence became a phantom miss."""
+def test_a_test_run_block_yields_no_tool_matches():
+    """When a session's work is signal-detection code, a RED pytest run puts TOOL_SIGNAL_PATTERN
+    phrases into tool text as literal DATA - not a live tooling gap. The audit tool branch has no
+    strict gate, so without this every such occurrence became a phantom miss."""
     for text in [
         "--- RED --- E FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x'",
-        "test_self_improve_signals.py::test_tool_matches_flags_a_real_tooling_gap FAILED",
-        "cat >> test_self_improve_audit.py <<'PYEOF' error: unrecognized arguments",
-        "collected 42 items ... 1 failed, 41 passed",
-        "no tests ran in 0.00s",
-        "===== FAILURES =====",
+        "test_self_improve_signals.py::test_tool_matches_flags_a_real_tooling_gap FAILED\n"
+        "bash: x: command not found",
+        "collected 42 items ... error: unrecognized arguments\n1 failed, 41 passed",
+        "===== test session starts =====\nfatal: not a git repository\nno tests ran in 0.00s",
+        "===== FAILURES =====\npermission denied",
+        "diff --git a/tests/test_signals.py b/tests/test_signals.py\n--- a/tests/test_signals.py\n"
+        "+++ b/tests/test_signals.py\n@@ -10,3 +10,4 @@\n+    assert tool_matches(\"bash: pct: command not found\")",
+        "cat > tests/test_signals.py <<'PY'\ndef test_flag():\n    assert tool_matches('bash: pct: command not found')\nPY",
+        'tests/test_x.py:12:    assert "command not found" in err',
     ]:
-        assert S.is_test_fixture_noise(text), text
+        assert S.tool_matches(text), text                          # control: the phrase IS there
+        assert S.tool_matches_outside_fixtures(text) == [], text
 
 
-def test_is_test_fixture_noise_passes_a_real_gap_through():
-    """A genuine tooling failure in ordinary (non-pytest, non-test-file) tool output is NOT noise
-    and must still surface - suppressing only fixture-shaped text keeps the real signal."""
+def test_a_real_error_beside_or_about_test_data_still_counts():
+    """Test data is discounted narrowly: the next command's error after a pytest summary, a line after
+    a test-file listing, an error that merely names a test file, another tool's error count, and what
+    follows a test file's diff section or heredoc all still count."""
+    cases = {
+        "12 passed in 0.40s\nfatal: The current branch fix has no upstream branch.": "fatal:",
+        "tests/test_alpha.py\nbash: pct: command not found": "command not found",
+        "fatal: pathspec 'tests/test_signals.py' did not match any files": "fatal:",
+        "ls: cannot access 'tests/test_x.py': No such file or directory": "no such file or directory",
+        "Found 2 errors.\nerror: unexpected argument '--chek' found": "error:",
+        "diff --git a/tests/test_a.py b/tests/test_a.py\n+x\ndiff --git a/src/b.py b/src/b.py\n"
+        "+bash: pct: command not found": "command not found",
+        "cat > tests/test_a.py <<'PY'\nx = 1\nPY\nbash: pct: command not found": "command not found",
+    }
+    for text, expected in cases.items():
+        assert expected in S.tool_matches_outside_fixtures(text), text
+
+
+def test_tool_matches_outside_fixtures_passes_a_real_gap_through():
+    """A genuine tooling failure in ordinary (non-pytest, non-test-file) tool output is NOT noise."""
     for text in [
         "error: unrecognized arguments: --rehome-to",
         "bash: pct: command not found",
         "fatal: not a git repository (or any of the parent directories)",
         "uv: error: Requested extra not found: dev",
-        "1170 files reformatted",
-        "",
     ]:
-        assert not S.is_test_fixture_noise(text), text
+        assert S.tool_matches_outside_fixtures(text) == S.tool_matches(text) != [], text
+    assert S.tool_matches_outside_fixtures("1170 files reformatted") == []
+    assert S.tool_matches_outside_fixtures("") == []
 
 
 def _isolate_home(tmp_path, monkeypatch):
