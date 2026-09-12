@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 import ci_watch_state as state
-from shell_text import commands_only, is_shell_tool
+from shell_text import commands_only, is_shell_tool, iter_segments, strip_heredoc_bodies
 
 __all__ = ["main", "notice"]
 
@@ -71,8 +71,47 @@ _DASH_C = re.compile(r"\bgit\b(?:\s+-c[= ]\S+)*\s+-C[= ]\s*(\S+)")
 _UNRESOLVABLE = ("$", "`", '"', "'")
 
 
+# A leading `cd` moves every later statement: `cd /other/repo && git push` pushes THAT repo,
+# not the event's cwd. Read at statement start, like `git-wrong-repo-nudge` does, so a `cd` in
+# an argument is not mistaken for one.
+_CD_AT_START = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
+# Only a push BEFORE which the `cd` ran is moved by it, so the walk stops at the first one.
+_GIT_PUSH = re.compile(r"\bgit\b[^\n;|&]*\bpush\b")
+
+
+def _cwd_after_any_cd(command: str, cwd: str) -> str | None:
+    """The directory the push actually runs in, following any `cd` that precedes it.
+
+    Heredoc bodies are stripped first: a `cd` inside one is stdin DATA and moves nothing, the
+    same trap the `-C` reader already guards. Structure is read from the masked form and the
+    VALUE from the stripped text at the same offsets, because masking preserves length - and
+    both come from the stripped text, so the two offset spaces agree.
+    """
+    stripped = strip_heredoc_bodies(command)
+    masked = commands_only(stripped)
+    here = cwd
+    for at, seg in iter_segments(masked):
+        moved = _CD_AT_START.match(seg)
+        if moved:
+            token = stripped[at + moved.start("target"):at + moved.end("target")]
+            if not token or any(ch in token for ch in _UNRESOLVABLE):
+                return None
+            try:
+                here = str((Path(here) / token).resolve())
+            except (OSError, ValueError):
+                return None
+            continue
+        if _GIT_PUSH.search(seg):
+            return here
+    return here
+
+
 def _repo_dir(command: str, cwd: str) -> str | None:
     """Which repository this push actually targets, or None when the text cannot say.
+
+    `git -C` names the repo outright. Failing that the push runs wherever the command last
+    `cd`-ed to, which is NOT the event's cwd: measured 2026-09-12, a `cd /other/repo && git push`
+    recorded the session's own repo and armed the gate on a commit it never pushed.
 
     Structure is read from the masked form; the VALUE is then taken from the raw text at the same
     offsets, because masking preserves length. Comparing values on the masked form would decide the
@@ -80,7 +119,7 @@ def _repo_dir(command: str, cwd: str) -> str | None:
     """
     found = _DASH_C.search(commands_only(command))
     if not found:
-        return cwd
+        return _cwd_after_any_cd(command, cwd)
     token = command[found.start(1):found.end(1)]
     if not token or any(ch in token for ch in _UNRESOLVABLE):
         return None

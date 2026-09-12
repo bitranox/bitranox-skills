@@ -29,6 +29,18 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.11.1]
+
+### Fixed
+- **`ci-watch-nudge` now follows a leading `cd` when deciding which repository a push targets.**
+  `_repo_dir` honoured `git -C` alone and otherwise took the event's cwd, so
+  `cd /other/repo && git push` recorded the SESSION's repo: measured 2026-09-12, pushing one repo
+  from another's session announced that other repo's HEAD and armed the Stop gate on a commit the
+  session never pushed, so the watch polled a run that had finished days earlier and reported
+  success. A `cd` is now read at statement start, before the push only, with heredoc bodies
+  stripped so a `cd` in stdin data moves nothing, and an unresolvable target (an expansion) refuses
+  rather than guessing.
+
 ## [6.11.0]
 
 ### Added

@@ -399,3 +399,32 @@ def test_a_command_merely_quoting_the_watcher_does_not_clear(repo, capsys):
     capsys.readouterr()
     assert hook.main(_event('echo "uv run ci_wait.py --sha deadbeef"', repo)) == 0
     assert state.pending_for(str(repo), "sess-1") != []
+
+
+def test_a_leading_cd_moves_the_repo_the_push_targets():
+    """`cd /other/repo && git push` pushes /other/repo, not the event's cwd.
+
+    Measured 2026-09-12: pushing bitranox-skills from an lsdsk session recorded lsdsk's HEAD and
+    armed the gate on a commit that session never pushed, so the watch polled a run that had
+    finished days before and reported success. `tooling-detour-nudge` already tracks a leading
+    `cd` for exactly this reason; this hook read `git -C` alone."""
+    assert _names(hook._repo_dir("cd /other/repo && git push", "/cwd"), "/other/repo")
+
+
+def test_a_cd_in_a_heredoc_body_does_not_move_the_repo():
+    """A heredoc body is stdin DATA, so a `cd` inside one moves nothing - the same trap the
+    `-C` reader already guards. Without this the nudge watches a repo the command never entered."""
+    cmd = "cat > r.md <<EOF\ncd /fake/repo\nEOF\ngit push origin master"
+    assert not _names(hook._repo_dir(cmd, "/fake/repo_marker"), "/fake/repo")
+
+
+def test_a_cd_after_the_push_does_not_move_it():
+    """Only a `cd` BEFORE the push moves it. Reading the whole command would let a tidy-up
+    `cd` in a later statement retarget a push that already happened in this one."""
+    assert _names(hook._repo_dir("git push && cd /other/repo", "/cwd"), "/cwd")
+
+
+def test_an_unresolvable_cd_target_refuses_rather_than_guessing():
+    """A path built from an expansion cannot be resolved from the text, and guessing is how the
+    wrong repository gets asked - the rule `-C` already follows."""
+    assert hook._repo_dir("cd $HOME/repo && git push", "/cwd") is None
