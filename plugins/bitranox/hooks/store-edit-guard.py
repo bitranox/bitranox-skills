@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|MultiEdit) guard: the memory store is written ONLY by the engine.
+"""PreToolUse(Edit|Write|MultiEdit|NotebookEdit) guard: the memory store is written ONLY by the engine.
 
 Two protected surfaces:
   1. ANY path inside a store dir - the live `.claude-memory/` (slug-named bodies + .archive) or the

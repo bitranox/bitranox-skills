@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: `sed '1,/re/d'` deletes one block more than you meant.
+"""PreToolUse(Bash|PowerShell) nudge: `sed '1,/re/d'` deletes one block more than you meant.
 
 sed's `1,/re/` range starts hunting for the END pattern at line 2. So on a file whose line 1 is the
 opening delimiter, the range already closes on the CLOSING delimiter - the frame is gone in ONE

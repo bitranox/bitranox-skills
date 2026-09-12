@@ -1,4 +1,4 @@
-"""Tests for toolbox-nudge.py (PreToolUse Bash nudge toward a local toolbox tool). ASCII only."""
+"""Tests for toolbox-nudge.py (PreToolUse nudge on Bash, PowerShell, Edit, Write, MultiEdit and NotebookEdit toward a local toolbox tool). ASCII only."""
 import io
 import json
 import sys

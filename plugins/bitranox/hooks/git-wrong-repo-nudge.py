@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: one call, two work trees, so two gits answer about different repos.
+"""PreToolUse(Bash|PowerShell) nudge: one call, two work trees, so two gits answer about different repos.
 
 A `cd` persists for the rest of the call. When a single call cd's into two DIFFERENT work trees and
 runs git after each, the two answers have different subjects and nothing in the output says which is

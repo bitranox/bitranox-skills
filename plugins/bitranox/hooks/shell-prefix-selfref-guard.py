@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against a prefix assignment referenced on the same line.
+"""PreToolUse(Bash|PowerShell) guard against a prefix assignment referenced on the same line.
 
 `VAR=value cmd ... "$VAR"` never does what it looks like. A prefix assignment
 binds the variable in the COMMAND's environment, but `$VAR` on the same line is

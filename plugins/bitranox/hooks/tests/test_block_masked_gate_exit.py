@@ -1,4 +1,4 @@
-"""Tests for block-masked-gate-exit.py (PreToolUse(Bash) masked-gate-status guard).
+"""Tests for block-masked-gate-exit.py (PreToolUse(Bash|PowerShell) masked-gate-status guard).
 
 Contract: reads a PreToolUse event JSON on stdin. Exit 2 (with stderr) blocks ONLY when a
 recognised gate runs inside a pipeline where it is not the last element (so a filter's status

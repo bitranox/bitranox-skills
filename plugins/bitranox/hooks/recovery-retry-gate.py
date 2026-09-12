@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|Write|Edit) gate: this call REPEATS a destructive act that already had to be undone.
+"""PreToolUse(Bash|PowerShell|Write|Edit|NotebookEdit) gate: this call REPEATS a destructive act that already had to be undone.
 
 WHY THIS EXISTS, next to jig-repetition-nudge.py. That hook asks "is this the same job again?" and
 answers it from SCRIPT TEXT - shingles, shared purpose words, numbered stems. Measured over 97 real

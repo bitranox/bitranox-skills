@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: a test/lint/build run under a FOREIGN VIRTUAL_ENV.
+"""PreToolUse(Bash|PowerShell) nudge: a test/lint/build run under a FOREIGN VIRTUAL_ENV.
 
 An ambient `VIRTUAL_ENV` - set by an IDE, or carried into the shell from another project - silently
 hijacks which interpreter a bare `pytest` / `make` / `pyright` / `pip-audit` resolves. The run then

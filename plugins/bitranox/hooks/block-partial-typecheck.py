@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against a type-check narrowed away from the tests.
+"""PreToolUse(Bash|PowerShell) guard against a type-check narrowed away from the tests.
 
 The recurring mistake:
 

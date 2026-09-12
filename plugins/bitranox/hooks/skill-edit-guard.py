@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|MultiEdit) guard: a SKILL.md edit must go through the skill-writer process.
+"""PreToolUse(Edit|Write|MultiEdit|NotebookEdit) guard: a SKILL.md edit must go through the skill-writer process.
 
 Editing a shipped `SKILL.md` by hand - skipping `bitranox:meta-skill-writer`'s RED-GREEN-REFACTOR / Iron
 Law (baseline test first, sibling tests for any bundled script) - is the exact miss this guard prevents.

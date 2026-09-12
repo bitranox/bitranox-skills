@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: a memory hook asserting a mechanism is MISSING needs the init path read.
+"""PreToolUse(Bash|PowerShell) nudge: a memory hook asserting a mechanism is MISSING needs the init path read.
 
 "X is missing" / "X defaults off" / "X is never called" is the shape of claim that is easiest to
 infer and hardest to verify: a doc comment is not a constructor, and a feature that ships OFF

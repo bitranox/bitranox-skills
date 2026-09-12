@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against a known-always-broken git invocation:
+"""PreToolUse(Bash|PowerShell) guard against a known-always-broken git invocation:
 `git rev-parse --short` with two or more revisions.
 
 `--short` abbreviates a SINGLE revision; passing two or more makes git fail with

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit) recorder: which files did this turn actually touch?
+"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit) recorder: which files did this turn actually touch?
 
 Capture is cwd-keyed (`memory_engine add --proj "<cwd>"`), so a learning ABOUT a repo you edited
 from somewhere ELSE lands in the wrong store - and cross-tree the dream can never re-home it (a

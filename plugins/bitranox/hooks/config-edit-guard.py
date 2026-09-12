@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Edit|Write|NotebookEdit) guard: Claude Code config JSON goes through update-config.
+"""PreToolUse(Edit|Write|MultiEdit|NotebookEdit) guard: Claude Code config JSON goes through update-config.
 
 Hand-editing `settings.json` is the `no-hand-edit-config-json` footgun applied to the file that
 decides how the harness itself behaves: a stray comma or a key at the wrong nesting level does not

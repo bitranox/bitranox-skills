@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit) guard against AI-writing typographic / invisible
+"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit) guard against AI-writing typographic / invisible
 tells in prose files.
 
 Flags em/en-dashes, curly quotes, ellipsis, guillemets, and invisible blanks

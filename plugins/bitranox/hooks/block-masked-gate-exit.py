@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against claiming success on a gate whose exit status a pipe ate.
+"""PreToolUse(Bash|PowerShell) guard against claiming success on a gate whose exit status a pipe ate.
 
 The mistake, seen twice in one session on a rule that was already written down twice:
 

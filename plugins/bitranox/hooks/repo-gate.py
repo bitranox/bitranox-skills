@@ -4,7 +4,7 @@
 Enforces the repo's mandatory invariants in two interchangeable modes that share one
 set of checks:
 
-  * Hook mode (default): PreToolUse(Bash). Reads the event JSON on stdin and acts ONLY
+  * Hook mode (default): PreToolUse(Bash|PowerShell). Reads the event JSON on stdin and acts ONLY
     when the command is a `git commit` or `gh pr create`. On a violation it exits 2 to
     block the commit and prints what to fix; otherwise exits 0. Every error path exits 0
     so a broken gate never wedges a turn.
@@ -12,7 +12,7 @@ set of checks:
     and exits 1 on any violation (0 otherwise). Meant for GitHub Actions as a reporting
     check.
 
-CRITICAL: this plugin is installed globally, so the Bash hook fires in EVERY repo the
+CRITICAL: this plugin is installed globally, so the Bash|PowerShell hook fires in EVERY repo the
 user commits in. The gate first verifies it is actually inside the bitranox-skills repo
 (plugins/bitranox/.claude-plugin/plugin.json with name "bitranox"); in any other repo it
 no-ops (exit 0) so it never blocks unrelated commits.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: a path-status question answered from a directory the path is not in.
+"""PreToolUse(Bash|PowerShell) nudge: a path-status question answered from a directory the path is not in.
 
 The Bash tool's working directory PERSISTS across calls, so a call carrying no `cd` of its own runs
 wherever an earlier call left the shell. When that call asks git a question ABOUT A PATH, and the

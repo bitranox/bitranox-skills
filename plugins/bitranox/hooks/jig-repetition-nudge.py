@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Write|Bash) nudge: you may be solving one job over and over. Judge, then build a jig.
+"""PreToolUse(Write|Bash|PowerShell) nudge: you may be solving one job over and over. Judge, then build a jig.
 
 Why this exists, next to toolbox-nudge.py: that hook matches a fixed catalogue of signatures for
 chores a jig ALREADY exists for, so it answers "do we have a tool for this?". It cannot fire for a

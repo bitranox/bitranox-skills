@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit) validator for JSON / YAML / XML files.
+"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit) validator for JSON / YAML / XML files.
 
 The files-edit-json / files-edit-yml / files-edit-xml skills teach the model to round-trip these
 formats through a library so the result is valid by construction. This hook is the

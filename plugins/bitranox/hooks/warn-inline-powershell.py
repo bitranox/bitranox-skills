@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: remote PowerShell passed inline as `-Command` over SSH.
+"""PreToolUse(Bash|PowerShell) nudge: remote PowerShell passed inline as `-Command` over SSH.
 
 `ssh <host> 'powershell -Command "... | ..."'` is handed to the Windows side through `cmd.exe`,
 which consumes pipes and quotes before PowerShell ever parses the string. The command does not

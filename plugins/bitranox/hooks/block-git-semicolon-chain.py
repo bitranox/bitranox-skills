@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard: two or more state-changing git verbs joined by `;` instead of `&&`.
+"""PreToolUse(Bash|PowerShell) guard: two or more state-changing git verbs joined by `;` instead of `&&`.
 
 `;` means "run the next one regardless". Chain `git commit ; git merge ; git push` and a commit
 that refused still lets the merge and the push run - and those two answer a no-op with git's

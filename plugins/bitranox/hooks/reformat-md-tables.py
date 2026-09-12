@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit|MultiEdit|Bash) hook: auto-realign markdown tables after a write.
+"""PostToolUse(Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell) hook: auto-realign markdown tables after a write.
 
 Formatter-on-save for markdown tables (Mode A). When a markdown file is written or edited, reuse the
 docs-md-table-formatting skill's `reformat_tables.reformat_file()` to realign its tables in place, so a

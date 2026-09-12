@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: `git rev-parse <name>` without --verify echoes the name back.
+"""PreToolUse(Bash|PowerShell) nudge: `git rev-parse <name>` without --verify echoes the name back.
 
 Given a ref it cannot resolve, a plain `git rev-parse` does not fail - it prints the argument
 verbatim and exits 0. So a comparison built on it succeeds against a string that was never a

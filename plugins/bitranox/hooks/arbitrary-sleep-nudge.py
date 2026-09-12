@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge: a long bare `sleep` waits on the CLOCK, not on the event.
+"""PreToolUse(Bash|PowerShell) nudge: a long bare `sleep` waits on the CLOCK, not on the event.
 
 Waiting a fixed span for something whose real duration you have not measured is how a run either
 returns before the work finished or sits idle long after it did. The rule is to wait on a concrete

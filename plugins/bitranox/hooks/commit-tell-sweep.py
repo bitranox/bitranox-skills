@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against AI-writing typographic / invisible tells in a git
+"""PreToolUse(Bash|PowerShell) guard against AI-writing typographic / invisible tells in a git
 commit / merge / tag MESSAGE passed inline.
 
 The `tell-sweep` PostToolUse hook catches tells in prose FILES, but a commit message

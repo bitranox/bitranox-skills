@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard: stop text-editing a STRUCTURED file (JSON/YAML/TOML/XML) with sed.
+"""PreToolUse(Bash|PowerShell) guard: stop text-editing a STRUCTURED file (JSON/YAML/TOML/XML) with sed.
 
 Editing structured config as raw text is the recurring `no-hand-edit-config-json` footgun: a `sed -i`
 silently corrupts structure, hits the wrong match, or churns formatting. The right tool is the bitranox

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard: warn before a `git commit` when the checkout state is risky.
+"""PreToolUse(Bash|PowerShell) guard: warn before a `git commit` when the checkout state is risky.
 
 For when multiple agents/sessions share ONE working copy: branch/HEAD/index can change under you between
 reads, so a commit lands on the wrong branch or on a stale base. Always active (wired in hooks.json), but

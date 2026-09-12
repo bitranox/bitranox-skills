@@ -1,4 +1,4 @@
-"""Tests for block-pgrep-self-match.py (PreToolUse(Bash) bracket-trick guard).
+"""Tests for block-pgrep-self-match.py (PreToolUse(Bash|PowerShell) bracket-trick guard).
 
 Contract: reads a PreToolUse event JSON on stdin. Exit 2 (with stderr) blocks only
 when a pgrep/pkill bracket-trick pattern [X]rest has its de-bracketed literal Xrest

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) guard against the pgrep/pkill self-match.
+"""PreToolUse(Bash|PowerShell) guard against the pgrep/pkill self-match.
 
 `pgrep -f` / `pkill -f` match against /proc/*/cmdline, which INCLUDES the command
 line of the shell running the check. So the checker can match itself: pgrep

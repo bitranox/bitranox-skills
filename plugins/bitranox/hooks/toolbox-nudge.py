@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|Write|Edit|MultiEdit) nudge: when a tool call looks like a hand-rolled chore
+"""PreToolUse(Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit) nudge: when a tool call looks like a hand-rolled chore
 that the local toolbox already has a tested tool for, inject a non-blocking additionalContext
 pointer ("use the jig") - once per tool per session. Silent if the toolbox (or the specific tool)
 is not installed.

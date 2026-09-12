@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) nudge for checks that silently report the wrong answer.
+"""PreToolUse(Bash|PowerShell) nudge for checks that silently report the wrong answer.
 
 A check you write to VERIFY your own work is itself unverified code, and it fails in
 the direction that produces a false alarm or a false all-clear - never in a direction

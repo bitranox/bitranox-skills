@@ -1,4 +1,4 @@
-"""Tests for block-partial-typecheck.py (PreToolUse(Bash) narrowed-pyright guard).
+"""Tests for block-partial-typecheck.py (PreToolUse(Bash|PowerShell) narrowed-pyright guard).
 
 Contract: reads a PreToolUse event JSON on stdin. Exit 2 (with stderr) blocks only
 when pyright is given positional paths, the project has a test directory, and none

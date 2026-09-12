@@ -129,7 +129,7 @@ The default ssh shell on Windows is `cmd.exe`; to make it PowerShell set the `De
 
 ## Hook / script
 
-`block-pgrep-self-match` (PreToolUse on Bash) catches the echo-label pgrep self-match, including `ssh ... 'pgrep ...'`. `warn-inline-powershell` (PreToolUse on Bash) is the one that fires on an inline remote `-Command`, and it points back here.
+`block-pgrep-self-match` (PreToolUse on Bash and PowerShell) catches the echo-label pgrep self-match, including `ssh ... 'pgrep ...'`. `warn-inline-powershell` (PreToolUse on Bash and PowerShell) is the one that fires on an inline remote `-Command`, and it points back here.
 
 For remote PowerShell, write yourself a small wrapper - no such script ships here - doing these two steps:
 
