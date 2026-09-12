@@ -1158,6 +1158,50 @@ def test_a_real_error_beside_or_about_test_data_still_counts():
         assert expected in S.tool_matches_outside_fixtures(text), text
 
 
+def test_a_shift_operator_is_not_a_heredoc_opener():
+    """A heredoc body runs to its delimiter, so a line misread as an opener swallows the rest.
+
+    Found by replaying the discount over the 250 most recent transcripts rather than by reading it:
+    `<<` matched unanchored also matches `cout << x`, and a source listing holding one such line
+    then reported nothing at all. An unquoted delimiter must abut the `<<`, and it must end the
+    line give or take a trailing redirection.
+    """
+    assert S.tool_matches_outside_fixtures("out << value\nbash: pct: command not found")
+    assert S.tool_matches_outside_fixtures("cout << x << endl\nfatal: not a git repository")
+    assert S.tool_matches_outside_fixtures("cat > t.py <<'PY'\nx = 1\nPY\nbash: pct: command not found")
+    for silent in ["cat > t.py <<'PY'\nassert 'command not found'\nPY",
+                   "cat > t.py <<PY\nassert 'command not found'\nPY",
+                   "cat <<'EOF' > f\nbash: pct: command not found\nEOF"]:
+        assert S.tool_matches_outside_fixtures(silent) == [], silent
+
+
+def test_a_numbered_listing_is_a_file_being_read_not_a_report():
+    """A `N<TAB>` line is a file's own content. No tool announces a failure in that shape, and the
+    corpus replay showed whole source files reported as tooling gaps for the text inside them."""
+    listing = "1\t#!/usr/bin/env python3\n2\t# bash: pct: command not found\n3\tx = 1"
+    assert S.tool_matches(listing)                                  # control: the phrase IS there
+    assert S.tool_matches_outside_fixtures(listing) == []
+    assert S.tool_matches_outside_fixtures(listing + "\nbash: pct: command not found")
+
+
+def test_another_tool_s_error_count_does_not_close_or_open_a_pytest_run():
+    """Only a TIMED summary ends a run. A bare count is how pyright and mypy report their own
+    findings, and reading it as a pytest boundary decided the lines around it either way."""
+    assert "error:" in S.tool_matches_outside_fixtures("Found 2 errors.\nerror: unexpected argument")
+    assert S.tool_matches_outside_fixtures("=== FAILURES ===\n832 errors\nx.py:1:1 - error: bad") == []
+    assert "fatal:" in S.tool_matches_outside_fixtures("12 passed in 0.40s\nfatal: no upstream")
+
+
+def test_a_pytest_tail_without_its_banner_is_still_a_run():
+    """A captured tail arrives with no `=== FAILURES ===` header, so the summary-list line and the
+    `E   ` detail line have to open the run themselves."""
+    for tail in ["ERROR tests/test_a.py - FileNotFoundError: [Errno 2] No such file or directory: '/x'",
+                 "E   FileNotFoundError: [Errno 2] No such file or directory: '/x'",
+                 "\x1b[31mERROR\x1b[0m tests/test_a.py - OSError: permission denied"]:
+        assert S.tool_matches(tail), tail                           # control: the phrase IS there
+        assert S.tool_matches_outside_fixtures(tail) == [], tail
+
+
 def test_tool_matches_outside_fixtures_passes_a_real_gap_through():
     """A genuine tooling failure in ordinary (non-pytest, non-test-file) tool output is NOT noise."""
     for text in [

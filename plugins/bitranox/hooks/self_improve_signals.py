@@ -1950,28 +1950,48 @@ def tool_matches(text):
 # away the NEXT command's genuine error; keeping every line that does not itself name a test file
 # keeps the phrases that file's own diff hunk or heredoc body writes.
 #
-# A pytest run is data from its first marker to its summary line, and the summary is TERMINAL: so
-# "12 passed in 0.40s" followed by "fatal: ..." leaves the fatal counted, and another tool's
-# "Found 2 errors." discounts only itself.
+# A pytest run is data from its first marker until a TIMED summary ("12 passed in 0.40s"), which is
+# what ends a run: requiring the timing suffix is what stops another tool's own count closing it.
+# Replayed over the 250 most recent transcripts, a bare count as the closer let a pyright run's 832
+# per-line "error:" lines through, and a bare count as an OPENER is the defect this half fixes -
+# "Found 2 errors." from a type checker used to switch off the argparse error on the line after it.
+_ANSI = r"(?:\x1b\[[0-9;]*m)*"
 _RUN_OPENS = re.compile(
     r"=+ (?:FAILURES|ERRORS|test session starts|short test summary)"
     r"|\bcollected \d+ item"
     r"|::test_\w+"                                                    # a pytest node id
-    r"|-{2,} (?:RED|GREEN) -{2,}",                                    # the repo's own TDD-cycle markers
-    re.IGNORECASE,
+    r"|-{2,} (?:RED|GREEN) -{2,}"                                     # the repo's own TDD-cycle markers
+    # The tail's own shapes, which arrive without the banner when only the tail was captured: a
+    # summary-list line and pytest's exception detail. Both were read as live tool output.
+    r"|^" + _ANSI + r"(?:FAILED|ERROR)" + _ANSI + r"\s+\S+\.py"
+    r"|^" + _ANSI + r"E\s{2,}",
+    re.IGNORECASE | re.MULTILINE,
 )
 _RUN_CLOSES = re.compile(
-    r"\b\d+ (?:passed|failed|xfailed|xpassed|deselected|errors?)\b|\bno tests ran\b",
+    r"\b(?:\d+ (?:passed|failed|xfailed|xpassed|deselected|errors?)|no tests ran)\b.*?"
+    r"\bin \d+(?:\.\d+)?\s*s\b",
     re.IGNORECASE,
 )
 # A diff's file header: every line until the next header belongs to the file this one names.
 _DIFF_FILE_HEADER = re.compile(r"^\s*(?:diff --git \S+ |--- |\+\+\+ )(\S+)")
-_HEREDOC_OPENS = re.compile(r"<<-?\s*[\"']?(\w+)[\"']?")
+# ANY heredoc body, not only one whose opener names a test file: the body is literal text being
+# WRITTEN, never a tool's report, and the file it lands in is often built inside the body rather
+# than named on the opener line (`python3 - <<'PY'` writing three test files).
+#
+# The delimiter must END the line, give or take a trailing redirection, and an UNQUOTED one must
+# abut the `<<`. Both halves are about the shift operator: `<<` unanchored matches `cout << x`, and
+# since a body runs to its delimiter, one such line in a source listing swallows every line after
+# it. `a << b` is exactly the shape a loose rule reads as a heredoc named b; `cat <<EOF` is not.
+_HEREDOC_OPENS = re.compile(
+    r"<<-?(?:\s*(?P<q>[\"'])(?P<quoted>\w+)(?P=q)|(?P<bare>\w+))\s*(?:[<>|&]\S*\s*\S*)?$")
 _TEST_FILE_TOKEN = re.compile(r"\btest_\w*\.py\b", re.IGNORECASE)
 # A line that BEGINS with a test file's path is a grep hit or a listing, so what follows is that
 # file's content. A line that merely NAMES one ("fatal: pathspec 'tests/test_x.py' did not match")
 # is an error ABOUT the file and is exactly the kind of gap the audit exists to surface.
 _TEST_FILE_LINE = re.compile(r"^\s*[\w./\\-]*\btest_\w*\.py\b", re.IGNORECASE)
+# A numbered listing line is a file being READ, and a file's content is not a tool's report. No
+# tool announces a failure in this shape, so discounting it cannot hide one.
+_NUMBERED_LISTING = re.compile(r"^\s*\d+\t")
 
 
 class _FixtureScan:
@@ -1989,18 +2009,18 @@ class _FixtureScan:
         content, so a pytest marker quoted inside one must not open a run that outlives it.
         """
         return (self._in_heredoc(line) or self._in_test_diff(line) or self._in_run(line)
-                or bool(_TEST_FILE_LINE.match(line)))
+                or bool(_TEST_FILE_LINE.match(line)) or bool(_NUMBERED_LISTING.match(line)))
 
     def _in_heredoc(self, line):
-        """A heredoc that writes a test file; its body ends at the delimiter line."""
+        """A heredoc body, which is written text rather than a report; ends at the delimiter."""
         if self.heredoc_end is not None:
             if line.strip() == self.heredoc_end:
                 self.heredoc_end = None
             return True
         opener = _HEREDOC_OPENS.search(line)
-        if opener is None or not _TEST_FILE_TOKEN.search(line):
+        if opener is None:
             return False
-        self.heredoc_end = opener.group(1)
+        self.heredoc_end = opener.group("quoted") or opener.group("bare")
         return True
 
     def _in_test_diff(self, line):
