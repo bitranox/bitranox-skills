@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.13.0]
+
+### Fixed
+
+- **The context watcher took a gateway model's window from the wrong place.** A model id no
+  family table knows (glm-5.3 behind `ANTHROPIC_BASE_URL`) fell back to the 200K default while
+  the session actually ran the 1M window its launcher had declared - so a handover was offered
+  at 140k on a session 16% full, seven tenths early, and the misconfigured report could not
+  catch it either because 140K < 200K reads as an ordinary offer. Window resolution now runs
+  three legs in order: family table, then the launcher's declaration in
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for a family the table does not know (probe-verified on
+  2.1.269 that the variable reaches a Stop hook's subprocess environment), then the 200K
+  default that errs small. A known family ignores the variable, so a stale globally exported
+  value cannot override a measured family window. The meta-context-watcher skill states the
+  same rule; seven new tests cover the leg, both precedence directions, malformed declarations
+  and the exposing scenario (RED-verified by mutation).
+
 ## [6.12.1]
 
 ### Fixed

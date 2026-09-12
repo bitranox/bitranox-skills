@@ -186,6 +186,67 @@ def test_an_unknown_family_errs_SMALL_not_large():
     assert W.window_for_model("claude-newthing-9") == 200_000
 
 
+# ------------------------------------------------- the launcher's declared window
+#
+# A gateway model id (glm-5.3 behind ANTHROPIC_BASE_URL) is not in the family table, and its API
+# advertises no window - so Claude Code defines CLAUDE_CODE_MAX_CONTEXT_TOKENS for the launcher to
+# declare it (model-config docs, "correct the window for a gateway or custom model id"). Measured
+# on 2.1.269: the variable reaches a Stop hook's subprocess env, and the bitranox glm launcher
+# sets it to 1,000,000. Read ONLY for a family the table does not know.
+
+_GLM_ENV = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000"}
+
+
+def test_an_unknown_family_takes_the_launchers_declared_window():
+    """glm-5.3 on a 1M endpoint: without this leg the 200K default asks at 140K - seven tenths
+    early - and the misconfigured check cannot catch it because 140K < 200K reads as fine."""
+    assert W.window_for_model("glm-5.3", _GLM_ENV) == 1_000_000
+    assert W.resolve_window({}, "glm-5.3", _GLM_ENV) == (1_000_000, "declared")
+
+
+def test_the_declared_window_must_be_a_positive_number():
+    """A zero, negative, or non-numeric declaration is absent, not a window - fall back to small."""
+    for bad in ("", "0", "-5", "one-million", None):
+        env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": bad}
+        assert W.window_for_model("glm-5.3", env) == 200_000, bad
+        assert W.resolve_window({}, "glm-5.3", env) == (200_000, "assumed"), bad
+
+
+def test_a_known_family_ignores_the_env_variable():
+    """A globally-exported declaration left over from another model must not override a MEASURED
+    family window - only an unknown family trusts it. This is the direction the guard must NOT
+    apply in; without it every Claude session on a machine exporting the var would switch legs."""
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "128000"}
+    assert W.window_for_model("claude-opus-5", env) == 1_000_000
+    assert W.resolve_window({}, "claude-opus-5", env) == (1_000_000, "detected")
+    assert W.window_for_model("claude-haiku-4-5", env) == 200_000
+
+
+def test_an_unknown_family_without_a_declaration_still_errs_small():
+    """No family, no declaration: the 200K default, labelled assumed so the message says so."""
+    assert W.resolve_window({}, "glm-5.3", {}) == (200_000, "assumed")
+
+
+def test_no_environ_at_all_is_the_default():
+    """The harness passes the real env; a caller passing none gets the small-default contract."""
+    assert W.resolve_window({}, "glm-5.3") == (200_000, "assumed")
+
+
+def test_the_explicit_knob_still_wins_over_the_declaration():
+    """context_window is the escape hatch for a declaration the user knows is wrong."""
+    assert W.resolve_window({"context_window": 300_000}, "glm-5.3", _GLM_ENV) == (300_000, "configured")
+
+
+def test_the_declared_window_gives_glm_the_real_threshold():
+    """End to end on the numbers of the session that exposed this: 164k of context on glm-5.3
+    crossed the 140K threshold of a wrongly-assumed 200K window and asked for a handover at 16%
+    of the real 1M window; against the declared window the same reading is quiet."""
+    declared_window = W.resolve_window({}, "glm-5.3", _GLM_ENV)[0]
+    wrong_window = W.resolve_window({}, "glm-5.3", {})[0]
+    assert W.verdict(164_614, wrong_window, 70, 400_000)[0] == "offer"
+    assert W.verdict(164_614, declared_window, 70, 400_000)[0] == "quiet"
+
+
 def test_an_explicit_window_overrides_the_family():
     assert W.resolve_window({"context_window": 500_000}, "claude-opus-5") == (500_000, "configured")
 

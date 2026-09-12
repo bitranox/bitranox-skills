@@ -30,6 +30,17 @@ local transcripts, every non-haiku family has actually carried far more than a 2
 119,393. The peaks stopping just under 1,000,000 is the window boundary showing itself in the data.
 So the family settles it: opus, fable, sonnet and mythos are 1M; haiku is 200K.
 
+A family the TABLE has not met - a gateway model like glm-5.3 behind ANTHROPIC_BASE_URL - must not
+land on the 200K default, because that errs LARGE for a model actually running 1M: the ask fires at
+140K and then the misconfigured check sees 200K < 1M so nothing catches the stale default either -
+the silent-inert failure this hook exists to prevent. For exactly that case Claude Code defines
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` (model-config docs, "correct the window for a gateway or custom
+model id"): the launcher declares the real window because the API advertises none. Probe-verified
+on 2.1.269: the variable reaches a Stop hook's subprocess environment, and the bitranox glm
+launcher (claude_on_inco/claude-glm.sh) sets it to 1,000,000. It is read ONLY for a family the
+table does not know - for a known family the table wins, so a stale globally-exported value cannot
+silently override a measured family window.
+
 THE ASSUMPTION IN THAT TABLE, stated because its failure is silent. Those transcripts come from ONE
 machine and one account tier, so the table asserts that current opus, fable, sonnet and mythos run
 1M for EVERYONE. If some tier or plan runs a 200K opus, that session gets a 400K threshold it can
@@ -40,6 +51,11 @@ is the symptom nobody reports.
 The remedy is `context_window`: setting it to a real token count overrides the table entirely. A
 deliberate trade - the alternative was to assume 200K until each session proved otherwise, which is
 correct for every tier but asks early on every genuine 1M session.
+
+For a model OUTSIDE the table entirely (a gateway id like glm-5.3) the fallback is not a guess but
+the launcher's own declaration: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` names the window precisely because
+the API behind a custom model id advertises none (model-config docs). That leg answers only when
+the family is unknown - see the window paragraph above for why.
 
 When the measured context exceeds the window in use, that IS reported rather than ignored - a
 threshold nothing can cross is indistinguishable from a watcher that works. It catches an
@@ -89,13 +105,22 @@ _FAMILY_WINDOWS = (("claude-fable", 1_000_000), ("claude-mythos", 1_000_000),
                    ("claude-opus", 1_000_000), ("claude-sonnet", 1_000_000),
                    ("claude-haiku", 200_000), ("oss-128k", 128_000))
 
+# What the launcher declared for a model the family table has not met. Read only in that case -
+# see the module docstring for why a known family ignores it.
+_ENV_MAX_CONTEXT = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
-def window_for_model(model_id) -> int:
+
+def window_for_model(model_id, environ=None) -> int:
     """The context window this model family runs. PURE.
 
-    An unknown family falls back to 200K, which errs SMALL on purpose: too small asks early and
-    costs a decline, while too large sets a threshold the session can never reach and the hook goes
-    silently inert - the failure this whole check exists to prevent.
+    A family the table knows answers from the table alone - the environment is not consulted for
+    it, so a globally-exported `CLAUDE_CODE_MAX_CONTEXT_TOKENS` left over from another model can
+    never override a measured family window. An UNKNOWN family (a gateway model id the table has
+    not met) reads that variable when the caller passes an environment mapping, because the
+    launcher set it precisely to declare this model's window; only when even that is absent does it
+    fall back to 200K, which errs SMALL on purpose: too small asks early and costs a decline, while
+    too large sets a threshold the session can never reach and the hook goes silently inert - the
+    failure this whole check exists to prevent.
     """
     mid = str(model_id or "").lower()
     if mid.endswith("[1m]"):                  # `~/.claude.json` spells it this way; harmless here
@@ -103,7 +128,25 @@ def window_for_model(model_id) -> int:
     for prefix, window in _FAMILY_WINDOWS:
         if mid.startswith(prefix):
             return window
+    if environ is not None:
+        declared = _env_max_context(environ)
+        if declared:
+            return declared
     return _DEFAULT_WINDOW
+
+
+def _env_max_context(environ) -> int:
+    """The window a launcher declared for a custom model, or 0 when it declared none. PURE.
+
+    `None` (no environment passed at all) counts as no declaration, not an error.
+    """
+    if not isinstance(environ, dict):
+        return 0
+    try:
+        value = int(environ.get(_ENV_MAX_CONTEXT) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
 
 
 def read_session(transcript_path, tail_bytes=_TAIL_BYTES):
@@ -286,17 +329,20 @@ def _misconfigured(detail) -> str:
         "it was measuring against (%(source)s) - so the threshold can never be reached. This is "
         "reported rather than ignored because a threshold nothing can cross looks exactly like a "
         "watcher that works.\n\n"
-        "The window is normally derived from the model this project has used. If that could not be "
-        "read, set `context_window` to the real figure via bitranox:meta-memory-settings. Until "
+        "The window is normally derived from the model this project has used, or - for a model no "
+        "family table knows - declared by the launcher via CLAUDE_CODE_MAX_CONTEXT_TOKENS. If both "
+        "failed, set `context_window` to the real figure via bitranox:meta-memory-settings. Until "
         "then this check is inert."
     ) % {k: format(v, ",") if isinstance(v, int) and k != "pct" else v for k, v in detail.items()}
 
 
-def resolve_window(cfg, model=None):
+def resolve_window(cfg, model=None, environ=None):
     """(window, how it was established). PURE.
 
     An explicit `context_window` wins - the escape hatch for a model the table has not met.
-    Otherwise the family decides, and failing that the 200K default.
+    Otherwise the family decides; an unknown family takes what the launcher declared in
+    `CLAUDE_CODE_MAX_CONTEXT_TOKENS` ("declared"), and failing that the 200K default. The label
+    records which leg answered, which the offer message quotes.
     """
     explicit = cfg.get("context_window") or 0
     try:
@@ -305,8 +351,20 @@ def resolve_window(cfg, model=None):
     except (TypeError, ValueError):
         pass
     if model:
-        return window_for_model(model), "detected"
+        if _family_known(model):
+            return window_for_model(model, environ), "detected"
+        declared = _env_max_context(environ)
+        if declared:
+            return declared, "declared"
     return _DEFAULT_WINDOW, "assumed"
+
+
+def _family_known(model_id) -> bool:
+    """True when the family table has a window for this model id. PURE."""
+    mid = str(model_id or "").lower()
+    if mid.endswith("[1m]"):
+        mid = mid[:-4]
+    return any(mid.startswith(prefix) for prefix, _window in _FAMILY_WINDOWS)
 
 
 def decide(event, cfg):
@@ -326,7 +384,7 @@ def decide(event, cfg):
     except Exception:                         # noqa: BLE001 - a missing helper must not wedge a turn
         pass
     tokens, model = read_session(transcript)
-    window, source = resolve_window(cfg, model)
+    window, source = resolve_window(cfg, model, os.environ)
     state, detail = verdict(tokens, window,
                             cfg.get("context_handover_pct", 70),
                             cfg.get("context_handover_cap", 400000))

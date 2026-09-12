@@ -198,12 +198,20 @@ been waiting longest is the one least likely to be in it.
 ## When it fires on its own
 
 A `Stop` hook measures context from the transcript's last recorded usage - the real per-request
-figure, not an estimate - and blocks when it crosses
-`min(context_handover_pct` of the window, `context_handover_cap)`.
+figure, not an estimate - and blocks when it crosses `min(context_handover_pct of the window,
+context_handover_cap)`.
 
-The window is detected from the model this project has used, so nothing needs configuring. Declining
-is not permanent: the next ask waits until context has grown another tenth of the window, because a
-decline at 40% is "not yet" while 90% is a different question.
+The window comes from the model family on the transcript's most recent assistant record, so nothing
+needs configuring for a known family. A model id no family table knows - a gateway model such as
+glm-5.3 behind `ANTHROPIC_BASE_URL` - takes the window its launcher declared in
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, the variable Claude Code defines for exactly that case; the hook
+reads it from its own environment. A model that is neither known nor declared falls back to a
+200k window that errs small on purpose. In one rule: family table first, then the launcher's
+declaration, then 200k - a known family always wins, so a globally exported declaration left over
+from another model cannot override a measured family window.
+
+Declining is not permanent: the next ask waits until context has grown another tenth of the window,
+because a decline at 40% is "not yet" while 90% is a different question.
 
 If it ever reports measuring MORE context than the window, the detection failed - set
 `context_window` explicitly via `bitranox:meta-memory-settings`. That is reported rather than
