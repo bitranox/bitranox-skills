@@ -20,7 +20,7 @@ SHIM = HOOKS_DIR / "run-python.sh"
 
 EM_DASH = chr(0x2014)
 NBSP = chr(0x00A0)
-CURLY_OPEN = chr(0x201C)
+CURLY_CLOSE = chr(0x201D)   # the OPENING curly quote is the German closing quote and passes now
 ARROW = chr(0x2192)  # allowed on purpose, must NOT trip
 
 
@@ -44,7 +44,7 @@ def test_real_em_dash_caught(tmp_path, monkeypatch):
 
 
 def test_curly_quote_caught(tmp_path, monkeypatch):
-    assert _run(monkeypatch, _md(tmp_path, "He said %shi.\n" % CURLY_OPEN)) == 2
+    assert _run(monkeypatch, _md(tmp_path, "He said %shi.\n" % CURLY_CLOSE)) == 2
 
 
 def test_nbsp_caught(tmp_path, monkeypatch):

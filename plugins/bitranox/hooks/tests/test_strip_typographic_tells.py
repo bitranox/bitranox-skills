@@ -73,12 +73,10 @@ def test_normalize_returns_str():
         (FIG_DASH, "-"),
         (HORIZ_BAR, "-"),
         (MINUS, "-"),
-        (LSQUO, "'"),
+        # LSQUO, LDQUO, LAQUO and RAQUO are German punctuation and are deliberately absent:
+        # `test_german_punctuation_survives_the_strip` asserts the script leaves them alone.
         (RSQUO, "'"),
-        (LDQUO, '"'),
         (RDQUO, '"'),
-        (LAQUO, '"'),
-        (RAQUO, '"'),
         (ONE_DOT, "."),
         (TWO_DOT, ".."),
         (ELLIPSIS, "..."),
@@ -103,14 +101,15 @@ def test_combined_input_becomes_pure_ascii():
     src = (
         BOM
         + "em" + EM_DASH + "dash "
-        + LDQUO + "curly" + RDQUO
+        + "it" + RSQUO + "s "
+        + RDQUO + "curly" + RDQUO
         + " ellipsis" + ELLIPSIS
         + " nbsp" + NBSP + "x"
         + " zwsp" + ZWSP + "y"
     )
     out = mod.normalize(src)
     assert all(ord(ch) < 0x80 for ch in out), repr(out)
-    assert out == 'em - dash "curly" ellipsis... nbsp x zwspy'
+    assert out == 'em - dash it\'s "curly" ellipsis... nbsp x zwspy'
 
 
 def test_idempotent():
@@ -190,7 +189,7 @@ def test_clean_file_left_byte_identical(tmp_path):
 
 
 def test_stdin_mode_writes_normalized_stdout():
-    res = _run(["-"], stdin="q" + LDQUO + "z" + RDQUO + "\n")
+    res = _run(["-"], stdin="q" + RDQUO + "z" + RDQUO + "\n")
     assert res.returncode == 0
     assert res.stdout == 'q"z"\n'
 
@@ -233,7 +232,7 @@ def test_main_check_clean_returns_zero(tmp_path):
 def test_main_stdin_normalizes(monkeypatch, capsys):
     import io
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("q" + LDQUO + "z" + RDQUO))
+    monkeypatch.setattr("sys.stdin", io.StringIO("q" + RDQUO + "z" + RDQUO))
     rc = mod._main(["prog"])
     assert rc == 0
     assert capsys.readouterr().out == 'q"z"'
@@ -273,7 +272,7 @@ def test_verdict_emoji_normalized_to_ascii_markers():
 # ---- code is left alone, matching the tell-sweep hook ---------------------------------------
 
 EM_DASH = chr(0x2014)
-CURLY = chr(0x201C) + "quoted" + chr(0x201D)
+CURLY = chr(0x201D) + "quoted" + chr(0x201D)   # both halves must still BE tells
 
 
 def test_normalize_leaves_an_inline_code_span_untouched():
@@ -474,3 +473,36 @@ def test_rewriting_preserves_crlf_line_endings(tmp_path):
     p.write_bytes(("a " + EM_DASH + " b\r\nsecond\r\n").encode("utf-8"))
     assert _run([str(p)]).returncode == 0
     assert p.read_bytes() == b"a - b\r\nsecond\r\n"
+
+
+# ---- the strip script may never flatten what the hook now permits ----------------------------
+#
+# The script calls itself "the exact inverse of the tell-sweep detector". Once German punctuation
+# left RANGES, a table entry for it would make the sanctioned repair tool destroy exactly the
+# characters the hook allows - and a German page run through it would come back with ASCII quotes
+# and no complaint from anything.
+
+GERMAN_PUNCTUATION = [chr(cp) for cp in (0x00AB, 0x00BB, 0x2018, 0x201A, 0x201C, 0x201E, 0x2039, 0x203A)]
+
+
+def test_german_punctuation_survives_the_strip():
+    for ch in GERMAN_PUNCTUATION:
+        src = "ein Satz mit %s Zeichen\n" % ch
+        assert mod.normalize(src) == src, "U+%04X" % ord(ch)
+
+
+def test_the_table_rewrites_nothing_the_hook_permits():
+    """A wider oracle than the table's own list: every rewritten codepoint must BE a tell.
+
+    Checked against RANGES rather than against a second copy of the table, so a codepoint dropped
+    from one side and not the other fails here whichever side moved.
+    """
+    import sys as _sys, pathlib as _pathlib
+    _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
+    import tell_chars as TC
+    permitted = [cp for cp in mod.TABLE if not TC._TELL.search(chr(cp))]
+    assert permitted == [], ["U+%04X" % cp for cp in permitted]
+
+
+def test_an_english_curly_apostrophe_is_still_normalized():
+    assert mod.normalize("it%ss here\n" % chr(0x2019)) == "it's here\n"

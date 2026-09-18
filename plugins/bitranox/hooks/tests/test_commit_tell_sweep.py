@@ -19,7 +19,7 @@ SCRIPT = HOOKS_DIR / "commit-tell-sweep.py"
 SHIM = HOOKS_DIR / "run-python.sh"
 
 EM_DASH = chr(0x2014)
-CURLY = chr(0x201C)
+CURLY = chr(0x201D)   # the CLOSING curly quote: the opening one is German punctuation now
 
 
 def _run(monkeypatch, command, tool_name="Bash"):

@@ -29,6 +29,33 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.14.0]
+
+### Changed
+
+- **German quotation marks are no longer AI-writing tells.** The tell set blocked all eight
+  characters German prose quotes with, so `tell-sweep` refused a German page written correctly
+  and `commit-tell-sweep` refused a German commit message, while the sanctioned repair script
+  flattened the quotes to ASCII without a word. Both forms now pass: the low-9 quotes
+  (U+201E ... U+201C, U+201A ... U+2018) and the guillemets (U+00BB ... U+00AB, U+203A ...
+  U+2039). Blocking them never caught a machine - they are correct typography, and neither hook
+  can tell the language it is looking at, since one runs on file paths and the other on commit
+  messages.
+
+  Two of the eight are shared with the English curly quotes and are the price of the change:
+  U+201C is also the English opening double quote and U+2018 the English opening single, so an
+  English curly quote can now open unreported. What the set keeps is the half that carries the
+  tell on its own - U+2019, the curly apostrophe and the commonest tell of all, plus U+201D - so
+  a curly PAIR still reports on its closing half, and only an opener closed with an ASCII quote
+  gets through.
+
+  `strip_typographic_tells.py` drops the same eight, because it is the detector's inverse and an
+  entry there would have the repair tool destroy exactly what the hook now permits. A new test
+  asserts that property against `RANGES` itself rather than against a second copy of the table,
+  so a codepoint dropped from one side and not the other fails whichever side moved. Verified
+  end to end by driving both hooks over German inputs and over English curly, apostrophe and
+  em-dash controls that must still block, and they do.
+
 ## [6.13.0]
 
 ### Fixed

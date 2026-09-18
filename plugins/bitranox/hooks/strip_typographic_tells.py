@@ -16,7 +16,9 @@ text's spacing.
 
 This is the exact inverse of the tell-sweep detector: running it makes a file
 pass that check. Symbols that are intentionally allowed (arrow, multiply sign,
->=, <=, !=, check mark, bullet) are left untouched.
+>=, <=, !=, check mark, bullet) are left untouched, as is German quotation -
+the low-9 quotes, their closing partners and the guillemets - which is correct
+typography rather than a tell and is not in the detector's set either.
 
 Usage:
   strip_typographic_tells.py FILE [FILE ...]   rewrite each file in place
@@ -61,10 +63,13 @@ def _build_table():
     # table entry cannot produce without doubling existing spaces, so `_EM_DASH_RUN` owns it.
     for cp in [0x2010, 0x2011, 0x2012, 0x2013, 0x2015, 0x2212]:
         table[cp] = "-"
-    # Quotation marks and guillemets.
-    for cp in [0x2018, 0x2019, 0x201A, 0x201B, 0x2039, 0x203A]:
+    # Quotation marks. The German ones are absent on purpose and must stay absent: U+201E, U+201C,
+    # U+201A, U+2018 and the guillemets U+00AB, U+00BB, U+2039, U+203A left RANGES in the 2026-09-18
+    # decision, and this script is the detector's inverse - an entry here would have the sanctioned
+    # repair tool flatten exactly the characters the hook permits, silently, on a German page.
+    for cp in [0x2019, 0x201B]:
         table[cp] = "'"
-    for cp in [0x00AB, 0x00BB, 0x201C, 0x201D, 0x201E, 0x201F]:
+    for cp in [0x201D, 0x201F]:
         table[cp] = '"'
     # Dot leaders / ellipsis.
     table[0x2024] = "."

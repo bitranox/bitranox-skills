@@ -4,7 +4,8 @@ import tell_chars as TC
 
 EM_DASH = chr(0x2014)
 NBSP = chr(0x00A0)
-CURLY_OPEN = chr(0x201C)
+CURLY_OPEN = chr(0x201C)   # ALSO the German closing double quote, so it is allowed now
+CURLY_CLOSE = chr(0x201D)  # English-only, and what still trips on a curly pair
 ARROW = chr(0x2192)   # allowed on purpose, must NOT trip
 
 
@@ -17,7 +18,7 @@ def test_em_dash_and_nbsp_caught():
 
 
 def test_curly_quote_caught():
-    assert TC.find_tell_lines("He said %shi\n" % CURLY_OPEN)[0].startswith("1: ")
+    assert TC.find_tell_lines("He said %shi\n" % CURLY_CLOSE)[0].startswith("1: ")
 
 
 def test_inline_code_span_ignored():
@@ -253,3 +254,53 @@ def test_decode_utf8_does_not_forgive_a_sliced_character_on_an_uncapped_read():
     two_byte = chr(0x00E4).encode("utf-8")
     _text, bad = TC.decode_utf8(b"head" + two_byte[:1], truncated=False)
     assert bad == 4
+
+
+# ---- German typography is not an AI tell (user decision 2026-09-18) ---------------------------
+#
+# German prose quotes with ,,...`` (U+201E ... U+201C) or with the guillemets >>...<< (U+00BB ...
+# U+00AB), and both are correct typography rather than a sign of a machine. The set below is
+# therefore NOT in RANGES. Two of the six are shared with the English curly quotes, which is the
+# whole reason this needed deciding: U+201C is the English OPENING double quote and U+2018 the
+# English opening single, so allowing the German closing quotes necessarily allows those two.
+# What survives is the half that carries the English tell on its own - U+2019, the curly
+# apostrophe, which is the commonest tell of all, and U+201D.
+
+GERMAN_PUNCTUATION = {
+    "opening double (low-9)": chr(0x201E),
+    "closing double": chr(0x201C),
+    "opening single (low-9)": chr(0x201A),
+    "closing single": chr(0x2018),
+    "opening guillemet": chr(0x00BB),
+    "closing guillemet": chr(0x00AB),
+    "single guillemet right": chr(0x203A),
+    "single guillemet left": chr(0x2039),
+}
+
+
+def test_german_quotes_and_guillemets_are_not_tells():
+    for name, ch in GERMAN_PUNCTUATION.items():
+        assert TC.find_tell_lines("ein Satz mit %s Zeichen\n" % ch) == [], name
+
+
+def test_a_whole_german_quoted_sentence_passes():
+    low9, closing = chr(0x201E), chr(0x201C)
+    guill_open, guill_close = chr(0x00BB), chr(0x00AB)
+    assert TC.find_tell_lines("Er sagte %sguten Tag%s und ging.\n" % (low9, closing)) == []
+    assert TC.find_tell_lines("Er sagte %sguten Tag%s und ging.\n" % (guill_open, guill_close)) == []
+
+
+def test_the_english_only_curly_quotes_still_trip():
+    """The half that is NOT German punctuation must keep failing, or this trade gave away the rule."""
+    for cp in (0x2019, 0x201B, 0x201D, 0x201F):
+        assert TC.find_tell_lines("it%ss here\n" % chr(cp)), "U+%04X" % cp
+
+
+def test_an_english_curly_pair_is_still_caught_by_its_closing_half():
+    """The reason unblocking U+201C is affordable: the pair still reports, on the other character."""
+    assert TC.find_tell_lines("He said %shi%s\n" % (chr(0x201C), chr(0x201D)))
+
+
+def test_the_em_dash_family_is_untouched_by_the_german_carve_out():
+    for cp in (0x2013, 0x2014, 0x2E3A, 0x2E3B):
+        assert TC.find_tell_lines("a %s b\n" % chr(cp)), "U+%04X" % cp

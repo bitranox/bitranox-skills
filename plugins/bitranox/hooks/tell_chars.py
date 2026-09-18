@@ -11,15 +11,30 @@ Allowed-on-purpose symbols are NOT in the set: arrow U+2192, multiplication U+00
 >= U+2265, <= U+2264, != U+2260, check U+2713, bullet U+2022. The heavy verdict emoji
 (U+2705/U+274C/U+2714/U+2717/U+26A0 + the U+FE0F selector) ARE tells - house style is
 ASCII OK/NO/WARN markers (user decision 2026-07-05).
+
+GERMAN QUOTATION MARKS ARE NOT TELLS either (user decision 2026-09-18), so U+201E, U+201C,
+U+201A, U+2018 and the guillemets U+00AB, U+00BB, U+2039, U+203A are all out of the set. German
+prose quotes with U+201E ... U+201C or with U+00BB ... U+00AB; blocking those does not catch a
+machine, it forces a German writer to spell correct typography wrongly, and there is no way to
+tell the two apart from the codepoint alone because the rule fires on files and on commit
+messages, which carry no language marker.
+
+Two of the eight are shared with the English curly quotes and are the price of that: U+201C is
+also the English OPENING double quote and U+2018 the English opening single, so an English curly
+quote can now open unreported. The trade was weighed on what remains - U+2019, the curly
+apostrophe, is the commonest English tell of all and is still in the set, as is U+201D, so a
+curly PAIR still reports on its closing half. Only a curly opener closed with an ASCII quote gets
+through, which is a shape neither a person nor a model tends to produce.
 """
 import re
 
 # Inclusive codepoint ranges to flag (the canonical tell set).
 RANGES = [
-    (0x0085, 0x0085), (0x00A0, 0x00A0), (0x00AB, 0x00AB), (0x00AD, 0x00AD),
-    (0x00BB, 0x00BB), (0x061C, 0x061C), (0x180E, 0x180E), (0x2000, 0x200F),
-    (0x2010, 0x2015), (0x2018, 0x201F), (0x2024, 0x2026), (0x2028, 0x202F),
-    (0x2039, 0x2039), (0x203A, 0x203A), (0x205F, 0x205F), (0x2060, 0x2064),
+    (0x0085, 0x0085), (0x00A0, 0x00A0), (0x00AD, 0x00AD),
+    (0x061C, 0x061C), (0x180E, 0x180E), (0x2000, 0x200F),
+    (0x2010, 0x2015), (0x2019, 0x2019), (0x201B, 0x201B), (0x201D, 0x201D),
+    (0x201F, 0x201F), (0x2024, 0x2026), (0x2028, 0x202F),
+    (0x205F, 0x205F), (0x2060, 0x2064),
     (0x2066, 0x2069), (0x2212, 0x2212), (0x26A0, 0x26A0), (0x2705, 0x2705),
     (0x2714, 0x2714), (0x2717, 0x2717), (0x274C, 0x274C), (0x2E3A, 0x2E3A),
     (0x2E3B, 0x2E3B), (0x3000, 0x3000), (0xFE0F, 0xFE0F), (0xFEFF, 0xFEFF),
