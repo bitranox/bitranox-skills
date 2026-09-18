@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [6.14.1]
+
+### Changed
+
+- **write-humanize-de told a German writer to remove correct German punctuation.** Section 20
+  demonstrated its rule by rewriting a typographically quoted sentence to straight ASCII quotes,
+  and the completion checklist listed quotation marks among the things "entfernt" - so after
+  6.14.0 the skill was teaching the removal of characters the tell set permits and the repair
+  script protects on purpose. Its own opening sentence already said the characters are correct
+  German; the tell it describes is ChatGPT switching styles mid-text. The section is now about
+  that inconsistency: the example mixes low-9, straight and guillemet quoting and unifies on one
+  German style instead of flattening. The checklist bullet splits, with quotation marks moving
+  from "entfernt" to "vereinheitlicht".
+
+  Two tests hold it, over every Vorher/Nachher pair in the skill rather than the one section.
+  Normalising one permitted German style to another stays legal, because that is what a
+  consistency fix looks like; what fails is an example whose "after" has no German punctuation
+  left where the "before" had some. Of the 30 examples, section 20 was the only one. The English
+  section 18 is unchanged - English curly quotes are still tells.
+
 ## [6.14.0]
 
 ### Changed

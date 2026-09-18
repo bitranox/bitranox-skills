@@ -374,20 +374,22 @@ Entferne EM-Dashes (`—`), En Dashes (`–`) komplett und ersetze diese wenn n�
 
 ---
 
-### 20. Typographische Anführungszeichen
+### 20. Uneinheitliche Anführungszeichen
 
-**Problem:** ChatGPT verwendet typographische Anführungszeichen statt gerader Anführungszeichen. Im Deutschen sind typographische Anführungszeichen zwar korrekt, aber ChatGPT setzt sie inkonsistent ein und wechselt innerhalb desselben Textes zwischen verschiedenen Stilen.
+**Problem:** Typographische Anführungszeichen sind im Deutschen korrekt, und der Tell-Sweep lässt sie durch - „“ ebenso wie »«. Der Tell ist nicht das Zeichen, sondern die Uneinheitlichkeit: ChatGPT wechselt innerhalb desselben Textes zwischen den Stilen und mischt gerade und typographische Zeichen. Vereinheitliche auf einen Stil, statt korrekte Typografie durch gerade Anführungszeichen zu ersetzen.
 
-**Vorher:** (als Codeblock, damit die typographischen Zeichen unverändert erhalten bleiben)
+**Vorher:** (als Codeblock, damit die Zeichen unverändert bleiben)
 
 ```text
-Er sagte, „das Projekt liegt im Zeitplan", aber andere widersprachen.
+Er sagte, „das Projekt liegt im Zeitplan", im nächsten Absatz stand "der Termin
+wackelt", und weiter unten hieß es »wir schaffen das«.
 ```
 
 **Nachher:**
 
 ```text
-Er sagte "das Projekt liegt im Zeitplan", aber andere widersprachen.
+Er sagte, „das Projekt liegt im Zeitplan“, im nächsten Absatz stand „der Termin
+wackelt“, und weiter unten hieß es „wir schaffen das“.
 ```
 
 ---
@@ -626,7 +628,8 @@ Liefere:
 - Negative Parallelismen entfernt ("Es geht nicht nur um X; es geht um Y")
 - Dreierregel-Muster und Synonym-Karussell entfernt ("Katalysator/Partner/Fundament")
 - Falsche Spannen entfernt ("von X zu Y, von A zu B")
-- Gedankenstriche, Emojis, Fettschrift-Header und typographische Anführungszeichen entfernt
+- Gedankenstriche, Emojis und Fettschrift-Header entfernt
+- Anführungszeichen vereinheitlicht (im Deutschen sind sie korrekt und bleiben erhalten)
 - Kopula-Vermeidung entfernt ("dient als", "fungiert als", "steht als") zugunsten von "ist"/"sind"
 - Übermäßige Konjunktionen entfernt ("Darüber hinaus")
 - Fazit-Abschnitt komplett gestrichen

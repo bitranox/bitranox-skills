@@ -304,3 +304,109 @@ def test_an_english_curly_pair_is_still_caught_by_its_closing_half():
 def test_the_em_dash_family_is_untouched_by_the_german_carve_out():
     for cp in (0x2013, 0x2014, 0x2E3A, 0x2E3B):
         assert TC.find_tell_lines("a %s b\n" % chr(cp)), "U+%04X" % cp
+
+
+# ---- a skill may not teach the removal of punctuation the tell set permits -------------------
+#
+# write-humanize-de demonstrates each rule with a Vorher/Nachher pair. Once German quotation marks
+# left RANGES, a pair whose "after" has flattened them to ASCII is teaching the reader to strip
+# correct typography that the gate accepts and the repair script now protects on purpose - and the
+# same section's own first sentence already said the characters are correct German.
+#
+# The check is deliberately narrow: normalising one permitted German style to another (guillemets
+# to low-9 quotes, say) is exactly what a consistency fix looks like, so it must stay legal. What
+# fails is an "after" that has NO German punctuation left at all where the "before" had some.
+
+import os
+import re as _re
+
+GERMAN_PUNCTUATION_CODEPOINTS = {0x00AB, 0x00BB, 0x2018, 0x201A, 0x201C, 0x201E, 0x2039, 0x203A}
+_DE_SKILL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "skills", "write-humanize-de", "SKILL.md",
+)
+_MARKER = _re.compile(r"^\*\*(Vorher|Nachher):\*\*")
+
+
+def _german_chars(s):
+    return {ord(c) for c in s} & GERMAN_PUNCTUATION_CODEPOINTS
+
+
+def _example_after(lines, i):
+    """The example body following a Vorher/Nachher marker at line i.
+
+    The skill uses BOTH forms and a parser that knows only one reads almost nothing: 29 of the 30
+    examples are blockquotes and exactly one - the quotation-mark section this guard exists for -
+    is a fenced block. Reading fences alone matched 1 pair of 30 and still looked like a working
+    test, which is what the pair-count control below is for.
+    """
+    out, n = [], len(lines)
+    j = i + 1
+    while j < n and not lines[j].strip():
+        j += 1
+    if j < n and lines[j].lstrip().startswith(("```", "~~~")):
+        fence = lines[j].strip()[:3]
+        j += 1
+        while j < n and not lines[j].lstrip().startswith(fence):
+            out.append(lines[j])
+            j += 1
+        return "\n".join(out)
+    while j < n and lines[j].lstrip().startswith(">"):
+        out.append(lines[j].lstrip()[1:])
+        j += 1
+    return "\n".join(out)
+
+
+def _de_pairs():
+    lines = TC.split_lines(open(_DE_SKILL, encoding="utf-8").read())
+    marks = [(n, _MARKER.match(ln).group(1)) for n, ln in enumerate(lines) if _MARKER.match(ln)]
+    pairs, pending = [], None
+    for n, kind in marks:
+        body = _example_after(lines, n)
+        if kind == "Vorher":
+            pending = body
+        elif pending is not None:
+            pairs.append((pending, body))
+            pending = None
+    return pairs
+
+
+def test_the_german_skill_has_before_after_pairs_to_check():
+    """Control: the parser must find nearly every example, or the next test asserts almost nothing."""
+    body = open(_DE_SKILL, encoding="utf-8").read()
+    declared = body.count("**Vorher:**")
+    found = len(_de_pairs())
+    assert declared >= 25, declared
+    assert found >= declared - 1, (found, declared)
+
+
+def test_every_parsed_example_actually_has_text():
+    """A pair parser that returns empty strings passes the flattening test vacuously."""
+    empty = [i for i, (b, a) in enumerate(_de_pairs()) if not b.strip() or not a.strip()]
+    assert empty == [], empty
+
+
+def test_no_german_example_flattens_permitted_punctuation_away():
+    flattened = [
+        (before.strip()[:60], after.strip()[:60])
+        for before, after in _de_pairs()
+        if _german_chars(before) and not _german_chars(after)
+    ]
+    assert flattened == [], (
+        "a Vorher/Nachher pair removes every German quotation mark, teaching the reader to strip "
+        "punctuation RANGES permits: %r" % (flattened,)
+    )
+
+
+def test_the_german_checklist_unifies_quotes_rather_than_removing_them():
+    """Keyed on the POSITIVE claim, because a revert to "entfernt" drops the word this requires.
+
+    A bare "must not say entfernt" check passes just as well when the line disappears entirely,
+    so the presence of a quotation-mark bullet is asserted first.
+    """
+    lines = TC.split_lines(open(_DE_SKILL, encoding="utf-8").read())
+    bullets = [ln for ln in lines
+               if ln.lstrip().startswith("-") and "nf%chrungszeichen" % chr(0x00FC) in ln]
+    assert bullets, "control: no checklist bullet mentions quotation marks"
+    bad = [ln.strip() for ln in bullets if "entfernt" in ln or "vereinheitlicht" not in ln]
+    assert bad == [], bad
