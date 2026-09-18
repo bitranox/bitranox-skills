@@ -48,10 +48,14 @@ ist das exakte Gegenstück zur tell-sweep-Prüfung, sodass der Text diese danach
 
 Das Skript liegt im `hooks/`-Ordner des Plugins, nicht in einem `scripts/`-Ordner dieses
 Skills - die Befehle oben verwenden bereits den richtigen `<plugin>/hooks/`-Pfad. Es ersetzt
-Geviert- und Halbgeviertstriche, typografische Anführungszeichen und Guillemets, Auslassungspunkte,
+Geviert- und Halbgeviertstriche, den typografischen Apostroph und die schliessenden
+Anführungszeichen, Auslassungspunkte,
 geschützte und nullbreite Leerzeichen, BOM und Bidi-Steuerzeichen durch ASCII, wandelt
 Bewertungs-Emojis (Haken/Kreuz/Warnung) in OK/NO/WARN um und lässt
 bewusst genutzte Symbole (Pfeil, x, >=, <=, !=, Haken, Aufzählungspunkt) unangetastet.
+Deutsche Anführungszeichen bleiben ebenfalls unangetastet: die unteren Anführungszeichen,
+ihre schliessenden Partner und die Guillemets sind korrekte Typografie und kein Verräter,
+sie haben den Melder in Plugin 6.14.0 verlassen, und dieses Skript ist dessen Umkehrung.
 Dieses Skill-Dokument selbst NICHT durch das Skript laufen lassen - die Beispiele unten
 enthalten solche Zeichen absichtlich. Deshalb steht jedes solche Beispiel in einem
 Code-Span oder Codeblock: Hook (`tell_chars.find_tell_lines`) und `strip_typographic_tells.py`

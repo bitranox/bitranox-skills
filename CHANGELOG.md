@@ -56,6 +56,16 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   end to end by driving both hooks over German inputs and over English curly, apostrophe and
   em-dash controls that must still block, and they do.
 
+- **Both humanize skills described the strip script's coverage falsely.** `write-humanize-en` and
+  `write-humanize-de` each carry one sentence naming what
+  `strip_typographic_tells.py` replaces, and each still promised curly quotes and guillemets - so
+  the German skill told a German writer their correct quotes would be flattened. Both now name
+  what the script actually rewrites (the curly apostrophe and the closing quotation marks) and
+  state that German quotation marks and guillemets are left alone. A new test ties that sentence
+  to the script's own table, so the prose cannot drift from the code again without a named
+  failure; the generic phrase is what it rejects, because two of the four English curly quotes
+  are still rewritten and a blanket term over-claims in either language.
+
 ## [6.13.0]
 
 ### Fixed

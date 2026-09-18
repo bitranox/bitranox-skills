@@ -506,3 +506,56 @@ def test_the_table_rewrites_nothing_the_hook_permits():
 
 def test_an_english_curly_apostrophe_is_still_normalized():
     assert mod.normalize("it%ss here\n" % chr(0x2019)) == "it's here\n"
+
+
+# ---- the shipped skills must not promise a rewrite the script does not do --------------------
+#
+# Both humanize skills describe this script's coverage in one sentence. That sentence is the only
+# thing most readers ever consult about it, and it went false the moment German quotation marks
+# left RANGES: it still said the script replaces curly quotes and guillemets, so a German writer
+# reading it would believe their correct typography gets flattened. Prose cannot be kept honest by
+# review, so the claim is tied to TABLE here.
+
+import re as _re
+
+from pathlib import Path as _Path
+
+SKILLS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "skills")
+UML_U = chr(0x00FC)   # the file under test is German; this module stays ASCII
+
+# term named in the sentence -> a codepoint that term would have to cover
+CLAIMED_TERMS = {
+    "guillemets": 0x00AB,
+    "curly quotes": 0x201C,
+    "typografische Anf%shrungszeichen" % UML_U: 0x201C,
+}
+
+COVERAGE_SENTENCE = {
+    "write-humanize-en": (r"It replaces", r"untouched\."),
+    "write-humanize-de": (r"Es ersetzt", r"unangetastet\."),
+}
+
+
+def _coverage_sentence(skill):
+    start, end = COVERAGE_SENTENCE[skill]
+    body = _Path(os.path.join(SKILLS_DIR, skill, "SKILL.md")).read_text(encoding="utf-8")
+    m = _re.search(start + r".*?" + end, body, _re.S)
+    assert m, "%s: coverage sentence not found - the anchors moved" % skill
+    return m.group(0)
+
+
+@pytest.mark.parametrize("skill", sorted(COVERAGE_SENTENCE))
+def test_the_skill_claims_no_rewrite_the_table_does_not_perform(skill):
+    sentence = _coverage_sentence(skill)
+    broken = [
+        term for term, cp in CLAIMED_TERMS.items()
+        if term.lower() in sentence.lower() and cp not in mod.TABLE
+    ]
+    assert broken == [], "%s promises a rewrite the script no longer does: %s" % (skill, broken)
+
+
+@pytest.mark.parametrize("skill", sorted(COVERAGE_SENTENCE))
+def test_the_coverage_sentence_still_names_something_the_table_does(skill):
+    """A control: the sentence must not pass by naming nothing at all."""
+    sentence = _coverage_sentence(skill).lower()
+    assert "ascii" in sentence and ("bom" in sentence or "zero" in sentence or "null" in sentence)

@@ -50,11 +50,14 @@ inverse of the tell-sweep check, so the text passes that gate afterward:
 
 The script lives in the plugin's `hooks/` directory, not in a `scripts/` directory under
 this skill - the commands above already use the correct `<plugin>/hooks/` path. It replaces
-em and en dashes, curly quotes and guillemets, ellipsis and dot leaders, non-breaking and
+em and en dashes, the curly apostrophe and the closing quotation marks, ellipsis and dot
+leaders, non-breaking and
 zero-width spaces, BOM,
 heavy verdict emoji (check/cross/warning become OK/NO/WARN),
 and bidi controls with ASCII, and leaves intentional symbols (arrow, x, >=, <=, !=, check
-mark, bullet) untouched. Do not run it on this skill file itself - the examples below
+mark, bullet) untouched. German quotation marks are untouched too - the low-9 quotes, their
+closing partners and the guillemets are correct typography rather than a tell, so they left
+the detector's set in plugin 6.14.0 and this script, being its inverse, leaves them alone. Do not run it on this skill file itself - the examples below
 contain those characters on purpose. That is also why every such example is kept inside a
 code span or fenced block: the hook (`tell_chars.find_tell_lines`) and
 `strip_typographic_tells.py` (`tell_chars.transform_outside_code`) are two walks over the same
