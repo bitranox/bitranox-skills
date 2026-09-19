@@ -3,7 +3,7 @@
 **A Claude Code plugin that learns your way of working.** It notices when a session teaches
 something - a correction, a rule you state, a mistake worth not repeating - captures it as durable
 memory, sleeps on it, and files each lesson exactly where it applies: this project, this group of
-projects, or everything you do. On top of that self-learning memory it ships **82 skills** of
+projects, or everything you do. On top of that self-learning memory it ships **81 skills** of
 software-engineering craft - planning, debugging, code review, clean architecture, language and
 tool references, humanizing prose - refined over real day-to-day work and growing with every
 lesson that proves broadly useful.
@@ -38,7 +38,7 @@ uv tool install bitranox-skills
 bitranox-skills install
 ```
 
-That copies all 82 skills into `~/.claude/skills/`, where Claude Code picks them up as personal
+That copies all 81 skills into `~/.claude/skills/`, where Claude Code picks them up as personal
 skills. It leaves anything already there alone unless you pass `--force`, `--dry-run` reports the
 plan without writing, and `--dest` targets a different directory. `bitranox-skills path` prints
 where the bundled copy lives, including the `hooks/` directory - the hooks need entries in your
@@ -55,7 +55,7 @@ bitranox-skills==5.293.0` and the marketplace's 5.293.0 are the same skills.
 | [Installation](docs/installation.md)  | Install, auto-update, Windows, verifying the setup                                   |
 | [Setup](docs/setup.md)                | First-session decisions: knobs, tree shape, iron rules, seeding a project            |
 | [Usage](docs/usage.md)                | The daily flow: capture, recall, the nap/tree/crosstree consolidation ladder         |
-| [Skill catalog](docs/skills.md)       | All 82 skills with their triggers, grouped by domain (generated, cannot rot)         |
+| [Skill catalog](docs/skills.md)       | All 81 skills with their triggers, grouped by domain (generated, cannot rot)         |
 | [Architecture](docs/architecture.md)  | Store format, the write engine, the hook pipeline, guards, delivery paths            |
 | [Reference](docs/reference.md)        | Every knob, sentinel file, env var, CLI command, and quirk                           |
 | [Contributing](CONTRIBUTING.md)       | Authoring skills, the quality gates, proposing changes upstream                      |

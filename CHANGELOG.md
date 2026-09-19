@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.0.0]
+
+### Removed
+
+- **`infra-soundtouch-decloud` is no longer published here.** It was a mirror: the skill's home has
+  always been its own tool repo, `bitranox/soundtouch-decloud`, which is itself a Claude Code
+  marketplace shipping that one skill. Carrying a second copy here bought nothing a reader wanted
+  and cost a synchronisation obligation that `repo-gate --mirrors` existed to police, so the copy
+  is gone and the pair is out of `MIRRORED_SKILLS`. The two were byte-identical when it was
+  removed, so nothing was lost in the move.
+
+  Anyone who was using it through this marketplace installs it from its own instead:
+  `https://github.com/bitranox/soundtouch-decloud`. The invocation name changes with the move, from
+  `bitranox:infra-soundtouch-decloud` to `soundtouch-decloud`, which is the breaking part and the
+  reason this is a MAJOR rather than a MINOR.
+
+  MAJOR per the versioning rule above: removing a skill is a breaking change to the published
+  surface. The catalog, the router trigger map and the README count are regenerated with it
+  (82 skills to 81). The entries this file already carries for that skill stay as they are: they
+  record what shipped at the time, which is still true.
+
 ## [6.14.1]
 
 ### Changed
