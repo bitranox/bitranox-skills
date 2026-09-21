@@ -56,6 +56,7 @@ if str(_HOOKS_DIR) not in sys.path:
 
 import harness_checks as hc  # noqa: E402
 import shell_text  # noqa: E402
+import secret_patterns  # noqa: E402
 
 # Re-exported: these predicates are shared with the local-harness audit, which applies the same
 # rules to the skills and hooks no plugin ships. One definition, so the two cannot drift apart.
@@ -575,26 +576,6 @@ def check_skill_naming(root):
     return []
 
 
-# High-signal credential formats that are never legitimate in a shipped skill. Standard
-# secret-scanner patterns (gitleaks/trufflehog family); low false-positive by construction.
-_SECRET_RX = [
-    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "GitHub token"),
-    # Installation tokens (ghs_) are now long JWT-format strings (~520 chars) carrying
-    # dots/dashes/underscores, so the body allows ".-_" and is open-ended on length.
-    (re.compile(r"ghs_[A-Za-z0-9._-]{36,}"), "GitHub App installation token"),
-    (re.compile(r"github_pat_[A-Za-z0-9_]{60,}"), "GitHub fine-grained PAT"),
-    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}"), "Anthropic API key"),
-    (re.compile(r"\bsk-[A-Za-z0-9]{40,}\b"), "OpenAI-style key"),
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
-    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "Google API key"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "Slack token"),
-    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b"), "GitLab token"),
-]
-# A complete private key block. The body must lack a "..." truncation marker and carry real
-# base64, so an illustrative/elided example (e.g. the rpyc tutorial's key) does not trip it.
-_PRIVKEY_RX = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----([\s\S]{20,8000}?)-----END [A-Z0-9 ]*PRIVATE KEY-----"
-)
 _SENSITIVE_NAME_RX = re.compile(
     r"(^|/)(\.env(\.[^/]*)?|id_rsa|id_dsa|id_ecdsa|id_ed25519|.*\.pem|.*\.p12|.*\.pfx|"
     r"\.netrc|\.htpasswd|.*\.kdbx)$|credentials?\.(json|ya?ml|toml|txt)$",
@@ -638,14 +619,12 @@ def check_secrets(root):
         if b"\x00" in raw[:4096] or len(raw) > 2_000_000:
             continue  # binary or oversized
         text = raw.decode("utf-8", "replace")
-        for rx, label in _SECRET_RX:
-            if rx.search(text):
-                findings.append(f"  {rel}: possible {label}")
-        for m in _PRIVKEY_RX.finditer(text):
-            body = m.group(1)
-            if "..." not in body and len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) > 64:
-                findings.append(f"  {rel}: embedded private key")
-                break
+        # The credential formats and the real-key-block rule live in secret_patterns, shared
+        # with recall and the classifier's egress redaction.
+        for label in secret_patterns.find_secret_labels(text):
+            findings.append(f"  {rel}: possible {label}")
+        if next(secret_patterns.real_private_key_blocks(text), None):
+            findings.append(f"  {rel}: embedded private key")
         low = text.lower()
         for orig, term in deny:
             if term in low:

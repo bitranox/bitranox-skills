@@ -102,3 +102,85 @@ def two_trees(tmp_path, monkeypatch):
         top_a=tops["marketing"][0], proj_a=tops["marketing"][1],
         top_b=tops["bakery"][0], proj_b=tops["bakery"][1],
     )
+
+
+# ---- a local stand-in for the TypeSafe API (test_classifier*, via the fake_jev fixture) ----
+# Lives here because pytest runs with --import-mode=importlib, where one test module cannot
+# import another.
+
+import json as _json  # noqa: E402
+import threading as _threading  # noqa: E402
+import time  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+class FakeJev:
+    """A local stand-in for api.typesafe.ai: records each request, answers per a script."""
+
+    def __init__(self, status=200, body=None, delay=0.0, trickle=False):
+        self.status, self.body, self.delay, self.trickle = status, body, delay, trickle
+        self.requests = []
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):  # keep pytest output clean
+                pass
+
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                fake.requests.append({"path": self.path, "headers": dict(self.headers),
+                                      "json": _json.loads(raw)})
+                time.sleep(fake.delay)
+                payload = fake.body
+                if payload is None:
+                    payload = fake.default_answers(_json.loads(raw))
+                data = payload if isinstance(payload, bytes) else _json.dumps(payload).encode()
+                self.send_response(fake.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                if fake.trickle:  # each byte arrives inside the socket timeout; the whole does not
+                    for b in data:
+                        self.wfile.write(bytes([b]))
+                        self.wfile.flush()
+                        time.sleep(0.05)
+                else:
+                    self.wfile.write(data)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+        _threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @staticmethod
+    def default_answers(req):
+        answers = {}
+        for qid, q in req["questions"].items():
+            if q["type"] == "noul":
+                answers[qid] = {"type": "noul", "noul": 0.9}
+            else:
+                key = next(iter(q["criteria"]))
+                answers[qid] = {"type": "choice", "choice": key,
+                                "probabilities": {key: 0.8}, "confidence": 0.7}
+        return {"model": "jev-1.13.0", "answers": answers,
+                "usage": {"input_tokens": 123, "output_tokens": 5}}
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def fake_jev():
+    """Factory: `fake_jev(status=, body=, delay=, trickle=)` starts a server; all close at teardown."""
+    started = []
+
+    def make(**kw):
+        f = FakeJev(**kw)
+        started.append(f)
+        return f
+
+    yield make
+    for f in started:
+        f.close()

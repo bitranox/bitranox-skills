@@ -12,7 +12,6 @@ Pure standard library. Fail-open: every error path exits 0, so a broken or slow 
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -24,9 +23,13 @@ for _d in (str(_HOOKS_DIR), str(_SKILL_DIR)):
 
 import gather_scan as gs  # noqa: E402  (the existing grep engine; also pulls in self_improve_signals)
 import self_improve_signals as sig  # noqa: E402
+import classifier  # noqa: E402
+import secret_patterns  # noqa: E402
 
 MAX_HITS = 4
 MAX_BODY = 1800
+SHADOW_SHORTLIST = 30  # candidates the shadow classifier reranks, one pair request each
+SHADOW_NOTE = 600      # characters of each note shown to it
 SPECIFIC_MAX = 6  # a keyword matching <= this many candidate notes is a specific (strong) signal
 COMMON_FRACTION = 0.25  # a keyword in > this fraction of the whole store is a corpus-stopword (no signal)
 
@@ -41,14 +44,8 @@ COMMON_FRACTION = 0.25  # a keyword in > this fraction of the whole store is a c
 # nothing; `Password: <value>` and `scheme://user:pw@host` are the secret itself. The shapes that
 # matter are the ones a human writes in a runbook - a labelled value and URL userinfo - because
 # the token-shape patterns (ghp_..., AKIA...) are NOT what this leak looked like, though they are
-# matched too.
-_CRED_LABEL = re.compile(
-    r"(?im)^[^\n]*\b(pass(?:word|phrase)?|pwd|secret|api[ _-]?key|access[ _-]?key|token"
-    r"|credentials?)\b\s*[:=]\s*\S")
-_CRED_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
-_CRED_TOKEN = re.compile(
-    r"ghp_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}|\bsk-ant-[A-Za-z0-9_-]{24,}"
-    r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}")
+# matched too. The patterns live in secret_patterns, shared with repo-gate and the classifier's
+# egress redaction, so a shape added for one is never missing in the others.
 
 
 def holds_a_credential(body):
@@ -57,7 +54,7 @@ def holds_a_credential(body):
     Deliberately conservative: a false positive costs one withheld note, which the reader can
     still open by name, while a false negative publishes a live credential into a transcript.
     """
-    return bool(_CRED_LABEL.search(body) or _CRED_URL.search(body) or _CRED_TOKEN.search(body))
+    return secret_patterns.holds_a_credential(body)
 
 
 def _state_file(cwd, sid):
@@ -105,6 +102,23 @@ def _snippet(path, keywords, maxlen):
     start = max(0, pos - maxlen // 3)
     end = start + maxlen
     return ("..." if start > 0 else "") + text[start:end].strip() + ("..." if end < len(text) else "")
+
+
+def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords):
+    """Hand the keyword shortlist to the classifier's detached shadow child: one pair request
+    per (prompt, note). Never changes what is injected and never raises."""
+    try:
+        if not classifier.shadow_enabled(sig.load_config(), "recall_rerank"):
+            return
+        shortlist = by_score[:SHADOW_SHORTLIST]
+        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS]}
+        questions = classifier.recall_questions()
+        requests = [{"fields": {"user_prompt": prompt,
+                                "memory_note": _snippet(p, hits.get(p, keywords), SHADOW_NOTE)},
+                     "questions": questions} for p in shortlist]
+        classifier.spawn_shadow("recall_rerank", sid, regex, requests)
+    except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
+        pass
 
 
 def main():
@@ -182,6 +196,11 @@ def main():
         u = _useful(p)
         return len(u) >= 2 or any(df[k] <= SPECIFIC_MAX for k in u)
     ranked = sorted((p for p in hits if _specific(p)), key=lambda p: (-_score(p), p))
+    # Opt-in shadow comparison (off by default). The shortlist is taken from ALL hits, not only
+    # the ones that passed the specificity filter, so the reranker can surface a note the
+    # keyword rules dropped.
+    _shadow_recall(prompt, sid, sorted(hits, key=lambda p: (-_score(p), p)), ranked, hits,
+                   keywords)
     if not ranked:
         return 0
 

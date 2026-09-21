@@ -34,6 +34,7 @@ from self_improve_signals import (
     REALIZATION_PATTERN as _REALIZATION_PATTERN,
     ENDORSE_PATTERN as _ENDORSE_PATTERN,
 )
+import classifier as _classifier  # noqa: E402
 
 _REASON = (
     'A learning signal was detected this turn (a correction, an explicit "remember", a good idea '
@@ -183,6 +184,26 @@ def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES):
     return last_user, last_asst
 
 
+def _shadow_stop_signal(event, last_user, last_asst):
+    """Hand this turn to the classifier's detached shadow child. Never changes the decision
+    and never raises: the regex verdict per family is logged beside Jev's."""
+    try:
+        if not _classifier.shadow_enabled(_sig.load_config(), "stop_signal"):
+            return
+        regex = {"user_pattern": bool(_USER_PATTERN.search(last_user)),
+                 "asst_pattern": bool(_ASST_PATTERN.search(last_asst)),
+                 "realization": bool(_REALIZATION_PATTERN.search(last_asst)),
+                 "endorse_user": bool(_ENDORSE_PATTERN.search(last_user)),
+                 "endorse_asst": bool(_ENDORSE_PATTERN.search(last_asst))}
+        regex["fires"] = any(regex.values())
+        _classifier.spawn_shadow(
+            "stop_signal", event.get("session_id") or "", regex,
+            [{"fields": {"user_message": last_user, "assistant_reply": last_asst},
+              "questions": _classifier.stop_signal_questions()}])
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        pass
+
+
 def main():
     try:
         event = json.loads(sys.stdin.read())
@@ -217,6 +238,10 @@ def main():
 
     if not (last_user.strip() or last_asst.strip()):
         return 0
+
+    # Opt-in shadow comparison (off by default). Before the once-per-message dedup, so every
+    # turn is compared, not only the ones the regex already blocked on.
+    _shadow_stop_signal(event, last_user, last_asst)
 
     sig = hashlib.sha1(last_user.encode("utf-8", "replace")).hexdigest()
     try:

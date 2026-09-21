@@ -824,6 +824,14 @@ DEFAULT_CONFIG = {
     "context_window": 0,           # 0 = detect; set a token count only to override the detection
     "context_handover_pct": 70,    # percentage leg of the handover threshold
     "context_handover_cap": 400000,  # absolute leg, in tokens (measured context-rot onset)
+    # Opt-in text classifier (hooks/classifier.py). The backend is the master switch; each site
+    # has its own knob, so one site can be compared in shadow while the others stay off. Shadow
+    # never changes a hook's decision: it only logs Jev's verdict beside the regex's.
+    "classifier_backend": "off",       # off | jev
+    "classifier_model": "jev-latest",  # the TypeSafe model id sent with every request
+    "classifier_stop_signal": "off",   # off | shadow - self-improve Stop gate learning signal
+    "classifier_skill_router": "off",  # off | shadow - UserPromptSubmit skill router
+    "classifier_recall_rerank": "off",  # off | shadow - UserPromptSubmit memory recall ranking
 }
 
 

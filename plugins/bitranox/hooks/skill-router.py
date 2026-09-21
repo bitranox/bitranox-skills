@@ -22,6 +22,7 @@ _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
+import classifier  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
 
 MIN_HITS = 2
@@ -54,6 +55,22 @@ def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
     return scored[:max_skills]
 
 
+def _shadow_skill_router(prompt, sid, triggers):
+    """Hand this prompt to the classifier's detached shadow child: one noul per skill beside
+    the keyword ranking. Never changes the nudge and never raises."""
+    try:
+        if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
+            return
+        ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
+        regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
+                 "scores": {s: n for s, n in ranked}}
+        questions = classifier.skill_router_questions(classifier.load_skill_descriptions())
+        classifier.spawn_shadow("skill_router", sid, regex,
+                                [{"fields": {"user_prompt": prompt}, "questions": questions}])
+    except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
+        pass
+
+
 def main():
     try:
         ev = json.load(sys.stdin)
@@ -65,7 +82,11 @@ def main():
     cwd = ev.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     sid = ev.get("session_id") or "default"
     try:
-        hits = match(prompt, load_triggers())
+        triggers = load_triggers()
+        hits = match(prompt, triggers)
+        # Opt-in shadow comparison (off by default), before the per-session dedup so every
+        # prompt is compared.
+        _shadow_skill_router(prompt, sid, triggers)
         if not hits:
             return 0
         state = _state_file(cwd, sid)

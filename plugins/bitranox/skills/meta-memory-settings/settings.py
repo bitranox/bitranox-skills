@@ -31,6 +31,10 @@ ENUM_CHOICES = {
     "promotion": ("corroborated", "eager"),
     "skill_placement": ("lowest", "user", "project"),
     "mcp_search": ("off", "auto"),
+    "classifier_backend": ("off", "jev"),
+    "classifier_stop_signal": ("off", "shadow"),
+    "classifier_skill_router": ("off", "shadow"),
+    "classifier_recall_rerank": ("off", "shadow"),
 }
 
 _TRUE_WORDS = ("1", "true", "yes", "on")

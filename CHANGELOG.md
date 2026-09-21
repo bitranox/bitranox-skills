@@ -29,6 +29,46 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.1.0]
+
+### Added
+
+- **An opt-in text classifier the hooks can consult in shadow mode: TypeSafe's Jev.** Several
+  hooks classify prose with regexes and word lists, and their CHANGELOG history is a record of
+  false fires and misses. Jev is a classifier model, not a generator: text goes in as named
+  fields, typed questions go with it, and typed answers with probabilities come back in about a
+  second. This release lets three sites be COMPARED against it without changing what any of them
+  does:
+
+  - the self-improve Stop gate's learning-signal regexes (`classifier_stop_signal`) - one yes/no
+    question per signal family over the last user message and assistant reply;
+  - the skill router's keyword match (`classifier_skill_router`) - one yes/no question per shipped
+    skill over the prompt;
+  - recall's keyword ranking (`classifier_recall_rerank`) - one request per (prompt, memory note)
+    pair over the keyword shortlist.
+
+  Shadow means the regex still decides, byte for byte. The hook hands a payload to a detached
+  process and returns at once; that process asks Jev and appends both verdicts to
+  `~/.claude/self-improve-audit/classifier-shadow.jsonl`, which is what a later replay will judge
+  the classifier on before any site is allowed to act on it.
+
+  Everything is off by default. `classifier_backend` is the master switch (`off` | `jev`) and each
+  site has its own knob (`off` | `shadow`), set through `bitranox:meta-memory-settings`. The key is
+  read from `TYPESAFE_API_KEY` or the keyfile `~/.credentials/typesafe.key`, which must be
+  owner-only. Only the named fields a site passes leave the machine, each capped, and every one
+  goes through redaction first: a secret is replaced with `[REDACTED]`, it never causes the call to
+  be skipped. The client is the standard library, so it runs on the bare interpreter the hooks
+  use, with an overall deadline that a slow server cannot outlast.
+
+### Changed
+
+- **One credential vocabulary for every hook that must recognise a secret.** `repo-gate`'s commit
+  scan and recall's credential withholding each carried their own patterns; both now read
+  `hooks/secret_patterns.py`, which also supplies the classifier's redaction. Recall's check is
+  broader as a result: it now also withholds a note carrying an OpenAI-style, Google, GitLab or
+  GitHub App token, a real private key block, or a secret-named environment assignment such as
+  `GITHUB_TOKEN=...`, all of which it previously injected.
+
 ## [7.0.0]
 
 ### Removed
