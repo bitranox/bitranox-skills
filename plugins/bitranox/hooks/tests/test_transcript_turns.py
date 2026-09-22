@@ -107,6 +107,48 @@ def test_the_window_widens_past_a_huge_tool_output_to_find_the_prompt(tmp_path):
     assert turn.prompt == "the second" and turn.reply_before_prompt == "Which one?"
 
 
+# ---- recent activity and skills in use -----------------------------------------------------
+
+def _call(name, **inp):
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": name,
+                                                          "name": name, "input": inp}]}}
+
+
+def test_recent_activity_labels_the_last_tool_calls_oldest_first(tmp_path):
+    t = _write(tmp_path, [
+        _call("Read", file_path="/a/b/old.py"),
+        _call("Bash", command="ssh host 'secret stuff'", description="Run the shadow report"),
+        _call("Edit", file_path="/repo/plugins/bitranox/hooks/recall-memory.py"),
+        _call("Skill", skill="bitranox:meta-context-watcher"),
+        _call("WebFetch", url="https://example.invalid/x")])
+    assert T.recent_activity(t, n=4) == ("Bash: Run the shadow report; Edit: recall-memory.py; "
+                                         "Skill: meta-context-watcher; WebFetch")
+
+
+def test_recent_activity_never_sends_a_bash_command_line(tmp_path):
+    # The command can carry hostnames and paths; the description the harness requires cannot
+    # be relied on to exist, so a Bash call without one is only named.
+    t = _write(tmp_path, [_call("Bash", command="ssh root@10.0.0.5 cat /etc/shadow")])
+    assert T.recent_activity(t) == "Bash"
+
+
+def test_recent_activity_is_capped(tmp_path):
+    t = _write(tmp_path, [_call("Bash", description="x" * 200) for _ in range(6)])
+    assert len(T.recent_activity(t, n=6, cap=300)) <= 300 + len(T.EXCERPT_MARK)
+
+
+def test_skills_used_are_the_skills_invoked_this_session_without_their_plugin_prefix(tmp_path):
+    t = _write(tmp_path, [_call("Skill", skill="bitranox:meta-context-watcher"),
+                          _call("Skill", skill="toolbox"),
+                          _call("Skill", skill="bitranox:meta-context-watcher")])
+    assert T.skills_used(t) == ["meta-context-watcher", "toolbox"]
+
+
+def test_activity_readers_on_a_missing_transcript_are_empty(tmp_path):
+    assert T.recent_activity(str(tmp_path / "absent.jsonl")) == ""
+    assert T.skills_used("") == []
+
+
 # ---- excerpt -------------------------------------------------------------------------------
 
 def test_excerpt_keeps_a_short_text_whole():

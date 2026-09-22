@@ -28,6 +28,10 @@ import transcript_turns  # noqa: E402
 
 MIN_HITS = 2
 MAX_SKILLS = 2
+# The router's shadow input beyond the prompt: project scope, recent tool activity, skills in use
+# and the "new task or continuation?" gate question. Recorded in every log line.
+ROUTER_VIEW = "ctx-v1"
+PROJECT_CAP = 200
 
 
 def _state_file(cwd, sid):
@@ -56,21 +60,58 @@ def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
     return scored[:max_skills]
 
 
-def _shadow_skill_router(prompt, sid, triggers, transcript=""):
-    """Hand this prompt to the classifier's detached shadow child: one noul per skill beside
-    the keyword ranking, with the reply the prompt answers. Never changes the nudge and never
-    raises."""
+def _project_line(cwd):
+    """`<dir>: <WHAT line>` from the nearest CLAUDE.local.md scope descriptor at or above `cwd`,
+    else just the cwd's own name. Tells the router which domain the session is in."""
+    here = Path(cwd)
+    for d in (here, *here.parents):
+        try:
+            text = (d / "CLAUDE.local.md").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith("WHAT:"):
+                return transcript_turns.excerpt(
+                    "%s: %s" % (d.name, line[len("WHAT:"):].strip()), PROJECT_CAP)
+    return here.name
+
+
+def _already_nudged(cwd, sid):
+    try:
+        return {s for s in _state_file(cwd, sid).read_text(encoding="utf-8").split("\n") if s}
+    except OSError:
+        return set()
+
+
+def _router_fields(prompt, cwd, sid, transcript):
+    """The router's state: the prompt plus what it replies to and where the session is. Empty
+    context is left out, so no question is asked about a field that says nothing."""
+    fields = {"user_prompt": prompt, "project": _project_line(cwd)}
+    activity = transcript_turns.recent_activity(transcript)
+    if activity:
+        fields["recent_activity"] = activity
+    in_use = sorted(_already_nudged(cwd, sid) | set(transcript_turns.skills_used(transcript)))
+    if in_use:
+        fields["skills_already_used"] = ", ".join(in_use)
+    return classifier.with_previous(fields, transcript_turns.last_reply(transcript))
+
+
+def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
+    """Hand this prompt to the classifier's detached shadow child: the new-task gate plus one
+    noul per skill beside the keyword ranking, with the context the prompt needs to be read.
+    Never changes the nudge and never raises."""
     try:
         if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
             return
         ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
         regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
-                 "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW}
+                 "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
+                 "router_view": ROUTER_VIEW}
         questions = classifier.skill_router_questions(classifier.load_skill_descriptions())
-        fields = classifier.with_previous({"user_prompt": prompt},
-                                          transcript_turns.last_reply(transcript))
         classifier.spawn_shadow("skill_router", sid, regex,
-                                [{"fields": fields, "questions": questions}])
+                                [{"fields": _router_fields(prompt, cwd or os.getcwd(), sid,
+                                                           transcript),
+                                  "questions": questions}])
     except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
         pass
 
@@ -90,7 +131,7 @@ def main():
         hits = match(prompt, triggers)
         # Opt-in shadow comparison (off by default), before the per-session dedup so every
         # prompt is compared.
-        _shadow_skill_router(prompt, sid, triggers, ev.get("transcript_path") or "")
+        _shadow_skill_router(prompt, sid, triggers, ev.get("transcript_path") or "", cwd)
         if not hits:
             return 0
         state = _state_file(cwd, sid)

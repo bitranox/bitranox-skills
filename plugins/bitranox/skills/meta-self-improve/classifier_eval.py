@@ -124,6 +124,23 @@ def summarize_stop_signal(rows, threshold):
 
 # ---- skill_router --------------------------------------------------------------------------
 
+# Router answers whose id starts with this are gate questions, never skills.
+GATE_PREFIX = "_"
+NEW_TASK_ID = "_new_task"
+
+
+def _router_picks(scores, threshold, top):
+    """Jev's suggestion: nothing when its gate says the prompt continues the current work,
+    else its `top` highest-scoring skills at or above threshold. Rows from before the gate
+    existed have no gate answer and are judged on the skills alone."""
+    gate = scores.get(NEW_TASK_ID)
+    if gate is not None and gate < threshold:
+        return set()
+    ranked = sorted(((v, k) for k, v in scores.items()
+                     if v >= threshold and not k.startswith(GATE_PREFIX)), reverse=True)
+    return {k for _v, k in ranked[:top]}
+
+
 def summarize_skill_router(rows, threshold, top):
     """The keyword selection against Jev's `top` highest-scoring skills at or above threshold."""
     s = {"prompts": 0, "identical": 0, "regex_picks": 0, "jev_picks": 0, "agreed_picks": 0,
@@ -135,8 +152,7 @@ def summarize_skill_router(rows, threshold, top):
             s["unanswered"] += 1
             continue
         regex = set((row.get("regex") or {}).get("selected") or [])
-        ranked = sorted(((v, k) for k, v in scores.items() if v >= threshold), reverse=True)
-        jev = {k for _v, k in ranked[:top]}
+        jev = _router_picks(scores, threshold, top)
         s["prompts"] += 1
         s["regex_picks"] += len(regex)
         s["jev_picks"] += len(jev)

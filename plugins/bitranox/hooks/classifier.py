@@ -370,13 +370,26 @@ def load_skill_descriptions(skills_dir=None):
     return out
 
 
+# The router's gate question. Its id starts with "_" so it can never collide with a skill name;
+# the eval reads a low score as "a continuation, suggest nothing".
+NEW_TASK_ID = "_new_task"
+
+
 def skill_router_questions(skills):
-    """One noul per skill over {user_prompt}; the id is the skill name."""
-    return [Question(name, "noul",
-                     "Would the assistant need the skill described here to handle `user_prompt` "
-                     "well? `user_prompt` is a reply to `previous_assistant_message` when that is "
-                     "given. Skill description: " + desc)
-            for name, desc in skills.items()]
+    """The gate question, then one noul per skill; each skill's id is its name. State fields:
+    user_prompt, and when known previous_assistant_message, project, recent_activity and
+    skills_already_used."""
+    gate = Question(NEW_TASK_ID, "noul",
+                    "Does `user_prompt` start a new task, or change direction in a way that needs "
+                    "specialised know-how, rather than continuing, approving or checking the work "
+                    "that `previous_assistant_message` and `recent_activity` describe?")
+    return [gate] + [
+        Question(name, "noul",
+                 "Would the assistant need the skill described here to handle `user_prompt` well? "
+                 "`user_prompt` is a reply to `previous_assistant_message` when that is given, and "
+                 "`project` and `recent_activity` say what is being worked on. Answer no if the "
+                 "skill is listed in `skills_already_used`. Skill description: " + desc)
+        for name, desc in skills.items()]
 
 
 def recall_questions():

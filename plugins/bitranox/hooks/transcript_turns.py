@@ -144,6 +144,64 @@ def last_reply(transcript_path, tail_bytes=TAIL_BYTES, max_bytes=MAX_TAIL_BYTES)
     return turn.reply or turn.reply_before_prompt
 
 
+# Skills are looked up over a wider tail than a turn: one invoked early in a long session is still
+# loaded, and the only record of it is the Skill call itself.
+SKILLS_TAIL_BYTES = 1024 * 1024
+_FILE_TOOLS = ("Read", "Edit", "Write", "NotebookEdit")
+
+
+def _tool_calls(transcript_path, window):
+    """(name, input) of every tool_use block in the transcript tail, oldest first."""
+    try:
+        data, _size = _tail(transcript_path, window)
+    except (OSError, TypeError, ValueError):
+        return []
+    calls = []
+    for raw in data.splitlines():
+        try:
+            obj = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if obj.get("type") != "assistant":
+            continue
+        content = obj.get("message", {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                inp = block.get("input") if isinstance(block.get("input"), dict) else {}
+                calls.append((str(block.get("name") or ""), inp))
+    return calls
+
+
+def _label(name, inp):
+    """A short, safe label for one tool call. A Bash call is named by the description the model
+    wrote for it, never by its command line, which can carry hostnames, paths and arguments."""
+    if name == "Bash" or name in ("Agent", "Task"):
+        desc = str(inp.get("description") or "").strip()
+        return "%s: %s" % (name, desc) if desc else name
+    if name in _FILE_TOOLS:
+        path = str(inp.get("file_path") or inp.get("notebook_path") or "")
+        base = path.replace("\\", "/").rsplit("/", 1)[-1]
+        return "%s: %s" % (name, base) if base else name
+    if name == "Skill":
+        skill = str(inp.get("skill") or "").rsplit(":", 1)[-1]
+        return "Skill: %s" % skill if skill else name
+    return name
+
+
+def recent_activity(transcript_path, n=6, cap=300, tail_bytes=TAIL_BYTES):
+    """The last `n` tool calls as short labels, oldest first, trimmed to about `cap` characters:
+    what "it" in a prompt like "check it again" refers to."""
+    labels = [_label(name, inp) for name, inp in _tool_calls(transcript_path, tail_bytes)[-n:]]
+    return excerpt("; ".join(label for label in labels if label), cap)
+
+
+def skills_used(transcript_path, tail_bytes=SKILLS_TAIL_BYTES):
+    """The skills invoked in the transcript tail, without their plugin prefix, sorted."""
+    names = {str(inp.get("skill") or "").rsplit(":", 1)[-1]
+             for name, inp in _tool_calls(transcript_path, tail_bytes) if name == "Skill"}
+    return sorted(n for n in names if n)
+
+
 def excerpt(text, cap):
     """`text` trimmed to about `cap` characters, keeping both ends: a reply's opening says what
     it is about and its end usually holds the question a short answer like "yes" refers to."""

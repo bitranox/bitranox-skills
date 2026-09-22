@@ -121,9 +121,9 @@ def test_skill_router_shadow_asks_one_noul_per_skill_and_keeps_its_output(env, m
     assert line["site"] == "skill_router"
     skills = cl.load_skill_descriptions()
     assert len(skills) >= 20
-    assert set(line["results"][0]["answers"]) == set(skills)
+    assert set(line["results"][0]["answers"]) == set(skills) | {cl.NEW_TASK_ID}
     assert line["regex"]["selected"] == [s for s, _n in SR.match(prompt, SR.load_triggers())]
-    assert line["states"][0] == {"user_prompt": prompt}
+    assert line["states"][0] == {"user_prompt": prompt, "project": "x"}
 
 
 # ---- recall -------------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def test_skill_router_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, m
     _run(SR, monkeypatch, capsys, {"prompt": "check it again", "cwd": "/p/x", "session_id": "s-r",
                                    "transcript_path": t})
     line = _wait_for_log(env["home"])[-1]
-    assert line["states"][0] == {"user_prompt": "check it again",
+    assert line["states"][0] == {"user_prompt": "check it again", "project": "x",
                                  "previous_assistant_message": "The shadow log has 19 rows."}
     assert line["regex"]["context_view"] == "prev-reply-v1"
 
@@ -242,6 +242,34 @@ def test_recall_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeyp
     assert all(s["previous_assistant_message"] == "The make test gate is red."
                for s in line["states"])
     assert line["regex"]["context_view"] == "prev-reply-v1"
+
+
+def test_skill_router_shadow_sends_project_activity_and_skills_in_use(env, tmp_path, monkeypatch,
+                                                                     capsys):
+    proj = tmp_path / "shop"
+    (proj / "sub").mkdir(parents=True)
+    (proj / "CLAUDE.local.md").write_text("<!-- x -->\nWHAT: An online shop backend.\n",
+                                          encoding="utf-8")
+    t = _transcript(tmp_path, _typed("run it"),
+                    {"type": "assistant", "message": {"content": [
+                        {"type": "tool_use", "id": "a", "name": "Skill",
+                         "input": {"skill": "bitranox:process-test-driven-development"}},
+                        {"type": "tool_use", "id": "b", "name": "Bash",
+                         "input": {"command": "pytest", "description": "Run the tests"}}]}},
+                    _said("All 12 tests pass."))
+    already = SR._state_file(str(proj / "sub"), "s-ctx")
+    already.parent.mkdir(parents=True, exist_ok=True)
+    already.write_text("compuse-git\n", encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "check it again", "cwd": str(proj / "sub"),
+                                   "session_id": "s-ctx", "transcript_path": t})
+    line = _wait_for_log(env["home"])[-1]
+    state = line["states"][0]
+    assert state["project"] == "shop: An online shop backend."
+    assert state["recent_activity"] == "Skill: process-test-driven-development; Bash: Run the tests"
+    assert state["skills_already_used"] == "compuse-git, process-test-driven-development"
+    assert line["regex"]["router_view"] == "ctx-v1"
+    assert "_new_task" in line["results"][0]["answers"]
 
 
 def test_questions_name_the_previous_message_field():

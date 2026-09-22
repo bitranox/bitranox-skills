@@ -29,6 +29,35 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.5.0]
+
+### Changed
+
+- **The router's Jev shadow now knows where the session is and whether the prompt is new work.**
+  On the 7.4.0 rows every router suggestion was a generic pair ("yes" got two memory skills, "check
+  the shadow stat" got the ZFS pool skill), because the only question was "would this skill help?",
+  asked about every skill, with no way to answer "nothing new is needed". The request gains:
+  - a gate question, `_new_task`: does the prompt start new work or change direction, rather than
+    continue, approve or check the current work? The eval suggests nothing when it scores below
+    the threshold;
+  - `project`: the nearest `CLAUDE.local.md` scope descriptor's WHAT line, else the directory name;
+  - `recent_activity`: the last six tool calls as short labels. A Bash call is named by the
+    description the model wrote for it, never by its command line, which can carry hostnames and
+    arguments;
+  - `skills_already_used`: skills invoked this session plus those the keyword router already
+    suggested; each skill question says to answer no for one of these.
+
+  Measured on a real session: about 200 characters of project line, 225 of activity, 57 of skills
+  in use. The question set grows to about 57k characters, roughly 14k tokens per prompt against
+  11.5k before. Router log lines record `router_view: ctx-v1`.
+- `hooks/transcript_turns.py` gains `recent_activity` and `skills_used`.
+
+### Added
+
+- **`classifier_eval.py report` applies the router's gate**: no Jev suggestion when `_new_task` is
+  below the threshold, and a gate answer is never counted as a skill pick. Rows from before the gate
+  are judged on the skills alone.
+
 ## [7.4.0]
 
 ### Changed

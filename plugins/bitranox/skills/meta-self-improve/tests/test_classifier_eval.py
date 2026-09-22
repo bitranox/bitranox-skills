@@ -114,6 +114,18 @@ def test_router_compares_regex_selection_with_jev_top_n_above_threshold():
     assert s["disagreements"][0]["regex_only"] == []
 
 
+def test_router_suggests_nothing_when_jev_judges_the_prompt_a_continuation():
+    rows = [router_row([], {"_new_task": 0.2, "a": 0.9, "b": 0.8})]
+    s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
+    assert s["jev_picks"] == 0 and s["identical"] == 1
+
+
+def test_router_new_task_answer_is_never_a_skill_pick():
+    rows = [router_row(["a"], {"_new_task": 0.9, "a": 0.8})]
+    s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
+    assert s["jev_picks"] == 1 and s["identical"] == 1
+
+
 def test_router_prompt_where_both_pick_nothing_is_an_agreement():
     rows = [router_row([], {"a": 0.1, "b": 0.2})]
     s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
