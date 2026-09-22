@@ -501,3 +501,39 @@ def test_an_unknown_script_behind_a_launcher_is_not_a_sink():
 )
 def test_opens_a_pr(cmd, expected):
     assert S.opens_a_pr(cmd) is expected
+
+
+# ---- heredoc bodies as AUTHORED text -----------------------------------------------------------
+# `strip_heredoc_bodies` removes a body because it is data rather than a command. But a body can
+# also be a PROGRAM being authored, and the toolbox nudge already treats authored text (Write and
+# Edit content) as a place a chore hides. `heredoc_bodies` is that same text, so the two readings
+# can be taken from one command without either one blinding the other.
+
+def test_heredoc_bodies_returns_what_strip_removes():
+    command = "python3 - <<'PY'\nimport os\nprint(os.getcwd())\nPY\nls -la"
+    assert S.heredoc_bodies(command) == "import os\nprint(os.getcwd())"
+    assert "import os" not in S.strip_heredoc_bodies(command)
+
+
+def test_heredoc_bodies_is_empty_when_there_is_no_heredoc():
+    assert S.heredoc_bodies("ls -la && echo done") == ""
+
+
+def test_heredoc_bodies_joins_several_bodies():
+    command = "cat <<'A'\nfirst\nA\ncat <<'B'\nsecond\nB"
+    assert S.heredoc_bodies(command) == "first\nsecond"
+
+
+def test_heredoc_bodies_ignores_a_quoted_opener_the_shell_would_not_open():
+    # the same shape that once made the strip swallow a whole command
+    command = 'git commit -m "docs: explain <<EOF heredocs"\ngit push'
+    assert S.heredoc_bodies(command) == ""
+
+
+def test_heredoc_bodies_takes_an_unterminated_body_to_the_end():
+    assert S.heredoc_bodies("cat <<'EOF'\nline one\nline two") == "line one\nline two"
+
+
+def test_heredoc_bodies_excludes_the_opener_and_the_terminator():
+    body = S.heredoc_bodies("cat > f <<'EOF'\npayload\nEOF")
+    assert body == "payload"

@@ -22,7 +22,9 @@ from pathlib import Path
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the chore it watches for. Re-exported so callers and
 # tests can keep reaching it as `toolbox_nudge.strip_heredoc_bodies`.
-from shell_text import blank_unexpanded_text, is_shell_tool, strip_heredoc_bodies  # noqa: F401
+from shell_text import (  # noqa: F401
+    blank_unexpanded_text, heredoc_bodies, is_shell_tool, strip_heredoc_bodies,
+)
 
 # (regex over the command, tool name, one-line "why"). First match wins. STRONG signatures only, to
 # keep false positives + noise low; the per-session dedup then nudges each tool at most once.
@@ -129,6 +131,14 @@ _ANY_TOOL_RULES = [
     (re.compile(r"\bfind\b[^\n]*-name\s+['\"]?CLAUDE\.md"
                 r"|\bgrep\s+-[A-Za-z]*r[A-Za-z]*\b[^\n]*CLAUDE\.md"), "claudemd_variance",
      "finding duplicated CLAUDE.md sections by hand"),
+    # The Python spelling of anchor_edit's chore. Its other rule is `sed -i`, and measured over 60
+    # recorded calls this is how the chore is actually written - a read, an exact-text replace and
+    # a write-back - usually inside a heredoc, where NO command rule can see it. Both CALL shapes
+    # are required so that prose naming the trap ("read_text then write_text with a replace") is
+    # not an instance of it.
+    (re.compile(r"(?s)(?=.*\.replace\()(?=.*write_text\()"), "anchor_edit",
+     "replacing a file region by exact text, where a computed span or a double-apply goes wrong "
+     "silently"),
 ]
 
 
@@ -203,6 +213,19 @@ def match_tool(command, tool_name=None):
     ordered = _RULES + (_SHELL_ONLY_RULES if scanning_a_command else []) + _ANY_TOOL_RULES
     for rx, tool, why in ordered:
         if rx.search(command or ""):
+            return tool, why
+    return None
+
+
+def match_authored(text):
+    """(tool, why) for the first ANY-TOOL rule matching authored `text`, else None. PURE.
+
+    Authored text is a program being written rather than a command being run, so only the rules
+    marked real-when-authored apply - the same split that lets Write and Edit content be scanned
+    without a shell-only rule firing on a document that merely quotes a command.
+    """
+    for rx, tool, why in _ANY_TOOL_RULES:
+        if rx.search(text or ""):
             return tool, why
     return None
 
@@ -322,8 +345,14 @@ def main():
         return 0
     if not isinstance(event, dict) or event.get("tool_name") not in _SCANNED_TOOLS:
         return 0
-    text = extract_text(event.get("tool_name"), event.get("tool_input") or {})
+    tool_input = event.get("tool_input") or {}
+    text = extract_text(event.get("tool_name"), tool_input)
     hit = match_tool(text, event.get("tool_name"))
+    if not hit and is_shell_tool(event.get("tool_name")):
+        # Second reading of the SAME call: a heredoc body is stripped from the command because it
+        # is data, and it is also where a program gets authored. The command reading keeps
+        # precedence - it is the shipped, measured one - so this only reaches text nothing saw.
+        hit = match_authored(heredoc_bodies(tool_input.get("command", "")))
     if not hit:
         return 0
     tool, why = hit

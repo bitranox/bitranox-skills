@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+import shell_text
 import toolbox_nudge as N
 
 
@@ -458,3 +459,54 @@ def test_a_tool_kept_at_a_skill_root_resolves_and_names_that_skill(home, monkeyp
     N.main()
     out = capsys.readouterr().out
     assert "statusrot" in out and "bitranox:meta-dream-tree" in out
+
+# ---- a chore authored INSIDE a heredoc body ----------------------------------------------------
+# Measured 2026-09-23 with jig_probe over 60 recorded calls: the commonest real spelling of
+# anchor_edit's chore is a Python heredoc doing an exact-text replace, and no rule could ever see
+# it - extract_text blanks the whole body, so what survived was a trailing `pytest ... 2>&1 |
+# tail` and `gate` matched that instead. A body is not only data; it is also a program being
+# AUTHORED, which is the reading the hook already gives Write and Edit content. So the body gets
+# the authored-text rules, and the command keeps getting the command rules.
+
+_OPEN = "<<" + "'PY'"
+_REPLACE_IN_A_HEREDOC = (
+    "python3 - %s\n"
+    "from pathlib import Path\n"
+    "p = Path('src/app.py')\n"
+    "s = p.read_text(encoding='utf-8')\n"
+    "old = '''    self.findings = diagnose(self.inventory)'''\n"
+    "p.write_text(s.replace(old, '    pass'), encoding='utf-8')\n"
+    "PY\n" % _OPEN
+)
+
+
+def test_a_replace_authored_in_a_heredoc_is_routed_to_anchor_edit():
+    body = shell_text.heredoc_bodies(_REPLACE_IN_A_HEREDOC)
+    assert "write_text" in body                      # the body really reached the matcher
+    assert N.match_authored(body)[0] == "anchor_edit"
+
+
+def test_the_command_rules_see_nothing_of_the_chore_in_that_command():
+    # the premise of the whole change: the visible text carries no sign of it
+    text = N.extract_text("Bash", {"command": _REPLACE_IN_A_HEREDOC})
+    assert N.match_tool(text, tool_name="Bash") is None
+
+
+def test_prose_that_merely_names_the_chore_is_still_not_a_firing():
+    # why bodies were blanked in the first place - documenting a footgun must not trip the guard
+    doc = ("cat > notes.md %s\n"
+           "Never hand-roll it: read_text then write_text with a replace is the trap\n"
+           "EOF\n" % ("<<" + "'EOF'"))
+    assert N.match_authored(shell_text.heredoc_bodies(doc)) is None
+
+
+def test_the_authored_pass_does_not_use_the_shell_only_rules():
+    # a shell-only rule must not fire on authored text, which is what the split is for
+    assert N.match_authored("git push origin master") is None
+
+
+def test_the_command_reading_keeps_precedence_over_the_authored_one():
+    # the command rules are the shipped, measured behaviour; the authored pass only extends reach
+    command = _REPLACE_IN_A_HEREDOC + "pgrep -f something\n"
+    text = N.extract_text("Bash", {"command": command})
+    assert N.match_tool(text, tool_name="Bash")[0] == "procsig"

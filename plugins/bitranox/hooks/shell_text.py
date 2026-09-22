@@ -449,20 +449,19 @@ def commands_only(command: str) -> str:
     return mask_data_regions(strip_heredoc_bodies(command or ""))
 
 
-def strip_heredoc_bodies(command: str) -> str:
-    """Drop heredoc bodies, keeping the command lines around them.
+def _split_heredocs(command: str):
+    """(command lines, body lines) for `command`, split at every heredoc the shell would open.
 
-    The opener line is KEPT, because it is a real command (`cat <<EOF > file.txt` still redirects,
-    and `cmd <<EOF | grep x` still pipes). Only the body and its terminator are removed.
-
-    An unterminated heredoc consumes the rest of the input, which is the safe direction: the shell
-    would treat those lines as data too, so a guard must not judge them as commands.
+    One scanner for both readings of a command: a body is DATA when judging what runs, and it is
+    AUTHORED TEXT when asking what is being written. Deriving the two from separate walks let them
+    disagree about where a body starts, so they share this one.
     """
-    out: list[str] = []
+    kept: list[str] = []
+    bodies: list[str] = []
     lines = command.split("\n")
     index = 0
     while index < len(lines):
-        out.append(lines[index])
+        kept.append(lines[index])
         # `<<EOF` inside a quoted ARGUMENT opens nothing: `git commit -m "docs: explain <<EOF
         # heredocs"` was read as an opener, so the strip swallowed the rest of the command and
         # every guard downstream went SILENT on a real `git push` after it.
@@ -482,9 +481,33 @@ def strip_heredoc_bodies(command: str) -> str:
         # The terminator is the first line that is exactly the delimiter; bash allows leading
         # whitespace with the `<<-` form, so the comparison is made on the stripped line.
         while index < len(lines) and lines[index].strip() != delimiter:
+            bodies.append(lines[index])
             index += 1
         index += 1                                    # drop the terminator line itself
-    return "\n".join(out)
+    return kept, bodies
+
+
+def strip_heredoc_bodies(command: str) -> str:
+    """Drop heredoc bodies, keeping the command lines around them.
+
+    The opener line is KEPT, because it is a real command (`cat <<EOF > file.txt` still redirects,
+    and `cmd <<EOF | grep x` still pipes). Only the body and its terminator are removed.
+
+    An unterminated heredoc consumes the rest of the input, which is the safe direction: the shell
+    would treat those lines as data too, so a guard must not judge them as commands.
+    """
+    return "\n".join(_split_heredocs(command)[0])
+
+
+def heredoc_bodies(command: str) -> str:
+    """Exactly what `strip_heredoc_bodies` removes: the heredoc bodies, openers and terminators
+    excluded, several joined by newlines, and "" when the command opens none.
+
+    A body is data when judging what RUNS, which is why it is stripped there. It is also where a
+    program gets AUTHORED, and a chore hand-rolled inside one is invisible to every rule that only
+    ever sees the stripped text.
+    """
+    return "\n".join(_split_heredocs(command)[1])
 
 
 def blank_unexpanded_text(command: str) -> str:

@@ -29,6 +29,44 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.9.0]
+
+### Added
+
+- **A heredoc body is now read as authored text, so a chore hand-rolled inside one can be seen.**
+  `toolbox-nudge` strips heredoc bodies before matching, deliberately: a document that merely
+  names a chore must not trip the guard that watches for it. The cost was a blind spot nothing
+  could reach. Measured with `jig_probe` over 60 recorded calls, the commonest real spelling of
+  `anchor_edit`'s chore is a Python heredoc doing an exact-text replace, and the hook saw only
+  this:
+
+  ```
+  raw:  python3 - <<'PY' ... old = """...""" ... p.write_text(s.replace(old, new)) ... PY
+  seen: python3 - <<'  ' ... pytest ... 2>&1 | tail -4
+  ```
+
+  so `gate` matched the surviving pipe and the chore went unrouted. No rule could have fixed that,
+  which is why the backlog line asking for one was corrected rather than implemented.
+
+  The fix uses the hook's own existing distinction: `_ANY_TOOL_RULES` already holds the rules that
+  are real when AUTHORED, which is why Write and Edit content is scanned. A heredoc body is
+  authored text too. `match_authored()` applies those rules to it, the command keeps getting the
+  command rules, and the command reading keeps precedence - so this only reaches text nothing saw.
+- `shell_text.heredoc_bodies()`, the exact inverse of `strip_heredoc_bodies()`. Both now come from
+  one scanner (`_split_heredocs`), so the two readings of a command cannot disagree about where a
+  body starts.
+- An `anchor_edit` rule for the Python spelling of its chore, requiring BOTH call shapes
+  (`.replace(` and `write_text(`) so that prose describing the trap is not an instance of it.
+
+  Measured over 84,828 distinct recorded Bash calls: the command reading fires on 20.84%, and this
+  pass adds 5.61% (4,757 calls, 4,386 of them `anchor_edit`) where it was silent. Twelve firings
+  sampled across the corpus and adjudicated against their own text: eleven are the chore exactly -
+  read, an exact `old = """..."""` anchor, replace, write back, several hand-rolling the very
+  `assert s.count(old) == 1` the jig provides - and the twelfth is `mdwrap` on a `textwrap`
+  reflow, also right. A sample shows shapes rather than a proportion, so that is 12 of 12
+  adjudicated and not a precision figure for all 4,757. For scale the shipped `gate` rule fires at
+  5.20%, and the per-session dedup bounds this to one nudge per session.
+
 ## [7.8.1]
 
 ### Fixed
