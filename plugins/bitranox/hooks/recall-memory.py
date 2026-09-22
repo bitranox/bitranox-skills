@@ -104,6 +104,78 @@ def _snippet(path, keywords, maxlen):
     return ("..." if start > 0 else "") + text[start:end].strip() + ("..." if end < len(text) else "")
 
 
+# What the shadow classifier is shown of each shortlisted note, recorded in every log line so the
+# eval can tell rows judged on one view from rows judged on another.
+NOTE_VIEW = "summary-v1"
+
+
+def _frontmatter(text):
+    """{key: value} for the top-level scalar keys of a leading `---` block, else {}."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    out = {}
+    for line in text[3:end].splitlines():
+        if not line or line[0] in " \t#" or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key.strip()] = value
+    return out
+
+
+def _matched_section(text, keywords):
+    """(heading line, section body) of the section holding the first keyword match, else None."""
+    low = text.lower()
+    pos = min((i for i in (low.find((k or "").lower()) for k in keywords if k) if i != -1),
+              default=-1)
+    if pos < 0:
+        return None
+    lines = text.splitlines(keepends=True)
+    offset, heading, start = 0, None, 0
+    for i, line in enumerate(lines):
+        if offset > pos:
+            break
+        if line.startswith("#"):
+            heading, start = line.strip(), i + 1
+        offset += len(line)
+    if heading is None:
+        return None
+    body = []
+    for line in lines[start:]:
+        if line.startswith("#"):
+            break
+        body.append(line)
+    return heading, "".join(body).strip()
+
+
+def _note_view(path, keywords, maxlen):
+    """What a note is ABOUT, for the shadow reranker: never the window centred on the matched
+    keyword, which makes the reranker repeat the keyword ranking's error.
+
+    A note with front matter is its `name: description`. Anything else (a CLAUDE.md, a curated
+    index) is the section holding the match, from its heading, since one of those files covers
+    many topics; with no match or no heading, the file head.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if Path(path).name == sig.CURATED_INDEX:
+        text = sig._strip_scope(text)
+    meta = _frontmatter(text)
+    if meta.get("description"):
+        return "%s: %s" % (meta.get("name") or _label(path), meta["description"])
+    section = _matched_section(text, keywords)
+    if section:
+        return "%s > %s\n%s" % (_label(path), section[0], section[1][:maxlen].strip())
+    return "%s: %s" % (_label(path), text.strip()[:maxlen].strip())
+
+
 def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords):
     """Hand the keyword shortlist to the classifier's detached shadow child: one pair request
     per (prompt, note). Never changes what is injected and never raises."""
@@ -111,10 +183,10 @@ def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords):
         if not classifier.shadow_enabled(sig.load_config(), "recall_rerank"):
             return
         shortlist = by_score[:SHADOW_SHORTLIST]
-        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS]}
+        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS], "note_view": NOTE_VIEW}
         questions = classifier.recall_questions()
         requests = [{"fields": {"user_prompt": prompt,
-                                "memory_note": _snippet(p, hits.get(p, keywords), SHADOW_NOTE)},
+                                "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
                      "questions": questions} for p in shortlist]
         classifier.spawn_shadow("recall_rerank", sid, regex, requests)
     except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt

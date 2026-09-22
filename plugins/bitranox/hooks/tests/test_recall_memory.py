@@ -307,3 +307,43 @@ def test_an_ordinary_note_is_unaffected(monkeypatch, capsys):
     assert out, "the planted note did not match at all; the fixture, not the hook, is wrong"
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "VIRTUAL_ENV unset" in ctx
+
+
+# ---- what the shadow classifier is shown of each note ---------------------------------------
+# A reranker shown the window centred on the matched keyword repeats the keyword ranking's error
+# (a DNS note mentioning "shadow" looked relevant to a prompt about a shadow log). It is shown
+# what the note is ABOUT instead.
+
+def test_note_view_of_a_frontmatter_note_is_its_name_and_description(tmp_path):
+    m = tmp_path / "split-dns.md"
+    m.write_text("---\nname: split-dns-hosts\ndescription: When mail servers resolve internal "
+                 "names, use addn-hosts.\nmetadata:\n  type: reference\n---\n\n"
+                 + "filler line\n" * 80 + "the shadow entries override the zone\n",
+                 encoding="utf-8")
+    view = R._note_view(str(m), ["shadow"], 600)
+    assert view == "split-dns-hosts: When mail servers resolve internal names, use addn-hosts."
+
+
+def test_note_view_strips_quotes_around_a_yaml_description(tmp_path):
+    m = tmp_path / "api.md"
+    m.write_text('---\nname: fastapi-api-design\ndescription: "central HTTP surface"\n---\nbody\n',
+                 encoding="utf-8")
+    assert R._note_view(str(m), ["http"], 600) == "fastapi-api-design: central HTTP surface"
+
+
+def test_note_view_of_a_claude_md_is_the_matched_section_from_its_heading(tmp_path):
+    m = tmp_path / "proj" / "CLAUDE.md"
+    m.parent.mkdir()
+    m.write_text("# Proj\n\nIntro text.\n\n## Conventions\n\nRule one.\n" + "padding line\n" * 60
+                 + "the kvm shim routes VMs\n\n## Later\n\nOther.\n", encoding="utf-8")
+    view = R._note_view(str(m), ["shim"], 300)
+    header = "proj/CLAUDE.md > ## Conventions\n"
+    assert view.startswith(header + "Rule one.")
+    assert len(view) <= len(header) + 300
+    assert "## Later" not in view
+
+
+def test_note_view_without_a_match_or_frontmatter_is_the_file_head(tmp_path):
+    m = tmp_path / "notes.md"
+    m.write_text("First line.\n" + "x\n" * 500, encoding="utf-8")
+    assert R._note_view(str(m), ["absent"], 40).startswith("notes: First line.")

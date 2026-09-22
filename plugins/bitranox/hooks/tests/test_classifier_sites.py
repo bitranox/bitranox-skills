@@ -175,3 +175,17 @@ def test_stop_gate_shadow_sends_the_human_prompt_and_the_event_reply_in_a_tool_t
     assert line["states"][0] == {"user_message": "no, that is wrong - use uv",
                                  "assistant_reply": "Switched."}
     assert line["regex"]["fires"] is True
+
+
+def test_recall_shadow_shows_each_note_by_its_description_and_tags_the_view(env, monkeypatch,
+                                                                            capsys):
+    _mem("/p/other", "make-test.md",
+         "---\nname: make-test-venv\ndescription: When running make test, set VIRTUAL_ENV.\n---\n\n"
+         + "unrelated padding\n" * 60 + "run make test here\n")
+    _config(env["home"], classifier_backend="jev", classifier_recall_rerank="shadow")
+    _run(RM, monkeypatch, capsys, {"prompt": "run make test", "cwd": "/p/cur",
+                                   "session_id": "s-view"})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["regex"]["note_view"] == "summary-v1"
+    assert line["states"][0]["memory_note"] == (
+        "make-test-venv: When running make test, set VIRTUAL_ENV.")

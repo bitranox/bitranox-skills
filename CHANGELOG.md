@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.3.0]
+
+### Changed
+
+- **The recall shadow now shows Jev what each note is about, not the passage around the matched
+  word.** It used to send a 600-character window centred on the keyword that put the note on the
+  shortlist. Jev then judged exactly the text the keyword stage had chosen, so it repeated that
+  stage's mistakes: for "check again the results from the shadow" it scored a NIC benchmark note
+  0.88 and a split-DNS note 0.82, because each window was the paragraph containing "shadow". A note
+  with front matter is now sent as `name: description`. A CLAUDE.md or curated index covers many
+  topics, so it is sent as the section holding the match, starting at its heading. On a real
+  30-note shortlist that is 26 descriptions and 4 sections, averaging 369 characters instead of
+  600. The hook's own injection is unchanged. Every recall log line now records
+  `note_view: summary-v1`.
+
+### Added
+
+- **`classifier_eval.py report` keeps rows judged on different inputs apart.** A row that records
+  its `note_view` is reported under `recall_rerank@<view>`, so the old keyword-window rows and the
+  new description rows are never pooled into one number.
+
 ## [7.2.0]
 
 ### Added

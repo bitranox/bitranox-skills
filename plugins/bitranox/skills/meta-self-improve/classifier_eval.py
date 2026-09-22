@@ -213,20 +213,32 @@ def _cost(rows):
                              "mean": round(sum(tokens) / len(tokens)) if tokens else None}}
 
 
+def _group(row):
+    """The report key for a row: its site, plus `@<view>` when the row records which view of its
+    input the classifier was shown, so rows judged on different inputs are never pooled."""
+    view = (row.get("regex") or {}).get("note_view")
+    return "%s@%s" % (row.get("site"), view) if view else row.get("site")
+
+
+def _base_site(key):
+    return key.split("@", 1)[0]
+
+
 def summarize(rows, threshold, top):
-    """The whole report: per site, the cost block merged with that site's comparison."""
+    """The whole report: per site (and input view), the cost block merged with its comparison."""
+    keys = sorted({_group(r) for r in rows if r.get("site") in SITES},
+                  key=lambda k: (SITES.index(_base_site(k)), k))
     sites = {}
-    for site in SITES:
-        site_rows = [r for r in rows if r.get("site") == site]
-        if not site_rows:
-            continue
+    for key in keys:
+        site_rows = [r for r in rows if _group(r) == key]
+        site = _base_site(key)
         if site == "stop_signal":
             detail = summarize_stop_signal(site_rows, threshold)
         elif site == "skill_router":
             detail = summarize_skill_router(site_rows, threshold, top)
         else:
             detail = summarize_recall(site_rows, threshold)
-        sites[site] = {**_cost(site_rows), **detail}
+        sites[key] = {**_cost(site_rows), **detail}
     return {"threshold": threshold, "top": top, "rows": len(rows), "sites": sites}
 
 
@@ -244,11 +256,11 @@ def render_text(rep):
                   "   latency ms   " + _pct(s["latency_ms"]),
                   "   input tokens total %s, mean %s" % (s["input_tokens"]["total"],
                                                          s["input_tokens"]["mean"])]
-        if site == "stop_signal":
+        if _base_site(site) == "stop_signal":
             for lang, c in sorted(s["by_lang"].items()):
                 lines.append("   %-8s both %d  regex_only %d  jev_only %d  neither %d"
                              % (lang, c["both"], c["regex_only"], c["jev_only"], c["neither"]))
-        elif site == "skill_router":
+        elif _base_site(site) == "skill_router":
             lines.append("   prompts %d, identical %d; picks regex %d, jev %d, agreed %d"
                          % (s["prompts"], s["identical"], s["regex_picks"], s["jev_picks"],
                             s["agreed_picks"]))

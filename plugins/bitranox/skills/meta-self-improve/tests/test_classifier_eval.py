@@ -139,6 +139,15 @@ def test_recall_reports_the_score_spread_per_prompt():
     assert s["spread"]["p50"] == pytest.approx(0.24)
 
 
+def test_recall_rows_judged_on_different_note_views_are_reported_apart():
+    old = recall_row(["n1"], ["n1"], [0.9])
+    new = recall_row(["n1"], ["n1"], [0.2])
+    new["regex"]["note_view"] = "summary-v1"
+    rep = ce.summarize([old, new], threshold=0.5, top=2)
+    assert rep["sites"]["recall_rerank"]["agreed"] == 1
+    assert rep["sites"]["recall_rerank@summary-v1"]["agreed"] == 0
+
+
 # ---- cost / latency ------------------------------------------------------------------------
 
 def test_percentiles_nearest_rank():
