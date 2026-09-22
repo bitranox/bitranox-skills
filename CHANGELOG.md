@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.8.1]
+
+### Fixed
+
+- **The `ask_many` concurrency test no longer races the clock.** It asserted that six 0.4 s
+  requests finish within 1.6 s (serial would be 2.4 s), which went red on a windows-latest runner
+  at 1.666 s - a number that says nothing about concurrency. The fake server now records how many
+  requests it was serving AT ONCE, and the test asserts that overlap, which is the property
+  itself: a client that serialises can never push it above 1. Verified by mutating `ask_many` to
+  start and join each thread in turn, which the test kills.
+- The same test claimed to check ORDER and checked none: every scripted answer was identical, so
+  no ordering could be observed. `fake_jev(echo_state=True)` returns the request's own state value
+  as the model, and the test now pins the six results to the six requests.
+
 ## [7.8.0]
 
 ### Added

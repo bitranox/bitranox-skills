@@ -119,9 +119,15 @@ import pytest  # noqa: E402
 class FakeJev:
     """A local stand-in for api.typesafe.ai: records each request, answers per a script."""
 
-    def __init__(self, status=200, body=None, delay=0.0, trickle=False):
+    def __init__(self, status=200, body=None, delay=0.0, trickle=False, echo_state=False):
         self.status, self.body, self.delay, self.trickle = status, body, delay, trickle
+        self.echo_state = echo_state
         self.requests = []
+        # How many requests were being served AT ONCE. A client that serialises can never push
+        # this above 1, so it is the concurrency property itself rather than a wall-clock proxy.
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self._counter_lock = _threading.Lock()
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -130,12 +136,20 @@ class FakeJev:
 
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                request = _json.loads(raw)
                 fake.requests.append({"path": self.path, "headers": dict(self.headers),
-                                      "json": _json.loads(raw)})
-                time.sleep(fake.delay)
+                                      "json": request})
+                with fake._counter_lock:
+                    fake.in_flight += 1
+                    fake.max_in_flight = max(fake.max_in_flight, fake.in_flight)
+                try:
+                    time.sleep(fake.delay)
+                finally:
+                    with fake._counter_lock:
+                        fake.in_flight -= 1
                 payload = fake.body
                 if payload is None:
-                    payload = fake.default_answers(_json.loads(raw))
+                    payload = fake.default_answers(request, echo_state=fake.echo_state)
                 data = payload if isinstance(payload, bytes) else _json.dumps(payload).encode()
                 self.send_response(fake.status)
                 self.send_header("Content-Type", "application/json")
@@ -154,7 +168,10 @@ class FakeJev:
         _threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     @staticmethod
-    def default_answers(req):
+    def default_answers(req, echo_state=False):
+        """The scripted answer. With `echo_state`, `model` carries the request's own state value
+        back, which is how a caller can tell WHICH request a result belongs to - otherwise every
+        answer is identical and an ordering claim cannot be checked at all."""
         answers = {}
         for qid, q in req["questions"].items():
             if q["type"] == "noul":
@@ -163,7 +180,11 @@ class FakeJev:
                 key = next(iter(q["criteria"]))
                 answers[qid] = {"type": "choice", "choice": key,
                                 "probabilities": {key: 0.8}, "confidence": 0.7}
-        return {"model": "jev-1.13.0", "answers": answers,
+        model = "jev-1.13.0"
+        if echo_state:
+            values = list((req.get("state") or {}).values())
+            model = str(values[0]) if values else model
+        return {"model": model, "answers": answers,
                 "usage": {"input_tokens": 123, "output_tokens": 5}}
 
     def close(self):

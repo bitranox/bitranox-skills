@@ -84,11 +84,17 @@ def test_the_overall_deadline_holds_against_a_trickling_server(fake_jev):
 
 
 def test_ask_many_runs_requests_concurrently_and_keeps_order(fake_jev):
-    c = _jev(fake_jev(delay=0.4).url, deadline=3.0)
-    t = time.monotonic()
+    # Asserted from the SERVER's overlap, not from the clock. A wall-time bound is a race with
+    # whatever else the machine is doing: the old "< 1.6 s" (against 2.4 s serial) went red on a
+    # windows-latest runner at 1.666 s, which says nothing about concurrency. Overlap is the
+    # property itself - a serial client can never put two requests in flight at once - and the
+    # echoed state proves the ORDER this test is named for, which nothing here checked before.
+    fake = fake_jev(delay=0.4, echo_state=True)
+    c = _jev(fake.url, deadline=5.0)
     out = c.ask_many([({"n": str(i)}, [NOUL]) for i in range(6)], workers=6)
-    assert time.monotonic() - t < 1.6  # serial would take 2.4 s
     assert len(out) == 6 and all(r is not None for r in out)
+    assert fake.max_in_flight > 1
+    assert [r.model for r in out] == [str(i) for i in range(6)]
 
 
 def test_null_classifier_answers_nothing():
