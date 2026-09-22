@@ -29,6 +29,43 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.8.0]
+
+### Added
+
+- **`skills/meta-self-improve/jig_probe.py`** asks offline what the jig channel cannot ask itself:
+  would Jev have pointed at a toolbox jig where the keyword rules were silent, and which recurring
+  chores have no jig at all? Jig suggestion today is `toolbox-nudge.py`, a regex, and a regex can
+  only match shapes somebody already wrote down - so the jigs with no rule can never be suggested,
+  and a NEW jig is by definition a shape no rule describes. It runs against calls already recorded
+  in the transcript corpus, so it costs no session tokens and touches no hot path, and it refuses
+  to report anything unless a planted positive and a planted negative answer differently
+  (exit 3).
+
+  Measured on 60 sampled Bash calls, stratified over whether the rules already speak: Jev named
+  the same jig on 7 of 30 firings, a DIFFERENT one on 9, and nothing on 14; it spoke on 4 of 30
+  calls the rules miss, and called 3 of 60 a real chore that no jig covers.
+
+  The finding worth acting on is in the "different tool" column: in 5 of those 11 the rules said
+  `gate` or `claim_check` - matching incidentally on a `2>&1 | tail` or a `grep -c` - while Jev
+  said `anchor_edit`, and reading the commands it is right. They are Python heredocs doing an
+  exact-text replace, which IS anchor_edit's job; its rule is spelled `sed -i`, so the dominant
+  real-world spelling of that chore is invisible to it.
+
+  One request per call, not a gate plus a choice. The two-stage shape was tried first, copying the
+  router's `_new_task` gate, and failed its own control: `pgrep -f ...` scored 0.12 on "is this a
+  hand-rolled chore", because that gate's own exclusion ("ordinary use of a normal program")
+  describes `pgrep` exactly. A gate about a TURN transfers; a gate about a COMMAND runs into the
+  command's own vocabulary.
+
+### Fixed
+
+- The probe's keyword arm asks the hook through its own `extract_text` and `match_tool`, rather
+  than matching the raw command against its rule lists. Matching raw is a more trigger-happy
+  matcher than the one that ships - it counted a `cat > x <<EOF` whose BODY mentioned a grep as a
+  `claim_check` firing production never makes - and it charged Jev with disagreeing against rules
+  that had not spoken. Correcting it moved agreement from 2 of 20 to 7 of 30.
+
 ## [7.7.0]
 
 ### Fixed
