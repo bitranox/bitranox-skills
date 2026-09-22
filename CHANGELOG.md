@@ -29,6 +29,35 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.4.0]
+
+### Changed
+
+- **All three Jev shadow sites now also send the message the person was answering.** A bare
+  "yes", "go" or "check it again" cannot be judged without it, and a word like "shadow" means
+  different things in different conversations. Each request gains a `previous_assistant_message`
+  field: the assistant's last reply, trimmed to about 300 characters with both ends kept, since
+  its opening says what it is about and its end usually holds the question the answer refers to.
+  The Stop gate sends the reply before the prompt it judges; the router and recall send the newest
+  reply, which is the one being answered whether or not the new prompt is on disk yet. The field
+  is left out on a session's first prompt. The questions name the field, and every log line
+  records `context_view: prev-reply-v1`.
+- **An answer to Stop-hook feedback no longer counts as "the reply".** When the Stop gate blocks,
+  the assistant answers the hook, often in one line ("Nothing new to record."), and that line
+  would otherwise have replaced the proposal the person actually said yes to. Measured on a real
+  transcript before the fix: the context sent for "yes" was the hook answer, not the proposal.
+  Skill bodies are also `isMeta`, and the text after one is the real reply, so the match is on the
+  `Stop hook feedback:` prefix, not on `isMeta`.
+- The transcript reading moved out of the Stop gate into `hooks/transcript_turns.py`, shared by
+  the gate and the two prompt-time sites. The gate's own verdict still uses the newest assistant
+  text, as before.
+
+### Added
+
+- **`classifier_eval.py report` groups rows by every input view they record** (`*_view` keys, e.g.
+  `recall_rerank@prev-reply-v1+summary-v1`), so rows judged with and without the new field are
+  never pooled.
+
 ## [7.3.0]
 
 ### Changed

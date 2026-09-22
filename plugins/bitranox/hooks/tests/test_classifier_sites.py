@@ -189,3 +189,62 @@ def test_recall_shadow_shows_each_note_by_its_description_and_tags_the_view(env,
     assert line["regex"]["note_view"] == "summary-v1"
     assert line["states"][0]["memory_note"] == (
         "make-test-venv: When running make test, set VIRTUAL_ENV.")
+
+
+# ---- the reply the person answered --------------------------------------------------------
+# "yes", "go" or "check it again" cannot be judged without the message they answer.
+
+def _transcript(tmp_path, *records):
+    t = tmp_path / "transcript.jsonl"
+    t.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return str(t)
+
+
+def _typed(text):
+    return {"type": "user", "message": {"content": text}, "origin": {"kind": "human"}}
+
+
+def _said(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def test_stop_gate_shadow_sends_the_reply_the_prompt_answered(env, tmp_path, monkeypatch, capsys):
+    t = _transcript(tmp_path, _typed("fix it"), _said("Fixed. Shall I bump the version too?"),
+                    _typed("yes"))
+    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
+    _run(G, monkeypatch, capsys, {"transcript_path": t, "cwd": str(tmp_path), "session_id": "s-p",
+                                  "last_assistant_message": "Bumped to 1.2.0."})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["states"][0] == {"previous_assistant_message": "Fixed. Shall I bump the version too?",
+                                 "user_message": "yes", "assistant_reply": "Bumped to 1.2.0."}
+    assert line["regex"]["context_view"] == "prev-reply-v1"
+
+
+def test_skill_router_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeypatch,
+                                                                capsys):
+    t = _transcript(tmp_path, _typed("look at the log"), _said("The shadow log has 19 rows."))
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "check it again", "cwd": "/p/x", "session_id": "s-r",
+                                   "transcript_path": t})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["states"][0] == {"user_prompt": "check it again",
+                                 "previous_assistant_message": "The shadow log has 19 rows."}
+    assert line["regex"]["context_view"] == "prev-reply-v1"
+
+
+def test_recall_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeypatch, capsys):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    t = _transcript(tmp_path, _typed("status?"), _said("The make test gate is red."))
+    _config(env["home"], classifier_backend="jev", classifier_recall_rerank="shadow")
+    _run(RM, monkeypatch, capsys, {"prompt": "run make test", "cwd": "/p/cur", "session_id": "s-c",
+                                   "transcript_path": t})
+    line = _wait_for_log(env["home"])[-1]
+    assert all(s["previous_assistant_message"] == "The make test gate is red."
+               for s in line["states"])
+    assert line["regex"]["context_view"] == "prev-reply-v1"
+
+
+def test_questions_name_the_previous_message_field():
+    for questions in (cl.stop_signal_questions(), cl.recall_questions(),
+                      cl.skill_router_questions({"x": "does x"})):
+        assert any("`previous_assistant_message`" in q.instructions for q in questions)

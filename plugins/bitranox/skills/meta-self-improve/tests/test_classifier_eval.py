@@ -148,6 +148,16 @@ def test_recall_rows_judged_on_different_note_views_are_reported_apart():
     assert rep["sites"]["recall_rerank@summary-v1"]["agreed"] == 0
 
 
+def test_every_input_view_a_row_records_is_part_of_its_group():
+    both = recall_row(["n1"], ["n1"], [0.9])
+    both["regex"].update(note_view="summary-v1", context_view="prev-reply-v1")
+    stop = stop_row(False, {"correction": 0.1})
+    stop["regex"]["context_view"] = "prev-reply-v1"
+    rep = ce.summarize([both, stop], threshold=0.5, top=2)
+    assert set(rep["sites"]) == {"stop_signal@prev-reply-v1",
+                                 "recall_rerank@prev-reply-v1+summary-v1"}
+
+
 # ---- cost / latency ------------------------------------------------------------------------
 
 def test_percentiles_nearest_rank():

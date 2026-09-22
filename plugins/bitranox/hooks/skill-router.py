@@ -24,6 +24,7 @@ if str(_HOOKS_DIR) not in sys.path:
 
 import classifier  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
+import transcript_turns  # noqa: E402
 
 MIN_HITS = 2
 MAX_SKILLS = 2
@@ -55,18 +56,21 @@ def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
     return scored[:max_skills]
 
 
-def _shadow_skill_router(prompt, sid, triggers):
+def _shadow_skill_router(prompt, sid, triggers, transcript=""):
     """Hand this prompt to the classifier's detached shadow child: one noul per skill beside
-    the keyword ranking. Never changes the nudge and never raises."""
+    the keyword ranking, with the reply the prompt answers. Never changes the nudge and never
+    raises."""
     try:
         if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
             return
         ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
         regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
-                 "scores": {s: n for s, n in ranked}}
+                 "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW}
         questions = classifier.skill_router_questions(classifier.load_skill_descriptions())
+        fields = classifier.with_previous({"user_prompt": prompt},
+                                          transcript_turns.last_reply(transcript))
         classifier.spawn_shadow("skill_router", sid, regex,
-                                [{"fields": {"user_prompt": prompt}, "questions": questions}])
+                                [{"fields": fields, "questions": questions}])
     except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
         pass
 
@@ -86,7 +90,7 @@ def main():
         hits = match(prompt, triggers)
         # Opt-in shadow comparison (off by default), before the per-session dedup so every
         # prompt is compared.
-        _shadow_skill_router(prompt, sid, triggers)
+        _shadow_skill_router(prompt, sid, triggers, ev.get("transcript_path") or "")
         if not hits:
             return 0
         state = _state_file(cwd, sid)

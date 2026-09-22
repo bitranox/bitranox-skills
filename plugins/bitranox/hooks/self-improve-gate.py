@@ -35,6 +35,7 @@ from self_improve_signals import (
     ENDORSE_PATTERN as _ENDORSE_PATTERN,
 )
 import classifier as _classifier  # noqa: E402
+import transcript_turns as _turns  # noqa: E402
 
 _REASON = (
     'A learning signal was detected this turn (a correction, an explicit "remember", a good idea '
@@ -140,106 +141,10 @@ def _subagent_hint(session):
         return ""
 
 
-def _text(content):
-    """Flatten a transcript message's content (string, or list of blocks) to text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str))
-    return ""
-
-
-# Transcripts grow to many MB, so only the tail is read: 64 KiB first, widened 4x at a time until
-# the human prompt is in the window. A single tool output can be larger than the first window, and
-# the prompt sits BEFORE every tool call of the turn. The cap bounds a pathological file; a miss
-# only costs recall, never a wedged turn.
-_TAIL_BYTES = 65536
-_MAX_TAIL_BYTES = 16 * 1024 * 1024
-
-# Records that carry `type: user` and text but were not typed by the person, for transcripts
-# old enough to lack the `origin` field: slash-command echoes and their output, background-task
-# notifications and teammate messages. Hook feedback and skill bodies are marked `isMeta`
-# instead, and tool results carry no text block at all.
-_NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
-                       "Another Claude session sent a message", "<teammate-message")
-
-
-def _human_text(obj):
-    """The text of a `user` record the person actually typed, else "".
-
-    A turn's last `user` record is almost never the prompt: every tool call is answered by a
-    `user` record holding a tool_result, and hooks, skills and task notifications inject more.
-    Claude Code writes `origin.kind == "human"` on a typed prompt and `origin: null` on the prompt
-    of a headless `claude -p` / SDK run and on a teammate message - measured over the corpus,
-    those were 244 of the 268 prompts a looser rule added, and blocking a headless run on its own
-    task brief is damage, not a learning signal. Headless runs that write no `origin` key at all
-    are told apart by `entrypoint: sdk-*`. A transcript old enough to have neither falls back to
-    excluding the known injected shapes.
-    """
-    if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
-        return ""
-    # A headless SDK run writes no `origin` key; its records name the entrypoint instead.
-    if str(obj.get("entrypoint") or "").startswith("sdk"):
-        return ""
-    if "origin" in obj:
-        origin = obj["origin"]
-        if not (isinstance(origin, dict) and origin.get("kind") == "human"):
-            return ""
-    text = _text(obj.get("message", {}).get("content"))
-    if not text.strip() or text.lstrip().startswith(_NOT_TYPED_PREFIXES):
-        return ""
-    return text
-
-
-def _scan(data):
-    """(last human prompt, last assistant text) among the complete JSONL lines of `data`."""
-    last_user = last_asst = ""
-    for raw in data.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line.decode("utf-8", "replace"))
-        except ValueError:
-            continue
-        if obj.get("type") == "assistant":
-            # Each content block is its own record (thinking, text, tool_use), so skip the ones
-            # with no text rather than letting a trailing tool_use blank the reply.
-            last_asst = _text(obj.get("message", {}).get("content")) or last_asst
-        else:
-            last_user = _human_text(obj) or last_user
-    return last_user, last_asst
-
-
-def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES, max_bytes=_MAX_TAIL_BYTES):
-    """Return (last human prompt, last assistant text) from the JSONL transcript tail.
-
-    The assistant half here is only a fallback: when Stop fires, the final reply is often not on
-    disk yet, which is why `main` prefers the event's `last_assistant_message`.
-    """
-    try:
-        size = os.path.getsize(transcript_path)
-    except OSError:
-        return "", ""
-    window = tail_bytes
-    while True:
-        try:
-            with open(transcript_path, "rb") as fh:
-                if size > window:
-                    fh.seek(size - window)
-                    fh.readline()  # drop the partial first line after the seek
-                data = fh.read()
-        except OSError:
-            return "", ""
-        last_user, last_asst = _scan(data)
-        if last_user or window >= size or window >= max_bytes:
-            return last_user, last_asst
-        window *= 4
-
-
-def _shadow_stop_signal(event, last_user, last_asst):
+def _shadow_stop_signal(event, last_user, last_asst, previous=""):
     """Hand this turn to the classifier's detached shadow child. Never changes the decision
-    and never raises: the regex verdict per family is logged beside Jev's."""
+    and never raises: the regex verdict per family is logged beside Jev's. `previous` is the
+    reply the prompt answered, which a bare "yes" or "go" needs to be judged at all."""
     try:
         if not _classifier.shadow_enabled(_sig.load_config(), "stop_signal"):
             return
@@ -249,10 +154,12 @@ def _shadow_stop_signal(event, last_user, last_asst):
                  "endorse_user": bool(_ENDORSE_PATTERN.search(last_user)),
                  "endorse_asst": bool(_ENDORSE_PATTERN.search(last_asst))}
         regex["fires"] = any(regex.values())
-        _classifier.spawn_shadow(
-            "stop_signal", event.get("session_id") or "", regex,
-            [{"fields": {"user_message": last_user, "assistant_reply": last_asst},
-              "questions": _classifier.stop_signal_questions()}])
+        regex["context_view"] = _classifier.CONTEXT_VIEW
+        fields = _classifier.with_previous(
+            {"user_message": last_user, "assistant_reply": last_asst}, previous)
+        _classifier.spawn_shadow("stop_signal", event.get("session_id") or "", regex,
+                                 [{"fields": fields,
+                                   "questions": _classifier.stop_signal_questions()}])
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         pass
 
@@ -280,7 +187,11 @@ def main():
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         pass
 
-    last_user, last_asst = _last_messages(transcript)
+    turn = _turns.read_turn(transcript)
+    last_user = turn.prompt
+    # The newest assistant text anywhere in the window, as before; the reply the prompt answered
+    # is kept apart only for the classifier.
+    last_asst = turn.reply or turn.reply_before_prompt
     # The transcript lags: when Stop fires, this turn's final reply is usually not written yet.
     # The event carries it, so the transcript's assistant text is only the fallback.
     final = event.get("last_assistant_message")
@@ -299,7 +210,7 @@ def main():
 
     # Opt-in shadow comparison (off by default). Before the once-per-message dedup, so every
     # turn is compared, not only the ones the regex already blocked on.
-    _shadow_stop_signal(event, last_user, last_asst)
+    _shadow_stop_signal(event, last_user, last_asst, turn.reply_before_prompt)
 
     sig = hashlib.sha1(last_user.encode("utf-8", "replace")).hexdigest()
     try:

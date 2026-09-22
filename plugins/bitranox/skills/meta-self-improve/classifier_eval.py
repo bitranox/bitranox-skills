@@ -214,10 +214,12 @@ def _cost(rows):
 
 
 def _group(row):
-    """The report key for a row: its site, plus `@<view>` when the row records which view of its
-    input the classifier was shown, so rows judged on different inputs are never pooled."""
-    view = (row.get("regex") or {}).get("note_view")
-    return "%s@%s" % (row.get("site"), view) if view else row.get("site")
+    """The report key for a row: its site, plus `@<views>` when the row records which views of
+    its input the classifier was shown (every `*_view` key, joined in key order), so rows judged
+    on different inputs are never pooled."""
+    regex = row.get("regex") or {}
+    views = [str(regex[k]) for k in sorted(regex) if k.endswith("_view") and regex[k]]
+    return "%s@%s" % (row.get("site"), "+".join(views)) if views else row.get("site")
 
 
 def _base_site(key):

@@ -41,12 +41,14 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import secret_patterns  # noqa: E402
+import transcript_turns  # noqa: E402
 
 __all__ = [
-    "Answer", "CAP_MARK", "DEFAULT_BASE_URL", "JevClassifier", "NullClassifier", "Question",
-    "Result", "SHADOW_LOG", "SITES", "detect_language", "get_classifier", "load_key",
-    "load_skill_descriptions", "prepare_state", "recall_questions", "shadow_enabled",
-    "skill_router_questions", "spawn_shadow", "stop_signal_questions",
+    "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NullClassifier",
+    "PREVIOUS_FIELD", "Question", "Result", "SHADOW_LOG", "SITES", "detect_language",
+    "get_classifier", "load_key", "load_skill_descriptions", "prepare_state", "recall_questions",
+    "shadow_enabled", "skill_router_questions", "spawn_shadow", "stop_signal_questions",
+    "with_previous",
 ]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
@@ -312,12 +314,28 @@ def detect_language(text):
 # One `noul` per label wherever several labels can hold at once (TypeSafe's guidance): a turn can
 # be a correction AND state a rule, a prompt can need two skills.
 
+# The reply a prompt answers, as a state field. "yes", "go" or "check it again" cannot be judged
+# without it. Trimmed, keeping both ends: its opening says what it is about, its end usually holds
+# the question the short answer refers to. Every log line records this view.
+CONTEXT_VIEW = "prev-reply-v1"
+PREVIOUS_CAP = 300
+PREVIOUS_FIELD = "previous_assistant_message"
+
+
+def with_previous(fields, previous):
+    """`fields` plus the trimmed previous reply, first; unchanged when there is none (the first
+    prompt of a session), so no question is asked about an empty field."""
+    text = transcript_turns.excerpt(previous, PREVIOUS_CAP)
+    return {PREVIOUS_FIELD: text, **fields} if text else dict(fields)
+
+
 def stop_signal_questions():
-    """The Stop gate's learning-signal families, over {user_message, assistant_reply}."""
+    """The Stop gate's learning-signal families, over {previous_assistant_message, user_message,
+    assistant_reply}."""
     return [
         Question("correction", "noul",
                  "Does `user_message` correct, reject or push back on something the assistant did "
-                 "or said?"),
+                 "or said, for example in `previous_assistant_message`?"),
         Question("remember_rule", "noul",
                  "Does `user_message` state a lasting rule, preference or instruction for future "
                  "work, such as 'always', 'never', 'from now on' or 'remember this'?"),
@@ -328,8 +346,9 @@ def stop_signal_questions():
                  "Does `assistant_reply` state a newly understood root cause or a reusable lesson, "
                  "beyond just reporting that a fix was made?"),
         Question("endorsement", "noul",
-                 "Does `user_message` approve an approach the assistant proposed, or does "
-                 "`assistant_reply` agree to adopt an idea the user suggested?"),
+                 "Does `user_message` approve an approach the assistant proposed in "
+                 "`previous_assistant_message`, or does `assistant_reply` agree to adopt an idea "
+                 "the user suggested?"),
     ]
 
 
@@ -355,15 +374,17 @@ def skill_router_questions(skills):
     """One noul per skill over {user_prompt}; the id is the skill name."""
     return [Question(name, "noul",
                      "Would the assistant need the skill described here to handle `user_prompt` "
-                     "well? Skill description: " + desc)
+                     "well? `user_prompt` is a reply to `previous_assistant_message` when that is "
+                     "given. Skill description: " + desc)
             for name, desc in skills.items()]
 
 
 def recall_questions():
     """One noul per (prompt, note) pair, asked in its own request (TypeSafe's rerank pattern)."""
     return [Question("relevant", "noul",
-                     "Would `memory_note` be useful context for carrying out `user_prompt`? Only if "
-                     "it is about the same task, tool or problem, not merely sharing some words.")]
+                     "Would `memory_note` be useful context for carrying out `user_prompt`, read "
+                     "as a reply to `previous_assistant_message` when that is given? Only if it is "
+                     "about the same task, tool or problem, not merely sharing some words.")]
 
 
 # ---- shadow: the hook side -----------------------------------------------------------------

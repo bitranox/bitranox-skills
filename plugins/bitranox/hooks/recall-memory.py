@@ -25,6 +25,7 @@ import gather_scan as gs  # noqa: E402  (the existing grep engine; also pulls in
 import self_improve_signals as sig  # noqa: E402
 import classifier  # noqa: E402
 import secret_patterns  # noqa: E402
+import transcript_turns  # noqa: E402
 
 MAX_HITS = 4
 MAX_BODY = 1800
@@ -176,17 +177,23 @@ def _note_view(path, keywords, maxlen):
     return "%s: %s" % (_label(path), text.strip()[:maxlen].strip())
 
 
-def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords):
+def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript=""):
     """Hand the keyword shortlist to the classifier's detached shadow child: one pair request
-    per (prompt, note). Never changes what is injected and never raises."""
+    per (prompt, note), each with the reply the prompt answers, which settles a word that means
+    different things in different conversations. Never changes what is injected and never
+    raises."""
     try:
         if not classifier.shadow_enabled(sig.load_config(), "recall_rerank"):
             return
         shortlist = by_score[:SHADOW_SHORTLIST]
-        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS], "note_view": NOTE_VIEW}
+        regex = {"shortlist": shortlist, "selected": ranked[:MAX_HITS], "note_view": NOTE_VIEW,
+                 "context_view": classifier.CONTEXT_VIEW}
         questions = classifier.recall_questions()
-        requests = [{"fields": {"user_prompt": prompt,
-                                "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
+        previous = transcript_turns.last_reply(transcript)
+        requests = [{"fields": classifier.with_previous(
+                        {"user_prompt": prompt,
+                         "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
+                        previous),
                      "questions": questions} for p in shortlist]
         classifier.spawn_shadow("recall_rerank", sid, regex, requests)
     except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
@@ -272,7 +279,7 @@ def main():
     # the ones that passed the specificity filter, so the reranker can surface a note the
     # keyword rules dropped.
     _shadow_recall(prompt, sid, sorted(hits, key=lambda p: (-_score(p), p)), ranked, hits,
-                   keywords)
+                   keywords, ev.get("transcript_path") or "")
     if not ranked:
         return 0
 
