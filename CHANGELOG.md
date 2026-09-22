@@ -29,6 +29,24 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.2.0]
+
+### Added
+
+- **`classifier_eval.py report` compares the regex and Jev per classifier site from the shadow
+  log** (`skills/meta-self-improve/classifier_eval.py`). For the Stop gate it counts every turn as
+  both firing, regex only, Jev only or neither, split by language. For the skill router it sets
+  the keyword selection against Jev's top N skills above the threshold. For recall it sets the
+  injected notes against the shortlisted notes Jev scores relevant, and reports how widely Jev's
+  scores spread across one prompt's shortlist, since a narrow spread means Jev is not telling the
+  notes apart. It also reports latency and token percentiles and the error reasons per site.
+  `--disagreements OUT` writes every disagreement with the text it was judged on, for
+  adjudication against the source transcript. A disagreement does not by itself mean Jev is
+  wrong. The script is standard library only and calls no API. `--json` gives the `{ok, command,
+  data, skipped}` envelope, and the exit code is 0 for a report, 1 for an empty log, 2 for an IO
+  or usage error. Rows from hand-run probes (session ids starting `probe-`) are dropped by
+  default.
+
 ## [7.1.1]
 
 ### Fixed
