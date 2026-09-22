@@ -154,3 +154,24 @@ def test_recall_shadow_reranks_the_shortlist_pairwise_and_keeps_its_output(env, 
     assert set(line["regex"]["selected"]) <= set(shortlist)
     assert "hunter2" not in _log(env["home"]).read_text(encoding="utf-8")
     assert len(env["fake"].requests) == 2  # one pair request per candidate
+
+
+def test_stop_gate_shadow_sends_the_human_prompt_and_the_event_reply_in_a_tool_turn(
+        env, tmp_path, monkeypatch, capsys):
+    # The real shape: prompt, tool call, tool_result, and the final reply only in the event.
+    t = tmp_path / "transcript.jsonl"
+    t.write_text("\n".join([
+        json.dumps({"type": "user", "message": {"content": "no, that is wrong - use uv"},
+                    "origin": {"kind": "human"}}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]}}),
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
+    ]) + "\n", encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
+    _run(G, monkeypatch, capsys, {"transcript_path": str(t), "cwd": str(tmp_path),
+                                  "session_id": "s-tool", "last_assistant_message": "Switched."})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["states"][0] == {"user_message": "no, that is wrong - use uv",
+                                 "assistant_reply": "Switched."}
+    assert line["regex"]["fires"] is True

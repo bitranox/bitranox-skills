@@ -436,3 +436,131 @@ def test_the_gate_writes_its_session_file_under_the_isolated_home(tmp_path, monk
 
     written = list((tmp_path / "home" / ".claude" / "self-improve-audit").glob("*.session.json"))
     assert written, "the gate wrote no session file inside the isolated HOME - HOME is not redirected"
+
+
+# ---- the gate's INPUT: what Claude Code actually writes, and when --------------------------
+# In a turn that used a tool, the transcript's last `type: user` record is a tool_result with no
+# text, and the final assistant text is not yet on disk when Stop fires (the event carries it as
+# `last_assistant_message`). Reading "the last user record" and "the last assistant record"
+# therefore gave two empty strings in most real turns, and the gate returned before matching.
+
+def _rec(kind, content, **extra):
+    return json.dumps(dict({"type": kind, "message": {"content": content}}, **extra))
+
+
+def _write(tmp_path, *records):
+    p = tmp_path / "transcript.jsonl"
+    p.write_text("\n".join(records) + "\n", encoding="utf-8")
+    return str(p)
+
+
+def _tool_turn(prompt, *after):
+    """A human prompt, one tool call and its result - the shape of almost every real turn."""
+    return [_rec("user", prompt, origin={"kind": "human"}),
+            _rec("assistant", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]),
+            _rec("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]),
+            *after]
+
+
+def test_a_correction_in_a_tool_using_turn_blocks(tmp_path, monkeypatch, capsys):
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - always use uv from now on"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Switched to uv."})
+    assert decision_of(capsys) == "block"
+
+
+def test_the_final_reply_comes_from_the_event_not_the_lagging_transcript(tmp_path, monkeypatch,
+                                                                          capsys):
+    # The transcript holds no final text at all; only the event has it.
+    tp = _write(tmp_path, *_tool_turn("please list the files"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message":
+                                         "you're right, my mistake - I read the stale log"})
+    assert decision_of(capsys) == "block"
+
+
+def test_a_neutral_tool_using_turn_does_not_block(tmp_path, monkeypatch, capsys):
+    tp = _write(tmp_path, *_tool_turn("please list the files"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "Here are the files."})
+    assert decision_of(capsys) is None
+
+
+@pytest.mark.parametrize("noise", [
+    _rec("user", "Stop hook feedback: a learning signal was detected", isMeta=True),
+    _rec("user", [{"type": "text", "text": "Base directory for this skill: /x\n# y"}], isMeta=True),
+    _rec("user", "<command-name>/plugin</command-name> <command-args>update</command-args>"),
+    _rec("user", "<task-notification> agent finished </task-notification>",
+         origin={"kind": "task-notification"}),
+])
+def test_injected_user_records_do_not_hide_the_human_prompt(tmp_path, monkeypatch, capsys, noise):
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - never do that again", noise))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "ok"})
+    assert decision_of(capsys) == "block"
+
+
+def test_the_human_prompt_is_found_behind_a_tool_output_larger_than_the_tail(tmp_path, monkeypatch,
+                                                                             capsys):
+    big = _rec("user", [{"type": "tool_result", "tool_use_id": "t2", "content": "x" * 200_000}])
+    tp = _write(tmp_path, *_tool_turn("no, that is wrong - always run the gate first", big))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "ok"})
+    assert decision_of(capsys) == "block"
+
+
+def test_an_empty_input_does_not_poison_the_once_per_message_dedup(tmp_path, monkeypatch, capsys):
+    # The dedup keys on the user message. Two different human corrections must both block, even
+    # when earlier turns had nothing to match.
+    for prompt in ("no, that is wrong - use uv", "no, wrong again - never pip"):
+        tp = _write(tmp_path, *_tool_turn(prompt))
+        run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                         "last_assistant_message": "ok"})
+        assert decision_of(capsys) == "block", prompt
+
+
+# A replay over the real corpus found 244 of 268 newly matched prompts were never typed by a
+# person: headless `claude -p` / SDK runs and teammate messages, all written with `origin: null`,
+# while every typed prompt carries `origin.kind == "human"`. Blocking a headless audit run on the
+# wording of its own task brief is damage, not a learning signal.
+
+@pytest.mark.parametrize("record", [
+    _rec("user", "You are auditing ONE skill. No, that is wrong - from now on always report it.", origin=None),
+    _rec("user", "Another Claude session sent a message: <teammate-message>no, that is wrong"
+                 "</teammate-message>", origin=None),
+])
+def test_a_prompt_with_a_null_origin_is_not_a_human_message(tmp_path, monkeypatch, capsys, record):
+    tp = _write(tmp_path, record,
+                _rec("assistant", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "done"})
+    assert decision_of(capsys) is None
+
+
+def test_a_legacy_teammate_message_without_an_origin_field_is_not_a_human_message(
+        tmp_path, monkeypatch, capsys):
+    tp = _write(tmp_path, _rec("user", "Another Claude session sent a message: <teammate-message>"
+                                       "no, that is wrong</teammate-message>"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "done"})
+    assert decision_of(capsys) is None
+
+
+@pytest.mark.parametrize("entrypoint", ["sdk-cli", "sdk-py"])
+def test_the_prompt_of_a_headless_sdk_run_is_not_a_human_message(tmp_path, monkeypatch, capsys,
+                                                                  entrypoint):
+    # Headless runs write no `origin` key at all; their records say where they came from instead.
+    tp = _write(tmp_path, _rec("user", "No, that is wrong - from now on always report it.",
+                               entrypoint=entrypoint))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "done"})
+    assert decision_of(capsys) is None
+
+
+def test_an_interactive_cli_prompt_without_an_origin_key_still_counts(tmp_path, monkeypatch,
+                                                                      capsys):
+    tp = _write(tmp_path, _rec("user", "No, that is wrong - from now on always report it.",
+                               entrypoint="cli"))
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "last_assistant_message": "done"})
+    assert decision_of(capsys) == "block"

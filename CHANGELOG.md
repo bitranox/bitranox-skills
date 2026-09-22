@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.1.1]
+
+### Fixed
+
+- **The self-improve Stop gate now reads the turn it is judging.** It took "the last `user`
+  record" and "the last `assistant` record" from the transcript, and in a real turn both were
+  usually empty. Every tool call is answered by a `user` record holding a tool result, so the
+  typed prompt was never the last one. And when Stop fires, the final reply is often not on disk
+  yet, which is why Claude Code hands it to the hook as `last_assistant_message`. With both halves
+  empty the gate returned before matching, so a correction typed in any turn that used a tool never
+  reached it. Its once-per-message dedup also keyed on that empty string, silencing later empty
+  turns as "already blocked".
+
+  The gate now takes the reply from `last_assistant_message`, with the transcript only as a
+  fallback. The user half is the last message the person actually typed: `origin.kind == "human"`,
+  never `isMeta` hook feedback or skill bodies, never a slash-command echo, task notification or
+  teammate message, and never the prompt of a headless `claude -p` / SDK run (`origin: null` or
+  `entrypoint: sdk-*`), whose task brief is not a learning signal. The tail window widens until
+  that prompt is found, since one large tool output can push it past the first 64 KiB.
+
+  A replay over 1,339 real interactive turns measured the change. The gate fires on 6.0% of turns
+  instead of 7.7%. It gains 24 firings, nearly all typed corrections and standing rules the old
+  input never saw. It loses 47, every one a match on its own or a sibling hook's injected
+  "Stop hook feedback" text.
+
+  The classifier's `stop_signal` shadow site reads the same corrected input, which is why it
+  logged nothing in real sessions until now.
+
 ## [7.1.0]
 
 ### Added

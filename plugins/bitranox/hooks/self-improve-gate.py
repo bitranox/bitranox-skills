@@ -149,25 +149,51 @@ def _text(content):
     return ""
 
 
-# Read only the JSONL tail: we just need the last user + last assistant line, and
-# transcripts grow to many MB in long sessions. 64 KiB sits comfortably above any
-# normal final turn; bump it if a final turn is ever larger and gets truncated for
-# matching (a truncated tail only costs recall, never a wedged turn).
+# Transcripts grow to many MB, so only the tail is read: 64 KiB first, widened 4x at a time until
+# the human prompt is in the window. A single tool output can be larger than the first window, and
+# the prompt sits BEFORE every tool call of the turn. The cap bounds a pathological file; a miss
+# only costs recall, never a wedged turn.
 _TAIL_BYTES = 65536
+_MAX_TAIL_BYTES = 16 * 1024 * 1024
+
+# Records that carry `type: user` and text but were not typed by the person, for transcripts
+# old enough to lack the `origin` field: slash-command echoes and their output, background-task
+# notifications and teammate messages. Hook feedback and skill bodies are marked `isMeta`
+# instead, and tool results carry no text block at all.
+_NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
+                       "Another Claude session sent a message", "<teammate-message")
 
 
-def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES):
-    """Return (last_user_text, last_assistant_text) from the JSONL transcript tail."""
+def _human_text(obj):
+    """The text of a `user` record the person actually typed, else "".
+
+    A turn's last `user` record is almost never the prompt: every tool call is answered by a
+    `user` record holding a tool_result, and hooks, skills and task notifications inject more.
+    Claude Code writes `origin.kind == "human"` on a typed prompt and `origin: null` on the prompt
+    of a headless `claude -p` / SDK run and on a teammate message - measured over the corpus,
+    those were 244 of the 268 prompts a looser rule added, and blocking a headless run on its own
+    task brief is damage, not a learning signal. Headless runs that write no `origin` key at all
+    are told apart by `entrypoint: sdk-*`. A transcript old enough to have neither falls back to
+    excluding the known injected shapes.
+    """
+    if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
+        return ""
+    # A headless SDK run writes no `origin` key; its records name the entrypoint instead.
+    if str(obj.get("entrypoint") or "").startswith("sdk"):
+        return ""
+    if "origin" in obj:
+        origin = obj["origin"]
+        if not (isinstance(origin, dict) and origin.get("kind") == "human"):
+            return ""
+    text = _text(obj.get("message", {}).get("content"))
+    if not text.strip() or text.lstrip().startswith(_NOT_TYPED_PREFIXES):
+        return ""
+    return text
+
+
+def _scan(data):
+    """(last human prompt, last assistant text) among the complete JSONL lines of `data`."""
     last_user = last_asst = ""
-    try:
-        size = os.path.getsize(transcript_path)
-        with open(transcript_path, "rb") as fh:
-            if size > tail_bytes:
-                fh.seek(size - tail_bytes)
-                fh.readline()  # drop the partial first line after the seek
-            data = fh.read()
-    except OSError:
-        return "", ""
     for raw in data.splitlines():
         line = raw.strip()
         if not line:
@@ -176,12 +202,39 @@ def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES):
             obj = json.loads(line.decode("utf-8", "replace"))
         except ValueError:
             continue
-        kind = obj.get("type")
-        if kind == "user":
-            last_user = _text(obj.get("message", {}).get("content"))
-        elif kind == "assistant":
-            last_asst = _text(obj.get("message", {}).get("content"))
+        if obj.get("type") == "assistant":
+            # Each content block is its own record (thinking, text, tool_use), so skip the ones
+            # with no text rather than letting a trailing tool_use blank the reply.
+            last_asst = _text(obj.get("message", {}).get("content")) or last_asst
+        else:
+            last_user = _human_text(obj) or last_user
     return last_user, last_asst
+
+
+def _last_messages(transcript_path, tail_bytes=_TAIL_BYTES, max_bytes=_MAX_TAIL_BYTES):
+    """Return (last human prompt, last assistant text) from the JSONL transcript tail.
+
+    The assistant half here is only a fallback: when Stop fires, the final reply is often not on
+    disk yet, which is why `main` prefers the event's `last_assistant_message`.
+    """
+    try:
+        size = os.path.getsize(transcript_path)
+    except OSError:
+        return "", ""
+    window = tail_bytes
+    while True:
+        try:
+            with open(transcript_path, "rb") as fh:
+                if size > window:
+                    fh.seek(size - window)
+                    fh.readline()  # drop the partial first line after the seek
+                data = fh.read()
+        except OSError:
+            return "", ""
+        last_user, last_asst = _scan(data)
+        if last_user or window >= size or window >= max_bytes:
+            return last_user, last_asst
+        window *= 4
 
 
 def _shadow_stop_signal(event, last_user, last_asst):
@@ -228,6 +281,11 @@ def main():
         pass
 
     last_user, last_asst = _last_messages(transcript)
+    # The transcript lags: when Stop fires, this turn's final reply is usually not written yet.
+    # The event carries it, so the transcript's assistant text is only the fallback.
+    final = event.get("last_assistant_message")
+    if isinstance(final, str) and final.strip():
+        last_asst = final
 
     # Invoking a skill injects its whole SKILL.md as a type="user" message, so a skill whose own
     # prose contains a directive ("from now on", "always run") would fire the gate on itself every
