@@ -188,6 +188,57 @@ def test_summarize_reports_cost_and_errors_per_site():
     assert rep["sites"]["skill_router"]["input_tokens"]["total"] == 9000
 
 
+# ---- a family that is logged but never counted as a firing ------------------------------------
+# `endorsement` scored above the threshold as a turn's ONLY reason to fire on 12 turns across two
+# shadow windows, every one a plain approval ("yes", "go", "lets try 1-4"). Approving a proposal is
+# not a learning signal, so it stops counting as a firing - while the question stays in the set,
+# so the score keeps being recorded and can be re-judged later.
+
+def test_endorsement_alone_is_not_a_firing():
+    rep = ce.summarize_stop_signal([stop_row(False, {"endorsement": 0.94, "correction": 0.1})],
+                                   threshold=0.7)
+    assert rep["by_lang"]["en"] == {"both": 0, "regex_only": 0, "jev_only": 0, "neither": 1}
+
+
+def test_endorsement_does_not_join_the_families_of_a_real_firing():
+    rep = ce.summarize_stop_signal(
+        [stop_row(False, {"endorsement": 0.94, "realization": 0.88})], threshold=0.7)
+    assert rep["by_lang"]["en"]["jev_only"] == 1
+    assert rep["disagreements"][0]["jev_families"] == ["realization"]
+
+
+def test_a_non_firing_family_keeps_its_score_in_the_row():
+    rep = ce.summarize_stop_signal([stop_row(False, {"endorsement": 0.94, "realization": 0.88})],
+                                   threshold=0.7)
+    assert rep["disagreements"][0]["scores"]["endorsement"] == 0.94
+
+
+# ---- one threshold per site -------------------------------------------------------------------
+# The three sites ask different questions and their score distributions differ, so a single number
+# for all of them was always a placeholder. Measured over 1,177 recall pair judgements, 0.5 keeps
+# 20% of them (about 5.9 notes a prompt) and 0.8 keeps 4% (about 1.1).
+
+def test_each_site_is_judged_at_its_own_default_threshold():
+    assert ce.SITE_THRESHOLDS["recall_rerank"] == 0.8
+    assert ce.SITE_THRESHOLDS["stop_signal"] == 0.7
+    assert ce.SITE_THRESHOLDS["skill_router"] == 0.7
+
+
+def test_summarize_applies_the_per_site_default_when_no_threshold_is_given():
+    rows = [recall_row(["n1", "n2"], ["n1"], [0.75, 0.85])]
+    rep = ce.summarize(rows, threshold=None, top=2)
+    # 0.75 is relevant at the old flat 0.7 and not at recall's own 0.8
+    assert rep["sites"]["recall_rerank"]["jev_relevant"] == 1
+    assert rep["sites"]["recall_rerank"]["threshold"] == 0.8
+
+
+def test_an_explicit_threshold_overrides_every_site():
+    rows = [recall_row(["n1", "n2"], ["n1"], [0.75, 0.85])]
+    rep = ce.summarize(rows, threshold=0.7, top=2)
+    assert rep["sites"]["recall_rerank"]["jev_relevant"] == 2
+    assert rep["sites"]["recall_rerank"]["threshold"] == 0.7
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 def test_cli_json_envelope_and_disagreement_file(tmp_path, capsys):

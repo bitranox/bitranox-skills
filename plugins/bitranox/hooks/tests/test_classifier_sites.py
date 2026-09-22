@@ -299,6 +299,17 @@ def test_skill_router_shadow_sends_a_notification_s_own_fields(env, tmp_path, mo
     assert gate["type"] == "noul"
 
 
+def test_router_rows_record_which_keyword_matcher_judged_them(env, tmp_path, monkeypatch, capsys):
+    # The keyword arm is half of every comparison, so when IT changes its rows must stop pooling
+    # with the old ones. 7.6.0 changed what it scores while the input views stayed the same, which
+    # left 15 notification rows judged by the old matcher in the same group as typed prompts.
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "git commit fails with a CRLF line ending",
+                                   "cwd": str(tmp_path), "session_id": "s-matcher"})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["regex"]["matcher_view"] == SR.MATCHER_VIEW
+
+
 def test_router_questions_for_a_notification_name_its_fields_not_the_prompt():
     qs = cl.skill_router_questions({"x": "does x"}, turn=cl.TURN_NOTIFICATION)
     assert [q.id for q in qs] == [cl.NEW_TASK_ID, "x"]

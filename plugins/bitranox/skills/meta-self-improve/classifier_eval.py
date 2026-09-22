@@ -34,6 +34,18 @@ from pathlib import Path
 
 DEFAULT_LOG = Path.home() / ".claude" / "self-improve-audit" / "classifier-shadow.jsonl"
 DEFAULT_THRESHOLD = 0.5
+
+# The threshold each site is judged at when none is given. One number for all three was always a
+# placeholder: they ask different questions and their answers are distributed differently.
+# Measured over 1,177 recall pair judgements, 0.5 keeps 20% of them (about 5.9 notes a prompt) and
+# 0.8 keeps 4% (about 1.1), which is the order of what a prompt can actually use.
+SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.7, "recall_rerank": 0.8}
+
+# Families whose score is LOGGED but never counted as a firing. `endorsement` was the only reason
+# to fire on 12 turns across two shadow windows, every one a plain approval ("yes", "go", "lets
+# try 1-4"): approving a proposal the assistant made is not a learning signal. The question stays
+# in the set, so the score keeps being recorded and the judgement can be revisited on data.
+NON_FIRING_FAMILIES = frozenset({"endorsement"})
 DEFAULT_TOP = 2
 # Rows written by a hand-run probe of a hook, not by a real session.
 DEFAULT_EXCLUDE = ("probe-",)
@@ -110,7 +122,8 @@ def summarize_stop_signal(rows, threshold):
         if scores is None:
             unanswered += 1
             continue
-        families = sorted(k for k, v in scores.items() if v >= threshold)
+        families = sorted(k for k, v in scores.items()
+                          if v >= threshold and k not in NON_FIRING_FAMILIES)
         kind = _kind(bool((row.get("regex") or {}).get("fires")), bool(families))
         counts = by_lang.setdefault(row.get("lang") or "unknown",
                                     {"both": 0, "regex_only": 0, "jev_only": 0, "neither": 0})
@@ -243,20 +256,25 @@ def _base_site(key):
 
 
 def summarize(rows, threshold, top):
-    """The whole report: per site (and input view), the cost block merged with its comparison."""
+    """The whole report: per site (and input view), the cost block merged with its comparison.
+
+    `threshold` of None judges each site at its own `SITE_THRESHOLDS` default; an explicit value
+    overrides every site, which is how one number is compared across them.
+    """
     keys = sorted({_group(r) for r in rows if r.get("site") in SITES},
                   key=lambda k: (SITES.index(_base_site(k)), k))
     sites = {}
     for key in keys:
         site_rows = [r for r in rows if _group(r) == key]
         site = _base_site(key)
+        at = SITE_THRESHOLDS[site] if threshold is None else threshold
         if site == "stop_signal":
-            detail = summarize_stop_signal(site_rows, threshold)
+            detail = summarize_stop_signal(site_rows, at)
         elif site == "skill_router":
-            detail = summarize_skill_router(site_rows, threshold, top)
+            detail = summarize_skill_router(site_rows, at, top)
         else:
-            detail = summarize_recall(site_rows, threshold)
-        sites[key] = {**_cost(site_rows), **detail}
+            detail = summarize_recall(site_rows, at)
+        sites[key] = {**_cost(site_rows), **detail, "threshold": at}
     return {"threshold": threshold, "top": top, "rows": len(rows), "sites": sites}
 
 
@@ -268,9 +286,11 @@ def _pct(p):
 
 def render_text(rep):
     lines = ["classifier shadow report - threshold %s, router top %s, %d rows"
-             % (rep["threshold"], rep["top"], rep["rows"])]
+             % (rep["threshold"] if rep["threshold"] is not None else "per site",
+                rep["top"], rep["rows"])]
     for site, s in rep["sites"].items():
-        lines += ["", "== %s: %d rows, errors %s" % (site, s["rows"], s["errors"] or "none"),
+        lines += ["", "== %s: %d rows at threshold %s, errors %s"
+                  % (site, s["rows"], s["threshold"], s["errors"] or "none"),
                   "   latency ms   " + _pct(s["latency_ms"]),
                   "   input tokens total %s, mean %s" % (s["input_tokens"]["total"],
                                                          s["input_tokens"]["mean"])]
@@ -310,7 +330,9 @@ def _parser():
     sub = p.add_subparsers(dest="command", required=True)
     r = sub.add_parser("report", help="summarise the shadow log per site")
     r.add_argument("--log", type=Path, default=DEFAULT_LOG)
-    r.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    r.add_argument("--threshold", type=float, default=None,
+                   help="judge every site at this value; omitted, each uses its own default "
+                        "(%s)" % ", ".join("%s %s" % kv for kv in sorted(SITE_THRESHOLDS.items())))
     r.add_argument("--top", type=int, default=DEFAULT_TOP,
                    help="how many skills the router would suggest (default 2)")
     r.add_argument("--exclude-session", action="append", default=None, metavar="PREFIX",

@@ -32,6 +32,11 @@ MAX_SKILLS = 2
 # The router's shadow input beyond the prompt: project scope, recent tool activity, skills in use
 # and the "new task or continuation?" gate question. Recorded in every log line.
 ROUTER_VIEW = "ctx-v1"
+# Which KEYWORD matcher produced the row's regex arm. The `*_view` tags say what the classifier
+# was shown; this says what it is being compared AGAINST, and that half changes too. 7.6.0 stopped
+# scoring machine turns and non-prose while the input views stayed the same, which left 15
+# notification rows judged by the old matcher pooling with typed prompts in one report group.
+MATCHER_VIEW = "prose-v1"
 PROJECT_CAP = 200
 
 
@@ -118,7 +123,7 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
         ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
         regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
                  "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
-                 "router_view": ROUTER_VIEW}
+                 "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW}
         notification = bool(prompt_text.notification_fields(prompt))
         if notification:
             # Its own field set, so the eval never pools these rows with typed-prompt rows.

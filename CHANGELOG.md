@@ -29,6 +29,32 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.7.0]
+
+### Fixed
+
+- **A shadow row now records which keyword matcher judged it.** The `*_view` tags say what the
+  classifier was shown; nothing said what it was being compared AGAINST, and 7.6.0 changed that
+  half. The result was 15 notification rows judged by the old matcher pooling with typed prompts
+  in one report group, whose `picks regex 33` came almost entirely from those 15. Rows now carry
+  `matcher_view: prose-v1`. No backfill: rows logged earlier have no such key, so they group apart
+  on their own and stay readable as the historical window they are.
+
+### Changed
+
+- **`endorsement` is logged but no longer counted as a Stop-gate firing.** Adjudicated against the
+  turns rather than the count: it was the only reason to fire on 12 turns across two shadow
+  windows, and every one was a plain approval ("yes", "go", "lets try 1-4", "yes, start"). On the
+  current log this moves 7 rows from `jev_only` to `neither`, so the gate's apparent 25 missed
+  signals are really 18. The question stays in the set, so the score keeps being recorded and the
+  judgement can be revisited on data.
+- **Each site is judged at its own threshold** (`SITE_THRESHOLDS`: stop_signal 0.7,
+  skill_router 0.7, recall_rerank 0.8). One number for all three was always a placeholder - they
+  ask different questions and their answers are distributed differently. Measured over 1,177
+  recall pair judgements, 0.5 keeps 20% (about 5.9 notes a prompt) and 0.8 keeps 4% (about 1.1).
+  `--threshold` still overrides every site, which is how one number is compared across them, and
+  the report names the threshold each site was judged at.
+
 ## [7.6.0]
 
 ### Fixed
