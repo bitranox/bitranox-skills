@@ -272,6 +272,46 @@ def test_skill_router_shadow_sends_project_activity_and_skills_in_use(env, tmp_p
     assert "_new_task" in line["results"][0]["answers"]
 
 
+def test_skill_router_shadow_sends_a_notification_s_own_fields(env, tmp_path, monkeypatch,
+                                                               capsys):
+    # A machine turn scores no keywords, but a background task that FAILED can still need a
+    # skill - so the shadow judges the envelope's own fields instead of the envelope as a
+    # pretend prompt, and the row is tagged so it never pools with typed-prompt rows.
+    notification = ("<task-notification>\n<task-id>b6bgpwg53</task-id>\n"
+                    "<tool-use-id>toolu_01ABC</tool-use-id>\n"
+                    "<output-file>/tmp/claude-1000/-media-srv-main-softdev/tasks/b6bgpwg53.output"
+                    "</output-file>\n<status>failed</status>\n"
+                    "<summary>Background command \"Run the repo CI-parity gate\" failed with exit "
+                    "code 1</summary>\n</task-notification>")
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    out = _run(SR, monkeypatch, capsys, {"prompt": notification, "cwd": str(tmp_path),
+                                         "session_id": "s-notify"})
+    assert out == ""                                    # and it still nudges nothing
+    line = _wait_for_log(env["home"])[-1]
+    state = line["states"][0]
+    assert "user_prompt" not in state
+    assert state["task_status"] == "failed"
+    assert "CI-parity gate" in state["task_summary"]
+    assert "b6bgpwg53" not in json.dumps(state) and "toolu" not in json.dumps(state)
+    assert line["regex"]["selected"] == []              # the keyword arm says nothing now
+    assert line["regex"]["notify_view"] == cl.NOTIFY_VIEW
+    gate = line["results"][0]["answers"][cl.NEW_TASK_ID]
+    assert gate["type"] == "noul"
+
+
+def test_router_questions_for_a_notification_name_its_fields_not_the_prompt():
+    qs = cl.skill_router_questions({"x": "does x"}, turn=cl.TURN_NOTIFICATION)
+    assert [q.id for q in qs] == [cl.NEW_TASK_ID, "x"]
+    for q in qs:
+        assert "`user_prompt`" not in q.instructions
+        assert "`task_status`" in q.instructions or "`task_summary`" in q.instructions
+
+
+def test_router_questions_still_default_to_the_typed_prompt():
+    qs = cl.skill_router_questions({"x": "does x"})
+    assert all("`user_prompt`" in q.instructions for q in qs)
+
+
 def test_questions_name_the_previous_message_field():
     for questions in (cl.stop_signal_questions(), cl.recall_questions(),
                       cl.skill_router_questions({"x": "does x"})):

@@ -347,3 +347,21 @@ def test_note_view_without_a_match_or_frontmatter_is_the_file_head(tmp_path):
     m = tmp_path / "notes.md"
     m.write_text("First line.\n" + "x\n" * 500, encoding="utf-8")
     assert R._note_view(str(m), ["absent"], 40).startswith("notes: First line.")
+
+
+# ---- recall takes the same input as the skill router, so it has the same defect -------------------
+
+def test_a_machine_generated_turn_recalls_nothing(monkeypatch, capsys):
+    _mem("/p/other", "frobnicator.md", "The frobnicator widgets need FROB_LEVEL=9 set")
+    rc, out = run(monkeypatch, capsys,
+                  "<task-notification>done: /tmp/frobnicator/widgets/a.output</task-notification>")
+    assert rc == 0 and out == ""
+
+
+def test_words_inside_a_path_do_not_recall_a_note(monkeypatch, capsys):
+    _mem("/p/other", "frobnicator.md", "The frobnicator widgets need FROB_LEVEL=9 set")
+    rc, out = run(monkeypatch, capsys, "have a look at /tmp/frobnicator/widgets/a.output")
+    assert rc == 0 and out == ""
+    # the same words as prose still reach the note, so the guard removed a path and not the signal
+    rc, out = run(monkeypatch, capsys, "have a look at the frobnicator widgets", sid="t2")
+    assert "frobnicator" in out

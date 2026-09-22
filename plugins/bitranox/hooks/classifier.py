@@ -44,11 +44,11 @@ import secret_patterns  # noqa: E402
 import transcript_turns  # noqa: E402
 
 __all__ = [
-    "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NullClassifier",
-    "PREVIOUS_FIELD", "Question", "Result", "SHADOW_LOG", "SITES", "detect_language",
-    "get_classifier", "load_key", "load_skill_descriptions", "prepare_state", "recall_questions",
-    "shadow_enabled", "skill_router_questions", "spawn_shadow", "stop_signal_questions",
-    "with_previous",
+    "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NOTIFY_VIEW",
+    "NullClassifier", "PREVIOUS_FIELD", "Question", "Result", "SHADOW_LOG", "SITES",
+    "TURN_NOTIFICATION", "TURN_PROMPT", "detect_language", "get_classifier", "load_key",
+    "load_skill_descriptions", "prepare_state", "recall_questions", "shadow_enabled",
+    "skill_router_questions", "spawn_shadow", "stop_signal_questions", "with_previous",
 ]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
@@ -374,21 +374,47 @@ def load_skill_descriptions(skills_dir=None):
 # the eval reads a low score as "a continuation, suggest nothing".
 NEW_TASK_ID = "_new_task"
 
+# Which kind of turn the router is judging. A typed prompt is one thing; a task notification is
+# not a prompt at all, so sending its envelope as `user_prompt` asks the model to read a status
+# line as if somebody had said it. Each kind names its own state fields, and a notification row
+# records NOTIFY_VIEW so the eval never pools the two.
+TURN_PROMPT = "prompt"
+TURN_NOTIFICATION = "notification"
+NOTIFY_VIEW = "fields-v1"
 
-def skill_router_questions(skills):
-    """The gate question, then one noul per skill; each skill's id is its name. State fields:
-    user_prompt, and when known previous_assistant_message, project, recent_activity and
-    skills_already_used."""
-    gate = Question(NEW_TASK_ID, "noul",
-                    "Does `user_prompt` start a new task, or change direction in a way that needs "
-                    "specialised know-how, rather than continuing, approving or checking the work "
-                    "that `previous_assistant_message` and `recent_activity` describe?")
-    return [gate] + [
+_ROUTER_TURNS = {
+    TURN_PROMPT: (
+        "Does `user_prompt` start a new task, or change direction in a way that needs specialised "
+        "know-how, rather than continuing, approving or checking the work that "
+        "`previous_assistant_message` and `recent_activity` describe?",
+        "`user_prompt`",
+        "`user_prompt` is a reply to `previous_assistant_message` when that is given, and "
+        "`project` and `recent_activity` say what is being worked on.",
+    ),
+    TURN_NOTIFICATION: (
+        "A background task has just finished, described by `task_status` and `task_summary`. Does "
+        "handling it need specialised know-how - for example because it failed - rather than "
+        "simply being noted so the work in `previous_assistant_message` and `recent_activity` can "
+        "carry on?",
+        "the finished background task in `task_status` and `task_summary`",
+        "`project` and `recent_activity` say what is being worked on.",
+    ),
+}
+
+
+def skill_router_questions(skills, turn=TURN_PROMPT):
+    """The gate question, then one noul per skill; each skill's id is its name.
+
+    State fields for `TURN_PROMPT`: user_prompt, and when known previous_assistant_message,
+    project, recent_activity and skills_already_used. For `TURN_NOTIFICATION`: task_status and
+    task_summary in place of user_prompt.
+    """
+    gate_instructions, subject, context = _ROUTER_TURNS[turn]
+    return [Question(NEW_TASK_ID, "noul", gate_instructions)] + [
         Question(name, "noul",
-                 "Would the assistant need the skill described here to handle `user_prompt` well? "
-                 "`user_prompt` is a reply to `previous_assistant_message` when that is given, and "
-                 "`project` and `recent_activity` say what is being worked on. Answer no if the "
-                 "skill is listed in `skills_already_used`. Skill description: " + desc)
+                 "Would the assistant need the skill described here to handle %s well? %s Answer "
+                 "no if the skill is listed in `skills_already_used`. Skill description: %s"
+                 % (subject, context, desc))
         for name, desc in skills.items()]
 
 

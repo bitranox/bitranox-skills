@@ -24,6 +24,7 @@ for _d in (str(_HOOKS_DIR), str(_SKILL_DIR)):
 import gather_scan as gs  # noqa: E402  (the existing grep engine; also pulls in self_improve_signals)
 import self_improve_signals as sig  # noqa: E402
 import classifier  # noqa: E402
+import prompt_text  # noqa: E402
 import secret_patterns  # noqa: E402
 import transcript_turns  # noqa: E402
 
@@ -212,7 +213,10 @@ def main():
     sid = ev.get("session_id") or "default"
 
     try:
-        keywords = gs.extract_keywords(prompt, proj=cwd)  # filler-free: global baseline + THIS project's
+        # Only the prose of a typed prompt: a path carries project and tool names, and a machine
+        # turn (a task notification, a slash-command echo) is not somebody asking for anything -
+        # the skill router had the same input and the same defect. An empty result recalls nothing.
+        keywords = gs.extract_keywords(prompt_text.scorable_prose(prompt), proj=cwd)
         if not keywords:
             return 0
         # Queue any not-yet-classified keyword for the dream-time filler classifier (deterministic,

@@ -1,4 +1,4 @@
-# Handover - written 2026-09-22, nothing in flight
+# STALE - read 2026-09-22, work continued
 
 ## In flight
 

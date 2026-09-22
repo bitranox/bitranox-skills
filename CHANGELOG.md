@@ -29,6 +29,51 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.6.0]
+
+### Fixed
+
+- **The skill router and recall no longer score what nobody typed.** A keyword matcher sees one
+  flat string, so it cannot tell prose from a path, an id or an XML envelope - and a path on this
+  machine carries project and tool names, which are exactly the terms a trigger map is built from.
+  Measured on the router's own shadow log: 16 of 40 rows were `<task-notification>` turns, and
+  **every one of them fired**, 9 to 11 skills over the 2-keyword threshold, always nudging
+  `compuse-bash` plus one of `meta-adopting-external-skills` / `meta-claude-hooks`, with the words
+  coming from the envelope's vocabulary and its output-file path. Each firing cost more than a
+  false nudge: a skill nudges at most once per session, so the match silenced that skill for the
+  prompt where it would have been right.
+
+  `hooks/prompt_text.py` (new) answers the two questions a matcher needs and both hooks now ask
+  it: `typed_by_a_person` rejects a whole machine turn (the shapes are
+  `transcript_turns.NOT_TYPED_PREFIXES`, so one added for the Stop gate is never missing here),
+  and `prose` removes tag markup, ids, hashes and dashed slugs, and reduces a path to its file
+  type.
+
+  Replayed over 5,354 prompt-shaped records from the transcript corpus: firings fall from 2,403
+  (44.9%) to 1,353 (25.3%), and 1,043 of the 1,050 removed are machine turns - false by
+  construction. Of the 8 typed prompts that stopped firing when a path was dropped whole, 7 had
+  matched on a device path, a quoted agent brief or a `/tmp` script name; the eighth was a genuine
+  match, a request about `src/<pkg>/defaultconfig.toml` that stopped reaching `files-edit-toml`.
+  Keeping the path's basename recovered it but admitted two false firings (a git branch name, a
+  device node); keeping only its **extension** recovered it and admitted nothing, which is what
+  ships. The set diff also showed 235 records where a different skill moved into the top two once
+  a path-inflated one stopped crowding it out.
+
+### Changed
+
+- **A task notification reaches the Jev shadow as its own fields, not as a pretend prompt.** A
+  machine turn now scores no keywords, but a background task that just FAILED can still need a
+  skill, so the turn is still worth a question - asked about `task_status` and `task_summary`
+  instead of `user_prompt`, with its own gate question ("does handling this need specialised
+  know-how, for example because it failed?"). The envelope's ids and its output-file path are not
+  sent at all, being both meaningless and the cause of the false matches. The output file is
+  deliberately NOT read: its path comes from the turn's own text, so reading it would let a forged
+  envelope name any file on the machine and send it to the API. Such rows record
+  `notify_view: fields-v1`, so the eval never pools them with typed-prompt rows, and their keyword
+  baseline is now correctly empty.
+- `classifier.skill_router_questions(skills, turn=...)` takes the kind of turn it is asking about
+  (`TURN_PROMPT`, the default, or `TURN_NOTIFICATION`).
+
 ## [7.5.0]
 
 ### Changed

@@ -23,6 +23,7 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import classifier  # noqa: E402
+import prompt_text  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
 import transcript_turns  # noqa: E402
 
@@ -48,8 +49,13 @@ def load_triggers():
 
 
 def match(prompt, triggers, min_hits=MIN_HITS, max_skills=MAX_SKILLS):
-    """[(skill, hit_count)] for skills whose distinct keyword hits reach min_hits, best first."""
-    low = (prompt or "").lower()
+    """[(skill, hit_count)] for skills whose distinct keyword hits reach min_hits, best first.
+
+    Only the PROSE of a typed prompt is scored (`prompt_text.scorable_prose`): a machine-generated
+    turn scores nothing, and a path, an id or a tag inside a real prompt is not a topic. Keeping
+    this inside `match` is what makes the nudge and the shadow's keyword baseline agree.
+    """
+    low = prompt_text.scorable_prose(prompt).lower()
     scored = []
     for skill, kws in triggers.items():
         hits = sum(1 for k in kws
@@ -83,10 +89,16 @@ def _already_nudged(cwd, sid):
         return set()
 
 
+def _turn_fields(prompt):
+    """What the turn itself contributes: a typed prompt, or a notification's own fields - never
+    the notification envelope dressed up as a prompt."""
+    return prompt_text.notification_fields(prompt) or {"user_prompt": prompt}
+
+
 def _router_fields(prompt, cwd, sid, transcript):
-    """The router's state: the prompt plus what it replies to and where the session is. Empty
+    """The router's state: the turn plus what it replies to and where the session is. Empty
     context is left out, so no question is asked about a field that says nothing."""
-    fields = {"user_prompt": prompt, "project": _project_line(cwd)}
+    fields = dict(_turn_fields(prompt), project=_project_line(cwd))
     activity = transcript_turns.recent_activity(transcript)
     if activity:
         fields["recent_activity"] = activity
@@ -107,7 +119,13 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
         regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
                  "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
                  "router_view": ROUTER_VIEW}
-        questions = classifier.skill_router_questions(classifier.load_skill_descriptions())
+        notification = bool(prompt_text.notification_fields(prompt))
+        if notification:
+            # Its own field set, so the eval never pools these rows with typed-prompt rows.
+            regex["notify_view"] = classifier.NOTIFY_VIEW
+        questions = classifier.skill_router_questions(
+            classifier.load_skill_descriptions(),
+            turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
         classifier.spawn_shadow("skill_router", sid, regex,
                                 [{"fields": _router_fields(prompt, cwd or os.getcwd(), sid,
                                                            transcript),

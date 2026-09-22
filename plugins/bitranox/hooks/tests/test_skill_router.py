@@ -131,6 +131,42 @@ def test_router_silent_on_no_match(monkeypatch, capsys):
     assert R.main() == 0 and capsys.readouterr().out == ""
 
 
+# ---- the prompt a keyword matcher may score ------------------------------------------------------
+# Measured 2026-09-22: a 409-char <task-notification> envelope reached the 2-keyword threshold for
+# ELEVEN skills, the words coming from the envelope's own vocabulary and from its output-file PATH.
+# The nudge is false by construction, and because a skill nudges at most once per session, each
+# such match silences that skill for the prompt where it would have been right.
+
+def test_match_scores_nothing_in_a_machine_generated_turn():
+    triggers = {"frob": ["frobnicating", "widgets"]}
+    assert R.match("<task-notification>frobnicating widgets done</task-notification>",
+                   triggers) == []
+    assert R.match("<command-name>/frobnicating-widgets</command-name>", triggers) == []
+
+
+def test_match_does_not_score_words_inside_a_path():
+    triggers = {"frob": ["frobnicating", "widgets"]}
+    assert R.match("look at /tmp/frobnicating/widgets/out.txt", triggers) == []
+    # the same two words as prose still match, so the guard removed a path and not the signal
+    assert R.match("look at the frobnicating widgets", triggers) == [("frob", 2)]
+
+
+def test_a_notification_does_not_spend_the_once_per_session_nudge(monkeypatch, capsys):
+    trig = {"frob": ["frobnicating", "widgets"]}
+    monkeypatch.setattr(R, "load_triggers", lambda: trig)
+
+    def run(prompt):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"prompt": prompt, "cwd": "/p/x", "session_id": "s1"})))
+        rc = R.main()
+        return rc, capsys.readouterr().out
+
+    rc, out = run("<task-notification>done: /tmp/frobnicating/widgets/a.output</task-notification>")
+    assert rc == 0 and out == ""                        # no false nudge on a machine status line
+    rc, out = run("the frobnicating widgets broke")
+    assert "bitranox:frob" in out                       # and the budget was still there to spend
+
+
 def test_shipped_trigger_map_in_sync_with_descriptions():
     # the committed map must match the skills' current descriptions (rebuild on description change)
     import build_skill_triggers as B2
