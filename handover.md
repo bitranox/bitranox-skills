@@ -1,130 +1,105 @@
-# STALE - read 2026-09-23, work continued
-
-## Continued 2026-09-23: 7.11.0 is on origin/master, CI-green on 74358ef7
-
-All three things the section below called "the exact next action" were done, in that order.
-
-1. **The session-start gate defect is fixed in the question and NOT closed in the gate.** A router
-   question is now built from the state the request carries, so it can no longer name a field that
-   is absent. Measured live, interleaved: the old wording scored a first-prompt positive 0.65,
-   0.68, 0.67 - under its own 0.7 threshold EVERY time, so it suppressed rather than coin-flipped,
-   which is worse than the note below guessed. The new wording clears it 3 of 3 at 0.70-0.72 with
-   the negative at 0.17-0.18, and mid-session is untouched. But asked beside the real roster
-   instead of alone it scores 0.67-0.71, and 3 of 4 arms still fail that control, so `replay` now
-   REFUSES to run. That refusal is deliberate: the gate is what every arm is measured through.
-2. **The rerank is settled and it loses.** Re-thresholded to the 0.30 its own recipe uses, from
-   scores already paid for: it names 5 picks and suppresses 5 of the wide pass's, and adjudication
-   scored it 0 right against 11 misses. Do not revisit the two-request shape on the cookbook's
-   authority again.
-3. **The accuracy question is answered.** All 50 replayed prompts adjudicated blind by five
-   judges, every pick classified rather than sampled. The numbers and the caveat live in
-   `OPEN-WORK.md` rank 12; the short version is that `choice_full` wins on accuracy as well as
-   cost (3 right, 7 defensible, 1 wrong, 6 missed) and the shipping KEYWORD matcher is the worst
-   thing measured (0 right, 4 wrong, 10 of 11 missed).
-
-The next action is no longer building or measuring shapes: it is choosing the two thresholds
-against these labels, because the dominant failure is that the right answer scores just BELOW the
-bar - 6 of 11 misses wanted `meta-context-watcher` for handover prompts, which the noul arm ranks
-top at 0.58-0.73.
-
-The adjudication inputs and labels are in this session's scratchpad and are NOT durable; the
-replay logs were copied there from the previous session's and carry the per-arm scores.
-
----
-
 # Handover - written 2026-09-23, nothing in flight
 
 ## In flight
 
-Nothing. 7.10.0 is on `origin/master` and CI-green on `973292ab752174c9a40e5ae759607de5873d0d1a`.
+Nothing. 7.13.0 is on `origin/master`, CI-green on `fb3330bd1ad7088658dda3716342906364ca87e2`.
 The worktree is clean and level with `origin/master`.
 
 ## Committed, or not
 
-- Everything is pushed. Work was done in `.claude/worktrees/jev-classifier`; it can be removed
-  (`wtclean.py jev-classifier`) and the main checkout pulled.
-- Machine config unchanged: `classifier_backend = jev`, all three sites `shadow`. Nothing shipped
-  here changes what a live session sees.
-- Two replay logs live in a session scratchpad and are NOT durable. The second one carries the
-  per-arm scores, so it is the one worth keeping if anybody wants to re-threshold without paying:
-  `replay-run2.jsonl`. Re-running costs about 1.6M input tokens, roughly $0.07.
+Everything is pushed: 7.11.0 (`74358ef7`), 7.12.0 (`baaffb2f`), 7.13.0 (`fb3330bd`), all CI-green.
+Machine config unchanged - `classifier_backend = jev`, all three sites still `shadow`. Nothing
+shipped here changes what a live session sees.
+
+**Not durable and not re-derivable for free.** The five judges' blind labels for all 50 prompts
+(`labels.json`) and the scored replay logs (`replay-run2.jsonl`, per-arm scores) sit in this
+session's scratchpad. Re-judging costs five opus agents; re-running the replay costs a paid run.
+Paths are under "Files that matter"; `OPEN-WORK.md` rank 12 carries them too. Copy them somewhere
+durable before `/tmp` is swept.
 
 ## Decided, and why - do not reopen
 
-- **A choice arm is NOT thresholded on its winner's probability.** A noul at 0.7 and a choice
-  probability at 0.7 do not mean the same thing; the API guarantees no comparability between
-  primitives. The `none_needed` option carries that judgement instead, which is what it is for.
-- **The gate question stays byte-identical across arms.** It is the variable the comparison holds
-  fixed, so an arm that also reworded it could attribute nothing.
-- **`corpus_prompts` is its own jig, not a `--field prompt` mode on `guard_replay`.** A prompt has
-  no gate, so guard_replay's precision column has nothing to read, and bolting them together would
-  distort the one that works.
-- **`<pasted_content` is NOT excluded from typed prompts, and must stay that way.** A person
-  pasting a question wraps it in exactly that. This is why no blanket "opens with a tag" rule may
-  be written; `<bash-input` and `<bash-stdout` are excluded individually.
-- **The new jig has a `NO_COMMAND_SHAPE` exemption rather than a nudge rule**, on measured evidence
-  over 84,968 Bash calls: the nearest candidate patterns either shadow `jsonl_grep --type user`
-  (30 firings) or name the corpus WALK that `guard_replay` shares (56).
+- **The option catalogue belongs in the question's `criteria`, never in `state`.** Checked against
+  the live docs when the split was questioned: state is "the content you ask a System One model to
+  evaluate", every worked routing example puts candidates in `criteria`, and nothing documents
+  `state` as cached or persisted. The placement was right and had never been a decision; it is
+  now checked, so do not re-litigate it.
+- **There is no prefix cache to unlock, so the request's field order stays as it is.** An
+  interleaved 3-arm, 18-call probe: reordered is not faster than shipping, the broken-prefix
+  control is indistinguishable from both, 9,400 input tokens charged on every call. Excludes the
+  5-6x a published replica reports; cannot exclude a subtle effect.
+- **Cost is not a deciding axis.** The whole spread across six arms is $1.33 to $6.43 per TEN
+  THOUSAND prompts, and latency is ~36 ms per 1k tokens against a 15 s shadow deadline. Choose the
+  arm on accuracy.
+- **The rerank is settled and loses**, on two independent grounds: 0 right / 11 missed when
+  adjudicated, and the vendor's own "give the model the full list rather than a shortlist".
+- **The first-prompt control is left FAILING on purpose.** `controls` fails it on 3 of 4 arms at
+  0.67-0.71 and that blocks `replay`. The gate is what every arm is measured through; the refusal
+  is the instrument working, not a bug to route around.
 
 ## Decided against, and why
 
-- **Adopting the cookbook's two-request shape on its authority.** Measured here, the rerank stage
-  does not pay for itself at any threshold or under either decision rule; the wide choice arm alone
-  is the best shape so far. The recipe's own corpus and roster differ from ours.
-- **Re-running the replay to answer the threshold question.** The scores are now recorded, so the
-  0.3-to-0.8 sweep comes out of data already paid for.
+- **Moving the catalogue into `state`** - contradicts the documented purpose of `state`, no
+  example does it, and the caching benefit that would have justified it was measured absent.
+- **Reordering the request body to `{model, questions, state}`** - correct in theory, measured
+  worthless, so it would be a cosmetic edit justified by a mechanism nobody observed.
+- **Sending full skill bodies** - 1,469,460 chars over 81 skills is ~367k tokens a prompt and $154
+  per 10,000; `compuse-toolbox` alone is 104,951 chars. Out on SIZE, not on caching.
+- **Naming the absence in the gate question** ("no earlier reply yet") - measured and rejected: it
+  inverted the gate, positive 0.24 against negative 0.34.
 
 ## Still open, untouched
 
-`OPEN-WORK.md` is the list. Ranks 115 and 117 were closed here; rank 12 was re-scoped and its
-`next:` rewritten, because the instrument its old next action asked for now exists.
+`OPEN-WORK.md` is the list. Rank 10 (a USER item) is still top-ranked and untouched. Rank 14 was
+added this session for the guard the user approved. Rank 78 was raised this session.
 
 ## Lessons for the next nap
 
-- When an experiment's verdict depends on a threshold you chose, log the raw SCORES beside the verdict, or the first threshold you picked becomes the only one you ever measured.
-- When a prompt template interpolates optional context, check the question text does not NAME a field the caller can omit - the model hedges near the threshold instead of erroring, so there is no failure to notice.
-- When a control refuses a run, suspect the CONTROL's shape before the subject: one posed as production never poses it measures a question nobody asks.
-- When a markdown table row renders short, count the BACKTICKS in it, not the pipes - an unbalanced code span swallows the next separator while the pipe count still reads correct.
-- When you pad a short sha to full length, you have invented an identifier; derive it with `git rev-parse --verify -q HEAD` in the same command that uses it.
-- When adding a routing row for a tool with a close sibling, test the DIFFERENTIATION, because two rows that sound equally plausible for one query is the failure that ships.
-- tooling: `ci_wait` correctly refused a fabricated sha instead of polling to deadline - that refusal is worth keeping if anyone touches its validation.
+- When a command uses an identifier you did not derive in that same command, you may have invented it - PADDING a short sha to 40 characters is inventing, not completing. (recurrence 3; captured, and the guard is rank 14)
+- When a worktree session needs an untracked or gitignored file, resolve it against the MAIN checkout - a worktree brings the committed tree only, and the read just fails.
+- When a judge or router ranks candidates, do not cut every candidate's text to the same width: a uniform cap spends equal characters on unequal text, so a trigger-LIST description loses everything past its first clause.
+- When an early-exit gate sits in front of a scored question, record what was already paid for BEFORE the exit, or an offline re-threshold can only remove picks and a flat curve reads as insensitivity.
+- When verifying a fix to one question in a multi-question request, re-check it inside the REAL request: asked alone it scored 0.70-0.72, asked beside its 81 siblings 0.67-0.71, which flipped the verdict.
+- When optimising within your own shape, read the vendor's guidance for the primitive first - three documented practices had been missed for the whole life of this site.
+- tooling: the "every arm sends a different sequence" test caught two arms shipping INERT (choice_body, choice_router_text), both because a missing text source falls back to descriptions. Keep that test.
 
 ## The exact next action
 
-`OPEN-WORK.md` rank 10 is still top-ranked and still blocked on making `TRIAGE.md` durable; that
-has not changed and it goes first if nothing else is asked for.
+`OPEN-WORK.md` rank 10 is still the top-ranked item and goes first unless the user says otherwise:
+the skills-and-scripts review, one subagent each, asking before changing anything. It is not the
+Jev thread, and recency is not a reason to prefer the Jev thread.
 
-If the user picks up the Jev thread instead (rank 12, which this session advanced), the next action
-there is NOT more building. It is the accuracy question no arm has answered: fix the session-start
-gate defect first, since every measurement runs through that gate, then adjudicate a larger sample
-adversarially, classifying every pick rather than sampling.
+If the user picks up Jev (rank 12) instead, the next action is the GATE, because it blocks
+everything else: `classifier_eval.py controls` fails the first-prompt positive on 3 of 4 arms at
+0.67-0.71, and until it passes `replay` refuses to run, so neither `choice_body` nor
+`choice_router_text` can be scored against the labels already paid for.
+
+Rank 14 (the approved guard) is small and self-contained, and was ranked rather than started only
+because it was approved at ~530k context.
 
 ## Files that matter
 
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - `ARMS`, `run_arm`,
-  `REPLAY_CONTROLS`, `check_controls`, `stratified_prompts`, `size_replay`, `load_skill_bodies`.
-- `plugins/bitranox/skills/compuse-toolbox/scripts/corpus_prompts.py` - `extract_prompts`,
-  `collect_prompts`, `diff_predicates`; predicate is called `f(text)`.
-- `plugins/bitranox/hooks/classifier.py` - `skill_router_choice_questions`,
-  `skill_router_rerank_questions`, `short_description`, `PICK_ID`, `NO_SKILL_KEY`.
-- `plugins/bitranox/hooks/transcript_turns.py` - `NOT_TYPED_PREFIXES`, `NOT_TYPED_PATTERNS`,
-  `looks_typed`.
-- `plugins/bitranox/hooks/skill-router.py` - `_router_fields` is the seam the replay rebuilds
-  state through, and the one the gate defect sits in.
+- `plugins/bitranox/hooks/classifier.py` - `load_router_criteria`, `_router_turn_text`,
+  `_pick_question`, `skill_router_questions`, `load_skill_descriptions`, `short_description`.
+- `plugins/bitranox/hooks/router_criteria.json` - six structured entries; every other skill falls
+  back to its description. This is the file to extend.
+- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - `ARMS` (six), `_roster`,
+  `run_arm`, `run_controls`, `REPLAY_CONTROLS`, `size_replay`.
+- The grader, NOT durable:
+  `/tmp/claude-1000/-media-srv-main-softdev-projects-public-KI-bitranox-skills--claude-worktrees-jev-classifier/45b97af6-13f7-4877-8a62-0b1cf1242f33/scratchpad/`
+  holds `labels.json`, `replay-run2.jsonl`, `packets.json`, `score.py`, `rethreshold.py`.
 
 ## How to verify this still stands
 
 ```bash
-cd /media/srv-main-softdev/projects/public/KI/bitranox-skills
+cd /media/srv-main-softdev/projects/public/KI/bitranox-skills/.claude/worktrees/jev-classifier
 env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
   --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
 python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py size --limit 25
-python3 plugins/bitranox/skills/compuse-toolbox/scripts/corpus_prompts.py --count
 ```
 
-`repo-gate: all checks passed` with 5038 passed. `size` prices the four arms without calling the
-API and puts the shipping `nouls` arm near 15,120 tokens a prompt. `--count` reports the typed
-prompts the corpus holds; it was 1,301 after the harness-turn fix, against 1,409 before it.
+`repo-gate: all checks passed` with 5063 passed. `size` prices all six arms without calling the
+API: `choice_router_text` 36,112 chars a prompt against `choice_full` 36,245.
 
 ---
 
