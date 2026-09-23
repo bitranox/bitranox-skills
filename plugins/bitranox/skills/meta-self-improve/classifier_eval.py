@@ -342,16 +342,28 @@ def write_disagreements(rep, out):
 # An arm is a shape plus two flags, deliberately not four separate builders: the only differences
 # that may exist between arms are the ones named here, and a reader can check that at a glance.
 ARMS = {
-    "nouls": {"shape": "nouls", "short": False, "rerank": False, "body": False},
-    "choice_full": {"shape": "choice", "short": False, "rerank": False, "body": False},
-    "choice_short": {"shape": "choice", "short": True, "rerank": False, "body": False},
-    "choice_short_rerank": {"shape": "choice", "short": True, "rerank": True, "body": False},
+    "nouls": {"shape": "nouls", "short": False, "rerank": False, "body": False,
+              "router_text": False},
+    "choice_full": {"shape": "choice", "short": False, "rerank": False, "body": False,
+                    "router_text": False},
+    "choice_short": {"shape": "choice", "short": True, "rerank": False, "body": False,
+                     "router_text": False},
+    "choice_short_rerank": {"shape": "choice", "short": True, "rerank": True, "body": False,
+                            "router_text": False},
     # The one text source never tested on a WIDE pass. `choice_short_rerank` did rank on bodies,
     # but it also moved to two requests, so the two changes were confounded and neither was
     # measured; it scored 0 right against 11 misses and the body half was never on trial. Cost is
     # what makes this testable at all: 700-char bodies are about 14,175 tokens a prompt, $5.95 per
     # 10,000 against $3.81 for descriptions, where FULL bodies would be 367,365 and $154.29.
-    "choice_body": {"shape": "choice", "short": False, "rerank": False, "body": True},
+    "choice_body": {"shape": "choice", "short": False, "rerank": False, "body": True,
+                    "router_text": False},
+    # Option text written FOR the router rather than for the keyword matcher, per the API's own
+    # guidance: one discriminating line per option, and the documented OBJECT form
+    # ({what, not_for, examples}) for options the model keeps confusing. The adjudication named
+    # those: 6 of 11 misses wanted meta-context-watcher and lost to a neighbour while ranking top
+    # at 0.58-0.73. Only those skills carry an entry; the rest fall back to their descriptions.
+    "choice_router_text": {"shape": "choice", "short": False, "rerank": False, "body": False,
+                           "router_text": True},
 }
 DEFAULT_SHORTLIST = 3
 # A prompt this short is a continuation ("go", "yes", "weiter"), which the gate exists to
@@ -426,14 +438,16 @@ def _choice_parts(answers, qid):
     return answer, {}
 
 
-def _roster(skills, spec, bodies=None):
-    """The text this arm ranks each skill on: its description, the opening clause of it, or the
-    skill's own body.
+def _roster(skills, spec, bodies=None, router_text=None):
+    """The text this arm ranks each skill on: its description, the opening clause of it, the
+    skill's own body, or option text authored for the router.
 
-    A body arm with no `bodies` falls back to the descriptions rather than to an empty roster: an
-    arm silently ranking nothing answers `none_needed` for everything, which reads as a real null
-    instead of a wiring mistake.
+    Every alternative source falls back to the descriptions per missing skill rather than to an
+    empty roster: an arm silently ranking nothing answers `none_needed` for everything, which
+    reads as a real null instead of a wiring mistake.
     """
+    if spec.get("router_text"):
+        return {k: (router_text or {}).get(k) or skills[k] for k in skills}
     if spec.get("body"):
         return {k: (bodies or {}).get(k) or skills[k] for k in skills}
     if spec.get("short"):
@@ -457,7 +471,7 @@ def _survivors(winner, probs, shortlist):
 
 
 def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
-            shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT, bodies=None):
+            shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT, bodies=None, router_text=None):
     """Ask one arm about one prompt and report what it would have suggested.
 
     `ask(fields, questions) -> {question id: value}` is injected, so every test drives this code
@@ -470,7 +484,7 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     fixed.
     """
     spec = ARMS[name]
-    roster = _roster(skills, spec, bodies)
+    roster = _roster(skills, spec, bodies, router_text)
     build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
         cl.skill_router_questions
     questions = build(roster, fields, turn=turn)
@@ -613,7 +627,7 @@ SIZING_FIELDS = {"previous_assistant_message": "-", "user_prompt": "-", "project
 
 
 def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT,
-                fields=None, bodies=None):
+                fields=None, bodies=None, router_text=None):
     """What a run would cost, calling nothing.
 
     Counted from the questions the arms really build rather than from a formula, so it cannot
@@ -624,7 +638,7 @@ def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMP
     close_chars = _question_chars(cl.skill_router_rerank_questions({n: skills[n] for n in names}))
     arms = {}
     for name, spec in ARMS.items():
-        roster = _roster(skills, spec, bodies)
+        roster = _roster(skills, spec, bodies, router_text)
         build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
             cl.skill_router_questions
         chars = _question_chars(build(roster, fields, turn=turn))
@@ -707,7 +721,7 @@ class Asker:
         return None
 
 
-def _replay_one(prompt, ask, skills, bodies, router, triggers, args):
+def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text=None):
     """Every arm's verdict on one prompt, beside the keyword arm's, as one log row."""
     import tempfile  # noqa: PLC0415 - only the live path needs a prefix file
 
@@ -722,7 +736,8 @@ def _replay_one(prompt, ask, skills, bodies, router, triggers, args):
            "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields, "arms": {}}
     for name in ARMS:
         row["arms"][name] = run_arm(name, ask, fields, skills, threshold=args.threshold,
-                                    top=args.top, shortlist=args.shortlist, bodies=bodies)
+                                    top=args.top, shortlist=args.shortlist, bodies=bodies,
+                                    router_text=router_text)
     return row
 
 
@@ -754,8 +769,10 @@ def _run_replay(args):
     if not skills:
         return 2, None, "no skills found - is this running from inside the plugin?"
     bodies = load_skill_bodies()
+    router_text = cl.load_router_criteria(skills)
     if args.command == "size":
-        return 0, size_replay(skills, args.limit * 2, bodies=bodies), None
+        return 0, size_replay(skills, args.limit * 2, bodies=bodies,
+                              router_text=router_text), None
     clf = cl.get_classifier({"classifier_backend": "jev", "classifier_skill_router": "shadow"},
                             "skill_router", deadline=args.deadline)
     if getattr(clf, "key", None) is None:
@@ -765,7 +782,8 @@ def _run_replay(args):
         arms = [args.arm] if args.arm else list(ARMS)
         rows = [row for arm in arms
                 for row in run_controls(arm, ask, skills, threshold=args.threshold,
-                                        shortlist=args.shortlist, bodies=bodies)]
+                                        shortlist=args.shortlist, bodies=bodies,
+                                        router_text=router_text)]
         return (0 if all(r["ok"] for r in rows) else 3), \
             {"controls": rows, "input_tokens": ask.tokens, "requests": ask.calls,
              "failures": dict(ask.reasons)}, \
@@ -784,7 +802,8 @@ def _run_replay(args):
     # crash on the last prompt would otherwise discard every row before it.
     with open(args.out, "a", encoding="utf-8") as fh:
         for prompt in picked:
-            row = _replay_one(prompt, ask, skills, bodies, router, triggers, args)
+            row = _replay_one(prompt, ask, skills, bodies, router, triggers, args,
+                              router_text)
             rows.append(row)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()

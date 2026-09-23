@@ -1,0 +1,55 @@
+{
+  "meta-context-watcher": {
+    "what": "Writing or refreshing the session handover, and maintaining the standing backlog OPEN-WORK.md - including answering what is still open or unfinished.",
+    "not_for": "Merely READING a handover file, which is an ordinary file read; and reviewing whether decisions already made are sound, which is process-review-uncertain-decisions.",
+    "examples": [
+      "write handover",
+      "refresh the handover",
+      "read handover and tell me whats open",
+      "tell me what is open, point per point"
+    ]
+  },
+  "process-review-uncertain-decisions": {
+    "what": "Surfacing the choices made during a finished piece of work that are not settled, so they can be confirmed or revisited.",
+    "not_for": "Enumerating the standing backlog or writing the handover, which is meta-context-watcher.",
+    "examples": [
+      "what are you unsure about",
+      "which decisions are shaky",
+      "review your own decisions"
+    ]
+  },
+  "process-plan-brainstorming": {
+    "what": "Non-trivial work whose DESIGN or requirements are not settled yet, before any plan is written.",
+    "not_for": "Work whose behaviour is already specified, where the next artifact is a written plan - that is process-plan-writing-plans.",
+    "examples": [
+      "ich haette fuer rpx01 gerne folgendes feature: auto adaptive grouping",
+      "let's build X",
+      "how should we approach this"
+    ]
+  },
+  "process-plan-writing-plans": {
+    "what": "A spec or requirements already exist and an implementation plan is the next artifact.",
+    "not_for": "Design that is still unsettled, which needs brainstorming first; and executing a plan that already exists.",
+    "examples": [
+      "write a plan for this spec",
+      "turn these requirements into steps"
+    ]
+  },
+  "compuse-toolbox": {
+    "what": "Reach for an existing tested jig instead of hand-rolling a one-off script for a recurring chore: counting or tallying over a corpus, mining transcripts, a gate's real exit status, git state across repos, CI results for a commit, finding a process safely, replaying a guard over history.",
+    "not_for": "Interpreting one shell command's exit code or output, which is compuse-bash.",
+    "examples": [
+      "also trace the number of messages over the round",
+      "how often would this guard have fired",
+      "did CI pass on my commit"
+    ]
+  },
+  "compuse-bash": {
+    "what": "Running a shell command and reading its result: pipelines, exit codes, chaining after a mutating command, backgrounding, waiting for an event.",
+    "not_for": "A recurring multi-step chore that a shipped jig already does, which is compuse-toolbox.",
+    "examples": [
+      "why did this command fail",
+      "the exit code looks wrong"
+    ]
+  }
+}

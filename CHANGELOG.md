@@ -29,6 +29,43 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.13.0]
+
+### Added
+
+- **Option text written FOR the router, in the form the API documents for confusable options.**
+  `hooks/router_criteria.json` plus `classifier.load_router_criteria()`, and a sixth eval arm
+  `choice_router_text`. The shipped descriptions are written for the KEYWORD matcher - paragraph
+  trigger lists - and the API asks for something else: "Start with a one-line description per
+  option. When two options are similar and the model keeps confusing them, describe each one with
+  an object instead of a string. Give it fields for what the option covers, what belongs to a
+  neighboring option instead, and a few example inputs" (docs.typesafe.ai/primitives/choice;
+  `criteria` accepts `string | object | array | null`).
+
+  The file is PARTIAL by design and holds six entries, all in the structured form, for the
+  families the 50-prompt adjudication showed losing to a neighbour: `meta-context-watcher` against
+  `process-review-uncertain-decisions` and the two `process-plan-*` skills, and `compuse-toolbox`
+  against `compuse-bash`. Six of the eleven adjudicated misses wanted `meta-context-watcher` while
+  the model ranked it top at 0.58-0.73, so it was discriminated and under the bar. Every example
+  in an entry is a real prompt from that corpus. A skill with no entry falls back to its own
+  description, so the file can be filled in without a flag day and a missing entry degrades
+  instead of emptying the option.
+
+  Priced from the questions really built: `choice_router_text` 36,112 chars a prompt, against
+  `choice_full` 36,245 - the same order, because six entries replaced six paragraphs.
+
+### Verified, not assumed
+
+- **The catalogue belongs in `criteria`, not in `state`.** Checked against the live docs after the
+  placement was questioned: "State is the content you ask a System One model to evaluate... Think
+  of state as the material you would present to a panel of experts before asking them to make a
+  judgment" (`/concepts/state`), and every worked routing example puts the candidates in
+  `criteria`. Nothing documents `state` as cached, reused or persisted, which matches the measured
+  prefix-cache null in 7.12.0. The placement was correct but had never been a decision - it was a
+  general rule applied once when `skill_router_questions` was first written and carried through
+  every arm since. It is now checked. `Choice` accepts up to 255 options, so widening the roster
+  from 81 to all 109 installed skills stays within budget.
+
 ## [7.12.0]
 
 ### Added

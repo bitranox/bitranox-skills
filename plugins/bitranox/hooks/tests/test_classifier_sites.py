@@ -467,6 +467,59 @@ def test_the_two_arms_still_ask_the_same_gate_for_the_same_state():
                 == cl.skill_router_questions({"a": "does a"}, fields)[0])
 
 
+# ---- option text written FOR the router ------------------------------------------------------
+# The shipped descriptions are written for the KEYWORD matcher: paragraph-long trigger lists. The
+# API's own guidance for an option catalogue is different - "Start with a one-line description per
+# option. When two options are similar and the model keeps confusing them, describe each one with
+# an object instead of a string. Give it fields for what the option covers, what belongs to a
+# neighboring option instead, and a few example inputs." (docs.typesafe.ai/primitives/choice).
+# `criteria` accepts string | object | array | null, so the structured form is a supported value
+# and not a workaround. Measured motivation: 6 of 11 adjudicated misses wanted
+# meta-context-watcher and lost to a neighbour, with the right skill ranked top at 0.58-0.73.
+
+
+def test_router_criteria_fall_back_to_the_description_for_a_skill_with_no_entry(tmp_path):
+    # The file is filled in incrementally, so a missing entry must degrade to the description
+    # rather than empty the option - an option with no text is worse than a verbose one.
+    path = tmp_path / "router_criteria.json"
+    path.write_text(json.dumps({"a": "one discriminating line"}), encoding="utf-8")
+    out = cl.load_router_criteria({"a": "Use when ...", "b": "Use when b happens"}, path=path)
+    assert out["a"] == "one discriminating line"
+    assert out["b"] == "Use when b happens"
+    assert set(out) == {"a", "b"}
+
+
+def test_a_structured_router_entry_stays_an_object_all_the_way_to_the_request(tmp_path):
+    # `str(dict)` would be the same LENGTH as the dict in a size check and would reach the model as
+    # a Python repr, so the only thing that catches it is asserting the type at the wire boundary.
+    entry = {"what": "writes the handover", "not_for": "reviewing a decision",
+             "examples": ["write handover", "what is still open"]}
+    path = tmp_path / "router_criteria.json"
+    path.write_text(json.dumps({"a": entry}), encoding="utf-8")
+    roster = cl.load_router_criteria({"a": "Use when ..."}, path=path)
+    assert roster["a"] == entry
+    pick = cl.skill_router_choice_questions(roster, MID_SESSION)[1]
+    assert pick.criteria["a"] == entry
+    assert pick.to_api()["criteria"]["a"]["not_for"] == "reviewing a decision"
+    json.dumps(pick.to_api())            # the request really serialises
+
+
+def test_router_criteria_survive_a_missing_or_broken_file(tmp_path):
+    # A hook must never wedge a prompt over its own data file.
+    missing = tmp_path / "nope.json"
+    assert cl.load_router_criteria({"a": "Use when a"}, path=missing) == {"a": "Use when a"}
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert cl.load_router_criteria({"a": "Use when a"}, path=broken) == {"a": "Use when a"}
+
+
+def test_the_shipped_router_criteria_name_only_real_skills():
+    # A typo'd key is silently inert: it never matches a skill, so its careful wording reaches
+    # nobody and the option keeps the description it was written to replace.
+    shipped = cl.load_router_criteria(cl.load_skill_descriptions())
+    assert set(shipped) == set(cl.load_skill_descriptions())
+
+
 def test_the_router_hook_asks_only_about_the_state_it_sends(env, tmp_path, monkeypatch, capsys):
     # End to end through the hook, which is where the defect lived: the questions are built from
     # one dict and the fields sent from another, so only a run that reads what reached the API can

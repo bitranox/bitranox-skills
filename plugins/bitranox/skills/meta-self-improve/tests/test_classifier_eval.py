@@ -335,9 +335,30 @@ def test_the_body_arm_falls_back_to_descriptions_when_no_bodies_are_given():
 def test_every_arm_declares_which_text_it_ranks_on():
     # Pins the table so a new arm cannot be added without saying what it sends - the shape flags
     # are what makes an arm's result attributable.
+    sources = {"short", "body", "router_text"}
     for name, spec in ce.ARMS.items():
-        assert set(spec) == {"shape", "short", "rerank", "body"}, name
-        assert not (spec["short"] and spec["body"]), name   # two text sources is not an arm
+        assert set(spec) == {"shape", "short", "rerank", "body", "router_text"}, name
+        assert sum(1 for s in sources if spec[s]) <= 1, name   # one text source per arm
+
+
+def test_the_router_text_arm_ranks_on_the_router_authored_criteria():
+    # The option text the API's own guidance asks for, against the descriptions written for the
+    # keyword matcher. A structured entry must reach `criteria` as an OBJECT, because that is the
+    # form documented for options the model keeps confusing.
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    router = {"compuse-bash": {"what": "w", "not_for": "n", "examples": ["e"]},
+              "coding-python-uv": "one line", "docs-md-table-formatting": "another line"}
+    ce.run_arm("choice_router_text", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7,
+               router_text=router)
+    options = ask.asked[0]["questions"][1].criteria
+    assert options["compuse-bash"] == router["compuse-bash"]
+    assert options["coding-python-uv"] == "one line"
+
+
+def test_the_router_text_arm_falls_back_to_descriptions_when_none_is_given():
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    ce.run_arm("choice_router_text", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert ask.asked[0]["questions"][1].criteria["compuse-bash"] == SKILLS["compuse-bash"]
 
 
 def test_every_arm_sends_a_different_sequence_of_requests():
@@ -351,12 +372,16 @@ def test_every_arm_sends_a_different_sequence_of_requests():
     answer = {"_new_task": 0.9,
               "_pick": _choice("compuse-bash", {"compuse-bash": 0.6, "coding-python-uv": 0.4}),
               "coding-python-uv": 0.8, "compuse-bash": 0.9, "docs-md-table-formatting": 0.1}
-    # `bodies` is supplied because the body arm falls back to descriptions without it, which
-    # makes it byte-identical to choice_full - inert, and this is the test that says so.
+    # `bodies` and `router_text` are supplied because an arm whose alternative text source is
+    # missing falls back to the descriptions, which makes it byte-identical to choice_full -
+    # inert, and this is the test that says so. It has now caught exactly that twice.
+    router = {"compuse-bash": {"what": "w", "not_for": "n", "examples": ["e"]},
+              "coding-python-uv": "one discriminating line"}
     shapes = {}
     for name in ce.ARMS:
         ask = FakeAsk([answer, answer])
-        ce.run_arm(name, ask, {"user_prompt": "p"}, SKILLS, threshold=0.7, bodies=BODIES)
+        ce.run_arm(name, ask, {"user_prompt": "p"}, SKILLS, threshold=0.7, bodies=BODIES,
+                   router_text=router)
         shapes[name] = tuple(json.dumps([q.to_api() for q in r["questions"]], sort_keys=True)
                              for r in ask.asked)
     assert len(set(shapes.values())) == len(shapes), list(shapes)

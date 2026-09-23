@@ -48,7 +48,8 @@ __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
     "SHADOW_LOG", "SHORT_DESC_CAP", "SITES", "TURN_NOTIFICATION", "TURN_PROMPT",
-    "detect_language", "get_classifier", "load_key", "load_skill_descriptions", "prepare_state",
+    "detect_language", "get_classifier", "load_key", "load_router_criteria",
+    "load_skill_descriptions", "prepare_state",
     "recall_questions", "shadow_enabled", "short_description", "skill_router_choice_questions",
     "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
     "stop_signal_questions", "with_previous",
@@ -371,6 +372,34 @@ def load_skill_descriptions(skills_dir=None):
                     out[md.parent.name] = desc
                 break
     return out
+
+
+# Option text written FOR the router, which is a different consumer from the keyword matcher the
+# shipped descriptions were written for. The API's guidance for an option catalogue is "Start with
+# a one-line description per option. When two options are similar and the model keeps confusing
+# them, describe each one with an object instead of a string. Give it fields for what the option
+# covers, what belongs to a neighboring option instead, and a few example inputs."
+# (docs.typesafe.ai/primitives/choice; `criteria` accepts string | object | array | null.)
+#
+# The file is partial on purpose: an entry is worth writing where the adjudication showed a skill
+# losing to a neighbour, and everywhere else the skill's own description is already the best text
+# anyone has. A missing entry therefore falls back rather than emptying the option.
+ROUTER_CRITERIA_FILE = _HOOKS_DIR / "router_criteria.json"
+
+
+def load_router_criteria(skills, path=None):
+    """{skill name: option text}, preferring a router-authored entry over the description.
+
+    Never raises: a hook may not wedge a prompt over its own data file, and a missing or malformed
+    file degrades to the descriptions, which is the behaviour before this file existed.
+    """
+    try:
+        raw = json.loads(Path(path or ROUTER_CRITERIA_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {name: raw.get(name) or desc for name, desc in skills.items()}
 
 
 # The router's gate question. Its id starts with "_" so it can never collide with a skill name;
