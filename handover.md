@@ -1,74 +1,78 @@
-# STALE - read 2026-09-22, work continued
+# Handover - written 2026-09-23, nothing in flight
 
 ## In flight
 
-Nothing. 7.5.0 is pushed and CI-green (`ca9f609`). The shadow log then collected 81 rows under it,
-which are analysed below; no code change followed that analysis.
+Nothing. Five versions shipped and CI-green on their own shas: 7.6.0, 7.7.0, 7.8.0, 7.8.1, 7.9.0
+(`5444cb6`). The worktree is clean and level with `origin/master`.
 
 ## Committed, or not
 
-- `bitranox-skills`: everything is on `origin/master`, plugin `7.5.0`, except this handover commit.
-  Work was done in the worktree `.claude/worktrees/jev-classifier`; it can be removed
-  (`wtclean.py jev-classifier`) and the main checkout pulled.
+- Everything is on `origin/master`. Work was done in `.claude/worktrees/jev-classifier`; it can be
+  removed (`wtclean.py jev-classifier`) and the main checkout pulled.
 - `TODO-JEV.md` at the MAIN checkout root stays untracked on purpose (user's choice); its Progress
-  section was NOT updated - the state is in the `OPEN-WORK.md` rank-5 and rank-12 lines.
-- Machine config: `classifier_backend = jev`, all three sites `shadow`. Key: `~/.credentials/typesafe.key`.
+  section was NOT updated - the state is in the `OPEN-WORK.md` rank-12 line.
+- Machine config unchanged: `classifier_backend = jev`, all three sites `shadow`. Key:
+  `~/.credentials/typesafe.key`. No site has left shadow, and nothing decided here changes what a
+  live session sees.
 
 ## Decided, and why - do not reopen
 
-- **The router's new-task gate earns its place.** Over 21 prompts it cut Jev's picks from 1.8 per
-  prompt to 0.62, gated out every continuation, and on real new tasks picked the right skills. Do
-  not go back to asking only "would this skill help?" per skill.
-- **`endorsement` comes out of the Stop gate's firing set** (keep logging it): all 5 of its
-  standalone firings were plain approvals. `self_admission` and `realization` stay - 10 of their
-  firings were real misses the regex never caught.
-- **Recall needs a higher threshold, not a different input.** The description view fixed the
-  matched-word problem; at 0.5 it is simply too generous (165 relevant against 99 injected).
-- **An assistant answer to Stop-hook feedback is not "the reply"** (prefix match, not `isMeta`).
-- **Every changed input is tagged** (`note_view`, `context_view`, `router_view`), and the report
-  groups by every `*_view` key, so old and new rows never pool.
+- **A path contributes only its file TYPE to a keyword matcher.** Dropping paths whole cost one
+  genuine match in 3,483 typed prompts (a `defaultconfig.toml` request losing `files-edit-toml`);
+  keeping the basename recovered it and admitted two false firings. The extension recovered it and
+  admitted nothing.
+- **`endorsement` is logged but never counted as a Stop-gate firing.** 12 of 12 firings across two
+  windows were plain approvals ("yes", "go", "lets try 1-4").
+- **Each classifier site is judged at its own threshold** (stop_signal 0.7, skill_router 0.7,
+  recall_rerank 0.8). One number for three sites was always a placeholder.
+- **A heredoc body gets the `_ANY_TOOL_RULES` pass, and the command reading keeps precedence.** Do
+  not instead un-blank bodies for the command rules: blanking exists so a document naming a chore
+  cannot trip the guard watching for it.
+- **`jig_probe` asks one question per call, not a gate plus a choice.** The router's gate shape did
+  not transfer.
 
 ## Decided against, and why
 
-- Full conversation history as classifier context: irrelevant state lowers accuracy, and recall
-  multiplies every token by 30 requests.
-- Suggesting nothing on a `<task-notification>` as a PRINCIPLE: a failed preflight can genuinely
-  warrant a skill. What is wrong is judging it from the envelope text, which is why rank 5 sends
-  Jev the notification's own fields instead.
+- **Reading a task notification's output FILE** into the classifier state. Its path comes from the
+  turn's own text, so a forged envelope could name any file on the machine and have it sent to the
+  API. The summary already says whether the task failed.
+- **A live Jev jig-suggestion site, for now.** The offline probe answers the same question for no
+  session tokens, and it had to be built first anyway to know whether such a site would have
+  anything to say.
+- **Tuning the probe's judge until it matched my hand labels.** It disagreed on 2 of 9, both
+  defensible readings; fitting it to my expectations would have measured me rather than it.
 
 ## Still open, untouched
 
-Twenty items in `OPEN-WORK.md`; rank 5 is new and rank 12 carries the 7.5.0 measurements.
+Twenty-one items in `OPEN-WORK.md`. Ranks 5 and 112 were closed here; 115 and 117 are new.
 
 ## Lessons for the next nap
 
-- When a keyword matcher scores free text, strip paths, ids and tags first (captured as a fact this
-  session; nothing to add).
-- When a test fixture is built from how you THINK the transcript looks, run the code once on a real
-  transcript too: the Stop-hook-answer defect passed every synthetic test and failed on the first real one.
-- When a classifier answers "which of N labels applies", give it a way to answer "none": without
-  the router's gate question every prompt, even "yes", got two skills.
-- When judging a classifier's extra firings, adjudicate them by FAMILY: the same site was noise in
-  one family and correct in two others, and a single per-site rate hid both.
-- tooling: the self-improve Stop gate fires on a self-admission phrase the assistant QUOTES as data
-  (queued in contrib_queue as `hook:self-improve-gate`).
+- When you change the ARM a comparison is measured against, give it its own view tag, or old and new rows pool silently under an unchanged one.
+- When you copy a gate question to another site, check the gate's own exclusion does not describe that site's subject - "ordinary use of a normal program" described `pgrep` exactly, and scored the control 0.12.
+- When you measure a hook's regex arm offline, drive it through the hook's own pure seams, never its private rule lists - raw matching is a more trigger-happy matcher than the one that ships.
+- When a test asserts concurrency with a wall-clock bound, assert the server's observed overlap instead; a clock bound races the machine's load and says nothing about concurrency.
+- When a backlog line prescribes a fix, verify its premise before implementing it - "add a rule" was impossible, because the hook blanks heredoc bodies by design.
+- When a path is the SUBJECT of a request rather than incidental to it, stripping it is a loss; the file type is the part that carries the subject.
+- tooling: a version bump here touches two files (`plugin.json` and `pyproject.toml`) and has no command; three per-version scripts got written before one was parameterised.
 
 ## The exact next action
 
-`OPEN-WORK.md` rank 5, which the user asked for as the first thing after this handover: in
-`plugins/bitranox/hooks/skill-router.py`, skip prompts starting with the
-`transcript_turns.NOT_TYPED_PREFIXES` shapes AND strip tags, paths, ids and hashes before `match()`,
-with a test per class and a replay over real transcript prompts to show the firing rate falls
-without losing real matches. Then rank 5's second half (option 4): send Jev a notification's
-`status` and `summary` as their own fields, shadow only.
+`OPEN-WORK.md` rank 10, the top-ranked open item: the user's "review all skills and scripts one by
+one, each in its own subagent and ask when smth is to change". Its blocker comes first - `TRIAGE.md`
+is the only record of the 17 unadjudicated guard-slice claims and the 5 coverage gaps, and it
+survives ONLY in two hand-made ZFS snapshots
+(`/media/srv-main-softdev/.zfs/snapshot/pre-bose-zonemaster-move-2026-09-11/projects/public/KI/scriptwave-2026-08-28/TRIAGE.md`).
+Put it somewhere durable, then ask which bucket goes next.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/skill-router.py` - `match`, `_router_fields`, `_project_line`, the nudge and its once-per-session state file.
-- `plugins/bitranox/hooks/transcript_turns.py` - `NOT_TYPED_PREFIXES`, turn reading, `recent_activity`, `skills_used`, `excerpt`.
-- `plugins/bitranox/hooks/classifier.py` - port, questions (`NEW_TASK_ID`), `with_previous`.
-- `plugins/bitranox/hooks/recall-memory.py` - `_note_view`; same machine-prompt input problem.
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - the report, `_router_picks`.
+- `plugins/bitranox/hooks/prompt_text.py` - `typed_by_a_person`, `prose`, `scorable_prose`, `notification_fields`.
+- `plugins/bitranox/hooks/shell_text.py` - `_split_heredocs`, `heredoc_bodies`, `strip_heredoc_bodies`.
+- `plugins/bitranox/hooks/toolbox-nudge.py` - `match_authored`, `_ANY_TOOL_RULES`, the second reading in `main`.
+- `plugins/bitranox/hooks/skill-router.py` - `match`, `_turn_fields`, `MATCHER_VIEW`.
+- `plugins/bitranox/hooks/classifier.py` - `_ROUTER_TURNS`, `skill_router_questions(turn=)`, `NOTIFY_VIEW`.
+- `plugins/bitranox/skills/meta-self-improve/jig_probe.py` and `classifier_eval.py` - `SITE_THRESHOLDS`, `NON_FIRING_FAMILIES`.
 
 ## How to verify this still stands
 
@@ -76,11 +80,11 @@ without losing real matches. Then rank 5's second half (option 4): send Jev a no
 cd /media/srv-main-softdev/projects/public/KI/bitranox-skills
 env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
   --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
-python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py report --threshold 0.7
+python3 plugins/bitranox/skills/meta-self-improve/classifier_eval.py report
 ```
 
-`repo-gate: all checks passed` (4924 passed at 7.5.0); the report shows
-`skill_router@prev-reply-v1+ctx-v1` beside the older `skill_router@prev-reply-v1` rows.
+`repo-gate: all checks passed` with 4994 passed. The report names the threshold each site was
+judged at, and router rows logged from 7.7.0 on carry `matcher_view: prose-v1`.
 
 ---
 
