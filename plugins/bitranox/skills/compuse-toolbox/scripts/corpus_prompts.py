@@ -29,6 +29,12 @@ The prompts this yields are RAW. Whether one is a slash command, a pasted envelo
 notification is the caller's rule to apply, not this tool's - the bitranox hooks answer it with
 `hooks/prompt_text.py`, and a second copy here would drift from it.
 
+Your predicate is called as `f(text)`, with the prompt's TEXT and nothing else - not the record,
+and not a second positional argument. That differs from `guard_replay`, whose predicate takes
+`f(command)` or `f(command, cwd)` because a guard that resolves paths answers differently per
+session directory. A prompt has no cwd that changes its meaning, so there is nothing to forward
+and no second-argument convention to get wrong. Anything truthy counts as a firing.
+
 Run:
   corpus_prompts.py --module ../../hooks/skill-router.py --func some_predicate
   corpus_prompts.py --module a.py --func f --module-b b.py --func-b f --json
