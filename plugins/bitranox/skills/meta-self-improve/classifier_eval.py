@@ -342,10 +342,16 @@ def write_disagreements(rep, out):
 # An arm is a shape plus two flags, deliberately not four separate builders: the only differences
 # that may exist between arms are the ones named here, and a reader can check that at a glance.
 ARMS = {
-    "nouls": {"shape": "nouls", "short": False, "rerank": False},
-    "choice_full": {"shape": "choice", "short": False, "rerank": False},
-    "choice_short": {"shape": "choice", "short": True, "rerank": False},
-    "choice_short_rerank": {"shape": "choice", "short": True, "rerank": True},
+    "nouls": {"shape": "nouls", "short": False, "rerank": False, "body": False},
+    "choice_full": {"shape": "choice", "short": False, "rerank": False, "body": False},
+    "choice_short": {"shape": "choice", "short": True, "rerank": False, "body": False},
+    "choice_short_rerank": {"shape": "choice", "short": True, "rerank": True, "body": False},
+    # The one text source never tested on a WIDE pass. `choice_short_rerank` did rank on bodies,
+    # but it also moved to two requests, so the two changes were confounded and neither was
+    # measured; it scored 0 right against 11 misses and the body half was never on trial. Cost is
+    # what makes this testable at all: 700-char bodies are about 14,175 tokens a prompt, $5.95 per
+    # 10,000 against $3.81 for descriptions, where FULL bodies would be 367,365 and $154.29.
+    "choice_body": {"shape": "choice", "short": False, "rerank": False, "body": True},
 }
 DEFAULT_SHORTLIST = 3
 # A prompt this short is a continuation ("go", "yes", "weiter"), which the gate exists to
@@ -420,8 +426,19 @@ def _choice_parts(answers, qid):
     return answer, {}
 
 
-def _roster(skills, short):
-    return {k: cl.short_description(v) for k, v in skills.items()} if short else dict(skills)
+def _roster(skills, spec, bodies=None):
+    """The text this arm ranks each skill on: its description, the opening clause of it, or the
+    skill's own body.
+
+    A body arm with no `bodies` falls back to the descriptions rather than to an empty roster: an
+    arm silently ranking nothing answers `none_needed` for everything, which reads as a real null
+    instead of a wiring mistake.
+    """
+    if spec.get("body"):
+        return {k: (bodies or {}).get(k) or skills[k] for k in skills}
+    if spec.get("short"):
+        return {k: cl.short_description(v) for k, v in skills.items()}
+    return dict(skills)
 
 
 def _noul_picks(answers, roster, threshold, top):
@@ -453,7 +470,7 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     fixed.
     """
     spec = ARMS[name]
-    roster = _roster(skills, spec["short"])
+    roster = _roster(skills, spec, bodies)
     build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
         cl.skill_router_questions
     questions = build(roster, fields, turn=turn)
@@ -596,7 +613,7 @@ SIZING_FIELDS = {"previous_assistant_message": "-", "user_prompt": "-", "project
 
 
 def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT,
-                fields=None):
+                fields=None, bodies=None):
     """What a run would cost, calling nothing.
 
     Counted from the questions the arms really build rather than from a formula, so it cannot
@@ -607,7 +624,7 @@ def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMP
     close_chars = _question_chars(cl.skill_router_rerank_questions({n: skills[n] for n in names}))
     arms = {}
     for name, spec in ARMS.items():
-        roster = _roster(skills, spec["short"])
+        roster = _roster(skills, spec, bodies)
         build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
             cl.skill_router_questions
         chars = _question_chars(build(roster, fields, turn=turn))
@@ -738,7 +755,7 @@ def _run_replay(args):
         return 2, None, "no skills found - is this running from inside the plugin?"
     bodies = load_skill_bodies()
     if args.command == "size":
-        return 0, size_replay(skills, args.limit * 2), None
+        return 0, size_replay(skills, args.limit * 2, bodies=bodies), None
     clf = cl.get_classifier({"classifier_backend": "jev", "classifier_skill_router": "shadow"},
                             "skill_router", deadline=args.deadline)
     if getattr(clf, "key", None) is None:

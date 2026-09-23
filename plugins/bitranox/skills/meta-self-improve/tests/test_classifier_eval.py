@@ -305,6 +305,41 @@ SKILLS = {"coding-python-uv": "Use when managing Python deps with uv",
           "docs-md-table-formatting": "Use when a markdown table is misaligned"}
 
 
+BODIES = {"coding-python-uv": "A long body about uv, lockfiles, tool installs and CI caching.",
+          "compuse-bash": "A long body about pipelines, exit codes, pgrep and backgrounding.",
+          "docs-md-table-formatting": "A long body about padding columns and escaping pipes."}
+
+
+def test_the_body_arm_ranks_on_bodies_where_the_others_rank_on_descriptions():
+    # The one text source never tested on a WIDE pass. The arm that used bodies also changed to a
+    # two-request rerank and scored 0 right against 11 misses, so the two variables moved together
+    # and neither was measured. Cost is what made this testable: 700-char bodies are 14,175 tokens
+    # a prompt, $5.95 per 10,000, against $3.81 for descriptions.
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    ce.run_arm("choice_body", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7, bodies=BODIES)
+    options = ask.asked[0]["questions"][1].criteria
+    assert options["compuse-bash"] == BODIES["compuse-bash"]
+    assert SKILLS["compuse-bash"] not in options["compuse-bash"]
+    assert ce.cl.NO_SKILL_KEY in options
+
+
+def test_the_body_arm_falls_back_to_descriptions_when_no_bodies_are_given():
+    # `bodies` is optional on run_arm, so an arm that silently ranked an EMPTY roster would look
+    # like a real null rather than a wiring mistake.
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    ce.run_arm("choice_body", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    options = ask.asked[0]["questions"][1].criteria
+    assert options["compuse-bash"] == SKILLS["compuse-bash"]
+
+
+def test_every_arm_declares_which_text_it_ranks_on():
+    # Pins the table so a new arm cannot be added without saying what it sends - the shape flags
+    # are what makes an arm's result attributable.
+    for name, spec in ce.ARMS.items():
+        assert set(spec) == {"shape", "short", "rerank", "body"}, name
+        assert not (spec["short"] and spec["body"]), name   # two text sources is not an arm
+
+
 def test_every_arm_sends_a_different_sequence_of_requests():
     # Verification that the independent variable MOVED. An arm whose traffic matches another's is
     # inert, and an inert arm produces a clean null that reads like a real result.
@@ -316,10 +351,12 @@ def test_every_arm_sends_a_different_sequence_of_requests():
     answer = {"_new_task": 0.9,
               "_pick": _choice("compuse-bash", {"compuse-bash": 0.6, "coding-python-uv": 0.4}),
               "coding-python-uv": 0.8, "compuse-bash": 0.9, "docs-md-table-formatting": 0.1}
+    # `bodies` is supplied because the body arm falls back to descriptions without it, which
+    # makes it byte-identical to choice_full - inert, and this is the test that says so.
     shapes = {}
     for name in ce.ARMS:
         ask = FakeAsk([answer, answer])
-        ce.run_arm(name, ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+        ce.run_arm(name, ask, {"user_prompt": "p"}, SKILLS, threshold=0.7, bodies=BODIES)
         shapes[name] = tuple(json.dumps([q.to_api() for q in r["questions"]], sort_keys=True)
                              for r in ask.asked)
     assert len(set(shapes.values())) == len(shapes), list(shapes)

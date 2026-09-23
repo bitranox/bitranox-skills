@@ -29,6 +29,47 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.12.0]
+
+### Added
+
+- **A fifth eval arm, `choice_body`, ranking each skill on its BODY rather than its description.**
+  One text source had never been tested on a wide pass: `choice_short_rerank` did rank on bodies,
+  but it also moved to two requests, so the two changes were confounded and neither was measured -
+  it scored 0 right against 11 misses and the body half was never on trial. The arm reuses
+  `load_skill_bodies()`, which already caps at 700 chars and strips front matter.
+
+  An arm given no bodies falls back to the descriptions rather than to an empty roster, because an
+  arm silently ranking nothing answers `none_needed` for everything, which reads as a real null
+  instead of a wiring mistake. The existing "every arm sends a different sequence" test caught
+  exactly that on the first run and now supplies bodies, so an inert body arm cannot ship.
+
+  Priced from the questions the arms really build: `choice_body` 61,250 chars a prompt against
+  `nouls` 58,941, `choice_full` 36,245, `choice_short` 12,658 and `choice_short_rerank` 16,007.
+
+### Measured, and NOT changed
+
+- **The hosted API keeps no prefix cache we can observe, so the request's field order stays as it
+  is.** `classifier.py` serialises `{"model", "state", "questions"}` - the variable state before
+  the static 81-skill roster - which would defeat a prefix cache if one existed. An interleaved
+  three-arm probe (18 live calls, same roster, differing state) says one does not:
+
+| arm                                   | first ms | rest p50 | rest min | input_tokens |
+|---------------------------------------|----------|----------|----------|--------------|
+| current `{model, state, questions}`   | 630      | 485      | 418      | 9,400        |
+| reordered `{model, questions, state}` | 443      | 552      | 462      | 9,400        |
+| control (prefix broken every call)    | 1,042    | 485      | 431      | 9,403        |
+
+  All three sit in one band, the reordered arm is marginally SLOWER, and the control - whose
+  prefix is deliberately new on every call - is indistinguishable from both. The same roster was
+  charged 9,400 input tokens on all 18 calls with no discount, and `usage` carries only
+  `input_tokens` and `output_tokens`, so no cache hit could be reported even if one occurred.
+  n=6 per arm cannot exclude a subtle effect; it does exclude the 5-6x that a published Jev
+  replica reports for prefix KV caching, which would put the reordered arm near 100 ms.
+
+  The reorder is therefore NOT made: it would be a cosmetic edit justified by a mechanism nobody
+  observed. Recorded here so the next reader does not re-derive it from the same blog post.
+
 ## [7.11.0]
 
 ### Fixed
