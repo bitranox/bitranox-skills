@@ -276,3 +276,218 @@ def test_cli_missing_log_exits_2_with_json_error(tmp_path, capsys):
     rc = ce.main(["report", "--log", str(tmp_path / "nope.jsonl"), "--json"])
     env = json.loads(capsys.readouterr().out)
     assert rc == 2 and env["ok"] is False and "nope.jsonl" in env["error"]
+
+
+# ---- replay: the offline arm comparison ------------------------------------------------------
+# An arm is a callable over an injected `ask`, so every test here drives the real arm code with a
+# fake transport rather than patching anything inside it.
+
+
+def _choice(value, probabilities=None, confidence=0.9):
+    return {"type": "choice", "value": value, "probabilities": probabilities,
+            "confidence": confidence}
+
+
+class FakeAsk:
+    """Records every request and answers from a queue. `asked` is what the arm really sent."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.asked = []
+
+    def __call__(self, fields, questions):
+        self.asked.append({"fields": fields, "questions": questions})
+        return self.answers.pop(0) if self.answers else None
+
+
+SKILLS = {"coding-python-uv": "Use when managing Python deps with uv",
+          "compuse-bash": "Use when running shell commands",
+          "docs-md-table-formatting": "Use when a markdown table is misaligned"}
+
+
+def test_every_arm_sends_a_different_sequence_of_requests():
+    # Verification that the independent variable MOVED. An arm whose traffic matches another's is
+    # inert, and an inert arm produces a clean null that reads like a real result.
+    #
+    # The comparison is the whole SEQUENCE, in the exact bytes that reach the wire. Comparing
+    # only the first request called this green when it was not: the short arm and the rerank arm
+    # open identically and differ solely in the second request, which is the entire point of the
+    # rerank arm.
+    answer = {"_new_task": 0.9,
+              "_pick": _choice("compuse-bash", {"compuse-bash": 0.6, "coding-python-uv": 0.4}),
+              "coding-python-uv": 0.8, "compuse-bash": 0.9, "docs-md-table-formatting": 0.1}
+    shapes = {}
+    for name in ce.ARMS:
+        ask = FakeAsk([answer, answer])
+        ce.run_arm(name, ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+        shapes[name] = tuple(json.dumps([q.to_api() for q in r["questions"]], sort_keys=True)
+                             for r in ask.asked)
+    assert len(set(shapes.values())) == len(shapes), list(shapes)
+    assert len(shapes["choice_short_rerank"]) == 2
+    assert len(shapes["choice_short"]) == 1
+
+
+def test_the_noul_arm_asks_one_question_per_skill_plus_the_gate():
+    ask = FakeAsk([{"_new_task": 0.9, "coding-python-uv": 0.8, "compuse-bash": 0.1,
+                    "docs-md-table-formatting": 0.2}])
+    out = ce.run_arm("nouls", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert len(ask.asked[0]["questions"]) == len(SKILLS) + 1
+    assert out["picks"] == ["coding-python-uv"]
+    assert out["requests"] == 1
+
+
+def test_the_choice_arm_asks_one_question_over_the_whole_roster():
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("coding-python-uv")}])
+    out = ce.run_arm("choice_full", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert len(ask.asked[0]["questions"]) == 2
+    assert out["picks"] == ["coding-python-uv"]
+
+
+def test_the_short_arm_sends_shortened_descriptions_and_the_full_arm_does_not():
+    long_skills = {"a": "Use when " + "x" * 400}
+    for name, shortened in (("choice_full", False), ("choice_short", True)):
+        ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("a")}])
+        ce.run_arm(name, ask, {"user_prompt": "p"}, long_skills, threshold=0.7)
+        option = ask.asked[0]["questions"][1].criteria["a"]
+        assert (len(option) < 200) is shortened, name
+
+
+def test_a_gate_below_threshold_suppresses_every_arm():
+    # A continuation is 595 of the 1,409 typed prompts in the corpus, so this is the common case.
+    for name in ce.ARMS:
+        ask = FakeAsk([{"_new_task": 0.1, "_pick": _choice("compuse-bash"),
+                        "coding-python-uv": 0.99, "compuse-bash": 0.99,
+                        "docs-md-table-formatting": 0.99}] * 3)
+        out = ce.run_arm(name, ask, {"user_prompt": "go"}, SKILLS, threshold=0.7)
+        assert out["picks"] == [], name
+        assert out["gate"] == 0.1
+
+
+def test_the_no_match_option_means_no_pick_not_a_pick_named_none():
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice(ce.cl.NO_SKILL_KEY)}])
+    out = ce.run_arm("choice_full", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["picks"] == []
+
+
+def test_the_rerank_arm_makes_a_second_request_over_the_survivors_only():
+    wide = {"_new_task": 0.9, "_pick": _choice("compuse-bash",
+                                               {"coding-python-uv": 0.5, "compuse-bash": 0.4,
+                                                "docs-md-table-formatting": 0.1})}
+    close = {"_pick": _choice("coding-python-uv"), "coding-python-uv": 0.85, "compuse-bash": 0.2}
+    ask = FakeAsk([wide, close])
+    out = ce.run_arm("choice_short_rerank", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7,
+                     shortlist=2)
+    assert out["requests"] == 2
+    second = ask.asked[1]["questions"]
+    assert set(second[0].criteria) == {"coding-python-uv", "compuse-bash", ce.cl.NO_SKILL_KEY}
+    assert out["picks"] == ["coding-python-uv"]
+
+
+def test_the_rerank_arm_suggests_nothing_when_no_survivor_fits():
+    wide = {"_new_task": 0.9, "_pick": _choice("compuse-bash",
+                                               {"compuse-bash": 0.6, "coding-python-uv": 0.4})}
+    close = {"_pick": _choice("compuse-bash"), "compuse-bash": 0.2, "coding-python-uv": 0.1}
+    out = ce.run_arm("choice_short_rerank", FakeAsk([wide, close]), {"user_prompt": "p"}, SKILLS,
+                     threshold=0.7, shortlist=2)
+    assert out["picks"] == []
+
+
+def test_an_unanswered_request_yields_no_picks_and_says_why():
+    out = ce.run_arm("choice_full", FakeAsk([None]), {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["picks"] == [] and out["answered"] is False
+
+
+def test_controls_refuse_the_run_when_both_answer_the_same_way():
+    # A detector that fires on everything and one that works are indistinguishable without a
+    # known negative, so no number from the run may be read until they differ.
+    same = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")},
+                    {"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    with pytest.raises(ce.ControlFailed):
+        ce.check_controls("choice_full", same, SKILLS, threshold=0.7)
+
+
+def test_controls_pass_when_the_planted_pair_answers_differently():
+    ok = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")},
+                  {"_new_task": 0.1, "_pick": _choice(ce.cl.NO_SKILL_KEY)}])
+    ce.check_controls("choice_full", ok, SKILLS, threshold=0.7)
+
+
+def test_the_sample_is_stratified_over_short_and_long_prompts():
+    prompts = [{"uuid": "s%d" % i, "prompt": "go"} for i in range(10)]
+    prompts += [{"uuid": "l%d" % i, "prompt": "please rewrite the parser for me now"}
+                for i in range(10)]
+    picked = ce.stratified_prompts(prompts, per_class=3, seed=1)
+    kinds = [p["uuid"][0] for p in picked]
+    assert kinds.count("s") == 3 and kinds.count("l") == 3
+
+
+def test_a_failed_control_exits_3_so_a_gate_reading_the_code_cannot_read_the_numbers(
+        monkeypatch, capsys):
+    # The exception existing is not the guarantee; the EXIT CODE is, because that is what a
+    # caller keys on. Exit 3 means the instrument is wrong, which is not the same as exit 1
+    # (nothing to report) or exit 2 (bad usage), and collapsing it into either would let a run
+    # that measured nothing read as a run that found nothing.
+    def boom(_args):
+        raise ce.ControlFailed("planted negative named a skill")
+
+    monkeypatch.setattr(ce, "_run_replay", boom)
+    rc = ce.main(["replay", "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 3
+    assert env["ok"] is False and "planted negative" in env["error"]
+
+
+def test_an_arm_records_the_scores_it_judged_not_only_its_verdict():
+    # A threshold is the cheapest thing to get wrong and the most expensive to re-measure. A run
+    # that stores only what it DECIDED forces a second paid run to ask "and at 0.3?".
+    ask = FakeAsk([{"_new_task": 0.9, "coding-python-uv": 0.8, "compuse-bash": 0.12,
+                    "docs-md-table-formatting": 0.2}])
+    out = ce.run_arm("nouls", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["scores"]["compuse-bash"] == 0.12
+    assert out["scores"]["_new_task"] == 0.9
+
+
+def test_a_choice_arm_records_the_whole_distribution():
+    probs = {"coding-python-uv": 0.5, "compuse-bash": 0.4, "docs-md-table-formatting": 0.1}
+    ask = FakeAsk([{"_new_task": 0.9, "_pick": _choice("coding-python-uv", probs)}])
+    out = ce.run_arm("choice_full", ask, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["probabilities"] == probs
+
+
+def test_the_rerank_arm_records_the_close_pass_scores_so_it_can_be_rethresholded():
+    wide = {"_new_task": 0.9, "_pick": _choice("compuse-bash",
+                                               {"coding-python-uv": 0.5, "compuse-bash": 0.4})}
+    close = {"_pick": _choice("coding-python-uv"), "coding-python-uv": 0.45, "compuse-bash": 0.2}
+    out = ce.run_arm("choice_short_rerank", FakeAsk([wide, close]), {"user_prompt": "p"}, SKILLS,
+                     threshold=0.7, shortlist=2)
+    assert out["picks"] == []                       # below 0.7, as the run measured
+    assert out["rerank_scores"]["coding-python-uv"] == 0.45   # but 0.45 is recorded
+    assert out["rerank_winner"] == "coding-python-uv"
+
+
+def test_bodies_carry_the_opening_of_the_skill_and_not_its_front_matter(tmp_path):
+    # Request 2 exists to re-read the survivors at length. Handing it the description again would
+    # make the close pass the wide pass with fewer options, which cannot correct anything.
+    skill = tmp_path / "coding-python-uv"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: coding-python-uv\ndescription: Use when managing deps\n---\n\n"
+        "# uv\n\nuv replaces pip and virtualenv. " + "detail " * 300, encoding="utf-8")
+    bodies = ce.load_skill_bodies(tmp_path, cap=120)
+    assert "description:" not in bodies["coding-python-uv"]
+    assert bodies["coding-python-uv"].startswith("# uv")
+    assert len(bodies["coding-python-uv"]) <= 120
+
+
+def test_a_skill_without_front_matter_still_yields_a_body(tmp_path):
+    skill = tmp_path / "loose"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("just prose, no front matter", encoding="utf-8")
+    assert ce.load_skill_bodies(tmp_path)["loose"] == "just prose, no front matter"
+
+
+def test_sizing_estimates_every_arm_without_calling_anything():
+    est = ce.size_replay(SKILLS, prompts=10)
+    assert set(est["arms"]) == set(ce.ARMS)
+    assert est["arms"]["nouls"]["tokens"] > est["arms"]["choice_short"]["tokens"]
+    assert est["total_tokens"] == sum(a["tokens"] for a in est["arms"].values())

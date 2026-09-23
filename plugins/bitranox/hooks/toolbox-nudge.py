@@ -187,6 +187,16 @@ NO_COMMAND_SHAPE = {
         "the chore is confirming a claim ABOUT a guard, which is reasoning over a result.",
         "no shape exists: the input is a firing already observed, so the person is reading output "
         "rather than authoring a command."),
+    "corpus_prompts": (
+        "the chore is pricing a PROMPT-side rule over real history - a decision taken while "
+        "reading, and the walk it produces is the one `guard_replay` and `transcript_index` "
+        "already make over the same corpus. What separates them is which records you want, "
+        "which is intent and is not on the command line.",
+        "measured over 84,968 recorded Bash calls: candidate `\\.claude/projects.*'user'` fires "
+        "30 times (0.035%) and overlaps `jsonl_grep --type user`, which already claims that "
+        "shape; candidate `rglob\\('\\*\\.jsonl` fires 56 times (0.066%) and is the shared corpus "
+        "WALK, so it names guard_replay's chore as readily as this one; the path alone fires 824 "
+        "times (0.970%) for every purpose at once."),
     "guard_replay": (
         "the chore is shipping a hook on the strength of its unit tests - a decision, not a "
         "command.",

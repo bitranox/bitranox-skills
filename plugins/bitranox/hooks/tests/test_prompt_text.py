@@ -170,3 +170,42 @@ def test_notification_fields_are_empty_for_anything_else():
     for text in ("run make test", "<command-name>/clear</command-name>",
                  "<task-notification>\n<task-id>x</task-id>\n</task-notification>", "", None):
         assert P.notification_fields(text) == {}, text
+
+
+# ---- harness turns that no PREFIX can match ---------------------------------------------------
+# Measured over the corpus: of 1,409 turns this module called typed, 112 (7.9%) were the harness
+# talking - 82 interruption notices, 16 opening with a tag the prefix tuple does not list, and 14
+# beginning with a COUNT, which a prefix tuple structurally cannot match. Each one is scored by
+# the keyword matcher and costs a Jev request, and each spends a skill's once-per-session nudge.
+
+
+def test_an_interruption_notice_is_not_something_a_person_typed():
+    assert not P.typed_by_a_person("[Request interrupted by user for tool use]")
+    assert not P.typed_by_a_person("[Request interrupted by user]")
+
+
+def test_a_turn_opening_with_a_COUNT_is_not_something_a_person_typed():
+    # The shape rank 115 records: it starts with a number, so no prefix tuple can reach it.
+    assert not P.typed_by_a_person(
+        '5 background agents were stopped by the user: "You are authoring ONE test case"')
+    assert not P.typed_by_a_person("1 background agent was stopped by the user: \"x\"")
+
+
+def test_the_shell_escape_and_its_output_are_not_prose_for_a_router():
+    assert not P.typed_by_a_person("<bash-input>git status</bash-input>")
+    assert not P.typed_by_a_person("<bash-stdout>On branch master</bash-stdout>")
+
+
+def test_pasted_content_IS_the_person_and_must_stay_scored():
+    # The opposite verdict from its neighbours above, and the reason no blanket "starts with a
+    # tag" rule may be written: a person pasting a question wraps it in exactly this.
+    assert P.typed_by_a_person('<pasted_content id="190a">what can we improve?</pasted_content>')
+
+
+def test_a_person_writing_about_those_shapes_is_still_a_person():
+    # The negative direction, which is the one a widened matcher breaks: these must stay typed.
+    for text in ("why was my request interrupted by user for tool use?",
+                 "3 agents finished, please review what they found",
+                 "the [Request interrupted] banner keeps appearing, can we suppress it",
+                 "run make test"):
+        assert P.typed_by_a_person(text), text

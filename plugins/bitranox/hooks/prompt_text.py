@@ -55,9 +55,10 @@ _EDGE_PUNCTUATION = "\"'`,;:.!?()[]{}<>"
 
 def typed_by_a_person(prompt):
     """False for a whole turn the person did not type: a task notification, a slash-command echo
-    or its output, a teammate message. `transcript_turns.NOT_TYPED_PREFIXES` owns the shapes, so a
-    shape added for the Stop gate is never missing here."""
-    return not (prompt or "").lstrip().startswith(transcript_turns.NOT_TYPED_PREFIXES)
+    or its output, a teammate message, an interruption notice, a shell escape.
+    `transcript_turns.looks_typed` owns the shapes, so one added for the Stop gate is never
+    missing here."""
+    return transcript_turns.looks_typed(prompt)
 
 
 def _looks_like_a_path(token):

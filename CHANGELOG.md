@@ -29,6 +29,53 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.10.0]
+
+### Added
+
+- **The router's question shape can now be measured instead of argued about.** `classifier_eval.py`
+  gains a `replay` subcommand that asks the same recorded prompts four ways and a `size`
+  subcommand that prices a run without calling anything. The arms are `nouls` (what ships today,
+  one noul per skill), `choice_full`, `choice_short` and `choice_short_rerank`, differing in one
+  variable at a time so a result can be attributed: shape, then catalogue text, then whether a
+  second request re-reads the survivors. `TODO-JEV.md` step 5 has named this comparison since
+  2026-09-21; what was missing was the instrument.
+
+  Priced over the shipped 81-skill roster, questions only: `nouls` 60,480 chars a prompt,
+  `choice_full` 36,264, `choice_short` 12,677, `choice_short_rerank` 16,078 across two requests.
+  The estimator puts `nouls` at about 15,120 input tokens against the 14,168 median the live
+  shadow log records for it, which is what says the estimate is worth reading.
+
+- **`classifier.py` grows the choice-shaped question set beside the noul one**, not instead of it:
+  `skill_router_choice_questions` (one `choice` over the whole roster plus a `none_needed` option,
+  with the gate question byte-identical to the noul arm's), `skill_router_rerank_questions` (a
+  second pass over a handful of survivors shown at length, plus one "does this do the specific
+  thing asked" noul each), and `short_description`, which drops the `Use when` opening that 80 of
+  the 81 descriptions repeat. A choice returns a probability for every option and a confidence, so
+  asking once loses nothing that 81 separate questions provided.
+
+- **`compuse-toolbox/scripts/corpus_prompts.py`** - replay every prompt a person actually typed
+  through a predicate, and diff two predicates by the prompts they fire on rather than by how
+  many. `guard_replay` replays tool CALLS and scores a guard by whether a gate refused it; a
+  prompt has no gate, so the question is which prompts a rule speaks on, and two rules can fire
+  the same number of times on different ones. Which records count was measured, not assumed: over
+  300 transcripts, 14,884 `type: user` records split 13,790 tool results, 890 plain strings and
+  203 lists of text, and `origin` is present on 245 of them, which is why nothing filters on it.
+
+### Fixed
+
+- **108 harness turns were being scored as if a person had typed them.** `NOT_TYPED_PREFIXES`
+  gains `[Request interrupted`, `<bash-input` and `<bash-stdout`, and a new `NOT_TYPED_PATTERNS`
+  reaches the one shape no prefix can match, which opens with a COUNT (`5 background agents were
+  stopped by the user: ...`). Both are read through one `transcript_turns.looks_typed`, so a shape
+  added for one reader cannot go missing from another.
+
+  Measured as a firing-SET diff over the corpus, never a count: 1,409 typed prompts fall to 1,301,
+  with **108 removed and 0 added**. Each of those was scoring the keyword matcher, costing a
+  classifier request, and spending a skill's once-per-session nudge on a turn nobody typed.
+  `<pasted_content` is deliberately NOT excluded and the test says so: a person pasting a question
+  wraps it in exactly that, which is why no blanket "opens with a tag" rule may be written.
+
 ## [7.9.0]
 
 ### Added

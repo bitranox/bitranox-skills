@@ -327,3 +327,66 @@ def test_questions_name_the_previous_message_field():
     for questions in (cl.stop_signal_questions(), cl.recall_questions(),
                       cl.skill_router_questions({"x": "does x"})):
         assert any("`previous_assistant_message`" in q.instructions for q in questions)
+
+
+# ---- the choice-shaped router arm ------------------------------------------------------------
+# One `choice` over the whole roster instead of one `noul` per skill. The gate is unchanged: it
+# is measured as working here (bimodal, suppressing 29 of 43 rows), so the arm moves exactly one
+# variable - the shape of the skill question - and nothing else.
+
+
+def test_router_choice_offers_every_skill_and_a_no_match_option():
+    qs = cl.skill_router_choice_questions({"a": "does a", "b": "does b"})
+    assert [q.id for q in qs] == [cl.NEW_TASK_ID, cl.PICK_ID]
+    pick = qs[1]
+    assert pick.type == "choice"
+    assert set(pick.criteria) == {"a", "b", cl.NO_SKILL_KEY}
+    assert pick.criteria["a"] == "does a"
+
+
+def test_the_no_match_key_cannot_collide_with_a_skill_name():
+    # Skill names are hyphenated by the taxonomy, so an underscore key is unreachable by one.
+    assert "_" in cl.NO_SKILL_KEY and "-" not in cl.NO_SKILL_KEY
+    assert cl.PICK_ID.startswith("_")
+
+
+def test_router_choice_keeps_the_gate_exactly_as_the_noul_arm_asks_it():
+    gate_choice = cl.skill_router_choice_questions({"a": "does a"})[0]
+    gate_noul = cl.skill_router_questions({"a": "does a"})[0]
+    assert gate_choice == gate_noul
+
+
+def test_router_choice_for_a_notification_names_its_fields_not_the_prompt():
+    qs = cl.skill_router_choice_questions({"x": "does x"}, turn=cl.TURN_NOTIFICATION)
+    for q in qs:
+        assert "`user_prompt`" not in q.instructions
+        assert "`task_status`" in q.instructions or "`task_summary`" in q.instructions
+
+
+def test_short_description_drops_the_use_when_boilerplate():
+    # 80 of 81 shipped descriptions open with "Use when" or another "Use <preposition>", so the
+    # option list repeats it 80 times. The question frame says it once instead.
+    assert cl.short_description("Use when parsing .gitignore files").startswith("parsing")
+    assert cl.short_description("Use to convert documents").startswith("convert")
+    assert cl.short_description("Use after finishing a refactor").startswith("finishing")
+
+
+def test_short_description_cuts_on_a_word_boundary_within_the_cap():
+    text = "Use when writing, reviewing, or debugging Bash scripts and shell constructs"
+    short = cl.short_description(text, cap=30)
+    assert len(short) <= 30
+    assert not short.endswith("-")
+    assert short.split()[-1] in text.split()
+
+
+def test_short_description_leaves_a_description_that_is_already_short():
+    assert cl.short_description("Use when x happens", cap=200) == "x happens"
+
+
+def test_rerank_asks_one_choice_over_the_shortlist_and_one_noul_per_candidate():
+    qs = cl.skill_router_rerank_questions({"a": "the whole body of a", "b": "the whole body of b"})
+    assert [q.id for q in qs] == [cl.PICK_ID, "a", "b"]
+    assert qs[0].type == "choice"
+    assert set(qs[0].criteria) == {"a", "b", cl.NO_SKILL_KEY}
+    assert all(q.type == "noul" for q in qs[1:])
+    assert "'a'" in qs[1].instructions and "the whole body of a" in qs[1].instructions

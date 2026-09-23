@@ -8,6 +8,7 @@ reads as empty text, so a caller never wedges a turn on a missing or odd transcr
 
 import json
 import os
+import re
 from typing import NamedTuple
 
 # Transcripts grow to many MB, so only the tail is read: 64 KiB first, widened 4x at a time until
@@ -21,8 +22,33 @@ MAX_TAIL_BYTES = 16 * 1024 * 1024
 # old enough to lack the `origin` field: slash-command echoes and their output, background-task
 # notifications and teammate messages. Hook feedback and skill bodies are marked `isMeta`
 # instead, and tool results carry no text block at all.
+#
+# `<bash-input` and `<bash-stdout` are the `!` shell escape and its output: the person typed the
+# COMMAND, but not prose any of these readers should score. `<pasted_content` is deliberately
+# absent and must stay absent - a person pasting a question wraps it in exactly that, so no
+# blanket "opens with a tag" rule may be written here.
 NOT_TYPED_PREFIXES = ("<command-", "<local-command", "<task-notification",
-                      "Another Claude session sent a message", "<teammate-message")
+                      "Another Claude session sent a message", "<teammate-message",
+                      "[Request interrupted", "<bash-input", "<bash-stdout")
+
+# The shapes a prefix structurally cannot reach. This one opens with a COUNT, so there is no
+# literal to list. Measured over the corpus: 112 of 1,409 turns these readers called typed were
+# the harness talking, 14 of them this shape, and each one costs a keyword match, a classifier
+# request and a skill's once-per-session nudge.
+NOT_TYPED_PATTERNS = (re.compile(r"^\d+\s+background\s+agents?\s+(?:were|was)\s+stopped\b"),)
+
+
+def looks_typed(text):
+    """False for a turn the harness produced rather than the person.
+
+    One registry, two mechanisms: the cheap prefix tuple, then the patterns for shapes no prefix
+    can match. Callers ask this rather than reading either collection, so a shape added for one
+    reader is never missing from another.
+    """
+    head = (text or "").lstrip()
+    if head.startswith(NOT_TYPED_PREFIXES):
+        return False
+    return not any(pattern.match(head) for pattern in NOT_TYPED_PATTERNS)
 
 EXCERPT_MARK = " [...] "
 

@@ -23,6 +23,7 @@ exception into a hook.
 
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -45,10 +46,12 @@ import transcript_turns  # noqa: E402
 
 __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NOTIFY_VIEW",
-    "NullClassifier", "PREVIOUS_FIELD", "Question", "Result", "SHADOW_LOG", "SITES",
-    "TURN_NOTIFICATION", "TURN_PROMPT", "detect_language", "get_classifier", "load_key",
-    "load_skill_descriptions", "prepare_state", "recall_questions", "shadow_enabled",
-    "skill_router_questions", "spawn_shadow", "stop_signal_questions", "with_previous",
+    "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
+    "SHADOW_LOG", "SHORT_DESC_CAP", "SITES", "TURN_NOTIFICATION", "TURN_PROMPT",
+    "detect_language", "get_classifier", "load_key", "load_skill_descriptions", "prepare_state",
+    "recall_questions", "shadow_enabled", "short_description", "skill_router_choice_questions",
+    "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
+    "stop_signal_questions", "with_previous",
 ]
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
@@ -416,6 +419,78 @@ def skill_router_questions(skills, turn=TURN_PROMPT):
                  "no if the skill is listed in `skills_already_used`. Skill description: %s"
                  % (subject, context, desc))
         for name, desc in skills.items()]
+
+
+# The choice-shaped arm of the same question. One `choice` over the whole roster replaces the one
+# noul per skill: the roster is sent ONCE as option descriptions instead of once per skill wrapped
+# in its own question frame, and the answer carries a probability for every option plus a
+# confidence, so nothing is lost by asking once. `PICK_ID` starts with "_" for the same reason
+# `NEW_TASK_ID` does, and `NO_SKILL_KEY` holds an underscore, which a taxonomy-conformant skill
+# name (hyphens only) cannot.
+PICK_ID = "_pick"
+NO_SKILL_KEY = "none_needed"
+# The cookbook's roster is the truncated index its agent sees, averaging 54 characters. Ours are
+# whole paragraphs, so they are cut to the opening clause; the frame states once what every one
+# of them otherwise repeats.
+SHORT_DESC_CAP = 120
+_USE_PREFIX = re.compile(r"^use\s+(?:when|to|for|on|at|after|before|if|while|during)\s+", re.I)
+
+
+def short_description(desc, cap=SHORT_DESC_CAP):
+    """The opening clause of a skill description, without the `Use when` boilerplate.
+
+    80 of the 81 shipped descriptions open with "Use when" or another "Use <preposition>", so an
+    option list repeats it 80 times for nothing. Cuts on a word boundary, and adds no ellipsis -
+    a marker costs tokens and tells the model nothing it can act on.
+    """
+    text = " ".join(str(desc or "").split())
+    text = _USE_PREFIX.sub("", text)
+    if len(text) <= cap:
+        return text
+    cut = text[:cap]
+    head, sep, _tail = cut.rpartition(" ")
+    return (head if sep else cut).rstrip(" ,;:-")
+
+
+def _pick_question(skills, subject, context, no_match):
+    return Question(
+        PICK_ID, "choice",
+        "Which ONE of these skills would the assistant need to handle %s well? Each option "
+        "describes when that skill applies. %s Choose a skill only when it does the specific "
+        "thing being asked; one that merely sounds related is wrong, as is one already listed in "
+        "`skills_already_used`. Otherwise choose %r."
+        % (subject, context, NO_SKILL_KEY),
+        criteria={**skills, NO_SKILL_KEY: no_match})
+
+
+def skill_router_choice_questions(skills, turn=TURN_PROMPT):
+    """The same gate, then ONE choice over the whole roster.
+
+    The gate is byte-identical to the noul arm's on purpose: this arm moves the shape of the
+    skill question and nothing else, so a comparison between the two can attribute what it sees.
+    """
+    gate_instructions, subject, context = _ROUTER_TURNS[turn]
+    return [Question(NEW_TASK_ID, "noul", gate_instructions),
+            _pick_question(skills, subject, context,
+                           "No listed skill does this. Ordinary work the assistant handles from "
+                           "general understanding, or a task none of these cover.")]
+
+
+def skill_router_rerank_questions(shortlist):
+    """Second request: the same choice over a handful of candidates shown in FULL, plus one noul
+    per candidate asking whether it does the specific thing asked.
+
+    The wide pass ranks the roster on one clause each; this one re-reads the survivors at length,
+    which is where a skill that merely sounds related loses. The per-candidate noul is the floor:
+    a choice must return something, so without it a shortlist of three wrong skills still names a
+    winner.
+    """
+    return [_pick_question(shortlist, "the request", "",
+                           "None of these does the specific thing being asked.")] + [
+        Question(name, "noul",
+                 "Does the skill %r do the specific thing the request asks for, rather than "
+                 "something merely related? Skill: %s" % (name, body))
+        for name, body in shortlist.items()]
 
 
 def recall_questions():
