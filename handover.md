@@ -1,3 +1,37 @@
+# STALE - read 2026-09-23, work continued
+
+## Continued 2026-09-23: 7.11.0 is on origin/master, CI-green on 74358ef7
+
+All three things the section below called "the exact next action" were done, in that order.
+
+1. **The session-start gate defect is fixed in the question and NOT closed in the gate.** A router
+   question is now built from the state the request carries, so it can no longer name a field that
+   is absent. Measured live, interleaved: the old wording scored a first-prompt positive 0.65,
+   0.68, 0.67 - under its own 0.7 threshold EVERY time, so it suppressed rather than coin-flipped,
+   which is worse than the note below guessed. The new wording clears it 3 of 3 at 0.70-0.72 with
+   the negative at 0.17-0.18, and mid-session is untouched. But asked beside the real roster
+   instead of alone it scores 0.67-0.71, and 3 of 4 arms still fail that control, so `replay` now
+   REFUSES to run. That refusal is deliberate: the gate is what every arm is measured through.
+2. **The rerank is settled and it loses.** Re-thresholded to the 0.30 its own recipe uses, from
+   scores already paid for: it names 5 picks and suppresses 5 of the wide pass's, and adjudication
+   scored it 0 right against 11 misses. Do not revisit the two-request shape on the cookbook's
+   authority again.
+3. **The accuracy question is answered.** All 50 replayed prompts adjudicated blind by five
+   judges, every pick classified rather than sampled. The numbers and the caveat live in
+   `OPEN-WORK.md` rank 12; the short version is that `choice_full` wins on accuracy as well as
+   cost (3 right, 7 defensible, 1 wrong, 6 missed) and the shipping KEYWORD matcher is the worst
+   thing measured (0 right, 4 wrong, 10 of 11 missed).
+
+The next action is no longer building or measuring shapes: it is choosing the two thresholds
+against these labels, because the dominant failure is that the right answer scores just BELOW the
+bar - 6 of 11 misses wanted `meta-context-watcher` for handover prompts, which the noul arm ranks
+top at 0.58-0.73.
+
+The adjudication inputs and labels are in this session's scratchpad and are NOT durable; the
+replay logs were copied there from the previous session's and carry the per-arm scores.
+
+---
+
 # Handover - written 2026-09-23, nothing in flight
 
 ## In flight
