@@ -397,19 +397,71 @@ def test_an_unanswered_request_yields_no_picks_and_says_why():
     assert out["picks"] == [] and out["answered"] is False
 
 
+_PICKED = {"_new_task": 0.9, "_pick": _choice("compuse-bash")}
+_NOTHING = {"_new_task": 0.1, "_pick": _choice(ce.cl.NO_SKILL_KEY)}
+
+
+def test_a_gated_row_still_records_the_choice_it_already_paid_for():
+    # The choice rides in the same request as the gate, so dropping it on a gated row throws away
+    # an answer already bought - and with it any chance of re-thresholding the gate offline. A
+    # sweep could then only remove picks, never restore a suppressed one, which reads as an arm
+    # being insensitive to its threshold when it is the log that went blank.
+    gated = FakeAsk([{"_new_task": 0.2, "_pick": _choice("compuse-bash")}])
+    out = ce.run_arm("choice_full", gated, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["picks"] == []                      # the gate still decides what is SUGGESTED
+    assert out["winner"] == "compuse-bash"         # but the answer is not thrown away
+    assert out["requests"] == 1                    # and no second request was bought for it
+
+
+def test_a_gated_rerank_row_does_not_buy_the_close_pass():
+    gated = FakeAsk([{"_new_task": 0.2, "_pick": _choice("compuse-bash")}])
+    out = ce.run_arm("choice_short_rerank", gated, {"user_prompt": "p"}, SKILLS, threshold=0.7)
+    assert out["requests"] == 1 and out["picks"] == []
+    assert out["winner"] == "compuse-bash"
+
+
 def test_controls_refuse_the_run_when_both_answer_the_same_way():
     # A detector that fires on everything and one that works are indistinguishable without a
     # known negative, so no number from the run may be read until they differ.
-    same = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")},
-                    {"_new_task": 0.9, "_pick": _choice("compuse-bash")}])
+    same = FakeAsk([_PICKED] * len(ce.REPLAY_CONTROLS))
     with pytest.raises(ce.ControlFailed):
         ce.check_controls("choice_full", same, SKILLS, threshold=0.7)
 
 
-def test_controls_pass_when_the_planted_pair_answers_differently():
-    ok = FakeAsk([{"_new_task": 0.9, "_pick": _choice("compuse-bash")},
-                  {"_new_task": 0.1, "_pick": _choice(ce.cl.NO_SKILL_KEY)}])
+def test_controls_pass_when_every_planted_control_answers_its_own_way():
+    ok = FakeAsk([_PICKED, _NOTHING, _PICKED, _NOTHING])
     ce.check_controls("choice_full", ok, SKILLS, threshold=0.7)
+
+
+def test_the_controls_pose_a_session_s_first_prompt_both_ways():
+    # The state that found the gate defect: `_router_fields` omits an empty field, so the first
+    # prompt of a session carries neither `previous_assistant_message` nor `recent_activity`. A
+    # control set without it cannot see a gate that only works once a session has a past, and no
+    # detector finds the case nobody wrote down. Both directions, because a gate that answers yes
+    # to everything at a session's start passes a positive-only check.
+    bare = [c for c in ce.REPLAY_CONTROLS
+            if not (set(c["fields"]) & {"previous_assistant_message", "recent_activity"})]
+    assert sorted(c["expect_pick"] for c in bare) == [False, True]
+    assert all(set(c["fields"]) == {"user_prompt", "project"} for c in bare)
+
+
+def test_run_controls_reports_the_gate_score_behind_every_verdict():
+    # A control passing at 0.71 and one passing at 0.90 are one row and two instruments: the
+    # defect this caught was a gate on the wrong side of its threshold by 0.02, and the fix
+    # clears it by the same margin.
+    rows = ce.run_controls("choice_full", FakeAsk([_PICKED, _NOTHING, _PICKED, _NOTHING]), SKILLS,
+                           threshold=0.7)
+    assert [r["ok"] for r in rows] == [True] * len(ce.REPLAY_CONTROLS)
+    assert [r["gate"] for r in rows] == [0.9, 0.1, 0.9, 0.1]
+    assert rows[2]["state"] == ["project", "user_prompt"]
+
+
+def test_a_failing_control_names_the_state_it_was_posed_with():
+    # Which control failed is the whole diagnosis: the same prompt passes with a history and
+    # fails without one, and a message naming only the prompt cannot tell those apart.
+    with pytest.raises(ce.ControlFailed, match="project, user_prompt"):
+        ce.check_controls("choice_full", FakeAsk([_PICKED, _NOTHING, _NOTHING, _NOTHING]),
+                          SKILLS, threshold=0.7)
 
 
 def test_the_sample_is_stratified_over_short_and_long_prompts():

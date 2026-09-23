@@ -385,39 +385,91 @@ TURN_PROMPT = "prompt"
 TURN_NOTIFICATION = "notification"
 NOTIFY_VIEW = "fields-v1"
 
-_ROUTER_TURNS = {
-    TURN_PROMPT: (
+# A question names a context field only when the caller sent that field. `_router_fields` leaves
+# out a field that is empty, so on the FIRST prompt of a session there is no
+# `previous_assistant_message` and no `recent_activity` - and a question naming one anyway asks
+# the model to contrast against nothing, which it answers by HEDGING rather than erroring, so
+# there is no failure to notice. Measured 2026-09-23 by a planted control: the gate scored
+# 0.66-0.70 there against its own 0.7 threshold, and 0.89-0.90 (negative 0.05-0.06) with the
+# fields present. That is a coin flip exactly where a session starts, and every arm is judged
+# through this gate. The wording for a caller that DOES send them is unchanged.
+_CONTEXT_FIELDS = ("previous_assistant_message", "recent_activity", "skills_already_used")
+
+
+def _have(fields, name):
+    """Did the caller send this field with something in it?"""
+    return bool(str((fields or {}).get(name) or "").strip())
+
+
+def _and_list(names):
+    """'`a`', '`a` and `b`', '`a`, `b` and `c`' - the fields one sentence may name."""
+    ticked = ["`%s`" % n for n in names]
+    if len(ticked) < 2:
+        return ticked[0] if ticked else ""
+    return "%s and %s" % (", ".join(ticked[:-1]), ticked[-1])
+
+
+def _joined(*parts):
+    """The sentences that have something to say, one space apart."""
+    return " ".join(p for p in parts if p)
+
+
+def _describing(fields):
+    """The fields that say what work is already under way."""
+    return [n for n in (PREVIOUS_FIELD, "recent_activity") if _have(fields, n)]
+
+
+def _context_sentence(fields, subject):
+    """What the state fields are, for the reader of a skill question - naming only those sent."""
+    parts = []
+    if _have(fields, PREVIOUS_FIELD) and subject:
+        parts.append("%s is a reply to `%s`" % (subject, PREVIOUS_FIELD))
+    naming = [n for n in ("project", "recent_activity") if _have(fields, n)]
+    if naming:
+        parts.append("%s say%s what is being worked on"
+                     % (_and_list(naming), "" if len(naming) > 1 else "s"))
+    return ", and ".join(parts) + "." if parts else ""
+
+
+def _router_turn_text(turn, fields):
+    """(gate instructions, what the skill question is about, the context sentence) for `turn`."""
+    under_way = _describing(fields)
+    if turn == TURN_NOTIFICATION:
+        carry_on = ("the work in %s can carry on" % _and_list(under_way) if under_way
+                    else "the work under way can carry on")
+        return (
+            "A background task has just finished, described by `task_status` and `task_summary`. "
+            "Does handling it need specialised know-how - for example because it failed - rather "
+            "than simply being noted so %s?" % carry_on,
+            "the finished background task in `task_status` and `task_summary`",
+            _context_sentence(fields, ""),
+        )
+    checking = ("the work that %s describe%s" % (_and_list(under_way),
+                                                 "" if len(under_way) > 1 else "s")
+                if under_way else "work already under way")
+    return (
         "Does `user_prompt` start a new task, or change direction in a way that needs specialised "
-        "know-how, rather than continuing, approving or checking the work that "
-        "`previous_assistant_message` and `recent_activity` describe?",
+        "know-how, rather than continuing, approving or checking %s?" % checking,
         "`user_prompt`",
-        "`user_prompt` is a reply to `previous_assistant_message` when that is given, and "
-        "`project` and `recent_activity` say what is being worked on.",
-    ),
-    TURN_NOTIFICATION: (
-        "A background task has just finished, described by `task_status` and `task_summary`. Does "
-        "handling it need specialised know-how - for example because it failed - rather than "
-        "simply being noted so the work in `previous_assistant_message` and `recent_activity` can "
-        "carry on?",
-        "the finished background task in `task_status` and `task_summary`",
-        "`project` and `recent_activity` say what is being worked on.",
-    ),
-}
+        _context_sentence(fields, "`user_prompt`"),
+    )
 
 
-def skill_router_questions(skills, turn=TURN_PROMPT):
+def skill_router_questions(skills, fields, turn=TURN_PROMPT):
     """The gate question, then one noul per skill; each skill's id is its name.
 
-    State fields for `TURN_PROMPT`: user_prompt, and when known previous_assistant_message,
-    project, recent_activity and skills_already_used. For `TURN_NOTIFICATION`: task_status and
+    `fields` is the state this same request will carry, because the questions may only name what
+    it holds. For `TURN_PROMPT` that is user_prompt, and when known previous_assistant_message,
+    project, recent_activity and skills_already_used; for `TURN_NOTIFICATION`, task_status and
     task_summary in place of user_prompt.
     """
-    gate_instructions, subject, context = _ROUTER_TURNS[turn]
+    gate_instructions, subject, context = _router_turn_text(turn, fields)
+    skip_used = ("Answer no if the skill is listed in `skills_already_used`."
+                 if _have(fields, "skills_already_used") else "")
     return [Question(NEW_TASK_ID, "noul", gate_instructions)] + [
         Question(name, "noul",
-                 "Would the assistant need the skill described here to handle %s well? %s Answer "
-                 "no if the skill is listed in `skills_already_used`. Skill description: %s"
-                 % (subject, context, desc))
+                 _joined("Would the assistant need the skill described here to handle %s well?"
+                         % subject, context, skip_used, "Skill description: %s" % desc))
         for name, desc in skills.items()]
 
 
@@ -452,28 +504,31 @@ def short_description(desc, cap=SHORT_DESC_CAP):
     return (head if sep else cut).rstrip(" ,;:-")
 
 
-def _pick_question(skills, subject, context, no_match):
+def _pick_question(skills, subject, context, no_match, fields=None):
+    wrong = ("one that merely sounds related is wrong, as is one already listed in "
+             "`skills_already_used`" if _have(fields, "skills_already_used")
+             else "one that merely sounds related is wrong")
     return Question(
         PICK_ID, "choice",
-        "Which ONE of these skills would the assistant need to handle %s well? Each option "
-        "describes when that skill applies. %s Choose a skill only when it does the specific "
-        "thing being asked; one that merely sounds related is wrong, as is one already listed in "
-        "`skills_already_used`. Otherwise choose %r."
-        % (subject, context, NO_SKILL_KEY),
+        _joined("Which ONE of these skills would the assistant need to handle %s well? Each "
+                "option describes when that skill applies." % subject, context,
+                "Choose a skill only when it does the specific thing being asked; %s. Otherwise "
+                "choose %r." % (wrong, NO_SKILL_KEY)),
         criteria={**skills, NO_SKILL_KEY: no_match})
 
 
-def skill_router_choice_questions(skills, turn=TURN_PROMPT):
+def skill_router_choice_questions(skills, fields, turn=TURN_PROMPT):
     """The same gate, then ONE choice over the whole roster.
 
     The gate is byte-identical to the noul arm's on purpose: this arm moves the shape of the
     skill question and nothing else, so a comparison between the two can attribute what it sees.
+    That holds per state, since both arms build the gate from the same `fields`.
     """
-    gate_instructions, subject, context = _ROUTER_TURNS[turn]
+    gate_instructions, subject, context = _router_turn_text(turn, fields)
     return [Question(NEW_TASK_ID, "noul", gate_instructions),
             _pick_question(skills, subject, context,
                            "No listed skill does this. Ordinary work the assistant handles from "
-                           "general understanding, or a task none of these cover.")]
+                           "general understanding, or a task none of these cover.", fields)]
 
 
 def skill_router_rerank_questions(shortlist):

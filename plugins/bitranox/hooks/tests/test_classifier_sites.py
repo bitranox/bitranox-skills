@@ -311,7 +311,8 @@ def test_router_rows_record_which_keyword_matcher_judged_them(env, tmp_path, mon
 
 
 def test_router_questions_for_a_notification_name_its_fields_not_the_prompt():
-    qs = cl.skill_router_questions({"x": "does x"}, turn=cl.TURN_NOTIFICATION)
+    qs = cl.skill_router_questions({"x": "does x"}, NOTIFICATION_STATE,
+                                   turn=cl.TURN_NOTIFICATION)
     assert [q.id for q in qs] == [cl.NEW_TASK_ID, "x"]
     for q in qs:
         assert "`user_prompt`" not in q.instructions
@@ -319,13 +320,13 @@ def test_router_questions_for_a_notification_name_its_fields_not_the_prompt():
 
 
 def test_router_questions_still_default_to_the_typed_prompt():
-    qs = cl.skill_router_questions({"x": "does x"})
+    qs = cl.skill_router_questions({"x": "does x"}, MID_SESSION)
     assert all("`user_prompt`" in q.instructions for q in qs)
 
 
 def test_questions_name_the_previous_message_field():
     for questions in (cl.stop_signal_questions(), cl.recall_questions(),
-                      cl.skill_router_questions({"x": "does x"})):
+                      cl.skill_router_questions({"x": "does x"}, MID_SESSION)):
         assert any("`previous_assistant_message`" in q.instructions for q in questions)
 
 
@@ -336,7 +337,7 @@ def test_questions_name_the_previous_message_field():
 
 
 def test_router_choice_offers_every_skill_and_a_no_match_option():
-    qs = cl.skill_router_choice_questions({"a": "does a", "b": "does b"})
+    qs = cl.skill_router_choice_questions({"a": "does a", "b": "does b"}, MID_SESSION)
     assert [q.id for q in qs] == [cl.NEW_TASK_ID, cl.PICK_ID]
     pick = qs[1]
     assert pick.type == "choice"
@@ -351,13 +352,14 @@ def test_the_no_match_key_cannot_collide_with_a_skill_name():
 
 
 def test_router_choice_keeps_the_gate_exactly_as_the_noul_arm_asks_it():
-    gate_choice = cl.skill_router_choice_questions({"a": "does a"})[0]
-    gate_noul = cl.skill_router_questions({"a": "does a"})[0]
+    gate_choice = cl.skill_router_choice_questions({"a": "does a"}, MID_SESSION)[0]
+    gate_noul = cl.skill_router_questions({"a": "does a"}, MID_SESSION)[0]
     assert gate_choice == gate_noul
 
 
 def test_router_choice_for_a_notification_names_its_fields_not_the_prompt():
-    qs = cl.skill_router_choice_questions({"x": "does x"}, turn=cl.TURN_NOTIFICATION)
+    qs = cl.skill_router_choice_questions({"x": "does x"}, NOTIFICATION_STATE,
+                                          turn=cl.TURN_NOTIFICATION)
     for q in qs:
         assert "`user_prompt`" not in q.instructions
         assert "`task_status`" in q.instructions or "`task_summary`" in q.instructions
@@ -390,3 +392,93 @@ def test_rerank_asks_one_choice_over_the_shortlist_and_one_noul_per_candidate():
     assert set(qs[0].criteria) == {"a", "b", cl.NO_SKILL_KEY}
     assert all(q.type == "noul" for q in qs[1:])
     assert "'a'" in qs[1].instructions and "the whole body of a" in qs[1].instructions
+
+
+# ---- no question may name a state field the caller did not supply ----------------------------
+# Found 2026-09-23 by a planted control. `_router_fields` leaves out a field that is empty, and on
+# the FIRST prompt of a session `previous_assistant_message` and `recent_activity` do not exist
+# yet - but the gate named them anyway, so it was asked to contrast against nothing. Measured, it
+# then HEDGED at 0.66-0.70 against a 0.7 threshold; with both fields present the same prompt
+# scores 0.89-0.90 and its negative 0.05-0.06. The gate was a coin flip exactly where a session
+# starts, and every arm is measured through that gate.
+
+# The minimum a real caller produces: `_turn_fields` plus `_project_line`, which never returns
+# empty. Everything else is absent until a session has a history.
+FIRST_PROMPT = {"user_prompt": "write a parser for the log", "project": "p: a project"}
+MID_SESSION = {"previous_assistant_message": "I rewrote the parser's error branch.",
+               "user_prompt": "write a parser for the log", "project": "p: a project",
+               "recent_activity": "Edit: parser.py; Bash: pytest",
+               "skills_already_used": "compuse-bash"}
+NOTIFICATION_STATE = {"task_status": "failed", "task_summary": "the build broke",
+                      "project": "p: a project"}
+OPTIONAL_FIELDS = ("previous_assistant_message", "recent_activity", "skills_already_used")
+
+
+def _named_but_absent(questions, fields):
+    """Every (question id, field) where the question names a field the caller did not send."""
+    return [(q.id, f) for q in questions for f in OPTIONAL_FIELDS
+            if "`%s`" % f in q.instructions and not fields.get(f)]
+
+
+@pytest.mark.parametrize("build", [cl.skill_router_questions, cl.skill_router_choice_questions])
+def test_no_router_question_names_a_field_the_first_prompt_of_a_session_lacks(build):
+    assert _named_but_absent(build({"x": "does x"}, FIRST_PROMPT), FIRST_PROMPT) == []
+
+
+@pytest.mark.parametrize("build", [cl.skill_router_questions, cl.skill_router_choice_questions])
+def test_a_notification_question_names_no_absent_field_either(build):
+    questions = build({"x": "does x"}, NOTIFICATION_STATE, turn=cl.TURN_NOTIFICATION)
+    assert _named_but_absent(questions, NOTIFICATION_STATE) == []
+
+
+@pytest.mark.parametrize("build", [cl.skill_router_questions, cl.skill_router_choice_questions])
+def test_the_gate_still_names_both_fields_when_the_session_has_a_history(build):
+    # The wording measured as working (bimodal, 0.89-0.90 against 0.05-0.06) must not move for a
+    # caller that supplies the state, or this fix silently re-measures the arm it is fixing.
+    gate = build({"x": "does x"}, MID_SESSION)[0]
+    assert ("rather than continuing, approving or checking the work that "
+            "`previous_assistant_message` and `recent_activity` describe?") in gate.instructions
+
+
+def test_the_gate_names_only_the_one_context_field_that_is_there():
+    fields = dict(FIRST_PROMPT, recent_activity="Edit: parser.py")
+    gate = cl.skill_router_questions({"x": "does x"}, fields)[0]
+    assert "`recent_activity` describes?" in gate.instructions
+    assert "`previous_assistant_message`" not in gate.instructions
+
+
+def test_a_skill_question_drops_the_already_used_clause_when_nothing_has_been_used():
+    asked = cl.skill_router_questions({"x": "does x"}, FIRST_PROMPT)[1]
+    used = cl.skill_router_questions({"x": "does x"}, MID_SESSION)[1]
+    assert "skills_already_used" not in asked.instructions
+    assert "`skills_already_used`" in used.instructions
+    assert asked.instructions.endswith("Skill description: does x")
+
+
+def test_the_choice_pick_drops_the_already_used_clause_too():
+    pick = cl.skill_router_choice_questions({"x": "does x"}, FIRST_PROMPT)[1]
+    assert "skills_already_used" not in pick.instructions
+    assert cl.NO_SKILL_KEY in pick.criteria
+
+
+def test_the_two_arms_still_ask_the_same_gate_for_the_same_state():
+    for fields in (FIRST_PROMPT, MID_SESSION):
+        assert (cl.skill_router_choice_questions({"a": "does a"}, fields)[0]
+                == cl.skill_router_questions({"a": "does a"}, fields)[0])
+
+
+def test_the_router_hook_asks_only_about_the_state_it_sends(env, tmp_path, monkeypatch, capsys):
+    # End to end through the hook, which is where the defect lived: the questions are built from
+    # one dict and the fields sent from another, so only a run that reads what reached the API can
+    # prove they agree. No transcript, so this is the first prompt of a session.
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "write a parser for the log",
+                                   "cwd": str(tmp_path), "session_id": "s-first"})
+    _wait_for_log(env["home"])
+    sent = env["fake"].requests[0]["json"]
+    state = sent.get("state") or {}
+    assert "user_prompt" in state  # the request really carried the turn, so absence means absence
+    for qid, question in sent["questions"].items():
+        for field in OPTIONAL_FIELDS:
+            if not state.get(field):
+                assert "`%s`" % field not in question["instructions"], qid

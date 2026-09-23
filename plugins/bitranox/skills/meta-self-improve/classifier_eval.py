@@ -359,12 +359,26 @@ DEFAULT_CORPUS = "~/.claude/projects"
 # an arm that names a skill for everything and an arm that works are the same observation until
 # a known negative separates them.
 #
-# Both carry the FULL field set a live prompt carries, and that is load-bearing rather than
-# tidiness. The first version of the positive gave a bare `user_prompt`, and the gate - whose
-# question names `previous_assistant_message` and `recent_activity` - scored it 0.66 to 0.70
-# against a 0.7 threshold, so the control refused the run on a coin flip. With the context its
-# question names, the same prompt scores 0.89 to 0.90 on every arm and the negative scores 0.05
-# to 0.06. A control must be posed the way production poses the question.
+# The first pair carries the FULL field set, which is what a live prompt carries from a session's
+# second turn on. The second pair carries the MINIMUM one: `user_prompt` and `project`, which is
+# a session's FIRST prompt, since `_router_fields` leaves out a field that is empty.
+#
+# That second pair is here because its absence hid a defect in the gate. Posed with a bare
+# `user_prompt`, the gate scored 0.66 to 0.70 against its own 0.7 threshold, and the first
+# reading of that was "a control must be posed the way production poses the question". Half
+# right: production poses it that way too, on every session's first prompt. Measured 2026-09-23,
+# interleaved, 3 runs per arm: the old wording scored the first-prompt positive 0.65, 0.68, 0.67
+# - UNDER its own threshold every time, so a real new task was suppressed rather than coin-
+# flipped. 7.11.0 builds a question that names `previous_assistant_message` or `recent_activity`
+# only when the request carries them, and the same prompt then scores 0.70, 0.72, 0.72 against a
+# negative at 0.17 to 0.18. Mid-session was unmoved (0.90 against 0.06), which is how the run
+# shows it changed only what it meant to.
+#
+# The positive clears by 0.02, so this pair is also a tripwire: it separates from its negative by
+# about 0.53 but sits close to the threshold, and a wording change that costs a hundredth there
+# will fail this control before it reaches a paid run. Naming the absence outright ("no earlier
+# reply and no activity yet") was measured as the obvious repair for that margin and REJECTED: it
+# inverted the gate, scoring the positive 0.24 and the negative 0.34.
 _CONTEXT = {"project": "bitranox-skills: a Claude Code plugin marketplace",
             "recent_activity": "Bash: run make test; Read: classifier.py"}
 REPLAY_CONTROLS = (
@@ -376,6 +390,12 @@ REPLAY_CONTROLS = (
     {"fields": dict(_CONTEXT,
                     previous_assistant_message="I will run the gate now and report what it says.",
                     user_prompt="go ahead"),
+     "expect_pick": False},
+    {"fields": {"project": _CONTEXT["project"],
+                "user_prompt": "the markdown table in README.md has misaligned columns, "
+                               "reformat it"},
+     "expect_pick": True},
+    {"fields": {"project": _CONTEXT["project"], "user_prompt": "go ahead"},
      "expect_pick": False},
 )
 
@@ -436,7 +456,7 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     roster = _roster(skills, spec["short"])
     build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
         cl.skill_router_questions
-    questions = build(roster, turn=turn)
+    questions = build(roster, fields, turn=turn)
     answers = ask(fields, questions)
     out = {"arm": name, "answered": answers is not None, "gate": None, "picks": [], "requests": 1,
            "scores": {}}
@@ -449,15 +469,23 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     out["scores"] = {qid: (a.get("value") if isinstance(a, dict) else a)
                      for qid, a in answers.items()
                      if not isinstance(a, dict) or not isinstance(a.get("value"), str)}
+    # The choice answer is recorded BEFORE the gate is applied, because it was already paid for:
+    # it rode in the same request. Discarding it on a gated row made the gate's threshold
+    # un-rethresholdable after the fact - an offline sweep could only ever REMOVE picks, never
+    # restore one the gate had suppressed, so a flat curve read as "this arm is threshold-
+    # insensitive" when it was the log that had gone blank. The noul arm never had the problem,
+    # since its per-skill scores are answers like any other.
+    if spec["shape"] != "nouls":
+        winner, probs = _choice_parts(answers, cl.PICK_ID)
+        out["winner"] = winner
+        out["probabilities"] = probs
     out["gate"] = _value(answers, cl.NEW_TASK_ID)
     if isinstance(out["gate"], (int, float)) and out["gate"] < threshold:
         return out
     if spec["shape"] == "nouls":
         out["picks"] = _noul_picks(answers, roster, threshold, top)
         return out
-    winner, probs = _choice_parts(answers, cl.PICK_ID)
-    out["winner"] = winner
-    out["probabilities"] = probs
+    winner, probs = out["winner"], out["probabilities"]
     if not spec["rerank"]:
         out["picks"] = [] if winner in (None, cl.NO_SKILL_KEY) else [winner]
         return out
@@ -480,15 +508,32 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     return out
 
 
-def check_controls(arm, ask, skills, *, threshold, **kwargs):
-    """Raise unless the planted positive names a skill and the planted negative names none."""
+def run_controls(arm, ask, skills, *, threshold, **kwargs):
+    """What one arm answers for each planted control, gate score included.
+
+    The scores are reported and not just the verdict, because a control that passes at 0.71 and
+    one that passes at 0.90 are the same row here and a different instrument: the defect this
+    caught was a gate ANSWERING, on the right side of the threshold by 0.01.
+    """
+    rows = []
     for control in REPLAY_CONTROLS:
         out = run_arm(arm, ask, control["fields"], skills, threshold=threshold, **kwargs)
-        if bool(out["picks"]) != control["expect_pick"]:
+        rows.append({"arm": arm, "prompt": control["fields"]["user_prompt"],
+                     "state": sorted(control["fields"]), "expect_pick": control["expect_pick"],
+                     "gate": out["gate"], "picks": out["picks"],
+                     "ok": bool(out["picks"]) == control["expect_pick"]})
+    return rows
+
+
+def check_controls(arm, ask, skills, *, threshold, **kwargs):
+    """Raise unless the planted positives name a skill and the planted negative names none."""
+    for row in run_controls(arm, ask, skills, threshold=threshold, **kwargs):
+        if not row["ok"]:
             raise ControlFailed(
-                "arm %r: control %r expected %s and got %r - no number from this run may be read"
-                % (arm, control["fields"]["user_prompt"],
-                   "a pick" if control["expect_pick"] else "no pick", out["picks"]))
+                "arm %r: control %r (state: %s) expected %s and got %r at gate %r - no number "
+                "from this run may be read"
+                % (arm, row["prompt"], ", ".join(row["state"]),
+                   "a pick" if row["expect_pick"] else "no pick", row["picks"], row["gate"]))
 
 
 def _is_continuation(prompt):
@@ -542,12 +587,22 @@ def _question_chars(questions):
     return len(json.dumps([q.to_api() for q in questions], ensure_ascii=False))
 
 
-def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT):
+# A price needs a state, because a question names only the fields the request carries. This is
+# the dearest case and the common one: every prompt but a session's first has all of them, and
+# only the field NAMES reach the question text, so the values here stand for any content.
+SIZING_FIELDS = {"previous_assistant_message": "-", "user_prompt": "-", "project": "-",
+                 "recent_activity": "-", "skills_already_used": "-",
+                 "task_status": "-", "task_summary": "-"}
+
+
+def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMPT,
+                fields=None):
     """What a run would cost, calling nothing.
 
     Counted from the questions the arms really build rather than from a formula, so it cannot
     drift away from them the way a hand-kept constant does.
     """
+    fields = SIZING_FIELDS if fields is None else fields
     names = list(skills)[:shortlist]
     close_chars = _question_chars(cl.skill_router_rerank_questions({n: skills[n] for n in names}))
     arms = {}
@@ -555,7 +610,7 @@ def size_replay(skills, prompts, shortlist=DEFAULT_SHORTLIST, turn=cl.TURN_PROMP
         roster = _roster(skills, spec["short"])
         build = cl.skill_router_choice_questions if spec["shape"] == "choice" else \
             cl.skill_router_questions
-        chars = _question_chars(build(roster, turn=turn))
+        chars = _question_chars(build(roster, fields, turn=turn))
         requests = 2 if spec["rerank"] else 1
         if spec["rerank"]:
             chars += close_chars
@@ -688,6 +743,16 @@ def _run_replay(args):
                             "skill_router", deadline=args.deadline)
     if getattr(clf, "key", None) is None:
         return 2, None, "no api key: %s" % getattr(clf, "last_reason", "unknown")
+    if args.command == "controls":
+        ask = Asker(clf)
+        arms = [args.arm] if args.arm else list(ARMS)
+        rows = [row for arm in arms
+                for row in run_controls(arm, ask, skills, threshold=args.threshold,
+                                        shortlist=args.shortlist, bodies=bodies)]
+        return (0 if all(r["ok"] for r in rows) else 3), \
+            {"controls": rows, "input_tokens": ask.tokens, "requests": ask.calls,
+             "failures": dict(ask.reasons)}, \
+            None if all(r["ok"] for r in rows) else "a planted control answered the wrong way"
     found = corpus_prompts.collect_prompts(args.root)
     typed = [p for p in found["prompts"] if router.prompt_text.typed_by_a_person(p["prompt"])]
     picked = stratified_prompts(typed, args.limit, seed=args.seed)
@@ -717,8 +782,12 @@ def _parser():
                                 description="Compare regex and Jev verdicts from the shadow log.")
     sub = p.add_subparsers(dest="command", required=True)
     for name, helptext in (("replay", "ask the arms over recorded prompts"),
-                           ("size", "what a replay would cost, calling nothing")):
+                           ("size", "what a replay would cost, calling nothing"),
+                           ("controls", "ask the planted controls only, and report their scores")):
         q = sub.add_parser(name, help=helptext)
+        if name == "controls":
+            q.add_argument("--arm", choices=sorted(ARMS), default=None,
+                           help="one arm (default: every arm)")
         q.add_argument("--root", default=DEFAULT_CORPUS, help="transcript corpus")
         q.add_argument("--limit", type=int, default=25,
                        help="prompts PER CLASS, continuation and substantial (default 25)")
@@ -745,6 +814,15 @@ def _parser():
 
 
 def render_replay(data):
+    if "controls" in data:
+        lines = ["spent: %d requests, %d input tokens; failures: %s"
+                 % (data["requests"], data["input_tokens"], data["failures"] or "none")]
+        for row in data["controls"]:
+            lines.append("  %-20s gate %-5s picks %-28s %s  %s"
+                         % (row["arm"], row["gate"], ", ".join(row["picks"]) or "-",
+                            "PASS" if row["ok"] else "FAIL",
+                            "%s | %s" % (", ".join(row["state"]), row["prompt"][:48])))
+        return "\n".join(lines)
     if "arms" in data and "sampled" not in data:                      # a size estimate
         lines = ["%d prompts, %d requests, about %d input tokens in total"
                  % (data["prompts"], data["total_requests"], data["total_tokens"])]
@@ -772,15 +850,19 @@ def _emit(args, ok, data=None, error=None, skipped=None):
         if error:
             env["error"] = error
         print(json.dumps(env, ensure_ascii=False, indent=2))
-    elif ok:
-        print(render_replay(data) if args.command in ("replay", "size") else render_text(data))
-    else:
+    elif ok or data is not None:
+        # A failure that carries data prints it: for `controls` the rows ARE the diagnosis, and a
+        # verdict line alone would say a control failed while withholding which one and at what
+        # score. The error still goes to stderr, so the exit code and the stream stay separable.
+        print(render_replay(data) if args.command in ("replay", "size", "controls")
+              else render_text(data))
+    if error and not args.json:
         print("classifier_eval: %s" % error, file=sys.stderr)
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    if args.command in ("replay", "size"):
+    if args.command in ("replay", "size", "controls"):
         try:
             code, data, error = _run_replay(args)
         except ControlFailed as exc:

@@ -29,6 +29,50 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.11.0]
+
+### Fixed
+
+- **A router question no longer names a state field the request does not carry.** `_router_fields`
+  leaves out a field that is empty, so on a session's FIRST prompt there is no
+  `previous_assistant_message` and no `recent_activity` - and the gate named them anyway, asking
+  the model to contrast against nothing. It answered by hedging rather than erroring, so there was
+  no failure to notice. `classifier.py` now builds the gate, the context sentence and the
+  `skills_already_used` clause from the fields the caller actually sends, and `skill-router.py`
+  builds the questions from the same dict it ships, so neither can name what the other omits.
+  The wording for a caller that supplies everything is unchanged, byte for byte.
+
+  Measured on the live API, arms interleaved, 3 runs each: the old wording scored a first-prompt
+  positive 0.65, 0.68, 0.67 - UNDER its own 0.7 threshold every time, so a genuine new task was
+  suppressed rather than coin-flipped. The new wording scores 0.70, 0.72, 0.72 against a negative
+  at 0.17 to 0.18, and mid-session is unmoved at 0.90 against 0.06. Naming the absence outright
+  ("no earlier reply and no activity yet") was measured as the obvious repair for that thin margin
+  and REJECTED: it inverted the gate, scoring the positive 0.24 and the negative 0.34.
+
+  The fix is real and it is not sufficient. Asked beside the actual roster rather than alone, the
+  first-prompt positive scores 0.67 to 0.71 and three of the four arms still fail that control, so
+  `replay` now refuses to run until it is settled. That refusal is the instrument working: the gate
+  is the one thing every arm is measured through.
+
+- **A gated row no longer discards the choice answer it already paid for.** The choice rides in the
+  same request as the gate, and `run_arm` was recording it only after the gate passed. An offline
+  re-threshold could therefore only ever REMOVE picks, never restore one the gate had suppressed -
+  so a flat curve read as "this arm is insensitive to its threshold" when the log had simply gone
+  blank. The winner and its probabilities are now recorded whatever the gate says; the gate still
+  decides what is SUGGESTED, and a gated rerank row still buys no second request.
+
+### Added
+
+- **`classifier_eval.py controls`** asks the planted controls alone and prints the gate score behind
+  every verdict, so the gate can be checked for cents instead of a paid replay. A failure prints the
+  rows too: for this command the rows ARE the diagnosis, and a verdict line withholding which
+  control failed, and at what score, says nothing a reader can act on.
+
+- **Two more planted controls, posing a session's first prompt both ways.** The control set carried
+  only full-state prompts, which is why a gate that worked exactly once a session had a past looked
+  healthy. A `ControlFailed` now names the state it was posed with, because the same prompt passes
+  with a history and fails without one.
+
 ## [7.10.0]
 
 ### Added

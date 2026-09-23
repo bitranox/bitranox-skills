@@ -128,13 +128,14 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
         if notification:
             # Its own field set, so the eval never pools these rows with typed-prompt rows.
             regex["notify_view"] = classifier.NOTIFY_VIEW
+        # The questions are built from the SAME dict this request will carry, so neither can name
+        # a field the other leaves out.
+        fields = _router_fields(prompt, cwd or os.getcwd(), sid, transcript)
         questions = classifier.skill_router_questions(
-            classifier.load_skill_descriptions(),
+            classifier.load_skill_descriptions(), fields,
             turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
         classifier.spawn_shadow("skill_router", sid, regex,
-                                [{"fields": _router_fields(prompt, cwd or os.getcwd(), sid,
-                                                           transcript),
-                                  "questions": questions}])
+                                [{"fields": fields, "questions": questions}])
     except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
         pass
 
