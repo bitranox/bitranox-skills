@@ -56,6 +56,9 @@ change after it is this file.
   the loss can be a threshold effect, not a routing change.
 - When a probe measures a channel that is already near ceiling with the old text, report it as
   "no harm", not as a gain for the new text.
+- When a CI wait needs a full sha, paste the 40 characters a previous call PRINTED. The invented
+  identifier rule recurred here (recurrence 5): a short sha was padded into a fake full one, and
+  ci_wait's not-a-commit warning is what caught it. That is evidence for OPEN-WORK rank 14's guard.
 - tooling: in a worktree-isolated session, `env -u VIRTUAL_ENV uv run ...` with long args and a
   heredoc-fed python are refused as too complex. Put the command in a scratchpad script and run it.
 
