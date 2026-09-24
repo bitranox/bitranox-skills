@@ -494,11 +494,12 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
     `ask(fields, questions) -> {question id: value}` is injected, so every test drives this code
     with a fake transport and none of it is patched away.
 
-    A choice arm is NOT thresholded on the winner's probability. A noul at 0.7 and a choice
-    probability at 0.7 do not mean the same thing - the API guarantees no comparability between
-    primitives - so the no-match option carries that judgement instead, which is what it is for.
-    The gate applies to every arm alike, because that is the variable this comparison holds
-    fixed.
+    A choice arm's winner is not thresholded on its probability to be SUGGESTED - the no-match
+    option carries that judgement, which is what it is for. Its probability matters only in the
+    other direction: a single-choice arm uses the production rule `classifier.choice_pick`, where a
+    winner at `CHOICE_BYPASS` or above overrules a failed gate, and the row records `bypassed`.
+    That value was swept on the choice's own scale; a noul at 0.7 and a choice probability at 0.7
+    do not mean the same thing, since the API guarantees no comparability between primitives.
     """
     spec = ARMS[name]
     roster = _roster(skills, spec, bodies, router_text)
@@ -528,15 +529,21 @@ def run_arm(name, ask, fields, skills, *, threshold, top=DEFAULT_TOP,
         out["winner"] = winner
         out["probabilities"] = probs
     out["gate"] = _value(answers, cl.NEW_TASK_ID)
-    if isinstance(out["gate"], (int, float)) and out["gate"] < threshold:
+    gated = isinstance(out["gate"], (int, float)) and out["gate"] < threshold
+    if spec["shape"] != "nouls" and not spec["rerank"]:
+        # The single-choice arms take the production rule, so a replay measures what the router
+        # would do: the gate, or a winner sure enough to overrule it.
+        pick = cl.choice_pick(out["gate"], out["winner"], out["probabilities"],
+                              threshold=threshold)
+        out["picks"] = [pick] if pick else []
+        out["bypassed"] = bool(pick) and gated
+        return out
+    if gated:
         return out
     if spec["shape"] == "nouls":
         out["picks"] = _noul_picks(answers, roster, threshold, top)
         return out
     winner, probs = out["winner"], out["probabilities"]
-    if not spec["rerank"]:
-        out["picks"] = [] if winner in (None, cl.NO_SKILL_KEY) else [winner]
-        return out
     survivors = _survivors(winner, probs, shortlist)
     if not survivors:
         return out

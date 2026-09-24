@@ -518,6 +518,33 @@ def skill_router_questions(skills, fields, turn=TURN_PROMPT):
 # name (hyphens only) cannot.
 PICK_ID = "_pick"
 NO_SKILL_KEY = "none_needed"
+# A choice winner at least this sure passes a failed gate. The gate vetoed confident picks: "yes,
+# write the handover" chose meta-context-watcher at 0.96 while the gate read the turn as approving
+# work under way (0.37), and 8 of 14 such winners on a 30-prompt handover/backlog stratum were lost
+# that way. Swept offline over three recorded runs: at 0.7 the stratum's context-watcher picks go
+# 6 -> 12 of 30 with no added pick on a no-skill prompt in either labelled set; at 0.6 the
+# held-out set gains 2 noise picks. The value is on the CHOICE's own probability scale, chosen from
+# its own sweep - not borrowed from a noul threshold, since the API promises no comparability.
+CHOICE_BYPASS = 0.7
+
+
+def choice_pick(gate, winner, probabilities, *, threshold, bypass=CHOICE_BYPASS):
+    """The skill a gate-plus-choice answer suggests, or None.
+
+    The winner is taken when the gate passes (an unanswered gate does not suppress), or when the
+    winner's own probability reaches `bypass`. A missing probability reads as unsure, and the
+    no-match option is never a pick however confident. `bypass=None` restores gate-only.
+    """
+    if winner in (None, NO_SKILL_KEY):
+        return None
+    if not isinstance(gate, (int, float)) or gate >= threshold:
+        return winner
+    sure = (probabilities or {}).get(winner)
+    if bypass is not None and isinstance(sure, (int, float)) and sure >= bypass:
+        return winner
+    return None
+
+
 # The cookbook's roster is the truncated index its agent sees, averaging 54 characters. Ours are
 # whole paragraphs, so they are cut to the opening clause; the frame states once what every one
 # of them otherwise repeats.

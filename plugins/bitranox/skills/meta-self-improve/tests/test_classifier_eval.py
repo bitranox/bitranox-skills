@@ -418,8 +418,23 @@ def test_the_short_arm_sends_shortened_descriptions_and_the_full_arm_does_not():
         assert (len(option) < 200) is shortened, name
 
 
+def test_a_confident_choice_passes_a_failed_gate_and_says_so():
+    ask = FakeAsk([{"_new_task": 0.3, "_pick": _choice("compuse-bash", {"compuse-bash": 0.9})}])
+    out = ce.run_arm("choice_full", ask, {"user_prompt": "write the handover"}, SKILLS,
+                     threshold=0.5)
+    assert out["picks"] == ["compuse-bash"]
+    assert out["bypassed"] is True
+
+
+def test_an_unsure_choice_stays_suppressed_by_a_failed_gate():
+    ask = FakeAsk([{"_new_task": 0.3, "_pick": _choice("compuse-bash", {"compuse-bash": 0.5})}])
+    out = ce.run_arm("choice_full", ask, {"user_prompt": "go"}, SKILLS, threshold=0.5)
+    assert out["picks"] == [] and out["bypassed"] is False
+
+
 def test_a_gate_below_threshold_suppresses_every_arm():
     # A continuation is 595 of the 1,409 typed prompts in the corpus, so this is the common case.
+    # The choice here carries no probability, so the confidence bypass cannot apply.
     for name in ce.ARMS:
         ask = FakeAsk([{"_new_task": 0.1, "_pick": _choice("compuse-bash"),
                         "coding-python-uv": 0.99, "compuse-bash": 0.99,

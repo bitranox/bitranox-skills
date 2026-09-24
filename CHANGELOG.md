@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.17.0]
+
+### Added
+
+- **The Jev skill router's pick rule lets a confident choice overrule a failed gate.**
+  `classifier.choice_pick` is the one rule: the choice winner is suggested when the new-task gate
+  passes, or when the winner's own probability reaches `CHOICE_BYPASS` (0.7); the no-match option
+  is never a pick, and a missing probability reads as unsure. The gate had been vetoing picks the
+  choice was sure of - "yes, write the handover" chose `meta-context-watcher` at 0.96 while the gate
+  read the turn as approving work under way (0.37). `classifier_eval.py`'s single-choice arms now use
+  this rule and record `bypassed`, so a replay measures what the router would do.
+
+  The value was swept offline over three recorded runs on the choice's own probability scale: at
+  0.7 no labelled set gained a pick on a prompt needing no skill, at 0.6 the held-out set gained 2.
+  It was then judged on a FRESH stratum of 30 handover and backlog prompts, built by excluding every
+  prompt text of both earlier sets and labelled blind by five judges over pooled candidates (26
+  need a skill): gate only 8 right / 1 defensible / 0 wrong / 17 missed, with the bypass 14 / 1 / 0 /
+  11, and no pick on the 4 turns needing none either way. The planted controls still pass. The 11
+  still missed are the other half of the gap: there the choice itself answers `none_needed` for
+  "give me a list of open points", which a bypass cannot reach. The stratum is selected by intent
+  words, so these figures describe handover and backlog turns, not all prompts.
+
 ## [7.16.0]
 
 ### Added

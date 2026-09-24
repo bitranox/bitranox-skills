@@ -244,3 +244,39 @@ def test_the_shadow_child_logs_the_skip_reason_when_the_site_is_off(tmp_path, fa
     line = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
     assert line["results"] == [None] and "off" in line["reason"]
     assert fake.requests == []
+
+
+# ---- the router's pick rule: the gate, or a confident choice ------------------------------------
+# The gate vetoed confident picks: "yes, write the handover" chose meta-context-watcher at 0.96
+# while the gate read it as approving work under way (0.37). A winner that sure is its own evidence
+# that the turn needs the skill.
+
+def test_a_passed_gate_takes_the_winner_whatever_its_probability():
+    assert cl.choice_pick(0.8, "a", {"a": 0.2}, threshold=0.5) == "a"
+
+
+def test_a_failed_gate_suppresses_an_unsure_winner():
+    assert cl.choice_pick(0.3, "a", {"a": 0.69}, threshold=0.5) is None
+
+
+def test_a_failed_gate_lets_a_confident_winner_through():
+    assert cl.choice_pick(0.3, "a", {"a": cl.CHOICE_BYPASS}, threshold=0.5) == "a"
+
+
+def test_no_match_is_never_a_pick_however_confident():
+    assert cl.choice_pick(0.9, cl.NO_SKILL_KEY, {cl.NO_SKILL_KEY: 0.99}, threshold=0.5) is None
+    assert cl.choice_pick(0.9, None, {}, threshold=0.5) is None
+
+
+def test_a_winner_with_no_recorded_probability_cannot_bypass_the_gate():
+    # `probabilities` is optional in the API; a missing one must read as unsure, never as sure.
+    assert cl.choice_pick(0.3, "a", {}, threshold=0.5) is None
+    assert cl.choice_pick(0.3, "a", None, threshold=0.5) is None
+
+
+def test_an_unanswered_gate_does_not_suppress():
+    assert cl.choice_pick(None, "a", {"a": 0.1}, threshold=0.5) == "a"
+
+
+def test_the_bypass_can_be_switched_off():
+    assert cl.choice_pick(0.3, "a", {"a": 0.99}, threshold=0.5, bypass=None) is None
