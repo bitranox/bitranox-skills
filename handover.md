@@ -1,97 +1,99 @@
-# STALE - read 2026-09-25, work continued
+# Handover - 2026-09-25, 7.22.0 shipped, stop_signal adjudicated, design doc committed
 
 ## In flight
 
-Nothing. 7.21.0 (`048713c`) is on master: the skill_router's Jev shadow now asks the choice shape,
-and `classifier_eval.py report` can read it. CI passed on that commit (`workflow=success
-ci=success`, via `ci_wait` on the full sha). The only change after it is this file.
+Nothing. Everything below is committed, pushed and CI-green on master (`602b271`).
 
 ## Committed, or not
 
-- **Committed and pushed:** 7.21.0. That covers the hook, the report, tests, CHANGELOG, both
-  version fields, `docs/reference.md`, the `meta-memory-settings` cell with its review artifact
-  `plugins/bitranox/skills/meta-memory-settings/.skillwriter/checklist-20260924-router-choice-shape.md`,
-  and OPEN-WORK rank 12.
-- **Committed with this handover:** this file only.
-- **Not in git, local only:** `EXECUTION-USER-REVIEW.md` in this worktree (ignored through the
-  clone's `.git/info/exclude`). It holds the user's router choice and one autonomous decision.
+- **Committed and pushed:** 7.22.0 (`f819820`, shadow log bounded), and `602b271`
+  (`docs/jev-design.md`, OPEN-WORK ranks 12/150/160 updated). This handover goes in its own commit.
+- **Not in git, by design:** `.plan/jev-stop-2026-09-25/` (PREREG, RESULTS, labels, key, scripts).
+  It is gitignored and lives in BOTH this worktree and the main checkout's `.plan/`
+  (`diff -r` identical), so removing this worktree loses nothing.
+- **Local only:** `EXECUTION-USER-REVIEW.md` in this worktree (clone-local exclude). It holds this
+  session's user decisions and the day-file decision. Copy it to the main checkout before
+  `wtclean` removes this worktree if you want to keep it.
 
 ## Decided, and why - do not reopen
 
-- **skill_router stays in shadow, with the choice shape** (user, 2026-09-24: "Fix the shape, stay
-  in shadow", chosen over decide mode now and over parking Jev). Decide mode waits for live
-  choice-v1 rows and a blind-labelled sample of them, because a shadow row cannot say whether a
-  pick was right.
-- **New rows get their own tag, `question_view: choice-v1`,** rather than a bump of `router_view`
-  (`ctx-v1`). `router_view` records the context shown, which did not change. Every `*_view` key
-  feeds the report's grouping, so old and new rows never pool.
-- **The report reads choice rows with the production rule `classifier.choice_pick`** (gate
-  passes, or the winner's own probability reaches the 0.7 bypass, and never `none_needed`), at the
-  site threshold 0.5 from `SITE_THRESHOLDS` in `classifier_eval.py`.
+- **Shadow log retention 30 days / 200 MB** (user, over the recommended 14 / 100).
+- **One file per UTC day, pruned on each append, never rename rotation.** The writers are
+  concurrent detached children. With rename rotation, two of them can both rotate, and the second
+  rename silently overwrites the full `.1`. The current day's file is never deleted.
+- **recall_rerank waits for much more data** (user: "2 we wait for much more data !").
+- **TODO-JEV.md became `docs/jev-design.md`** (user chose "commit as design doc"), corrected to the
+  current code, with a pointer to rank 12 instead of a progress log.
+- **The stop_signal recommendation ("regex OR Jev at 0.7") is held until the skill_router decision**,
+  so the user gets one decision at a time. It met the pre-registered bar: 70% precision on the
+  Jev-only turns.
 
 ## Decided against, and why
 
-- **Removing `skill_router_questions`.** The live hook no longer calls it, but the replay's nouls
-  arm still does (`classifier_eval.py` `run_arm` and `size_replay`).
+- **ExitWorktree to lift the isolation:** this session did not enter the worktree via EnterWorktree,
+  so the tool is a no-op here, and it is for user requests only.
+- **Removing this worktree from inside itself:** it has to be done from the main checkout.
 
 ## Still open, untouched
 
 `OPEN-WORK.md` is the list; read it before this file.
 
 - Rank 10 (USER): the skills-and-scripts review. Top-ranked, not started.
-- Rank 12 (USER): Jev. It is waiting on data now; its next step needs choice-v1 rows to exist.
+- Rank 12 (USER): Jev. Waiting on choice-v1 rows; stop_signal's result is recorded there.
 - Rank 14 (USER): the approved invented-identifier guard.
-- Ranks 82, 145, 150, 160 (FOUND): the git_state recall gap, the unbounded shadow log, the staged
-  `TODO-JEV.md` in the main checkout, and the finished worktrees to remove (this one included).
+- Rank 150 (FOUND): unstage and delete `TODO-JEV.md` in the main checkout, then fast-forward it.
+- Rank 160 (FOUND): `wtclean` on this worktree and `nudge-recall-fix`, from the main checkout.
 
 ## Lessons for the next nap
 
-- When you change the SHAPE of what a producer writes (a question type, a field's type), check
-  every reader parses the new shape: `classifier_eval`'s `_scores` kept only numeric answers, so a
-  choice row would have read as "no pick" with nothing failing.
-- When you change what a hook sends, grep the docs for the old description. Both
-  `meta-memory-settings` and `docs/reference.md` still said "one yes/no per shipped skill", stale
-  since 7.16.0 widened the roster.
-- When a handover names a symbol's file, grep it before writing: the last one placed
-  `SITE_THRESHOLDS` in `classifier.py`, and it lives in `classifier_eval.py`.
-- tooling: in a worktree-isolated session even `bash run-python.sh skill_receipt.py start ...` is
-  refused as "cannot be shown not to run git". Put it in a scratchpad script and run that.
+- When a log has concurrent detached writers, bound it with one file per period plus deletion of old
+  files, never rename rotation: two writers that both rotate let the second rename overwrite the
+  full `.1` with no error.
+- When harvesting a subagent's structured verdict from its transcript, look inside tool_use INPUTS as
+  well as text blocks: the hand-back report is an escaped string inside a SubagentHandback tool_use.
+- When a jig that mutates source files runs, send its output to a file and never pipe it into a
+  consumer that can exit early: SIGPIPE can kill the jig mid-arm while a mutation is still applied.
+- When a worktree-isolated session's task needs git in the main checkout (unstage, wtclean,
+  fast-forward), plan those steps for a session opened in the main checkout, and copy gitignored
+  `.plan/` artifacts out of the worktree first.
+- When you change the SHAPE of what a producer writes (a question type, a field's type), check that
+  every reader parses the new shape, because a reader that skips unknown shapes fails silently.
+- When you change what a hook sends or where it writes, grep the docs for the old description: the
+  settings skill and `docs/reference.md` both carried it.
 
 ## The exact next action
 
-`OPEN-WORK.md` rank 10 is the top-ranked open item and nothing ranked above it is actionable: the
-skills-and-scripts review, one subagent each, asking before changing anything. Start by sizing it:
-count the targets under `plugins/bitranox/skills/*/` and `plugins/bitranox/hooks/`, and write the
-count into the line.
+Open the next session in the MAIN checkout
+(`/media/srv-main-softdev/projects/public/KI/bitranox-skills`), not this worktree.
 
-Jev (rank 12) cannot move until live rows exist. Once sessions on 7.21.0+ have run for a while,
-check with:
+Then take rank 10, the top-ranked open item: the skills-and-scripts review, one subagent per target,
+asking before changing anything. Its line says the only record of its 17 unadjudicated claims and 5
+coverage gaps is a `TRIAGE.md` in a ZFS snapshot, so the first step is to copy that file somewhere
+durable. Then size the sweep by counting the targets under `plugins/bitranox/skills/*/` and
+`plugins/bitranox/hooks/`.
 
-```bash
-uv run plugins/bitranox/skills/meta-self-improve/classifier_eval.py report
-```
-
-and look for the `skill_router@...+choice-v1+...` group.
+Ranks 150 and 160 are FOUND items ranked below it. They are not a reason to start elsewhere.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/skill-router.py`: `_shadow_skill_router`, `QUESTION_VIEW`.
-- `plugins/bitranox/hooks/classifier.py`: `skill_router_choice_questions`, `choice_pick`,
-  `CHOICE_BYPASS`.
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py`: `_router_verdict`,
-  `summarize_skill_router`, `SITE_THRESHOLDS`.
-- `~/.claude/self-improve-audit/classifier-shadow.jsonl`: the shadow log the report reads.
+- `plugins/bitranox/hooks/classifier.py`: `shadow_log_path`, `shadow_log_files`,
+  `prune_shadow_logs`, `_append_log`, `SHADOW_KEEP_DAYS`, `SHADOW_MAX_BYTES`.
+- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py`: `load_rows` (file or directory),
+  `default_log`, `SITE_THRESHOLDS`, `NON_FIRING_FAMILIES`.
+- `docs/jev-design.md`: the Jev design.
+- `.plan/jev-stop-2026-09-25/` in the main checkout: `RESULTS.md`, `score.py`, `labels.json`,
+  `key.json`.
 
 ## How to verify this still stands
 
 ```bash
 cd /media/srv-main-softdev/projects/public/KI/bitranox-skills
 git fetch origin && git log --oneline -3 origin/master
-uv run --no-project --with pytest --with PyYAML --with lxml --with defusedxml \
-  --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
+python3 .plan/jev-stop-2026-09-25/score.py .plan/jev-stop-2026-09-25/key.json
 ```
 
-origin/master carries `048713c` (or later), and the gate prints `repo-gate: all checks passed`.
+origin/master carries `602b271` (or later), and the score run prints `signals 51` with
+`P(jev_only) 39/56 = 70%` at t=0.7.
 
 ---
 
