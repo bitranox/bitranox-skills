@@ -29,6 +29,44 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.16.0]
+
+### Added
+
+- **The Jev skill router offers the skills the session actually has installed, not only this
+  plugin's own.** It used to glob `plugins/bitranox/skills/*/SKILL.md`, so a skill from another
+  plugin, a project skill or a Claude Code built-in could never be proposed however well it fit:
+  4 of the 6 skills no replay arm ever proposed across both adjudicated runs were of that kind
+  (`typesafe-ai`, `soundtouch-decloud`, `provmm-build`, `update-config`). The new
+  `hooks/skill_roster.py` reads the session's `skill_listing` attachment from the transcript (the
+  latest full listing plus the deltas a plugin reload adds after it). On a session's first prompt
+  that attachment is usually not written yet - in 50 of 51 sessions it landed after the first typed
+  prompt - so a listing read from the transcript is cached per project and answers the next
+  session's first prompt, and with neither the shipped glob answers as before. This plugin's skills
+  are keyed bare so existing logs and labels still match; every other skill keeps its full name,
+  because bare names collide across plugins. Each shadow row records `roster` (transcript, cache or
+  shipped) and `roster_size`, so rows judged against different rosters never pool.
+- `classifier_eval.py replay` takes `--roster installed`, which offers each prompt the listing of
+  its OWN session, and `--arm` to pay for one arm instead of six. `--roster shipped` stays the
+  default so earlier runs remain comparable.
+
+  Measured on the held-out 50 (pinned, state drift 0, choice_full only, about $0.03): at the
+  shipping gate of 0.5, of the 11 prompts that need a skill, the installed roster scores 8 right,
+  1 defensible, 1 wrong and 1 missed against 5, 3, 1 and 2 for the shipped roster, and it names a
+  skill on 4 of the 39 prompts that need none against 5. It leads at 0.3 and 0.7 too. Two of the
+  three extra right picks are skills that were never on offer before (`provmm-build`,
+  `provmm-pr`). The two picks no earlier panel had seen were judged by five blind judges over the
+  pooled candidates, unanimously; that panel also downgraded `compuse-toolbox` from right to
+  defensible on the prompt where `provmm-pr` now wins, and both rosters are scored with its
+  verdicts. The one wrong pick is new: offered `update-config` for a Claude Code model-catalog
+  error, the router chose `claude-api` (0.68 against 0.19), whose description names `[1m]` as a
+  trigger. Eleven prompts in one run is a shape, not a proportion.
+
+### Fixed
+
+- `classifier_eval.py`'s replay report counted `suppressed_by_gate` against a hardcoded 0.7 after
+  7.14.0 moved the router's gate to 0.5; it now uses the threshold the run was given.
+
 ## [7.15.1]
 
 ### Fixed

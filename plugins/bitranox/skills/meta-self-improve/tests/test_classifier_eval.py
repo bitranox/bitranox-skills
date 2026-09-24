@@ -664,3 +664,46 @@ def test_state_drift_treats_an_absent_field_and_an_empty_one_as_the_same():
     picked = [{"uuid": "a", "prompt": "p",
                "recorded_state": {"user_prompt": "p", "recent_activity": ""}}]
     assert ce.state_drift(picked, [{"user_prompt": "p"}]) == []
+
+
+# ---- the roster a replay offers ---------------------------------------------------------------
+
+def _listing_transcript(tmp_path, names_descs):
+    rec = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "isInitial": True, "skillCount": len(names_descs),
+        "names": [n for n, _d in names_descs],
+        "content": "\n".join("- %s: %s" % nd for nd in names_descs)}}
+    p = tmp_path / "source.jsonl"
+    p.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    return str(p)
+
+
+def test_an_installed_roster_is_the_listing_of_the_prompts_own_session(tmp_path):
+    # A replay judging whether a wider roster closes the gap must offer each prompt the skills
+    # ITS session had, not whatever this machine has installed today.
+    src = _listing_transcript(tmp_path, [("bitranox:compuse-bash", "shell"),
+                                         ("typesafe:typesafe-ai", "TypeSafe")])
+    skills, source = ce.roster_for({"source": src}, SKILLS, "installed")
+    assert source == "transcript"
+    assert skills == {"compuse-bash": "shell", "typesafe:typesafe-ai": "TypeSafe"}
+
+
+def test_an_installed_roster_falls_back_to_the_shipped_one_when_the_source_has_none(tmp_path):
+    missing = str(tmp_path / "swept.jsonl")
+    assert ce.roster_for({"source": missing}, SKILLS, "installed") == (SKILLS, "shipped")
+
+
+def test_the_default_roster_is_the_shipped_one_so_earlier_runs_stay_comparable(tmp_path):
+    src = _listing_transcript(tmp_path, [("typesafe:typesafe-ai", "TypeSafe")])
+    assert ce.roster_for({"source": src}, SKILLS, "shipped") == (SKILLS, "shipped")
+
+
+def test_a_replay_can_be_limited_to_one_arm():
+    assert ce.selected_arms(None) == list(ce.ARMS)
+    assert ce.selected_arms("choice_full") == ["choice_full"]
+
+
+def test_the_replay_command_accepts_an_arm_and_a_roster():
+    args = ce._parser().parse_args(["replay", "--arm", "choice_full", "--roster", "installed"])
+    assert args.arm == "choice_full" and args.roster == "installed"
+    assert ce._parser().parse_args(["replay"]).roster == "shipped"

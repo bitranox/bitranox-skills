@@ -42,6 +42,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
         sys.path.insert(0, _d)
 
 import classifier as cl  # noqa: E402 - the sys.path above is what makes this importable
+import skill_roster  # noqa: E402 - same sys.path
 
 DEFAULT_LOG = Path.home() / ".claude" / "self-improve-audit" / "classifier-shadow.jsonl"
 DEFAULT_THRESHOLD = 0.5
@@ -791,8 +792,32 @@ class Asker:
         return None
 
 
+ROSTERS = ("shipped", "installed")
+
+
+def roster_for(prompt, shipped, mode):
+    """(skills, source) a replay offers this prompt.
+
+    `shipped` is this plugin's own skills, which every run before `--roster` offered, so it stays
+    the default and old runs stay comparable. `installed` is the listing of the prompt's OWN
+    session, read from its source transcript: the question it answers is whether a wider roster
+    closes the gap, and that session's skills are what the live router would have had.
+    """
+    if mode == "installed":
+        listing = skill_roster.listing_from_transcript(prompt.get("source") or "")
+        if listing:
+            return listing, skill_roster.SOURCE_TRANSCRIPT
+    return shipped, skill_roster.SOURCE_SHIPPED
+
+
+def selected_arms(arm):
+    """The arms a run asks: one when named, else all of them. A paid run that only needs one
+    arm should not pay for six."""
+    return [arm] if arm else list(ARMS)
+
+
 def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text=None):
-    """Every arm's verdict on one prompt, beside the keyword arm's, as one log row."""
+    """The chosen arms' verdicts on one prompt, beside the keyword arm's, as one log row."""
     import tempfile  # noqa: PLC0415 - only the live path needs a prefix file
 
     # A pinned prompt carries the state its own run recorded, and it is re-sent verbatim: see
@@ -804,21 +829,23 @@ def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text
                 prompt["prompt"], prompt.get("cwd") or "", prompt.get("session_id") or "replay",
                 _prefix_transcript(prompt, tmp))
     ranked = router.match(prompt["prompt"], triggers, max_skills=len(triggers) or 1)
+    offered, source = roster_for(prompt, skills, getattr(args, "roster", "shipped"))
     row = {"uuid": prompt.get("uuid"), "source": prompt.get("source"), "line": prompt.get("line"),
            "continuation": _is_continuation(prompt.get("prompt")),
            "lang": cl.detect_language(prompt.get("prompt") or ""),
-           "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields, "arms": {}}
-    for name in ARMS:
-        row["arms"][name] = run_arm(name, ask, fields, skills, threshold=args.threshold,
+           "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields,
+           "roster": source, "roster_size": len(offered), "arms": {}}
+    for name in selected_arms(getattr(args, "arm", None)):
+        row["arms"][name] = run_arm(name, ask, fields, offered, threshold=args.threshold,
                                     top=args.top, shortlist=args.shortlist, bodies=bodies,
                                     router_text=router_text)
     return row
 
 
-def _replay_report(rows):
+def _replay_report(rows, threshold):
     """What the arms did, per arm, so a reader never has to re-derive it from the rows."""
     out = {}
-    for name in ARMS:
+    for name in [n for n in ARMS if rows and n in rows[0]["arms"]]:
         arms = [r["arms"][name] for r in rows]
         picked = [a for a in arms if a["picks"]]
         out[name] = {
@@ -827,7 +854,7 @@ def _replay_report(rows):
             "prompts_with_a_pick": len(picked),
             "picks_per_prompt": round(sum(len(a["picks"]) for a in arms) / max(1, len(arms)), 2),
             "suppressed_by_gate": sum(1 for a in arms if isinstance(a["gate"], (int, float))
-                                      and not a["picks"] and a["gate"] < 0.7),
+                                      and not a["picks"] and a["gate"] < threshold),
             "top_picks": Counter(p for a in arms for p in a["picks"]).most_common(5),
             "agreed_with_keywords": sum(1 for r, a in zip(rows, arms)
                                         if a["picks"] and set(a["picks"]) & set(r["keyword_picks"])),
@@ -889,7 +916,9 @@ def _run_replay(args):
     report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed)},
               "sampled": len(rows), "input_tokens": ask.tokens, "requests": ask.calls,
               "failures": dict(ask.reasons), "log": str(args.out),
-              "arms": _replay_report(rows)}
+              "roster": getattr(args, "roster", "shipped"),
+              "rosters_used": dict(Counter(r["roster"] for r in rows)),
+              "arms": _replay_report(rows, args.threshold)}
     if getattr(args, "prompts", None):
         drift = state_drift(picked, [r["state"] for r in rows])
         report["pinned_to"] = str(args.prompts)
@@ -905,9 +934,13 @@ def _parser():
                            ("size", "what a replay would cost, calling nothing"),
                            ("controls", "ask the planted controls only, and report their scores")):
         q = sub.add_parser(name, help=helptext)
-        if name == "controls":
+        if name in ("controls", "replay"):
             q.add_argument("--arm", choices=sorted(ARMS), default=None,
                            help="one arm (default: every arm)")
+        if name == "replay":
+            q.add_argument("--roster", choices=ROSTERS, default="shipped",
+                           help="the skills offered: this plugin's own (default, comparable with "
+                                "earlier runs) or each prompt's session listing (installed)")
         q.add_argument("--root", default=DEFAULT_CORPUS, help="transcript corpus")
         if name == "replay":
             q.add_argument("--prompts", type=Path, default=None, metavar="LOG",

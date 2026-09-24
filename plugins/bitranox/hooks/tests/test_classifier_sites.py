@@ -124,6 +124,28 @@ def test_skill_router_shadow_asks_one_noul_per_skill_and_keeps_its_output(env, m
     assert set(line["results"][0]["answers"]) == set(skills) | {cl.NEW_TASK_ID}
     assert line["regex"]["selected"] == [s for s, _n in SR.match(prompt, SR.load_triggers())]
     assert line["states"][0] == {"user_prompt": prompt, "project": "x"}
+    assert line["regex"]["roster"] == "shipped" and line["regex"]["roster_size"] == len(skills)
+
+
+def test_skill_router_shadow_offers_the_sessions_installed_skills(env, tmp_path, monkeypatch,
+                                                                  capsys):
+    # A skill from another plugin and a built-in reach the options once the transcript lists them.
+    listing = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "isInitial": True, "skillCount": 3,
+        "names": ["bitranox:files-edit-xml", "typesafe:typesafe-ai", "update-config"],
+        "content": "- bitranox:files-edit-xml: Use when editing XML.\n"
+                   "- typesafe:typesafe-ai: Build AI-powered software with TypeSafe.\n"
+                   "- update-config: Configure the Claude Code harness via settings.json."}}
+    t = tmp_path / "transcript.jsonl"
+    t.write_text(json.dumps(listing) + "\n", encoding="utf-8")
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "add a TypeSafe classifier to this app",
+                                   "cwd": "/p/x", "session_id": "s-roster",
+                                   "transcript_path": str(t)})
+    line = _wait_for_log(env["home"])[-1]
+    assert set(line["results"][0]["answers"]) == {"files-edit-xml", "typesafe:typesafe-ai",
+                                                  "update-config", cl.NEW_TASK_ID}
+    assert line["regex"]["roster"] == "transcript" and line["regex"]["roster_size"] == 3
 
 
 # ---- recall -------------------------------------------------------------------------------

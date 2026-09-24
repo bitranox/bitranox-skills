@@ -25,6 +25,7 @@ if str(_HOOKS_DIR) not in sys.path:
 import classifier  # noqa: E402
 import prompt_text  # noqa: E402
 import self_improve_signals as sig  # noqa: E402
+import skill_roster  # noqa: E402
 import transcript_turns  # noqa: E402
 
 MIN_HITS = 2
@@ -130,9 +131,12 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
             regex["notify_view"] = classifier.NOTIFY_VIEW
         # The questions are built from the SAME dict this request will carry, so neither can name
         # a field the other leaves out.
-        fields = _router_fields(prompt, cwd or os.getcwd(), sid, transcript)
+        cwd = cwd or os.getcwd()
+        fields = _router_fields(prompt, cwd, sid, transcript)
+        skills, regex["roster"] = skill_roster.installed_skills(transcript, cwd)
+        regex["roster_size"] = len(skills)
         questions = classifier.skill_router_questions(
-            classifier.load_skill_descriptions(), fields,
+            skills, fields,
             turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
         classifier.spawn_shadow("skill_router", sid, regex,
                                 [{"fields": fields, "questions": questions}])
