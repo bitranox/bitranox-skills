@@ -3,7 +3,8 @@
 
 The first-wave classifier sites (hooks/classifier.py) run in shadow mode: the hook keeps its regex
 verdict and a detached child logs Jev's answers beside it, one JSON line per prompt or turn, in
-~/.claude/self-improve-audit/classifier-shadow.jsonl. `report` reads that log and answers, per site:
+~/.claude/self-improve-audit/classifier-shadow-<UTC date>.jsonl (the hook keeps the last 30 days,
+at most 200 MB). `report` reads every one of those logs, oldest first, and answers, per site:
 
   stop_signal    per turn: both fire / regex only / Jev only / neither, split by language
   skill_router   per prompt: the keyword selection against Jev's top N skills above the threshold
@@ -47,7 +48,10 @@ import classifier as cl  # noqa: E402 - the sys.path above is what makes this im
 import skill_roster  # noqa: E402 - same sys.path
 import transcript_turns  # noqa: E402 - same sys.path
 
-DEFAULT_LOG = Path.home() / ".claude" / "self-improve-audit" / "classifier-shadow.jsonl"
+def default_log():
+    """The audit directory the hooks log into, resolved per run so a changed HOME is honoured."""
+    return Path.home() / ".claude" / "self-improve-audit"
+
 DEFAULT_THRESHOLD = 0.5
 
 # The threshold each site is judged at when none is given. One number for all three was always a
@@ -85,26 +89,34 @@ SITES = ("stop_signal", "skill_router", "recall_rerank")
 # ---- loading -------------------------------------------------------------------------------
 
 def load_rows(path, exclude_sessions=()):
-    """(rows, malformed_line_count). Rows whose session id starts with an excluded prefix are
-    dropped. Raises OSError when the log cannot be read."""
+    """(rows, malformed_line_count) from one log file, or from every shadow log in a directory,
+    oldest rows first. Rows whose session id starts with an excluded prefix are dropped. Raises
+    OSError when a log cannot be read or the path does not exist."""
+    path = Path(path)
+    files = cl.shadow_log_files(path) if path.is_dir() else [path]
     rows, bad = [], 0
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                bad += 1
-                continue
-            if not isinstance(row, dict):
-                bad += 1
-                continue
-            sid = str(row.get("session_id") or "")
-            if any(sid.startswith(p) for p in exclude_sessions):
-                continue
-            rows.append(row)
+    for f in files:
+        with open(f, encoding="utf-8") as fh:
+            for line in fh:
+                row = _parse_row(line)
+                if row is None:
+                    bad += bool(line.strip())
+                    continue
+                sid = str(row.get("session_id") or "")
+                if not any(sid.startswith(p) for p in exclude_sessions):
+                    rows.append(row)
     return rows, bad
+
+
+def _parse_row(line):
+    """The JSON object on `line`, or None for a blank, malformed or non-object line."""
+    if not line.strip():
+        return None
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    return row if isinstance(row, dict) else None
 
 
 # ---- joining a live row to its prompt ------------------------------------------------------
@@ -1090,7 +1102,9 @@ def _parser():
         q.add_argument("--out", type=Path, default=DEFAULT_REPLAY_LOG)
         q.add_argument("--json", action="store_true", help="print a JSON envelope")
     r = sub.add_parser("report", help="summarise the shadow log per site")
-    r.add_argument("--log", type=Path, default=DEFAULT_LOG)
+    r.add_argument("--log", type=Path, default=None,
+                   help="a log file, or a directory whose shadow logs are all read "
+                        "(default: ~/.claude/self-improve-audit)")
     r.add_argument("--threshold", type=float, default=None,
                    help="judge every site at this value; omitted, each uses its own default "
                         "(%s)" % ", ".join("%s %s" % kv for kv in sorted(SITE_THRESHOLDS.items())))
@@ -1165,6 +1179,7 @@ def main(argv=None):
         _emit(args, code == 0, data=data, error=error)
         return code
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
+    args.log = args.log or default_log()
     try:
         rows, bad = load_rows(args.log, exclude_sessions=exclude)
     except OSError as exc:

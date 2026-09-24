@@ -9,7 +9,8 @@ N keys, `score` = position on described levels), and typed answers with probabil
 Shadow mode never changes a hook's behaviour. The hook keeps deciding with its regex, spawns a
 DETACHED child (`python3 classifier.py --shadow <payload-file>`) and returns at once; the child
 redacts the text, asks Jev, and appends both verdicts to `~/.claude/self-improve-audit/
-classifier-shadow.jsonl` so a later replay can compare them. Off unless the user sets
+classifier-shadow-<UTC date>.jsonl` so a later replay can compare them; each append drops whole
+days older than SHADOW_KEEP_DAYS, then the oldest days past SHADOW_MAX_BYTES. Off unless the user sets
 `classifier_backend = jev` and the site's own knob to `shadow` (meta-memory-settings).
 
 Egress: only the named fields a site passes are sent, each capped, every one through
@@ -34,7 +35,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -48,10 +49,12 @@ import transcript_turns  # noqa: E402
 __all__ = [
     "Answer", "CAP_MARK", "CONTEXT_VIEW", "DEFAULT_BASE_URL", "JevClassifier", "NOTIFY_VIEW",
     "NO_SKILL_KEY", "NullClassifier", "PICK_ID", "PREVIOUS_FIELD", "Question", "Result",
-    "SHADOW_LOG", "SHORT_DESC_CAP", "SITES", "TURN_NOTIFICATION", "TURN_PROMPT",
+    "SHADOW_DAY_PREFIX", "SHADOW_KEEP_DAYS", "SHADOW_LOG", "SHADOW_MAX_BYTES", "SHORT_DESC_CAP",
+    "SITES", "TURN_NOTIFICATION", "TURN_PROMPT",
     "detect_language", "get_classifier", "load_key", "load_router_criteria",
-    "load_skill_descriptions", "prepare_state",
-    "recall_questions", "shadow_enabled", "short_description", "skill_router_choice_questions",
+    "load_skill_descriptions", "prepare_state", "prune_shadow_logs",
+    "recall_questions", "shadow_enabled", "shadow_log_files", "shadow_log_path",
+    "short_description", "skill_router_choice_questions",
     "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
     "stop_signal_questions", "with_previous",
 ]
@@ -60,7 +63,17 @@ DEFAULT_BASE_URL = "https://api.typesafe.ai"
 ENDPOINT = "/v1/systemone"
 KEY_ENV = "TYPESAFE_API_KEY"
 BASE_URL_ENV = "BITRANOX_CLASSIFIER_BASE_URL"
+# The single undated log that releases before 7.22.0 appended to. It is still READ, as the oldest
+# rows, and it ages out by its last write like any day file; nothing appends to it any more.
 SHADOW_LOG = "classifier-shadow.jsonl"
+# One file per UTC day. Writers are concurrent detached children, and a day file is never renamed,
+# so no two of them can race a rotation; retiring one is a delete, which a race cannot corrupt.
+SHADOW_DAY_PREFIX = "classifier-shadow-"
+_SHADOW_DAY_RE = re.compile(r"^classifier-shadow-(\d{4}-\d{2}-\d{2})\.jsonl$")
+# Retention (user's choice, 2026-09-25): the choice-v1 accumulation, its blind labelling and the two
+# later site reviews each need rows from the weeks before, and a busy day logs about 11 MB.
+SHADOW_KEEP_DAYS = 30
+SHADOW_MAX_BYTES = 200 * 1024 * 1024
 # A hook budget. The measured cold call (TLS handshake included) was 860 ms.
 DEFAULT_DEADLINE = 1.5
 # The detached child blocks nobody, so it can wait for a slow answer rather than lose it.
@@ -768,11 +781,78 @@ def run_shadow(payload, cfg, env=None, home=None):
     }, payload)
 
 
-def _append_log(record):
-    d = _audit_dir()
+def shadow_log_path(audit, now):
+    """The day file a row logged at `now` (an aware UTC datetime) is appended to."""
+    return Path(audit) / ("%s%s.jsonl" % (SHADOW_DAY_PREFIX, now.strftime("%Y-%m-%d")))
+
+
+def shadow_log_files(audit):
+    """Every shadow log in `audit`, oldest rows first: the undated SHADOW_LOG, then the day files.
+
+    Day files sort by name because the date in it is fixed-width. A missing dir lists nothing.
+    """
+    try:
+        names = os.listdir(audit)
+    except OSError:
+        return []
+    legacy = [SHADOW_LOG] if SHADOW_LOG in names else []
+    return [Path(audit) / n for n in legacy + sorted(n for n in names if _SHADOW_DAY_RE.match(n))]
+
+
+def _log_day(path):
+    """The UTC date a log's newest row was written on: from the name, or the undated file's mtime."""
+    m = _SHADOW_DAY_RE.match(path.name)
+    if m:
+        return datetime.strptime(m.group(1), "%Y-%m-%d").date()
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).date()
+
+
+def _unlink(path):
+    """True when `path` is gone afterwards. A concurrent prune may have removed it first, and on
+    Windows a file another process holds open refuses; the next append retries that one."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def prune_shadow_logs(audit, now, keep_days=SHADOW_KEEP_DAYS, max_bytes=SHADOW_MAX_BYTES):
+    """Delete whole logs older than `keep_days` UTC days, then the oldest until the rest fit in
+    `max_bytes`. The current day's file is never deleted, even when it alone is over the cap.
+    Returns the paths it removed. Never raises for a file that vanished or will not go."""
+    today = shadow_log_path(audit, now)
+    oldest_kept = (now - timedelta(days=keep_days - 1)).date()
+    removed, sized = [], []
+    for path in shadow_log_files(audit):
+        try:
+            day, size = _log_day(path), path.stat().st_size
+        except OSError:                    # removed by a concurrent prune between list and stat
+            continue
+        if path != today and day < oldest_kept:
+            if _unlink(path):
+                removed.append(path)
+            continue
+        sized.append((path, size))
+    total = sum(size for _p, size in sized)
+    for path, size in sized:
+        if total <= max_bytes:
+            break
+        if path != today and _unlink(path):
+            removed.append(path)
+            total -= size
+    return removed
+
+
+def _append_log(record, audit=None, now=None):
+    d = Path(audit) if audit is not None else _audit_dir()
+    now = now or datetime.now(timezone.utc)
     d.mkdir(parents=True, exist_ok=True)
-    with open(d / SHADOW_LOG, "a", encoding="utf-8") as fh:
+    with open(shadow_log_path(d, now), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    prune_shadow_logs(d, now)
 
 
 def _shadow_main(argv):

@@ -49,6 +49,35 @@ def test_load_rows_skips_malformed_lines_and_counts_them(tmp_path):
     assert bad == 1
 
 
+# The hook writes one file per UTC day plus, from before rotation, one undated file; a report
+# over the directory must read all of them, oldest rows first.
+def test_load_rows_reads_every_shadow_log_in_a_directory_oldest_first(tmp_path):
+    (tmp_path / "classifier-shadow.jsonl").write_text(
+        json.dumps(stop_row(False, {"correction": 0.1}, session="legacy")) + "\n", encoding="utf-8")
+    for day, sid in (("2026-09-25", "newer"), ("2026-09-24", "older")):
+        (tmp_path / ("classifier-shadow-%s.jsonl" % day)).write_text(
+            json.dumps(stop_row(False, {"correction": 0.1}, session=sid)) + "\n{bad\n",
+            encoding="utf-8")
+    (tmp_path / "classifier-payload.json").write_text("{}", encoding="utf-8")
+    rows, bad = ce.load_rows(tmp_path)
+    assert [r["session_id"] for r in rows] == ["legacy", "older", "newer"]
+    assert bad == 2
+
+
+def test_cli_report_accepts_the_audit_directory(tmp_path, capsys):
+    (tmp_path / "classifier-shadow-2026-09-25.jsonl").write_text(
+        json.dumps(stop_row(False, {"correction": 0.1})) + "\n", encoding="utf-8")
+    assert ce.main(["report", "--log", str(tmp_path), "--json"]) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["data"]["sites"]["stop_signal"]["by_lang"]["en"]["neither"] == 1
+
+
+def test_the_default_log_is_the_audit_directory_resolved_at_run_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    assert ce.default_log() == tmp_path / ".claude" / "self-improve-audit"
+
+
 def test_load_rows_drops_excluded_sessions(tmp_path):
     log = tmp_path / "shadow.jsonl"
     log.write_text("\n".join(json.dumps(r) for r in (

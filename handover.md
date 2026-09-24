@@ -1,4 +1,4 @@
-# Handover - 2026-09-25, 7.21.0 shipped and CI-green
+# STALE - read 2026-09-25, work continued
 
 ## In flight
 

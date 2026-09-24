@@ -45,7 +45,10 @@ def _config(home, **knobs):
 
 
 def _log(home):
-    return home / ".claude" / "self-improve-audit" / cl.SHADOW_LOG
+    """Today's shadow log, or a path that does not exist when the child has written none."""
+    audit = home / ".claude" / "self-improve-audit"
+    files = cl.shadow_log_files(audit)
+    return files[-1] if files else audit / "no-shadow-log-yet"
 
 
 def _wait_for_log(home, timeout=20.0):

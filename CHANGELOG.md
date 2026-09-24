@@ -29,6 +29,22 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.0]
+
+### Changed
+
+- **The classifier shadow log is bounded.** It was one file that nothing trimmed, and it grew by
+  3 to 11 MB a day. The detached shadow child now appends to one file per UTC day
+  (`~/.claude/self-improve-audit/classifier-shadow-YYYY-MM-DD.jsonl`), and every append deletes
+  whole days older than 30, then the oldest days until the rest fit in 200 MB. The current day's
+  file is never deleted. Nothing is renamed, so concurrent children cannot race a rotation and
+  lose a file; a file a peer already removed is skipped.
+- **The undated `classifier-shadow.jsonl` stays readable** as the oldest rows and ages out 30
+  days after its last write, so no row logged before this release is lost when it ships.
+- **`classifier_eval.py report` reads the whole directory.** With no `--log` it reads every
+  shadow log in `~/.claude/self-improve-audit`, oldest first; `--log` takes that directory or a
+  single file, so a pinned replay log still works.
+
 ## [7.21.0]
 
 ### Changed

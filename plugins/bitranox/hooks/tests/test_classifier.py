@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -217,8 +218,13 @@ def _run_child(tmp_path, fake_url, payload, config):
     r = subprocess.run([sys.executable, str(HOOKS_DIR / "classifier.py"), "--shadow"],
                        input=json.dumps(payload), capture_output=True, text=True, env=env,
                        encoding="utf-8", errors="replace", timeout=30)
-    log = home / ".claude" / "self-improve-audit" / cl.SHADOW_LOG
-    return r, log
+    return r, _only_log(home / ".claude" / "self-improve-audit")
+
+
+def _only_log(audit):
+    files = cl.shadow_log_files(audit)
+    assert len(files) == 1, files
+    return files[0]
 
 
 def test_the_shadow_child_logs_both_verdicts_and_only_redacted_state(tmp_path, fake):
@@ -288,7 +294,7 @@ def test_shadow_guard_swallows_an_exception_and_logs_it(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     with cl.shadow_guard("recall_rerank", "s7"):
         raise ValueError("boom %s" % GHP)
-    log = tmp_path / ".claude" / "self-improve-audit" / cl.SHADOW_LOG
+    log = _only_log(tmp_path / ".claude" / "self-improve-audit")
     line = _last_line(log)
     assert line["site"] == "recall_rerank" and line["session_id"] == "s7"
     assert line["reason"].startswith("error: ValueError: boom")
@@ -300,7 +306,90 @@ def test_shadow_guard_writes_nothing_when_the_block_succeeds(tmp_path, monkeypat
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     with cl.shadow_guard("recall_rerank", "s7"):
         pass
-    assert not (tmp_path / ".claude" / "self-improve-audit" / cl.SHADOW_LOG).exists()
+    assert cl.shadow_log_files(tmp_path / ".claude" / "self-improve-audit") == []
+
+
+# ---- the shadow log's retention --------------------------------------------------------------
+
+NOW = datetime(2026, 9, 25, 0, 30, tzinfo=timezone.utc)
+
+
+def _day_file(audit, days_ago, size=10):
+    p = cl.shadow_log_path(audit, NOW - timedelta(days=days_ago))
+    p.write_text("x" * (size - 1) + "\n", encoding="utf-8")
+    return p
+
+
+def test_a_row_lands_in_the_file_named_for_its_utc_day(tmp_path):
+    cl._append_log({"site": "stop_signal"}, audit=tmp_path, now=NOW)
+    assert cl.shadow_log_files(tmp_path) == [tmp_path / "classifier-shadow-2026-09-25.jsonl"]
+
+
+# The pre-rotation single file holds the oldest rows, so it must be read first and never skipped.
+def test_the_log_files_are_listed_oldest_first_and_nothing_else_is(tmp_path):
+    (tmp_path / cl.SHADOW_LOG).write_text("{}\n", encoding="utf-8")
+    newer, older = _day_file(tmp_path, 1), _day_file(tmp_path, 3)
+    for stray in ("classifier-abc123.json", "classifier-shadow-notes.jsonl",
+                  "x.contrib.jsonl", "classifier-shadow-2026-09-25.jsonl.tmp"):
+        (tmp_path / stray).write_text("{}\n", encoding="utf-8")
+    assert cl.shadow_log_files(tmp_path) == [tmp_path / cl.SHADOW_LOG, older, newer]
+
+
+def test_a_missing_audit_dir_lists_no_log_files(tmp_path):
+    assert cl.shadow_log_files(tmp_path / "absent") == []
+
+
+def test_prune_keeps_exactly_the_last_keep_days_days(tmp_path):
+    kept = [_day_file(tmp_path, n) for n in range(cl.SHADOW_KEEP_DAYS)]
+    gone = [_day_file(tmp_path, n) for n in (cl.SHADOW_KEEP_DAYS, cl.SHADOW_KEEP_DAYS + 5)]
+    assert sorted(cl.prune_shadow_logs(tmp_path, NOW)) == sorted(gone)
+    assert cl.shadow_log_files(tmp_path) == sorted(kept)
+
+
+# The legacy file carries no date in its name; its last write is when its newest row was logged.
+def test_prune_ages_the_legacy_file_by_its_last_write(tmp_path):
+    legacy = tmp_path / cl.SHADOW_LOG
+    legacy.write_text("{}\n", encoding="utf-8")
+    recent = (NOW - timedelta(days=cl.SHADOW_KEEP_DAYS - 1)).timestamp()
+    os.utime(legacy, (recent, recent))
+    assert cl.prune_shadow_logs(tmp_path, NOW) == []
+    stale = (NOW - timedelta(days=cl.SHADOW_KEEP_DAYS + 1)).timestamp()
+    os.utime(legacy, (stale, stale))
+    assert cl.prune_shadow_logs(tmp_path, NOW) == [legacy]
+
+
+def test_prune_drops_the_oldest_whole_days_until_under_the_size_cap(tmp_path):
+    oldest, middle, newest = (_day_file(tmp_path, n, size=100) for n in (3, 2, 1))
+    today = _day_file(tmp_path, 0, size=100)
+    assert cl.prune_shadow_logs(tmp_path, NOW, max_bytes=250) == [oldest, middle]
+    assert cl.shadow_log_files(tmp_path) == [newest, today]
+
+
+# Rows being written today are the ones a report is waiting for; the cap never takes them.
+def test_prune_never_deletes_the_current_day_even_over_the_cap(tmp_path):
+    today = _day_file(tmp_path, 0, size=500)
+    assert cl.prune_shadow_logs(tmp_path, NOW, max_bytes=100) == []
+    assert cl.shadow_log_files(tmp_path) == [today]
+
+
+# Detached children append and prune concurrently, so a file can vanish between list and stat.
+def test_prune_ignores_a_file_a_concurrent_prune_already_removed(tmp_path):
+    today = _day_file(tmp_path, 0)
+    ghost = cl.shadow_log_path(tmp_path, NOW - timedelta(days=2))
+    try:
+        os.symlink(tmp_path / "gone", ghost)       # listed by name, but stat finds nothing
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    # Inside the age window and over the cap, so only the size accounting ever touches it.
+    assert cl.prune_shadow_logs(tmp_path, NOW, max_bytes=1) == []
+    assert today.exists()
+
+
+def test_appending_prunes_so_the_log_stays_bounded_without_a_separate_job(tmp_path):
+    stale = _day_file(tmp_path, cl.SHADOW_KEEP_DAYS + 1)
+    cl._append_log({"site": "stop_signal"}, audit=tmp_path, now=NOW)
+    assert not stale.exists()
+    assert cl.shadow_log_files(tmp_path) == [cl.shadow_log_path(tmp_path, NOW)]
 
 
 def test_the_shadow_child_logs_the_skip_reason_when_the_site_is_off(tmp_path, fake):
