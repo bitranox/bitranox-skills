@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.20.0]
+
+### Changed
+
+- **meta-context-watcher's description names the "what next" ask.** Its body already says the
+  backlog, read first, decides what is worth doing next. But the description named only reading a
+  handover and listing open points, so a router judging from descriptions answered
+  `none_needed` for "what next" or "ok, whats next for <project> ?". The reading clause now adds
+  "or is asked what to do next", with the triggers "what next" and "what's next for <project>"
+  (708 chars). Measured on the Jev router (choice_full, gate 0.5, installed roster), old against
+  new wording in a pre-registered A/B:
+  - On 10 fresh "what next" prompts, labelled blind by five judges who were shown a neutral
+    summary of the body and never either wording, context-watcher was caught 2 and 3 times with
+    the old wording and 9 and 9 with the new, interleaved.
+  - No new wrong pick on any of four earlier labelled sets.
+  - The new wording made 8 extra picks on those sets, all "what next" turns. A fresh blind panel
+    judged 6 of them right and 2 defensible; all 3 unrelated controls came back wrong, so the
+    panel could say wrong.
+  - One row is a reproducible loss: "whats open ?" keeps context-watcher as the winner but at
+    0.55-0.69 instead of 0.78-0.88, under the 0.7 confidence bypass, against about 13 picks gained.
+  - Claude Code's own routing, probed with haiku on a renamed listing, already sent these prompts
+    to the skill with the old wording (18 of 20); with the new wording it sent 20 of 20, and both
+    control messages stayed NONE in every run.
+
 ## [7.19.0]
 
 ### Added
