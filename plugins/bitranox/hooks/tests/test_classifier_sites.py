@@ -330,6 +330,16 @@ def test_questions_name_the_previous_message_field():
         assert any("`previous_assistant_message`" in q.instructions for q in questions)
 
 
+def test_the_gate_ignores_a_reasoning_field_even_when_one_is_sent():
+    # Measured 2026-09-24 and rejected: naming the previous turn's reasoning made the gate LOWER
+    # on 139 of 245 cells against higher on 61, so the router spoke LESS where missing a needed
+    # skill is already the dominant failure. This pins the rejection - a caller that sends the
+    # field must not silently change the question, which is how it would creep back in.
+    state = dict(MID_SESSION, previous_assistant_reasoning="I was weighing two parser designs.")
+    assert (cl.skill_router_questions({"x": "does x"}, state)[0].instructions
+            == cl.skill_router_questions({"x": "does x"}, MID_SESSION)[0].instructions)
+
+
 # ---- the choice-shaped router arm ------------------------------------------------------------
 # One `choice` over the whole roster instead of one `noul` per skill. The gate is unchanged: it
 # is measured as working here (bimodal, suppressing 29 of 43 rows), so the arm moves exactly one

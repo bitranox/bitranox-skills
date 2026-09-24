@@ -29,6 +29,30 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.15.0]
+
+### Changed
+
+- **The previous turn's reasoning is rejected as a router input, and the rejection is pinned.**
+  It was implemented, measured and reverted the same day. Two facts settle it. Availability: a
+  thinking block carries `{signature, thinking, type}` and `transcript_turns.text_of` keeps only
+  blocks with a `text` key, so reasoning is structurally invisible today - and it is scarce, found
+  for 1 of 46 surviving prompts in the first replay set and for 12% of prompts even inside the
+  11-16% of recent sessions that record thinking at all. Effect: tested on a TARGETED stratum of
+  49 prompts that DO carry it, each replayed twice adjacent so control and treatment interleave,
+  it made the gate LOWER on 139 of 245 choice-arm cells against higher on 61 (mean and median
+  -0.010) and the arms spoke LESS, 56 cells against 53. That is the wrong direction: missing a
+  needed skill is the dominant failure, so an input that suppresses suggestions makes it worse.
+  `_describing` carries the numbers and the test now asserts a caller sending the field does not
+  change the question, which is how it would creep back.
+
+  A held-out run the same day also closed the arm question: `choice_router_text` does not beat
+  `choice_full` on prompts its option text was not authored from (7 right each at gate 0.30, same
+  wrong, same missed, identical 4-inside/3-outside split of right picks, where the authored set
+  had shown 9 against 4). Prefer `choice_full` - equal accuracy, equal size, and no hand-authored
+  `router_criteria.json` to keep in sync. The 0.7 -> 0.5 gate change from 7.14.0 replicated on
+  those fresh prompts.
+
 ## [7.14.0]
 
 ### Changed

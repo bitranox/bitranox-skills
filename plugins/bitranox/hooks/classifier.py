@@ -444,7 +444,15 @@ def _joined(*parts):
 
 
 def _describing(fields):
-    """The fields that say what work is already under way."""
+    """The fields that say what work is already under way.
+
+    The previous turn's REASONING is deliberately not among them. It was implemented and A/B'd on
+    2026-09-24 over 49 interleaved pairs drawn only from prompts that HAVE it, and it made the gate
+    LOWER on 139 of 245 cells against higher on 61 (mean and median -0.010), so the arms spoke less
+    rather than more - the wrong direction, since missing a needed skill is the dominant failure.
+    It is also absent from about 88% of prompts even in sessions that record thinking at all.
+    Do not re-add it without a result that beats those numbers.
+    """
     return [n for n in (PREVIOUS_FIELD, "recent_activity") if _have(fields, n)]
 
 

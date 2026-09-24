@@ -2,84 +2,84 @@
 
 ## In flight
 
-Nothing. 7.14.0 is committed and pushed; the worktree is clean and level with `origin/master`.
+Nothing. 7.15.0 is committed and pushed; the worktree is clean and level with `origin/master`.
 
 ## Committed, or not
 
-7.14.0 carries `--prompts` on `classifier_eval.py` (pin a replay to an earlier run's exact prompts
-AND recorded state, reporting `state_drift`), the `skill_router` eval threshold 0.7 -> 0.5, and
-five new sibling tests. Machine config unchanged: `classifier_backend = jev`, all three sites still
-`shadow`. Nothing shipped here changes what a live session sees - `SITE_THRESHOLDS` exists only in
-the eval tool, and `skill-router.py` has no threshold at all.
+Two releases this session, both CI-green:
 
-**The paid inputs are durable now**, both byte-verified copies, both gitignored:
+* **7.14.0** - `classifier_eval.py replay --prompts LOG` (pin a replay to an earlier run's exact
+  prompts AND recorded state, with a `state_drift` report), and the `skill_router` eval threshold
+  0.7 -> 0.5.
+* **7.15.0** - the previous turn's reasoning rejected as a router input, with the rejection pinned
+  by a test, plus the held-out result recorded.
 
-* `.plan/jev-replay-2026-09-23/` - panel-1 `labels.json`, `replay-run2.jsonl` (48 files)
-* `.plan/jev-replay-2026-09-24/` - `replay-run4.jsonl`, `labels2.json`, `verdicts2_0-4.json`,
-  `sweep.py`, `check_fit.py`, `merge_verdicts2.py` (24 files)
+Machine config unchanged: `classifier_backend = jev`, all three sites still `shadow`. Nothing here
+changes what a live session sees - `SITE_THRESHOLDS` exists only in the eval tool and
+`skill-router.py` has no threshold at all.
 
-Re-judging costs five opus agents; a replay costs about $0.12. Do not let a `/tmp` sweep take them.
+**Paid inputs, all durable and byte-verified, all gitignored:**
+
+* `.plan/jev-replay-2026-09-23/` - panel-1 `labels.json`, `replay-run2.jsonl`
+* `.plan/jev-replay-2026-09-24/` - `replay-run4.jsonl`, `labels2.json`, `verdicts2_0-4`
+* `.plan/jev-heldout-2026-09-24/` - the held-out run and its labels (`h/`), the reasoning A/B
+  (`stratum.jsonl`, `reasoning-ab.jsonl`), and every analysis script
 
 ## Decided, and why - do not reopen
 
-- **The gate, not the roster, was the dominant failure.** Its AUC is about 0.71 on every arm, so
-  0.7 sat in the steep part of a shallow curve and kept 5 of 11 - reproducing the first
-  adjudication's "missing 6" exactly. No rewording moves a curve like that.
-- **The first-prompt control was never a wording defect.** Its 0.02 margin was that same steep
-  curve. `controls --threshold 0.5` passes all 24 rows on all six arms (positives 0.68-0.72,
-  negatives 0.20-0.23). The previous handover's "left FAILING on purpose" is superseded: the
-  instrument was sound, the operating point was not.
-- **0.5 and not 0.3**, though 0.3 scores better here: 0.5 is where the controls were actually run
-  and clears both ways by about 0.2, where 0.3 leaves 0.07 over the negatives and has never been
-  run.
-- **A pinned replay re-sends the RECORDED state.** Rebuilding it from `source`+`line` was tried
-  first and is unfaithful - `project` reproduced on 39 of 50, differed on 8 because a directory had
-  since gained its own scope descriptor, 3 cwds unresolvable. Holding state fixed is also what
-  makes this an A/B at all.
-- **`nouls` is out.** 42 outright wrong picks at 0.3, because one number gates the turn AND sets
-  its per-skill bar.
-- **The rerank stays settled.** Flat at 2 right across the whole grid.
+- **The gate was the dominant failure, not the roster.** AUC about 0.71 on every arm, so 0.7 sat
+  in the steep part of a shallow curve and kept 5 of 11. Every arm improves as the gate drops, and
+  that REPLICATED on 50 held-out prompts, which is why it is safe to build on.
+- **0.5, not the better-scoring 0.3.** 0.5 is where the controls were actually run and passed on
+  all six arms (positives 0.68-0.72, negatives 0.20-0.23). 0.3 leaves 0.07 over the negatives and
+  has never been run.
+- **The arm question is closed: `choice_full`.** `choice_router_text` led 9 right to 4 on the
+  prompts its option text was authored from, and ties 7-7 on held-out prompts with the same wrong
+  count, same missed count and an identical 4-inside/3-outside split. Equal cost, and `choice_full`
+  needs no hand-authored `router_criteria.json` kept in sync. `nouls` is out (42 wrong at 0.3);
+  the rerank is out (flat at 2 right).
+- **Reasoning as a state field is rejected.** Invisible today by structure, present for about 12%
+  of prompts, and on a targeted stratum of 49 that DO have it the gate went LOWER on 139 of 245
+  cells against higher on 61 and the arms spoke LESS. Wrong direction. `_describing`'s docstring
+  carries the numbers; a test pins it.
+- **A pinned replay re-sends the RECORDED state.** Rebuilding from `source`+`line` reproduced
+  `project` on only 39 of 50 - descriptor files change, cwds stop resolving, transcripts get swept
+  (4 of the original 50 are already gone).
 
-## Not established - do not repeat this as a result
+## Still open
 
-**`choice_router_text`'s lead is contaminated.** It looks dominant (0.30: 9 right / 12 defensible /
-1 wrong / 2 missed, against `choice_full` at 0.70 on 2/7/1/8). But 7 of those 9 right picks fall
-inside the six entries in `router_criteria.json`, which 7.13.0 authored FROM the panel-1
-adjudication over these same 50 prompts. Outside those six it scores 2 right - the same as
-`choice_full`. It is fitted to this test set until a held-out run says otherwise.
+`OPEN-WORK.md` is the list. Rank 10 (a USER item) is still top-ranked and untouched; it is not the
+Jev thread, and recency is not a reason to prefer the Jev thread. Rank 14 (the approved identifier
+guard) is still small and self-contained. Rank 78 is still open.
 
-What IS arm-independent, and therefore safe to build on: every arm improves as the gate drops.
+Inside rank 12, two things remain and they are different in kind:
 
-## Still open, untouched
+1. **Whether any site leaves shadow.** No shadow log can answer this by itself - it is a decision,
+   not a measurement.
+2. **The roster gap.** Skills that NO arm proposes at any threshold: 4 of 13 on the first set
+   (`meta-self-improve`, `meta-context-watcher`, `typesafe-ai`, `soundtouch-decloud`) and 2 of 11
+   on the held-out set (`provmm-build`, `update-config`). A recall/coverage problem, not a gate
+   one. Reasoning was the candidate input for it and is now ruled out, so it needs a different
+   idea.
 
-`OPEN-WORK.md` is the list. Rank 10 (a USER item) is still top-ranked and untouched - it is not
-the Jev thread, and recency is not a reason to prefer the Jev thread. Rank 14 (the approved
-identifier guard) is still small and self-contained. Rank 78 is still open.
+## Lessons for the next nap
 
-A new one this session, inside rank 12: **4 of the 13 prompts that need a skill wanted one NO arm
-proposed at any threshold** (p02 `meta-self-improve`, p05 `meta-context-watcher`, p28
-`typesafe-ai`, p43 `soundtouch-decloud`). That is a roster/coverage gap. No threshold closes it and
-it should not be folded into the gate work.
+- A grep for a literal token is not a structural check: searching `"thinking"` said 29 of 50
+  transcripts carried reasoning, counting real blocks said 1 of 46, and I nearly "fixed" a correct
+  extractor because the bad proxy disagreed with it.
+- Mirroring a production helper can import a bug its caller does not have: `last_reply`'s two-slot
+  fallback exists for a live race, and copying it into a historical extractor silently attached an
+  earlier turn's reasoning to a later prompt. The tell was two unrelated prompts with identical text.
+- A different seed does not give a disjoint sample when the population repeats: every seed tried
+  overlapped the original 50 on 13-23 rows because continuations repeat verbatim. Exclude by value.
+- Interleave by building the pairs into the input, not by running two passes - each prompt twice
+  and adjacent needs no code change and cannot confound arm with clock.
 
 ## The exact next action
 
-If the user picks Jev (rank 12): the **held-out run**. Pin a FRESH 50 prompts with a seed the six
-criteria were never authored against, replay at 0.5, adjudicate blind, and require
-`choice_router_text` to beat `choice_full` OUTSIDE those six entries. About $0.12 plus five judges.
-Only then decide per site whether anything leaves shadow.
-
-Otherwise rank 10 goes first.
-
-## Files that matter
-
-- `plugins/bitranox/skills/meta-self-improve/classifier_eval.py` - `prompts_from_log`,
-  `state_drift`, `_replay_one`, `SITE_THRESHOLDS`, `REPLAY_CONTROLS`, `run_arm`, `ARMS` (six).
-- `plugins/bitranox/hooks/classifier.py` - `skill_router_questions`, `_router_turn_text`,
-  `short_description`.
-- `plugins/bitranox/hooks/router_criteria.json` - the six authored entries; everything else falls
-  back to its description. This is the file whose contamination the held-out run tests.
-- `.plan/jev-replay-2026-09-24/sweep.py` - re-derives any arm's picks at any threshold offline,
-  per shape; `check_fit.py` - the contamination and roster-gap checks.
+Rank 10 goes first unless the user says otherwise. If they pick Jev again, it is the roster gap -
+and the first step there is deciding what evidence would even identify a skill nobody proposed,
+since by construction it is absent from every arm's output.
 
 ## How to verify this still stands
 
@@ -87,12 +87,12 @@ Otherwise rank 10 goes first.
 cd /media/srv-main-softdev/projects/public/KI/bitranox-skills/.claude/worktrees/jev-classifier
 env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml \
   --with ruamel.yaml --with httpx2 python plugins/bitranox/hooks/repo-gate.py --ci
-D=/media/srv-main-softdev/projects/public/KI/bitranox-skills/.plan/jev-replay-2026-09-24
-python3 "$D/sweep.py" "$D/replay-run4.jsonl" "$D/labels2.json"
+D=/media/srv-main-softdev/projects/public/KI/bitranox-skills/.plan/jev-heldout-2026-09-24
+python3 "$D/hx/check_fit.py" plugins/bitranox/hooks/router_criteria.json
 ```
 
-`repo-gate: all checks passed` with 5068 passed. The sweep calls nothing and reprints the table
-above from the recorded run.
+The gate prints `repo-gate: all checks passed`. `check_fit.py` reprints the held-out
+inside/outside split (4/3 for both arms) and the two roster gaps, calling nothing.
 
 ---
 
