@@ -236,6 +236,73 @@ def test_the_shadow_child_logs_both_verdicts_and_only_redacted_state(tmp_path, f
     assert line["redactions"] == 1
 
 
+def _plugin_version():
+    manifest = HOOKS_DIR.parent / ".claude-plugin" / "plugin.json"
+    return json.loads(manifest.read_text(encoding="utf-8"))["version"]
+
+
+def _last_line(log):
+    return json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+
+
+# Sessions on different releases append to ONE log, so a row that does not say which release
+# wrote it cannot be compared before and after a change.
+def test_the_shadow_child_stamps_the_release_that_wrote_the_row(tmp_path, fake):
+    payload = {"site": "stop_signal", "session_id": "s1", "regex": {"fires": False},
+               "requests": [{"fields": {"user_message": "hi"}, "questions": [NOUL.to_json()]}]}
+    r, log = _run_child(tmp_path, fake.url, payload,
+                        {"classifier_backend": "jev", "classifier_stop_signal": "shadow"})
+    assert r.returncode == 0, r.stderr
+    assert _last_line(log)["plugin_version"] == _plugin_version()
+
+
+# Without the transcript and where in it the hook stood, a live row can only be joined to its
+# prompt by text, and repeated prompts ("read the handover") collapse into one.
+def test_the_shadow_child_records_where_the_prompt_sits_in_its_transcript(tmp_path, fake):
+    payload = {"site": "stop_signal", "session_id": "s1", "regex": {"fires": False},
+               "transcript": {"path": "/t/s1.jsonl", "offset": 4096},
+               "requests": [{"fields": {"user_message": "hi"}, "questions": [NOUL.to_json()]}]}
+    r, log = _run_child(tmp_path, fake.url, payload,
+                        {"classifier_backend": "jev", "classifier_stop_signal": "shadow"})
+    assert r.returncode == 0, r.stderr
+    line = _last_line(log)
+    assert line["transcript_path"] == "/t/s1.jsonl" and line["transcript_offset"] == 4096
+
+
+# A child that crashes used to write nothing, so a broken site read exactly like an idle one.
+def test_a_failing_shadow_child_still_logs_a_row_naming_the_error(tmp_path, fake):
+    payload = {"site": "skill_router", "session_id": "s9", "regex": {"router_view": "ctx-v1"},
+               "requests": "not a list of requests"}
+    r, log = _run_child(tmp_path, fake.url, payload,
+                        {"classifier_backend": "jev", "classifier_skill_router": "shadow"})
+    assert r.returncode == 0, r.stderr
+    line = _last_line(log)
+    assert line["site"] == "skill_router" and line["session_id"] == "s9"
+    assert line["reason"].startswith("error: AttributeError")
+    assert line["results"] == [] and line["regex"] == {"router_view": "ctx-v1"}
+    assert line["plugin_version"] == _plugin_version()
+
+
+def test_shadow_guard_swallows_an_exception_and_logs_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    with cl.shadow_guard("recall_rerank", "s7"):
+        raise ValueError("boom %s" % GHP)
+    log = tmp_path / ".claude" / "self-improve-audit" / cl.SHADOW_LOG
+    line = _last_line(log)
+    assert line["site"] == "recall_rerank" and line["session_id"] == "s7"
+    assert line["reason"].startswith("error: ValueError: boom")
+    assert GHP not in log.read_text(encoding="utf-8")
+
+
+def test_shadow_guard_writes_nothing_when_the_block_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    with cl.shadow_guard("recall_rerank", "s7"):
+        pass
+    assert not (tmp_path / ".claude" / "self-improve-audit" / cl.SHADOW_LOG).exists()
+
+
 def test_the_shadow_child_logs_the_skip_reason_when_the_site_is_off(tmp_path, fake):
     payload = {"site": "stop_signal", "session_id": "s1", "regex": {"fires": False},
                "requests": [{"fields": {"user_message": "hi"}, "questions": [NOUL.to_json()]}]}

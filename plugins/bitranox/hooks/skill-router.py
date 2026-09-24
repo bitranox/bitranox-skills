@@ -117,8 +117,8 @@ def _router_fields(prompt, cwd, sid, transcript):
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
     """Hand this prompt to the classifier's detached shadow child: the new-task gate plus one
     noul per skill beside the keyword ranking, with the context the prompt needs to be read.
-    Never changes the nudge and never raises."""
-    try:
+    Never changes the nudge and never raises; a failure is logged as an error row."""
+    with classifier.shadow_guard("skill_router", sid):
         if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
             return
         ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
@@ -139,9 +139,8 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
             skills, fields,
             turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
         classifier.spawn_shadow("skill_router", sid, regex,
-                                [{"fields": fields, "questions": questions}])
-    except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
-        pass
+                                [{"fields": fields, "questions": questions}],
+                                transcript=transcript)
 
 
 def main():

@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.19.0]
+
+### Added
+
+- **Every classifier shadow row names the release that wrote it.** Sessions running different
+  plugin releases append to one `classifier-shadow.jsonl`, and a row carried nothing that said
+  which one, so a before-and-after comparison of a release could only guess from which optional
+  fields happened to be present. Rows now carry `plugin_version`, and `classifier_eval.py report`
+  counts rows per release for each site; older rows show as `unversioned`.
+- **Every row records its transcript and where the hook stood in it.** `transcript_path` and
+  `transcript_offset` (the file size when the hook ran) join a live row back to the prompt it was
+  asked about. Matching by text alone collapses a prompt typed several times in one session, such
+  as "read the handover". `classifier_eval.locate_prompt(row)` does the join. A prompt-time site
+  takes the matching prompt nearest the offset, because its prompt may reach the file before or
+  after the hook runs. The Stop site takes the last one before the offset, because at turn end
+  its prompt is always already written.
+- **A failed shadow comparison leaves a row.** The detached child and all three hook sites
+  swallowed any exception and wrote nothing, so a site that had started crashing looked exactly
+  like one that was switched off. Each failure now appends a row with no answers and
+  `reason: "error: <Type>: <message>"` (message redacted and capped), which the report counts
+  under that site's errors. The hooks still never raise.
+
 ## [7.18.0]
 
 ### Changed

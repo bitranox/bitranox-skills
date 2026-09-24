@@ -188,6 +188,99 @@ def test_summarize_reports_cost_and_errors_per_site():
     assert rep["sites"]["skill_router"]["input_tokens"]["total"] == 9000
 
 
+def test_summarize_counts_rows_per_release_so_a_mixed_log_is_visible():
+    new = router_row([], {"a": 0.1})
+    new["plugin_version"] = "7.19.0"
+    rep = ce.summarize([new, dict(new), router_row([], {"a": 0.1})], threshold=0.5, top=2)
+    assert rep["sites"]["skill_router"]["releases"] == {"7.19.0": 2, "unversioned": 1}
+
+
+def test_an_error_row_counts_as_an_error_and_breaks_no_summary():
+    failed = router_row([], {})
+    failed["results"], failed["reason"] = [], "error: AttributeError: boom"
+    rep = ce.summarize([failed], threshold=0.5, top=2)
+    assert rep["sites"]["skill_router"]["errors"] == {"error: AttributeError: boom": 1}
+    assert rep["sites"]["skill_router"]["unanswered"] == 1
+
+
+# ---- joining a live row back to the prompt it was asked about -------------------------------
+# The same prompt is typed many times in one session ("read the handover"), so text alone cannot
+# say which one a row belongs to; the byte offset the hook recorded can.
+
+def _typed(uuid, text):
+    return {"type": "user", "uuid": uuid, "origin": {"kind": "human"},
+            "message": {"content": text}}
+
+
+def _said(uuid, text):
+    return {"type": "assistant", "uuid": uuid,
+            "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _write(path, records):
+    """Write the records and return the byte offset after each one."""
+    offsets, data = [], b""
+    for r in records:
+        data += (json.dumps(r) + "\n").encode("utf-8")
+        offsets.append(len(data))
+    path.write_bytes(data)
+    return offsets
+
+
+def _located(row, path, offset):
+    return {**row, "transcript_path": str(path), "transcript_offset": offset}
+
+
+REPEATED = [_typed("p1", "read the handover"), _said("a1", "Done, rank 10 is next."),
+            _typed("p2", "read the handover"), _said("a2", "Done again."),
+            _typed("p3", "read the handover")]
+
+
+def test_a_prompt_site_row_finds_its_prompt_when_the_hook_ran_before_it_was_written(tmp_path):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, REPEATED)
+    row = _located(router_row([], {}, prompt="read the handover"), t, ends[1])
+    assert ce.locate_prompt(row) == "p2"
+
+
+def test_a_prompt_site_row_finds_its_prompt_when_the_hook_ran_after_it_was_written(tmp_path):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, REPEATED)
+    row = _located(router_row([], {}, prompt="read the handover"), t, ends[2])
+    assert ce.locate_prompt(row) == "p2"
+
+
+def test_a_stop_row_takes_the_prompt_before_its_offset_even_when_the_next_one_is_nearer(tmp_path):
+    t = tmp_path / "t.jsonl"
+    long_turn = [_typed("p1", "read the handover"), _said("a1", "x" * 5000),
+                 _typed("p2", "read the handover")]
+    ends = _write(t, long_turn)
+    row = _located(stop_row(False, {}, user="read the handover"), t, ends[1])
+    assert ce.locate_prompt(row) == "p1"
+
+
+def test_a_capped_prompt_is_matched_on_its_tail(tmp_path):
+    t = tmp_path / "t.jsonl"
+    text = "head " * 2000 + "and finally the actual ask"
+    ends = _write(t, [_typed("p1", "other"), _typed("p2", text)])
+    capped = "head head" + "\n[... truncated ...]\n" + "and finally the actual ask"
+    assert ce.locate_prompt(_located(router_row([], {}, prompt=capped), t, ends[1])) == "p2"
+
+
+@pytest.mark.parametrize("change", [
+    {"transcript_path": None},
+    {"transcript_offset": None},
+    {"transcript_path": "/nonexistent-dir-for-test/t.jsonl"},
+    {"states": [{"user_prompt": "a prompt nobody typed"}]},
+    {"states": []},
+])
+def test_a_row_that_cannot_be_located_answers_none(tmp_path, change):
+    t = tmp_path / "t.jsonl"
+    ends = _write(t, REPEATED)
+    row = _located(router_row([], {}, prompt="read the handover"), t, ends[1])
+    assert ce.locate_prompt({**row, **change}) is None
+
+
 # ---- a family that is logged but never counted as a firing ------------------------------------
 # `endorsement` scored above the threshold as a turn's ONLY reason to fire on 12 turns across two
 # shadow windows, every one a plain approval ("yes", "go", "lets try 1-4"). Approving a proposal is

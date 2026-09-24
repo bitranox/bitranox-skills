@@ -11,8 +11,10 @@ verdict and a detached child logs Jev's answers beside it, one JSON line per pro
                  scores relevant, plus the spread of Jev's scores (a narrow spread means Jev is not
                  telling the notes apart)
 
-plus latency and token percentiles and the error reasons. Every disagreement can be written to a
-JSONL file, carrying the text it was judged on, for adjudication against the source transcript.
+plus latency and token percentiles, the error reasons, and how many rows each plugin release
+wrote. Every disagreement can be written to a JSONL file, carrying the text it was judged on, for
+adjudication against the source transcript; `locate_prompt(row)` finds the prompt record a row
+was asked about there, from the transcript path and offset the hook recorded.
 
 A disagreement is not a Jev error: either side can be the wrong one, and deciding which is the
 point of adjudication. Standard library only; it reads a local file and calls no API.
@@ -43,6 +45,7 @@ for _d in (str(_HOOKS), str(_JIGS)):
 
 import classifier as cl  # noqa: E402 - the sys.path above is what makes this importable
 import skill_roster  # noqa: E402 - same sys.path
+import transcript_turns  # noqa: E402 - same sys.path
 
 DEFAULT_LOG = Path.home() / ".claude" / "self-improve-audit" / "classifier-shadow.jsonl"
 DEFAULT_THRESHOLD = 0.5
@@ -102,6 +105,61 @@ def load_rows(path, exclude_sessions=()):
                 continue
             rows.append(row)
     return rows, bad
+
+
+# ---- joining a live row to its prompt ------------------------------------------------------
+
+# The part of a logged prompt matched against the transcript: its end, because a capped field
+# keeps head and tail, and the tail survives whole.
+MATCH_TAIL = 80
+# The sites a Stop hook drives. At turn end the prompt is always already written, so the row's
+# prompt is the last match BEFORE the offset; a prompt-time hook may run before or after its
+# prompt reaches the file, so its row takes the match nearest the offset.
+TURN_END_SITES = frozenset({"stop_signal"})
+
+
+def _logged_prompt(row):
+    state = _first_state(row)
+    text = state.get("user_prompt") or state.get("user_message") or ""
+    return text.split(cl.CAP_MARK)[-1].strip()[-MATCH_TAIL:]
+
+
+def _typed_spans(path):
+    """(start, end, uuid, text) of every typed prompt in a transcript, by byte position."""
+    spans, pos = [], 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            start, pos = pos, pos + len(raw)
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            text = transcript_turns.human_text(obj) if isinstance(obj, dict) else ""
+            if text:
+                spans.append((start, pos, obj.get("uuid"), text))
+    return spans
+
+
+def locate_prompt(row):
+    """The uuid of the typed prompt a live shadow row was asked about, else None.
+
+    Text alone cannot place a prompt typed several times in one session, so the match is taken
+    from where the hook stood in the transcript (`transcript_offset`). A row with no location, a
+    transcript that is gone, a notification row, or a prompt redaction changed answers None.
+    """
+    path, offset, want = row.get("transcript_path"), row.get("transcript_offset"), _logged_prompt(row)
+    if not path or offset is None or not want:
+        return None
+    try:
+        spans = [s for s in _typed_spans(path) if want in s[3]]
+    except OSError:
+        return None
+    if row.get("site") in TURN_END_SITES:
+        before = [s for s in spans if s[1] <= offset]
+        return before[-1][2] if before else None
+    if not spans:
+        return None
+    return min(spans, key=lambda s: offset - s[1] if s[1] <= offset else s[0] - offset)[2]
 
 
 def _scores(result):
@@ -263,7 +321,9 @@ def _cost(rows):
         elif r not in answered:
             errors["no answer"] += 1
     tokens = [int(r.get("input_tokens") or 0) for r in answered]
-    return {"rows": len(rows), "errors": dict(errors),
+    # Sessions on different releases share one log; rows from before the stamp existed say so.
+    releases = Counter(str(r.get("plugin_version") or "unversioned") for r in rows)
+    return {"rows": len(rows), "errors": dict(errors), "releases": dict(releases),
             "latency_ms": percentiles([int(r.get("latency_ms") or 0) for r in answered]),
             "input_tokens": {"total": sum(tokens),
                              "mean": round(sum(tokens) / len(tokens)) if tokens else None}}
@@ -318,6 +378,7 @@ def render_text(rep):
     for site, s in rep["sites"].items():
         lines += ["", "== %s: %d rows at threshold %s, errors %s"
                   % (site, s["rows"], s["threshold"], s["errors"] or "none"),
+                  "   releases     " + ", ".join("%s: %d" % kv for kv in sorted(s["releases"].items())),
                   "   latency ms   " + _pct(s["latency_ms"]),
                   "   input tokens total %s, mean %s" % (s["input_tokens"]["total"],
                                                          s["input_tokens"]["mean"])]

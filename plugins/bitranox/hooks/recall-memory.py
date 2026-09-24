@@ -182,8 +182,8 @@ def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript="")
     """Hand the keyword shortlist to the classifier's detached shadow child: one pair request
     per (prompt, note), each with the reply the prompt answers, which settles a word that means
     different things in different conversations. Never changes what is injected and never
-    raises."""
-    try:
+    raises; a failure is logged as an error row."""
+    with classifier.shadow_guard("recall_rerank", sid):
         if not classifier.shadow_enabled(sig.load_config(), "recall_rerank"):
             return
         shortlist = by_score[:SHADOW_SHORTLIST]
@@ -196,9 +196,7 @@ def _shadow_recall(prompt, sid, by_score, ranked, hits, keywords, transcript="")
                          "memory_note": _note_view(p, hits.get(p, keywords), SHADOW_NOTE)},
                         previous),
                      "questions": questions} for p in shortlist]
-        classifier.spawn_shadow("recall_rerank", sid, regex, requests)
-    except Exception:  # noqa: BLE001 - shadow mode must never wedge a prompt
-        pass
+        classifier.spawn_shadow("recall_rerank", sid, regex, requests, transcript=transcript)
 
 
 def main():

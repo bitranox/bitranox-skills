@@ -266,6 +266,46 @@ def test_recall_shadow_sends_the_reply_the_prompt_answers(env, tmp_path, monkeyp
     assert line["regex"]["context_view"] == "prev-reply-v1"
 
 
+# ---- where the prompt sits: the key that joins a live row back to its transcript ----------
+
+def _assert_located(line, t):
+    assert line["transcript_path"] == t
+    assert line["transcript_offset"] == len(open(t, "rb").read())
+
+
+def test_stop_gate_shadow_records_its_transcript_and_offset(env, tmp_path, monkeypatch, capsys):
+    t = _transcript(tmp_path, _typed("fix it"), _said("Fixed."))
+    _config(env["home"], classifier_backend="jev", classifier_stop_signal="shadow")
+    _run(G, monkeypatch, capsys, {"transcript_path": t, "cwd": str(tmp_path), "session_id": "s-o",
+                                  "last_assistant_message": "Fixed."})
+    _assert_located(_wait_for_log(env["home"])[-1], t)
+
+
+def test_skill_router_shadow_records_its_transcript_and_offset(env, tmp_path, monkeypatch,
+                                                               capsys):
+    t = _transcript(tmp_path, _typed("look at the log"), _said("It has 19 rows."))
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "check it again", "cwd": "/p/x", "session_id": "s-o",
+                                   "transcript_path": t})
+    _assert_located(_wait_for_log(env["home"])[-1], t)
+
+
+def test_recall_shadow_records_its_transcript_and_offset(env, tmp_path, monkeypatch, capsys):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    t = _transcript(tmp_path, _typed("status?"), _said("The make test gate is red."))
+    _config(env["home"], classifier_backend="jev", classifier_recall_rerank="shadow")
+    _run(RM, monkeypatch, capsys, {"prompt": "run make test", "cwd": "/p/cur", "session_id": "s-o",
+                                   "transcript_path": t})
+    _assert_located(_wait_for_log(env["home"])[-1], t)
+
+
+def test_a_site_without_a_transcript_logs_no_location(env, monkeypatch, capsys):
+    _config(env["home"], classifier_backend="jev", classifier_skill_router="shadow")
+    _run(SR, monkeypatch, capsys, {"prompt": "check it again", "cwd": "/p/x", "session_id": "s-n"})
+    line = _wait_for_log(env["home"])[-1]
+    assert line["transcript_path"] is None and line["transcript_offset"] is None
+
+
 def test_skill_router_shadow_sends_project_activity_and_skills_in_use(env, tmp_path, monkeypatch,
                                                                      capsys):
     proj = tmp_path / "shop"

@@ -21,6 +21,7 @@ failure - no key, HTTP error, timeout, malformed answer - yields None plus a rea
 exception into a hook.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -51,7 +52,7 @@ __all__ = [
     "detect_language", "get_classifier", "load_key", "load_router_criteria",
     "load_skill_descriptions", "prepare_state",
     "recall_questions", "shadow_enabled", "short_description", "skill_router_choice_questions",
-    "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
+    "shadow_guard", "skill_router_questions", "skill_router_rerank_questions", "spawn_shadow",
     "stop_signal_questions", "with_previous",
 ]
 
@@ -65,6 +66,8 @@ DEFAULT_DEADLINE = 1.5
 # The detached child blocks nobody, so it can wait for a slow answer rather than lose it.
 SHADOW_DEADLINE = 15.0
 FIELD_CAP = 4000
+# An error row carries the message, not a traceback: enough to group failures by cause.
+ERROR_CAP = 200
 CAP_MARK = "\n[... truncated ...]\n"
 # The first-wave sites. Each has its own config knob `classifier_<site>` (off | shadow).
 SITES = ("stop_signal", "skill_router", "recall_rerank")
@@ -626,7 +629,21 @@ def _audit_dir():
     return Path.home() / ".claude" / "self-improve-audit"
 
 
-def spawn_shadow(site, session_id, regex, requests):
+def _transcript_location(transcript):
+    """{"path", "offset"} of the transcript as it stood when the hook ran, both None without one.
+
+    The offset is the file size at that moment, which places the prompt a row was asked about
+    even when the same text was typed many times in one session.
+    """
+    if not transcript:
+        return {"path": None, "offset": None}
+    try:
+        return {"path": str(transcript), "offset": os.path.getsize(transcript)}
+    except OSError:
+        return {"path": str(transcript), "offset": None}
+
+
+def spawn_shadow(site, session_id, regex, requests, transcript=""):
     """Hand one shadow comparison to a detached child and return immediately.
 
     `requests` is a list of {"fields": {name: text}, "questions": [Question, ...]}. The payload
@@ -635,6 +652,7 @@ def spawn_shadow(site, session_id, regex, requests):
     """
     try:
         payload = {"site": site, "session_id": session_id, "regex": regex,
+                   "transcript": _transcript_location(transcript),
                    "requests": [{"fields": r["fields"],
                                  "questions": [q.to_json() for q in r["questions"]]}
                                 for r in requests]}
@@ -672,6 +690,54 @@ def _read_payload(argv):
     return json.loads(sys.stdin.read())
 
 
+def _plugin_version():
+    """The version of the plugin this file shipped in, so each row names the release that wrote
+    it: sessions on different releases append to the same log."""
+    try:
+        manifest = _HOOKS_DIR.parent / ".claude-plugin" / "plugin.json"
+        return str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _stamp(record, payload):
+    """Add the release and the transcript location every row carries, success or failure."""
+    where = payload.get("transcript") if isinstance(payload.get("transcript"), dict) else {}
+    record["plugin_version"] = _plugin_version()
+    record["transcript_path"] = where.get("path")
+    record["transcript_offset"] = where.get("offset")
+    return record
+
+
+def _error_record(payload, exc):
+    """The row for a comparison that failed: no answers, and the cause as its `reason`."""
+    message, _n = prepare_state({"e": "%s: %s" % (type(exc).__name__, exc)}, cap=ERROR_CAP)
+    return _stamp({
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "site": str(payload.get("site") or ""),
+        "session_id": payload.get("session_id"),
+        "regex": payload.get("regex"),
+        "reason": "error: " + message["e"],
+        "results": [],
+    }, payload)
+
+
+@contextlib.contextmanager
+def shadow_guard(site, session_id):
+    """Run a site's shadow hand-off, swallowing any exception but logging it as an error row.
+
+    Shadow mode must never cost a hook anything, and it must not fail silently either: a site
+    that raises and writes nothing looks exactly like a site that is switched off.
+    """
+    try:
+        yield
+    except Exception as exc:  # noqa: BLE001 - shadow mode must never wedge a hook
+        try:
+            _append_log(_error_record({"site": site, "session_id": session_id}, exc))
+        except Exception:  # noqa: BLE001 - nothing left to report to
+            pass
+
+
 def run_shadow(payload, cfg, env=None, home=None):
     """Ask Jev for one site's comparison and return the log record (the caller appends it)."""
     site = str(payload.get("site") or "")
@@ -687,7 +753,7 @@ def run_shadow(payload, cfg, env=None, home=None):
              for s, r in zip(states, requests)]
     results = clf.ask_many(items)
     first_text = " ".join(str(v) for v in (requests[0].get("fields") or {}).values()) if requests else ""
-    return {
+    return _stamp({
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "site": site,
         "session_id": payload.get("session_id"),
@@ -699,7 +765,7 @@ def run_shadow(payload, cfg, env=None, home=None):
         "latency_ms": max([r.latency_ms for r in results if r] or [0]),
         "results": [r.to_json() if r else None for r in results],
         "states": states,
-    }
+    }, payload)
 
 
 def _append_log(record):
@@ -711,11 +777,15 @@ def _append_log(record):
 
 def _shadow_main(argv):
     import self_improve_signals as sig  # noqa: PLC0415 - only the child needs the config reader
+    payload = {}
     try:
         payload = _read_payload(argv)
         _append_log(run_shadow(payload, sig.load_config()))
-    except Exception:  # noqa: BLE001 - a detached child has nobody to report to
-        return 0
+    except Exception as exc:  # noqa: BLE001 - its only reader is the log, so the failure goes there
+        try:
+            _append_log(_error_record(payload if isinstance(payload, dict) else {}, exc))
+        except Exception:  # noqa: BLE001 - nothing left to report to
+            pass
     return 0
 
 

@@ -144,8 +144,9 @@ def _subagent_hint(session):
 def _shadow_stop_signal(event, last_user, last_asst, previous=""):
     """Hand this turn to the classifier's detached shadow child. Never changes the decision
     and never raises: the regex verdict per family is logged beside Jev's. `previous` is the
-    reply the prompt answered, which a bare "yes" or "go" needs to be judged at all."""
-    try:
+    reply the prompt answered, which a bare "yes" or "go" needs to be judged at all. A failure
+    is logged as an error row."""
+    with _classifier.shadow_guard("stop_signal", event.get("session_id") or ""):
         if not _classifier.shadow_enabled(_sig.load_config(), "stop_signal"):
             return
         regex = {"user_pattern": bool(_USER_PATTERN.search(last_user)),
@@ -159,9 +160,8 @@ def _shadow_stop_signal(event, last_user, last_asst, previous=""):
             {"user_message": last_user, "assistant_reply": last_asst}, previous)
         _classifier.spawn_shadow("stop_signal", event.get("session_id") or "", regex,
                                  [{"fields": fields,
-                                   "questions": _classifier.stop_signal_questions()}])
-    except Exception:                                     # noqa: BLE001 - never wedge a turn
-        pass
+                                   "questions": _classifier.stop_signal_questions()}],
+                                 transcript=event.get("transcript_path") or "")
 
 
 def main():
