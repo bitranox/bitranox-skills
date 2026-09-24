@@ -106,8 +106,13 @@ def test_stop_gate_spawns_nothing_while_the_site_is_off(env, tmp_path, monkeypat
 
 # ---- skill router -------------------------------------------------------------------------
 
-def test_skill_router_shadow_asks_one_noul_per_skill_and_keeps_its_output(env, monkeypatch,
-                                                                          capsys):
+def _pick_options(fake):
+    """The option keys of the router's one choice question, as the fake API received them."""
+    return set(fake.requests[-1]["json"]["questions"][cl.PICK_ID]["criteria"])
+
+
+def test_skill_router_shadow_asks_one_choice_over_the_roster_and_keeps_its_output(env, monkeypatch,
+                                                                                  capsys):
     prompt = "git commit fails with a CRLF line ending and the hook is not executable"
     ev = {"prompt": prompt, "cwd": "/p/x", "session_id": "s-router"}
     _config(env["home"])
@@ -121,7 +126,10 @@ def test_skill_router_shadow_asks_one_noul_per_skill_and_keeps_its_output(env, m
     assert line["site"] == "skill_router"
     skills = cl.load_skill_descriptions()
     assert len(skills) >= 20
-    assert set(line["results"][0]["answers"]) == set(skills) | {cl.NEW_TASK_ID}
+    # The replay-winning shape: the gate plus ONE choice, never a noul per skill.
+    assert set(line["results"][0]["answers"]) == {cl.NEW_TASK_ID, cl.PICK_ID}
+    assert _pick_options(env["fake"]) == set(skills) | {cl.NO_SKILL_KEY}
+    assert line["regex"]["question_view"] == SR.QUESTION_VIEW == "choice-v1"
     assert line["regex"]["selected"] == [s for s, _n in SR.match(prompt, SR.load_triggers())]
     assert line["states"][0] == {"user_prompt": prompt, "project": "x"}
     assert line["regex"]["roster"] == "shipped" and line["regex"]["roster_size"] == len(skills)
@@ -143,8 +151,8 @@ def test_skill_router_shadow_offers_the_sessions_installed_skills(env, tmp_path,
                                    "cwd": "/p/x", "session_id": "s-roster",
                                    "transcript_path": str(t)})
     line = _wait_for_log(env["home"])[-1]
-    assert set(line["results"][0]["answers"]) == {"files-edit-xml", "typesafe:typesafe-ai",
-                                                  "update-config", cl.NEW_TASK_ID}
+    assert _pick_options(env["fake"]) == {"files-edit-xml", "typesafe:typesafe-ai",
+                                          "update-config", cl.NO_SKILL_KEY}
     assert line["regex"]["roster"] == "transcript" and line["regex"]["roster_size"] == 3
 
 

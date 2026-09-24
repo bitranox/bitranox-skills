@@ -239,18 +239,37 @@ def _router_picks(scores, threshold, top):
     return {k for _v, k in ranked[:top]}
 
 
+def _router_verdict(row, threshold, top):
+    """(Jev's picks, the score behind each skill it could name) for one row, or None when it was
+    unanswered. A row asked the choice shape is read by the production rule `choice_pick` - its
+    gate plus its winner's own probability - because a choice's winner is a key, not a score, and
+    reading it like a noul row would see no skill at all."""
+    results = row.get("results") or []
+    result = results[0] if results else None
+    if not isinstance(result, dict):
+        return None
+    answers = result.get("answers") or {}
+    if cl.PICK_ID not in answers:
+        scores = _scores(result)
+        return _router_picks(scores, threshold, top), scores
+    winner, probs = _choice_parts(answers, cl.PICK_ID)
+    pick = cl.choice_pick(_value(answers, cl.NEW_TASK_ID), winner, probs, threshold=threshold)
+    return ({pick} if pick else set()), {k: float(v) for k, v in probs.items()
+                                         if isinstance(v, (int, float))}
+
+
 def summarize_skill_router(rows, threshold, top):
-    """The keyword selection against Jev's `top` highest-scoring skills at or above threshold."""
+    """The keyword selection against Jev's suggestion: its `top` highest-scoring skills at or
+    above threshold on a noul row, the gate-plus-choice pick on a choice row."""
     s = {"prompts": 0, "identical": 0, "regex_picks": 0, "jev_picks": 0, "agreed_picks": 0,
          "unanswered": 0, "disagreements": []}
     for row in rows:
-        results = _answered(row)
-        scores = results[0] if results else None
-        if scores is None:
+        verdict = _router_verdict(row, threshold, top)
+        if verdict is None:
             s["unanswered"] += 1
             continue
+        jev, scores = verdict
         regex = set((row.get("regex") or {}).get("selected") or [])
-        jev = _router_picks(scores, threshold, top)
         s["prompts"] += 1
         s["regex_picks"] += len(regex)
         s["jev_picks"] += len(jev)

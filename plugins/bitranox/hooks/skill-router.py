@@ -33,6 +33,10 @@ MAX_SKILLS = 2
 # The router's shadow input beyond the prompt: project scope, recent tool activity, skills in use
 # and the "new task or continuation?" gate question. Recorded in every log line.
 ROUTER_VIEW = "ctx-v1"
+# The SHAPE of the skill question: the gate plus one choice over the roster. The replays preferred
+# it on accuracy over one noul per skill, which the rows before this tag carry, so their picks are
+# read by a different rule and must never pool with these.
+QUESTION_VIEW = "choice-v1"
 # Which KEYWORD matcher produced the row's regex arm. The `*_view` tags say what the classifier
 # was shown; this says what it is being compared AGAINST, and that half changes too. 7.6.0 stopped
 # scoring machine turns and non-prose while the input views stayed the same, which left 15
@@ -116,15 +120,16 @@ def _router_fields(prompt, cwd, sid, transcript):
 
 def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
     """Hand this prompt to the classifier's detached shadow child: the new-task gate plus one
-    noul per skill beside the keyword ranking, with the context the prompt needs to be read.
-    Never changes the nudge and never raises; a failure is logged as an error row."""
+    choice over the roster beside the keyword ranking, with the context the prompt needs to be
+    read. Never changes the nudge and never raises; a failure is logged as an error row."""
     with classifier.shadow_guard("skill_router", sid):
         if not classifier.shadow_enabled(sig.load_config(), "skill_router"):
             return
         ranked = match(prompt, triggers, max_skills=len(triggers) or 1)
         regex = {"selected": [s for s, _n in ranked[:MAX_SKILLS]],
                  "scores": {s: n for s, n in ranked}, "context_view": classifier.CONTEXT_VIEW,
-                 "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW}
+                 "router_view": ROUTER_VIEW, "matcher_view": MATCHER_VIEW,
+                 "question_view": QUESTION_VIEW}
         notification = bool(prompt_text.notification_fields(prompt))
         if notification:
             # Its own field set, so the eval never pools these rows with typed-prompt rows.
@@ -135,7 +140,7 @@ def _shadow_skill_router(prompt, sid, triggers, transcript="", cwd=""):
         fields = _router_fields(prompt, cwd, sid, transcript)
         skills, regex["roster"] = skill_roster.installed_skills(transcript, cwd)
         regex["roster_size"] = len(skills)
-        questions = classifier.skill_router_questions(
+        questions = classifier.skill_router_choice_questions(
             skills, fields,
             turn=classifier.TURN_NOTIFICATION if notification else classifier.TURN_PROMPT)
         classifier.spawn_shadow("skill_router", sid, regex,

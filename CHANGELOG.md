@@ -29,6 +29,28 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.21.0]
+
+### Changed
+
+- **The skill router's Jev shadow asks the shape the replays chose.** The live hook still sent
+  the new-task gate plus one yes/no question per skill, the shape the adjudicated replays ruled
+  out (42 outright wrong picks at a 0.30 gate). It now sends the gate plus ONE choice over the
+  session's installed skills (`classifier.skill_router_choice_questions`), which is the arm that
+  won on accuracy on both labelled sets and on held-out prompts. The site stays in shadow: the
+  keyword match still decides every nudge.
+- **Router rows record their question shape.** Each row carries `question_view: choice-v1`, so
+  `classifier_eval.py report` never pools them with the older one-question-per-skill rows, which
+  are read by a different rule.
+- **`classifier_eval.py report` reads a choice-shaped router row.** A choice's winner is a key,
+  not a score, so the report used to see no skill at all in such a row. It now applies the
+  production rule `classifier.choice_pick`: the winner when the gate passes, or when the winner's
+  own probability reaches the 0.7 bypass, and never the no-match option.
+- **The `classifier_skill_router` knob says what it sends.** `meta-memory-settings` and
+  `docs/reference.md` described one yes/no question per shipped skill over the prompt. They now
+  name the context fields sent with the prompt, the new-task question, and the one choice over the
+  session's installed skills.
+
 ## [7.20.0]
 
 ### Changed

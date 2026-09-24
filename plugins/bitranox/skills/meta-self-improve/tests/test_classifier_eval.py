@@ -133,6 +133,45 @@ def test_router_prompt_where_both_pick_nothing_is_an_agreement():
     assert s["disagreements"] == []
 
 
+def choice_router_row(selected, gate, winner, probs):
+    """A row the live hook writes since it asks the choice shape: the gate plus one choice."""
+    row = router_row(selected, {})
+    row["regex"]["question_view"] = "choice-v1"
+    row["results"][0]["answers"] = {
+        "_new_task": _noul(gate),
+        "_pick": {"type": "choice", "value": winner, "probabilities": probs, "confidence": 0.6}}
+    return row
+
+
+def test_router_reads_a_choice_row_through_the_production_pick_rule():
+    rows = [choice_router_row([], 0.8, "files-edit-xml", {"files-edit-xml": 0.6})]
+    s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
+    assert s["jev_picks"] == 1
+    assert s["disagreements"][0]["jev_only"] == ["files-edit-xml"]
+    assert s["disagreements"][0]["jev_scores"] == {"files-edit-xml": 0.6}
+
+
+def test_router_choice_row_keeps_a_confident_winner_the_gate_vetoed():
+    rows = [choice_router_row([], 0.3, "meta-context-watcher", {"meta-context-watcher": 0.9})]
+    assert ce.summarize_skill_router(rows, threshold=0.5, top=2)["jev_picks"] == 1
+
+
+@pytest.mark.parametrize("gate, winner, prob", [
+    (0.3, "meta-context-watcher", 0.5),   # gate fails and the winner is unsure
+    (0.9, "none_needed", 0.95),           # the no-match option is never a pick
+])
+def test_router_choice_row_suggests_nothing(gate, winner, prob):
+    rows = [choice_router_row([], gate, winner, {winner: prob})]
+    s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
+    assert s["jev_picks"] == 0 and s["identical"] == 1
+
+
+def test_router_choice_row_agrees_with_the_same_keyword_pick():
+    rows = [choice_router_row(["compuse-git"], 0.8, "compuse-git", {"compuse-git": 0.7})]
+    s = ce.summarize_skill_router(rows, threshold=0.5, top=2)
+    assert s["agreed_picks"] == 1 and s["identical"] == 1
+
+
 # ---- recall_rerank -------------------------------------------------------------------------
 
 def test_recall_compares_injected_notes_with_notes_jev_scores_relevant():
