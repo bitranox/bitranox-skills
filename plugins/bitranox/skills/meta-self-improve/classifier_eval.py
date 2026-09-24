@@ -29,6 +29,7 @@ import argparse
 import json
 import math
 import random
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -49,7 +50,22 @@ DEFAULT_THRESHOLD = 0.5
 # placeholder: they ask different questions and their answers are distributed differently.
 # Measured over 1,177 recall pair judgements, 0.5 keeps 20% of them (about 5.9 notes a prompt) and
 # 0.8 keeps 4% (about 1.1), which is the order of what a prompt can actually use.
-SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.7, "recall_rerank": 0.8}
+# `skill_router` was 0.7 and that was measured WRONG on 2026-09-24, against 50 prompts labelled
+# blind by five judges (every pick classified, none sampled). The gate discriminates weakly - AUC
+# about 0.71 on all four arms then measured - so 0.7 sat in the steep part of a shallow curve and
+# discarded correct answers wholesale. Right/defensible/wrong/missed, same run, same prompts:
+#
+#   choice_full          0.70   2 /  7 / 1 / 8        choice_router_text  0.70   4 /  6 / 1 / 8
+#   choice_full          0.50   4 / 13 / 1 / 5        choice_router_text  0.50   6 /  9 / 1 / 5
+#   choice_full          0.30   4 / 15 / 1 / 5        choice_router_text  0.30   9 / 12 / 1 / 2
+#
+# Every arm improves as the gate drops, so this is a property of the gate and not of one arm.
+# 0.5 rather than the better-scoring 0.3 because 0.5 is where the planted controls were actually
+# run and passed on all six arms - positives 0.68-0.72, negatives 0.20-0.23 - so it clears both
+# ways by about 0.2, where 0.3 leaves 0.07 over the negatives and has never been run.
+# `nouls` is not a candidate at any of these: one number gates the turn AND sets its per-skill
+# bar, so at 0.3 it makes 42 outright wrong picks.
+SITE_THRESHOLDS = {"stop_signal": 0.7, "skill_router": 0.5, "recall_rerank": 0.8}
 
 # Families whose score is LOGGED but never counted as a firing. `endorsement` was the only reason
 # to fire on 12 turns across two shadow windows, every one a plain approval ("yes", "go", "lets
@@ -571,6 +587,60 @@ def _is_continuation(prompt):
     return len((prompt or "").split()) <= CONTINUATION_WORDS
 
 
+def prompts_from_log(path):
+    """The exact prompts a previous replay ran on, in their original order.
+
+    `stratified_prompts` samples the transcript corpus, which GROWS between runs, so the same
+    seed does not name the same prompts twice. That silently breaks the one comparison a replay
+    exists to support: a paid adjudication labels PROMPTS, so a later run sampled from a bigger
+    corpus is scored against verdicts describing prompts it never asked about. Reading the set
+    back out of an earlier run's log pins it.
+
+    Carries the RECORDED state, and a pinned replay re-sends it verbatim rather than rebuilding
+    it. Rebuilding was tried first and is wrong for this job: `_router_fields` derives `project`
+    from the nearest CLAUDE.local.md and part of `skills_already_used` from live nudge state,
+    and neither is frozen. Measured 2026-09-23 over these 50 prompts, rebuilding reproduced the
+    recorded `project` on 39, differed on 8 because a directory had since gained its own scope
+    descriptor, and could not resolve a cwd for 3.
+
+    That is real drift in the world, not a defect to resolve harder, and it defeats the one thing
+    a pinned run is for: an adjudication labels a PROMPT IN A STATE, so an arm asked about a
+    different state is not answering the judged question. Holding the state fixed is also what
+    makes this an A/B at all - the arm is the only thing that may differ between runs.
+    """
+    picked = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        state = row.get("state") or {}
+        text = state.get("user_prompt")
+        if not text:
+            continue
+        picked.append({"prompt": text, "uuid": row.get("uuid"), "source": row.get("source"),
+                       "line": row.get("line"), "recorded_state": state})
+    return picked
+
+
+def state_drift(picked, rebuilt):
+    """Which state fields a pinned replay rebuilt differently from the run that recorded them.
+
+    A pinned run is only comparable to an earlier adjudication if the arms are asked the same
+    question, and the question is built from this state. A source transcript that has been moved,
+    rewritten or swept rebuilds a SHORTER state in silence, which would read as an arm changing
+    its mind. Reports one entry per prompt that differs, naming the fields.
+    """
+    out = []
+    for want, got in zip(picked, rebuilt):
+        before = want.get("recorded_state") or {}
+        fields = sorted(set(before) | set(got or {}))
+        differing = [f for f in fields if (before.get(f) or "") != ((got or {}).get(f) or "")]
+        if differing:
+            out.append({"uuid": want.get("uuid"), "prompt": (want.get("prompt") or "")[:60],
+                        "fields": differing})
+    return out
+
+
 def stratified_prompts(prompts, per_class, seed=0):
     """`per_class` continuations and `per_class` substantial prompts.
 
@@ -725,10 +795,14 @@ def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text
     """Every arm's verdict on one prompt, beside the keyword arm's, as one log row."""
     import tempfile  # noqa: PLC0415 - only the live path needs a prefix file
 
-    with tempfile.TemporaryDirectory() as tmp:
-        fields = router._router_fields(  # noqa: SLF001 - the seam under test IS the hook's own
-            prompt["prompt"], prompt.get("cwd") or "", prompt.get("session_id") or "replay",
-            _prefix_transcript(prompt, tmp))
+    # A pinned prompt carries the state its own run recorded, and it is re-sent verbatim: see
+    # `prompts_from_log` for why rebuilding it cannot be made faithful after the fact.
+    fields = prompt.get("recorded_state")
+    if not fields:
+        with tempfile.TemporaryDirectory() as tmp:
+            fields = router._router_fields(  # noqa: SLF001 - the seam under test IS the hook's
+                prompt["prompt"], prompt.get("cwd") or "", prompt.get("session_id") or "replay",
+                _prefix_transcript(prompt, tmp))
     ranked = router.match(prompt["prompt"], triggers, max_skills=len(triggers) or 1)
     row = {"uuid": prompt.get("uuid"), "source": prompt.get("source"), "line": prompt.get("line"),
            "continuation": _is_continuation(prompt.get("prompt")),
@@ -788,11 +862,16 @@ def _run_replay(args):
             {"controls": rows, "input_tokens": ask.tokens, "requests": ask.calls,
              "failures": dict(ask.reasons)}, \
             None if all(r["ok"] for r in rows) else "a planted control answered the wrong way"
-    found = corpus_prompts.collect_prompts(args.root)
-    typed = [p for p in found["prompts"] if router.prompt_text.typed_by_a_person(p["prompt"])]
-    picked = stratified_prompts(typed, args.limit, seed=args.seed)
-    if not picked:
-        return 1, None, "no typed prompts under %s" % args.root
+    if getattr(args, "prompts", None):
+        picked, found, typed = prompts_from_log(args.prompts), {"files_read": 0}, []
+        if not picked:
+            return 1, None, "no prompts in %s" % args.prompts
+    else:
+        found = corpus_prompts.collect_prompts(args.root)
+        typed = [p for p in found["prompts"] if router.prompt_text.typed_by_a_person(p["prompt"])]
+        picked = stratified_prompts(typed, args.limit, seed=args.seed)
+        if not picked:
+            return 1, None, "no typed prompts under %s" % args.root
     ask = Asker(clf)
     check_controls("choice_short_rerank", ask, skills, threshold=args.threshold,
                    shortlist=args.shortlist, bodies=bodies)
@@ -807,10 +886,15 @@ def _run_replay(args):
             rows.append(row)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
-    return 0, {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed)},
-               "sampled": len(rows), "input_tokens": ask.tokens, "requests": ask.calls,
-               "failures": dict(ask.reasons), "log": str(args.out),
-               "arms": _replay_report(rows)}, None
+    report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed)},
+              "sampled": len(rows), "input_tokens": ask.tokens, "requests": ask.calls,
+              "failures": dict(ask.reasons), "log": str(args.out),
+              "arms": _replay_report(rows)}
+    if getattr(args, "prompts", None):
+        drift = state_drift(picked, [r["state"] for r in rows])
+        report["pinned_to"] = str(args.prompts)
+        report["state_drift"] = drift
+    return 0, report, None
 
 
 def _parser():
@@ -825,6 +909,11 @@ def _parser():
             q.add_argument("--arm", choices=sorted(ARMS), default=None,
                            help="one arm (default: every arm)")
         q.add_argument("--root", default=DEFAULT_CORPUS, help="transcript corpus")
+        if name == "replay":
+            q.add_argument("--prompts", type=Path, default=None, metavar="LOG",
+                           help="replay the exact prompts of an earlier run's JSONL log instead "
+                                "of sampling the corpus, so the run stays comparable to an "
+                                "adjudication that labelled those prompts")
         q.add_argument("--limit", type=int, default=25,
                        help="prompts PER CLASS, continuation and substantial (default 25)")
         q.add_argument("--threshold", type=float, default=SITE_THRESHOLDS["skill_router"])

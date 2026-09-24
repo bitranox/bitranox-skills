@@ -29,6 +29,40 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.14.0]
+
+### Changed
+
+- **The skill-router eval threshold is 0.5, not 0.7, because 0.7 was measured wrong.** Against 50
+  prompts labelled blind by five judges, the gate's AUC is about 0.71 on every arm - the
+  needs-a-skill scores sit at p50 0.61 against 0.52 for the rest, with ranges almost fully
+  overlapping - so 0.7 sat in the steep part of a shallow curve and discarded correct answers
+  wholesale. At 0.7 it kept 5 of the 11 prompts panel one said needed a skill, which reproduces
+  that adjudication's "missing 6" exactly: the gate, not the roster, was the dominant failure.
+  Right/defensible/wrong/missed over 13 needing a skill, one run, same prompts: `choice_full`
+  2/7/1/8 at 0.70 against 4/15/1/5 at 0.30; `choice_router_text` 4/6/1/8 at 0.70 against 9/12/1/2
+  at 0.30. Every arm improves as the gate drops, so this is a property of the gate rather than of
+  one arm. 0.5 rather than the better-scoring 0.3 because 0.5 is where the planted controls were
+  actually run and passed on all six arms - positives 0.68-0.72, negatives 0.20-0.23, clearing
+  both ways by about 0.2, where 0.3 leaves 0.07 over the negatives and has never been run.
+  `SITE_THRESHOLDS` lives only in the eval tool and `skill-router.py` has no threshold at all, so
+  this changes what the instrument reports and nothing a live session sees.
+
+  This also retires "the first-prompt control is left failing on purpose". Its 0.02 margin was the
+  same steep curve, not a wording defect; at 0.5 all 24 control rows pass.
+
+### Added
+
+- **`classifier_eval.py replay --prompts LOG`** pins a replay to the exact prompts of an earlier
+  run, so a paid adjudication stays comparable: `stratified_prompts` samples a corpus that GROWS,
+  and the same seed therefore does not name the same prompts twice. A pinned run re-sends the
+  RECORDED state rather than rebuilding it, and reports `state_drift` per prompt. Rebuilding from
+  `source`+`line` was implemented first and measured unfaithful - it reproduced `project` on 39 of
+  50, differed on 8 because a directory had since gained its own scope descriptor, and could not
+  resolve a cwd for 3 - because `project` comes from the nearest `CLAUDE.local.md` and part of
+  `skills_already_used` from live nudge state, neither of which is frozen. Holding the state fixed
+  is also what makes the comparison an A/B: the arm is then the only thing that differs.
+
 ## [7.13.0]
 
 ### Added

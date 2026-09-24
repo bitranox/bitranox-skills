@@ -221,7 +221,11 @@ def test_a_non_firing_family_keeps_its_score_in_the_row():
 def test_each_site_is_judged_at_its_own_default_threshold():
     assert ce.SITE_THRESHOLDS["recall_rerank"] == 0.8
     assert ce.SITE_THRESHOLDS["stop_signal"] == 0.7
-    assert ce.SITE_THRESHOLDS["skill_router"] == 0.7
+    # 0.5, not the 0.7 this shipped with: measured 2026-09-24 against 50 blind-labelled prompts,
+    # 0.7 lost 8 of 13 needed skills on every arm, and 0.5 is where the planted controls were run
+    # and passed. The reasoning is at SITE_THRESHOLDS; this line is what makes a silent change to
+    # it fail, so it is deliberately a hard-coded number and not derived from the module.
+    assert ce.SITE_THRESHOLDS["skill_router"] == 0.5
 
 
 def test_summarize_applies_the_per_site_default_when_no_threshold_is_given():
@@ -605,3 +609,58 @@ def test_sizing_estimates_every_arm_without_calling_anything():
     assert set(est["arms"]) == set(ce.ARMS)
     assert est["arms"]["nouls"]["tokens"] > est["arms"]["choice_short"]["tokens"]
     assert est["total_tokens"] == sum(a["tokens"] for a in est["arms"].values())
+
+
+def _log_row(uuid, prompt, line, **state):
+    return json.dumps({"uuid": uuid, "source": "/t/%s.jsonl" % uuid, "line": line,
+                       "state": dict({"user_prompt": prompt}, **state), "arms": {}})
+
+
+def test_a_pinned_replay_reads_the_exact_prompts_of_an_earlier_run(tmp_path):
+    # The whole point of pinning: a paid adjudication labels PROMPTS, so a later run must ask
+    # about the same ones. Sampling the corpus cannot promise that, because the corpus grows.
+    log = tmp_path / "run.jsonl"
+    log.write_text("%s\n\n%s\n" % (_log_row("a", "reformat the table", 7, project="p"),
+                                   _log_row("b", "go ahead", 12)), encoding="utf-8")
+    picked = ce.prompts_from_log(log)
+    assert [p["prompt"] for p in picked] == ["reformat the table", "go ahead"]
+    assert [p["uuid"] for p in picked] == ["a", "b"]
+    # The recorded state rides along and is what a pinned run re-sends: an adjudication labels a
+    # prompt IN A STATE, so rebuilding a different one would not answer the judged question.
+    assert picked[0]["recorded_state"]["project"] == "p"
+    assert picked[0]["recorded_state"]["user_prompt"] == "reformat the table"
+
+
+def test_a_row_carrying_no_user_prompt_is_skipped_rather_than_replayed_as_empty(tmp_path):
+    log = tmp_path / "run.jsonl"
+    log.write_text("%s\n%s\n" % (json.dumps({"uuid": "x", "state": {}}),
+                                 _log_row("b", "real prompt", 3)), encoding="utf-8")
+    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["real prompt"]
+
+
+def test_state_drift_is_silent_when_the_rebuilt_state_matches_what_was_recorded(tmp_path):
+    log = tmp_path / "run.jsonl"
+    log.write_text(_log_row("a", "reformat the table", 7, project="p") + "\n", encoding="utf-8")
+    picked = ce.prompts_from_log(log)
+    assert ce.state_drift(picked, [{"user_prompt": "reformat the table", "project": "p"}]) == []
+
+
+def test_state_drift_names_a_field_the_rebuild_lost():
+    # The real failure this guards: a source transcript that has been moved or swept rebuilds a
+    # SHORTER state in silence, and the arms then answer a different question than the judges
+    # were shown - which would read as an arm changing its mind rather than as a broken replay.
+    picked = [{"uuid": "a", "prompt": "reformat the table",
+               "recorded_state": {"user_prompt": "reformat the table", "project": "p",
+                                  "previous_assistant_message": "CI is green"}}]
+    drift = ce.state_drift(picked, [{"user_prompt": "reformat the table", "project": "p"}])
+    assert len(drift) == 1
+    assert drift[0]["fields"] == ["previous_assistant_message"]
+    assert drift[0]["uuid"] == "a"
+
+
+def test_state_drift_treats_an_absent_field_and_an_empty_one_as_the_same():
+    # `_router_fields` omits a field that is empty, so "absent" and "empty string" are the same
+    # state; reporting them as drift would make every pinned run look broken.
+    picked = [{"uuid": "a", "prompt": "p",
+               "recorded_state": {"user_prompt": "p", "recent_activity": ""}}]
+    assert ce.state_drift(picked, [{"user_prompt": "p"}]) == []
