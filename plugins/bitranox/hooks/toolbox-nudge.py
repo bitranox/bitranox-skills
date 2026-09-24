@@ -75,12 +75,29 @@ _RULES = [
 # itself. Unscoped, `git push` sitting in a Write body was the dominant firing of the pushcheck
 # rule. A chore that is equally real when authored belongs in `_ANY_TOOL_RULES` below.
 _SHELL_ONLY_RULES = [
-    (re.compile(r"(?:^|[;&|]\s*|\bdo\s+|&&\s*)git\s+push\b|\bmake\s+push\b|\bgh\s+pr\s+create\b"),
+    # A push is a STATEMENT, so it is anchored to where a statement starts: a line start (multi-
+    # line, since a command is often several lines), a separator, or `do`. Environment prefixes
+    # (`LC_ALL=C`, `env -u X`) and git's own global options (`git -C <repo> -c k=v`) may sit
+    # between that anchor and `push`. Measured over 79,213 recorded calls: a push on a later line
+    # or behind one of those prefixes was about 30 un-nudged pushes. Quoted option values reach
+    # this pattern blanked to spaces, hence the quoted alternatives.
+    (re.compile(r"(?m)(?:^|[;&|]\s*|\bdo\s+)\s*"
+                r"(?:(?:[A-Za-z_]\w*=\S*|env(?:\s+-u\s+\w+)*)\s+)*"
+                r"git(?:\s+-[Cc]\s+(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+)*\s+push\b"
+                r"|\bmake\s+push\b|\bgh\s+pr\s+create\b"),
      "pushcheck", "about to push - whether this repo is public, and what the push would publish"),
     (re.compile(r"\bgh\s+run\s+(?:watch|list|view)\b|\bgh\s+pr\s+checks\b"), "ci_wait",
      "waiting on CI for the commit you just pushed"),
-    (re.compile(r"\bsleep\s+\d{2,}\b|\bnohup\b|\bsetsid\b"), "backstop",
-     "a long job with a hand-rolled wait loop that cannot tell hung from finished"),
+    # Three shapes of one chore. A long `sleep`, a detached job, and the two measured as missing:
+    # a polling loop whose `sleep` sits inside its body however short (a poll sleeps 3-6 seconds a
+    # turn - about 38 recorded calls), and a process-table check that reads "gone" as "finished"
+    # (28 calls), which a crash satisfies just as well. The loop body stops at `done`, so a sleep
+    # after the loop ended does not make it a poll.
+    (re.compile(r"\bsleep\s+\d{2,}\b|\bnohup\b|\bsetsid\b"
+                r"|(?s:\b(?:until|while)\b[^\n]*?(?:;|\n)\s*do\b(?:(?!\bdone\b).){0,400}?"
+                r"\bsleep\s+\d)"
+                r"|\bps\b[^\n|]*\|\s*grep\b[^\n]*\|\|\s*\{?\s*echo\s+[\"']?(?:FINISHED|DONE|finished|done)\b"),
+     "backstop", "a long job with a hand-rolled wait loop that cannot tell hung from finished"),
     # Before anchor_edit, which claims every `sed -i`: measured, all 23 firings of this shape were
     # swallowed by that broader rule, so listed after it this one would be dead on arrival.
     (re.compile(r"\bsed\s+-i[^\n]*s/[A-Za-z_][A-Za-z0-9_]{3,}/"), "renamescope",

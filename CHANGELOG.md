@@ -29,6 +29,39 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.15.1]
+
+### Fixed
+
+- **toolbox-nudge's `pushcheck` and `backstop` rules went silent on common spellings of their own
+  chores.** Found by measuring the nudge's RECALL rather than its firing rate: a wider, independent
+  oracle replayed over 79,239 recorded Bash calls, with every silent hit grouped by shape and the
+  narrow classes read row by row.
+  - `pushcheck` anchored a push to `^` without multi-line matching, so a push on any line but the
+    first was invisible, and it allowed nothing between the anchor and `git`. It now matches a
+    push on any line, behind environment prefixes (`LC_ALL=C`, `env -u X`) and behind git's own
+    global options (`git -C <repo>`, `git -c credential.helper=...`), whose quoted values reach
+    the rule blanked.
+  - `backstop` knew only a `sleep` of 10 seconds or more, `nohup` and `setsid`. It now also
+    matches a polling loop with a `sleep` of any length inside its body (stopping at `done`, so a
+    sleep after the loop is not a poll), and a process-table check that reads "gone" as
+    "FINISHED", which a crash satisfies just as well.
+
+  Replayed old against new over the same calls: `pushcheck` 839 -> 1,006 (1.06% -> 1.27% of
+  calls), `backstop` 551 -> 615 (0.70% -> 0.78%); both still fire at most once per session. Every
+  one of the 231 changed verdicts was read: of 166 new `pushcheck` firings about 160 are real
+  pushes, 5 push to a throwaway local repo in a test setup and 1 is test data in a Python list;
+  all 64 new `backstop` firings are hand-rolled waits. A loop inside `bash -c '...'` stays out of
+  reach, since the nudge blanks single-quoted text before any rule sees it.
+
+- **`test_still_silent_for_a_tool_that_exists_nowhere` failed whenever `test_jig_probe.py` ran
+  first.** It was not a leaked registry. The test faked the shipped scripts dir as
+  `tmp_path / "nowhere"`, and the resolver's sibling-skill search runs at
+  `_shipped_dir().parent.parent` - pytest's shared temp root, where the other test's
+  `test_catalogue_takes_each_jig_0/scripts/procsig.py` made the tool "exist". Both tests that fake
+  the shipped dir now place it inside a skills tree they own (`_no_shipped_tree`), the second one
+  having the same exposure for `git_state`. `repo-gate.py --ci` hit it in whole-repo order.
+
 ## [7.15.0]
 
 ### Changed

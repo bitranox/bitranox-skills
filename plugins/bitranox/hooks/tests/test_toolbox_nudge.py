@@ -95,6 +95,16 @@ def _ev(cmd, session="s1"):
     return {"tool_name": "Bash", "session_id": session, "tool_input": {"command": cmd}}
 
 
+def _no_shipped_tree(root):
+    """A shipped-scripts dir that does not exist, inside a skills tree this test owns.
+
+    The resolver also searches SIBLING skills, at `_shipped_dir().parent.parent`. A fake placed
+    directly in `tmp_path` puts that search at pytest's shared temp root, where every other test's
+    tmp_path sits - so a test that writes `<its tmp>/scripts/procsig.py` makes the tool "exist",
+    and this test's verdict depends on which tests ran before it."""
+    return root / "no-plugin" / "skills" / "compuse-toolbox" / "scripts"
+
+
 def _with_tool(home, name="git_state"):
     tools = home / ".claude" / "skills" / "toolbox" / "tools"
     tools.mkdir(parents=True, exist_ok=True)
@@ -125,7 +135,7 @@ def test_main_falls_back_to_the_shipped_copy_when_the_local_one_is_absent(home, 
 
 def test_main_silent_when_the_tool_exists_neither_locally_nor_shipped(home, monkeypatch, capsys):
     (home / ".claude" / "skills" / "toolbox" / "tools").mkdir(parents=True)
-    monkeypatch.setattr(N, "_shipped_dir", lambda: home / "no-such-plugin-dir")
+    monkeypatch.setattr(N, "_shipped_dir", lambda: _no_shipped_tree(home))
     _feed(monkeypatch, _ev("git rev-parse --abbrev-ref HEAD", "s2b"))
     N.main()
     assert capsys.readouterr().out.strip() == ""
@@ -282,7 +292,7 @@ def test_still_silent_for_a_tool_that_exists_nowhere(tmp_path, monkeypatch, caps
     """Must-not-break: a match for a tool neither local nor shipped stays silent."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(N, "_shipped_dir", lambda: tmp_path / "nowhere")
+    monkeypatch.setattr(N, "_shipped_dir", lambda: _no_shipped_tree(tmp_path))
     assert _run(_event("pkill -f myserver", session="s3"), monkeypatch, capsys) is None
 
 
@@ -357,6 +367,65 @@ def test_a_ci_poll_loop_routes_to_ci_wait_not_backstop():
     first. Ordering is behaviour here, not tidiness: the rules are first-match-wins."""
     loop = "for i in $(seq 1 8); do sleep 30; gh run list --json headSha; done"
     assert N.match_tool(loop, "Bash")[0] == "ci_wait"
+
+
+# ---- recall: shapes the rules above went silent on ------------------------------------------------
+# Found by replaying a wider, independent oracle over 79,213 recorded Bash calls and reading every
+# silent hit: about 30 real pushes and about 66 hand-rolled waits went un-nudged. Each case below is
+# one of those recorded shapes, reduced.
+
+def _bash(command):
+    """The verdict production gives a Bash call: the same text extraction, then the rules."""
+    matched = N.match_tool(N.extract_text("Bash", {"command": command}), "Bash")
+    return matched[0] if matched else None
+
+
+def test_pushcheck_sees_a_push_on_a_later_line():
+    """A multi-line command puts the push on its own line. Without multi-line matching the `^`
+    alternative only ever meant the first character of the whole command."""
+    assert _bash("cd /repo\ngit push origin main") == "pushcheck"
+    assert _bash('tail -3 "$SP/c.txt"\ngit push origin master > "$SP/p.txt" 2>&1') == "pushcheck"
+
+
+def test_pushcheck_sees_a_push_behind_an_environment_prefix():
+    assert _bash("LC_ALL=C git push") == "pushcheck"
+    assert _bash("env -u VIRTUAL_ENV git push origin HEAD:master") == "pushcheck"
+    assert _bash("cd /r && env -u GIT_DIR -u GIT_INDEX_FILE git push origin master") == "pushcheck"
+
+
+def test_pushcheck_sees_a_push_behind_git_global_options():
+    """`git -C <repo> push` is how a loop over several repos pushes each one."""
+    assert _bash('git -C "$r" push origin main') == "pushcheck"
+    assert _bash("git -C $r -c credential.helper='!gh auth git-credential' push origin main") \
+        == "pushcheck"
+
+
+def test_pushcheck_still_ignores_prose_that_names_a_push():
+    """Mid-sentence text is not a statement: the anchors stay line start or a separator."""
+    assert _bash("echo we never git push here") is None
+    assert _bash("grep -n 'git push' CLAUDE.md") != "pushcheck"
+
+
+def test_backstop_sees_a_polling_loop_with_a_short_sleep():
+    """The original rule knew only `sleep` of 10 or more; a poll sleeps 3-6 seconds a turn."""
+    assert _bash("until grep -qE '^RC=' /tmp/s.log; do sleep 5; done; tail -4 /tmp/s.log") \
+        == "backstop"
+    assert _bash("i=0; until [ -s out.jsonl ] || [ $i -ge 60 ]; do sleep 3; i=$((i+1)); done") \
+        == "backstop"
+    assert _bash("until grep -q passed t.output\ndo\n  sleep 5\ndone") == "backstop"
+
+
+def test_backstop_sees_process_absence_read_as_finished():
+    """No process is not the same as success: a crash leaves the table just as empty."""
+    assert _bash("ps -eo etimes,comm | grep -w pytest || echo FINISHED") == "backstop"
+    assert _bash("ps -eo etime,args | grep '[b]ench' | head -1 || { echo FINISHED; tail -5 l; }") \
+        == "backstop"
+
+
+def test_backstop_ignores_a_sleep_after_a_loop_that_ended():
+    """A `sleep 1` AFTER `done` is not inside the loop, so the loop is not a poll."""
+    assert _bash("pgrep x | while read p; do kill $p; done; sleep 1; ls") is None
+    assert _bash("while read -r f; do wc -l \"$f\"; done < list.txt") is None
 
 
 def test_match_transcript_index_on_a_hand_walk_over_past_sessions():
