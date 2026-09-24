@@ -713,6 +713,66 @@ def test_the_default_roster_is_the_shipped_one_so_earlier_runs_stay_comparable(t
     assert ce.roster_for({"source": src}, SKILLS, "shipped") == (SKILLS, "shipped")
 
 
+def test_a_description_override_replaces_the_listed_text_by_bare_name():
+    # A listing names a plugin's own skills bare and other plugins' skills prefixed; an override
+    # written as the bare name must reach both spellings.
+    offered = {"meta-context-watcher": "old", "typesafe:typesafe-ai": "ts", "compuse-bash": "sh"}
+    out, applied = ce.with_descriptions(offered, {"meta-context-watcher": "new",
+                                                  "typesafe-ai": "ts2"})
+    assert out == {"meta-context-watcher": "new", "typesafe:typesafe-ai": "ts2",
+                   "compuse-bash": "sh"}
+    assert applied == ["meta-context-watcher", "typesafe:typesafe-ai"]
+    assert offered["meta-context-watcher"] == "old", "the caller's roster must not be mutated"
+
+
+def test_an_override_naming_no_offered_skill_reports_that_nothing_was_applied():
+    out, applied = ce.with_descriptions({"compuse-bash": "sh"}, {"meta-context-watcher": "new"})
+    assert out == {"compuse-bash": "sh"} and applied == []
+
+
+def test_the_replay_command_reads_each_description_override_from_its_file(tmp_path):
+    f = tmp_path / "desc.txt"
+    f.write_text("  Use when reading a handover\n", encoding="utf-8")
+    args = ce._parser().parse_args(
+        ["replay", "--description", "meta-context-watcher=%s" % f,
+         "--description", "compuse-bash=%s" % f])
+    assert args.description == [("meta-context-watcher", "Use when reading a handover"),
+                                ("compuse-bash", "Use when reading a handover")]
+    assert ce._parser().parse_args(["replay"]).description is None
+
+
+@pytest.mark.parametrize("value", ["no-equals-sign", "=file.txt", "skill=", "skill=missing.txt"])
+def test_a_malformed_or_unreadable_description_override_is_refused(tmp_path, value, capsys):
+    with pytest.raises(SystemExit):
+        ce._parser().parse_args(["replay", "--description", value.replace(
+            "missing.txt", str(tmp_path / "missing.txt"))])
+    assert "--description" in capsys.readouterr().err
+
+
+class _NoKeywords:
+    @staticmethod
+    def match(_prompt, _triggers, max_skills):
+        return []
+
+
+def test_a_replay_row_offers_the_overridden_text_and_records_that_it_did():
+    ask = FakeAsk([{}])
+    args = ce._parser().parse_args(["replay", "--arm", "choice_full"])
+    args.description = [("coding-python-uv", "Use when READING A HANDOVER")]
+    prompt = {"prompt": "read the handover", "recorded_state": {"user_prompt": "read the handover"}}
+    row = ce._replay_one(prompt, ask, SKILLS, {}, _NoKeywords, {}, args)
+    assert row["description_overrides"] == ["coding-python-uv"]
+    assert ask.asked[0]["questions"][1].criteria["coding-python-uv"] == \
+        "Use when READING A HANDOVER"
+
+
+def test_a_replay_row_without_overrides_keeps_its_earlier_shape():
+    args = ce._parser().parse_args(["replay", "--arm", "choice_full"])
+    prompt = {"prompt": "go", "recorded_state": {"user_prompt": "go"}}
+    row = ce._replay_one(prompt, FakeAsk([{}]), SKILLS, {}, _NoKeywords, {}, args)
+    assert "description_overrides" not in row
+
+
 def test_a_replay_can_be_limited_to_one_arm():
     assert ce.selected_arms(None) == list(ce.ARMS)
     assert ce.selected_arms("choice_full") == ["choice_full"]

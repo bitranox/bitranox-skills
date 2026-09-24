@@ -1,6 +1,6 @@
 ---
 name: meta-context-watcher
-description: Use when a session's context is large enough that quality is degrading or compaction is close, when a Stop nudge reports the handover threshold was crossed, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog OPEN-WORK.md, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "what is still open"
+description: Use when a session's context is large enough that quality is degrading or compaction is close, when a Stop nudge reports the handover threshold was crossed, or on "write a handover", "hand this over", "context is getting full", or "let's start a fresh session". Also use when a session picks up from an existing handover.md or OPEN-WORK.md - "read the handover", "what is still open", "list the open points" - when unfinished work or an unmet user request must outlive the session and belongs in the standing backlog, when open items keep sinking under whatever was worked on last, or on "add this to the backlog", "clean up the backlog"
 ---
 
 # Write the handover, then start clean

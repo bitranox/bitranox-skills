@@ -29,6 +29,42 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.18.0]
+
+### Changed
+
+- **`meta-context-watcher`'s description names the READING side of a handover.** The skill's body
+  has always covered a session that picks up from `handover.md` (absorb it, mark it stale, read
+  `OPEN-WORK.md` first), but its description spoke only of writing one, so a router judging from
+  descriptions had no reason to offer it for "read the handover and give me the open points". The
+  description now says so, and names "list the open points" and "clean up the backlog". It is 637
+  characters.
+
+  Measured on the Jev router (`choice_full`, gate 0.5, each prompt offered its own session's
+  installed skills), old wording against new, alternating runs. On a FRESH 40-prompt handover and
+  backlog set that shares no prompt text with any earlier set, labelled blind by five judges who saw
+  a neutral summary of the skill's body rather than either wording: context-watcher caught 11 of 32
+  turns that need it with the old wording, 21 with the new, identical over two runs. Wrong picks went
+  1 to 0 and picks on prompts needing no skill stayed at 1. On the two earlier 50-prompt sets the
+  new wording added context-watcher picks on "read the handover" turns that their panels had marked
+  as needing no skill; those panels had seen the OLD description. Re-judged by a fresh blind panel
+  that saw the neutral summary, all 11 disputed rows came back unanimous that context-watcher is
+  right, while 4 unrelated control rows got it 0 times. With those labels the new wording has 0
+  wrong context-watcher picks on any set. Claude Code's own routing moved the same way: two haiku
+  probes routing 8 fresh prompts chose the skill 0 of 8 times on the old wording and 8 of 8 on the
+  new. Still missed: "what next for <project>" turns, where context-watcher scores under 0.1.
+  The set was selected by intent words, so these figures describe handover and backlog turns, not
+  all prompts.
+
+### Added
+
+- **`classifier_eval.py replay --description SKILL=FILE`** offers SKILL with FILE's text as its
+  description (repeatable), so a reworded description can be measured on the same prompts. An
+  installed roster is read from each prompt's own transcript and so carries the wording that
+  session saw, which an edited `SKILL.md` never reaches. Each row records the keys it overrode in
+  `description_overrides` and the report counts rows per override, so an override that matched
+  nothing is visible rather than reading as "the new wording changed nothing".
+
 ## [7.17.0]
 
 ### Added

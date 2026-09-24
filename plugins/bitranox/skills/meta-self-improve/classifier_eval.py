@@ -817,6 +817,38 @@ def roster_for(prompt, shipped, mode):
     return shipped, skill_roster.SOURCE_SHIPPED
 
 
+def with_descriptions(offered, overrides):
+    """(roster, applied): `offered` with each override's text in place of the listed description.
+
+    An installed roster is read from the prompt's own transcript, so it carries the descriptions
+    that session saw, and an edited SKILL.md never reaches a replay through it. Overrides are keyed
+    by the bare skill name, because a listing names a plugin's skill both bare and prefixed.
+    `applied` is returned so a row can prove the override took: a name that matched nothing leaves
+    the run identical to its control and would otherwise read as "the new wording changed nothing".
+    """
+    if not overrides:
+        return offered, []
+    out = dict(offered)
+    applied = [key for key in offered if key.rsplit(":", 1)[-1] in overrides]
+    for key in applied:
+        out[key] = overrides[key.rsplit(":", 1)[-1]]
+    return out, sorted(applied)
+
+
+def description_override(value):
+    """argparse type for `--description SKILL=FILE`: (skill, the file's text)."""
+    name, sep, path = value.partition("=")
+    if not sep or not name.strip() or not path.strip():
+        raise argparse.ArgumentTypeError("expected SKILL=FILE, got %r" % value)
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise argparse.ArgumentTypeError("cannot read %s: %s" % (path, exc)) from exc
+    if not text:
+        raise argparse.ArgumentTypeError("%s is empty" % path)
+    return name.strip(), text
+
+
 def selected_arms(arm):
     """The arms a run asks: one when named, else all of them. A paid run that only needs one
     arm should not pay for six."""
@@ -837,11 +869,15 @@ def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text
                 _prefix_transcript(prompt, tmp))
     ranked = router.match(prompt["prompt"], triggers, max_skills=len(triggers) or 1)
     offered, source = roster_for(prompt, skills, getattr(args, "roster", "shipped"))
+    overrides = dict(getattr(args, "description", None) or [])
+    offered, applied = with_descriptions(offered, overrides)
     row = {"uuid": prompt.get("uuid"), "source": prompt.get("source"), "line": prompt.get("line"),
            "continuation": _is_continuation(prompt.get("prompt")),
            "lang": cl.detect_language(prompt.get("prompt") or ""),
            "keyword_picks": [s for s, _n in ranked[:args.top]], "state": fields,
            "roster": source, "roster_size": len(offered), "arms": {}}
+    if overrides:
+        row["description_overrides"] = applied
     for name in selected_arms(getattr(args, "arm", None)):
         row["arms"][name] = run_arm(name, ask, fields, offered, threshold=args.threshold,
                                     top=args.top, shortlist=args.shortlist, bodies=bodies,
@@ -926,6 +962,12 @@ def _run_replay(args):
               "roster": getattr(args, "roster", "shipped"),
               "rosters_used": dict(Counter(r["roster"] for r in rows)),
               "arms": _replay_report(rows, args.threshold)}
+    if getattr(args, "description", None):
+        # Rows each override reached, per skill: 0 means the run was its own control.
+        report["description_overrides"] = {
+            name: sum(1 for r in rows if any(k.rsplit(":", 1)[-1] == name
+                                             for k in r.get("description_overrides", [])))
+            for name, _text in args.description}
     if getattr(args, "prompts", None):
         drift = state_drift(picked, [r["state"] for r in rows])
         report["pinned_to"] = str(args.prompts)
@@ -948,6 +990,10 @@ def _parser():
             q.add_argument("--roster", choices=ROSTERS, default="shipped",
                            help="the skills offered: this plugin's own (default, comparable with "
                                 "earlier runs) or each prompt's session listing (installed)")
+            q.add_argument("--description", type=description_override, action="append",
+                           default=None, metavar="SKILL=FILE",
+                           help="offer SKILL with the text of FILE as its description, to "
+                                "measure a reworded description on the same prompts (repeatable)")
         q.add_argument("--root", default=DEFAULT_CORPUS, help="transcript corpus")
         if name == "replay":
             q.add_argument("--prompts", type=Path, default=None, metavar="LOG",
