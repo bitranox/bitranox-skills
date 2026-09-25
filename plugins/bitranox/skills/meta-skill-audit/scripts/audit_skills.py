@@ -666,11 +666,30 @@ def _refuse_input_inside(room, sources):
                 "source outside the room, or --reuse-room to review the existing copy" % (src, target))
 
 
+def _refuse_room_inside(room_root, sources):
+    """Raise RoomError when the room root is a source or lies inside one.
+
+    The opposite nesting to `_refuse_input_inside`, and worse: the copy then contains the room it
+    is being written into, so copytree recursed until the path was too long and left that runaway
+    tree INSIDE the source; with --reuse-room the reviewers would read, and the reports land in,
+    the tree under audit. Refused before anything is created, whatever --reuse-room says."""
+    target = Path(room_root).resolve()
+    for src in sources:
+        if not src:
+            continue
+        resolved = Path(src).resolve()
+        if resolved == target or resolved in target.parents:
+            raise RoomError(
+                "the room %s lies inside the source %s, so the copy would contain the room itself "
+                "- pass a --room outside the source" % (target, resolved))
+
+
 def prepare_room(plugin_src, room_root, reuse=False):
     """Copy the plugin into `<room_root>/plugin` and make `<room_root>/reports`. Returns the copy.
 
     The room belongs OUTSIDE the knowledge tree: a reviewer whose cwd sits inside it also picks up
     the tree's CLAUDE.md cascade, which is a second contamination route on top of recall."""
+    _refuse_room_inside(room_root, (plugin_src,))
     room_root = Path(room_root)
     room = room_root / "plugin"
     if room.exists() and not reuse:
@@ -793,6 +812,7 @@ def prepare_room_from_skills(skills_dir, room_root, hooks_dir=None, reuse=False)
     `prepare_room` copies the WHOLE plugin dir, which is right for a plugin and ruinous for a
     skills dir whose parent is `~/.claude`: reviewing two personal skills would copy gigabytes of
     transcripts, caches and installed plugins. Stage only what a reviewer reads."""
+    _refuse_room_inside(room_root, (skills_dir, hooks_dir))
     room_root = Path(room_root)
     room = room_root / "plugin"
     if room.exists() and not reuse:
@@ -982,6 +1002,7 @@ def _list(args, only):
 
     The room copy is what a run reviews only under --reuse-room; otherwise a run deletes it and
     copies the source afresh, so previewing the old copy undercounts every file added since."""
+    _refuse_room_inside(args.room, (args.plugin, args.skills_dir, args.hooks_dir))
     room = Path(args.room) / "plugin"
     reuse = args.reuse_room and room.is_dir()
     if args.scripts:
@@ -1043,12 +1064,33 @@ def _sweep(args, only):
     return 0
 
 
+# Flags only one mode can honour: (flag, attribute, the mode that honours it, is it that mode?).
+# Every other mode used to accept and ignore them, so `--kind hook` without --scripts reviewed
+# every skill. A new mode-bound flag goes here, and the refusal follows.
+_MODE_BOUND_FLAGS = (
+    ("--kind", "kind", "--scripts", lambda a: a.scripts),
+    ("--skip-existing", "skip_existing", "--scripts", lambda a: a.scripts),
+    ("--include-vendored", "include_vendored", "--scripts", lambda a: a.scripts),
+    ("--hooks-dir", "hooks_dir", "--skills-dir", lambda a: bool(a.skills_dir)),
+)
+
+
+def mode_conflicts(args):
+    """One message per mode-bound flag given in a mode that would ignore it."""
+    return ["%s is honoured only with %s; this run would ignore it" % (flag, needs)
+            for flag, attr, needs, honoured in _MODE_BOUND_FLAGS
+            if getattr(args, attr) and not honoured(args)]
+
+
 def main(argv=None):
     _tolerant_stdio()
     ap = _parser()
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     if args.scripts and args.skills_dir:
         ap.error("--scripts needs --plugin: a loose --skills-dir is staged for the skill sweep only")
+    conflicts = mode_conflicts(args)
+    if conflicts:
+        ap.error("; ".join(conflicts))
     only = tuple(s.strip() for s in args.only.split(","))
     try:
         return _list(args, only) if args.list else _sweep(args, only)

@@ -287,16 +287,73 @@ def derive_name(source, subdir):
     return p.stem if p.suffix == ".md" else p.name
 
 
+# A skill name is [a-z0-9-]: a hyphen continues it, so `\b` would match "git" inside "git-worktrees".
+_NAME_EDGE_L = r"(?<![A-Za-z0-9_-])"
+_NAME_EDGE_R = r"(?![A-Za-z0-9_-])"
+
+
+def _identity_patterns(old_name):
+    """(pattern, replacement-template) for the places the name IS the skill: never plain prose.
+
+    A skill named after its tool (`git`) shares its name with the word the body uses for that
+    tool, so a whole-word rewrite turned `git commit` into `<new> commit`. Only a skill reference
+    (`<namespace>:<name>`) and a path segment under `skills/` name the skill itself.
+    """
+    name = re.escape(old_name)
+    spaces = "|".join(re.escape(ns) for ns in (*FOREIGN_NAMESPACES, "bitranox"))
+    return [
+        (rf"{_NAME_EDGE_L}(?:{spaces}):{name}{_NAME_EDGE_R}", "bitranox:{new}"),
+        (rf"(?<=skills[/\\]){name}(?=[/\\]|{_NAME_EDGE_R})", "{new}"),
+    ]
+
+
 def rewrite_cross_refs(text, old_name, new_name):
-    """Rewrite the skill's own name and foreign namespaces to bitranox form. Returns (text, n)."""
+    """Rewrite references to the skill and foreign namespaces to bitranox form. Returns (text, n).
+
+    The skill's name is rewritten only where it identifies the skill (see _identity_patterns);
+    the front matter `name:` and a title echoing it are rewrite_identity()'s job.
+    """
     changes = 0
     if old_name and old_name != new_name:
-        new_text, n = re.subn(rf"\b{re.escape(old_name)}\b", new_name, text)
-        text, changes = new_text, changes + n
+        for pattern, template in _identity_patterns(old_name):
+            replacement = template.format(new=new_name)
+            text, n = re.subn(pattern, lambda _m, r=replacement: r, text)
+            changes += n
     for ns in FOREIGN_NAMESPACES:
-        new_text, n = re.subn(rf"\b{re.escape(ns)}:", "bitranox:", text)
+        new_text, n = re.subn(rf"{_NAME_EDGE_L}{re.escape(ns)}:", "bitranox:", text)
         text, changes = new_text, changes + n
     return text, changes
+
+
+def count_bare_mentions(text, name):
+    """How often `name` still appears as a whole word: prose the human decides about."""
+    if not name:
+        return 0
+    return len(re.findall(rf"{_NAME_EDGE_L}{re.escape(name)}{_NAME_EDGE_R}", text))
+
+
+def rewrite_identity(text, old_name, new_name):
+    """Set the front matter `name:` and an H1 that is exactly the old name. Returns (text, n).
+
+    A replaced line keeps its own "\r", so a CRLF file stays CRLF. A title that says more than
+    the name is prose and stays.
+    """
+    lines = text.split("\n")
+    changes = 0
+
+    def replace(i, new_line):
+        lines[i] = new_line + ("\r" if lines[i].endswith("\r") else "")
+
+    body = _frontmatter_end(lines)
+    for i in range(1, max(body - 1, 1)):
+        if lines[i].startswith("name:") and lines[i][len("name:"):].strip().strip("\"'") != new_name:
+            replace(i, f"name: {new_name}")
+            changes += 1
+    h1 = _h1_index(lines, body)
+    if old_name and h1 is not None and lines[h1][2:].strip() == old_name:
+        replace(h1, f"# {new_name}")
+        changes += 1
+    return "\n".join(lines), changes
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +604,11 @@ def _gate(lic):
 
 
 def _rewrite_tree(dest, old_name, new_name):
-    """Rewrite cross-refs in every text file, keeping each file's line endings. {relpath: n}."""
+    """Rewrite cross-refs in every text file, keeping each file's line endings.
+
+    Returns {relpath: (rewritten, left)}: `left` counts the old name still standing as a plain
+    word, which a human must judge (a skill named `git` means the tool there as often as itself).
+    """
     rewrites = {}
     for f in dest.rglob("*"):
         if f.is_file() and f.suffix.lower() in {".md", ".py", ".txt", ".json", ".yml", ".yaml"}:
@@ -556,9 +617,14 @@ def _rewrite_tree(dest, old_name, new_name):
             except (OSError, UnicodeDecodeError):
                 continue
             new_txt, n = rewrite_cross_refs(txt, old_name, new_name)
+            if f == dest / "SKILL.md":
+                new_txt, m = rewrite_identity(new_txt, old_name, new_name)
+                n += m
             if n:
                 f.write_bytes(new_txt.encode("utf-8"))
-                rewrites[str(f.relative_to(dest))] = n
+            left = count_bare_mentions(new_txt, old_name) if old_name != new_name else 0
+            if n or left:
+                rewrites[str(f.relative_to(dest))] = (n, left)
     return rewrites
 
 
@@ -615,9 +681,9 @@ def _report(name, lic, dest, rewrites, stub, gate_out, *, credited, noticed):
     print(f"LICENSE GATE: ACCEPTED ({lic['id']}; {lic['where'] or 'detected'}).")
     print(f"Adopted as: {dest}")
     if rewrites:
-        print("Cross-ref rewrites:")
-        for rel, n in sorted(rewrites.items()):
-            print(f"  {rel}: {n}")
+        print("Cross-ref rewrites (rewritten; plain-word mentions of the old name left for review):")
+        for rel, (n, left) in sorted(rewrites.items()):
+            print(f"  {rel}: {n} rewritten" + (f"; {left} left for review" if left else ""))
     else:
         print("Cross-ref rewrites: none")
     print(f"Tests stub: {stub if stub else 'not needed (no shipped .py) or already present'}")

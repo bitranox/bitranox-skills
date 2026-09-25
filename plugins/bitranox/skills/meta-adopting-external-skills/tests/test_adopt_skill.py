@@ -133,12 +133,63 @@ def test_derive_name_from_url_and_path():
 
 
 def test_rewrite_cross_refs():
-    text = "Use oldname here. See superpowers:git-worktrees and obra:thing."
+    text = "See superpowers:oldname, superpowers:git-worktrees and obra:thing."
     out, n = AS.rewrite_cross_refs(text, "oldname", "newname")
-    assert "newname here" in out
+    assert "bitranox:newname," in out
     assert "bitranox:git-worktrees" in out
     assert "bitranox:thing" in out
     assert n == 3
+
+
+@pytest.mark.parametrize("text", [
+    "Run `git commit` before you push.",
+    "git is the tool this skill drives.",
+    "Use `git-worktrees` for isolation.",
+    "See superpowers:git-worktrees.",       # a different skill that merely starts with the name
+    "Files live in .git/hooks/.",
+])
+def test_the_name_as_an_ordinary_word_is_left_alone(text):
+    """An upstream skill called `git` must not rewrite the git TOOL wherever the word appears."""
+    out, _n = AS.rewrite_cross_refs(text, "git", "devops-git")
+    assert "devops-git" not in out, out
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("See superpowers:git for more.", "See bitranox:devops-git for more."),
+    ("Invoke bitranox:git first.", "Invoke bitranox:devops-git first."),
+    ("Run skills/git/run.py.", "Run skills/devops-git/run.py."),
+    ("Run skills\\git\\run.py.", "Run skills\\devops-git\\run.py."),
+])
+def test_the_name_as_the_skills_identity_is_rewritten(text, expected):
+    """Control: a skill reference or a path under skills/ IS the skill's identity."""
+    out, n = AS.rewrite_cross_refs(text, "git", "devops-git")
+    assert (out, n) == (expected, 1)
+
+
+def test_rewrite_identity_keeps_crlf_and_a_title_that_says_more():
+    text = "---\r\nname: git\r\n---\r\n# git\r\n\r\nbody\r\n"
+    out, n = AS.rewrite_identity(text, "git", "devops-git")
+    assert (out, n) == ("---\r\nname: devops-git\r\n---\r\n# devops-git\r\n\r\nbody\r\n", 2)
+    titled = "---\nname: git\n---\n# git for teams\n"
+    out, n = AS.rewrite_identity(titled, "git", "devops-git")
+    assert (out, n) == ("---\nname: devops-git\n---\n# git for teams\n", 1)
+
+
+def test_an_upstream_skill_named_git_keeps_the_git_tool_end_to_end(tmp_path):
+    repo, skills = _fake_repo(tmp_path)
+    src = _tree(tmp_path / "up" / "git", {
+        "SKILL.md": "---\nname: git\ndescription: Use when driving git\n---\n# git\n\n"
+                    "Run `git commit -m x`, then see superpowers:git and skills/git/run.py.\n",
+        "LICENSE": MIT,
+    })
+    r = subprocess.run([sys.executable, AS.__file__, str(src), "--name", "devops-git",
+                        "--dest", str(skills)], capture_output=True)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    text = (skills / "devops-git" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: devops-git\n" in text and "\n# devops-git\n" in text
+    assert "`git commit -m x`" in text and "Use when driving git" in text
+    assert "bitranox:devops-git" in text and "skills/devops-git/run.py" in text
+    assert b"left for review" in r.stdout      # the prose mentions are reported, not rewritten
 
 
 def test_rewrite_cross_refs_noop_when_same_name():
@@ -485,7 +536,7 @@ def test_a_root_level_skill_md_renames_the_skill_and_leaves_src_alone(tmp_path, 
     assert AS.main([str(src), "--name", "coding-newname", "--dest", str(skills)]) == 0
     text = (skills / "coding-newname" / "SKILL.md").read_text(encoding="utf-8")
     assert "name: coding-newname" in text and "name: up2" not in text
-    assert "Run coding-newname." in text
+    assert "Run up2." in text        # prose: reported for review, never rewritten
     assert "src/ holds the code; see src/main.py" in text
 
 

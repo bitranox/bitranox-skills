@@ -8,7 +8,8 @@ Default OUTFILE: <repo-root>/.bitranox/sdd/review-<base7>..<head7>.diff
 (named per range, so a re-review after fixes gets a distinct fresh file).
 
 BASE must be an ancestor of HEAD (swapped arguments, or a BASE rewritten away,
-exit 2). Any git failure while building the package exits 2 and writes nothing.
+exit 2). Any git failure while building the package exits 2 and writes nothing, as does
+a workspace or OUTFILE that cannot be written.
 The diff is kept byte-exact, so a line-ending change shows as one.
 """
 import subprocess
@@ -107,11 +108,15 @@ def main(argv=None):
         else:
             short = lambda r: _git_text("rev-parse", "--short", r).strip()  # noqa: E731
             out = sdd_workspace.workspace_dir() / ("review-%s..%s.diff" % (short(base), short(head)))
-    except GitError as exc:
+    except (GitError, sdd_workspace.WorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     data = text.encode("utf-8")
-    out.write_bytes(data)  # bytes, so Windows does not rewrite every "\n" as "\r\n"
+    try:
+        out.write_bytes(data)  # bytes, so Windows does not rewrite every "\n" as "\r\n"
+    except OSError as exc:
+        print("cannot write the review package: %s" % exc, file=sys.stderr)
+        return 2
     print("wrote %s: %s commit(s), %d bytes" % (out, commits, len(data)))
     return 0
 

@@ -3,9 +3,9 @@
 Fixtures are tiny real artifacts: a plan file with fenced decoys for task_brief, a throwaway
 git repo for review_package/sdd_workspace. ASCII only.
 """
+import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -248,7 +248,7 @@ def test_workspace_main_names_a_mkdir_failure_as_such(tmp_path, monkeypatch, cap
 
 def test_workspace_cli_on_a_cp1252_console_fails_loudly_not_with_a_wrong_path(tmp_path):
     repo = _git_init(tmp_path / "proj-✓")
-    env = {**__import__("os").environ, "PYTHONIOENCODING": "cp1252"}
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
     env.pop("PYTHONUTF8", None)
     done = subprocess.run([sys.executable, WS.__file__], cwd=repo, capture_output=True, env=env,
                           timeout=60)
@@ -256,3 +256,88 @@ def test_workspace_cli_on_a_cp1252_console_fails_loudly_not_with_a_wrong_path(tm
     assert done.returncode in (0, 2)
     if done.returncode == 0:  # a console that CAN encode it must print the exact path
         assert done.stdout.decode("cp1252").strip() == str((repo / ".bitranox" / "sdd").resolve())
+
+
+# ---------------------------- every caller of workspace_dir() fails with exit 2, never a traceback
+
+SCRIPTS = os.path.dirname(os.path.abspath(WS.__file__))
+
+# Each script that resolves the workspace, with arguments that reach that resolution. A new caller
+# must be added here: test_every_workspace_caller_is_in_the_failure_matrix fails until it is.
+_WORKSPACE_CALLERS = {
+    "task_brief.py": ["plan.md", "1"],
+    "review_package.py": ["HEAD~1", "HEAD"],
+}
+
+
+def _callers_of_workspace_dir():
+    found = []
+    for name in sorted(os.listdir(SCRIPTS)):
+        if not name.endswith(".py") or name == "sdd_workspace.py":
+            continue
+        with open(os.path.join(SCRIPTS, name), encoding="utf-8") as handle:
+            if "workspace_dir(" in handle.read():
+                found.append(name)
+    return found
+
+
+def test_every_workspace_caller_is_in_the_failure_matrix():
+    assert _callers_of_workspace_dir() == sorted(_WORKSPACE_CALLERS)
+
+
+def _run_script(name, argv, cwd, ceiling):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_CEILING_DIRECTORIES"] = str(ceiling)
+    return subprocess.run([sys.executable, os.path.join(SCRIPTS, name), *argv], cwd=cwd,
+                          capture_output=True, env=env, timeout=60)
+
+
+def _two_commit_repo(path):
+    _git_init(path)
+    for msg in ("one", "two"):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                        "--allow-empty", "-m", msg], cwd=path, check=True, capture_output=True)
+    (path / "plan.md").write_text("## Task 1\nbody\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("name", sorted(_WORKSPACE_CALLERS))
+def test_a_blocked_workspace_is_exit_2_not_a_traceback(tmp_path, name):
+    repo = _two_commit_repo(tmp_path / "blocked")
+    (repo / ".bitranox").write_text("a file, not a dir", encoding="utf-8")
+    done = _run_script(name, _WORKSPACE_CALLERS[name], repo, tmp_path)
+    assert b"Traceback" not in done.stderr, done.stderr.decode("utf-8", "replace")
+    assert done.returncode == 2
+    assert b"cannot create the workspace" in done.stderr
+
+
+@pytest.mark.parametrize("name", sorted(_WORKSPACE_CALLERS))
+def test_the_same_arguments_in_a_healthy_repo_write_the_artifact(tmp_path, name):
+    """Control for the blocked case: nothing but the blocked workspace separates the two."""
+    repo = _two_commit_repo(tmp_path / "ok")
+    done = _run_script(name, _WORKSPACE_CALLERS[name], repo, tmp_path)
+    assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+    written = [p for p in (repo / ".bitranox" / "sdd").iterdir() if p.name != ".gitignore"]
+    assert len(written) == 1
+
+
+def test_task_brief_outside_a_repo_is_exit_2_not_a_traceback(tmp_path):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    (loose / "plan.md").write_text("## Task 1\nbody\n", encoding="utf-8")
+    done = _run_script("task_brief.py", ["plan.md", "1"], loose, tmp_path)
+    assert b"Traceback" not in done.stderr, done.stderr.decode("utf-8", "replace")
+    assert done.returncode == 2
+    assert b"git working tree" in done.stderr
+
+
+@pytest.mark.parametrize("name,argv", [
+    ("task_brief.py", ["plan.md", "1", "no-such-dir/brief.md"]),
+    ("review_package.py", ["HEAD~1", "HEAD", "no-such-dir/pkg.diff"]),
+])
+def test_an_unwritable_outfile_is_exit_2_not_a_traceback(tmp_path, name, argv):
+    repo = _two_commit_repo(tmp_path / "repo")
+    done = _run_script(name, argv, repo, tmp_path)
+    assert b"Traceback" not in done.stderr, done.stderr.decode("utf-8", "replace")
+    assert done.returncode == 2
+    assert b"cannot write" in done.stderr

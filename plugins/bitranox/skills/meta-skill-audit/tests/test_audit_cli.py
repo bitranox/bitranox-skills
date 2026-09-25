@@ -172,6 +172,50 @@ def test_scripts_mode_refuses_a_skills_dir(tmp_path, capsys):
     assert caught.value.code == 2 and "--plugin" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("flag", [["--kind", "hook"], ["--skip-existing"], ["--include-vendored"]])
+def test_a_scripts_only_flag_in_skill_mode_is_refused(tmp_path, monkeypatch, capsys, flag):
+    """The skill sweep cannot honour these; accepting them silently reviewed every skill."""
+    log = _fake_claude(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as caught:
+        A.main(flag + ["--plugin", str(_plugin(tmp_path)), "--room", str(tmp_path / "room")])
+    err = capsys.readouterr().err
+    assert caught.value.code == 2 and flag[0] in err and "--scripts" in err
+    assert not log.exists() and not (tmp_path / "room").exists()
+
+
+@pytest.mark.parametrize("flag", [["--kind", "hook"], ["--skip-existing"], ["--include-vendored"]])
+def test_a_scripts_only_flag_with_scripts_is_accepted(tmp_path, capsys, flag):
+    """Control: the same flag in the mode that honours it."""
+    rc = A.main(["--list", "--scripts"] + flag + ["--plugin", str(_plugin(tmp_path)),
+                                                  "--room", str(tmp_path / "room")])
+    assert rc == 0 and "TOTAL:" in capsys.readouterr().out
+
+
+def test_hooks_dir_without_skills_dir_is_refused(tmp_path, capsys):
+    hooks = _plugin(tmp_path) / "hooks"
+    with pytest.raises(SystemExit) as caught:
+        A.main(["--list", "--hooks-dir", str(hooks), "--plugin", str(hooks.parent),
+                "--room", str(tmp_path / "room")])
+    assert caught.value.code == 2 and "--hooks-dir" in capsys.readouterr().err
+
+
+def test_hooks_dir_with_skills_dir_is_accepted(tmp_path, capsys):
+    """Control: --hooks-dir is honoured beside --skills-dir."""
+    hooks = _plugin(tmp_path) / "hooks"
+    rc = A.main(["--list", "--hooks-dir", str(hooks), "--skills-dir", str(_loose_skills(tmp_path)),
+                 "--room", str(tmp_path / "room")])
+    assert rc == 0 and "toolbox" in capsys.readouterr().out
+
+
+def test_a_room_inside_the_source_is_refused_by_the_cli(tmp_path, monkeypatch, capsys):
+    log = _fake_claude(tmp_path, monkeypatch)
+    src = _plugin(tmp_path)
+    assert A.main(["--plugin", str(src), "--room", str(src / "auditroom")]) == 2
+    assert "inside the source" in capsys.readouterr().err
+    assert not (src / "auditroom").exists() and not log.exists()
+    assert A.main(["--list", "--plugin", str(src), "--room", str(src / "auditroom")]) == 2
+
+
 def test_an_unknown_kind_is_refused(tmp_path):
     with pytest.raises(SystemExit) as caught:
         A.main(["--scripts", "--kind", "hooks", "--plugin", str(_plugin(tmp_path)),

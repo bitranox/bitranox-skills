@@ -6,6 +6,7 @@ gitignore-aware `grep`, which silently drops ignored files. The tests in
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -614,6 +615,42 @@ class TestCliRobustness:
         proc = run_cli("--root", str(tmp_path))
         assert proc.returncode == 0, proc.stderr
         assert "Common Make Targets" in proc.stdout and "x\\xff" in proc.stdout
+
+    @pytest.mark.skipif(sys.platform in ("win32", "darwin"),
+                        reason="needs a filesystem that accepts non-UTF-8 byte names")
+    def test_json_with_a_non_utf8_name_is_strict_utf8_and_lossless(self, tmp_path):
+        """--json used to carry the name as a lone-surrogate escape (\\udcff): Python reads it
+        back, but it is not UTF-8, so a strict consumer rejects or mangles it."""
+        odd = os.path.join(os.fsencode(str(tmp_path)), b"x\xff")
+        os.mkdir(odd)
+        with open(os.path.join(odd, b"CLAUDE.md"), "w", encoding="utf-8") as fh:
+            fh.write(SECTION_A)
+        os.mkdir(os.path.join(odd, b"bad"))
+        with open(os.path.join(odd, b"bad", b"CLAUDE.md"), "wb") as fh:
+            fh.write(b"## X\n\xff\xfe not utf-8\n")                 # a warning naming the odd dir
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+        proc = subprocess.run([sys.executable, CLI, "--root", str(tmp_path), "--json"],
+                              capture_output=True, timeout=CLI_TIMEOUT, check=False)
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+        surrogate_escape = re.compile(rb"\\u[dD][89a-fA-F][0-9a-fA-F]{2}")  # U+D800-U+DFFF
+        assert not surrogate_escape.search(proc.stdout), "a lone surrogate escaped into the JSON"
+        payload = json.loads(proc.stdout.decode("utf-8"))
+        json.dumps(payload, ensure_ascii=False).encode("utf-8")   # strict: raises on a surrogate
+        member = next(m for m in payload["data"]["heading_groups"][0]["variants"][0]["members"]
+                      if "x" in m and "\\xff" in m)
+        raw = {entry["shown"]: bytes.fromhex(entry["bytes_hex"])
+               for entry in payload["data"]["undecodable_paths"]}
+        assert raw[member] == os.path.join(odd, b"CLAUDE.md")    # lossless: the exact bytes
+        assert any("\\xff" in s and "cannot decode" in s for s in payload["skipped"])
+
+    def test_json_with_utf8_names_is_unchanged_and_lists_nothing_undecodable(self, tmp_path):
+        """Control: a non-ASCII but valid UTF-8 name is emitted as itself."""
+        write(tmp_path / "proj-ä" / "CLAUDE.md", SECTION_A)
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+        payload = json.loads(run_cli("--root", str(tmp_path), "--json").stdout)
+        members = payload["data"]["heading_groups"][0]["variants"][0]["members"]
+        assert (tmp_path / "proj-ä" / "CLAUDE.md").as_posix() in members
+        assert payload["data"]["undecodable_paths"] == []
 
     def test_cp1252_stdout_does_not_crash_on_a_cjk_heading(self, tmp_path):
         write(tmp_path / "a" / "CLAUDE.md", "## 日本語\nx\n")

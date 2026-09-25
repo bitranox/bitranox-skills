@@ -82,6 +82,11 @@ internal cross-references to `bitranox:<name>`, scaffolds a `tests/` stub when t
 gate read-only, and prints a follow-up checklist. It never commits, never pushes, and never
 removes anything. Review every rewrite it reports.
 
+It renames the old name only where it identifies the skill: the front matter `name:`, an H1 that
+is exactly the name, a `<namespace>:<name>` reference, and a path segment under `skills/`. A plain
+word is never rewritten, because a skill named after its tool (`git`) uses that word for the tool
+(`git commit`); the report counts those mentions per file as "left for review" for you to judge.
+
 Its license gate reads EVERY declared id - the LICENSE file, every SPDX header, every manifest
 field - and one copyleft id anywhere rejects. A LICENSE file it does not recognise, or an id it can
 neither accept nor reject, stops it as NO LICENSE FOUND with the reason, for you to decide. Exit

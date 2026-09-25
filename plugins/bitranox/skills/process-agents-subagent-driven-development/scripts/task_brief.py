@@ -8,6 +8,8 @@ TASK_ID is the id after "Task" in the heading: 3, 3.5 or 3a.
 Default OUTFILE: <repo-root>/.bitranox/sdd/task-<ID>-<plan8>-brief.md, where <plan8>
 is a short hash of the plan file's path, so two plans in one working tree never
 overwrite each other's brief. A task that is not found writes nothing (exit 3).
+Exit 2: bad arguments, no plan file, no git working tree for the default OUTFILE, or an
+OUTFILE or workspace that cannot be written.
 """
 import hashlib
 import re
@@ -110,8 +112,16 @@ def main(argv=None):
         print("task %s not found in %s (no heading matching 'Task %s')" % (n, plan, n),
               file=sys.stderr)
         return 3
-    out = Path(argv[2]) if len(argv) == 3 else default_outfile(plan, n)
-    out.write_text(text, encoding="utf-8")
+    try:
+        out = Path(argv[2]) if len(argv) == 3 else default_outfile(plan, n)
+    except sdd_workspace.WorkspaceError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    try:
+        out.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print("cannot write the brief: %s" % exc, file=sys.stderr)
+        return 2
     print("wrote %s: %d lines" % (out, len(text.split("\n")) - 1))
     return 0
 

@@ -38,7 +38,9 @@ matched zero files (an empty or misspelled --root), 2 = error (a --root path doe
 every matched file failed to decode, a variant's members share no directory, or any other
 failure). `--json` emits `{ok, command, skipped, data}`, plus `error` when ok is false;
 warnings (an unreadable file, a directory the walk cannot list, a bound hit) always go to stderr
-so stdout stays parseable.
+so stdout stays parseable. Every JSON string is valid UTF-8: a name that is not shows its
+undecodable bytes as \\xNN, and `data.undecodable_paths` lists each such path as
+`{shown, bytes_hex}` with its exact bytes.
 
 A `## ` line inside a fenced code block (CommonMark: 3+ backticks or tildes) is not a heading, and
 a heading's closing sequence is a run of `#` preceded by whitespace, so `## Using C#` keeps its `#`.
@@ -408,6 +410,15 @@ class Report:
     lift_threshold: int
     heading_groups: tuple[HeadingGroup, ...]
 
+    def all_paths(self) -> set[Path]:
+        """Every path the report names: roots, members and common ancestors."""
+        paths = set(self.roots)
+        for group in self.heading_groups:
+            for variant in group.variants:
+                paths.update(variant.members)
+                paths.add(variant.common_ancestor)
+        return paths
+
     def as_dict(self) -> dict[str, object]:
         return {
             "roots": [p.as_posix() for p in self.roots],
@@ -419,6 +430,7 @@ class Report:
             "min_members": self.min_members,
             "lift_threshold": self.lift_threshold,
             "heading_groups": [g.as_dict() for g in self.heading_groups],
+            "undecodable_paths": undecodable_paths(self.all_paths()),
         }
 
 
@@ -547,13 +559,61 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _shown(path: Path) -> str:
-    """A path for a human reader. A POSIX name that is not UTF-8 arrives as lone surrogates,
-    which no encoding can print; show its raw bytes as \\xNN escapes instead."""
+def _raw_bytes(text: str) -> bytes:
+    """The bytes a str decoded from the filesystem stands for, by os.fsencode's own rule
+    (surrogateescape on POSIX); an unpaired surrogate it cannot map is kept by surrogatepass."""
     try:
-        return os.fsencode(path.as_posix()).decode("utf-8", "backslashreplace")
-    except (UnicodeError, ValueError):
-        return path.as_posix()
+        return os.fsencode(text)
+    except UnicodeError:
+        return text.encode("utf-8", "surrogatepass")
+
+
+def utf8_safe(text: str) -> str:
+    """`text` when it is valid UTF-8, else its raw bytes with each undecodable one as \\xNN.
+
+    A POSIX name that is not UTF-8 arrives as lone surrogates: no encoding can print one, and
+    json.dumps writes it as a \\udcXX escape that a strict JSON reader rejects or mangles."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return _raw_bytes(text).decode("utf-8", "backslashreplace")
+    return text
+
+
+def undecodable_paths(paths: Iterable[Path]) -> list[dict[str, str]]:
+    """{shown, bytes_hex} for every path that is not valid UTF-8, sorted by the shown form.
+
+    `shown` is the string the report prints in the path's place; `bytes_hex` is the exact bytes
+    (os.fsencode of the forward-slash form), so a consumer can get the real name back."""
+    out: dict[str, dict[str, str]] = {}
+    for path in paths:
+        text = path.as_posix()
+        shown = utf8_safe(text)
+        if shown != text:
+            out[shown] = {"shown": shown, "bytes_hex": _raw_bytes(text).hex()}
+    return [out[key] for key in sorted(out)]
+
+
+def _json_safe(value: object) -> object:
+    """`value` with every string made valid UTF-8 (see utf8_safe), for the one JSON emitter."""
+    if isinstance(value, str):
+        return utf8_safe(value)
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {utf8_safe(str(key)): _json_safe(item) for key, item in value.items()}
+    return value
+
+
+def _dump_envelope(envelope: dict[str, object]) -> None:
+    """Print the --json envelope. The only place JSON is written, so every field - paths,
+    warnings, the error text - passes through _json_safe and a new field cannot forget to."""
+    print(json.dumps(_json_safe(envelope), indent=2))
+
+
+def _shown(path: Path) -> str:
+    """A path for a human reader (see utf8_safe)."""
+    return utf8_safe(path.as_posix())
 
 
 def _render(report: Report) -> list[str]:
@@ -596,9 +656,8 @@ def _tolerant_stdio() -> None:
 def _fail(message: str, *, as_json: bool, warnings: list[str], data: object = None) -> int:
     """Report an error the way the caller asked for output, and return exit code 2."""
     if as_json:
-        envelope = {"ok": False, "command": "claudemd_variance", "skipped": warnings,
-                    "data": data, "error": message}
-        print(json.dumps(envelope, indent=2))
+        _dump_envelope({"ok": False, "command": "claudemd_variance", "skipped": warnings,
+                        "data": data, "error": message})
     else:
         print(f"claudemd_variance: {message}", file=sys.stderr)
     return 2
@@ -606,9 +665,8 @@ def _fail(message: str, *, as_json: bool, warnings: list[str], data: object = No
 
 def _emit(report: Report, *, as_json: bool, warnings: list[str]) -> None:
     if as_json:
-        envelope = {"ok": report.files_matched > 0, "command": "claudemd_variance",
-                    "skipped": warnings, "data": report.as_dict()}
-        print(json.dumps(envelope, indent=2))
+        _dump_envelope({"ok": report.files_matched > 0, "command": "claudemd_variance",
+                        "skipped": warnings, "data": report.as_dict()})
         return
     for line in _render(report):
         print(line)

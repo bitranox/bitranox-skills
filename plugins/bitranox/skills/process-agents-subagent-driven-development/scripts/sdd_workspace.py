@@ -21,7 +21,15 @@ from pathlib import Path
 USAGE = "usage: python3 sdd_workspace.py  (takes no arguments; prints the workspace path)"
 
 
-class RepoRootError(RuntimeError):
+class WorkspaceError(RuntimeError):
+    """The workspace could not be resolved or made; str() is the one-line reason for stderr.
+
+    workspace_dir() raises only this family, so a caller has ONE thing to catch; an OSError from
+    mkdir used to escape beside RepoRootError and each caller had to remember both.
+    """
+
+
+class RepoRootError(WorkspaceError):
     """git could not name the working tree: not a repository, or git could not be run."""
 
 
@@ -39,18 +47,21 @@ def repo_root(cwd=None):
             text=True, encoding="utf-8", errors="surrogateescape",
         )
     except (subprocess.CalledProcessError, OSError) as exc:
-        raise RepoRootError(str(exc)) from exc
+        raise RepoRootError("cannot resolve the git working tree: %s" % exc) from exc
     return done.stdout.removesuffix("\n")
 
 
 def workspace_dir(cwd=None):
     """Ensure <repo-root>/.bitranox/sdd exists (self-ignoring) and return its resolved Path.
 
-    Raises RepoRootError when there is no working tree, OSError when the directory cannot be made.
+    Raises WorkspaceError (RepoRootError when there is no working tree) and nothing else.
     """
     d = Path(repo_root(cwd)) / ".bitranox" / "sdd"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / ".gitignore").write_text("*\n", encoding="utf-8")
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".gitignore").write_text("*\n", encoding="utf-8")
+    except OSError as exc:
+        raise WorkspaceError("cannot create the workspace: %s" % exc) from exc
     return d.resolve()
 
 
@@ -62,11 +73,8 @@ def main(argv=None):
         return 2
     try:
         path = workspace_dir()
-    except RepoRootError as exc:
-        print("cannot resolve the git working tree: %s" % exc, file=sys.stderr)
-        return 2
-    except OSError as exc:
-        print("cannot create the workspace: %s" % exc, file=sys.stderr)
+    except WorkspaceError as exc:
+        print(exc, file=sys.stderr)
         return 2
     try:
         print(path)

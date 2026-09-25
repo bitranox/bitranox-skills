@@ -52,6 +52,40 @@ def test_prepare_room_from_skills_refuses_a_hooks_dir_inside_the_room(tmp_path):
     assert (room / "hooks" / "gate.py").is_file()
 
 
+@pytest.mark.parametrize("reuse", [False, True])
+def test_prepare_room_refuses_a_room_inside_the_source(tmp_path, reuse):
+    """The copy would contain the room it is being written into: it recursed until the path was
+    too long, leaving that runaway tree INSIDE the source."""
+    src = _plugin(tmp_path)
+    with pytest.raises(A.RoomError, match="inside the source"):
+        A.prepare_room(src, src / "auditroom", reuse=reuse)
+    assert not (src / "auditroom").exists(), "the refusal must create nothing in the source"
+
+
+def test_prepare_room_refuses_the_source_itself_as_the_room(tmp_path):
+    src = _plugin(tmp_path)
+    with pytest.raises(A.RoomError, match="inside the source"):
+        A.prepare_room(src, src)
+    assert not (src / "reports").exists() and not (src / "plugin").exists()
+
+
+@pytest.mark.parametrize("inside", ["skills", "hooks"])
+def test_prepare_room_from_skills_refuses_a_room_inside_either_source(tmp_path, inside):
+    src = _plugin(tmp_path)
+    room_root = src / inside / "auditroom"
+    with pytest.raises(A.RoomError, match="inside the source"):
+        A.prepare_room_from_skills(src / "skills", room_root, hooks_dir=src / "hooks")
+    assert not room_root.exists()
+
+
+def test_a_room_beside_the_source_is_accepted(tmp_path):
+    """Control: a sibling whose NAME starts with the source's is outside it."""
+    src = _plugin(tmp_path)
+    room = A.prepare_room(src, src.parent / (src.name + "-room"))
+    assert (room / "skills" / "alpha" / "SKILL.md").is_file()
+    assert A.prepare_room_from_skills(src / "skills", tmp_path / "room2", hooks_dir=src / "hooks")
+
+
 def test_reusing_the_room_with_a_source_inside_it_is_still_allowed(tmp_path):
     """The control: --reuse-room deletes nothing, so there is nothing to refuse."""
     room = A.prepare_room(_plugin(tmp_path), tmp_path / "room")
