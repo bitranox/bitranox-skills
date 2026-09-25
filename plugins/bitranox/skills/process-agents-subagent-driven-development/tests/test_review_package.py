@@ -5,6 +5,7 @@ run from a linked worktree or a git hook cannot point these fixtures at the repo
 test.
 """
 import os
+import stat
 import subprocess
 import sys
 
@@ -56,7 +57,9 @@ def test_a_git_failure_while_building_is_exit_2_not_an_empty_package(repo, tmp_p
     r, base = repo
     head = _commit(r, "a.txt", b"a\nc\n", "change")
     blob = _git(r, "rev-parse", "HEAD:a.txt")
-    (r / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+    obj = r / ".git" / "objects" / blob[:2] / blob[2:]
+    obj.chmod(stat.S_IREAD | stat.S_IWRITE)   # git writes objects read-only; Windows will not unlink those
+    obj.unlink()
     rc, data = _package(tmp_path, base, head)
     assert rc == 2
     assert data == b""

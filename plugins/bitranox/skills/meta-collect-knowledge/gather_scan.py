@@ -101,14 +101,23 @@ def extract_keywords(text, max_n=12, proj=None):
 
 def _own_memory_dirs(proj):
     """The resolved native memory dirs that belong to `proj`, under every spelling Claude Code may
-    have keyed it by: the absolute path as given (trailing separator and "." normalised away) and
-    the symlink-free one. Empty for no project."""
+    have keyed it by: the spelling exactly as given when it is rooted, the absolute path (trailing
+    separator and "." normalised away) and the symlink-free one. Empty for no project.
+
+    The given spelling is kept because it is not always what abspath returns: on Windows abspath
+    puts the current drive in front of a drive-less rooted path, so "/p/cur" becomes "D:\\p\\cur"
+    and keys "D--p-cur" while the project the caller named keys "-p-cur". A relative spelling is
+    not kept: "." would key "-", which is the project whose cwd is the filesystem root."""
     if not proj:
         return set()
     out = set()
     try:
-        spelled = os.path.abspath(os.fspath(proj))
-        for spelling in {spelled, os.path.realpath(spelled)}:
+        given = os.fspath(proj)
+        spelled = os.path.abspath(given)
+        spellings = {spelled, os.path.realpath(spelled)}
+        if Path(given).root:
+            spellings.add(given)
+        for spelling in spellings:
             out.add(str(sig.memory_dir(spelling).resolve()))
     except (OSError, TypeError, ValueError):
         pass
@@ -488,7 +497,7 @@ def _candidate_files(self_proj, cross_allowed):
     # labeled cross-tree gather.
     anchor = sig.resolve_anchor(self_proj)
     if anchor is None:
-        return None, "no tree anchor for %s and cross_tree_search=false" % self_proj
+        return None, "no tree anchor for %s and cross_tree_search=false" % os.path.abspath(self_proj)
     return within_tree(files, anchor), None
 
 
@@ -531,8 +540,9 @@ def _print_mcp_candidates(self_proj, topic):
 
 
 def _run(args):
+    given = args.self_proj or os.getcwd()
     # abspath: a trailing separator or "." must name the same project as the plain spelling.
-    self_proj = os.path.abspath(args.self_proj or os.getcwd())
+    self_proj = os.path.abspath(given)
 
     # Both answer from the debounce record alone. Deliberately BEFORE any discovery: --seen exists
     # to avoid the walk, so a version that walked first would defeat its own purpose. And neither
@@ -546,7 +556,9 @@ def _run(args):
     if not keywords:
         return _not_scanned("no usable keywords from topic")
     cross_allowed = args.cross_tree or sig.load_config().get("cross_tree_search", True)
-    files, reason = _candidate_files(self_proj, cross_allowed)
+    # The spelling as given, not the abspath: the own-memory exclusion needs every spelling the
+    # project may be keyed by, and abspath can rewrite the one the caller named (see _own_memory_dirs).
+    files, reason = _candidate_files(given, cross_allowed)
     if files is None:
         return _not_scanned(reason)
     skipped = []

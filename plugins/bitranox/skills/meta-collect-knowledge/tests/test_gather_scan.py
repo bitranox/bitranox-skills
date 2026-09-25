@@ -578,10 +578,17 @@ def test_walled_without_an_anchor_prints_an_explicit_zero_candidates_line(home, 
     assert "CANDIDATES: 0 (not scanned: no tree anchor" in out
 
 
-def test_an_unexpected_error_exits_two_not_one(home, capsys):
-    # One is "not gathered" for --seen and must never double as "crashed".
-    assert G.main(["--topic", "zorblax", "--self", "/p/a\x00b"]) == 2
-    assert "error" in capsys.readouterr().err
+def test_an_unexpected_error_exits_two_not_one(home, capsys, monkeypatch):
+    # One is "not gathered" for --seen and must never double as "crashed". The fault is injected
+    # at the discovery seam because no input crashes the scan on every platform: a NUL in --self
+    # raises on POSIX but Windows' path functions accept it and the scan runs to 0 candidates.
+    def boom(*args, **kwargs):
+        raise RuntimeError("injected discovery fault")
+
+    monkeypatch.setattr(G, "discover_files", boom)
+    assert G.main(["--topic", "zorblax", "--self", "/p/a"]) == 2
+    err = capsys.readouterr().err
+    assert "error: RuntimeError: injected discovery fault" in err
 
 
 def test_cp1252_stdout_does_not_crash_on_a_cjk_candidate(tmp_path):
@@ -624,9 +631,16 @@ def test_the_tree_filter_does_not_take_a_sibling_sharing_a_prefix(tmp_path):
 
 # ---- line-oriented caches and unreadable dirs ---------------------------------------------------
 
-def test_a_cached_path_holding_a_line_separator_char_survives_the_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize("sep", [
+    pytest.param("\x1c", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows forbids control characters 1-31 in a file name")),
+    "\u2028",
+    "\x85",
+], ids=["x1c", "u2028", "x85"])
+def test_a_cached_path_holding_a_line_separator_char_survives_the_cache(tmp_path, monkeypatch, sep):
     ws, cur = _ws(tmp_path, monkeypatch)
-    odd = ws / "odd\x1cname"                      # \x1c is a str.splitlines() boundary
+    odd = ws / ("odd%sname" % sep)                # each is a str.splitlines() boundary
+    assert len(("a%sb" % sep).splitlines()) == 2
     odd.mkdir()
     (odd / "CLAUDE.md").write_text("odd", encoding="utf-8")
     first = sorted(G.discover_claude_md(str(cur)))

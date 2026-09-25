@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.24.1]
+
+### Fixed
+
+- `gather_scan` (and through it the recall hook) excludes the current project on Windows again.
+  7.24.0 keyed the project's own memory dir from `os.path.abspath`, which adds a drive letter to a
+  drive-less rooted path (`/p/cur` became `C:\p\cur`), so the exclusion never matched; the path as
+  given is now kept beside the absolute and resolved spellings.
+- Tests that did not hold on Windows or macOS: a `\x1c` directory name (illegal on Windows; the
+  test now also covers U+2028 and U+0085), a NUL-in-path crash trigger that Windows path functions
+  accept (now an injected fault), a read-only git object deleted without making it writable, and
+  the planted growth-ratio scans, whose 4 ms base cost was below macOS timer slack (now 100 ms,
+  still separating quadratic from linear with 60 ms of added slack).
+
 ## [7.24.0]
 
 The skill-script audit: every confirmed finding across 79 bundled scripts is fixed, each against a

@@ -646,19 +646,25 @@ def test_adversarial_inputs_stay_linear(shape):
     assert ratio < _MAX_LINEAR_RATIO, (shape, t_n, t_4n, ratio)
 
 
+_PLANTED_BASE_S = 0.1
+
+
 def _sleep_for(seconds):
     time.sleep(max(seconds, 0.0))
 
 
 def test_growth_ratio_flags_a_planted_quadratic_and_passes_a_planted_linear():
     """The instrument must be able to fail: a scan whose cost grows with the square of the input
-    has to land above the bound, and a linear one below it, through the same calibration."""
+    has to land above the bound, and a linear one below it, through the same calibration.
+
+    The planted cost starts at 100 ms, well above timer slack: a macOS runner's sleep overshoots
+    by tens of ms, and with a 4 ms base that noise flattened the quadratic arm to a ratio of 4."""
 
     def quadratic(text):
-        _sleep_for(0.004 * (len(text) / _START_LEN) ** 2)
+        _sleep_for(_PLANTED_BASE_S * (len(text) / _START_LEN) ** 2)
 
     def linear(text):
-        _sleep_for(0.004 * (len(text) / _START_LEN))
+        _sleep_for(_PLANTED_BASE_S * (len(text) / _START_LEN))
 
     q_n, q_4n = _growth_ratio("", "a", "", scan=quadratic)
     l_n, l_4n = _growth_ratio("", "a", "", scan=linear)
