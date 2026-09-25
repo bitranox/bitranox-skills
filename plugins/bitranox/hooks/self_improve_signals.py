@@ -298,12 +298,58 @@ def curated_state_dir(proj):
 
 _LOCK_STALE_S = 120.0
 
+# Windows reports "another handle has this name open" as PermissionError, not as a distinct error.
+# A lock file the previous holder just deleted stays delete-pending while any handle (a virus
+# scanner, a waiter's stat()) is still open on it, and a new O_EXCL create of that name fails with
+# ACCESS_DENIED instead of EEXIST; os.replace onto a file a reader holds open fails the same way.
+# Both clear within milliseconds, so on Windows they are contention to wait out. On POSIX a
+# PermissionError is a real permission problem and must surface at once.
+_WINDOWS = os.name == "nt"
+
+
+def is_transient_sharing_error(exc, windows=_WINDOWS):
+    """True when `exc` is Windows saying another open handle holds the name, which clears on its
+    own; False on POSIX, where the same exception is a lasting permission problem."""
+    return bool(windows) and isinstance(exc, PermissionError)
+
+
+def retry_while_shared(op, *args, timeout=1.0, poll=0.01, windows=_WINDOWS):
+    """Return `op(*args)`, retrying while Windows reports the file held by another handle.
+
+    Re-raises the PermissionError once `timeout` passes, and at once on POSIX or for any other
+    OSError. Use it for the single call that must not be dropped over a momentary sharing clash:
+    the `os.replace` that publishes a write, the unlink that releases a lock.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return op(*args)
+        except PermissionError as exc:
+            if not is_transient_sharing_error(exc, windows) or time.monotonic() >= deadline:
+                raise
+        time.sleep(poll)
+
+
+def _reclaim_stale_lock(lock, clock):
+    """Delete a lock whose holder crashed; True when it was stale and is now gone."""
+    try:
+        if clock() - lock.stat().st_mtime > _LOCK_STALE_S:
+            lock.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
 
 @contextlib.contextmanager
 def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
     """Advisory exclusive lock around a memory read-modify-write, via an atomic `<target>.lock`
     O_EXCL create (cross-platform, no fcntl/msvcrt). Raises TimeoutError on contention past `timeout`;
-    reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests."""
+    reclaims a lock older than `_LOCK_STALE_S` (holder crashed). `now` injectable for tests.
+
+    On Windows a create refused with PermissionError is contention too (see `_WINDOWS`): a waiter
+    that arrives while the previous holder's lock is still being deleted must wait, not abandon
+    its write - every caller skips its write on any error this raises."""
     clock = time.time if now is None else now
     lock = Path(str(target_path) + ".lock")
     try:
@@ -315,16 +361,16 @@ def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
     while fd is None:
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
         except FileExistsError:
-            try:
-                if clock() - lock.stat().st_mtime > _LOCK_STALE_S:
-                    lock.unlink()
-                    continue
-            except OSError:
-                pass
-            if clock() >= deadline:
-                raise TimeoutError("memory_lock: contention on %s" % lock)
-            time.sleep(poll)
+            if _reclaim_stale_lock(lock, clock):
+                continue
+        except PermissionError as exc:
+            if not is_transient_sharing_error(exc):
+                raise
+        if clock() >= deadline:
+            raise TimeoutError("memory_lock: contention on %s" % lock)
+        time.sleep(poll)
     try:
         yield
     finally:
@@ -332,8 +378,10 @@ def memory_lock(target_path, timeout=5.0, poll=0.05, now=None):
             os.close(fd)
         except OSError:
             pass
+        # A release that fails leaves the lock in place until it goes stale, and every other
+        # writer times out behind it in the meantime - so a sharing clash here is waited out too.
         try:
-            lock.unlink()
+            retry_while_shared(lock.unlink)
         except OSError:
             pass
 

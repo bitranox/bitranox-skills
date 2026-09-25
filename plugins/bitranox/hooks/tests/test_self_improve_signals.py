@@ -1008,6 +1008,77 @@ def test_memory_lock_reclaims_stale(tmp_path):
     assert not stale.exists()
 
 
+def test_a_permission_error_is_transient_only_on_windows():
+    assert S.is_transient_sharing_error(PermissionError(13, "held"), windows=True)
+    assert not S.is_transient_sharing_error(PermissionError(13, "denied"), windows=False)
+    assert not S.is_transient_sharing_error(FileNotFoundError(2, "gone"), windows=True)
+
+
+def _clashing(times):
+    """An op that fails like a Windows sharing clash `times` times, then succeeds."""
+    calls = []
+
+    def op(value):
+        calls.append(value)
+        if len(calls) <= times:
+            raise PermissionError(13, "The process cannot access the file")
+        return value
+
+    return op, calls
+
+
+def test_retry_while_shared_waits_out_a_windows_clash():
+    op, calls = _clashing(2)
+    assert S.retry_while_shared(op, "ok", windows=True, poll=0) == "ok"
+    assert len(calls) == 3
+
+
+def test_retry_while_shared_surfaces_a_posix_permission_error_at_once():
+    op, calls = _clashing(1)
+    with pytest.raises(PermissionError):
+        S.retry_while_shared(op, "ok", windows=False, poll=0)
+    assert len(calls) == 1
+
+
+def test_retry_while_shared_gives_up_once_the_timeout_passes():
+    op, calls = _clashing(10 ** 9)
+    with pytest.raises(PermissionError):
+        S.retry_while_shared(op, "ok", windows=True, timeout=0.05, poll=0.005)
+    assert len(calls) > 1
+
+
+def _deny_first_create(monkeypatch, lock_name):
+    """The OS edge: the first O_EXCL create of `lock_name` is refused the way Windows refuses a
+    name whose delete is still pending."""
+    real_open, refused = os.open, []
+
+    def fake_open(path, flags, *args):
+        if str(path).endswith(lock_name) and not refused:
+            refused.append(path)
+            raise PermissionError(13, "Access is denied")
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(os, "open", fake_open)
+    return refused
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the delete-pending refusal is Windows semantics")
+def test_memory_lock_waits_out_a_windows_access_denied_create(tmp_path, monkeypatch):
+    target = tmp_path / "m4"
+    refused = _deny_first_create(monkeypatch, "m4.lock")
+    with S.memory_lock(target, timeout=2.0, poll=0.01):
+        assert (tmp_path / "m4.lock").exists()
+    assert refused                                    # the clash really happened, and was waited out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="on POSIX a PermissionError is a real permission problem")
+def test_memory_lock_surfaces_a_posix_permission_error(tmp_path, monkeypatch):
+    refused = _deny_first_create(monkeypatch, "m5.lock")
+    with pytest.raises(PermissionError), S.memory_lock(tmp_path / "m5", timeout=2.0, poll=0.01):
+        pass
+    assert refused
+
+
 # --------------------------------------------------------------------------
 # unified anchor resolver (single source in sig; uuid_store delegates)
 # --------------------------------------------------------------------------

@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.5]
+
+### Fixed
+
+- `memory_lock` (`self_improve_signals.py`) now treats a lock create refused with
+  `PermissionError` as contention on Windows. When the previous holder deletes its lock file while
+  any other handle is still open on it (a virus scanner, a waiter's `stat()`), Windows keeps the
+  name delete-pending and refuses a new O_EXCL create with ACCESS_DENIED rather than EEXIST. The
+  lock let that escape as a hard error, and every caller skips its write on any error, so
+  concurrent writers could lose entries on Windows only (`ci_watch_state`'s concurrency test
+  failed intermittently on windows-latest with 18 or 19 of 20 entries). This covers all nine
+  `memory_lock` call sites (memory engine, uuid store, contribution queue, migration, CI watch
+  state). On POSIX a `PermissionError` is still a real permission problem and surfaces at once.
+- The lock release, `ci_watch_state`'s state-file publish and `skill_roster`'s cache publish now
+  retry over a Windows sharing clash (new `retry_while_shared`, bounded at one second) instead of
+  failing on the first `PermissionError`. `os.replace` onto a file a reader holds open fails that
+  way on Windows, and `ci_watch_state.pending_for` reads without the lock; a release that failed
+  left the lock standing until it went stale, timing out every writer behind it.
+
 ## [7.23.4]
 
 ### Fixed

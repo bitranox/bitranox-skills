@@ -265,7 +265,8 @@ def _write_cache(cwd, skills):
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(skills, ensure_ascii=False))
-        os.replace(tmp, path)
+        # Another session reading the cache holds it open, which on Windows fails the rename.
+        sig.retry_while_shared(os.replace, tmp, path)
         tmp = None
     except OSError:
         pass

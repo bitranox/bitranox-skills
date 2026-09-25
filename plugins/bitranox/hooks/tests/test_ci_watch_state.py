@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
+
+import pytest
 
 import ci_watch_state as state
 
@@ -147,6 +150,26 @@ def test_concurrent_writers_lose_no_entry(tmp_path):
     leftovers = [p.name for p in state.state_path(proj).parent.glob(state.state_path(proj).name + "*")
                  if p.name != state.state_path(proj).name]
     assert leftovers == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a rename refused over an open reader is Windows semantics")
+def test_a_rename_refused_by_an_open_reader_is_retried_not_dropped(tmp_path, monkeypatch):
+    # The OS edge: the publishing rename fails once the way Windows fails it while a reader
+    # (pending_for runs unlocked) holds the state file open.
+    proj = str(tmp_path)
+    state.record_push(proj, "sess-a", "a" * 40)
+    real_replace, refused = os.replace, []
+
+    def clashing_replace(src, dst):
+        if not refused:
+            refused.append(dst)
+            raise PermissionError(13, "The process cannot access the file")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", clashing_replace)
+    state.record_push(proj, "sess-a", "b" * 40)
+    assert refused
+    assert sorted(e["sha"][0] for e in state.pending_for(proj, "sess-a")) == ["a", "b"]
 
 
 def test_session_key_falls_back_to_the_project_dir_env(monkeypatch):

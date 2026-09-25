@@ -92,13 +92,19 @@ def _load(path: Path) -> list[dict]:
 
 def _save(path: Path, entries: list[dict]) -> None:
     """Replace the file atomically. The temp name is unique per call: a fixed one is shared by
-    every concurrent writer, so one could rename another's half-written file into place."""
+    every concurrent writer, so one could rename another's half-written file into place.
+
+    The replace is retried over a Windows sharing clash: `pending_for` reads without the lock,
+    and on Windows a reader (or a virus scanner) holding the file open makes the rename fail,
+    which would drop this write without a trace."""
+    import self_improve_signals  # noqa: PLC0415 - kept off the per-shell-call import path, as in _update
+
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps({"pending": entries}))
-        os.replace(tmp, path)
+        self_improve_signals.retry_while_shared(os.replace, tmp, path)
         tmp = None
     except (OSError, ValueError):
         return
