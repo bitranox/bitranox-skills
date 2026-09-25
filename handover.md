@@ -1,4 +1,4 @@
-# Handover - 2026-09-25 afternoon, rank 10 slice 2 swept and adjudicated, nothing fixed yet
+# STALE - read 2026-09-25, work continued
 
 ## In flight
 
