@@ -21,9 +21,18 @@ Usage (cwd defaults to the current directory):
   contrib_queue.py shipped | rejected [cwd]
   contrib_queue.py drain [cwd]      # ONLY after the contributions actually shipped
   contrib_queue.py queues           # every queue on this machine, by key
+  contrib_queue.py rehome-tombstones [--apply]  # repair closes filed under the wrong key
 
-Exit codes: 0 done (a duplicate or already-closed add included); 1 the store could not be written
-(nothing was recorded); 2 usage error, an empty --what, or a selector / queue key that names nothing.
+Exit codes: 0 done (a duplicate or already-closed add included); 1 the store could not be read or
+written (nothing was recorded); 2 usage error, an empty --what, or a selector / queue key that names
+nothing.
+
+`rehome-tombstones` repairs what a `ship`/`drop` addressed as `queue_key:<hash>` wrote before
+7.24.0: the tombstone went to a file keyed by the pseudo-path, which no reader consults, so the close
+did not block a re-queue and `shipped` never listed it. It reports by default; `--apply` merges each
+such file into its queue's closed set (attributed by the `proj` stamp its records carry) and keeps
+the old file as `<name>.rehomed`. A file whose stamps name more than one queue is left in place and
+reported. `queues` prints a one-line pointer here while any such file exists.
 
 `--target` names where it goes, e.g. `skill:meta-dream-tree` or `hook:reconcile`. Entries dedup on
 (what, target), so re-noticing the same gap is not a second TODO.
@@ -79,6 +88,51 @@ def _resolve_from_session(qdir, key):
     return ""
 
 
+def _hint_orphans():
+    """One line when closed-set files sit under the wrong key, so `queues` - the verb an operator
+    runs to see every queue - also shows that some closes are not protecting their queue."""
+    try:
+        orphans = [o for o in sig.find_orphan_tombstones() if o["status"] == "orphan"]
+    except OSError:
+        return
+    if orphans:
+        print("%d closed-set file(s) sit under the wrong queue key, so their closes do not block a "
+              "re-queue: run `contrib_queue.py rehome-tombstones`" % len(orphans))
+
+
+def _rehome_tombstones(apply):
+    """Report (default) or repair (--apply) the closed-set files an older queue_key: close wrote
+    under the wrong key. Exit 0 done or nothing to do; 1 a file could not be read or written."""
+    try:
+        found = sig.find_orphan_tombstones()
+    except OSError as exc:
+        print("! failed: could not read a closed-set file (%s)" % exc, file=sys.stderr)
+        return 1
+    orphans = [o for o in found if o["status"] == "orphan"]
+    for o in found:
+        if o["status"] == "ambiguous":
+            print("  ! %s: stamped for more than one queue, or a queue lives at its key - left in "
+                  "place" % o["path"].name)
+    if not orphans:
+        print("no orphaned tombstone files (%d file(s) not their own queue's were left in place)"
+              % (len(found) - len(orphans)))
+        return 0
+    for o in orphans:
+        print("  %s -> %s%s  %d tombstone(s)" % (o["path"].name, sig.QUEUE_KEY_PREFIX, o["home"],
+                                                 len(o["records"])))
+        if apply:
+            try:
+                added = sig.rehome_orphan_tombstone(o)
+            except OSError as exc:
+                print("! failed: could not rehome %s (%s) - re-run after fixing the store"
+                      % (o["path"], exc), file=sys.stderr)
+                return 1
+            print("    merged %d new; the file is kept as %s*" % (added, o["path"].name + ".rehomed"))
+    if not apply:
+        print("dry run: pass --apply to merge them into their queues' closed sets")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Pending upstream-contribution queue (durable intent).")
     sub = ap.add_subparsers(dest="cmd")
@@ -108,11 +162,16 @@ def main(argv=None):
     sl.add_argument("proj", nargs="?", default=None)
     qs = sub.add_parser("queues", help="enumerate EVERY queue on this machine (key, open count, project)")
     qs.add_argument("proj", nargs="?", default=None)
+    rh = sub.add_parser("rehome-tombstones",
+                        help="merge closes an older queue_key: ship/drop filed under the wrong key")
+    rh.add_argument("--apply", action="store_true", help="write (default: report only)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     if not args.cmd:
         ap.print_help(sys.stderr)
         return 2
+    if args.cmd == "rehome-tombstones":
+        return _rehome_tombstones(args.apply)
     proj = args.proj or os.getcwd()
 
     # A key that is not `proj_key` output cannot name a queue at all, and `contrib_file` refuses it
@@ -183,6 +242,7 @@ def main(argv=None):
             else:
                 where = "%s  (cwd gone)" % path
             rows.append((key, len(recs), where))
+        _hint_orphans()
         open_rows = [r for r in rows if r[1]]
         if not open_rows:
             print("no queue on this machine has an open contribution (%d queue file(s) seen)" % len(rows))

@@ -736,15 +736,35 @@ def _tombstone(rec, outcome, note=""):
     return tomb
 
 
+def _load_closed(proj):
+    """`proj`'s closed set for a read-modify-write: [] only when the file does not exist. Any other
+    read failure raises, because `read_closed`'s [] there made the next close REPLACE every earlier
+    tombstone with its own - each earlier intent then became re-queueable."""
+    try:
+        out = _read_jsonl_records(rejected_file(proj))
+    except FileNotFoundError:
+        return []
+    for rec in out:
+        rec.setdefault("outcome", REJECTED)
+    return out
+
+
+def _write_closed(proj, records):
+    """Replace `proj`'s closed set with `records`. Raises OSError when it cannot be written."""
+    rf = rejected_file(proj)
+    rf.parent.mkdir(parents=True, exist_ok=True)
+    rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in records) + "\n",
+                  encoding="utf-8")
+
+
 def _append_tombstones(proj, tombs, max_items=200):
-    """Append `tombs` to `proj`'s closed set (capped). Raises OSError when it cannot be written."""
-    prev = read_closed(proj)
+    """Append `tombs` to `proj`'s closed set (capped). Raises OSError when it cannot be written,
+    or when the existing set cannot be read (it is never replaced blind)."""
+    prev = _load_closed(proj)
     prev.extend(tombs)
     if len(prev) > max_items:
         prev = prev[-max_items:]
-    rf = rejected_file(proj)
-    rf.parent.mkdir(parents=True, exist_ok=True)
-    rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
+    _write_closed(proj, prev)
 
 
 def read_rejected(proj):
@@ -764,7 +784,12 @@ def resolve_contribution(proj, index=None, match=None):
     INDEX SHIFTS under the previous close: closing two entries by the indices of one listing hits
     the wrong second entry, which silently destroys a contribution that was meant to stay queued.
     Raises IndexError (out of range, no match, or an ambiguous match) rather than guessing."""
-    cur = read_contributions(proj)
+    return _resolve_in(read_contributions(proj), index, match)
+
+
+def _resolve_in(cur, index=None, match=None):
+    """`resolve_contribution` over an already-loaded queue `cur` (the close holds the lock and
+    must select from the records it will rewrite, not from a second read)."""
     if match:
         needle = str(match).lower()
         hits = [i for i, r in enumerate(cur)
@@ -798,8 +823,10 @@ def _close_contribution(proj, index, outcome, note="", max_items=200, match=None
     except ValueError as exc:         # a malformed queue key selects nothing: refuse like a bad index
         raise IndexError(str(exc)) from exc
     with memory_lock(f):
-        cur = read_contributions(proj)
-        rec = cur.pop(resolve_contribution(proj, index, match))
+        # _load_queue, not read_contributions: an unreadable queue must fail the close as an
+        # OSError, not read as empty and be refused as "no queued contribution matches".
+        cur = _load_queue(f)
+        rec = cur.pop(_resolve_in(cur, index, match))
         _append_tombstones(proj, [_tombstone(rec, outcome, note)], max_items)
         if cur:
             f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
@@ -820,6 +847,95 @@ def ship_contribution(proj, index=None, note="", max_items=200, match=None):
     block a re-queue, but a delivered contribution reported back as rejected misleads every later
     reader about whether the work was done."""
     return _close_contribution(proj, index, SHIPPED, note, max_items, match)
+
+
+# ---- orphaned tombstones: closes the pre-7.24.0 queue_key: path wrote under the wrong key -------
+# Before `_queue_file_key`, `rejected_file("queue_key:<H>")` hashed the PSEUDO-PATH, made absolute
+# under whatever cwd the close ran from. So a ship or drop addressed by queue key removed the entry
+# from queue <H> and wrote its tombstone to a file keyed by nothing any reader consults: `shipped`
+# never listed it and a later add of the same intent was accepted. Such a file can suppress nothing
+# (its key names no real project); it only fails to protect its own queue.
+#
+# Attribution is by the `proj` stamp add_contribution writes. The stamp landed after proj_key's
+# path normalization, so a stamped record sits under a key other than its own project's hash ONLY
+# through a pseudo-path close - and one file key is one pseudo-path, so every record in the file,
+# stamped or not, left the same queue. A file whose stamps disagree is reported, never moved; a file
+# with no stamp at all is indistinguishable from an old correctly-keyed one and is left alone.
+
+_TOMBSTONE_SUFFIX = ".contrib-rejected.jsonl"
+_REHOMED_SUFFIX = ".rehomed"
+
+
+def _classify_tombstone_file(path):
+    """(status, home_key, records) for one closed-set file: status is "home" (correctly keyed or
+    unattributable - leave it), "orphan" (belongs to queue `home_key`), or "ambiguous"."""
+    key = path.name[:-len(_TOMBSTONE_SUFFIX)]
+    records = _read_jsonl_records(path)
+    homes = {proj_key(r["proj"]) for r in records if r.get("proj")}
+    if not homes or homes == {key}:
+        return "home", None, records
+    if key in homes or len(homes) > 1 or (_audit_dir() / (key + ".contrib.jsonl")).exists():
+        return "ambiguous", None, records
+    return "orphan", homes.pop(), records
+
+
+def find_orphan_tombstones():
+    """[{path, status, home, records}] for every closed-set file that is NOT its own queue's:
+    status "orphan" (with the queue key `home` it belongs to) or "ambiguous" (stamps disagree, or a
+    queue lives at its key - reported, never moved). An unreadable file raises OSError."""
+    out = []
+    try:
+        paths = sorted(_audit_dir().glob("*" + _TOMBSTONE_SUFFIX))
+    except OSError:
+        return out
+    for path in paths:
+        status, home, records = _classify_tombstone_file(path)
+        if status != "home":
+            out.append({"path": path, "status": status, "home": home, "records": records})
+    return out
+
+
+def _closed_ts(rec):
+    """A tombstone's close time for ordering; 0 when absent or not a number."""
+    try:
+        return float(rec.get("closed_ts") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _free_rehomed_path(path):
+    """`<path>.rehomed`, or `.rehomed-<n>` when an earlier repair already used that name."""
+    cand = path.with_name(path.name + _REHOMED_SUFFIX)
+    n = 1
+    while os.path.lexists(cand):
+        n += 1
+        cand = path.with_name("%s%s-%d" % (path.name, _REHOMED_SUFFIX, n))
+    return cand
+
+
+def rehome_orphan_tombstone(orphan):
+    """Merge one orphan (from `find_orphan_tombstones`) into its queue's closed set, then rename
+    the orphan file aside (kept as `<name>.rehomed`, never deleted). Returns the number of records
+    that were new to the home set. Raises OSError when either step fails.
+
+    The home set is written FIRST, so a failure before the rename leaves the records in both
+    places; a re-run finds the file again and adds nothing twice (records are deduped on
+    (what, target), the key the re-queue block reads). No cap: a repair must not push the oldest
+    home tombstones out to make room."""
+    home = QUEUE_KEY_PREFIX + orphan["home"]
+    with memory_lock(contrib_file(home)):
+        prev = _load_closed(home)
+        have = {(str(r.get("what")), str(r.get("target") or "")) for r in prev}
+        new = []
+        for rec in sorted(orphan["records"], key=_closed_ts):
+            ident = (str(rec.get("what")), str(rec.get("target") or ""))
+            if ident not in have:
+                have.add(ident)
+                new.append(dict(rec, outcome=rec.get("outcome") or REJECTED))
+        if new:
+            _write_closed(home, prev + new)
+        retry_while_shared(os.replace, str(orphan["path"]), str(_free_rehomed_path(orphan["path"])))
+    return len(new)
 
 
 # ---- nap-owed: make the post-compaction consolidation non-optional ----------------------------
@@ -1248,6 +1364,60 @@ def read_session_meta(proj):
         return {}
 
 
+class StateWriteError(OSError):
+    """A state file whose write the caller reports as done could not be written; nothing changed.
+
+    Raised, never swallowed, by the writers of the review watermark and the promotion sightings.
+    Those used to swallow every OSError, so a failed write returned exactly what a successful one
+    did and only a caller that happened to read the value back could tell. An OSError subclass, so
+    a hook's fail-open handler that already catches OSError still keeps the turn moving."""
+
+
+def _load_json_for_update(path):
+    """The JSON object at `path` for a read-modify-write: {} when the file is absent or does not
+    parse into an object (it then holds nothing to lose). A file that EXISTS but cannot be READ
+    raises StateWriteError: answering {} there makes the writer replace every other entry with
+    its one new value."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        return {}
+    except OSError as exc:
+        raise StateWriteError("cannot read %s to update it, so it was left unchanged (%s)"
+                              % (path, exc)) from exc
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_state(path, data):
+    """Write `data` to `path` as JSON through a temp file and a replace, so a failure leaves the
+    previous content whole rather than a torn file that later reads as empty. Raises
+    StateWriteError when the write does not land.
+
+    A read-only target is refused rather than replaced: a rename over it would succeed on POSIX
+    and fail on Windows, and on both a read-only mark means someone asked for it to stay put."""
+    path = Path(path)
+    if os.path.lexists(path) and path.is_file() and not os.access(path, os.W_OK):
+        raise StateWriteError("could not write %s (the file is read-only)" % path)
+    tmp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, sort_keys=True))
+        retry_while_shared(os.replace, tmp, str(path))
+        tmp = None
+    except OSError as exc:
+        raise StateWriteError("could not write %s (%s)" % (path, exc)) from exc
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def watermark_file(proj):
     """Per-(transcript, reviewer) high-water marks: how far each reviewer has consumed."""
     return _audit_dir() / (proj_key(proj) + ".watermark.json")
@@ -1255,7 +1425,7 @@ def watermark_file(proj):
 
 def _watermarks(proj):
     try:
-        d = json.loads(watermark_file(proj).read_text(encoding="utf-8"))
+        d = json.loads(watermark_file(proj).read_text(encoding="utf-8-sig"))
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -1270,25 +1440,39 @@ def get_watermark(proj, transcript, reviewer):
 
 
 def set_watermark(proj, transcript, reviewer, offset):
-    """Record that `reviewer` has consumed `transcript` up to `offset`. Best-effort."""
-    try:
-        marks = _watermarks(proj)
-        marks.setdefault(str(reviewer), {})[str(transcript)] = int(offset)
-        f = watermark_file(proj)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(marks, sort_keys=True), encoding="utf-8")
-    except (OSError, TypeError, ValueError):
-        pass
+    """Record that `reviewer` has consumed `transcript` up to `offset`.
+
+    Raises StateWriteError when the mark is not recorded (a failed write, or an existing store
+    that cannot be read and so must not be overwritten), and ValueError/TypeError for an offset
+    that is not an integer. Both used to be swallowed, so a caller reported a review as recorded
+    while the next review re-read the same stretch - or, worse, a later mark landed on a store
+    that had silently lost every other reviewer's position."""
+    offset = int(offset)
+    f = watermark_file(proj)
+    marks = _load_json_for_update(f)
+    per_reviewer = marks.get(str(reviewer))
+    if not isinstance(per_reviewer, dict):
+        per_reviewer = marks[str(reviewer)] = {}
+    per_reviewer[str(transcript)] = offset
+    _write_json_state(f, marks)
 
 
 def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
-    """(new_text, new_offset) - the part of the transcript `reviewer` has NOT consumed yet.
+    """(new_text, new_offset) - the OLDEST part of the transcript `reviewer` has NOT consumed yet,
+    and the byte offset where that part ends.
+
+    `new_offset` is always the end of the text returned, never further: marking it reviewed can
+    only ever discharge what the caller was shown. The cap used to return the NEWEST `max_bytes`
+    with the offset of the file END, so a caller that marked that offset discharged everything
+    older unread; and a single unreviewed line longer than the cap came back as "", which reads as
+    "nothing new". Now a stretch over `max_bytes` is cut after its last newline, so the next call
+    resumes on a whole line; a single line longer than the cap is cut at the byte bound. Call again
+    after marking to get the next part.
 
     Returns ("", mark) when nothing is new: that is what stops a second dream in one session from
     re-analyzing (and re-paying for) the whole transcript. A transcript SHORTER than the mark means a
-    rotated/replaced file, so the mark is ignored and the whole file is returned rather than silently
-    skipping a fresh session. Reads at most `max_bytes` (the newest part) so a huge transcript can
-    never blow up the caller."""
+    rotated/replaced file, so the mark is ignored and the file is read from the start rather than
+    silently skipping a fresh session."""
     transcript = transcript or (read_session_meta(proj) or {}).get("transcript_path") or ""
     if not transcript:
         return "", 0
@@ -1301,22 +1485,16 @@ def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_
         mark = 0                                   # rotated/replaced: never skip a fresh transcript
     if mark >= size:
         return "", mark
-    start = max(mark, size - max_bytes)
+    end = min(size, mark + max(1, int(max_bytes)))
     try:
         with open(transcript, "rb") as fh:
-            if start > mark:
-                # A capped seek usually lands mid-line, and that fragment is dropped. When it lands
-                # exactly on a line START (the byte before is a newline) the whole line is new, so
-                # dropping it would lose it - and the watermark would then pass it for good.
-                fh.seek(start - 1)
-                if fh.read(1) != b"\n":
-                    fh.readline()
-            else:
-                fh.seek(start)
-            data = fh.read()
+            fh.seek(mark)
+            data = fh.read(end - mark)
     except OSError:
         return "", mark
-    return data.decode("utf-8", "replace"), size
+    if mark + len(data) < size and b"\n" in data:
+        data = data[:data.rfind(b"\n") + 1]        # resume on a whole line next time
+    return data.decode("utf-8", "replace"), mark + len(data)
 
 
 def resolve_transcript(proj):
@@ -1556,20 +1734,27 @@ def _read_sightings():
     return {k: sorted({str(p) for p in v}) for k, v in data.items() if isinstance(v, list)}
 
 
+def _sightings_for_update():
+    """The sighting store for a read-modify-write: normalised like `_read_sightings`, but a store
+    that exists and cannot be READ raises StateWriteError instead of reading as empty, because the
+    write that follows would then erase every other key's corroborators."""
+    data = _load_json_for_update(promotion_file())
+    return {k: sorted({str(p) for p in v}) for k, v in data.items() if isinstance(v, list)}
+
+
 def _write_sightings(data):
-    f = promotion_file()
-    try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
-    except OSError:
-        pass
+    """Persist the sighting store. Raises StateWriteError when the write does not land."""
+    _write_json_state(promotion_file(), data)
 
 
 def note_promotion_candidate(proj, key):
     """Record that `proj` sighted promotion-candidate `key`; return its dwell - the number of
     DISTINCT projects that have sighted it. Idempotent within a project: re-recording the same
-    project adds no evidence, so N sightings of an unchanged fact body still count as one."""
-    data = _read_sightings()
+    project adds no evidence, so N sightings of an unchanged fact body still count as one.
+
+    Raises StateWriteError when the sighting is not recorded: returning the would-be dwell there
+    reported corroboration that no later read could find."""
+    data = _sightings_for_update()
     seen = set(data.get(key, ()))
     seen.add(proj_key(proj))
     data[key] = sorted(seen)
@@ -1583,8 +1768,11 @@ def clear_promotion_candidate(proj, key):
     The whole set goes, not the calling project's entry: leaving the other corroborators behind
     would let one single later sighting re-trip a gate that is supposed to need two. `proj` is
     accepted so the three promotion verbs share one call shape (a lone-argument variant here would
-    silently take a project path as the key at any call site missed in a rename)."""
-    data = _read_sightings()
+    silently take a project path as the key at any call site missed in a rename).
+
+    Raises StateWriteError when the clear is not recorded, so a promoted key cannot be reported
+    as cleared while its corroborators still stand."""
+    data = _sightings_for_update()
     if key in data:
         del data[key]
         _write_sightings(data)

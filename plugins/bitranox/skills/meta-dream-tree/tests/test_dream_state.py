@@ -116,6 +116,19 @@ def test_session_review_targets_the_transcript_that_actually_compacted(home, tmp
     assert str(old) in out                            # and it says which file it is showing
 
 
+def test_an_owed_transcript_whose_tail_is_one_huge_line_is_still_the_target(home, tmp_path, capsys):
+    # The "does the owed transcript still have unreviewed bytes?" probe read the NEWEST 2 MB and
+    # dropped the partial first line - so an unreviewed stretch that was one line over 2 MB read as
+    # "nothing new", and the review fell back to the live session with the owed stretch unread.
+    proj = "/p/x"
+    old = tmp_path / "compacted.jsonl"
+    old.write_bytes(b'{"type":"user","message":{"content":"the OLD lesson ' + b"x" * 2_100_000
+                    + b'"}}\n')
+    _session(home, proj, tmp_path, '{"type":"user","message":{"content":"the NEW turn"}}\n')
+    D.sig.mark_nap_owed(proj, session_id="sid-old", transcript_path=str(old))
+    assert D._review_target(proj) == str(old)
+
+
 def test_session_reviewed_marks_the_owed_transcript_it_showed(home, tmp_path, capsys):
     # review and reviewed must agree on the file, or the watermark advances on the wrong one and
     # the owed stretch is skipped forever.
@@ -388,6 +401,39 @@ def test_promoted_reports_a_clear_it_could_not_write(home, capsys):
     capsys.readouterr()
     D.main(["should-promote", "s3"])
     assert capsys.readouterr().out.strip() == "promote", "the sightings really are still there"
+
+
+# The state layer now RAISES a failed write (StateWriteError) instead of swallowing it; each verb
+# must turn that into its exit 2, never a traceback. A directory where the store file belongs blocks
+# the write on every platform, where the chmod variants above need a non-root POSIX user.
+
+def _block_with_a_dir(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()
+    (path / "keep").write_text("x", encoding="utf-8")
+
+
+def test_session_reviewed_exits_2_when_the_watermark_store_is_blocked(home, tmp_path, capsys):
+    tp = _session(home, "/p/wb", tmp_path, '{"type":"user","message":{"content":"x"}}\n')
+    _block_with_a_dir(D.sig.watermark_file("/p/wb"))
+    assert D.main(["session-reviewed", "/p/wb"]) == 2
+    captured = capsys.readouterr()
+    assert "advanced" not in captured.out and "did not land" in captured.err
+    assert str(tp) in captured.err
+
+
+def test_saw_promotable_exits_2_when_the_sighting_store_is_blocked(home, capsys):
+    _block_with_a_dir(D.sig.promotion_file())
+    assert D.main(["saw-promotable", "s5", "/p/a"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "" and "did not land" in captured.err
+
+
+def test_promoted_exits_2_when_the_sighting_store_is_blocked(home, capsys):
+    _block_with_a_dir(D.sig.promotion_file())
+    assert D.main(["promoted", "s5"]) == 2
+    captured = capsys.readouterr()
+    assert "cleared" not in captured.out and "did not land" in captured.err
 
 
 def test_promoted_with_a_writable_store_clears_the_gate(home, capsys):

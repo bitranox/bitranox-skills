@@ -14,10 +14,18 @@ existing candidate resolves; ambiguous/none is PARKED and reported - never guess
 Usage:
     migrate_memory.py --dry-run [--slug <s> ...]   # report the full touch-list, write nothing
     migrate_memory.py --apply   [--slug <s> ...]   # back up + migrate (idempotent via receipts)
+    migrate_memory.py --restore <backup-dir>       # undo an --apply run from the dir it printed
 
-Exit codes: 0 every entry placed (or would be); 1 something was not (a parked store, an entry the
-engine refused, an unreadable topic file, a failed backup or write); 2 usage error (--dry-run with
---apply, a malformed --redirect or one naming a missing dir, a --slug with no native store).
+The backup is taken before any write and covers everything the run can write: the anchor's
+central store, each level's CLAUDE.local.md and CLAUDE.md, and the repo .gitignore files. It lives
+under ~/.claude/self-improve-audit/backups/migrate-<ts>-<random>/ with a manifest.json;
+`--restore` puts each path back byte for byte and removes what the run created. It restores the
+state AS OF THE BACKUP, so anything written to those paths after the run is lost too.
+
+Exit codes: 0 every entry placed (or would be) / every item restored; 1 something was not (a parked
+store, an entry the engine refused, an unreadable topic file, a failed backup, write or restore);
+2 usage error (--dry-run with --apply, a malformed --redirect or one naming a missing dir, a --slug
+with no native store, a --restore dir with no migration manifest).
 
 Pure standard library; ASCII output.
 """
@@ -324,7 +332,7 @@ def ensure_gitignore(proj):
 
 # ---- migrate one store -------------------------------------------------------------------------
 
-def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
+def migrate_store(slug, dry_run=True, scope_default="", redirect=None, backup_run=None):
     """Migrate one native store. Returns a report dict. On apply: backs up out-of-tree, curates each
     native entry into the resolved (or `redirect`-forced) project's curated store via the engine,
     records a receipt. Idempotent (receipt-skipped). Unresolved -> parked; an excluded target
@@ -335,7 +343,7 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
     proj = redirect or resolve_one(slug)
     rep = {"slug": slug, "resolved": proj, "in": len(entries), "placed": 0, "skipped": 0,
            "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run,
-           "failed": [], "unreadable": unreadable, "error": None}
+           "failed": [], "unreadable": unreadable, "error": None, "backup": None}
     if proj and is_excluded(proj):
         rep["excluded"] = True
         return rep
@@ -356,10 +364,11 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
         rep["skipped"] = len(entries) - rep["placed"]
         return rep
 
-    # apply: back up both the native store and any existing curated store, out of tree. A backup
-    # that fails ABORTS the store: migrating anyway wrote with no way back while reporting success.
+    # apply: back up everything this store's migration can write, out of tree (see BackupRun). A
+    # backup that fails ABORTS the store: migrating anyway wrote with no way back while reporting
+    # success.
     try:
-        _backup(proj, memdir)
+        rep["backup"] = str(_backup(proj, memdir, backup_run))
     except OSError as exc:
         rep["error"] = "backup failed, nothing written: %s" % exc
         return rep
@@ -396,15 +405,146 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
     return rep
 
 
-def _backup(proj, memdir):
-    """Copy the native store and any legacy curated dir out of tree. Raises OSError on failure."""
-    key = sig.proj_key(proj)
-    stamp = _backups_dir() / ("%s-%d" % (key, int(time.time())))
-    stamp.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(memdir, stamp / "native", dirs_exist_ok=True)
-    cur = sig.claude_memory_dir(proj)
-    if cur.exists():
-        shutil.copytree(cur, stamp / "curated", dirs_exist_ok=True)
+# ---- backup + restore: everything the migration WRITES, replayable from a manifest -------------
+# The migration writes through the engine: the anchor's central store (bodies, receipts, archive),
+# the level's CLAUDE.local.md, the level's CLAUDE.md (a legacy scope block is moved out of it), and
+# the repo .gitignore of the level and of the anchor. The backup copies each of those as it was,
+# records whether it existed at all (a restore must REMOVE what the run created), and copies the
+# native store and the retired curated dir for reference only - the migration never writes them.
+# One backup per RUN: every level under one anchor shares its store, so copying it per level would
+# multiply the largest item by the number of levels.
+
+_MANIFEST = "manifest.json"
+
+
+def _repo_gitignore(path):
+    """The .gitignore at the root of the git repo holding `path`, or None outside a repo."""
+    rc, top = _git(path, "rev-parse", "--show-toplevel")
+    return Path(top) / ".gitignore" if rc == 0 and top else None
+
+
+def _written_paths(proj):
+    """Every path the migration of `proj` can write, as (path, kind)."""
+    anchor = Path(ME._anchor(proj))  # noqa: SLF001 - the engine's anchor resolution
+    out = [(anchor / sig.MEMORY_DIRNAME, "dir"),
+           (sig.claude_local_md_path(proj), "file"),
+           (sig.claude_md_path(proj), "file")]
+    for where in (proj, anchor):
+        gi = _repo_gitignore(where)
+        if gi is not None:
+            out.append((gi, "file"))
+    return out
+
+
+class BackupRun:
+    """One out-of-tree backup for a migration run, with a manifest `restore_backup` replays.
+
+    `cover(proj, memdir)` copies what migrating `proj` can write, each path once per run, and
+    rewrites the manifest after every level so a run that dies part-way still leaves a restorable
+    backup of everything it had covered. Raises OSError when a copy fails."""
+
+    def __init__(self, root=None):
+        self._root = root
+        self.dir = None
+        self._items = {}
+
+    def _ensure_dir(self):
+        if self.dir is None:
+            base = Path(self._root) if self._root else _backups_dir()
+            base.mkdir(parents=True, exist_ok=True)
+            self.dir = Path(tempfile.mkdtemp(prefix="migrate-%d-" % int(time.time()), dir=str(base)))
+        return self.dir
+
+    def _copy(self, src, kind, restore):
+        key = str(Path(src))
+        if key in self._items:
+            return
+        run = self._ensure_dir()
+        item = {"path": key, "kind": kind, "restore": restore,
+                "existed": os.path.lexists(src), "copy": None}
+        if item["existed"]:
+            item["copy"] = "items/%d" % len(self._items)
+            dest = run / item["copy"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "dir":
+                shutil.copytree(src, dest, symlinks=True)
+            else:
+                shutil.copy2(src, dest)
+        self._items[key] = item
+
+    def _reference(self, proj, name, src):
+        """A read-only copy kept for the operator (never restored), under <key>/<name>."""
+        if Path(src).exists():
+            dest = self._ensure_dir() / sig.proj_key(proj) / name
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+
+    def cover(self, proj, memdir):
+        self._reference(proj, "native", memdir)
+        self._reference(proj, "curated", sig.claude_memory_dir(proj))
+        for path, kind in _written_paths(proj):
+            self._copy(path, kind, restore=True)
+        (self._ensure_dir() / _MANIFEST).write_text(
+            json.dumps({"version": 1, "items": list(self._items.values())}, indent=2),
+            encoding="utf-8")
+        return self.dir
+
+
+def _backup(proj, memdir, run=None):
+    """Back up what migrating `proj` writes (see `BackupRun`). Returns the backup dir. Raises
+    OSError on failure."""
+    return (run or BackupRun()).cover(proj, memdir)
+
+
+def _remove(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        os.unlink(path)
+
+
+def _restore_item(backup_dir, item):
+    path = item["path"]
+    if not item["existed"]:
+        _remove(path)
+        return
+    src = Path(backup_dir) / item["copy"]
+    if item["kind"] == "dir":
+        _remove(path)
+        shutil.copytree(src, path, symlinks=True)
+    else:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        shutil.copy2(src, path)
+
+
+def load_manifest(backup_dir):
+    """The manifest items of a backup dir. Raises ValueError when it has no usable manifest."""
+    try:
+        data = json.loads((Path(backup_dir) / _MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("no readable %s in %s (%s)" % (_MANIFEST, backup_dir, exc)) from exc
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not all(
+            isinstance(i, dict) and {"path", "kind", "existed", "copy", "restore"} <= set(i)
+            for i in items):
+        raise ValueError("%s in %s is not a migration backup manifest" % (_MANIFEST, backup_dir))
+    return items
+
+
+def restore_backup(backup_dir):
+    """Put every path a migration wrote back as the backup found it: re-copy what existed, remove
+    what the run created. Returns a list of problems ([] when every item was restored). Raises
+    ValueError when `backup_dir` holds no usable manifest."""
+    problems = []
+    for item in load_manifest(backup_dir):
+        if not item["restore"]:
+            continue
+        try:
+            _restore_item(backup_dir, item)
+        except OSError as exc:
+            problems.append("%s: %s" % (item["path"], exc))
+    sig.bump_stores_generation()      # a store dir may have appeared or vanished: bust recall's cache
+    return problems
 
 
 def enumerate_slugs():
@@ -438,6 +578,8 @@ def _parser():
     mode = ap.add_mutually_exclusive_group()   # both at once used to WRITE
     mode.add_argument("--apply", action="store_true", help="write (default is dry-run/report-only)")
     mode.add_argument("--dry-run", action="store_true", help="report only; write nothing (default)")
+    mode.add_argument("--restore", metavar="BACKUP_DIR", default=None,
+                      help="put back everything an --apply run wrote, from the backup dir it printed")
     ap.add_argument("--slug", action="append", default=None,
                     help="limit to specific slug(s); slugs start with '-', so use the =form: --slug=-media-...")
     ap.add_argument("--redirect", action="append", default=None,
@@ -471,11 +613,27 @@ def _report_store_problems(rep):
     return bool(rep["failed"] or rep["unreadable"] or rep["error"])
 
 
+def _restore_cmd(backup_dir):
+    """`--restore`: 0 every item restored; 1 an item could not be; 2 not a migration backup."""
+    try:
+        problems = restore_backup(backup_dir)
+    except ValueError as exc:
+        print("migrate_memory: %s" % exc, file=sys.stderr)
+        return 2
+    for why in problems:
+        print("  ! NOT restored: %s" % why)
+    print("restored from %s%s" % (backup_dir, " (INCOMPLETE)" if problems else ""))
+    return 1 if problems else 0
+
+
 def main(argv=None):
     """Exit codes: 0 every entry placed (or would be); 1 something was not - a parked store, an
     entry the engine refused, an unreadable topic file, a failed backup or write; 2 usage error."""
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if args.restore:
+        return _restore_cmd(args.restore)
     dry = not args.apply
+    run = BackupRun()
     redirects, problems = _usage_problems(args)
     if problems:
         for problem in problems:
@@ -489,7 +647,7 @@ def main(argv=None):
     print("%s %d store(s)%s" % ("DRY-RUN over" if dry else "MIGRATING", len(slugs),
                                 "" if dry else " (writing)"))
     for slug in slugs:
-        rep = migrate_store(slug, dry_run=dry, redirect=redirects.get(slug))
+        rep = migrate_store(slug, dry_run=dry, redirect=redirects.get(slug), backup_run=run)
         total_in += rep["in"]
         total_placed += rep["placed"]
         if rep["excluded"]:
@@ -514,6 +672,8 @@ def main(argv=None):
     if parked:
         print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
               % ", ".join(parked))
+    if run.dir is not None:
+        print("BACKUP of everything written: %s (undo with --restore %s)" % (run.dir, run.dir))
     return 1 if (parked or incomplete) else 0
 
 

@@ -1653,34 +1653,5 @@ def test_nearest_level_absolute_path_and_no_level(tmp_path):
     assert S.nearest_level(str(loose)) is None
 
 
-# --------------------------------------------------------------------------
-# A capped read that lands EXACTLY on a line start must keep that line: dropping it
-# unconditionally lost a whole transcript line, and the watermark then passed it for good.
-# --------------------------------------------------------------------------
-
-
-def _abc(tmp_path):
-    tp = tmp_path / "t.jsonl"
-    tp.write_bytes(b"A" * 9 + b"\n" + b"B" * 9 + b"\n" + b"C" * 9 + b"\n")   # 30 bytes
-    return tp
-
-
-def test_a_capped_read_on_a_line_start_keeps_that_line(home, tmp_path):
-    tp = _abc(tmp_path)
-    text, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=20)
-    assert text == "B" * 9 + "\n" + "C" * 9 + "\n" and off == 30
-
-
-def test_a_capped_read_mid_line_drops_the_fragment(home, tmp_path):
-    """Control: a cut inside a line still drops the partial line, as it must."""
-    tp = _abc(tmp_path)
-    text, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=19)
-    assert text == "C" * 9 + "\n" and off == 30
-
-
-def test_a_capped_read_that_reaches_the_mark_keeps_everything_new(home, tmp_path):
-    """Control: when the cap reaches back past the watermark there is no cut to repair."""
-    tp = _abc(tmp_path)
-    S.set_watermark("/p/x", str(tp), "llm", 10)
-    text, _off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=25)
-    assert text == "B" * 9 + "\n" + "C" * 9 + "\n"
+# The capped transcript read (oldest part first, offset = end of what was returned) is pinned in
+# test_self_improve_signals_state_writes.py.

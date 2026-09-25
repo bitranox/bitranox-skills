@@ -231,7 +231,10 @@ def _session_reviewed(proj):
         return 2
     _text, _start, end, part_size = _unreviewed_part(proj, tp)
     target = end if end < part_size else size
-    sig.set_watermark(proj, tp, _REVIEWER, target)
+    try:
+        sig.set_watermark(proj, tp, _REVIEWER, target)
+    except OSError as exc:              # StateWriteError: the mark was not recorded
+        return _write_failed("the review watermark for %s (%s)" % (tp, exc))
     if sig.get_watermark(proj, tp, _REVIEWER) != target:
         return _write_failed("the review watermark for %s" % tp)
     print("review watermark advanced to %d for %s" % (target, tp))
@@ -248,12 +251,18 @@ def _promote_cmd(cmd, slug, proj):
         print("promote" if sig.should_promote("inferred", dwell) else "hold")
         return 0
     if cmd == "saw-promotable":
-        dwell = sig.note_promotion_candidate(proj, slug)             # dwell after this sighting
+        try:
+            dwell = sig.note_promotion_candidate(proj, slug)         # dwell after this sighting
+        except OSError as exc:                                       # StateWriteError
+            return _write_failed("the sighting of %s (%s)" % (slug, exc))
         if sig.promotion_dwell(proj, slug) != dwell:
             return _write_failed("the sighting of %s" % slug)
         print(dwell)
         return 0
-    sig.clear_promotion_candidate(proj, slug)                        # promoted
+    try:
+        sig.clear_promotion_candidate(proj, slug)                    # promoted
+    except OSError as exc:                                           # StateWriteError
+        return _write_failed("clearing the sightings of %s (%s)" % (slug, exc))
     if sig.promotion_dwell(proj, slug) != 0:
         return _write_failed("clearing the sightings of %s" % slug)
     print("cleared dwell for %s" % slug)

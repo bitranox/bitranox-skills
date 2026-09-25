@@ -110,7 +110,7 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     assert "Body A." in ME.us.body_path(anchor, "project-a").read_text(encoding="utf-8")
     # receipt written; a backup of the native store exists out of tree
     assert M._receipt_path(str(proj)).is_file()
-    backups = list(M._backups_dir().glob("*/native/a.md"))
+    backups = list(M._backups_dir().glob("*/*/native/a.md"))    # <run>/<proj key>/native
     assert len(backups) == 1 and "Body A." in backups[0].read_text(encoding="utf-8")
 
 
