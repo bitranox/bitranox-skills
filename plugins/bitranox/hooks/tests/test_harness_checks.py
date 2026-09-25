@@ -13,7 +13,7 @@ import shutil
 import sys
 import subprocess
 import types
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -1029,3 +1029,148 @@ def test_is_executable_is_false_off_posix_even_for_an_executable_file(tmp_path):
     f.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
     f.chmod(0o755)
     assert hc.is_executable(f, posix=False) is False
+
+
+# --- a shim that exits with a MESSAGE exits 1 -------------------------------------------------
+
+def _shim_exiting(tmp_path, line):
+    path = tmp_path / "s.py"
+    path.write_text('"""RETIRED. Replacement: other.py"""\nimport sys\n%s\n' % line,
+                    encoding="utf-8")
+    path.chmod(0o644)
+    return path
+
+
+def _real_exit_code(path):
+    return subprocess.run([sys.executable, str(path)], capture_output=True, timeout=60).returncode
+
+
+@pytest.mark.parametrize("line", [
+    'raise SystemExit("retired - use other.py")',
+    "sys.exit('retired - use other.py')",
+    'sys.exit(f"retired - use other.py")',
+    "raise SystemExit(r'retired')",
+    "raise SystemExit(2)",
+])
+def test_a_shim_that_exits_with_a_message_is_not_called_exit_zero(tmp_path, line):
+    """A string argument to SystemExit or sys.exit exits 1; the check read it as success."""
+    path = _shim_exiting(tmp_path, line)
+    assert _real_exit_code(path) != 0
+    assert not any("non-zero" in p for p in hc.shim_problems(path))
+
+
+@pytest.mark.parametrize("line", ["raise SystemExit", "sys.exit()", "sys.exit(0)",
+                                  "raise SystemExit(None)"])
+def test_a_shim_that_really_exits_zero_is_still_flagged(tmp_path, line):
+    """Control: each of these really exits 0, and each must still be reported."""
+    path = _shim_exiting(tmp_path, line)
+    assert _real_exit_code(path) == 0
+    assert any("non-zero" in p for p in hc.shim_problems(path))
+
+
+# --- front matter: a BOM, an empty value, and the gate's own sweep ----------------------------
+
+GOOD_DESC = ("Use when parsing gitignore files, filtering paths, or reaching for pathspec "
+             "instead of the igittigitt library")
+
+
+def _skill_dir_with(tmp_path, text, bom=False):
+    skills = tmp_path / "skills"
+    (skills / "demo").mkdir(parents=True)
+    data = text.encode("utf-8")
+    (skills / "demo" / "SKILL.md").write_bytes((b"\xef\xbb\xbf" if bom else b"") + data)
+    return skills
+
+
+def test_a_bom_skill_md_passes_the_front_matter_sweep(tmp_path):
+    """The sweep the commit gate runs over EVERY shipped SKILL.md: a BOM made it report "has no
+    name" and "has no description" for a file that has both."""
+    skills = _skill_dir_with(tmp_path, "---\nname: demo\ndescription: %s\n---\n" % GOOD_DESC,
+                             bom=True)
+    assert hc.frontmatter_problems(skills) == []
+
+
+def test_the_same_skill_md_without_a_bom_passes(tmp_path):
+    """Control for the test above."""
+    skills = _skill_dir_with(tmp_path, "---\nname: demo\ndescription: %s\n---\n" % GOOD_DESC)
+    assert hc.frontmatter_problems(skills) == []
+
+
+def test_an_unterminated_block_behind_a_bom_is_still_caught(tmp_path):
+    md = tmp_path / "SKILL.md"
+    md.write_bytes(b"\xef\xbb\xbf---\nname: demo\ndescription: Use when x.---\n# body\n")
+    assert hc.frontmatter_unterminated(md) is True
+
+
+def test_an_empty_name_is_reported_missing_not_as_the_next_line(tmp_path):
+    skills = _skill_dir_with(tmp_path, "---\nname:\ndescription: %s\n---\n" % GOOD_DESC)
+    problems = hc.frontmatter_problems(skills)
+    assert any("has no `name:`" in p for p in problems), problems
+    assert not any("description:" in p and "front-matter name is" in p for p in problems)
+
+
+def test_an_empty_description_is_reported_missing_not_as_the_next_key(tmp_path):
+    skills = _skill_dir_with(tmp_path, "---\ndescription:\nname: demo\n---\n")
+    problems = hc.frontmatter_problems(skills)
+    assert any("has no `description:`" in p for p in problems), problems
+
+
+# --- old git echoes an unknown rev-parse flag back with exit 0 --------------------------------
+
+_OLD_GIT = '''#!%s
+import os, subprocess, sys
+args = sys.argv[1:]
+flag = "--path-format=absolute"
+if flag in args:
+    # git before 2.31 does not know the flag: rev-parse echoes it and still exits 0.
+    args.remove(flag)
+    out = subprocess.run([os.environ["REAL_GIT"], *args], capture_output=True, text=True)
+    sys.stdout.write(flag + "\\n" + out.stdout)
+    sys.exit(out.returncode)
+sys.exit(subprocess.call([os.environ["REAL_GIT"], *args]))
+'''
+
+
+@needs_git
+@pytest.mark.skipif(os.name != "posix", reason="the stand-in git is a shebang script")
+def test_a_worktree_is_still_recognised_on_git_older_than_2_31(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _skills(repo, "demo")
+    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "seed")
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", "side")
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text(_OLD_GIT % sys.executable, encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("REAL_GIT", shutil.which("git"))
+    monkeypatch.setenv("PATH", str(fake.parent) + os.pathsep + os.environ.get("PATH", ""))
+    assert hc.target_identity(repo / "skills") == hc.target_identity(wt / "skills")
+    assert not hc.target_identity(repo / "skills")[0].endswith("absolute")
+
+
+# --- cached pytest node ids -------------------------------------------------------------------
+
+def _nodeid_cache(root, ids):
+    cache = root / ".pytest_cache" / "v" / "cache" / "nodeids"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps(ids), encoding="utf-8")
+    return cache
+
+
+def test_graveyard_flags_only_the_cached_test_file_that_is_gone(tmp_path):
+    root = tmp_path / "proj"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_here.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    _nodeid_cache(root, ["tests/test_here.py::test_x", "tests/test_gone.py::test_y"])
+    found = [why for _path, why in hc.graveyard_entries(root) if "node ids" in why]
+    assert found == ["caches node ids for tests/test_gone.py, which no longer exists"]
+
+
+def test_nodeid_paths_compare_with_forward_slashes_on_windows():
+    """pytest writes node ids with `/` on every OS; a Windows relative path has `\\`, so every
+    cached id read as missing there."""
+    got = hc._relative_posix(PureWindowsPath("C:/r/tests/test_x.py"), PureWindowsPath("C:/r"))
+    assert got == "tests/test_x.py"

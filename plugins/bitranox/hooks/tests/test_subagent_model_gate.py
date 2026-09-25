@@ -21,6 +21,9 @@ def home(tmp_path, monkeypatch):
     (h / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("USERPROFILE", str(h))
+    # A run inside a Claude Code session inherits that session's id, which would key every
+    # id-less `start` here to it; the tests name their sessions explicitly instead.
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     return h
 
 
@@ -100,6 +103,42 @@ def test_main_pinned_is_silent(monkeypatch, capsys):
 def test_main_fail_open_on_bad_stdin(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json at all"))
     assert W.main() == 0
+
+
+SESSION_A = "aaaaaaaa-0000-0000-0000-000000000001"
+SESSION_B = "bbbbbbbb-0000-0000-0000-000000000002"
+
+
+def _dispatch(session):
+    return {"tool_name": "Agent", "session_id": session, "tool_input": {"subagent_type": "x"}}
+
+
+def _decision(capsys):
+    return json.loads(capsys.readouterr().out)["hookSpecificOutput"].get("permissionDecision")
+
+
+def test_one_sessions_plan_does_not_arm_the_gate_in_another(monkeypatch, capsys):
+    """The gate asked "is a plan armed anywhere on this machine", so session A's plan execution
+    denied every unpinned dispatch in session B for eight hours."""
+    skill_receipt.start("plan-execution", session_id=SESSION_A)
+    run_main(monkeypatch, _dispatch(SESSION_B))
+    assert _decision(capsys) is None                      # B only gets the warning
+
+
+def test_a_sessions_own_plan_still_arms_its_gate(monkeypatch, capsys):
+    """Control for the test above: the session that armed the plan is still denied."""
+    skill_receipt.start("plan-execution", session_id=SESSION_A)
+    run_main(monkeypatch, _dispatch(SESSION_A))
+    assert _decision(capsys) == "deny"
+
+
+def test_another_sessions_end_does_not_disarm_this_sessions_plan(monkeypatch, capsys):
+    """Keyed by skill alone, B's `end` deleted A's receipt and silently opened A's gate."""
+    skill_receipt.start("plan-execution", session_id=SESSION_A)
+    skill_receipt.start("plan-execution", session_id=SESSION_B)
+    skill_receipt.end("plan-execution", session_id=SESSION_B)
+    run_main(monkeypatch, _dispatch(SESSION_A))
+    assert _decision(capsys) == "deny"
 
 
 def test_receipt_end_is_idempotent():

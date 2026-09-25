@@ -20,9 +20,10 @@ emits nothing and exits 0, so a broken hook never blocks a session.
 import json
 import math
 import os
-import re
 import sys
 from pathlib import Path
+
+import skill_frontmatter
 
 # The harness truncates a single description at this many characters (skillListingMaxDescChars).
 MAX_DESC_CHARS = 1536
@@ -45,10 +46,6 @@ SAFETY = 1.25
 FRACTION_CAP = 0.5  # refuse to run away if a catalogue is pathologically large
 HARNESS_DEFAULT_FRACTION = 0.01
 
-_FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n", re.S)
-_DESCRIPTION = re.compile(r"^description:\s*(.*(?:\n(?![A-Za-z_-]+:).*)*)", re.M)
-
-
 def config_dir():
     """Return the Claude configuration directory (CLAUDE_CONFIG_DIR wins, else ~/.claude)."""
     override = os.environ.get("CLAUDE_CONFIG_DIR")
@@ -56,16 +53,10 @@ def config_dir():
 
 
 def read_description(skill_md):
-    """Return a SKILL.md's frontmatter description as one line, or None if it has none."""
-    try:
-        text = skill_md.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    matter = _FRONTMATTER.match(text)
-    if not matter:
-        return None
-    found = _DESCRIPTION.search(matter.group(1))
-    return " ".join(found.group(1).split()) if found else None
+    """Return a SKILL.md's frontmatter description as one line, or None if it has none.
+
+    The shared reader, so a BOM or CRLF file is measured rather than counted as empty."""
+    return skill_frontmatter.description(skill_md)
 
 
 def _skills_in(directory, prefix):

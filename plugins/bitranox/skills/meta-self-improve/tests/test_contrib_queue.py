@@ -367,3 +367,42 @@ def test_a_bad_queue_key_degrades_inside_the_module_rather_than_escaping(home):
     assert S.read_contributions(bad) == []
     assert S.add_contribution(bad, {"what": "x"}) is False
     S.drain_contributions(bad)          # must not raise
+
+
+# ---- a close that cannot be recorded must say so, and must not lose the entry ------------------
+
+def _block_tombstones(proj):
+    """Make the tombstone file unwritable on every OS: a directory where the file must go."""
+    S.rejected_file(proj).mkdir(parents=True)
+
+
+def test_ship_reports_failure_when_the_tombstone_cannot_be_written(capsys):
+    """The IO error was swallowed and the CLI printed "will NOT be re-queued" with rc 0, while
+    nothing had been recorded."""
+    Q.main(["add", "--what", "only one", "--target", "skill:x", "/p/f1"])
+    _block_tombstones("/p/f1")
+    capsys.readouterr()
+    assert Q.main(["ship", "--index", "1", "/p/f1"]) != 0
+    out = capsys.readouterr()
+    assert "will NOT be re-queued" not in out.out and out.err.strip()
+    assert [r["what"] for r in S.read_contributions("/p/f1")] == ["only one"]
+
+
+def test_a_failed_tombstone_does_not_take_the_entry_out_of_the_queue():
+    """With two entries the queue rewrite succeeded BEFORE the tombstone failed, so the shipped
+    entry left the queue with no tombstone - the resurrection the tombstone exists to prevent."""
+    Q.main(["add", "--what", "first", "--target", "skill:x", "/p/f2"])
+    Q.main(["add", "--what", "second", "--target", "skill:y", "/p/f2"])
+    _block_tombstones("/p/f2")
+    with pytest.raises(OSError):
+        S.drop_contribution("/p/f2", index=1, reason="stale")
+    assert [r["what"] for r in S.read_contributions("/p/f2")] == ["first", "second"]
+
+
+def test_ship_succeeds_and_records_when_the_store_is_writable(capsys):
+    """Control for the two tests above: the ordinary path is unchanged."""
+    Q.main(["add", "--what", "fine", "--target", "skill:x", "/p/f3"])
+    capsys.readouterr()
+    assert Q.main(["ship", "--index", "1", "/p/f3"]) == 0
+    assert S.read_contributions("/p/f3") == []
+    assert [r["what"] for r in S.read_shipped("/p/f3")] == ["fine"]

@@ -700,28 +700,36 @@ def _close_contribution(proj, index, outcome, note="", max_items=200, match=None
     """Remove ONE entry from the queue (by `index` or `match`) and tombstone it under `outcome`.
 
     Raises IndexError on a selector that does not resolve to exactly one entry, so a mistyped or
-    shifted selector cannot silently close the wrong intent (or none, while reporting success)."""
-    cur = read_contributions(proj)
-    rec = cur.pop(resolve_contribution(proj, index, match))
-    tomb = dict(rec)
-    tomb["outcome"] = outcome
-    tomb["note" if outcome == SHIPPED else "reason"] = str(note or "")
-    tomb["closed_ts"] = time.time()
+    shifted selector cannot silently close the wrong intent (or none, while reporting success).
+
+    Raises OSError when the close cannot be RECORDED (TimeoutError, an OSError, on lock
+    contention). Unlike the queue's best-effort writers this is an operator verb whose whole
+    output is "it will not come back", so a swallowed error made it report a close that never
+    happened. The tombstone is written BEFORE the queue is rewritten: a failure between the two
+    then leaves the entry both queued and tombstoned (re-queue still blocked, a retry closes it),
+    never out of the queue with nothing recording that it left."""
     try:
         f = contrib_file(proj)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        if cur:
-            f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
-        else:
-            f.unlink(missing_ok=True)
+    except ValueError as exc:         # a malformed queue key selects nothing: refuse like a bad index
+        raise IndexError(str(exc)) from exc
+    with memory_lock(f):
+        cur = read_contributions(proj)
+        rec = cur.pop(resolve_contribution(proj, index, match))
+        tomb = dict(rec)
+        tomb["outcome"] = outcome
+        tomb["note" if outcome == SHIPPED else "reason"] = str(note or "")
+        tomb["closed_ts"] = time.time()
         prev = read_closed(proj)
         prev.append(tomb)
         if len(prev) > max_items:
             prev = prev[-max_items:]
         rf = rejected_file(proj)
+        rf.parent.mkdir(parents=True, exist_ok=True)
         rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
-    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
-        pass
+        if cur:
+            f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+        else:
+            f.unlink(missing_ok=True)
     return rec
 
 
@@ -899,7 +907,12 @@ def resolve_anchor(proj):
     (see `_excluded_anchor_dirs`). Returns a Path, or None when no ancestor has a `CLAUDE.md` at all.
     With MULTIPLE independent trees on one machine, each cwd resolves to its OWN tree's anchor."""
     try:
-        ladder = [Path(proj), *Path(proj).parents]
+        # Absolute FIRST: a relative path has an empty anchor and Path("") == Path("."), so the
+        # root guard below skipped the only rung and the walk never climbed above the cwd. abspath
+        # rather than resolve(): it keeps symlinked spellings as given, so an absolute input
+        # answers exactly as before and the excluded dirs (also unresolved) still compare equal.
+        here = Path(os.path.abspath(os.fspath(proj)))
+        ladder = [here, *here.parents]
     except (TypeError, ValueError):
         return None
     excluded = _excluded_anchor_dirs()
@@ -1167,9 +1180,15 @@ def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_
     start = max(mark, size - max_bytes)
     try:
         with open(transcript, "rb") as fh:
-            fh.seek(start)
             if start > mark:
-                fh.readline()                      # drop the partial line after a capped seek
+                # A capped seek usually lands mid-line, and that fragment is dropped. When it lands
+                # exactly on a line START (the byte before is a newline) the whole line is new, so
+                # dropping it would lose it - and the watermark would then pass it for good.
+                fh.seek(start - 1)
+                if fh.read(1) != b"\n":
+                    fh.readline()
+            else:
+                fh.seek(start)
             data = fh.read()
     except OSError:
         return "", mark
@@ -1310,7 +1329,8 @@ def nearest_level(path):
     filed at. `resolve_anchor` gives the TOPMOST rung; this gives the narrowest one. Returns a str
     path, or None when the path sits under no CLAUDE.md-bearing dir (or is an excluded altitude)."""
     try:
-        here = Path(path)
+        # Absolute first, for the reason `resolve_anchor` gives: a relative path stopped at once.
+        here = Path(os.path.abspath(os.fspath(path)))
         here = here if here.is_dir() else here.parent
         excluded = _excluded_anchor_dirs()
         for d in [here, *here.parents]:

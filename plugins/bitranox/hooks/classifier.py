@@ -44,6 +44,7 @@ if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
 import secret_patterns  # noqa: E402
+import skill_frontmatter  # noqa: E402
 import transcript_turns  # noqa: E402
 
 __all__ = [
@@ -373,20 +374,16 @@ def stop_signal_questions():
 
 
 def load_skill_descriptions(skills_dir=None):
-    """{skill name: description} from each shipped SKILL.md front matter (one-line descriptions)."""
+    """{skill name: description} from each shipped SKILL.md front matter.
+
+    Read through `skill_frontmatter`, the reader the commit gate lints with, so the router is
+    offered the same description the gate passed and the keyword map was built from."""
     skills_dir = Path(skills_dir) if skills_dir else _HOOKS_DIR.parent / "skills"
     out = {}
     for md in sorted(skills_dir.glob("*/SKILL.md")):
-        try:
-            head = md.read_text(encoding="utf-8").split("---", 2)[1]
-        except (OSError, IndexError):
-            continue
-        for line in head.splitlines():
-            if line.startswith("description:"):
-                desc = line[len("description:"):].strip().strip("\"'")
-                if desc:
-                    out[md.parent.name] = desc
-                break
+        desc = skill_frontmatter.description(md)
+        if desc:
+            out[md.parent.name] = desc
     return out
 
 

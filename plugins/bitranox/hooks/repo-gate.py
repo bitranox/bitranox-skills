@@ -1187,13 +1187,11 @@ def audit_mirrors(root):
 
 
 def _description(path):
-    """Return a SKILL.md's description line, collapsed to one line."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    match = re.search(r"^description:\s*(.+)$", text, re.M)
-    return " ".join(match.group(1).split()) if match else ""
+    """Return a SKILL.md's description collapsed to one line, "" when it has none.
+
+    The same reader as the CSO lint and the builders (`hc.frontmatter_description`), so a twin is
+    matched on the description those ship rather than on a looser first-line guess."""
+    return hc.frontmatter_description(path) or ""
 
 
 def unlisted_mirrors(root, public):

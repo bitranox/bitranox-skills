@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import skill_frontmatter
+
 # A plugin root announces itself with one of these; either means some other gate owns the content.
 PLUGIN_MANIFESTS = ("plugin.json", "marketplace.json")
 
@@ -98,7 +100,9 @@ def _git_identity_dirs(path):
         if out is None:
             continue
         lines = [line for line in out.splitlines() if line.strip()]
-        if len(lines) < 2:
+        # git before 2.31 does not know --path-format and ECHOES it back with exit 0, so the
+        # first line is the flag, not the common dir; fall through to the plain form.
+        if len(lines) != 2 or lines[0].startswith("-"):
             continue
         common, top = Path(lines[0]), Path(lines[1])
         if not common.is_absolute():
@@ -194,31 +198,17 @@ CSO_STOP = frozenset({
     "good", "need", "want", "like", "just",
 })
 
-_DESCRIPTION_RX = re.compile(r"^description:\s*(.+(?:\n(?![a-zA-Z_-]+:).*)*)", re.M)
-
-
 def frontmatter_description(path):
-    """The `description:` value from a SKILL.md front matter, or None when there is none."""
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not text.startswith("---"):
-        return None
-    match = _DESCRIPTION_RX.search(text.split("---", 2)[1])
-    return " ".join(match.group(1).split()) if match else None
+    """The `description:` value from a SKILL.md front matter, or None when there is none.
+
+    Read through `skill_frontmatter`, the reader the trigger and catalog builders use too: the
+    gate must lint exactly the string the router and the catalog ship."""
+    return skill_frontmatter.description(path)
 
 
 def frontmatter_name(path):
-    """The `name:` value from a SKILL.md front matter, or None."""
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not text.startswith("---"):
-        return None
-    match = re.search(r"^name:\s*(.+)$", text.split("---", 2)[1], re.M)
-    return match.group(1).strip() if match else None
+    """The `name:` value from a SKILL.md front matter, or None (see `frontmatter_description`)."""
+    return skill_frontmatter.name(path)
 
 
 #: Claude Code's documented cap on a skill's front-matter `description`. Going over is not
@@ -470,7 +460,10 @@ def registered_paths(settings_paths, home=None):
 # --- retired shims: a tombstone has to behave like one ---------------------------------------
 
 _RETIRED_RX = re.compile(r"\bRETIRED\b")
-_NONZERO_EXIT_RX = re.compile(r"SystemExit\(\s*[1-9]|sys\.exit\(\s*[1-9]|^\s*exit\s+[1-9]", re.M)
+# A string argument exits 1 too - Python prints it and exits 1 - so a shim that says WHY it is
+# retired (`raise SystemExit("use x.py")`) exits non-zero; reading only digits called it success.
+_NONZERO_EXIT_RX = re.compile(
+    r"(?:SystemExit|sys\.exit)\(\s*(?:[1-9]|[rRbBfFuU]{0,2}[\"'])|^\s*exit\s+[1-9]", re.M)
 
 
 def is_retired_shim(path):
@@ -749,7 +742,7 @@ def frontmatter_unterminated(path):
     perfectly fine until a loader that wants the delimiter on its own line refuses it.
     """
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
     except OSError:
         return False
     if not lines or lines[0].strip() != "---":
@@ -1015,6 +1008,12 @@ def _stale_bytecode(root):
     return out
 
 
+def _relative_posix(path, base):
+    """`path` relative to `base`, with `/` separators - the form pytest writes node ids in on
+    every OS. A native Windows relative path has `\\`, so no cached id would ever match it."""
+    return path.relative_to(base).as_posix()
+
+
 def _stale_nodeids(root):
     """Cached pytest node ids naming a test file that is gone."""
     out = []
@@ -1025,7 +1024,7 @@ def _stale_nodeids(root):
             continue
         base = cache.parents[3]
         missing = sorted({i.split("::")[0] for i in ids if isinstance(i, str)}
-                         - {str(p.relative_to(base)) for p in base.rglob("*.py")})
+                         - {_relative_posix(p, base) for p in base.rglob("*.py")})
         for name in missing:
             out.append((cache, "caches node ids for %s, which no longer exists" % name))
     return out

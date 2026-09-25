@@ -205,6 +205,11 @@ def main(argv=None):
         except IndexError as exc:
             print("! refused: %s" % exc, file=sys.stderr)
             return 2
+        except OSError as exc:
+            # Nothing was closed that the store does not record; say so rather than claim it.
+            print("! failed: could not record the %s (%s) - the entry is still queued; fix the "
+                  "store and re-run" % ("ship" if shipping else "drop", exc), file=sys.stderr)
+            return 1
         print("%s: %s%s%s" % ("shipped" if shipping else "dropped", rec.get("what") or "",
                               " -> %s" % rec["target"] if rec.get("target") else "",
                               " (%s)" % note if note else ""))

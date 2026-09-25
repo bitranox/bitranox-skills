@@ -29,6 +29,41 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.4]
+
+### Fixed
+
+- **Skill receipts belong to one session.** A receipt is now one file per skill and session
+  (`skill-receipts/<skill>.<session>.json`), and `skill_receipt.py end` removes only the calling
+  session's. Before, one session's `start` overwrote another's receipt (its next `SKILL.md` edit
+  was denied), one session's `end plan-execution` disarmed another session's plan gate, and a
+  plan armed in one session made `subagent-model-gate` DENY unpinned dispatches in every other
+  session on the machine for eight hours. A receipt written by an earlier version still counts
+  for the session recorded inside it and for no other. `check` answers for the calling session
+  and prints the receipt's age and owner; a malformed receipt reads as stale instead of a
+  traceback.
+- **A relative path finds its memory tree.** `resolve_anchor` and `nearest_level` take the
+  absolute path first, so `--proj .` / `--self .` resolve the real anchor instead of "no anchor"
+  or the wrong tree top.
+- **`contrib_queue.py ship|drop` reports a close it could not record.** The tombstone is written
+  before the queue is rewritten, under the memory lock; an IO failure exits 1 with the reason and
+  leaves the entry queued, instead of printing "will NOT be re-queued" over a close that never
+  happened.
+- **A transcript line is no longer skipped** when a capped review read starts exactly on a line
+  boundary.
+- **One front-matter reader.** The commit gate, the trigger-map and catalog builders, the mirror
+  audit, the listing-budget hook and the Jev router all read a `SKILL.md` description through
+  `hooks/skill_frontmatter.py`, so they cannot disagree. A value ends at the first unindented
+  line: a following `# comment` or `key:` no longer becomes router keywords, and an empty
+  `name:` or `description:` reads as missing instead of swallowing the next line. A `SKILL.md`
+  saved with a UTF-8 BOM no longer fails the commit gate as having no name and no description,
+  and is no longer left out of the trigger map.
+- **Local-harness audit:** a retired shim that exits with a message (`raise SystemExit("...")`)
+  counts as exiting non-zero; a linked worktree is audited once on git older than 2.31; cached
+  pytest node ids no longer all read as deleted on Windows.
+- **`build_skill_triggers.py --check` and `build_skill_docs.py --check`** say `missing: <path>`
+  for an output that does not exist, instead of `STALE`.
+
 ## [7.22.3]
 
 ### Fixed

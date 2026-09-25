@@ -71,6 +71,33 @@ def test_check_detects_stale_catalog(tmp_path):
     assert D.main(argv + ["--check"]) == 1
 
 
+def test_check_says_missing_for_a_catalog_that_does_not_exist(tmp_path, capsys):
+    """Run from an installed cache, the default --out points at a docs/ that does not ship, and
+    "STALE - run build_skill_docs.py" sent the reader to regenerate a file that was never there."""
+    skills = tmp_path / "skills"
+    _skill(skills, "meta-alpha", "Use when alpha work needs capturing across sessions")
+    tax = tmp_path / "tax.json"
+    _taxonomy(tax)
+    out = tmp_path / "docs" / "skills.md"
+    assert D.main(["--skills-dir", str(skills), "--taxonomy", str(tax), "--out", str(out),
+                   "--check"]) == 1
+    err = capsys.readouterr().err
+    assert "missing" in err and str(out) in err and "STALE" not in err
+
+
+def test_check_still_says_stale_for_an_outdated_catalog(tmp_path, capsys):
+    """Control for the test above."""
+    skills = tmp_path / "skills"
+    _skill(skills, "meta-alpha", "Use when alpha work needs capturing across sessions")
+    tax = tmp_path / "tax.json"
+    _taxonomy(tax)
+    out = tmp_path / "skills.md"
+    out.write_text("old\n", encoding="utf-8")
+    assert D.main(["--skills-dir", str(skills), "--taxonomy", str(tax), "--out", str(out),
+                   "--check"]) == 1
+    assert "STALE" in capsys.readouterr().err
+
+
 def test_shipped_catalog_in_sync_with_skills():
     # the committed docs/skills.md must match the shipped skills (regenerate on any change)
     assert D.main(["--check"]) == 0

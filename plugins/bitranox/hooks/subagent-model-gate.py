@@ -14,10 +14,11 @@ Two enforcement levels:
   (a `fork` always inherits by design, and sometimes the session model is genuinely right). The
   warn rides `hookSpecificOutput.additionalContext` (no `permissionDecision`), which reaches the
   model as a system-reminder without blocking the dispatch; exit-0 stderr would not reach it.
-- While a PLAN EXECUTION is armed (a fresh `plan-execution` receipt written by
-  `skill_receipt.py start plan-execution` - the plan-execution skills arm it at their step 0 and
-  disarm with `skill_receipt.py end plan-execution` when the plan completes): DENY the dispatch
-  with a reason, so no plan task runs on an unpinned model.
+- While a PLAN EXECUTION is armed in THIS session (a fresh `plan-execution` receipt written by
+  `skill_receipt.py start plan-execution` in the session the event comes from - the
+  plan-execution skills arm it at their step 0 and disarm with `skill_receipt.py end
+  plan-execution` when the plan completes): DENY the dispatch with a reason, so no plan task runs
+  on an unpinned model. Another session's plan never arms it here.
 
 Contract: reads a PreToolUse event JSON on stdin. Fail-open: any parse/IO error -> exit 0 (a
 broken gate must never wedge a turn). Pure standard library; launched via run-python.sh so it
@@ -83,7 +84,8 @@ def main():
     if not isinstance(event, dict):
         return 0
     try:
-        plan_armed = skill_receipt.is_fresh(PLAN_RECEIPT)
+        # The EVENT's session: a plan armed in another session must not deny dispatches here.
+        plan_armed = skill_receipt.is_fresh(PLAN_RECEIPT, session_id=event.get("session_id"))
     except Exception:  # noqa: BLE001 - receipt trouble must not wedge a turn
         plan_armed = False
     action, message = assess(event.get("tool_name"), event.get("tool_input") or {}, plan_armed)

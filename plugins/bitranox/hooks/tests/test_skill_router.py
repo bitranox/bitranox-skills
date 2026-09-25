@@ -42,6 +42,47 @@ def test_build_check_detects_stale_map(tmp_path):
     assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 1
 
 
+def test_build_check_says_missing_for_a_map_that_does_not_exist(tmp_path, capsys):
+    """A missing map read "STALE - run build_skill_triggers.py", which sends the reader to
+    regenerate a file that was never there (a wrong --out, a run outside the repo)."""
+    _skill(tmp_path, "alpha", "Use when alpha widgets explode under pressure loads")
+    out = tmp_path / "nowhere" / "map.json"
+    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 1
+    err = capsys.readouterr().err
+    assert "missing" in err and str(out) in err and "STALE" not in err
+
+
+def test_build_check_still_says_stale_for_an_outdated_map(tmp_path, capsys):
+    """Control for the test above."""
+    _skill(tmp_path, "alpha", "Use when alpha widgets explode under pressure loads")
+    out = tmp_path / "map.json"
+    out.write_text("{}\n", encoding="utf-8")
+    assert B.main(["--skills-dir", str(tmp_path), "--out", str(out), "--check"]) == 1
+    assert "STALE" in capsys.readouterr().err
+
+
+def test_build_keeps_comment_and_key_words_out_of_the_map(tmp_path):
+    """A `# comment` line or a `version2:` key after the description was swallowed into it, so its
+    words became router keywords; the commit gate passed both."""
+    d = tmp_path / "alpha"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: Use when alpha widgets explode under pressure loads\n"
+        "# todo reword before release\nversion2: tokenleaks intoprose\n---\n", encoding="utf-8")
+    words = set(B.build(tmp_path)["alpha"])
+    assert {"widgets", "explode"} <= words
+    assert not words & {"todo", "reword", "release", "version2", "tokenleaks", "intoprose"}
+
+
+def test_build_includes_a_skill_md_written_with_a_bom(tmp_path):
+    d = tmp_path / "alpha"
+    d.mkdir()
+    (d / "SKILL.md").write_bytes(
+        b"\xef\xbb\xbf---\nname: alpha\ndescription: Use when alpha widgets explode under "
+        b"pressure loads\n---\n")
+    assert "alpha" in B.build(tmp_path)
+
+
 # ---- the 14 head keywords crowd out the strings a user in trouble types verbatim -----------------
 # A description is trigger-first, so its head is prose about the SITUATION and its tail holds the
 # literal error codes and messages. Taking the first 14 by position therefore keeps generic words

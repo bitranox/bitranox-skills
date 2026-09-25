@@ -1,10 +1,17 @@
 """Tests for skill_receipt.py + the receipt-aware skill-edit-guard. ASCII."""
+import json
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
 import skill_receipt as SR
 import skill_edit_guard as G
+
+SCRIPT = Path(SR.__file__).resolve()
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +20,9 @@ def home(tmp_path, monkeypatch):
     (h / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setenv("USERPROFILE", str(h))
+    # A run inside a Claude Code session inherits that session's id, which would silently key
+    # every id-less `start` here to it; the tests name their sessions explicitly instead.
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     return h
 
 
@@ -110,8 +120,157 @@ def test_the_guard_allows_an_edit_when_the_receipt_belongs_to_this_session():
     assert G.decide(event, {}) is None
 
 
-def test_the_guard_falls_back_to_the_ttl_when_the_event_carries_no_session_id():
-    """Not every surface supplies one. Where it is absent the guard keeps its previous contract
-    rather than denying every edit, which would make the whole procedure unusable there."""
+def test_the_guard_denies_a_session_less_event_when_only_another_session_holds_a_receipt():
+    """With no id to offer, the reader answers from the id-less receipt only. Counting any
+    session's receipt here is the same hole the session id closed, entered through the side door."""
     SR.start("meta-skill-writer", session_id=OTHER)
+    assert G.decide(_edit_event(), {}) is not None
+
+
+def test_the_guard_allows_a_session_less_event_with_a_session_less_receipt():
+    """Control for the test above: a surface that supplies no id to the writer or the reader still
+    works end to end, so the procedure stays usable there."""
+    SR.start("meta-skill-writer", session_id="")
     assert G.decide(_edit_event(), {}) is None
+
+
+# ---- receipts are keyed per skill AND session: one session never touches another's ------------
+
+def test_a_second_sessions_start_does_not_unarm_the_first():
+    """Keyed by skill alone, B's `start` overwrote A's receipt, so A - which had entered the
+    procedure - was denied its next SKILL.md edit. Several sessions share this machine routinely."""
+    SR.start("meta-skill-writer", session_id=THIS)
+    SR.start("meta-skill-writer", session_id=OTHER)
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS)
+    assert SR.is_fresh("meta-skill-writer", session_id=OTHER)
+    assert G.decide(dict(_edit_event(), session_id=THIS), {}) is None
+
+
+def test_end_removes_only_this_sessions_receipt():
+    SR.start("plan-execution", session_id=THIS)
+    SR.start("plan-execution", session_id=OTHER)
+    assert SR.end("plan-execution", session_id=OTHER) is True
+    assert SR.is_fresh("plan-execution", session_id=THIS)
+    assert not SR.is_fresh("plan-execution", session_id=OTHER)
+
+
+def test_end_takes_the_session_from_the_environment(monkeypatch):
+    SR.start("plan-execution", session_id=THIS)
+    SR.start("plan-execution", session_id=OTHER)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OTHER)
+    assert SR.end("plan-execution") is True
+    assert SR.is_fresh("plan-execution", session_id=THIS)
+    assert SR.end("plan-execution") is False              # idempotent: already gone
+
+
+def test_a_session_less_reader_is_not_armed_by_a_session_keyed_receipt():
+    """Counting any session's receipt is what let one session's plan-execution arm the deny gate
+    in every other session on the machine."""
+    SR.start("plan-execution", session_id=OTHER)
+    assert not SR.is_fresh("plan-execution")
+    SR.start("plan-execution", session_id="")
+    assert SR.is_fresh("plan-execution")                   # the id-less writer and reader agree
+
+
+# ---- a receipt written before the per-session key (one file per skill) ------------------------
+
+def _legacy(skill, session_id, ts=None):
+    p = SR.receipt_path(skill)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    body = {"skill": skill, "ts": time.time() if ts is None else ts}
+    if session_id is not None:
+        body["session_id"] = session_id
+    p.write_text(json.dumps(body), encoding="utf-8")
+    return p
+
+
+def test_a_legacy_receipt_still_arms_the_session_that_wrote_it():
+    """A session that ran `start` before the key change keeps its receipt: the file names the
+    session, so it proves entry exactly as a new-format one does."""
+    _legacy("meta-skill-writer", THIS)
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS)
+
+
+def test_a_legacy_receipt_arms_no_other_session():
+    """A fresh session must not inherit another session's leftover receipt - neither as an allow
+    for the skill-edit guard nor as a DENY for the plan gate."""
+    _legacy("plan-execution", THIS)
+    assert not SR.is_fresh("plan-execution", session_id=OTHER)
+    assert not SR.is_fresh("plan-execution")
+
+
+def test_a_fresh_session_is_not_stuck_behind_a_legacy_receipt():
+    _legacy("meta-skill-writer", OTHER)
+    SR.start("meta-skill-writer", session_id=THIS)
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS)
+
+
+def test_end_removes_a_legacy_receipt_only_for_the_session_that_wrote_it():
+    p = _legacy("plan-execution", THIS)
+    assert SR.end("plan-execution", session_id=OTHER) is False
+    assert p.exists()
+    assert SR.end("plan-execution", session_id=THIS) is True
+    assert not p.exists()
+
+
+def test_start_prunes_expired_receipts_of_the_same_skill():
+    """One file per session would otherwise accumulate for as long as the machine runs."""
+    past = time.time() - SR.TTL_SECONDS - 60
+    old = _legacy("plan-execution", OTHER, ts=past)
+    stale = SR.start("plan-execution", session_id=OTHER)
+    keep = SR.start("meta-skill-writer", session_id=OTHER)  # another skill: not this start's to prune
+    for p in (old, stale, keep):
+        os.utime(p, (past, past))
+    SR.start("plan-execution", session_id=THIS)
+    assert not old.exists() and not stale.exists()
+    assert keep.exists()
+
+
+# ---- the CLI ----------------------------------------------------------------------------------
+
+def test_cli_check_answers_for_the_calling_session(monkeypatch):
+    """`check` ignored the session, so it said "fresh" in a session the guard denies."""
+    SR.start("meta-skill-writer", session_id=THIS)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OTHER)
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    assert SR.main(["check", "meta-skill-writer"]) == 0
+
+
+def test_cli_check_prints_the_age_and_the_owning_session(monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    SR.main(["start", "meta-skill-writer"])
+    capsys.readouterr()
+    assert SR.main(["check", "meta-skill-writer"]) == 0
+    out = capsys.readouterr().out
+    assert "fresh" in out and "age 0.0h" in out and THIS in out
+
+
+@pytest.mark.parametrize("body", ['{"ts": null}', "[]", '"text"', '{"ts": "soon"}', "not json"])
+def test_a_receipt_of_the_wrong_shape_is_stale_not_a_crash(monkeypatch, capsys, body):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    SR.start("meta-skill-writer", session_id=THIS).write_text(body, encoding="utf-8")
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    assert "stale-or-missing" in capsys.readouterr().out
+
+
+def _cli(home, sid, *args):
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CLAUDE_CODE_SESSION_ID=sid)
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=env, timeout=60)
+
+
+def test_cli_start_end_check_and_usage_as_a_process(home):
+    """The plan-execution skills disarm the gate through `end` from a Bash call, so drive the real
+    entry point, not main()."""
+    r = _cli(home, THIS, "start", "plan-execution")
+    assert r.returncode == 0 and "receipt:" in r.stdout
+    assert _cli(home, THIS, "check", "plan-execution").returncode == 0
+    assert _cli(home, OTHER, "end", "plan-execution").stdout.strip().endswith("absent")
+    assert _cli(home, THIS, "check", "plan-execution").returncode == 0
+    r = _cli(home, THIS, "end", "plan-execution")
+    assert r.returncode == 0 and r.stdout.strip().endswith("removed")
+    assert _cli(home, THIS, "check", "plan-execution").returncode == 1
+    r = _cli(home, THIS, "bogus", "plan-execution")
+    assert r.returncode == 2 and "usage:" in r.stdout

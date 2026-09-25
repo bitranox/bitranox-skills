@@ -1470,3 +1470,89 @@ def test_memory_dir_matches_a_plain_path_as_before():
 
 def test_memory_dir_encodes_a_space():
     assert S.memory_dir("/home/bob/a proj").parent.name == "-home-bob-a-proj"
+
+
+# --------------------------------------------------------------------------
+# A RELATIVE path: Path(".").anchor is "", and Path("") == Path("."), so the root guard fired on
+# the only rung and the ladder never climbed above the cwd - `--proj .` answered "no anchor".
+# --------------------------------------------------------------------------
+
+
+def _tree_with_project(tmp_path):
+    tree = tmp_path / "tree"
+    proj = tree / "proj"
+    (proj / "pkg").mkdir(parents=True)
+    (tree / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (tree / S.MEMORY_DIRNAME).mkdir()
+    (proj / "CLAUDE.md").write_text("x", encoding="utf-8")
+    (proj / "pkg" / "mod.py").write_text("x", encoding="utf-8")
+    return tree, proj
+
+
+def test_resolve_anchor_climbs_from_a_relative_path(tmp_path, monkeypatch):
+    tree, proj = _tree_with_project(tmp_path)
+    monkeypatch.chdir(proj)
+    for rel in (".", "pkg", "./pkg/../."):
+        got = S.resolve_anchor(rel)
+        assert got is not None and Path(got).resolve() == tree.resolve(), (rel, got)
+
+
+def test_resolve_anchor_of_a_relative_path_matches_its_absolute_twin(tmp_path, monkeypatch):
+    """Control: the absolute spelling of the same directory keeps today's answer."""
+    tree, proj = _tree_with_project(tmp_path)
+    assert S.resolve_anchor(str(proj)) == tree
+    monkeypatch.chdir(proj)
+    assert Path(S.resolve_anchor(".")).resolve() == Path(S.resolve_anchor(str(proj))).resolve()
+
+
+def test_nearest_level_finds_the_level_of_a_relative_path(tmp_path, monkeypatch):
+    tree, proj = _tree_with_project(tmp_path)
+    monkeypatch.chdir(proj)
+    for rel in (".", "pkg/mod.py"):
+        got = S.nearest_level(rel)
+        assert got is not None and Path(got).resolve() == proj.resolve(), (rel, got)
+    monkeypatch.chdir(tree)
+    assert Path(S.nearest_level("proj/pkg/mod.py")).resolve() == proj.resolve()
+
+
+def test_nearest_level_absolute_path_and_no_level(tmp_path):
+    """Controls: an absolute path keeps its answer, and a path under no CLAUDE.md is still None."""
+    tree, proj = _tree_with_project(tmp_path)
+    assert S.nearest_level(str(proj / "pkg" / "mod.py")) == str(proj)
+    assert S.nearest_level(str(tree)) == str(tree)
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    assert S.nearest_level(str(loose)) is None
+
+
+# --------------------------------------------------------------------------
+# A capped read that lands EXACTLY on a line start must keep that line: dropping it
+# unconditionally lost a whole transcript line, and the watermark then passed it for good.
+# --------------------------------------------------------------------------
+
+
+def _abc(tmp_path):
+    tp = tmp_path / "t.jsonl"
+    tp.write_bytes(b"A" * 9 + b"\n" + b"B" * 9 + b"\n" + b"C" * 9 + b"\n")   # 30 bytes
+    return tp
+
+
+def test_a_capped_read_on_a_line_start_keeps_that_line(home, tmp_path):
+    tp = _abc(tmp_path)
+    text, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=20)
+    assert text == "B" * 9 + "\n" + "C" * 9 + "\n" and off == 30
+
+
+def test_a_capped_read_mid_line_drops_the_fragment(home, tmp_path):
+    """Control: a cut inside a line still drops the partial line, as it must."""
+    tp = _abc(tmp_path)
+    text, off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=19)
+    assert text == "C" * 9 + "\n" and off == 30
+
+
+def test_a_capped_read_that_reaches_the_mark_keeps_everything_new(home, tmp_path):
+    """Control: when the cap reaches back past the watermark there is no cut to repair."""
+    tp = _abc(tmp_path)
+    S.set_watermark("/p/x", str(tp), "llm", 10)
+    text, _off = S.unreviewed_transcript_text("/p/x", "llm", str(tp), max_bytes=25)
+    assert text == "B" * 9 + "\n" + "C" * 9 + "\n"

@@ -20,6 +20,8 @@ import re
 import sys
 from pathlib import Path
 
+import skill_frontmatter
+
 _STOP = {
     "use", "when", "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
     "are", "was", "were", "has", "have", "had", "not", "but", "via", "per", "its", "also", "such",
@@ -82,22 +84,10 @@ def select(tokens, doc_freq, max_head=MAX_HEAD, max_extra=MAX_EXTRA):
     return head + extra[:max_extra]
 
 
-def _description(skill_md):
-    try:
-        text = skill_md.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not text.startswith("---"):
-        return None
-    fm = text.split("---", 2)[1]
-    m = re.search(r"^description:\s*(.+(?:\n(?![a-zA-Z_-]+:).*)*)", fm, re.M)
-    return " ".join(m.group(1).split()) if m else None
-
-
 def build(skills_dir):
     candidates = {}
     for skill_md in sorted(Path(skills_dir).glob("*/SKILL.md")):
-        desc = _description(skill_md)
+        desc = skill_frontmatter.description(skill_md)
         if desc:
             candidates[skill_md.parent.name] = distill(desc)
     doc_freq = {}
@@ -124,11 +114,15 @@ def main(argv=None):
     out = Path(args.out)
     if args.check:
         try:
-            if out.read_text(encoding="utf-8") == text:
-                print("skill_triggers.json in sync (%d skills)" % len(triggers))
-                return 0
+            current = out.read_text(encoding="utf-8")
         except OSError:
-            pass
+            # Not "stale": there is nothing to regenerate, so the --out (or the layout it was
+            # derived from) is what is wrong, and saying STALE sends the reader to the wrong fix.
+            print("skill_triggers.json is missing: %s" % out, file=sys.stderr)
+            return 1
+        if current == text:
+            print("skill_triggers.json in sync (%d skills)" % len(triggers))
+            return 0
         print("skill_triggers.json is STALE - run build_skill_triggers.py", file=sys.stderr)
         return 1
     out.write_text(text, encoding="utf-8", newline="\n")
