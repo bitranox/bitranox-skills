@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.13"
+# requires-python = ">=3.10"
 # dependencies = []
 # ///
 """Portable, stdlib-only bootstrap for the python-performance-review skill.
@@ -20,7 +20,10 @@ What it establishes (the equivalent of the old bash Setup):
   suite with: <root>/.venv or <root>/venv when one exists, else the interpreter
   running this script (with a note on stderr). Never uv's throwaway script env,
   which `uv run setup_env.py` would otherwise record and which has neither the
-  project nor pytest installed.
+  project nor pytest installed. It is RUN once to read its version: every later
+  step uses it, so it - not the interpreter running this script - must be
+  MIN_PYTHON or newer, and one that cannot start at all is refused here rather
+  than at the first profiling step.
 * a status file (cache/status.txt -> IN_PROGRESS).
 * session.json written INTO the scratch dir, holding every path later steps
   need. This single file replaces the old /tmp/bx-perf-session and
@@ -30,19 +33,25 @@ Later steps read session.json instead of the /tmp side-channel files, e.g.:
 
     python -c "import json,sys; print(json.load(open(sys.argv[1]))['tmpdir'])" SESSION_JSON
 
-Exit codes: 0 session created, 2 it could not be (no pyproject.toml, interpreter too old).
+Exit codes: 0 session created, 2 it could not be (no pyproject.toml, or the recorded
+interpreter cannot run or is older than MIN_PYTHON; nothing is created then).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-MIN_PYTHON = (3, 13)
+# The oldest interpreter the finders and the profiling steps are exercised on.
+MIN_PYTHON = (3, 10)
+_VERSION_PROBE = "import sys; print('%d.%d.%d' % sys.version_info[:3])"
+_PROBE_TIMEOUT_SECONDS = 60
 SESSION_FILENAME = "session.json"
+NO_PROJECT_MESSAGE = "No pyproject.toml found in any parent directory. Not a Python project."
 SUBDIRS = ("cache", "logs", "perf")
 VENV_DIRS = (".venv", "venv")
 
@@ -66,9 +75,28 @@ def skill_dir():
 
 
 def python_version_ok(version_info=None):
-    """Return True if the running interpreter is at least MIN_PYTHON."""
+    """Return True if *version_info* (default: the running interpreter) is at least MIN_PYTHON."""
     info = version_info if version_info is not None else sys.version_info
     return (info[0], info[1]) >= MIN_PYTHON
+
+
+def interpreter_version(python):
+    """Run *python* once and return its (major, minor, micro), or None if it cannot run.
+
+    None covers a missing file, a file that is not an interpreter, a non-zero exit, a hang and
+    output that is not a version: each means the later steps could not use it either.
+    """
+    try:
+        result = subprocess.run(
+            [str(python), "-c", _VERSION_PROBE], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = result.stdout.strip().split(".")
+    if result.returncode != 0 or len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
 
 
 def project_python(root):
@@ -111,9 +139,7 @@ def create_session(start=None):
     """
     root = find_project_root(start if start is not None else Path.cwd())
     if root is None:
-        raise FileNotFoundError(
-            "No pyproject.toml found in any parent directory. Not a Python project."
-        )
+        raise FileNotFoundError(NO_PROJECT_MESSAGE)
 
     tmpdir = make_scratch_dir()
     session = {
@@ -146,29 +172,41 @@ def _utf8_output():
             pass
 
 
+def interpreter_problem(python, version_info=None):
+    """Why *python* cannot run the later steps, or None when it can.
+
+    `version_info` stands in for running *python* (a test seam, like python_version_ok's).
+    """
+    version = version_info if version_info is not None else interpreter_version(python)
+    if version is None:
+        return (f"the recorded interpreter {python} could not be run to read its version; "
+                f"repair or recreate the project virtualenv")
+    if not python_version_ok(version):
+        got = ".".join(str(p) for p in version[:3])
+        want = ".".join(str(p) for p in MIN_PYTHON)
+        return f"Python {want}+ required, but the recorded interpreter {python} is {got}"
+    return None
+
+
 def main(argv=None, version_info=None):
     """Run the bootstrap. Print session.json's path and contents; return exit code.
 
-    `version_info` is the same injection seam python_version_ok() offers, so the rest of
-    main() can be tested on any interpreter. Without it these tests could only run on 3.13+,
-    which is precisely the versions the CI matrix added.
+    The version gate judges the interpreter the session RECORDS (the project's venv, else the
+    one running this script), because that is the one every later step runs. `version_info`
+    replaces running it, so the rest of main() can be tested without a real old interpreter.
+    Nothing is created when the gate refuses.
     """
     _utf8_output()
-    if not python_version_ok(version_info):
-        got = ".".join(str(p) for p in (version_info or sys.version_info)[:3])
-        want = ".".join(str(p) for p in MIN_PYTHON)
-        print(
-            f"ERROR: Python {want}+ required, but running {got} "
-            f"({sys.executable}).",
-            file=sys.stderr,
-        )
+    root = find_project_root(Path.cwd())
+    if root is None:
+        print(f"ERROR: {NO_PROJECT_MESSAGE}", file=sys.stderr)
+        return 2
+    problem = interpreter_problem(choose_python(root), version_info)
+    if problem is not None:
+        print(f"ERROR: {problem}.", file=sys.stderr)
         return 2
 
-    try:
-        session = create_session()
-    except FileNotFoundError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+    session = create_session(start=root)
 
     if project_python(session["project_root"]) is None:
         print(

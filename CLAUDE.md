@@ -47,7 +47,9 @@ does not silently break it. These rules are enforced/encoded by `.gitattributes`
   `run-python.sh`, which probes `python3 -> python -> py -3` and `cygpath`-converts POSIX paths.
   Do not change that probe order or the path conversion.
 - **Git Bash only on Windows; never WSL/Cygwin.** The shim guards `uname -s` and skips loudly to
-  stderr under an unexpected shell. A hook must never wedge a turn: every failure path exits 0.
+  stderr under an unexpected shell. A hook must never wedge a turn: every hooks.json command
+  launches the shim with `--hook`, under which every failure path exits 0 (a CLI call without
+  `--hook` gets exit 3 instead, so a mistyped path in a gate is loud).
 
 When a learning here applies beyond this repo (it usually does), it also belongs in the shared
 `skill-writer` skill's "Bundled scripts and hooks: keep them cross-platform" section.

@@ -190,7 +190,7 @@ Hooks and helper scripts must run on Windows, macOS, and Linux.
 - **Bash is NOT guaranteed on Windows.** Claude Code uses Git Bash only when Git for Windows is
   installed, and falls back to PowerShell otherwise ([setup.md](https://code.claude.com/docs/en/setup.md)).
   An auto-fired hook still needs a shell command in `hooks.json`; we launch the Python gate with
-  `bash run-python.sh <gate>.py` (matching Claude Code's own official plugin hooks), where
+  `bash run-python.sh --hook <gate>.py` (matching Claude Code's own official plugin hooks), where
   `run-python.sh` resolves a working Python 3 (the Windows Store `python3` stub, `py -3`, UTF-8,
   Git Bash `/c/...` paths). That hook fires on macOS/Linux and on Windows-with-Git-Bash; without
   bash it is simply skipped (the gate fail-opens and never errors a turn).

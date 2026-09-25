@@ -18,7 +18,7 @@ file/flag, a resolved issue, superseded by a newer entry, leaked task-state), vi
 `reconcile_memory_index.py --archive <slug> <level>` (home:
 `<plugin>/skills/meta-self-improve/`, launch through `hooks/run-python.sh`; it archives the body only
 when NO level still points at the slug). Launch it as a real script file, never a heredoc piped into
-`run-python.sh` (a `-` stdin arg fails with `gate script not found: -`). (3) a manual "forget this".
+`run-python.sh` (a `-` stdin arg fails with `run-python.sh: script not found: -` and exit 3). (3) a manual "forget this".
 Never archive a still-valid but quiet note.
 (See `forgetting-is-usage-based-only`.)
 

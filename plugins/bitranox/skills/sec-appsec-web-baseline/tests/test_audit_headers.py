@@ -406,3 +406,63 @@ def test_is_internal_ip_cgnat():
     assert a._is_internal_ip("100.101.102.103")
     assert a._is_internal_ip("100.64.0.1")
     assert not a._is_internal_ip("100.128.0.1")  # just outside 100.64.0.0/10
+
+
+# ---- mixed content: only a real loading ATTRIBUTE counts, matched by its whole name ----
+def test_mixed_content_ignores_data_prefixed_lazy_load_attributes():
+    # data-src / data-href are inert until page JS copies them; the browser loads the https src.
+    assert _mixed('<img src="https://cdn/x.png" data-src="http://cdn/lazy.png">') == []
+    assert _mixed('<link rel="stylesheet" href="https://cdn/x.css" data-href="http://cdn/y.css">') == []
+    assert _mixed('<img src="https://cdn/x.png" data-srcset="http://cdn/a.png 1x">') == []
+
+
+def test_mixed_content_ignores_attribute_names_inside_another_value():
+    assert _mixed('<img alt="see src=http://cdn/a.png" src="https://cdn/x.png">') == []
+
+
+def test_mixed_content_still_flags_real_attributes_next_to_data_ones():
+    assert _mixed('<img data-src="https://cdn/lazy.png" src="http://cdn/x.png">')
+    assert _mixed('<object data="http://cdn/x.swf"></object>')
+    assert _mixed('<img\nsrc=http://cdn/a.png>')
+
+
+def test_mixed_content_ignores_markup_inside_comments_and_script_text():
+    assert _mixed('<!-- <img src="http://cdn/old.png"> --><img src="https://cdn/x.png">') == []
+    assert _mixed('<script>var t = \'<img src="http://cdn/x.png">\';</script>') == []
+
+
+def test_mixed_content_reads_a_quoted_value_holding_a_closing_bracket():
+    assert _mixed('<img alt="a > b" src="http://cdn/x.png">')
+
+
+def test_mixed_content_flags_video_poster():
+    assert _mixed('<video poster="http://cdn/p.jpg" src="https://cdn/v.mp4"></video>')
+
+
+# ---- CSP Level 3: script-src-elem / script-src-attr override script-src ----
+def test_csp_unsafe_inline_in_script_src_elem_is_medium():
+    finding = a._csp("script-src 'self'; script-src-elem 'self' 'unsafe-inline'; object-src 'none'")
+    assert sev(finding) == "MEDIUM"
+    assert "script-src-elem" in finding.detail
+
+
+def test_csp_unsafe_inline_in_script_src_attr_is_medium():
+    finding = a._csp("script-src 'self'; script-src-attr 'unsafe-inline'; object-src 'none'")
+    assert sev(finding) == "MEDIUM"
+    assert "script-src-attr" in finding.detail
+
+
+def test_csp_elem_and_attr_without_unsafe_inline_stay_ok():
+    policy = "script-src 'self'; script-src-elem 'self'; script-src-attr 'none'; object-src 'none'"
+    assert sev(a._csp(policy)) == "OK"
+
+
+def test_csp_nonce_in_script_src_elem_neutralises_its_unsafe_inline():
+    policy = "script-src 'self'; script-src-elem 'nonce-r4nd0m' 'unsafe-inline'; object-src 'none'"
+    assert sev(a._csp(policy)) == "OK"
+
+
+def test_csp_unsafe_eval_is_governed_by_script_src_only():
+    # eval() consults script-src (then default-src); an 'unsafe-eval' in script-src-elem is ignored
+    policy = "script-src 'self'; script-src-elem 'self' 'unsafe-eval'; object-src 'none'"
+    assert sev(a._csp(policy)) == "OK"

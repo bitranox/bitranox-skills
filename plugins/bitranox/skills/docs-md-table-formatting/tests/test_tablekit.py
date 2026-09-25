@@ -356,3 +356,55 @@ def test_cli_replace_missing_file_exits_2(tmp_path):
                           input=b'{"headers": ["a"], "rows": []}', capture_output=True)
     assert proc.returncode == 2
     assert b"Traceback" not in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# Padding counts display columns, not code points
+# --------------------------------------------------------------------------
+
+import unicodedata  # noqa: E402
+
+import reformat_tables  # noqa: E402
+
+CJK = chr(0x6F22) + chr(0x5B57)          # two wide ideographs: 4 columns
+EMOJI = chr(0x1F600)                     # a wide emoji: 2 columns
+DECOMPOSED = "cafe" + chr(0x0301)        # e plus a combining acute: 4 columns
+
+
+def _columns(text):
+    """Independent of the code under test: wide/fullwidth 2, combining 0, the rest 1."""
+    return sum(0 if unicodedata.combining(ch) else 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+               for ch in text)
+
+
+def test_render_pads_wide_and_combining_characters_by_display_width():
+    for align in ("none", "left", "right", "center"):
+        table = {"headers": ["name", "n"], "alignments": [align, "none"],
+                 "rows": [[CJK, "1"], [EMOJI, "2"], [DECOMPOSED, "3"], ["plain", "4"]]}
+        lines = TK.render_table(table).split("\n")
+        assert len({_columns(line) for line in lines}) == 1, (align, lines)
+        # the second column's pipe sits in the same display column on every line
+        assert len({_columns(line[: line.index("|", 2)]) for line in lines}) == 1, (align, lines)
+
+
+def test_pad_of_ascii_matches_the_str_methods_exactly():
+    # an ASCII table must render byte-identical to before, center tie-break included
+    for cell in ("", "a", "ab", "abc", "abcd"):
+        for width in range(len(cell), 9):
+            assert TK._pad(cell, width, "center") == cell.center(width)
+            assert TK._pad(cell, width, "right") == cell.rjust(width)
+            assert TK._pad(cell, width, "left") == cell.ljust(width)
+            assert TK._pad(cell, width, "none") == cell.ljust(width)
+
+
+def test_tablekit_and_reformat_tables_share_one_width_function():
+    assert TK.display_width is reformat_tables.display_width
+
+
+def test_cli_render_run_from_another_directory_counts_columns(tmp_path):
+    payload = json.dumps({"headers": ["h"], "rows": [[CJK]]}, ensure_ascii=False)
+    proc = subprocess.run([sys.executable, str(SCRIPT), "render"], input=payload.encode("utf-8"),
+                          capture_output=True, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.decode("utf-8").splitlines()
+    assert len({_columns(line) for line in lines}) == 1, lines

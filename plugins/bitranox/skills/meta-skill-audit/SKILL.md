@@ -52,8 +52,9 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 
 Launch every script below through the plugin's shim with strict mode on:
 `BITRANOX_RUN_PYTHON_STRICT=1 bash hooks/run-python.sh <script> [args]`. The shim finds a working
-Python on every platform, but it fails OPEN for hooks - without that variable a mistyped script
-path prints one stderr line and exits 0, which reads as a clean run.
+Python on every platform, and a mistyped script path prints one stderr line naming the shim and
+exits 3 rather than reading as a clean run (only a `--hook` launch fails open, unless that
+variable is set).
 
 1. **Wall recall and record the old value.** Use the shipped front door - `settings.py` (home:
    `skills/meta-memory-settings/`), which validates the value and
@@ -78,8 +79,10 @@ path prints one stderr line and exits 0, which reads as a clean run.
      `REPORT MISSING:` and says why: the CLI failed, timed out or was not found, or the reply
      carried no report block.
    - **Exit codes:** 0 every target has a report; 1 at least one has none; 2 refused or crashed
-     before a verdict - a source inside the room, an unknown `--kind`, or a selection that matches
-     nothing.
+     before a verdict - a source inside the room, a room inside the source, an unknown `--kind`, a
+     flag the mode would ignore, or a selection that matches nothing. `--kind`, `--skip-existing`
+     and `--include-vendored` belong to the `--scripts` sweep, so each is refused without
+     `--scripts`; `--hooks-dir` is refused without `--skills-dir`.
 3. **Restore the setting and VERIFY the restored value**, before you start editing anything. Do not
    leave it until the end of the triage.
 4. **Verify every finding against the real files before acting on one.** A reviewer's quote is a

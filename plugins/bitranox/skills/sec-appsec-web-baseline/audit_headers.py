@@ -29,26 +29,24 @@ import socket
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
 SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
 
 # Elements that LOAD a subresource into the current page (so an http:// URL here is mixed
 # content). <a> is deliberately excluded: it navigates away, it is not a subresource.
-_SUBRESOURCE_TAG = re.compile(
-    r"<(?:img|script|iframe|video|audio|source|track|embed|object|link)\b[^>]*>", re.I
-)
-# Minifiers routinely drop attribute quotes, so the unquoted form (<script src=http://x/a.js>)
-# must count as well: one alternative per quoting style, exactly one group matches.
-_SUBRESOURCE_ATTR = re.compile(
-    r"""(?:src|data|srcset|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))""", re.I
-)
+_SUBRESOURCE_TAGS = frozenset({
+    "img", "script", "iframe", "video", "audio", "source", "track", "embed", "object", "link",
+})
+# The attributes that make those elements fetch. Matched by the WHOLE attribute name, as the
+# HTML tokenizer reports it: a lazy-load `data-src` is inert until page JS copies it, and text
+# such as `alt="src=http://x"` is a value, not an attribute.
+_SUBRESOURCE_ATTRS = frozenset({"src", "data", "srcset", "href", "poster"})
 
 # <link> is the one tag above that does NOT always load: rel decides. `canonical`, `alternate`,
 # `dns-prefetch` and friends are metadata or connection hints, so an http:// href there is not
 # mixed content, and grading it SEVERE sends the reader chasing a non-existent insecure load.
-_LINK_TAG = re.compile(r"<link\b", re.I)
-_LINK_REL = re.compile(r"""\brel\s*=\s*["']?([^"'>]+)""", re.I)
 _NON_LOADING_LINK_RELS = frozenset({
     "canonical", "alternate", "author", "license", "next", "prev", "prefetch-dns",
     "dns-prefetch", "preconnect", "bookmark", "help", "search", "tag", "nofollow",
@@ -56,16 +54,42 @@ _NON_LOADING_LINK_RELS = frozenset({
 })
 
 
-def _link_loads_a_subresource(tag: str) -> bool:
-    """Whether a `<link>` actually fetches something into the page.
+def _link_loads_a_subresource(rel: str | None) -> bool:
+    """Whether a `<link>` with this `rel` value actually fetches something into the page.
 
     An absent or unrecognised `rel` counts as loading: a security check fails LOUD, so a rel this
     list has not seen yet is reported rather than silently dropped."""
-    match = _LINK_REL.search(tag)
-    if not match:
+    rels = {part.lower() for part in (rel or "").split()}
+    if not rels:
         return True
-    rels = {part.strip().lower() for part in match.group(1).split() if part.strip()}
     return bool(rels - _NON_LOADING_LINK_RELS)
+
+
+class _SubresourceUrls(HTMLParser):
+    """Collect the URL-bearing attribute values of subresource-loading start tags.
+
+    The stdlib tokenizer gives what a regex over the raw text cannot: quoted values that hold
+    `>`, attribute names read whole, comments skipped, and <script> text left unparsed."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in _SUBRESOURCE_TAGS:
+            return
+        named = {name: value or "" for name, value in attrs}
+        if tag == "link" and not _link_loads_a_subresource(named.get("rel")):
+            return
+        self.values.extend(value for name, value in attrs if name in _SUBRESOURCE_ATTRS and value)
+
+
+def _subresource_urls(html: str) -> list[str]:
+    """Every loading attribute value in the page, in document order (srcset still unsplit)."""
+    reader = _SubresourceUrls()
+    reader.feed(html)
+    reader.close()
+    return reader.values
 
 
 @dataclass(frozen=True)
@@ -109,6 +133,25 @@ def _csp_directives(value: str) -> dict[str, str]:
     return directives
 
 
+# CSP Level 3 splits inline scripts by where they sit: script-src-elem governs <script> elements,
+# script-src-attr inline event handlers, and each falls back to script-src, then default-src.
+# script-src itself is graded too, because a CSP 2 browser ignores the two newer directives.
+_INLINE_SCRIPT_DIRECTIVES = ("script-src", "script-src-elem", "script-src-attr")
+_CSP_FALLBACK = {
+    "script-src": ("script-src", "default-src"),
+    "script-src-elem": ("script-src-elem", "script-src", "default-src"),
+    "script-src-attr": ("script-src-attr", "script-src", "default-src"),
+}
+
+
+def _effective_sources(directives: dict[str, str], name: str) -> str:
+    """The source list a browser enforces for ``name``: its own, else the first fallback present."""
+    for candidate in _CSP_FALLBACK[name]:
+        if candidate in directives:
+            return directives[candidate]
+    return ""
+
+
 def _has_nonce_or_hash(sources: str) -> bool:
     """A nonce or hash source makes browsers IGNORE 'unsafe-inline' in the same list."""
     return bool(re.search(r"'(?:nonce-|sha256-|sha384-|sha512-)", sources))
@@ -124,10 +167,13 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
         return Finding("csp", "MINOR", "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
                        "promote to an enforced Content-Security-Policy once violations are clear")
     directives = _csp_directives(value)
-    script_val = directives.get("script-src", directives.get("default-src", ""))
-    if "'unsafe-inline'" in script_val and not _has_nonce_or_hash(script_val):
-        return Finding("csp", "MEDIUM", "script-src allows 'unsafe-inline' (XSS not mitigated)",
-                       "drop 'unsafe-inline'; use nonces or hashes for any inline script")
+    script_val = _effective_sources(directives, "script-src")
+    for name in _INLINE_SCRIPT_DIRECTIVES:
+        sources = _effective_sources(directives, name)
+        if "'unsafe-inline'" in sources.split() and not _has_nonce_or_hash(sources):
+            return Finding("csp", "MEDIUM", f"{name} allows 'unsafe-inline' (XSS not mitigated)",
+                           "drop 'unsafe-inline'; use nonces or hashes for any inline script")
+    # String compilation (eval) consults script-src only, never script-src-elem/-attr (CSP 3).
     if "'unsafe-eval'" in script_val:
         return Finding("csp", "MEDIUM", "script-src allows 'unsafe-eval'", "remove 'unsafe-eval'")
     if "object-src" not in directives and "default-src" not in directives:
@@ -298,14 +344,10 @@ def _mixed_content(html: str, *, https: bool) -> list[Finding]:
     if not https or not html:
         return []
     seen: list[str] = []
-    for tag in _SUBRESOURCE_TAG.findall(html):
-        if _LINK_TAG.match(tag) and not _link_loads_a_subresource(tag):
-            continue
-        for groups in _SUBRESOURCE_ATTR.findall(tag):
-            attr_val = "".join(groups)
-            for piece in re.split(r"[,\s]+", attr_val.strip()):
-                if piece.lower().startswith("http://") and piece not in seen:
-                    seen.append(piece)
+    for attr_val in _subresource_urls(html):
+        for piece in re.split(r"[,\s]+", attr_val.strip()):
+            if piece.lower().startswith("http://") and piece not in seen:
+                seen.append(piece)
     if seen:
         return [Finding("mixed-content", "SEVERE", f"{len(seen)} http:// subresource(s), e.g. {seen[0]}",
                         "serve every subresource over https (and add CSP upgrade-insecure-requests)")]
@@ -365,9 +407,9 @@ def fetch(url: str, *, proxy: str | None = None, transport: object | None = None
     PUBLIC site is measured at the edge, not the internal origin. See net-rotating-proxies.
     ``transport`` replaces the network with an httpx transport (tests use a MockTransport).
     """
-    import httpx2 as httpx
+    import httpx2 as httpx  # noqa: PLC0415 - optional dependency: the pure graders import without it
 
-    ua = {"User-Agent": "sec-appsec-web-baseline/1.0"}
+    ua ={"User-Agent": "sec-appsec-web-baseline/1.0"}
     client_opts: dict[str, object] = {"follow_redirects": True, "timeout": 15.0, "headers": ua}
     if transport is not None:
         client_opts["transport"] = transport

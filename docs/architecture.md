@@ -66,8 +66,9 @@ cross-tree links); every consolidation must end it with `TOTAL problems: 0`.
 ## The hook pipeline
 
 All hooks launch through [`run-python.sh`](../plugins/bitranox/hooks/run-python.sh) (interpreter
-probing, UTF-8 forcing, Git-Bash-only on Windows); every failure path exits 0 so a broken hook
-never wedges a turn.
+probing, UTF-8 forcing, Git-Bash-only on Windows) with `--hook`, which makes every failure of the
+shim itself exit 0 so a broken hook never wedges a turn. Without `--hook` (a CLI or gate call) the
+same failures exit 3, so a mistyped script path cannot read as a clean pass.
 
 | Event              | Script                                                                                                                                     | Job                                                                                   |
 |--------------------|--------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|

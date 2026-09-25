@@ -7,8 +7,25 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+import pytest
 
 import setup_env as se
+
+
+@pytest.fixture(autouse=True)
+def _scratch_dirs_stay_in_tmp_path(tmp_path, monkeypatch):
+    """make_scratch_dir() creates a real bx-perf-* directory; the system temp dir is shared
+    and outlives the run, so every test here keeps it under its own tmp_path."""
+    scratch = tmp_path / "systemtemp"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    return scratch
+
+
+def test_scratch_dirs_are_created_under_the_test_tmp_path(tmp_path):
+    assert Path(se.make_scratch_dir()).is_relative_to(tmp_path)
 
 # --- find_project_root -----------------------------------------------------
 
@@ -36,9 +53,9 @@ def test_find_project_root_self_directory(tmp_path):
 # --- python_version_ok -----------------------------------------------------
 
 def test_python_version_ok_accepts_and_rejects():
-    assert se.python_version_ok((3, 13, 0)) is True
+    assert se.python_version_ok((3, 10, 0)) is True
     assert se.python_version_ok((3, 14, 2)) is True
-    assert se.python_version_ok((3, 12, 9)) is False
+    assert se.python_version_ok((3, 9, 25)) is False
     assert se.python_version_ok((2, 7, 18)) is False
 
 
@@ -120,11 +137,11 @@ def test_main_refuses_an_interpreter_below_the_minimum(tmp_path, monkeypatch, ca
     proj.mkdir()
     (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
     monkeypatch.chdir(proj)
-    rc = se.main(version_info=(3, 12, 9))
+    rc = se.main(version_info=(3, 9, 25))
     err = capsys.readouterr().err
     assert rc == 2
-    assert "3.13+ required" in err
-    assert "3.12.9" in err
+    assert "3.10+ required" in err
+    assert "3.9.25" in err
 
 
 # --- the recorded interpreter is the PROJECT's, not the one running this script ------------
@@ -138,7 +155,6 @@ def _venv_python(root, venv=".venv"):
 
 
 def _project(tmp_path, monkeypatch, name="proj"):
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # scratch dirs stay in tmp_path
     proj = tmp_path / name
     (proj / "src").mkdir(parents=True)
     (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
@@ -176,3 +192,50 @@ def test_main_under_cp1252_stdout_and_a_non_ansi_project_path(tmp_path, clean_en
                        capture_output=True, check=False, timeout=60)
     assert r.returncode == 0, r.stderr
     assert "proj_\u7530\u4e2d" in r.stdout.decode("utf-8")
+
+
+# --- the version gate judges the RECORDED interpreter, the one every later step runs ---------
+
+def test_interpreter_version_reads_a_real_interpreter():
+    assert se.interpreter_version(sys.executable) == tuple(sys.version_info[:3])
+
+
+def test_interpreter_version_of_something_that_cannot_run_is_none(tmp_path):
+    assert se.interpreter_version(str(tmp_path / "no-such-python")) is None
+    empty = tmp_path / "python"
+    empty.write_text("", encoding="utf-8")
+    assert se.interpreter_version(str(empty)) is None
+
+
+def test_main_refuses_a_project_venv_interpreter_that_cannot_run(tmp_path, monkeypatch, capsys,
+                                                                   _scratch_dirs_stay_in_tmp_path):
+    # the running interpreter is fine; the venv python every profiling step uses is not
+    proj = _project(tmp_path, monkeypatch)
+    venv_python = _venv_python(proj.resolve())  # an empty file: not an interpreter
+    monkeypatch.chdir(proj)
+    rc = se.main()
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert str(venv_python) in err
+    assert list(_scratch_dirs_stay_in_tmp_path.glob("bx-perf-*")) == []  # refused before creating
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a shell-script stand-in for a venv python is POSIX-only")
+def test_main_refuses_a_project_venv_interpreter_below_the_minimum(tmp_path, monkeypatch, capsys):
+    proj = _project(tmp_path, monkeypatch)
+    venv_python = _venv_python(proj.resolve())
+    venv_python.write_text("#!/bin/sh\necho 3.9.25\n", encoding="utf-8")
+    venv_python.chmod(0o755)
+    monkeypatch.chdir(proj)
+    rc = se.main()
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "3.9.25" in err
+    assert str(venv_python) in err
+
+
+def test_main_accepts_the_running_interpreter_when_there_is_no_venv(tmp_path, monkeypatch, capsys):
+    proj = _project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+    assert se.main() == 0
+    assert "Session file:" in capsys.readouterr().out

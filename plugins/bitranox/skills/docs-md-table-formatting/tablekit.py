@@ -30,7 +30,10 @@ import argparse
 import json
 import re
 import sys
-from pathlib import Path
+
+# One column-width rule for both tools: the reformat hook realigns whatever tablekit renders, so
+# two definitions of "width" would make every CJK or emoji table churn between them.
+from reformat_tables import display_width
 
 # A delimiter cell: optional leading colon, one or more dashes, optional trailing colon.
 _DELIM_CELL = re.compile(r"^:?-+:?$")
@@ -178,11 +181,17 @@ def _escape(cell: str) -> str:
 
 
 def _pad(cell: str, width: int, align: str) -> str:
+    """Pad to `width` DISPLAY columns (a wide character takes two, a combining mark none).
+
+    str.ljust/rjust/center count code points, which misaligns every row holding CJK or emoji."""
+    gap = max(0, width - display_width(cell))
     if align == "right":
-        return cell.rjust(width)
+        return " " * gap + cell
     if align == "center":
-        return cell.center(width)
-    return cell.ljust(width)
+        # str.center's tie-break: the odd space goes left only when both gap and width are odd
+        left = gap // 2 + (gap & width & 1)
+        return " " * left + cell + " " * (gap - left)
+    return cell + " " * gap
 
 
 def _delim(width: int, align: str) -> str:
@@ -225,7 +234,7 @@ def render_table(table: dict) -> str:
     widths = []
     for col in range(ncol):
         cells = [headers[col]] + [row[col] for row in rows]
-        widths.append(max(3, max(len(c) for c in cells)))
+        widths.append(max(3, max(display_width(c) for c in cells)))
 
     def line(cells: list[str]) -> str:
         return "| " + " | ".join(_pad(c, widths[k], aligns[k]) for k, c in enumerate(cells)) + " |"

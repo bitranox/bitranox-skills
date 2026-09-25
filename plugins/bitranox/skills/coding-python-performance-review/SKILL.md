@@ -120,15 +120,15 @@ Run the portable bootstrap. `setup_env.py` is stdlib-only and cross-platform: it
 walks up from the current directory for a `pyproject.toml` (clear error + non-zero
 exit if none), creates a scratch temp dir (via `tempfile.mkdtemp`, honouring
 TMPDIR/TEMP/TMP - never a hardcoded `/tmp`) with `cache/ logs/ perf/` subdirs,
-validates the running interpreter is Python 3.13+, and writes `session.json` into
-that scratch dir holding every path later steps need.
+validates the interpreter it records (see `python` below) is Python 3.10+ by running it
+once, and writes `session.json` into that scratch dir holding every path later steps need.
 
 `SKILL_DIR` is this skill's own directory - the one holding this `SKILL.md` and
 `setup_env.py` (`skills/coding-python-performance-review/` inside the plugin). You
 must set it YOURSELF before the bootstrap: `session.json` is written BY
 `setup_env.py`, so the `skill_dir` field read back in the next block does not exist
 yet and cannot be used to launch the script that creates it.
-`uv run` is preferred (it fetches an isolated 3.13+ interpreter); plain `python`
+`uv run` is preferred (it fetches an isolated interpreter); plain `python`
 works too. Run it once, capturing the printed session-file path. The script prints
 `Session file: <path>` on its first line, echoes the full JSON, and exits non-zero
 with a clear stderr message if there is no `pyproject.toml` or the interpreter is
@@ -137,7 +137,9 @@ too old. `session.json` replaces the old `/tmp/bx-perf-session` and
 `skill_dir`, `python`, and `status`. `python` is the PROJECT's interpreter (its `.venv/` or
 `venv/`), not the one running `setup_env.py`: under `uv run` that is a throwaway env without
 the project or pytest. With no project venv it falls back to the running interpreter and
-says so on stderr; then check `python` before profiling.
+says so on stderr; then check `python` before profiling. The version gate judges that recorded
+interpreter, because every later step runs it: a venv python that cannot start, or one older than
+3.10, exits 2 naming its path, and no scratch dir is created.
 
 ```bash
 # Set SKILL_DIR to this skill's own directory (the one holding setup_env.py) - substitute
@@ -237,17 +239,20 @@ Run `find_cache_candidates.py` from the skill directory against the project's Py
 read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
 BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
 
-# Discover Python files
+# Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
+# BX_PERF_FILES, when set, is the list to scan: one path per line.
+python_files=()
 if [ -n "${BX_PERF_FILES:-}" ]; then
-    python_files="$BX_PERF_FILES"
+    while IFS= read -r f; do [ -n "$f" ] && python_files+=("$f"); done <<< "$BX_PERF_FILES"
 elif [ -d "src" ]; then
-    python_files=$(find src/ -name '*.py' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done < <(find src/ -name '*.py' -print0)
 else
-    python_files=$(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done \
+        < <(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' -print0)
 fi
 
-if [ -n "$python_files" ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_cache_candidates.py" $python_files > "$BX_PERF_TMPDIR/cache/cache_candidates.txt" 2>&1 || true
+if [ "${#python_files[@]}" -gt 0 ]; then
+    $PYTHON_CMD "$SKILL_DIR/find_cache_candidates.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/cache_candidates.txt" 2>&1 || true
     echo "Cache candidates identified"
 fi
 ```
@@ -265,17 +270,20 @@ Run `find_uncompiled_regex.py` and scan for `re.match()`, `re.search()`, `re.fin
 read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
 BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
 
-# Discover Python files
+# Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
+# BX_PERF_FILES, when set, is the list to scan: one path per line.
+python_files=()
 if [ -n "${BX_PERF_FILES:-}" ]; then
-    python_files="$BX_PERF_FILES"
+    while IFS= read -r f; do [ -n "$f" ] && python_files+=("$f"); done <<< "$BX_PERF_FILES"
 elif [ -d "src" ]; then
-    python_files=$(find src/ -name '*.py' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done < <(find src/ -name '*.py' -print0)
 else
-    python_files=$(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done \
+        < <(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' -print0)
 fi
 
-if [ -n "$python_files" ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_uncompiled_regex.py" $python_files > "$BX_PERF_TMPDIR/cache/uncompiled_regex.txt" 2>&1 || true
+if [ "${#python_files[@]}" -gt 0 ]; then
+    $PYTHON_CMD "$SKILL_DIR/find_uncompiled_regex.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/uncompiled_regex.txt" 2>&1 || true
     echo "Uncompiled regex scan complete"
 fi
 ```
@@ -351,17 +359,20 @@ Run `find_unbounded_memory.py` to flag code that reads big files, huge database 
 read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
 BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
 
-# Discover Python files
+# Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
+# BX_PERF_FILES, when set, is the list to scan: one path per line.
+python_files=()
 if [ -n "${BX_PERF_FILES:-}" ]; then
-    python_files="$BX_PERF_FILES"
+    while IFS= read -r f; do [ -n "$f" ] && python_files+=("$f"); done <<< "$BX_PERF_FILES"
 elif [ -d "src" ]; then
-    python_files=$(find src/ -name '*.py' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done < <(find src/ -name '*.py' -print0)
 else
-    python_files=$(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' | tr '\n' ' ')
+    while IFS= read -r -d '' f; do python_files+=("$f"); done \
+        < <(find . -name '*.py' -not -path './.venv/*' -not -path './venv/*' -print0)
 fi
 
-if [ -n "$python_files" ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" $python_files > "$BX_PERF_TMPDIR/cache/memory_candidates.txt" 2>&1 || true
+if [ "${#python_files[@]}" -gt 0 ]; then
+    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/memory_candidates.txt" 2>&1 || true
     echo "Unbounded-memory candidates identified"
 fi
 ```
