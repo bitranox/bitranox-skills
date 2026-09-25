@@ -3,9 +3,12 @@
 conftest.py puts the skill directory on sys.path so `import setup_env` works.
 """
 import json
+import os
+import subprocess
+import sys
+import tempfile
 
 import setup_env as se
-
 
 # --- find_project_root -----------------------------------------------------
 
@@ -100,13 +103,13 @@ def test_main_returns_zero_in_project(tmp_path, monkeypatch, capsys):
     assert "Session file:" in out
 
 
-def test_main_returns_one_without_project(tmp_path, monkeypatch, capsys):
+def test_main_returns_two_without_project(tmp_path, monkeypatch, capsys):
     bare = tmp_path / "bare"
     bare.mkdir()
     monkeypatch.chdir(bare)
     rc = se.main(version_info=(3, 13, 0))
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 2
     assert "pyproject.toml" in err
 
 
@@ -119,6 +122,57 @@ def test_main_refuses_an_interpreter_below_the_minimum(tmp_path, monkeypatch, ca
     monkeypatch.chdir(proj)
     rc = se.main(version_info=(3, 12, 9))
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 2
     assert "3.13+ required" in err
     assert "3.12.9" in err
+
+
+# --- the recorded interpreter is the PROJECT's, not the one running this script ------------
+
+def _venv_python(root, venv=".venv"):
+    rel = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+    path = root.joinpath(venv, *rel)
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def _project(tmp_path, monkeypatch, name="proj"):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # scratch dirs stay in tmp_path
+    proj = tmp_path / name
+    (proj / "src").mkdir(parents=True)
+    (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    return proj
+
+
+def test_session_records_the_project_venv_interpreter(tmp_path, monkeypatch):
+    # Under `uv run setup_env.py`, sys.executable is uv's throwaway script env, which has
+    # neither the project nor pytest installed; every profiling run then fails.
+    proj = _project(tmp_path, monkeypatch)
+    venv_python = _venv_python(proj.resolve())
+    session = se.create_session(start=proj / "src")
+    assert session["python"] == str(venv_python)
+
+
+def test_session_accepts_a_venv_directory_named_venv(tmp_path, monkeypatch):
+    proj = _project(tmp_path, monkeypatch)
+    venv_python = _venv_python(proj.resolve(), venv="venv")
+    assert se.create_session(start=proj)["python"] == str(venv_python)
+
+
+def test_session_falls_back_to_the_running_interpreter_without_a_venv(tmp_path, monkeypatch):
+    proj = _project(tmp_path, monkeypatch)
+    assert se.create_session(start=proj)["python"] == sys.executable
+
+
+def test_main_under_cp1252_stdout_and_a_non_ansi_project_path(tmp_path, clean_env):
+    proj = tmp_path / "proj_\u7530\u4e2d"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    code = "import sys, setup_env; sys.exit(setup_env.main(version_info=(3, 13, 0)))"
+    env = clean_env(PYTHONIOENCODING="cp1252", PYTHONPATH=os.path.dirname(se.__file__),
+                    TMPDIR=str(tmp_path), TEMP=str(tmp_path), TMP=str(tmp_path))
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(proj), env=env,
+                       capture_output=True, check=False, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "proj_\u7530\u4e2d" in r.stdout.decode("utf-8")

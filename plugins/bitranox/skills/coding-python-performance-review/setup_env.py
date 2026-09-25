@@ -16,7 +16,11 @@ What it establishes (the equivalent of the old bash Setup):
 * a scratch temp directory created with tempfile.mkdtemp(prefix="bx-perf-")
   plus its cache/ logs/ perf/ subdirectories.
 * SKILL_DIR  - the directory containing this file (via __file__).
-* PYTHON     - sys.executable (the interpreter that should run the scripts).
+* PYTHON     - the PROJECT's interpreter, which the profiling steps run the test
+  suite with: <root>/.venv or <root>/venv when one exists, else the interpreter
+  running this script (with a note on stderr). Never uv's throwaway script env,
+  which `uv run setup_env.py` would otherwise record and which has neither the
+  project nor pytest installed.
 * a status file (cache/status.txt -> IN_PROGRESS).
 * session.json written INTO the scratch dir, holding every path later steps
   need. This single file replaces the old /tmp/bx-perf-session and
@@ -25,11 +29,14 @@ What it establishes (the equivalent of the old bash Setup):
 Later steps read session.json instead of the /tmp side-channel files, e.g.:
 
     python -c "import json,sys; print(json.load(open(sys.argv[1]))['tmpdir'])" SESSION_JSON
+
+Exit codes: 0 session created, 2 it could not be (no pyproject.toml, interpreter too old).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -37,6 +44,7 @@ from pathlib import Path
 MIN_PYTHON = (3, 13)
 SESSION_FILENAME = "session.json"
 SUBDIRS = ("cache", "logs", "perf")
+VENV_DIRS = (".venv", "venv")
 
 
 def find_project_root(start):
@@ -61,6 +69,26 @@ def python_version_ok(version_info=None):
     """Return True if the running interpreter is at least MIN_PYTHON."""
     info = version_info if version_info is not None else sys.version_info
     return (info[0], info[1]) >= MIN_PYTHON
+
+
+def project_python(root):
+    """Return the interpreter of the project's own virtualenv under *root*, or None.
+
+    The path is NOT resolved: a venv's python is a symlink to the base interpreter, and
+    following it would record an interpreter without the venv's packages.
+    """
+    rel = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+    for venv in VENV_DIRS:
+        candidate = Path(root).joinpath(venv, *rel)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def choose_python(root):
+    """Return the project's venv interpreter, else the interpreter running this script."""
+    venv_python = project_python(root)
+    return str(venv_python) if venv_python is not None else sys.executable
 
 
 def make_scratch_dir():
@@ -92,7 +120,7 @@ def create_session(start=None):
         "tmpdir": str(tmpdir),
         "project_root": str(root),
         "skill_dir": str(skill_dir()),
-        "python": sys.executable,
+        "python": choose_python(root),
         "status": "IN_PROGRESS",
     }
 
@@ -106,6 +134,18 @@ def create_session(start=None):
     return session
 
 
+def _utf8_output():
+    # A cp1252 console cannot encode most non-ASCII paths; this output is parsed as text.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 def main(argv=None, version_info=None):
     """Run the bootstrap. Print session.json's path and contents; return exit code.
 
@@ -113,6 +153,7 @@ def main(argv=None, version_info=None):
     main() can be tested on any interpreter. Without it these tests could only run on 3.13+,
     which is precisely the versions the CI matrix added.
     """
+    _utf8_output()
     if not python_version_ok(version_info):
         got = ".".join(str(p) for p in (version_info or sys.version_info)[:3])
         want = ".".join(str(p) for p in MIN_PYTHON)
@@ -121,13 +162,22 @@ def main(argv=None, version_info=None):
             f"({sys.executable}).",
             file=sys.stderr,
         )
-        return 1
+        return 2
 
     try:
         session = create_session()
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+        return 2
+
+    if project_python(session["project_root"]) is None:
+        print(
+            f"NOTE: no project virtualenv ({' or '.join(VENV_DIRS)}) under "
+            f"{session['project_root']}; recorded the interpreter running this script "
+            f"({session['python']}). If it cannot import the project and pytest, set "
+            f"'python' in {session['session_file']}.",
+            file=sys.stderr,
+        )
 
     print(f"Session file: {session['session_file']}")
     print(f"Project root: {session['project_root']}")

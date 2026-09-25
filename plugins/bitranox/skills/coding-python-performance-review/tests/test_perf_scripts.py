@@ -149,7 +149,7 @@ def test_claims_extracts_varied_phrasings(tmp_path):
         +It reduced latency by 30%.
         +Improves the cache hit rate noticeably.
     """)
-    claims = " | ".join(vpc.find_performance_claims(diff)).lower()
+    claims = " | ".join(c["claim"] for c in vpc.find_performance_claims(diff)).lower()
     assert "40% faster" in claims
     assert "3x speedup" in claims
     assert ("latency by 30%" in claims) or ("30%" in claims)
@@ -161,8 +161,9 @@ def test_claims_empty_when_none(tmp_path):
     assert vpc.find_performance_claims(diff) == []
 
 
-def test_validate_main_missing_file_returns_1(tmp_path):
-    assert vpc.main([str(tmp_path / "nope.diff")]) == 1
+def test_validate_main_missing_file_returns_2(tmp_path):
+    # 2 = could not do the job; 1 would read as an answer
+    assert vpc.main([str(tmp_path / "nope.diff")]) == 2
 
 
 # --- compare_performance ---------------------------------------------------
@@ -170,9 +171,9 @@ def test_validate_main_missing_file_returns_1(tmp_path):
 def test_compare_main_not_a_git_repo(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)        # tmp_path is not a git repo
     rc = cmp.main()
-    out = capsys.readouterr().out
-    assert rc == 1
-    assert "git repository" in out.lower()
+    err = capsys.readouterr().err
+    assert rc == 2                     # no comparison possible: an error, not a "no"
+    assert "git repository" in err.lower()
 
 
 def test_compare_pytest_argv_includes_tests_dir(tmp_path, monkeypatch):
