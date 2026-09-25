@@ -47,10 +47,11 @@ def test_underscore_delimiters_are_recognised():
     assert "body" not in out and "echo after" in out
 
 
-def test_a_delimiter_may_not_start_with_a_digit():
-    """`<<9X` is not a valid delimiter, so nothing is stripped and the text stays a command."""
-    text = "cat <<9INVALID\nbody\n9INVALID"
-    assert S.strip_heredoc_bodies(text) == text
+def test_a_delimiter_may_start_with_a_digit():
+    """A delimiter is any shell WORD: real bash runs `cat <<9INVALID` as a heredoc and prints
+    `body`, so its body is data like any other and is stripped."""
+    text = "cat <<9INVALID\nbody\n9INVALID\necho after"
+    assert S.strip_heredoc_bodies(text) == "cat <<9INVALID\necho after"
 
 
 # ---- multiple and unterminated -----------------------------------------------------------------

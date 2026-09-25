@@ -92,6 +92,20 @@ def test_control_a_subject_before_do_not_work_is_still_a_claim():
     assert _negative("When using foo, know it does not work.")
 
 
+def test_a_comma_inside_the_subject_does_not_make_an_imperative():
+    """A comma is not a clause start: the flags are the subject of this claim, and reading any
+    comma as a boundary lost the advisory that every other negative claim gets."""
+    assert _negative("--foo and --bar, when combined, do not work on Windows")
+    assert _negative("Hooks registered for Stop, and SessionEnd too, do not work under the SDK")
+    assert _negative("When the lock is held, retries do not work")
+
+
+def test_control_one_leading_condition_clause_keeps_the_imperative():
+    assert not _negative("If the tree is dirty, do not work on the release branch.")
+    assert not _negative("Before release, when on main, do not work there.")
+    assert not _negative("Run the gate first. Do not work around it.")
+
+
 # ---- contractions and the curly apostrophe read like their spelled-out forms -----------------
 
 

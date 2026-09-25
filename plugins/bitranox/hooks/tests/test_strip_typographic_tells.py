@@ -573,7 +573,21 @@ def test_the_coverage_sentence_still_names_something_the_table_does(skill):
 
 
 def test_an_em_dash_at_column_zero_gets_no_leading_space():
-    assert mod.normalize("Intro\n%s a quoted aside\n" % EM_DASH) == "Intro\n- a quoted aside\n"
+    """And it becomes `--`, not `-`: a lone hyphen then a space at a line start is a Markdown list
+    marker, so the aside turned into a bullet item. A doubled hyphen is no marker."""
+    assert mod.normalize("Intro\n%s a quoted aside\n" % EM_DASH) == "Intro\n-- a quoted aside\n"
+
+
+def test_an_indented_em_dash_at_a_line_start_is_not_a_list_marker_either():
+    assert mod.normalize("Intro\n  %s aside\n" % EM_DASH) == "Intro\n  -- aside\n"
+
+
+def test_control_a_dash_alone_on_its_line_stays_a_single_hyphen():
+    assert mod.normalize("Intro\n%s\n" % EM_DASH) == "Intro\n-\n"
+
+
+def test_control_an_em_dash_after_text_stays_a_single_hyphen():
+    assert mod.normalize("Intro %s aside\n" % EM_DASH) == "Intro - aside\n"
 
 
 def test_an_em_dash_ending_the_file_gets_no_trailing_space():
@@ -585,7 +599,7 @@ def test_an_em_dash_before_crlf_gets_no_trailing_space():
 
 
 def test_an_em_dash_at_column_zero_after_crlf_gets_no_leading_space():
-    assert mod.normalize("a\r\n%sb\r\n" % EM_DASH) == "a\r\n- b\r\n"
+    assert mod.normalize("a\r\n%sb\r\n" % EM_DASH) == "a\r\n-- b\r\n"     # no list marker
 
 
 def test_control_an_em_dash_beside_a_code_span_still_gets_its_space():

@@ -164,7 +164,7 @@ def test_an_arithmetic_shift_is_not_a_heredoc_opener(line):
 ])
 def test_control_a_real_opener_is_still_found(line, delimiter):
     opener = S.find_heredoc_opener(line)
-    assert opener is not None and opener.group(2) == delimiter
+    assert opener is not None and S.heredoc_delimiter(opener) == delimiter
 
 
 def test_an_arithmetic_shift_keeps_every_later_line():

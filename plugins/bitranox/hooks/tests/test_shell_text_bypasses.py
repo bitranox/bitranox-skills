@@ -65,7 +65,7 @@ def test_a_here_string_is_not_a_heredoc_opener(text):
 
 @pytest.mark.parametrize("text", ["cat <<EOF", "cat << EOF", "cat <<-EOF", "cat <<'EOF'"])
 def test_a_real_heredoc_opener_still_matches(text):
-    assert S.HEREDOC_OPEN.search(text).group(2) == "EOF"
+    assert S.heredoc_delimiter(S.HEREDOC_OPEN.search(text)) == "EOF"
 
 
 @pytest.mark.parametrize("herestring", ["<<< hello", "<<<hello"])
@@ -213,7 +213,7 @@ def test_every_sibling_splitter_sees_the_lone_ampersand():
     assert ci_watch_nudge._statement_around(text, text.rindex("push")).strip() == "git push x"
     assert retry_with_a_flag_nudge.shape("sleep 1 & sed -i x f")[0] == "sed"
     parts = block_git_semicolon_chain.SEP_SPLIT.split("a |& b")
-    assert parts == ["a ", "|", "& b"]
+    assert parts == ["a ", "|&", " b"]              # one pipe operator, no `&` glued to `b`
 
 
 # ---- `if`, `while` and `until` open a statement ------------------------------------------------

@@ -176,7 +176,7 @@ SEP_SPLIT = re.compile("(" + SEP.pattern + ")")
 
 # Only these continue past a failure. `&&` stops, `||` runs only ON failure, `|` is a pipeline.
 CONTINUES_AFTER_FAILURE = frozenset({";", "\n", "&"})
-JOINS_ON_SUCCESS = frozenset({"&&", "||", "|"})
+JOINS_ON_SUCCESS = frozenset({"&&", "||", "|", "|&"})       # `|&` is a pipe, as `|` is
 
 
 def _skip_wrappers(tokens: list[str], index: int) -> int:

@@ -17,17 +17,59 @@ Import it directly (`import shell_text`); the hooks directory is on `sys.path` f
 """
 from __future__ import annotations
 
+import bisect
 import re
 import shlex
 from pathlib import PurePosixPath, PureWindowsPath
 
-# The opener forms bash accepts: `<<WORD`, `<<-WORD`, `<< WORD`, `<<'WORD'`, `<<"WORD"`. The
-# backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
+# The delimiter of a heredoc is a whole shell WORD, not an identifier: bash accepts `<<\EOF`,
+# `<<'END-OF'`, `<<END.X`, `<<E"O"F` and `<<1`, and takes the word after quote removal as the
+# delimiter. Reading only `[A-Za-z_]\w*` failed the opener entirely on the first three, so the body
+# was judged as commands and its apostrophe opened a quote that hid every later statement - a
+# `sed -i` on a JSON file two lines down included. Group 1 is the RAW word; `heredoc_delimiter`
+# and `heredoc_is_quoted` read it, because quoting ANYWHERE in the word makes the body literal.
 #
 # The lookarounds exclude the HERE-STRING `<<< word`, which feeds one word on stdin and opens no
 # body. Unguarded, its last two `<` read as `<< word`, and since a body runs to its delimiter every
 # later line of the command was dropped as data - a `git push` on the next line included.
-HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_HEREDOC_WORD = r"""(?:[^\s;&|()<>'"\\`]|\\.|'[^'\n]*'|"(?:[^"\\\n]|\\.)*")+"""
+HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(" + _HEREDOC_WORD + ")")
+
+
+def heredoc_delimiter(opener) -> str:
+    """The delimiter a `HEREDOC_OPEN` match names: its word after bash's quote removal.
+
+    `<<'EOF'`, `<<"EOF"`, `<<\\EOF` and `<<E"O"F` all end at a line reading `EOF`.
+    """
+    word, out, i = opener.group(1), [], 0
+    while i < len(word):
+        ch = word[i]
+        if ch == "\\" and i + 1 < len(word):
+            out.append(word[i + 1])
+            i += 2
+        elif ch == "'":
+            close = word.index("'", i + 1)            # the pattern guarantees a closing quote
+            out.append(word[i + 1:close])
+            i = close + 1
+        elif ch == '"':
+            i += 1
+            while word[i] != '"':
+                if word[i] == "\\" and word[i + 1] in '"\\$`':
+                    i += 1                            # inside "", backslash escapes only these
+                out.append(word[i])
+                i += 1
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def heredoc_is_quoted(opener) -> bool:
+    """True when ANY part of the delimiter word is quoted, which makes the body literal: bash then
+    expands nothing in it, while a bare `<<EOF` body still runs its substitutions."""
+    return any(ch in opener.group(1) for ch in "'\"\\")
+
 
 # The tools whose `tool_input.command` is a shell command string. Claude Code routes the model's
 # shell commands through the `PowerShell` tool on Windows where that tool is enabled, and on a
@@ -51,7 +93,15 @@ _LONE_AMPERSAND = r"(?<![<>&|\\])&(?![>&])"
 # `SEP` also splits a PIPELINE into its elements, for the guards that ask what each program is.
 # `LIST_SEP` keeps a pipeline whole, for the ones that ask about a statement's overall status or
 # its last element.
-SEP = re.compile(r"&&|\|\||[;\n|]|" + _LONE_AMPERSAND)
+#
+# `|&` is ONE operator, the pipe that also carries stderr, and its `&` is not a statement of its
+# own: left glued to the next element, `ls |& git push` handed a guard the program `&`.
+#
+# A SUBSHELL paren is deliberately NOT here, although `(git push)` runs a push. Several callers
+# split RAW text, where a regex cannot tell a structural paren from one in a quoted label, and a
+# corpus replay measured the cost: every verdict it changed was an `echo "=== (must PASS) ==="`
+# label cut in half. The quote-aware walk (`iter_segments`) separates subshells instead.
+SEP = re.compile(r"&&|\|\||\|&|[;\n|]|" + _LONE_AMPERSAND)
 LIST_SEP = re.compile(r"&&|\|\||[;\n]|" + _LONE_AMPERSAND)
 
 # The characters after which a `#` begins a new word, and therefore a comment. Mid-word it is data:
@@ -102,6 +152,7 @@ def _iter_separators(text, tool_name=None):
     in_single = in_double = False
     i, n = 0, len(text)
     escaped_end = -1                           # just past the last escaped pair: `\ #` is mid-word
+    backticks = 0                              # open backtick substitutions, a count not a scan
     while i < n:
         ch = text[i]
         if ch == escape and not in_single:
@@ -125,8 +176,16 @@ def _iter_separators(text, tool_name=None):
             # A comment runs to the end of its line and separates nothing inside it. Walked as
             # text, the apostrophe of `# don't` opened a single-quoted span that swallowed the
             # newline and every command after it. The newline itself is left to end the statement.
-            newline = text.find("\n", i)
-            i = n if newline == -1 else newline
+            #
+            # Inside a BACKTICK substitution it ends at the closing backtick if that comes first:
+            # bash cuts the substitution out at its backtick before parsing it, so the comment of
+            # `echo \`ls #x\`; git push` cannot reach the push, and reading on to the newline did.
+            i = _comment_end(text, i, n, backticks)
+            continue
+        if substitutes and text.startswith("$$", i):
+            # The PID, `$$`, is one token. Its second `$` is not the start of `$'...'`: in
+            # `echo $$'x\'` the quote is a PLAIN single quote, whose backslash is literal.
+            i += 2
             continue
         if substitutes and not in_double and text.startswith("$'", i):
             # ANSI-C quoting, where a backslash DOES escape: `$'it\'s'` is one string. Read as a
@@ -140,7 +199,8 @@ def _iter_separators(text, tool_name=None):
             # commit -m x` whose start is `ls)` - and a gate that anchors at the start cannot
             # see the commit at all. It also drops the stray `)` off the last operand token.
             yield i, i + 1
-            _closer, in_single, in_double = depth.pop()
+            closer, in_single, in_double = depth.pop()
+            backticks -= closer == "`"
             i += 1
             continue
         two = text[i:i + 2]
@@ -155,13 +215,24 @@ def _iter_separators(text, tool_name=None):
         if ch == "`" and substitutes:
             yield i, i + 1
             depth.append(("`", in_single, in_double))
+            backticks += 1
             in_single = in_double = False
             i += 1
             continue
         if in_double:
             i += 1                             # a plain separator is literal in double quotes
             continue
-        if two in ("&&", "||"):
+        if ch == "(" and i != escaped_end and (i == 0 or text[i - 1] in _COMMENT_MAY_FOLLOW):
+            # A SUBSHELL. Its paren is a statement boundary on both sides: `(git push)` runs a
+            # push that, left whole, read as the program `(git` with the operand `push)`. Only a
+            # paren at a word start opens one - `f()`, `arr=(a b)` and `!(glob)` stay words.
+            yield i, i + 1
+            depth.append((")", in_single, in_double))
+            i += 1
+            continue
+        if two in ("&&", "||", "|&"):
+            # `|&` is one operator, the pipe that carries stderr too. Split as `|` alone, its `&`
+            # stayed glued to the next element and `ls |& git push` began with the program `&`.
             yield i, i + 2
             i += 2
             continue
@@ -179,6 +250,18 @@ def _is_lone_ampersand(text, i):
     `2>&1`, `&>f`, `<&3` and `|&` is part of a redirection or a pipe.
     """
     return (i == 0 or text[i - 1] not in "<>&|") and text[i + 1:i + 2] not in (">", "&")
+
+
+def _comment_end(text, start, size, backticks):
+    """Index where the `#` comment opening at `start` stops: its newline, or - inside an open
+    backtick substitution - the backtick that closes it, whichever comes first. The newline and
+    the backtick are both left for the caller to read, since each ends something itself."""
+    newline = text.find("\n", start)
+    end = size if newline == -1 else newline
+    if backticks:
+        tick = text.find("`", start, end)
+        end = end if tick == -1 else tick
+    return end
 
 
 def _ansi_c_end(text, start):
@@ -313,11 +396,27 @@ def argv_for_match(segment, tool_name="Bash"):
     Falls back to a whitespace split when the segment does not parse. An unbalanced quote is
     normal in a segment cut out of a larger command, and a caller whose whole purpose is a
     yes/no is better served by a partial answer than by an exception.
+
+    A trailing COMMENT is removed first, by bash's own word rule, and line continuations with it.
+    Left in, the apostrophe of `# don't force` made shlex refuse the whole segment, and the
+    fallback then split the raw text: the continuation of `git \\<newline> push` stayed a token and
+    `-c user.name="A B"` fell into two, so the verb walk found no push to gate.
     """
+    text = _without_comments(segment, tool_name)
     try:
-        return split_for_tool(segment, tool_name)
+        return split_for_tool(text, tool_name)
     except ValueError:
-        return segment.split()
+        return text.split()
+
+
+def _without_comments(segment, tool_name):
+    """`segment` with every comment and unquoted line continuation turned into spaces.
+
+    Both are exactly the regions `mask_data_regions` turns into SPACES rather than filler, so the
+    mask decides them - including which `#` starts a word - and nothing else is touched.
+    """
+    masked = mask_data_regions(segment, tool_name=tool_name)
+    return "".join(" " if mask == " " else char for char, mask in zip(segment, masked))
 
 
 def is_git_verb(segment, verbs, tool_name="Bash"):
@@ -521,8 +620,11 @@ def opens_a_pr(command, tool_name=None):
     return False
 
 
-def commands_only(command: str) -> str:
+def commands_only(command: str, tool_name="Bash") -> str:
     """`command` with every DATA region removed, leaving only text the shell will EXECUTE.
+
+    `tool_name` picks the escape rules, as it does for `mask_data_regions`: a hook registered for
+    PowerShell that masked by the Bash reading ate the `;` of `cd C:\\; git push`.
 
     The pairing every command-scanning guard needs, in one call. Each half alone leaves a hole the
     other closes, and both holes have shipped: `mask_data_regions` cannot see a heredoc BODY,
@@ -543,7 +645,7 @@ def commands_only(command: str) -> str:
     `ssh host \'powershell -command "x"\'` stop firing and took six tests with it. Those guards
     want `strip_heredoc_bodies` alone. Ask what the guard's subject IS before reaching for this.
     """
-    return mask_data_regions(strip_heredoc_bodies(command or ""))
+    return mask_data_regions(strip_heredoc_bodies(command or ""), tool_name=tool_name)
 
 
 # `cd /long/scratch/path && <the command that matters>`. Almost every Bash call in a real session
@@ -571,55 +673,167 @@ def iter_heredocs(command: str):
     `line` is the opener's index in `command.split("\\n")`, `opener` its `HEREDOC_OPEN` match on
     that raw line, and `body` the half-open (start, end) range of body lines; the terminator, when
     there is one, is line `end`. An unterminated body runs to the last line. THE heredoc walk:
-    every reader of heredocs uses it, so none can disagree about where a body starts.
+    every reader of heredocs uses it, so none can disagree about where a body starts. Read the
+    delimiter with `heredoc_delimiter`, never off the match: it is a whole word after quote removal.
 
-    The regex knows the opener's SYNTAX; where a `<<` sits decides whether it is one, and two
-    places make it something else:
+    The regex knows the opener's SYNTAX; where a `<<` sits decides whether it is one:
 
-    - a QUOTED argument, a comment or a substitution: `git commit -m "docs: explain <<EOF
+    - a QUOTED argument or a comment makes it text: `git commit -m "docs: explain <<EOF
       heredocs"` opens nothing, and reading it as an opener swallowed the rest of the command, so
       every guard downstream went silent on a real `git push` after it;
-    - ARITHMETIC, where `<<` is a left shift: `(( z = x << y ))` and `$((1 << n))` read as a
-      heredoc delimited by `y` or `n`, and every later line up to one spelling it was dropped.
+    - ARITHMETIC makes it a left shift: `(( z = x << y ))` and `$((1 << n))` read as a heredoc
+      delimited by `y` or `n`, and every later line up to one spelling it was dropped;
+    - a COMMAND SUBSTITUTION makes it code again, even inside double quotes: in
+      `git commit -m "$(cat <<'EOF' ... EOF\\n)"` the heredoc is real, and missing it left an odd
+      `"` in its body to open a string that hid every later statement.
 
-    The test is whether the `<<` ITSELF sits in such a region, so a quoted mention does not hide a
-    real opener later on the same line. Quoting is read over the whole remaining text, not line by
-    line: a string can span lines (`python3 -c "...` with `\\"cat <<EOF\\"` inside it), and a line
-    read alone loses the quote it is in. The walk restarts after each body, because a body is data
-    and an apostrophe in it would otherwise open a quote that hides the next opener. The delimiter
-    is read from the RAW match: masking hides the quotes of `<<'EOF'`, which are heredoc syntax
-    rather than a string, and reading the masked form made that opener look bare.
+    One left-to-right pass carries the quoting and substitution state ACROSS each body, the way
+    bash reads it: the body starts at the newline that ends the opener's line and is skipped
+    whole, so an apostrophe in it opens nothing, and after the terminator the walk resumes inside
+    whatever the opener sat in. Two openers on one line take their bodies in order. Linear in the
+    length of the command, which matters because this runs on every shell call.
     """
-    lines = (command or "").split("\n")
-    index = 0
-    while index < len(lines):
-        found = _next_opener(lines, index)
-        if found is None:
-            return
-        at, opener = found
-        end = at + 1
-        # The terminator is the first line that is exactly the delimiter; bash allows leading
-        # whitespace with the `<<-` form, so the comparison is made on the stripped line.
-        while end < len(lines) and lines[end].strip() != opener.group(2):
-            end += 1
-        yield at, opener, (at + 1, end)
-        index = end + 1
+    command = command or ""
+    if "<<" not in command:
+        return
+    yield from _HeredocScan(command).run()
 
 
-def _next_opener(lines, start):
-    """(line index, match) of the first real heredoc opener at or after line `start`, or None."""
-    if not any("<<" in line for line in lines[start:]):
-        return None
-    masked = _blank_arithmetic(mask_data_regions("\n".join(lines[start:])))
-    offset = 0
-    for index in range(start, len(lines)):
-        line = lines[index]
-        region = masked[offset:offset + len(line)]
-        for match in HEREDOC_OPEN.finditer(line):
-            if region[match.start():match.start() + 2] == "<<":
-                return index, match
-        offset += len(line) + 1
-    return None
+class _HeredocScan:
+    """The single pass behind `iter_heredocs`. State is a stack of open closers - `)` for a
+    substitution or subshell, a backtick, `"` for a double-quoted string - plus the openers still
+    waiting for the newline that starts their bodies."""
+
+    def __init__(self, text):
+        self.text = text
+        self.lines = text.split("\n")
+        self.starts = [0]
+        for line in self.lines[:-1]:
+            self.starts.append(self.starts[-1] + len(line) + 1)
+        self.stack: list[str] = []
+        self.backticks = 0
+        self.pending: list[tuple[int, re.Match]] = []
+        self.escaped_end = -1
+        self.parens: dict[int, int] | None = None
+
+    def run(self):
+        i, size = 0, len(self.text)
+        while i < size:
+            found, i = self._step(i)
+            yield from found
+        for at, opener in self.pending:                # unterminated: runs to the last line
+            yield at, opener, (len(self.lines), len(self.lines))
+
+    def _line_of(self, offset):
+        return bisect.bisect_right(self.starts, offset) - 1
+
+    def _step(self, i):
+        """(heredocs completed here, next offset) for the character at `i`."""
+        text, ch = self.text, self.text[i]
+        in_double = bool(self.stack) and self.stack[-1] == '"'
+        if ch == "\\":
+            self.escaped_end = i + 2                   # an escaped character is data
+            return (), i + 2
+        if ch == "\n" and self.pending and not in_double:
+            return self._bodies(i)
+        if text.startswith("$$", i):
+            return (), i + 2                           # the PID, never the start of `$'...'`
+        if text.startswith("$((", i):
+            return (), self._paren_run_end(i + 1)      # arithmetic: its `<<` is a shift
+        if text.startswith("$(", i):
+            self.stack.append(")")
+            return (), i + 2
+        if text.startswith("${", i):
+            close = text.find("}", i + 2)
+            return (), len(text) if close == -1 else close + 1
+        if ch in "`\"":
+            self._toggle(ch, in_double)
+            return (), i + 1
+        if in_double:
+            return (), i + 1
+        return self._code(i)
+
+    def _toggle(self, ch, in_double):
+        """Open or close a backtick substitution or a double-quoted string at a `ch` of that kind."""
+        if ch == '"':
+            if in_double:
+                self.stack.pop()
+            else:
+                self.stack.append('"')
+        elif self.stack and self.stack[-1] == "`":
+            self.stack.pop()
+            self.backticks -= 1
+        else:
+            self.stack.append("`")
+            self.backticks += 1
+
+    def _code(self, i):
+        """The step for a character in live code, outside any double-quoted string."""
+        text, ch = self.text, self.text[i]
+        if ch == "'":
+            close = text.find("'", i + 1)
+            return (), len(text) if close == -1 else close + 1
+        if text.startswith("$'", i):
+            return (), _ansi_c_end(text, i + 2)
+        if text.startswith("((", i):
+            return (), self._paren_run_end(i)          # bare arithmetic command
+        if ch == "(":
+            self.stack.append(")")
+            return (), i + 1
+        if ch == ")":
+            if self.stack and self.stack[-1] == ")":
+                self.stack.pop()
+            return (), i + 1
+        if ch == "#" and i != self.escaped_end and (i == 0 or text[i - 1] in _COMMENT_MAY_FOLLOW):
+            return (), _comment_end(text, i, len(text), self.backticks)
+        if text.startswith("<<", i):
+            return self._opener(i)
+        return (), i + 1
+
+    def _opener(self, i):
+        """Queue the heredoc whose `<<` is at `i`, if it is one; a here-string `<<<` is not."""
+        if self.text.startswith("<<<", i):
+            return (), i + 3
+        at = self._line_of(i)
+        opener = HEREDOC_OPEN.match(self.lines[at], i - self.starts[at])
+        if opener is None:
+            return (), i + 2
+        self.pending.append((at, opener))
+        return (), self.starts[at] + opener.end()
+
+    def _bodies(self, newline):
+        """Skip the bodies of every queued opener, which start after the `newline` at this offset.
+
+        The terminator is the first line that is exactly the delimiter; bash allows leading
+        whitespace with the `<<-` form, so the comparison is made on the stripped line.
+        """
+        line, found = self._line_of(newline) + 1, []
+        for at, opener in self.pending:
+            delimiter, end = heredoc_delimiter(opener), line
+            while end < len(self.lines) and self.lines[end].strip() != delimiter:
+                end += 1
+            found.append((at, opener, (line, end)))
+            line = end + 1
+        self.pending = []
+        return found, len(self.text) if line >= len(self.lines) else self.starts[line]
+
+    def _paren_run_end(self, start):
+        """Offset just past the `)` that balances the `(` at `start`, counted without regard to
+        quoting; an unbalanced one runs to the end of its line only, so a stray `((` cannot hide
+        every opener after it. The pairs are matched once for the whole text, which keeps a run of
+        unclosed `((` linear rather than rescanning the rest of the command for each."""
+        if self.parens is None:
+            self.parens, opened = {}, []
+            for index, char in enumerate(self.text):
+                if char == "(":
+                    opened.append(index)
+                elif char == ")" and opened:
+                    self.parens[opened.pop()] = index
+        close = self.parens.get(start)
+        if close is not None:
+            return close + 1
+        newline = self.text.find("\n", start)
+        return len(self.text) if newline == -1 else newline
 
 
 def find_heredoc_opener(line: str):
@@ -627,37 +841,6 @@ def find_heredoc_opener(line: str):
     for _at, opener, _body in iter_heredocs(line):
         return opener
     return None
-
-
-def _blank_arithmetic(masked: str) -> str:
-    """`masked` with every bare `(( ... ))` arithmetic command blanked, length preserved.
-
-    Only the bare form is left for this to find: `mask_data_regions` already fills `$(( ))`. At
-    the start of a command bash reads `((` as arithmetic, so a subshell inside a subshell has to be
-    written `( (`, and a `((` here is arithmetic. An unclosed one is blanked to the end of its
-    line only, so a stray `((` cannot hide every opener after it.
-    """
-    out = list(masked)
-    start = masked.find("((")
-    while start != -1:
-        depth, cursor, closed = 0, start, False
-        while cursor < len(masked):
-            if masked[cursor] == "(":
-                depth += 1
-            elif masked[cursor] == ")":
-                depth -= 1
-                if depth == 0:
-                    cursor += 1
-                    closed = True
-                    break
-            cursor += 1
-        if not closed:
-            newline = masked.find("\n", start)
-            cursor = len(masked) if newline == -1 else newline
-        for index in range(start, cursor):
-            out[index] = " "
-        start = masked.find("((", cursor)
-    return "".join(out)
 
 
 def _split_heredocs(command: str):
@@ -732,6 +915,7 @@ def blank_unexpanded_text(command: str) -> str:
     # decides after one is the character before its backslash (`cont_prev`, valid at `cont_at`).
     word_at = cont_at = -1
     cont_prev = ""
+    in_backtick = False
     while index < size:
         char = command[index]
         if in_single:
@@ -746,6 +930,9 @@ def blank_unexpanded_text(command: str) -> str:
             else:
                 out.append("  ")
                 word_at = len(out)
+            index += 2
+        elif command.startswith("$$", index):
+            out.append("$$")                   # the PID: its second `$` does not open `$'...'`
             index += 2
         elif not in_double and command.startswith("$'", index):
             # ANSI-C `$'...'` expands nothing either, and its `\'` does not close it.
@@ -771,10 +958,14 @@ def blank_unexpanded_text(command: str) -> str:
             out.append(char)
             index += 1
         elif char == "#" and _hash_starts_a_word(out, word_at, cont_at, cont_prev):
-            while index < size and command[index] != "\n":
-                out.append(" ")
-                index += 1
+            # Inside a backtick substitution the comment also ends at the closing backtick, since
+            # bash cuts the substitution out before parsing it: blanking on to the newline hid the
+            # `$?` of `echo \`ls #x\`; echo $?`.
+            stop = _comment_end(command, index, size, in_backtick)
+            out.append(" " * (stop - index))
+            index = stop
         else:
+            in_backtick ^= char == "`"
             out.append(char)
             index += 1
     return "".join(out)
@@ -825,8 +1016,13 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     backslash is a path separator, and there is no ANSI-C string. Reading `\\` as an escape under
     PowerShell masked the `;` of `cd C:\\; git commit` and closed no quote at `"C:\\temp\\"`, so the
     statement after it never reached a guard. An unrecognised tool escapes nothing.
+
+    An ABSENT tool (`None`) is the Bash reading, not an unrecognised one. Callers pass None when
+    they have no event to ask - a pure helper's default - and escaping nothing there is wrong in
+    both directions at once: the `\\"` of `"a\\" > b.md; c"` closed the string, so a redirection
+    appeared inside it, and `echo \\"; git push; echo \\"` masked a push that really runs.
     """
-    escape = {"Bash": "\\", "PowerShell": "`"}.get(tool_name, "")
+    escape = {"Bash": "\\", "PowerShell": "`", None: "\\"}.get(tool_name, "")
     bash_quoting = tool_name != "PowerShell"
     out: list[str] = []
     index, size = 0, len(command)
@@ -842,6 +1038,9 @@ def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
                 cont_at = len(out)
             else:
                 out.append(fill * 2)
+            index += 2
+        elif bash_quoting and command.startswith("$$", index):
+            out.append("$$")                   # the PID: its second `$` does not open `$'...'`
             index += 2
         elif bash_quoting and command.startswith("$'", index):
             # ANSI-C quoting: a backslash escapes here, so `\'` does not close the string. Scanned

@@ -152,7 +152,7 @@ def _heredoc_bodies(command: str) -> str:
     return "\n".join(line for line in command.split("\n") if line not in kept)
 
 
-def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name=None):
+def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name="Bash"):
     """The nudge text when a shell WRITE names a path inside a marketplace repo, else None.
 
     Statements are judged with heredoc bodies stripped, so prose naming the tool is not a write to

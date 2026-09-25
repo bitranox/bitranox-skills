@@ -32,7 +32,8 @@ import sys
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
 from shell_text import (  # noqa: F401
-    SEP, blank_unexpanded_text, iter_heredocs, mask_data_regions, strip_heredoc_bodies,
+    SEP, blank_unexpanded_text, heredoc_is_quoted, iter_heredocs, mask_data_regions,
+    strip_heredoc_bodies,
 )
 
 # Statement separators (`SEP`, shared). A prefix assignment dies at the end of ITS command, so a
@@ -175,7 +176,7 @@ def substitutes_inside_unquoted_heredoc(command: str) -> bool:
     lines = (command or "").split("\n")
     for _at, opener, (start, end) in iter_heredocs(command):
         raw = _HEREDOC_ESCAPED_RX.sub("", "\n".join(lines[start:end]))
-        if not opener.group(1) and _HEREDOC_SUBSTITUTION_RX.search(raw):
+        if not heredoc_is_quoted(opener) and _HEREDOC_SUBSTITUTION_RX.search(raw):
             return True
     return False
 

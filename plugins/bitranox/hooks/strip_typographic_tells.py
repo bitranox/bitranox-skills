@@ -131,7 +131,25 @@ def _spaced_hyphen(match, starts_line, ends_line):
     after = text[match.end()] if not at_end else ""
     left = "" if before in _SPACE_OR_BREAK or (at_start and starts_line) else " "
     right = "" if after in _SPACE_OR_BREAK or (at_end and ends_line) else " "
-    return left + "-" + right
+    # A hyphen that opens a line and has text after it is a Markdown LIST MARKER, so an aside that
+    # began with an em dash became a bullet item. A doubled hyphen is no marker, and it is the
+    # plain-text spelling of an em dash.
+    hyphen = "--" if _would_be_a_list_marker(match, starts_line) else "-"
+    return left + hyphen + right
+
+
+def _would_be_a_list_marker(match, starts_line):
+    """True when a hyphen in place of `match` would start a list item: at most three spaces of
+    indentation before it (four make an indented code line) and text after it on the same line.
+    A dash alone on its line is left a single hyphen - the old spelling, and no list item."""
+    text = match.string
+    head = text[:match.start()]
+    cut = max(head.rfind("\n"), head.rfind("\r"))
+    if cut == -1 and not starts_line:
+        return False
+    indent = head[cut + 1:]
+    tail = re.split(r"[\r\n]", text[match.end():], maxsplit=1)[0]
+    return indent.strip(" ") == "" and len(indent) <= 3 and tail.strip() != ""
 
 
 def _normalize_prose(text, starts_line, ends_line):

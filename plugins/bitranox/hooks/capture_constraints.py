@@ -106,12 +106,20 @@ def _spelled_out(text: str) -> str:
     return _CONTRACTION_RX.sub(expand, text)
 
 
-# What a clause-initial "do not work" follows: the start of the hook or a clause boundary. There
-# it is an instruction ("When on main, do not work there"), not a claim about a tool.
-_CLAUSE_START_RX = re.compile(r"(?:^|[,;:.!?(]|\s-)\s*$")
+# Where a "do not work" is an instruction ("When on main, do not work there") rather than a claim
+# about a tool: at the start of the hook or of a sentence, either bare or after ONE leading
+# condition clause. A comma alone is not the test - in "--foo and --bar, when combined, do not
+# work on Windows" the flags are the subject, and treating every comma as a clause start read
+# that claim as an instruction and dropped its advisory.
+_IMPERATIVE_PREFIX_RX = re.compile(
+    r"(?:^|[;:.!?(])\s*"
+    r"(?:(?:when|if|before|after|once|unless|while|whenever)\b[^;:.!?]*(?:,|\s-))?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _is_imperative(text: str, m: re.Match[str]) -> bool:
     """True when a "do not work" match has no subject before it, so it tells the reader what not
     to do rather than saying something does not work. "does not work" always has a subject."""
-    return m.group("plain") is not None and _CLAUSE_START_RX.search(text[:m.start()]) is not None
+    return (m.group("plain") is not None
+            and _IMPERATIVE_PREFIX_RX.search(text[:m.start()]) is not None)

@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.3]
+
+### Fixed
+
+- The shared shell parser behind the blocking command guards no longer lets a statement slip past
+  them after these shapes, each checked against real bash: a `#` comment inside backticks (it ends
+  at the closing backtick), an apostrophe in a trailing comment together with a line continuation
+  or a quoted option value, `$$'x\'` (the PID then a plain quote, not ANSI-C quoting), the `|&`
+  pipe, and a subshell such as `(cd x && git push)`.
+- A heredoc delimiter is read as a whole shell word, so `<<\EOF`, `<<'END-OF'`, `<<END.X` and
+  `<<1` open their bodies, and a heredoc inside a command substitution - `"$(cat <<'EOF' ...)"` -
+  is found even within double quotes. Before, a body read as commands could hide every statement
+  after it. Two heredocs on one line both open, and the walk is one linear pass.
+- A mask asked with no tool name reads it as Bash, and `commands_only` takes the tool name, so the
+  PowerShell-registered CI-watch nudge reads `cd C:\; git push` by PowerShell rules.
+- The memory capture advisory no longer mistakes a claim such as "--foo and --bar, when combined,
+  do not work" for an instruction: an imperative now needs the start of a sentence or one leading
+  condition clause, not just a comma.
+- The typographic-tell stripper turns an em dash that opens a line into `--`, not a `-` that
+  Markdown reads as a list marker.
+
 ## [7.23.2]
 
 ### Fixed

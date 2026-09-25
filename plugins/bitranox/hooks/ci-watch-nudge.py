@@ -79,7 +79,7 @@ _CD_AT_START = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
 _GIT_PUSH = re.compile(r"\bgit\b[^\n;|&]*\bpush\b")
 
 
-def _cwd_after_any_cd(command: str, cwd: str) -> str | None:
+def _cwd_after_any_cd(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     """The directory the push actually runs in, following any `cd` that precedes it.
 
     Heredoc bodies are stripped first: a `cd` inside one is stdin DATA and moves nothing, the
@@ -88,9 +88,9 @@ def _cwd_after_any_cd(command: str, cwd: str) -> str | None:
     both come from the stripped text, so the two offset spaces agree.
     """
     stripped = strip_heredoc_bodies(command)
-    masked = commands_only(stripped)
+    masked = commands_only(stripped, tool_name)
     here = cwd
-    for at, seg in iter_segments(masked):
+    for at, seg in iter_segments(masked, tool_name):
         moved = _CD_AT_START.match(seg)
         if moved:
             token = stripped[at + moved.start("target"):at + moved.end("target")]
@@ -106,7 +106,7 @@ def _cwd_after_any_cd(command: str, cwd: str) -> str | None:
     return here
 
 
-def _repo_dir(command: str, cwd: str) -> str | None:
+def _repo_dir(command: str, cwd: str, tool_name: str = "Bash") -> str | None:
     """Which repository this push actually targets, or None when the text cannot say.
 
     `git -C` names the repo outright. Failing that the push runs wherever the command last
@@ -117,9 +117,9 @@ def _repo_dir(command: str, cwd: str) -> str | None:
     offsets, because masking preserves length. Comparing values on the masked form would decide the
     path by its filler, not by what it says.
     """
-    found = _DASH_C.search(commands_only(command))
+    found = _DASH_C.search(commands_only(command, tool_name))
     if not found:
-        return _cwd_after_any_cd(command, cwd)
+        return _cwd_after_any_cd(command, cwd, tool_name)
     token = command[found.start(1):found.end(1)]
     if not token or any(ch in token for ch in _UNRESOLVABLE):
         return None
@@ -213,10 +213,10 @@ def _ssh_hostname(alias: str) -> str | None:
     return None
 
 
-def _push_remote(command: str, repo: str) -> str | None:
+def _push_remote(command: str, repo: str, tool_name: str = "Bash") -> str | None:
     """The remote this push targets: the first bare word after `push`, else the branch's
     configured remote, else `origin`, which is git's own fallback."""
-    rest = _AFTER_PUSH.search(commands_only(command))
+    rest = _AFTER_PUSH.search(commands_only(command, tool_name))
     if rest:
         span = rest.span("rest")
         words = [w for w in command[span[0]:span[1]].split() if not w.startswith("-")]
@@ -230,7 +230,7 @@ def _push_remote(command: str, repo: str) -> str | None:
     return "origin"
 
 
-def _targets_a_watchable_forge(command: str, repo: str) -> bool:
+def _targets_a_watchable_forge(command: str, repo: str, tool_name: str = "Bash") -> bool:
     """Will the forge this push LANDED on actually run the workflows `_has_workflows` found?
 
     `_has_workflows` asks whether the repo has CI files, which a fork that vendors upstream's
@@ -247,7 +247,7 @@ def _targets_a_watchable_forge(command: str, repo: str) -> bool:
     use to stand in for a real remote, so reading it as "no CI" would decide semantics from a
     fixture's convenience.
     """
-    remote = _push_remote(command, repo)
+    remote = _push_remote(command, repo, tool_name)
     if not remote:
         return True
     looks_like_url = "://" in remote or bool(_SCP_LIKE.match(remote))
@@ -288,14 +288,14 @@ def _statement_around(text: str, index: int) -> str:
     return text[start:]
 
 
-def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
+def _pushed_ref(command: str, repo: str, tool_name: str = "Bash") -> tuple[str, str] | None:
     """What this push actually built: (sha, display), or None to fall back to the branch test.
 
     A refspec is read from the text after `push`; a `src:dst` pair is resolved by its SOURCE, which
     is the object being sent. Bulk `--tags` names no ref, so the newest local tag by creation date
     stands in - the tag just cut is the one whose run is wanted.
     """
-    rest = _AFTER_PUSH.search(commands_only(command))
+    rest = _AFTER_PUSH.search(commands_only(command, tool_name))
     if not rest:
         return None
     span = rest.span("rest")
@@ -308,7 +308,7 @@ def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
         found = _resolve_ref(repo, source) if source and source != "HEAD" else None
         if found:
             return found
-    if _BULK_TAGS.search(commands_only(command)):
+    if _BULK_TAGS.search(commands_only(command, tool_name)):
         # In `for-each-ref` the LAST --sort key is the PRIMARY one (measured, not assumed), so
         # this reads as: newest by creation date, ties broken by version order. Creation date
         # alone is not enough - tags cut in the same second tie, and the fallback is plain
@@ -320,20 +320,20 @@ def _pushed_ref(command: str, repo: str) -> tuple[str, str] | None:
     return None
 
 
-def _watching(command: str) -> bool:
+def _watching(command: str, tool_name: str = "Bash") -> bool:
     """Did this command RUN a watcher, as opposed to merely naming one?
 
     The MASKED form is the default, so `echo "ci_wait.py ..."` still clears nothing. A known
     execute-a-string wrapper is the one exception, and it is checked on the masked form too, so
     the exception cannot itself be opened by quoting the wrapper's name.
     """
-    masked = commands_only(command)
+    masked = commands_only(command, tool_name)
     if _WATCHING.search(masked):
         return True
     return bool(_WRAPPER.search(masked) and _WATCHING.search(command))
 
 
-def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
+def notice(command, cwd: str = "", tool_name: str = "Bash") -> tuple[str, str, str, str] | None:
     """The (text, sha, branch, repo) to record for this command, or None if it is not a landed push.
 
     Returns the sha it resolved rather than making the caller resolve it again: every lookup here
@@ -344,7 +344,7 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
         return None
     # Read STRUCTURE from the masked form so a command merely quoting "git push" cannot trigger it,
     # then take VALUES from the real repo rather than from the text.
-    masked = commands_only(command)
+    masked = commands_only(command, tool_name)
     # _NOT_A_BUILD must be judged on the push STATEMENT, not the whole command: a dry run in
     # one statement silenced the nudge for a genuine push in another.
     # EVERY push, not the first: scoping the flag correctly but then selecting the first match
@@ -353,13 +353,13 @@ def notice(command, cwd: str = "") -> tuple[str, str, str, str] | None:
     if not any(not _NOT_A_BUILD.search(_statement_around(masked, m.start()))
                for m in _PUSH.finditer(masked)):
         return None
-    repo = _repo_dir(command, cwd) if cwd else None
+    repo = _repo_dir(command, cwd, tool_name) if cwd else None
     if not repo or not _has_workflows(repo):
         return None
     # Having workflow FILES is not the same as pushing somewhere that runs them.
-    if not _targets_a_watchable_forge(command, repo):
+    if not _targets_a_watchable_forge(command, repo, tool_name):
         return None
-    pushed = _pushed_ref(command, repo)
+    pushed = _pushed_ref(command, repo, tool_name)
     if pushed:
         sha, branch = pushed
     else:
@@ -396,7 +396,10 @@ def main(raw: str | None = None) -> int:
         return 0
 
     try:
-        if _watching(command):
+        # Mask by the language the command is in. The clear half also reads non-shell tools
+        # (a Monitor call), whose command text is Bash.
+        shell = event.get("tool_name") if is_shell_tool(event.get("tool_name")) else "Bash"
+        if _watching(command, shell):
             state.clear_session(key, session)
             return 0
         # Only a shell tool can have MADE a push. The clear half above is deliberately wider: a
@@ -404,7 +407,7 @@ def main(raw: str | None = None) -> int:
         # cannot see it leaves a watched push pending until the gate gives up.
         if not is_shell_tool(event.get("tool_name")):
             return 0
-        found = notice(command, cwd)
+        found = notice(command, cwd, shell)
         if not found:
             return 0
         text, sha, branch, repo = found
