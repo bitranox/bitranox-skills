@@ -231,7 +231,7 @@ Sparkline {
 
 | Name               | Type                                 | Default | Description                                        |
 |--------------------|--------------------------------------|---------|----------------------------------------------------|
-| `data`             | `Sequence[float] | None`             | `None`  | The data represented by the sparkline.             |
+| `data`             | `Sequence[float] \| None`            | `None`  | The data represented by the sparkline.             |
 | `summary_function` | `Callable[[Sequence[float]], float]` | `max`   | The function that computes the height of each bar. |
 
 

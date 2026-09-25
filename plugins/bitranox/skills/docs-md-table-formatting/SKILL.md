@@ -109,7 +109,11 @@ python3 reformat_tables.py --backup file.md
 python3 reformat_tables.py --strict -r
 ```
 
-Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks, preserves alignment markers (`:---`, `:---:`, `---:`), handles pipes inside backtick spans, and leaves a table with inconsistent column counts alone.
+Exit codes: 0 = done, 1 = `--check` found a table to reformat or `--strict` found a ragged row, 2 = usage error or a file that could not be read (not UTF-8, missing, not a regular file). A directory named `*.md` or a dangling link met by `-r` is reported and skipped.
+
+Safe by design: reformats tables inside blockquotes and `` ```markdown ``/`` ```md `` fenced code blocks, skips all other fenced code blocks (including one nested inside a markdown fence) and indented code blocks, keeps a list-nested table's indentation, preserves alignment markers (`:---`, `:---:`, `---:`), measures width in display columns (a CJK character counts two), keeps the file's line endings and a leading BOM, and leaves a table with inconsistent column counts alone.
+
+**A pipe inside backticks still splits the cell.** GFM gives a code span no protection, so `` `a | b` `` in a table cell renders as two cells; write `` `a \| b` ``. The tool splits exactly as GFM does, so such a row is reported as ragged rather than accepted.
 
 **A ragged row is REPORTED, not passed over in silence.** It is the one shape the tool cannot repair, and the two directions differ: a row with MORE cells than the header loses the surplus (GFM splits at each unescaped pipe and DROPS the extras, so a 4-cell row under a 3-column header renders as 3 and the content disappears while the table still looks correct), while a row with FEWER is PADDED, so the missing cell renders empty. The message says which, because a warning that claims content loss for both is wrong half the time. Since there is nothing to reformat, the run would otherwise print `Unchanged`, which reads as a clean bill of health for exactly the defect worth catching. Every ragged row now goes to stderr with its file and line, and the status line carries the count; `--strict` turns that into a non-zero exit for CI, while the default stays a warning so existing callers keep their exit codes. Its first sweep over this plugin found three, one of them a routing table whose third column had gone missing on a single row.
 
@@ -134,6 +138,12 @@ python3 tablekit.py read FILE.md --index 0 \
   | python3 tablekit.py replace FILE.md --index 0
 ```
 
-`alignments` values are `left` / `right` / `center` / `none`. `rows` is a list of
-cell-lists; ragged rows are padded to the column count on render. Stdlib only; a literal
-`|` in a cell round-trips (escaped as `\|` in the markdown, unescaped in the JSON).
+`alignments` values are `left` / `right` / `center` / `none`; any other value is refused.
+`rows` is a list of cell-lists; a SHORT row is padded to the column count on render, a row
+with MORE cells than headers is refused (exit 2), because truncating it would delete text
+from the file - `read --index` refuses such a table for the same reason. Tables are numbered
+as `reformat_tables.py` sees them: one inside a non-markdown code fence is not counted.
+`replace` keeps the table's indentation, the file's line endings and a leading BOM. Exit
+codes: 0 = done, 1 = no table at that index, 2 = refused or error (invalid JSON, unreadable
+file). Stdlib only; a literal `|` in a cell round-trips (escaped as `\|` in the markdown,
+unescaped in the JSON).

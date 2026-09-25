@@ -584,7 +584,7 @@ def test_a_cache_hit_reports_the_LIVE_cli_version_not_the_cached_one(tmp_path, m
     stamp = FIXTURES / "stamp-sample.json"
     H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
                              "stamp_sha256": H.stamp_hash(stamp), "cli_version": "2.1.247",
-                             "docs_cover_up_to": "2.1.200"})
+                             "docs_cover_up_to": "2.1.200", "source": "hooks-sample"})
     monkeypatch.setattr(H, "local_cli_version", lambda *a, **k: "2.1.250")
 
     H.main(["check", "--stamp", str(stamp), "--source", "hooks-sample", "--json",
@@ -598,8 +598,278 @@ def test_a_cache_hit_reports_the_LIVE_cli_version_not_the_cached_one(tmp_path, m
 def test_a_cache_hit_with_no_cli_probe_does_not_invent_a_version(tmp_path, capsys):
     stamp = FIXTURES / "stamp-sample.json"
     H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
-                             "stamp_sha256": H.stamp_hash(stamp), "cli_version": "2.1.247"})
+                             "stamp_sha256": H.stamp_hash(stamp), "cli_version": "2.1.247",
+                             "source": "hooks-sample"})
     H.main(["check", "--stamp", str(stamp), "--source", "hooks-sample", "--json",
             "--cache-dir", str(tmp_path), "--no-cli-probe"])
     payload = json.loads(capsys.readouterr().out)["data"]
     assert payload["cli_version"] is None
+
+
+# --------------------------------------------------------------------------- audit fixes
+#
+# The network is the one true external edge here, so `_fetch` is replaced by a map of the bundled
+# fixture bodies. Everything else runs for real.
+
+SAMPLE_URL = sample_record()["url"]
+SECOND_URL = "https://example.com/docs/en/second.md"
+
+
+class FakeNet:
+    """Serves fixture bodies by URL and records every fetch, so a test can assert none happened."""
+
+    def __init__(self, bodies: dict[str, str]) -> None:
+        self.bodies = bodies
+        self.calls: list[str] = []
+
+    def __call__(self, url: str, timeout: float) -> tuple[int, bytes, str]:
+        self.calls.append(url)
+        return 200, fixture(self.bodies[url]), "text/markdown; charset=utf-8"
+
+
+def two_source_stamp(tmp_path: Path) -> Path:
+    stamp = json.loads((FIXTURES / "stamp-sample.json").read_text(encoding="utf-8"))
+    second = dict(stamp["sources"][0], name="second", url=SECOND_URL)
+    stamp["sources"].append(second)
+    path = tmp_path / "two.json"
+    path.write_text(json.dumps(stamp), encoding="utf-8")
+    return path
+
+
+def sample_stamp_over_shipped(tmp_path: Path) -> Path:
+    """The shipped stamp with its sources replaced by the fixture one: coverage is complete."""
+    stamp = json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))
+    stamp["sources"] = json.loads((FIXTURES / "stamp-sample.json").read_text(encoding="utf-8"))["sources"]
+    path = tmp_path / "stamp.json"
+    path.write_text(json.dumps(stamp), encoding="utf-8")
+    return path
+
+
+def test_a_narrowed_check_does_not_certify_the_other_sources(tmp_path, monkeypatch, capsys):
+    """`check --source A` wrote the cache; a full `check` then replayed it and never looked at B."""
+    net = FakeNet({SAMPLE_URL: "hooks-sample.md", SECOND_URL: "hooks-sample-structural.md"})
+    monkeypatch.setattr(H, "_fetch", net)
+    stamp = two_source_stamp(tmp_path)
+    cache = tmp_path / "cache"
+    rc = H.main(["check", "--stamp", str(stamp), "--source", "hooks-sample", "--cache-dir", str(cache),
+                 "--no-cli-probe"])
+    capsys.readouterr()
+    assert rc == 0
+    rc = H.main(["check", "--stamp", str(stamp), "--cache-dir", str(cache), "--no-cli-probe", "--json"])
+    payload = json.loads(capsys.readouterr().out)["data"]
+    assert rc == 1, payload
+    assert payload["cached"] is False
+    assert payload["verdict"] == H.STRUCTURAL
+
+
+def test_a_repeated_full_check_is_served_from_the_cache(tmp_path, monkeypatch, capsys):
+    """The control: keying on the source must not stop a full check replaying a full check."""
+    net = FakeNet({SAMPLE_URL: "hooks-sample.md", SECOND_URL: "hooks-sample.md"})
+    monkeypatch.setattr(H, "_fetch", net)
+    stamp = two_source_stamp(tmp_path)
+    cache = tmp_path / "cache"
+    for _ in range(2):
+        H.main(["check", "--stamp", str(stamp), "--cache-dir", str(cache), "--no-cli-probe"])
+    capsys.readouterr()
+    assert len(net.calls) == 2, net.calls
+
+
+def test_offline_with_no_cache_fetches_nothing(tmp_path, monkeypatch, capsys):
+    net = FakeNet({SAMPLE_URL: "hooks-sample.md"})
+    monkeypatch.setattr(H, "_fetch", net)
+    rc = H.main(["check", "--stamp", str(FIXTURES / "stamp-sample.json"), "--offline",
+                 "--cache-dir", str(tmp_path), "--no-cli-probe"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "offline" in out
+    assert net.calls == []
+
+
+def test_offline_with_a_fresh_cache_replays_it(tmp_path, monkeypatch, capsys):
+    net = FakeNet({SAMPLE_URL: "hooks-sample.md"})
+    monkeypatch.setattr(H, "_fetch", net)
+    stamp = FIXTURES / "stamp-sample.json"
+    H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
+                             "stamp_sha256": H.stamp_hash(stamp), "source": None})
+    rc = H.main(["check", "--stamp", str(stamp), "--offline", "--cache-dir", str(tmp_path), "--no-cli-probe"])
+    capsys.readouterr()
+    assert rc == 0 and net.calls == []
+
+
+def test_expect_is_honoured_on_a_cache_hit(tmp_path, capsys):
+    stamp = FIXTURES / "stamp-sample.json"
+    H.write_cache(tmp_path, {"verdict": H.CURRENT, "checked_at_epoch": time.time(),
+                             "stamp_sha256": H.stamp_hash(stamp), "source": None})
+    rc = H.main(["check", "--stamp", str(stamp), "--cache-dir", str(tmp_path), "--no-cli-probe",
+                 "--expect", H.STRUCTURAL])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "expected STRUCTURAL, got CURRENT" in err
+
+
+def _refs_copy(tmp_path: Path) -> Path:
+    refs = tmp_path / "references"
+    refs.mkdir()
+    for f in REFS.glob("*.md"):
+        (refs / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    return refs
+
+
+def test_an_event_documented_but_dropped_from_the_stamp_is_a_phantom(tmp_path):
+    """The reverse check drew its candidates from the stamp under test, so it could never fire."""
+    stamp = json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))
+    for src in stamp["sources"]:
+        src["fingerprint"]["events"] = [e for e in src["fingerprint"].get("events", []) if e != "FileChanged"]
+    result = H.coverage(stamp, _refs_copy(tmp_path))
+    assert result["phantom_events"] == ["FileChanged"]
+    assert result["complete"] is False
+
+
+def test_the_coverage_command_reports_a_phantom_and_fails(tmp_path, capsys):
+    stamp = json.loads(SHIPPED_STAMP.read_text(encoding="utf-8"))
+    for src in stamp["sources"]:
+        src["fingerprint"]["events"] = [e for e in src["fingerprint"].get("events", []) if e != "FileChanged"]
+    path = tmp_path / "nofc.json"
+    path.write_text(json.dumps(stamp), encoding="utf-8")
+    rc = H.main(["coverage", "--stamp", str(path), "--refs", str(REFS)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "phantom event: FileChanged" in out
+
+
+def test_stamp_refuses_to_write_a_new_event_the_references_do_not_document(tmp_path, capsys):
+    """The HIGH finding: the gate ran on the OLD stamp, so a new upstream event was stamped with
+    coverage_gaps [] and `check` then reported CURRENT while it was undocumented."""
+    target = sample_stamp_over_shipped(tmp_path)
+    assert H.coverage(json.loads(target.read_text(encoding="utf-8")), REFS)["complete"] is True
+    before = target.read_bytes()
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-structural.md"), "--write"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "refusing" in out
+    assert target.read_bytes() == before
+
+
+def test_the_stamp_dry_run_predicts_the_same_refusal(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-structural.md")])
+    capsys.readouterr()
+    assert rc == 1
+
+
+def test_stamp_write_refreshes_a_source_when_coverage_holds(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    stamp = json.loads(target.read_text(encoding="utf-8"))
+    stamp["generated_at"] = "2000-01-01"
+    target.write_text(json.dumps(stamp), encoding="utf-8")
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-cosmetic.md"), "--write"])
+    capsys.readouterr()
+    assert rc == 0
+    written = json.loads(target.read_text(encoding="utf-8"))
+    assert written["generated_at"] != "2000-01-01"
+    assert written["coverage_gaps"] == []
+    assert written["sources"][0]["content_sha256"] == H.content_sha(H.normalise(fixture("hooks-sample-cosmetic.md")))
+
+
+def test_accept_gaps_writes_and_records_the_gap(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-structural.md"), "--write", "--accept-gaps"])
+    capsys.readouterr()
+    assert rc == 0
+    assert json.loads(target.read_text(encoding="utf-8"))["coverage_gaps"], "the gap must be recorded"
+
+
+def test_cosmetic_only_refuses_a_structural_body(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    before = target.read_bytes()
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-structural.md"), "--write", "--cosmetic-only",
+                 "--accept-gaps"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "cosmetic-only" in out
+    assert target.read_bytes() == before
+
+
+def test_cosmetic_only_accepts_a_cosmetic_body(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-sample",
+                 "--body", str(FIXTURES / "hooks-sample-cosmetic.md"), "--write", "--cosmetic-only"])
+    capsys.readouterr()
+    assert rc == 0
+
+
+def test_stamp_with_an_unknown_source_is_an_error_and_writes_nothing(tmp_path, capsys):
+    target = sample_stamp_over_shipped(tmp_path)
+    before = target.read_bytes()
+    rc = H.main(["stamp", "--stamp", str(target), "--refs", str(REFS), "--source", "hooks-smaple",
+                 "--body", str(FIXTURES / "hooks-sample.md"), "--write"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "hooks-smaple" in err
+    assert target.read_bytes() == before
+
+
+def test_stamp_on_a_malformed_stamp_is_broken_with_a_parseable_envelope(tmp_path):
+    import subprocess
+    import sys
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(SKILL / "scripts" / "hookdoc_stamp.py"), "stamp",
+                           "--stamp", str(bad), "--json"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=60, check=False)
+    assert proc.returncode == 2, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False and payload["data"]["verdict"] == H.BROKEN
+
+
+def test_baseline_write_with_no_line_to_update_fails_and_leaves_the_file(tmp_path, capsys):
+    skill_md = tmp_path / "SKILL.md"
+    skill_md.write_text("# Skill\n\nno baseline here\n", encoding="utf-8")
+    rc = H.main(["baseline", "--skill-md", str(skill_md), "--write"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "no baseline line" in out
+    assert skill_md.read_text(encoding="utf-8") == "# Skill\n\nno baseline here\n"
+
+
+def test_baseline_write_rewrites_a_stale_line(tmp_path, capsys):
+    skill_md = tmp_path / "SKILL.md"
+    skill_md.write_text("# Skill\n\nReference baseline: stale\n", encoding="utf-8")
+    rc = H.main(["baseline", "--skill-md", str(skill_md), "--write"])
+    capsys.readouterr()
+    assert rc == 0
+    want = H.baseline_line(H.load_stamp(SHIPPED_STAMP))
+    assert want in skill_md.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("argv", [["--json", "selftest"], ["selftest", "--json"]])
+def test_json_is_honoured_before_or_after_the_subcommand(argv, capsys):
+    rc = H.main(argv)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0 and payload["command"] == "hookdoc_stamp/selftest"
+
+
+def test_a_stamp_with_a_utf8_bom_still_loads(tmp_path, capsys):
+    path = tmp_path / "bom.json"
+    path.write_bytes(b"\xef\xbb\xbf" + SHIPPED_STAMP.read_bytes())
+    rc = H.main(["coverage", "--stamp", str(path)])
+    capsys.readouterr()
+    assert rc == 0
+
+
+def test_a_non_ascii_path_in_a_message_does_not_crash_a_cp1252_console(tmp_path):
+    import os
+    import subprocess
+    import sys
+    missing = tmp_path / ("d" + chr(0x65E5)) / "missing.md"
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    proc = subprocess.run([sys.executable, str(SKILL / "scripts" / "hookdoc_stamp.py"), "check",
+                           "--stamp", str(FIXTURES / "stamp-sample.json"), "--body", str(missing),
+                           "--no-cli-probe"], capture_output=True, env=env, timeout=60, check=False)
+    assert proc.returncode == 2, proc.stderr
+    assert b"Traceback" not in proc.stderr
+    assert b"BROKEN" in proc.stdout

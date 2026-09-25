@@ -28,7 +28,9 @@ confines the search to that base, because an explicit location is an instruction
 to look rather than a starting point. Any other layout is reached by passing the worktree
 path outright instead of the bare name. A search that finds nothing says which paths it
 checked, for the same reason the cache search does: silence about a miss reads as a clean
-bill of health.
+bill of health. A worktree path inside one of those project-local directories keeps any `wt-`
+at the front of its name when the cache topic is derived, because that name was never on the
+prefix convention. A `--cache-dir` that does not exist is refused by name rather than ignored.
 
 Refusals, because this runs on machines whose layout is not yours:
 
@@ -86,7 +88,9 @@ __all__ = [
     "build_plan",
     "cache_dirs",
     "directory_size",
+    "git_worktree_remove",
     "git_worktree_status",
+    "in_project_worktree_dir",
     "looks_like_a_path",
     "refusal_for",
     "topic_name",
@@ -179,8 +183,28 @@ def looks_like_a_path(value: str) -> bool:
     return value.startswith("~") or any(sep in value for sep in _separators())
 
 
-def topic_name(value: str, *, prefix: str = DEFAULT_PREFIX) -> str:
+def in_project_worktree_dir(value: str) -> bool:
+    """Whether a worktree PATH sits directly in one of the project-local worktree directories.
+
+    Such a worktree was named by its creator, not by the `<base>/<prefix><topic>` convention, so a
+    `wt-` at the front of its name is part of the name. Stripping it pointed the cache plan at
+    `<base>/wt-<rest>-target`, which belongs to a different worktree called `<base>/wt-<rest>`.
+    """
+    if not looks_like_a_path(value):
+        return False
+    parents = Path(value.rstrip(_separators())).parent.parts
+    for layout in PROJECT_WORKTREE_DIRS:
+        wanted = tuple(layout.split("/"))
+        if parents[-len(wanted):] == wanted:
+            return True
+    return False
+
+
+def topic_name(value: str, *, prefix: str = DEFAULT_PREFIX, keep_prefix: bool = False) -> str:
     """The bare topic from a worktree path or name: <somewhere>/wt-foo -> foo.
+
+    `keep_prefix` is for a worktree that is not on the prefix convention (see
+    `in_project_worktree_dir`), whose name is taken as it stands.
 
     Path splitting is deliberately platform-native (`Path` is POSIX-flavoured on Linux and
     Windows-flavoured on Windows), because a backslash is a legal filename character on Linux and
@@ -188,6 +212,8 @@ def topic_name(value: str, *, prefix: str = DEFAULT_PREFIX) -> str:
     splitter leaves intact is still refused rather than mis-targeted.
     """
     name = Path(value.rstrip(_separators())).name
+    if keep_prefix:
+        return name
     return name[len(prefix):] if prefix and name.startswith(prefix) else name
 
 
@@ -235,15 +261,20 @@ def refusal_for(path: Path, *, base: Path | None = None) -> str | None:
     return None
 
 
-def directory_size(path: Path) -> int:
-    """Bytes held by the tree, following no symlink - so the plan cannot inflate its own numbers."""
+def directory_size(path: Path, errors: list[OSError] | None = None) -> int:
+    """Bytes held by the tree, following no symlink - so the plan cannot inflate its own numbers.
+
+    Pass a list as `errors` to learn what could not be read: an unreadable directory or file is
+    counted as zero, so without it a partial total reads as the whole reclaim.
+    """
+    unreadable = errors if errors is not None else []
     total = 0
-    for root, _dirs, files in os.walk(path, onerror=lambda _exc: None):
+    for root, _dirs, files in os.walk(path, onerror=unreadable.append):
         for name in files:
             try:
                 total += (Path(root) / name).lstat().st_size
-            except OSError:
-                continue
+            except OSError as exc:
+                unreadable.append(exc)
     return total
 
 
@@ -271,14 +302,30 @@ class Refusal:
 
 @dataclass(frozen=True)
 class CacheTarget:
-    """One cache directory, its size, and why it may not be removed (None when it may)."""
+    """One cache directory, its size, and why it may not be removed (None when it may).
+
+    `size_complete` is False when part of the tree could not be read, so `size_bytes` is only a
+    lower bound.
+    """
 
     path: Path
     size_bytes: int
     refusal: str | None
+    size_complete: bool = True
 
     def as_dict(self) -> dict[str, object]:
-        return {"path": str(self.path), "bytes": self.size_bytes, "refusal": self.refusal}
+        return {
+            "path": str(self.path),
+            "bytes": self.size_bytes,
+            "size_complete": self.size_complete,
+            "refusal": self.refusal,
+        }
+
+
+def _cache_target(path: Path, refusal: str | None) -> CacheTarget:
+    errors: list[OSError] = []
+    size = directory_size(path, errors)
+    return CacheTarget(path, size, refusal, size_complete=not errors)
 
 
 @dataclass(frozen=True)
@@ -298,6 +345,9 @@ class Plan:
     # The TOPIC could not be resolved to one worktree. Held as a flag rather than recovered by
     # matching the refusal text, so rewording a message can never change what gets deleted.
     topic_ambiguous: bool = False
+    # `--cache-dir` paths that do not exist. A typo there otherwise reads as "nothing to remove"
+    # and exits 0, while the cache the caller meant is still filling the disk.
+    missing_caches: tuple[Path, ...] = ()
 
     @property
     def total_bytes(self) -> int:
@@ -313,6 +363,7 @@ class Plan:
             "worktree_refusal": self.worktree_refusal,
             "worktree_candidates": [str(path) for path in self.worktree_candidates],
             "caches": [target.as_dict() for target in self.caches],
+            "missing_caches": [str(path) for path in self.missing_caches],
             "total_bytes": self.total_bytes,
         }
 
@@ -389,7 +440,10 @@ def git_worktree_status(
 def _git_run_dir(worktree: Path, timeout: float) -> tuple[Path, str | None]:
     """(directory to run git FROM, warning) - never the directory about to be deleted.
 
-    The main checkout, found through the worktree's own common git dir.
+    The worktree's common git dir ITSELF, not its parent. git accepts `-C <common dir>` for every
+    layout: an ordinary checkout (`<repo>/.git`), a bare repository (`repo.git`) and a
+    `--separate-git-dir` one. The parent is a repository only in the first case; for the other two
+    git answered "not a git repository" and the worktree could never be removed.
 
     When that cannot be resolved this falls back to the worktree itself, which is the pre-fix
     behaviour: correct on POSIX, and on Windows the very bug this helper exists to avoid, since
@@ -414,9 +468,8 @@ def _git_run_dir(worktree: Path, timeout: float) -> tuple[Path, str | None]:
         common_path = Path(common)
         if not common_path.is_absolute():
             common_path = Path(worktree) / common_path
-        candidate = common_path.parent
-        if candidate.is_dir():
-            return candidate, None
+        if common_path.is_dir():
+            return common_path, None
     return worktree, "could not locate the main checkout from this worktree"
 
 
@@ -424,14 +477,18 @@ def git_worktree_remove(
     worktree: Path,
     *,
     force: bool = False,
-    timeout: float = GIT_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> str | None:
     """Ask git to drop the worktree; return an error string, or None on success.
 
     Keyed on the exit code, never on the message: git's own refusal text is localised, so the
     string that comes back depends on the machine's language.
 
-    Git is run from the MAIN checkout, never `-C <worktree>`. Running it from inside the
+    No timeout by default, unlike the status queries. The removal is a delete: killing git part
+    way through leaves a half-deleted tree that is still registered as a worktree, which is worse
+    than waiting for a slow filesystem to finish.
+
+    Git is run from the repository's common git dir, never `-C <worktree>`. Running it from inside the
     directory being deleted is fine on POSIX but not on Windows, where a process's current
     directory is locked open: git deleted the contents, then failed to drop the directory with
     "Permission denied" and left the worktree half-removed. It looked like an open-handle quirk
@@ -439,7 +496,7 @@ def git_worktree_remove(
     from the main checkout succeeds on Windows, so the tool was simply asking git to saw off the
     branch it was sitting on.
     """
-    run_dir, run_dir_warning = _git_run_dir(worktree, timeout)
+    run_dir, run_dir_warning = _git_run_dir(worktree, GIT_TIMEOUT_SECONDS)
     argv = ["git", "-C", str(run_dir), "worktree", "remove", str(worktree)]
     if force:
         argv.append("--force")
@@ -500,13 +557,14 @@ def build_plan(
     targets: list[CacheTarget] = []
     for candidate in cache_dirs(topic, base=root, prefix=prefix, suffixes=suffixes):
         if candidate.exists() or candidate.is_symlink():
-            targets.append(
-                CacheTarget(candidate, directory_size(candidate), refusal_for(candidate, base=root))
-            )
+            targets.append(_cache_target(candidate, refusal_for(candidate, base=root)))
+    missing: list[Path] = []
     for raw in explicit_caches:
         candidate = Path(raw).expanduser()
         if candidate.exists() or candidate.is_symlink():
-            targets.append(CacheTarget(candidate, directory_size(candidate), refusal_for(candidate)))
+            targets.append(_cache_target(candidate, refusal_for(candidate)))
+        else:
+            missing.append(candidate)
 
     matched = [c for c in candidates if c.exists() or c.is_symlink()]
     ambiguous = False
@@ -540,6 +598,7 @@ def build_plan(
         caches=tuple(targets),
         worktree_candidates=tuple(candidates),
         topic_ambiguous=ambiguous,
+        missing_caches=tuple(missing),
     )
 
 
@@ -583,6 +642,10 @@ def blocked_reasons(
         plan, discard_uncommitted=discard_uncommitted, remove_worktree=remove_worktree
     )
     blocked = [Refusal(str(plan.worktree), reason)] if reason is not None else []
+    blocked += [
+        Refusal(str(path), "does not exist - check the --cache-dir path")
+        for path in plan.missing_caches
+    ]
     if plan.topic_ambiguous:
         # The caches are derived from the SAME name that could not be resolved, and two checkouts
         # sharing a topic share cache candidates - so removing them would destroy the other
@@ -734,7 +797,10 @@ def _render(
         lines.append(f"  {verb}: {plan.worktree}  (worktree, {plan.worktree_status})")
     removed = [t for t in plan.caches if t.refusal is None and str(t.path) not in blocked_paths]
     for target in removed:
-        lines.append(f"  {verb}: {target.path}  ({_human(target.size_bytes)})")
+        size = _human(target.size_bytes)
+        if not target.size_complete:
+            size = f"at least {size} - part of it could not be read"
+        lines.append(f"  {verb}: {target.path}  ({size})")
     if not lines and not blocked:
         lines.append("  nothing to remove")
     elif removed:
@@ -743,7 +809,18 @@ def _render(
     return lines
 
 
+def _reconfigure_stdio() -> None:
+    """A path the console code page cannot encode must not crash the report, least of all after
+    an `--apply` has already deleted things: on Windows a redirected stdout is the ANSI page."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            continue
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _reconfigure_stdio()
     args = _build_parser().parse_args(argv)
 
     warnings: list[str] = []
@@ -758,7 +835,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if reason is not None:
         print(f"wtclean: refusing {given!r} - it {reason}", file=sys.stderr)
         return 2
-    topic = topic_name(given, prefix=args.prefix)
+    topic = topic_name(given, prefix=args.prefix, keep_prefix=in_project_worktree_dir(given))
     reason = unsafe_topic_reason(topic)
     if reason is not None:
         print(f"wtclean: refusing topic {topic!r} - it {reason}", file=sys.stderr)

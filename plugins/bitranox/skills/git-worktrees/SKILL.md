@@ -221,8 +221,19 @@ rejects is not knowable until it is attempted:
   innocent-looking name `etc`. A path WITHOUT a parent reference is not refused: it names the
   worktree directly (relative to where you run from, like any path you type), which is what
   the third example above does. What has to be a bare name is the TOPIC, and the topic is the
-  argument's last path segment with the prefix stripped - it is what the cache candidates are
-  built from, so `.worktrees/wt-my-feature` still looks for `<base>/wt-my-feature-target`.
+  argument's last path segment - it is what the cache candidates are built from. The prefix is
+  stripped only from a worktree on the `<base>/wt-<topic>` convention: inside `.worktrees/`,
+  `worktrees/` or `.claude/worktrees/` the name is kept whole, so `.worktrees/wt-cache` looks for
+  `<base>/wt-wt-cache-target` and never touches `<base>/wt-cache-target`, which belongs to a
+  different worktree.
+- **A `--cache-dir` that does not exist** is refused by name (a typo would otherwise read as
+  "nothing to remove" and exit 0 while the real cache stays on disk).
+- **A path that is your home directory or a filesystem root** is refused, `--cache-dir` included.
+
+Works for a worktree of an ordinary checkout, a bare repository and a `--separate-git-dir` one:
+git is run from the repository's common git dir. The removal has no timeout, because killing git
+part way through would leave a half-deleted, still-registered worktree. A size that could not be
+read in full is shown as `at least`.
 
 Exit codes: 0 = nothing blocked, 1 = something was refused or could not be removed, 2 = usage
 error. `--json` emits the machine-readable envelope; warnings go to stderr.

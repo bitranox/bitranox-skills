@@ -467,7 +467,9 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
 
     Reverse: every event the references give a heading to must still be in the stamp, which catches
     a phantom - an event this skill still documents after upstream removed it. A stale absence or
-    presence claim steers a reader wrong rather than merely failing to help.
+    presence claim steers a reader wrong rather than merely failing to help. The candidates are the
+    event headings of ``events.md``, never the stamp under test: drawn from the stamp, a name missing
+    from it could not be a candidate, so the check could never fire.
 
     Raises:
         ControlError: there is nothing to check, so "complete" would be vacuous.
@@ -475,7 +477,7 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
     files = sorted(refs_dir.glob("*.md")) if refs_dir.is_dir() else []
     if not files:
         raise ControlError("no reference files under %s" % refs_dir)
-    text = "\n".join(f.read_text(encoding="utf-8") for f in files)
+    text = "\n".join(f.read_text(encoding="utf-8-sig") for f in files)
 
     api_events: list[str] = []
     required: set[str] = set()
@@ -507,7 +509,7 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
         return name in documented or name in ticked_words
 
     missing_events = sorted(e for e in set(api_events) if e not in documented)
-    phantom = sorted(h for h in documented if h in _known_event_shape(stamp) and h not in set(api_events))
+    phantom = sorted(_documented_events(refs_dir) - set(api_events))
     missing_required = sorted(f for f in required if not is_documented(f))
     missing_advisory = sorted(f for f in advisory if not is_documented(f))
     complete = not missing_events and not phantom and not missing_required
@@ -523,11 +525,24 @@ def coverage(stamp: dict[str, Any], refs_dir: Path) -> dict[str, Any]:
     }
 
 
-def _known_event_shape(stamp: dict[str, Any]) -> set[str]:
-    """Names that look like event names, used to spot a phantom without flagging prose headings."""
+EVENTS_REFERENCE = "events.md"
+EVENT_HEADING_RX = re.compile(r"^### ([A-Z][A-Za-z0-9]*)\s*$")
+
+
+def _documented_events(refs_dir: Path) -> set[str]:
+    """The events this skill documents: each has its own ``### Name`` heading in ``events.md``.
+
+    Only single-identifier headings count, so a prose heading there cannot read as an event, and
+    fenced lines are skipped so an example heading inside a code block does not either.
+    """
+    path = refs_dir / EVENTS_REFERENCE
+    if not path.is_file():
+        return set()
     out: set[str] = set()
-    for src in stamp.get("sources", []):
-        out.update(src.get("fingerprint", {}).get("events", []))
+    for kind, line, _lang in _walk(path.read_text(encoding="utf-8-sig")):
+        m = EVENT_HEADING_RX.match(line) if kind == "prose" else None
+        if m:
+            out.add(m.group(1))
     return out
 
 
@@ -598,20 +613,24 @@ def cache_path(cache_dir: Path) -> Path:
     return cache_dir / "lastcheck.json"
 
 
-def read_cache(cache_dir: Path, stamp_hash: str, max_age: float, now: float) -> dict[str, Any] | None:
-    """Replay a recent verdict only when it was taken against THIS stamp.
+def read_cache(cache_dir: Path, stamp_hash: str, max_age: float, now: float, source: str | None = None) -> dict[str, Any] | None:
+    """Replay a recent verdict only when it was taken against THIS stamp and THIS source selection.
 
     Keying on the stamp's own hash means re-stamping invalidates the cache for free: no stale
-    STRUCTURAL haunting you after the fix, and no stale CURRENT after the stamp moved.
+    STRUCTURAL haunting you after the fix, and no stale CURRENT after the stamp moved. Keying on
+    the ``--source`` selection too means a check narrowed to one source cannot answer for a full
+    check: replayed, it certified every source for the cache window while having looked at one.
     """
     path = cache_path(cache_dir)
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
-    if data.get("stamp_sha256") != stamp_hash:
+    if not isinstance(data, dict) or data.get("stamp_sha256") != stamp_hash:
+        return None
+    if data.get("source") != source:
         return None
     age = now - float(data.get("checked_at_epoch", 0))
     ttl = 900.0 if data.get("verdict") == BROKEN else max_age
@@ -643,13 +662,20 @@ def emit(args: argparse.Namespace, command: str, ok: bool, data: dict[str, Any],
         sys.stdout.write(human + "\n")
 
 
-def load_stamp(path: Path) -> dict[str, Any]:
+def _read_stamp_json(path: Path) -> dict[str, Any]:
     try:
-        stamp = json.loads(path.read_text(encoding="utf-8"))
+        stamp = json.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise ControlError("stamp unreadable: %s" % exc) from exc
     except ValueError as exc:
         raise ControlError("stamp is not valid JSON: %s" % exc) from exc
+    if not isinstance(stamp, dict):
+        raise ControlError("stamp is not a JSON object")
+    return stamp
+
+
+def load_stamp(path: Path) -> dict[str, Any]:
+    stamp = _read_stamp_json(path)
     if not stamp.get("sources"):
         raise ControlError("stamp lists no sources")
     if stamp.get("normalisation", {}).get("id") != NORMALISATION_ID:
@@ -700,8 +726,23 @@ def cmd_coverage(args: argparse.Namespace) -> int:
 
 
 def _sources(stamp: dict[str, Any], only: str | None) -> list[dict[str, Any]]:
+    """The stamp's sources, or the one named. A name that matches nothing is an error: returning
+    an empty list let `stamp --source <typo> --write` refresh nothing and still report success."""
     src = stamp["sources"]
-    return [s for s in src if s["name"] == only] if only else src
+    if not only:
+        return src
+    picked = [s for s in src if s["name"] == only]
+    if not picked:
+        known = ", ".join(s["name"] for s in src) or "(none)"
+        raise ControlError("no source named %r in the stamp; known: %s" % (only, known))
+    return picked
+
+
+def _expectation_failed(args: argparse.Namespace, verdict: str) -> bool:
+    if args.expect and args.expect != verdict:
+        sys.stderr.write("expected %s, got %s\n" % (args.expect, verdict))
+        return True
+    return False
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -724,8 +765,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     # seven-day cache would sit through answering CURRENT, so shorten it rather than widen a verdict.
     max_age = min(float(args.max_age), 86400.0) if ahead else float(args.max_age)
 
+    selected = _sources(stamp, args.source)
     if not args.force and not args.body:
-        cached = read_cache(cache_dir, shash, max_age, now)
+        cached = read_cache(cache_dir, shash, max_age, now, args.source)
         if cached:
             # The cache exists for the network FETCH. The CLI version is a local probe with a 10s
             # timeout, so replay it rather than reprinting the one stored days ago: the human line
@@ -733,25 +775,14 @@ def cmd_check(args: argparse.Namespace) -> int:
             # (docs versus CLI) is computed from that same number.
             cached = dict(cached, cli_version=cli, cli_ahead_of_docs=ahead)
             emit(args, "check", _EXIT[cached["verdict"]] == 0, cached, _human_check(cached))
-            return _EXIT[cached["verdict"]]
-
-    verdicts: list[Verdict] = []
-    for src in _sources(stamp, args.source):
-        try:
-            raw = Path(args.body).read_bytes() if args.body else fetch_body(src["url"], float(args.timeout))
-        except ControlError as exc:
-            verdicts.append(Verdict(src["name"], BROKEN, str(exc)))
-            continue
-        except OSError as exc:
-            verdicts.append(Verdict(src["name"], BROKEN, "cannot read body: %s" % exc))
-            continue
-        v = compare(src, raw)
-        v.detail.setdefault("content_sha256", src["content_sha256"])
-        v.detail.setdefault("structure_sha256", src["structure_sha256"])
-        verdicts.append(v)
+            return 1 if _expectation_failed(args, cached["verdict"]) else _EXIT[cached["verdict"]]
 
     if args.offline and not args.body:
-        verdicts = [Verdict(s["name"], BROKEN, "offline and no fresh cache") for s in _sources(stamp, args.source)]
+        # Decided BEFORE the fetch loop: --offline means no network I/O at all, not a fetch whose
+        # result is then thrown away.
+        verdicts = [Verdict(s["name"], BROKEN, "offline and no fresh cache") for s in selected]
+    else:
+        verdicts = [_check_source(src, args) for src in selected]
 
     overall = max((v.verdict for v in verdicts), key=lambda v: _SEVERITY[v], default=BROKEN)
     payload = {
@@ -764,15 +795,26 @@ def cmd_check(args: argparse.Namespace) -> int:
         "cli_version": cli,
         "docs_cover_up_to": docs_cover,
         "cli_ahead_of_docs": ahead,
+        "source": args.source,
         "sources": [v.as_dict() for v in verdicts],
     }
     if not args.body:
         write_cache(cache_dir, payload)
     emit(args, "check", _EXIT[overall] == 0, payload, _human_check(payload))
-    if args.expect and args.expect != overall:
-        sys.stderr.write("expected %s, got %s\n" % (args.expect, overall))
-        return 1
-    return _EXIT[overall]
+    return 1 if _expectation_failed(args, overall) else _EXIT[overall]
+
+
+def _check_source(src: dict[str, Any], args: argparse.Namespace) -> Verdict:
+    try:
+        raw = Path(args.body).read_bytes() if args.body else fetch_body(src["url"], float(args.timeout))
+    except ControlError as exc:
+        return Verdict(src["name"], BROKEN, str(exc))
+    except OSError as exc:
+        return Verdict(src["name"], BROKEN, "cannot read body: %s" % exc)
+    v = compare(src, raw)
+    v.detail.setdefault("content_sha256", src["content_sha256"])
+    v.detail.setdefault("structure_sha256", src["structure_sha256"])
+    return v
 
 
 def _human_check(payload: dict[str, Any]) -> str:
@@ -805,20 +847,13 @@ def cmd_stamp(args: argparse.Namespace) -> int:
     import time  # noqa: PLC0415 - only the timing paths need it
 
     stamp_file = Path(args.stamp)
-    stamp = json.loads(stamp_file.read_text(encoding="utf-8")) if stamp_file.is_file() else {"schema": SCHEMA, "sources": []}
-
-    if stamp.get("sources"):
-        try:
-            cov = coverage(stamp, Path(args.refs))
-        except ControlError as exc:
-            sys.stderr.write("coverage control failed: %s\n" % exc)
-            return 2
-        if not cov["complete"] and not args.accept_gaps:
-            emit(args, "stamp", False, {"refused": True, "coverage": cov}, "refusing to re-stamp: coverage has gaps\n  %s" % cov)
-            return 1
+    # A missing file is a new stamp; a present one that does not parse is BROKEN, never a traceback.
+    stamp = _read_stamp_json(stamp_file) if stamp_file.is_file() else {"schema": SCHEMA, "sources": []}
+    if not isinstance(stamp.get("sources"), list):
+        raise ControlError("stamp has no sources list")
 
     records = []
-    for src in _sources(stamp, args.source) or []:
+    for src in _sources(stamp, args.source):
         raw = Path(args.body).read_bytes() if args.body else fetch_body(src["url"], float(args.timeout))
         rec = build_source_record(src["name"], src["url"], raw, src.get("tier", "api"), src.get("control"))
         if args.cosmetic_only and rec["structure_sha256"] != src["structure_sha256"]:
@@ -832,7 +867,19 @@ def cmd_stamp(args: argparse.Namespace) -> int:
     stamp["generated_at"] = time.strftime("%Y-%m-%d", time.gmtime())
     stamp["generator"] = "scripts/hookdoc_stamp.py"
     stamp["normalisation"] = {"id": NORMALISATION_ID, "rules": NORMALISATION_RULES}
-    stamp["coverage_gaps"] = [] if not args.accept_gaps else coverage(stamp, Path(args.refs))["missing_events"]
+
+    # The gate runs on the stamp ABOUT TO BE WRITTEN. Run on the old one, it passed exactly when a
+    # new upstream event had just appeared - the event was not in the old stamp to be missed - and
+    # wrote coverage_gaps [] for an event nothing documents.
+    gaps: list[str] = []
+    if stamp["sources"]:
+        cov = coverage(stamp, Path(args.refs))
+        if not cov["complete"] and not args.accept_gaps:
+            emit(args, "stamp", False, {"refused": True, "coverage": cov},
+                 "refusing to re-stamp: coverage of the new stamp has gaps\n  %s" % cov)
+            return 1
+        gaps = cov["missing_events"] if args.accept_gaps else []
+    stamp["coverage_gaps"] = gaps
 
     if not args.write:
         emit(args, "stamp", True, {"dry_run": True, "sources": [r["name"] for r in records]}, "dry run; would stamp %d source(s)" % len(records))
@@ -864,7 +911,7 @@ def run_selftest(fixtures_dir: Path, comparator: Callable[[dict[str, Any], bytes
     stamp_file = fixtures_dir / "stamp-sample.json"
     if not stamp_file.is_file():
         raise ControlError("fixture stamp missing: %s" % stamp_file)
-    record = json.loads(stamp_file.read_text(encoding="utf-8"))["sources"][0]
+    record = json.loads(stamp_file.read_text(encoding="utf-8-sig"))["sources"][0]
     results = []
     for name, expected in SELFTEST_FIXTURES:
         path = fixtures_dir / name
@@ -910,7 +957,13 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     if not args.write:
         emit(args, "baseline", False, {"expected": want, "found": found.group(0) if found else None, "in_sync": False}, "stale baseline line\n  want: %s\n  have: %s" % (want, found.group(0) if found else "(absent)"))
         return 1
-    text = BASELINE_RX.sub(want, text) if found else text
+    if not found:
+        # Inserting a line into SKILL.md is a placement decision this tool cannot make; claiming
+        # "wrote" while the file is byte-identical is the one answer it must not give.
+        emit(args, "baseline", False, {"expected": want, "found": None, "written": False},
+             "no baseline line to update in %s; add a line starting 'Reference baseline: ' first" % target)
+        return 1
+    text = BASELINE_RX.sub(lambda _m: want, text)
     target.write_text(text, encoding="utf-8")
     emit(args, "baseline", True, {"line": want, "written": True}, "wrote: %s" % want)
     return 0
@@ -925,9 +978,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="emit the JSON envelope on stdout")
     sub = p.add_subparsers(dest="command", required=True)
 
+    # A subcommand's own --json must not reset the top-level one: with a plain store_true default,
+    # `--json selftest` was silently overridden by the subparser's False. SUPPRESS leaves the
+    # top-level value standing unless the flag is given after the subcommand.
+    def sub_json(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
     def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--stamp", default=str(skill / "references" / "upstream-stamp.json"))
-        sp.add_argument("--json", action="store_true")
+        sub_json(sp)
 
     c = sub.add_parser("check", help="compare upstream against the committed stamp")
     common(c)
@@ -961,12 +1020,12 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fingerprint", help="print the structural fingerprint of a local markdown file")
     f.add_argument("body")
     f.add_argument("--tier", default="api", choices=["api", "prose"])
-    f.add_argument("--json", action="store_true")
+    sub_json(f)
     f.set_defaults(func=cmd_fingerprint)
 
     t = sub.add_parser("selftest", help="known-negative proof over the bundled fixtures")
     t.add_argument("--fixtures", default=str(skill / "tests" / "fixtures"))
-    t.add_argument("--json", action="store_true")
+    sub_json(t)
     t.set_defaults(func=cmd_selftest)
 
     b = sub.add_parser("baseline", help="verify or rewrite the Reference baseline line in SKILL.md")
@@ -977,7 +1036,18 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _reconfigure_stdio() -> None:
+    """A reason carrying a path the console code page cannot encode must print, not crash: on
+    Windows a redirected stdout is the ANSI page, and the crash turned BROKEN (2) into a traceback."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            continue
+
+
 def main(argv: list[str] | None = None) -> int:
+    _reconfigure_stdio()
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))

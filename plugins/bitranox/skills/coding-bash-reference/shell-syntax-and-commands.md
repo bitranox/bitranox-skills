@@ -339,10 +339,10 @@ A **list** is a sequence of one or more pipelines separated by one of the operat
 
 #### Operator Precedence
 
-| Precedence | Operators                        |
-|------------|----------------------------------|
-| Higher     | `&&`, `||` (equal to each other) |
-| Lower      | `;`, `&` (equal to each other)   |
+| Precedence | Operators                          |
+|------------|------------------------------------|
+| Higher     | `&&`, `\|\|` (equal to each other) |
+| Lower      | `;`, `&` (equal to each other)     |
 
 A sequence of one or more newlines may appear in a list to delimit commands, equivalent to a semicolon.
 

@@ -459,17 +459,6 @@ def test_a_real_worktree_is_removed_end_to_end(tmp_path):
     assert not cache.exists()
 
 
-@needs_git
-def test_the_run_dir_is_the_main_checkout_and_carries_no_warning(tmp_path):
-    """The whole point of the helper: git must not run from the directory being deleted, which
-    Windows locks. A resolvable worktree returns the MAIN checkout and warns about nothing."""
-    main, worktree, _git = make_repo_with_worktree(tmp_path)
-    run_dir, warning = W._git_run_dir(worktree, 30)
-    assert warning is None
-    assert run_dir.resolve() == main.resolve()
-    assert run_dir.resolve() != worktree.resolve()
-
-
 def test_an_unresolvable_run_dir_falls_back_but_says_so(tmp_path):
     """The fallback keeps working where it always worked (POSIX), but must never be silent: on
     Windows it is exactly the bug this helper exists to avoid, and a check that quietly reverts
@@ -849,3 +838,174 @@ def test_an_ambiguous_dry_run_offers_nothing_for_removal(tmp_path):
     assert result.returncode == 1
     assert "would remove" not in result.stdout
     assert "REFUSED" in result.stderr
+
+
+# ---------------------------------------------------------------------------------------------
+# Audit fixes
+# ---------------------------------------------------------------------------------------------
+
+
+def _git_env(root: Path) -> dict:
+    return {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig"), "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+def _git(root: Path, *args, cwd: Path | None = None):
+    return subprocess.run(
+        [GIT, *args], cwd=None if cwd is None else str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=CLI_TIMEOUT, check=True, env=_git_env(root),
+    )
+
+
+def _commit_empty(root: Path, repo: Path) -> None:
+    _git(root, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "init", cwd=repo)
+
+
+def make_bare_repo_with_worktree(root: Path) -> Path:
+    seed = root / "seed"
+    _git(root, "init", "-q", "-b", "main", str(seed))
+    _commit_empty(root, seed)
+    bare = root / "proj" / "repo.git"
+    _git(root, "clone", "-q", "--bare", str(seed), str(bare))
+    worktree = root / "home" / "wt-feat"
+    _git(root, "-C", str(bare), "worktree", "add", "-q", str(worktree), "-b", "feat", "main")
+    return worktree
+
+
+def make_separate_gitdir_repo_with_worktree(root: Path) -> Path:
+    (root / "gitdirs").mkdir()
+    repo = root / "checkout"
+    _git(root, "init", "-q", "-b", "main", "--separate-git-dir", str(root / "gitdirs" / "x.git"), str(repo))
+    _commit_empty(root, repo)
+    worktree = root / "home" / "wt-feat"
+    _git(root, "-C", str(repo), "worktree", "add", "-q", str(worktree), "-b", "feat")
+    return worktree
+
+
+@needs_git
+@pytest.mark.parametrize("maker", [make_bare_repo_with_worktree, make_separate_gitdir_repo_with_worktree])
+def test_a_bare_or_separate_gitdir_worktree_is_removable(tmp_path, maker):
+    """git ran from the common dir's PARENT, which for these layouts is not a repository at all."""
+    worktree = maker(tmp_path)
+    assert W.git_worktree_remove(worktree) is None
+    assert not worktree.exists()
+
+
+@needs_git
+def test_a_bare_repo_worktree_is_removed_through_the_cli(tmp_path):
+    worktree = make_bare_repo_with_worktree(tmp_path)
+    result = run_cli(str(worktree), "--base", str(tmp_path / "home"), "--apply")
+    assert result.returncode == 0, result.stderr
+    assert not worktree.exists()
+
+
+@needs_git
+def test_the_run_dir_is_the_common_git_dir_never_the_worktree(tmp_path):
+    main, worktree, _git_fn = make_repo_with_worktree(tmp_path)
+    run_dir, warning = W._git_run_dir(worktree, 30)
+    assert warning is None
+    assert run_dir.resolve() == (main / ".git").resolve()
+    assert not run_dir.resolve().is_relative_to(worktree.resolve())
+
+
+@pytest.mark.parametrize("layout", [".worktrees", "worktrees", ".claude/worktrees"])
+def test_a_project_local_wt_named_path_keeps_its_prefix(layout):
+    """Stripping `wt-` from `.worktrees/wt-cache` pointed the plan at `~/wt-cache-target`, the
+    cache of a DIFFERENT worktree named `~/wt-cache`."""
+    value = layout + "/wt-cache"
+    assert W.topic_name(value, keep_prefix=W.in_project_worktree_dir(value)) == "wt-cache"
+
+
+def test_a_base_convention_path_still_has_its_prefix_stripped(tmp_path):
+    value = str(tmp_path / "wt-cache")
+    assert not W.in_project_worktree_dir(value)
+    assert W.topic_name(value) == "cache"
+
+
+def test_the_cli_never_targets_a_sibling_topics_cache_from_a_project_path(tmp_path):
+    home = tmp_path / "home"
+    sibling_cache = make_cache(home, "wt-cache-target")
+    project = tmp_path / "project"
+    (project / ".worktrees" / "wt-cache").mkdir(parents=True)
+    result = run_cli(".worktrees/wt-cache", "--skip-worktree", "--apply", cwd=project, home=home)
+    assert sibling_cache.exists(), result.stdout
+    assert "wt-cache-target" not in result.stdout
+
+
+def test_worktree_remove_has_no_default_timeout():
+    """Killing git mid-delete leaves a half-deleted, still-registered worktree; a slow remove is
+    better than that. Status queries keep their limit."""
+    import inspect
+    assert inspect.signature(W.git_worktree_remove).parameters["timeout"].default is None
+    assert inspect.signature(W.git_worktree_status).parameters["timeout"].default == W.GIT_TIMEOUT_SECONDS
+
+
+@needs_git
+def test_a_remove_that_overruns_an_explicit_timeout_says_it_timed_out(tmp_path):
+    _main, worktree, _git_fn = make_repo_with_worktree(tmp_path, topic="slow")
+    error = W.git_worktree_remove(worktree, timeout=0)
+    assert error is not None and "timed out" in error
+
+
+def test_a_missing_explicit_cache_dir_is_reported_and_blocks(tmp_path):
+    real = make_cache(tmp_path, ".cache/targets/feat")
+    typo = tmp_path / ".cache" / "targts" / "feat"
+    result = run_cli("feat", "--base", str(tmp_path), "--skip-worktree",
+                     "--cache-dir", str(typo), "--apply")
+    assert result.returncode == 1, result.stdout
+    assert "does not exist" in result.stderr and str(typo) in result.stderr
+    assert real.exists()
+
+
+def test_a_missing_explicit_cache_dir_fails_the_dry_run_too(tmp_path):
+    typo = tmp_path / "nope"
+    plan = W.build_plan("feat", base=tmp_path, explicit_caches=[typo],
+                        status_probe=lambda _p: W.STATUS_CLEAN)
+    assert [r.path for r in W.blocked_reasons(plan, remove_worktree=False)] == [str(typo)]
+    result = run_cli("feat", "--base", str(tmp_path), "--skip-worktree", "--cache-dir", str(typo))
+    assert result.returncode == 1
+
+
+def test_the_home_directory_is_refused_as_a_cache_dir_and_survives_apply(tmp_path):
+    """The only guard between `--cache-dir ~ --apply` and rmtree(home) had no test."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "keep.txt").write_text("keep", encoding="utf-8")
+    result = run_cli("feat", "--base", str(home), "--skip-worktree",
+                     "--cache-dir", str(home), "--apply", home=home)
+    assert result.returncode == 1
+    assert "is the home directory" in result.stderr
+    assert (home / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs POSIX permissions enforced for a non-root user")
+def test_an_unreadable_subdir_marks_the_size_as_a_lower_bound(tmp_path):
+    cache = make_cache(tmp_path, "wt-topic-target")
+    locked = cache / "locked"
+    locked.mkdir()
+    (locked / "big").write_bytes(b"0" * 8192)
+    locked.chmod(0)
+    try:
+        plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN)
+        assert plan.caches[0].size_complete is False
+        result = run_cli("topic", "--base", str(tmp_path), "--skip-worktree")
+        assert "at least" in result.stdout
+    finally:
+        locked.chmod(0o700)
+
+
+def test_a_readable_cache_size_is_complete(tmp_path):
+    make_cache(tmp_path, "wt-topic-target")
+    plan = W.build_plan("topic", base=tmp_path, status_probe=lambda _p: W.STATUS_CLEAN)
+    assert plan.caches[0].size_complete is True
+
+
+def test_a_non_ascii_path_on_a_cp1252_console_does_not_crash(tmp_path):
+    base = tmp_path / ("b" + chr(0x65E5))
+    make_cache(base, "wt-topic-target")
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    proc = subprocess.run([sys.executable, CLI, "topic", "--base", str(base), "--skip-worktree"],
+                          capture_output=True, timeout=CLI_TIMEOUT, env=env, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert b"Traceback" not in proc.stderr
