@@ -59,7 +59,9 @@ def test_unknown_command_errors(home):
 
 def _session(home, proj, tmp_path, text):
     tp = tmp_path / "sess.jsonl"
-    tp.write_text(text, encoding="utf-8")
+    # Bytes, not write_text: a real transcript is LF-only JSONL on every platform, and text mode
+    # on Windows writes CRLF, which moves every byte offset a reader test asserts.
+    tp.write_bytes(text.encode("utf-8"))
     D.sig.record_session_meta(proj, "sid1", str(tp))
     return tp
 

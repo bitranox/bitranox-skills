@@ -29,6 +29,13 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.2]
+
+### Fixed
+
+- The meta-dream-tree tests write their fixture transcripts as bytes, so a byte-offset assertion
+  holds on Windows too (text mode wrote CRLF there, and a real transcript is LF-only JSONL).
+
 ## [7.25.1]
 
 ### Fixed
