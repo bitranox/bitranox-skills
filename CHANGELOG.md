@@ -31,7 +31,78 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
 
 ## [7.24.0]
 
-### Fixed
+The skill-script audit: every confirmed finding across 79 bundled scripts is fixed, each against a
+test seen failing first. Exit codes now follow one convention across the scripts touched - 0 yes,
+1 no, 2 error or incomplete - so a crash, an unreadable input or a refused argument no longer reads
+as a clean "no".
+
+### Fixed - tools that could delete or leak
+
+- `pluginprune` fails closed: a missing, unreadable, typo'd or corrupt `installed_plugins.json`, a
+  pin written as `~/...` or `$HOME/...`, a symlinked marketplace dir, a relative `--keep` or
+  `--cache-dir`, and an unreadable `.in_use` dir each made it plan the installed or a live version
+  for deletion; each now keeps it or refuses.
+- `pfsense --apply` runs its git-work-tree guard on the nearest existing ancestor, so a snapshot
+  dir that does not exist yet inside a repo no longer receives a full `config.xml`.
+- `audit_skills` refuses a `--plugin` that is the room copy or inside it instead of deleting its
+  own input.
+- `fleet_ssh` never re-runs a remote command that already ran (it retries only when ssh itself
+  refused the host key), and `--scp` with more than two paths is refused instead of overwriting a
+  local file.
+- `procsig` refuses an empty or blank needle for every matcher (an empty `--exe` matched every
+  process with an unreadable exe, and `--kill` signalled them), and its exit code no longer counts
+  itself or its ancestors.
+- `adopt_skill`'s license gate reads every declared id and stops on an unknown one; `anchor_edit`
+  backs up glob-named, skip-worktree and assume-unchanged files, byte for byte.
+- `generate_schematic` and `generate_schematic_ai` take the API key from the environment only.
+
+### Fixed - gates that passed what they exist to stop
+
+- `pushcheck` scans every commit in the range, so a leak added and then removed inside the push is
+  caught; an added line starting `++ ` is no longer read as a header, a BOM no longer drops the
+  first denylist term, and JSON-escaped or lowercase Windows user paths are matched.
+- The recall hook no longer goes silent machine-wide when one note or `CLAUDE.md` is not UTF-8.
+- `audit_headers` counts unquoted `http://` sources, compares cookie attributes by name, grades
+  https from the final URL, and parses CSP directives by name.
+- `reformat_tables` splits a pipe inside a code span the way GFM does, so a row that loses content
+  on GitHub is caught by `--strict`; `hookdoc_stamp` gates the stamp it writes, not the old one.
+- `audit_skills` reviewers run with every hook disabled, so a Stop hook can no longer replace a
+  report; a missing report names its cause and counts as missing, not as two findings.
+
+### Fixed - checks that returned a confident wrong verdict
+
+- `claim_check` answers BROKEN, not ABSENT, for a path it could not read; `confound` refuses an arm
+  without a label; `diffbehave` answers ERROR when neither side ran.
+- `adjudicate` scores a timed-out or unlaunchable side as ERROR (exit 2), never as fired;
+  `ci_triage` fails a `--cmd` that exited non-zero and refuses an absent `--step`.
+- `ci_wait` asks for runs by sha, bounds every `gh` call, and treats `skipped` as not-failed;
+  `git_state` reports a gone upstream and finds repos whose `.git` is a file; `enforced` skips
+  `.venv-*`/`.tox` and test files; `jsonl_grep` counts JSON `null`.
+- `mutation_arm` reports INCONCLUSIVE when pytest exits 1 without a failure (the `uv run` case);
+  `transfer` fails a 404; `renamescope` keys functions by file and places regex hits correctly;
+  `transcript_index` matches words literally; `srccount` reports an unreadable directory.
+- `dream_state session-review` shows a stretch over 2 MB in parts and marks only what it showed as
+  reviewed; the dream tools anchor at the engine's store, never a nearer leftover one.
+- The performance-review scripts no longer report a failing suite as an improvement, and time the
+  cached arm against a warmed baseline.
+- The responsive-UX audit fails when axe or the i18n pass could not run instead of passing.
+
+### Fixed - correctness and robustness across the scripts
+
+- About 180 MED and 400 LOW findings: unreadable inputs reported instead of silently skipped
+  (`os.walk` with `onerror`), UTF-8 BOM input read, CRLF files kept CRLF, output that survives a
+  cp1252 console, line splitting on `\n` only, and failed writes reported instead of printed as
+  success (`meta-memory-settings`, `contrib_queue`, `migrate_memory`, `reconcile_memory_index`,
+  `ref_map`, `store_manifest`, `statusrot`, `dedup_scan`, `factedit`, `tablekit`, `wtclean`,
+  `proxy_pool`, `redcheck`, `find_polluter`, `review_package`, `task_brief`, `sdd_workspace`,
+  `jig_probe`, `classifier_eval`, `gather_scan`, `audit_local`, `claudemd_variance`,
+  `batch_convert`, `convert_literature`, `convert_with_ai`, `winlog`, `transcript_tail`, `mdwrap`,
+  `mem_levels`, `guard_replay`, `grep_all`, `gate`, `backstop`, `newest`, `corpus_prompts`,
+  `conflict_scan`, `script_prepass`).
+- `contrib_queue drain` records each drained entry as shipped, so it is not queued again.
+- The skills whose scripts changed document the new exit codes and refusals.
+
+### Fixed - tests
 
 - The secret-pattern linear-growth test no longer fails on scheduler noise. The small arm doubles
   its input until it takes at least 50 ms (it took about 10 ms before, where a few ms of jitter
