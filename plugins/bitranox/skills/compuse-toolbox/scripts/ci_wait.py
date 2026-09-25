@@ -31,21 +31,31 @@ for the same sha was still being created was reported as success. A failure is s
 once, since a later run cannot rescue it.
 
 Waits up to `--timeout` seconds (default 1500, so 25 minutes) polling every `--interval` (30).
+The timeout is wall-clock time, and each `gh` call is itself bounded (60 seconds, or what is left
+of the timeout), so a stalled API connection cannot hold the wait past it. The runs are asked for
+by sha (`gh run list --commit`), so newer runs of other commits cannot push them out of the
+`--limit` window.
+
+A run concluding `skipped` (a workflow whose jobs were all `if:`-gated off) does not fail the push;
+a push on which every run was skipped tested nothing and is reported `failed`, never green.
 
 Run: `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD)`
      `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --repo OWNER/REPO --json`
      `uv run scripts/ci_wait.py --sha $(git rev-parse HEAD) --timeout 1800 --interval 30`
-Exit 0 = every run for that sha succeeded, 1 = at least one did not, 2 = could not tell
-(bad sha, no runs for it, timed out, `gh` failed).
+Exit 0 = every run for that sha succeeded (or was skipped), 1 = at least one did not, 2 = could
+not tell (bad sha, a bad flag value, no runs for it, timed out, `gh` failed, or the tool itself
+crashed).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 
@@ -53,6 +63,11 @@ FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 _FIELDS = "headSha,workflowName,status,conclusion,databaseId"
 _TERMINAL = "completed"
+#: Conclusions that do not fail a push. `skipped` is a workflow whose jobs were all if:-gated off.
+_PASSING = frozenset({"success", "skipped"})
+#: Longest a single `gh run list` may take. A half-open API connection otherwise blocks the whole
+#: wait forever, and `--timeout` - checked only between polls - never gets its turn.
+GH_CALL_TIMEOUT_S = 60.0
 #: gh's documented exit code for "authentication required" (measured on 2.92.0: no token and no
 #: config gives 4 and tells you to run `gh auth login`). Local configuration, so it is fatal here
 #: rather than retried. A REJECTED credential is exit 1, not this - see GhUnavailable.
@@ -174,18 +189,23 @@ def verdict(runs: Sequence[dict[str, object]]) -> Verdict:
         ``no-runs`` when the list is empty - never ``success``, because "nothing matched" and
         "everything passed" are the same shape and only one of them is good news. ``pending``
         while any run is not ``completed``. ``failed`` when any completed run's conclusion is
-        anything but ``success``, a null conclusion included (a run cancelled at source
-        completes with none, and that is not green). ``success`` only when every run completed
-        successfully.
+        anything but ``success`` or ``skipped``, a null conclusion included (a run cancelled at
+        source completes with none, and that is not green). ``skipped`` is a workflow whose
+        jobs were all ``if:``-gated off: nothing ran and nothing failed, so it does not fail the
+        push. ``success`` only when every run completed successfully or was skipped AND at
+        least one actually succeeded - a push where everything was skipped tested nothing, so
+        it is reported ``failed`` rather than green.
     """
     if not runs:
         return Verdict("no-runs", "no runs found for that sha")
     unfinished = [r for r in runs if r.get("status") != _TERMINAL]
     if unfinished:
         return Verdict("pending", _named(unfinished, "status"), tuple(runs))
-    bad = [r for r in runs if r.get("conclusion") != "success"]
+    bad = [r for r in runs if r.get("conclusion") not in _PASSING]
     if bad:
         return Verdict("failed", _named(bad, "conclusion"), tuple(runs))
+    if not any(r.get("conclusion") == "success" for r in runs):
+        return Verdict("failed", _named(runs, "conclusion") + " (nothing ran)", tuple(runs))
     return Verdict("success", _named(runs, "conclusion"), tuple(runs))
 
 
@@ -214,10 +234,19 @@ def wait_for(
     error_grace_s: float = 300.0,
     settle_s: float = 20.0,
     report: Callable[[str], None] = lambda _m: None,
+    deadline_s: float | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> Verdict:
     """Poll ``fetch`` until every run is terminal, or a budget runs out.
 
-    ``fetch`` and ``sleep`` are injected so the loop is testable without a network or a clock.
+    ``fetch``, ``sleep`` and ``clock`` are injected so the loop is testable without a network or
+    a clock. With no ``clock``, elapsed time is the sum of what was handed to ``sleep``, which is
+    what a test with an instant ``sleep`` means; the command line passes ``time.monotonic``, so
+    the time a slow ``gh`` call took counts too.
+
+    Each grace is measured as elapsed time since the FIRST empty (or failed) poll of the current
+    streak and compared against the budget, never converted into a poll count: floor-dividing a
+    grace by the interval gave ``--interval 120 --appear-grace 120`` no grace at all.
 
     An empty match gets its OWN small budget, separate from the deadline, because it has two
     causes that look identical: the runs for a just-pushed commit have not been created yet
@@ -269,6 +298,9 @@ def wait_for(
         settle_s: How long to wait before CONFIRMING an all-green result, so a run created after
             the first all-terminal poll is still counted. ``0`` returns on the first one.
         report: Where a per-poll progress line goes.
+        deadline_s: A wall-clock bound on the whole wait, checked after every poll. ``None``
+            leaves only ``deadline_polls``.
+        clock: Returns the current time in seconds; see above for the default.
 
     Returns:
         The terminal verdict: ``success``, ``failed``, ``no-runs``, ``timeout`` or ``error``.
@@ -276,36 +308,46 @@ def wait_for(
     Raises:
         GhUnavailable: `gh` cannot be run here; no budget can fix that.
     """
-    empty_polls_allowed = max(1, int(appear_grace_s // max(interval_s, 0.001)))
-    error_polls_allowed = max(1, int(error_grace_s // max(interval_s, 0.001)))
-    empty_seen = 0
+    timer = _Timer(sleep, clock)
+    started = timer.now()
+    empty_since: float | None = None
+    error_since: float | None = None
     errors_seen = 0
     last_error = ""
     last_summary = ""
     settled: frozenset[tuple[object, object]] | None = None
     last_success: Verdict | None = None
+
+    def may_poll_again(poll: int) -> bool:
+        if poll + 1 >= deadline_polls:
+            return False
+        return deadline_s is None or timer.now() - started < deadline_s
+
     for poll in range(deadline_polls):
         try:
             rows = fetch()
         except GhFailed as exc:
             errors_seen += 1
             last_error = str(exc)
-            if errors_seen >= error_polls_allowed:
+            error_since = timer.now() if error_since is None else error_since
+            if timer.now() - error_since >= error_grace_s:
                 return _gh_gave_up(errors_seen, last_error)
             report(f"poll {poll + 1}/{deadline_polls}: gh failed, retrying: {last_error}")
-            if poll + 1 < deadline_polls:
-                sleep(interval_s)
+            if not may_poll_again(poll):
+                break
+            timer.sleep(interval_s)
             continue
         errors_seen = 0
+        error_since = None
         current = verdict(rows)
         last_summary = current.summary
         if current.state == "no-runs":
-            empty_seen += 1
-            if empty_seen >= empty_polls_allowed:
+            empty_since = timer.now() if empty_since is None else empty_since
+            if timer.now() - empty_since >= appear_grace_s:
                 return current
             report(f"poll {poll + 1}/{deadline_polls}: no runs yet for that sha")
         elif current.state == "success":
-            empty_seen = 0
+            empty_since = None
             last_success = current
             seen = frozenset(_run_key(r) for r in rows)
             if settle_s <= 0 or settled == seen:
@@ -313,18 +355,20 @@ def wait_for(
             report(f"poll {poll + 1}/{deadline_polls}: {current.summary}; confirming no run for "
                    f"this sha is still being created")
             settled = seen
-            if poll + 1 < deadline_polls:
-                sleep(settle_s)
+            if not may_poll_again(poll):
+                break
+            timer.sleep(settle_s)
             continue
         elif current.state != "pending":
             return current
         else:
-            empty_seen = 0
+            empty_since = None
             settled = None
             last_success = None
             report(f"poll {poll + 1}/{deadline_polls}: {current.summary}")
-        if poll + 1 < deadline_polls:
-            sleep(interval_s)
+        if not may_poll_again(poll):
+            break
+        timer.sleep(interval_s)
     # The deadline, reported from what the last ANSWERED poll saw. Re-fetching here to describe
     # the timeout cost an extra request that could itself fail, turning a plain timeout into an
     # error about the API - a report naming the wrong system entirely.
@@ -338,6 +382,25 @@ def wait_for(
     return Verdict("timeout", last_summary)
 
 
+class _Timer:
+    """Sleeps, and tells the time: from ``clock`` when given, else from the sleeps it was asked for.
+
+    The fallback keeps the loop's arithmetic identical in a test whose ``sleep`` returns at once.
+    """
+
+    def __init__(self, sleep: Callable[[float], None], clock: Callable[[], float] | None) -> None:
+        self._sleep = sleep
+        self._clock = clock
+        self._slept = 0.0
+
+    def now(self) -> float:
+        return self._clock() if self._clock is not None else self._slept
+
+    def sleep(self, seconds: float) -> None:
+        self._slept += seconds
+        self._sleep(seconds)
+
+
 def _gh_gave_up(polls: int, message: str) -> Verdict:
     """The verdict for gh failing on every poll of its budget, naming gh's own last words."""
     return Verdict("error", f"gh failed {polls} polls running: {message}")
@@ -348,23 +411,37 @@ def exit_code_for(state: str) -> int:
     return _EXIT_CODES.get(state, 2)
 
 
-def gh_runs(sha: str, *, repo: str | None = None, limit: int = 30) -> list[dict[str, object]]:
-    """Fetch the runs whose ``headSha`` is ``sha``, filtering CLIENT-side.
+def gh_runs(
+    sha: str,
+    *,
+    repo: str | None = None,
+    limit: int = 30,
+    timeout_s: float = GH_CALL_TIMEOUT_S,
+) -> list[dict[str, object]]:
+    """Fetch the runs whose ``headSha`` is ``sha``: asked for SERVER-side, checked client-side.
 
-    The filter is client-side because `--commit` needs the full sha too and fails silently
-    without it; this tool has already refused a short one, so both routes are safe, and the
-    client-side one costs no second request.
+    `--commit` is passed so the API returns this sha's runs only. Without it, `--limit` bounds a
+    window over EVERY recent run, and on a busy repo 30 newer runs of other shas push this sha's
+    older runs out of it - a failing CI run vanished that way while a green CodeQL run remained,
+    and the push read as green. `--commit` needs the full sha and fails silently without it; this
+    tool has already refused a short one. The client-side filter stays as a second check.
 
     Raises:
-        GhFailed: `gh` exited non-zero or returned something that is not a JSON list. The
-            caller may retry this; a bad minute at the API arrives here.
+        GhFailed: `gh` exited non-zero, did not answer within ``timeout_s``, or returned
+            something that is not a JSON list. The caller may retry this; a bad minute at the
+            API arrives here.
         GhUnavailable: `gh` could not be spawned at all - not installed, or not executable.
     """
-    argv = ["gh", "run", "list", "--json", _FIELDS, "--limit", str(limit)]
+    argv = ["gh", "run", "list", "--commit", sha, "--json", _FIELDS, "--limit", str(limit)]
     if repo:
         argv += ["--repo", repo]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhFailed(f"gh did not answer within {timeout_s:g}s") from exc
     except OSError as exc:
         raise GhUnavailable(f"could not run gh: {exc}") from exc
     if proc.returncode == _GH_EXIT_AUTH_REQUIRED:
@@ -380,21 +457,55 @@ def gh_runs(sha: str, *, repo: str | None = None, limit: int = 30) -> list[dict[
     return [r for r in rows if isinstance(r, dict) and r.get("headSha") == sha]
 
 
+def _seconds(*, allow_zero: bool) -> Callable[[str], float]:
+    """An argparse type for a duration: finite, and positive (or zero when ``allow_zero``).
+
+    `float()` alone accepted `-5`, `inf` and `nan`, which then crashed deep in the loop with a
+    traceback and exit 1 - the code this tool reserves for "a run failed".
+    """
+
+    def parse(text: str) -> float:
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+        if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+            bound = "zero or more" if allow_zero else "more than zero"
+            raise argparse.ArgumentTypeError(f"{text!r} must be a finite number of seconds, {bound}")
+        return value
+
+    return parse
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be at least 1")
+    return value
+
+
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    positive, non_negative = _seconds(allow_zero=False), _seconds(allow_zero=True)
     parser.add_argument("--sha", required=True, help="the FULL 40-character commit sha (git rev-parse HEAD)")
     parser.add_argument("--repo", default=None, help="OWNER/NAME; default is the cwd's repo")
-    parser.add_argument("--timeout", type=float, default=1500.0, help="seconds to wait (default 1500)")
-    parser.add_argument("--interval", type=float, default=30.0, help="seconds between polls (default 30)")
-    parser.add_argument("--limit", type=int, default=30, help="how many recent runs to scan (default 30)")
+    parser.add_argument("--timeout", type=positive, default=1500.0, help="seconds to wait (default 1500)")
+    parser.add_argument("--interval", type=positive, default=30.0, help="seconds between polls (default 30)")
     parser.add_argument(
-        "--appear-grace", type=float, default=120.0,
+        "--limit", type=_positive_int, default=30,
+        help="how many of this sha's runs to fetch (default 30)",
+    )
+    parser.add_argument(
+        "--appear-grace", type=non_negative, default=120.0,
         help="seconds to keep tolerating an EMPTY match before reporting no-runs (default 120); "
              "a just-pushed commit takes seconds to have runs at all. A DURATION, so changing "
              "--interval does not move it",
     )
     parser.add_argument(
-        "--error-grace", type=float, default=300.0,
+        "--error-grace", type=non_negative, default=300.0,
         help="seconds to keep tolerating CONSECUTIVE gh failures before giving up (default 300); "
              "a 502 from the API is weather, not a verdict. The streak resets on any answered "
              "poll. Also a DURATION. Longer than --appear-grace because the costs are asymmetric: "
@@ -402,7 +513,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "reporting a setup that was broken anyway",
     )
     parser.add_argument(
-        "--settle", type=float, default=20.0,
+        "--settle", type=non_negative, default=20.0,
         help="seconds to wait before CONFIRMING an all-green result (default 20; 0 disables). A "
              "run that has not been created yet looks exactly like one that does not exist, so a "
              "verdict from the first all-terminal poll can be computed over a partial set. Only "
@@ -414,8 +525,34 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Wait for one sha's runs and report. Returns the process exit code."""
+    """Wait for one sha's runs and report. Returns the process exit code.
+
+    An unexpected exception is reported as ``error`` (exit 2, "could not tell") with its
+    traceback on stderr: left to the interpreter it would exit 1, the code that means "a run
+    failed", and a crashed waiter would read as a red CI.
+    """
+    _tolerant_streams()
     args = _parse_args(argv)
+    try:
+        return _run(args)
+    except Exception as exc:  # noqa: BLE001 - the boundary that keeps a crash off exit code 1
+        traceback.print_exc(file=sys.stderr)
+        return _emit(Verdict("error", f"unexpected {type(exc).__name__}: {exc}"), as_json=args.json)
+
+
+def _tolerant_streams() -> None:
+    """Print a workflow name the console cannot encode (cp1252) as an escape, never crash on it."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
+
+
+def _run(args: argparse.Namespace) -> int:
     try:
         sha = require_full_sha(args.sha)
     except BadSha as exc:
@@ -433,9 +570,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
     polls = max(1, int(args.timeout // max(args.interval, 1.0)))
+    started = time.monotonic()
+
+    def fetch() -> list[dict[str, object]]:
+        # A single gh call may not outlive the whole wait: bound it by what is left, too.
+        left = args.timeout - (time.monotonic() - started)
+        return gh_runs(
+            sha, repo=args.repo, limit=args.limit, timeout_s=max(1.0, min(GH_CALL_TIMEOUT_S, left))
+        )
+
     try:
         result = wait_for(
-            lambda: gh_runs(sha, repo=args.repo, limit=args.limit),
+            fetch,
             deadline_polls=polls,
             sleep=time.sleep,
             interval_s=args.interval,
@@ -443,6 +589,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             error_grace_s=args.error_grace,
             settle_s=args.settle,
             report=lambda line: print(line, file=sys.stderr, flush=True),
+            deadline_s=args.timeout,
+            clock=time.monotonic,
         )
     except (GhFailed, GhUnavailable) as exc:
         return _emit(Verdict("error", str(exc)), as_json=args.json)

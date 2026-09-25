@@ -29,8 +29,13 @@ Run:
   jig_probe.py run  --limit 200            # asks, appends rows to the log
   jig_probe.py report                      # reads the log back
 
-Exit codes: 0 fine, 1 nothing to report, 2 usage or IO error, 3 a control failed (the instrument
-is wrong, so no number from the run may be read).
+A classifier request that FAILS (an outage, a timeout) is never read as Jev saying nothing: the row
+is logged with the failure's reason and counted as `unanswered`, outside the four-way comparison,
+and a run or report holding any such row exits 2.
+
+Exit codes: 0 fine, 1 nothing to report (an empty corpus or log), 2 usage, IO or classifier error
+(no key, a failed request, a missing root, a bad flag, a malformed log line, an unexpected crash),
+3 a control failed (the instrument is wrong, so no number from the run may be read).
 """
 
 import argparse
@@ -38,6 +43,7 @@ import json
 import random
 import re
 import sys
+import traceback
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -50,9 +56,10 @@ for _d in (str(_HOOKS), str(_JIGS)):
 from classifier import Question, get_classifier, prepare_state  # noqa: E402
 
 __all__ = [
-    "CHOICE_ID", "CONTROLS", "ControlFailed", "ORDINARY_KEY", "UNCOVERED_KEY", "check_controls",
-    "choice_question", "collect_calls", "decide", "jig_catalogue", "main", "regex_jig",
-    "stratified_sample", "summarize", "toolbox_nudge",
+    "CHOICE_ID", "CONTROLS", "ClassifierFailed", "ClassifierUnavailable", "ControlFailed",
+    "NothingToReport", "ORDINARY_KEY", "UNCOVERED_KEY", "check_controls", "choice_question",
+    "collect_calls", "decide", "jig_catalogue", "main", "regex_jig", "stratified_sample",
+    "summarize", "toolbox_nudge",
 ]
 
 CHOICE_ID = "which_jig"
@@ -67,6 +74,22 @@ _SENTENCE = re.compile(r"^(.+?[.!?])(?:\s|$)", re.S)
 
 class ControlFailed(RuntimeError):
     """A planted control answered the wrong way, so the instrument is not measuring."""
+
+
+class ClassifierFailed(RuntimeError):
+    """A request got no answer (outage, timeout). Not an answer of "no jig" - no answer at all."""
+
+
+class ClassifierUnavailable(RuntimeError):
+    """No classifier can be asked here (no key, backend off): setup, not "nothing to report"."""
+
+
+class NothingToReport(Exception):
+    """An empty corpus or an empty log: the documented exit 1.
+
+    Its own class rather than LookupError, because a stray KeyError is a LookupError too and
+    would otherwise report a crash as "nothing to report".
+    """
 
 
 # Asserted before any real number is read. A detector that fires on everything and a detector that
@@ -128,20 +151,29 @@ def decide(choice):
 
 
 def collect_calls(root, tool="Bash"):
-    """Every distinct recorded call of `tool`, via guard_replay's own walk - it already dedupes by
-    tool_use id, which a resumed or forked session otherwise double-counts."""
+    """(calls, skipped): every distinct recorded call of `tool`, and every transcript that could
+    not be read.
+
+    Via guard_replay's own walk - it already dedupes by tool_use id, which a resumed or forked
+    session otherwise double-counts. Its `skipped` list is passed on rather than dropped, so an
+    unreadable transcript is visible instead of a silently smaller corpus. A root that does not
+    exist is refused (FileNotFoundError, exit 2) rather than read as an empty corpus.
+    """
     import guard_replay  # noqa: PLC0415 - a shipped jig, imported here so --help needs no corpus
 
+    base = Path(root).expanduser()
+    if not base.exists():
+        raise FileNotFoundError("no transcript corpus at %s" % base)
     collected = []
 
     def collect(command, cwd=None):
         collected.append({"id": None, "command": command, "cwd": cwd})
         return False
 
-    guard_replay.replay(str(root), collect, tool=tool)
+    report = guard_replay.replay(str(base), collect, tool=tool)
     for i, call in enumerate(collected):
         call["id"] = "%s-%d" % (tool, i)
-    return collected
+    return collected, list(report.get("skipped") or [])
 
 
 def stratified_sample(calls, already_covered, per_class, seed=0):
@@ -161,37 +193,58 @@ def stratified_sample(calls, already_covered, per_class, seed=0):
 
 
 def _ask(clf, command, cwd, question):
-    """(choice, tokens) for one call."""
+    """(choice, tokens, failure) for one call; `failure` is None when the request was answered.
+
+    A None result is the classifier FAILING (JevClassifier.ask returns None on an HTTP error or a
+    timeout), which is not the same fact as Jev choosing nothing - so it carries the reason.
+    """
     state, _n = prepare_state({"command": command, "cwd": cwd or ""}, key=getattr(clf, "key", None))
     result = clf.ask(state, [question])
-    if result is None:
-        return None, 0
-    return result.answers[CHOICE_ID].value, result.input_tokens
+    answer = None if result is None else result.answers.get(CHOICE_ID)
+    if answer is None:
+        return None, 0, str(getattr(clf, "last_reason", None) or "no answer")
+    return answer.value, result.input_tokens, None
 
 
 def check_controls(clf, catalogue):
-    """Raise unless the planted positive names a jig and the planted negative names none."""
+    """Raise unless the planted positive names its EXPECTED jig and the planted negative names none.
+
+    Raises ClassifierFailed when a control gets no answer at all: an outage would otherwise pass
+    the negative control, whose expected answer is silence.
+    """
     question = choice_question(catalogue)
     positive, negative = CONTROLS
     for control, label in ((positive, "known positive"), (negative, "known negative")):
-        choice, _t = _ask(clf, control["command"], control["cwd"], question)
+        choice, _t, failure = _ask(clf, control["command"], control["cwd"], question)
+        if failure is not None:
+            raise ClassifierFailed("the %s (%r) got no answer: %s"
+                                   % (label, control["command"], failure))
         got = decide(choice)
         if control["expect"] is None and got is not None:
             raise ControlFailed(
                 "the %s (%r) was answered %r; a detector that speaks on ordinary commands cannot "
                 "measure anything" % (label, control["command"], got))
-        if control["expect"] is not None and got in (None, UNCOVERED_KEY):
+        if control["expect"] is not None and got != control["expect"]:
             raise ControlFailed(
                 "the %s (%r) was answered %r, expected %r"
                 % (label, control["command"], got, control["expect"]))
 
 
 def summarize(rows):
-    """The four ways the two channels can land, plus the chores no jig covers, plus the cost."""
+    """The four ways the two channels can land, plus the chores no jig covers, plus the cost.
+
+    A row whose request got no answer (`choice` null) is counted as `unanswered` and kept OUT of
+    the four-way comparison: counted there it read as Jev being silent, which inflated
+    `regex_only` and `neither` - the probe's headline numbers - with an outage.
+    """
     rep = {"rows": len(rows), "agreed": 0, "both_but_different": 0, "regex_only": 0,
            "jev_only": 0, "neither": 0, "chore_without_a_jig": 0, "uncovered_examples": [],
+           "unanswered": 0,
            "input_tokens": sum(int(r.get("input_tokens") or 0) for r in rows), "by_jig": {}}
     for row in rows:
+        if row.get("choice") is None:
+            rep["unanswered"] += 1
+            continue
         regex, jev = row.get("regex_jig"), row.get("jev_jig")
         if jev == UNCOVERED_KEY:
             rep["chore_without_a_jig"] += 1
@@ -237,8 +290,14 @@ def regex_jig(call, tool="Bash"):
     matcher than the one that ships, and charged Jev with disagreeing with rules that had not
     spoken.
     """
+    import guard_replay  # noqa: PLC0415 - a shipped jig, imported here so --help needs no corpus
+
+    # `call["command"]` holds the tool's PAYLOAD (a Write's content, an Edit's new_string), so it
+    # goes back under that tool's own field: keyed as "command", a Write read as empty text and
+    # the keyword arm never spoke, disagreeing with the hook it stands in for.
     nudge = toolbox_nudge()
-    text = nudge.extract_text(tool, {"command": call.get("command") or ""})
+    payload = {guard_replay.payload_field(tool): call.get("command") or ""}
+    text = nudge.extract_text(tool, payload)
     if text is None:
         return None
     hit = nudge.match_tool(text, tool_name=tool)
@@ -247,23 +306,38 @@ def regex_jig(call, tool="Bash"):
 
 # ---- CLI --------------------------------------------------------------------------------------
 
-def _envelope(ok, command, data=None, error=None):
-    out = {"ok": ok, "command": command, "data": data or {}, "skipped": []}
+def _envelope(ok, command, data=None, error=None, skipped=None):
+    out = {"ok": ok, "command": command, "data": data or {}, "skipped": list(skipped or [])}
     if error:
         out["error"] = error
     return out
+
+
+class _Outcome:
+    """What a subcommand produced: the data, what it could not read, and why it is not clean."""
+
+    def __init__(self, data, skipped=(), problem=None):
+        self.data, self.skipped, self.problem = data, list(skipped), problem
 
 
 def _log_path(named):
     return Path(named) if named else Path.home() / ".claude" / "self-improve-audit" / JIG_LOG
 
 
+def _calls_or_nothing(args):
+    calls, skipped = collect_calls(args.root, args.tool)
+    if not calls:
+        raise NothingToReport("no %s calls under %s" % (args.tool, args.root))
+    return calls, skipped
+
+
 def _size(args):
-    calls = collect_calls(args.root, args.tool)
+    calls, skipped = _calls_or_nothing(args)
     asked = min(args.limit, len(calls)) * 2
-    return {"calls_in_corpus": len(calls), "would_ask_about": asked,
-            "estimated_input_tokens": asked * CALL_TOKENS,
-            "note": "one request per call, charged at the rate the diagnostic measured"}
+    return _Outcome({"calls_in_corpus": len(calls), "would_ask_about": asked,
+                     "estimated_input_tokens": asked * CALL_TOKENS,
+                     "note": "one request per call, charged at the rate the diagnostic measured"},
+                    skipped)
 
 
 def _run(args):
@@ -273,30 +347,70 @@ def _run(args):
     # Ask the OBJECT, never the API: a probe request sent to find out whether we may spend is
     # itself spending.
     if getattr(clf, "key", None) is None:
-        raise LookupError("no classifier: %s" % clf.last_reason)
+        raise ClassifierUnavailable("no classifier: %s" % clf.last_reason)
+    # The corpus is read BEFORE the paid control asks, so a mistyped --root costs nothing.
+    calls, skipped = _calls_or_nothing(args)
     check_controls(clf, catalogue)
     question = choice_question(catalogue)
-    calls = collect_calls(args.root, args.tool)
-    picked = stratified_sample(calls, lambda c: regex_jig(c) is not None, args.limit, args.seed)
+    picked = stratified_sample(calls, lambda c: regex_jig(c, args.tool) is not None, args.limit,
+                               args.seed)
     rows, log = [], _log_path(args.log)
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a", encoding="utf-8") as fh:
         for call in picked:
-            choice, tokens = _ask(clf, call["command"], call.get("cwd"), question)
+            choice, tokens, failure = _ask(clf, call["command"], call.get("cwd"), question)
             row = {"command": call["command"][:2000], "cwd": call.get("cwd"),
-                   "regex_jig": regex_jig(call), "choice": choice, "jev_jig": decide(choice),
-                   "input_tokens": tokens}
+                   "regex_jig": regex_jig(call, args.tool), "choice": choice,
+                   "jev_jig": decide(choice), "input_tokens": tokens}
+            if failure is not None:
+                row["failed"] = failure
             rows.append(row)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    return summarize(rows)
+    return _with_unanswered(summarize(rows), skipped)
+
+
+def _with_unanswered(data, skipped, problem=None):
+    if data["unanswered"] and problem is None:
+        problem = ("%d of %d classifier requests got no answer; they are counted as unanswered "
+                   "and excluded from the comparison" % (data["unanswered"], data["rows"]))
+    return _Outcome(data, skipped, problem)
 
 
 def _report(args):
-    rows = [json.loads(x) for x in
-            _log_path(args.log).read_text(encoding="utf-8").splitlines() if x.strip()]
-    if not rows:
-        raise LookupError("no rows in %s" % _log_path(args.log))
-    return summarize(rows)
+    path = _log_path(args.log)
+    # utf-8-sig: a BOM would otherwise break the first row. split("\n") rather than splitlines():
+    # rows are written with ensure_ascii=False, so a U+2028 inside a command sits raw in its line.
+    text = path.read_text(encoding="utf-8-sig")
+    rows, malformed = [], []
+    for number, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            malformed.append("%s line %d: %s" % (path, number, exc))
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+        else:
+            malformed.append("%s line %d: not a JSON object" % (path, number))
+    if not rows and not malformed:
+        raise NothingToReport("no rows in %s" % path)
+    data = summarize(rows)
+    data["malformed_lines"] = len(malformed)
+    problem = ("%d malformed line(s) in %s were skipped" % (len(malformed), path)
+               if malformed else None)
+    return _with_unanswered(data, malformed, problem)
+
+
+def _at_least_one(text):
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("not a whole number: %r" % text) from None
+    if value < 1:
+        raise argparse.ArgumentTypeError("%r must be at least 1" % text)
+    return value
 
 
 def _parse(argv):
@@ -306,7 +420,7 @@ def _parse(argv):
         s = sub.add_parser(name)
         s.add_argument("--root", default=str(Path.home() / ".claude" / "projects"))
         s.add_argument("--tool", default="Bash")
-        s.add_argument("--limit", type=int, default=100, help="calls per class")
+        s.add_argument("--limit", type=_at_least_one, default=100, help="calls per class")
         s.add_argument("--seed", type=int, default=0)
         s.add_argument("--json", action="store_true")
         if name == "run":
@@ -320,24 +434,37 @@ def _parse(argv):
     return p.parse_args(argv)
 
 
+def _fail(command, exc, code):
+    # ensure_ascii (the default) on stdout: a cp1252 console cannot encode most of Unicode.
+    print(json.dumps(_envelope(False, command, error=str(exc))))
+    return code
+
+
 def main(argv=None):
     args = _parse(argv if argv is not None else sys.argv[1:])
     try:
-        data = {"size": _size, "run": _run, "report": _report}[args.cmd](args)
+        outcome = {"size": _size, "run": _run, "report": _report}[args.cmd](args)
     except ControlFailed as exc:
-        print(json.dumps(_envelope(False, args.cmd, error=str(exc))))
-        return 3
-    except LookupError as exc:
-        print(json.dumps(_envelope(False, args.cmd, error=str(exc))))
-        return 1
-    except OSError as exc:
-        print(json.dumps(_envelope(False, args.cmd, error=str(exc))))
-        return 2
+        return _fail(args.cmd, exc, 3)
+    except NothingToReport as exc:
+        return _fail(args.cmd, exc, 1)
+    except (ClassifierUnavailable, ClassifierFailed, OSError, ValueError) as exc:
+        # ValueError covers guard_replay.UnsupportedTool and a JSONDecodeError alike.
+        return _fail(args.cmd, exc, 2)
+    except Exception as exc:  # noqa: BLE001 - a crash must not exit 1, which means "nothing to report"
+        traceback.print_exc(file=sys.stderr)
+        return _fail(args.cmd, "unexpected %s: %s" % (type(exc).__name__, exc), 2)
+    ok = outcome.problem is None
     if getattr(args, "json", False):
-        print(json.dumps(_envelope(True, args.cmd, data), ensure_ascii=False))
+        print(json.dumps(_envelope(ok, args.cmd, outcome.data, error=outcome.problem,
+                                   skipped=outcome.skipped)))
     else:
-        print(json.dumps(data, indent=2, ensure_ascii=False))
-    return 0
+        print(json.dumps(outcome.data, indent=2))
+        for item in outcome.skipped:
+            print("skipped: %s" % item, file=sys.stderr)
+        if outcome.problem:
+            print("error: %s" % outcome.problem, file=sys.stderr)
+    return 0 if ok else 2
 
 
 if __name__ == "__main__":

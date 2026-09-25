@@ -207,7 +207,7 @@ def test_report_states_what_it_cost():
 # ---- the CLI envelope --------------------------------------------------------------------------
 
 def test_size_prints_an_estimate_without_calling_anything(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(jp, "collect_calls", lambda root, tool: _calls(1000))
+    monkeypatch.setattr(jp, "collect_calls", lambda root, tool: (_calls(1000), []))
     rc = jp.main(["size", "--limit", "20", "--root", str(tmp_path), "--json"])
     env = json.loads(capsys.readouterr().out)
     assert rc == 0 and env["ok"] is True
@@ -229,7 +229,8 @@ def test_run_refuses_without_a_key_and_asks_the_api_nothing(tmp_path, capsys, mo
     monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: _Null())
     rc = jp.main(["run", "--limit", "1", "--root", str(tmp_path), "--json"])
     env = json.loads(capsys.readouterr().out)
-    assert rc == 1 and env["ok"] is False and "no api key" in env["error"]
+    # a missing key is setup, not "nothing to report": exit 2 per the documented table
+    assert rc == 2 and env["ok"] is False and "no api key" in env["error"]
     assert asked == []
 
 
@@ -237,3 +238,204 @@ def test_report_on_an_empty_log_exits_1(tmp_path, capsys):
     log = tmp_path / "jig.jsonl"
     log.write_text("", encoding="utf-8")
     assert jp.main(["report", "--log", str(log), "--json"]) == 1
+
+
+# ---- end to end through run(), against a planted corpus and a classifier at the real seam ------
+
+def _transcript(path, calls):
+    """One Claude Code transcript holding `calls` as (tool, input) tool_use blocks."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for i, (tool, payload) in enumerate(calls):
+        lines.append(json.dumps({"cwd": "/p", "message": {"content": [
+            {"type": "tool_use", "id": "tu%d-%s" % (i, path.stem), "name": tool, "input": payload}]}}))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.fixture
+def corpus(tmp_path):
+    root = tmp_path / "projects"
+    _transcript(root / "p" / "s1.jsonl", [("Bash", {"command": "pgrep -f my-daemon"}),
+                                          ("Bash", {"command": "ls -la"})])
+    return root
+
+
+def _separating(state):
+    chore = "pgrep" in state.get("command", "") or "daemon" in state.get("command", "")
+    return {jp.CHOICE_ID: "procsig" if chore else jp.ORDINARY_KEY}
+
+
+def _run_cli(tmp_path, root, *extra):
+    return jp.main(["run", "--root", str(root), "--log", str(tmp_path / "log.jsonl"), "--json",
+                    *extra])
+
+
+def test_run_end_to_end_logs_one_row_per_call(tmp_path, corpus, fake_answers, monkeypatch, capsys):
+    monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: fake_answers(_separating))
+    rc = _run_cli(tmp_path, corpus, "--limit", "5")
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0, env
+    assert env["data"]["rows"] == 2 and env["data"]["agreed"] == 1
+    assert len((tmp_path / "log.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_a_control_failure_exits_3_and_logs_nothing(tmp_path, corpus, fake_answers, monkeypatch,
+                                                    capsys):
+    monkeypatch.setattr(jp, "get_classifier",
+                        lambda *a, **k: fake_answers({jp.CHOICE_ID: "procsig"}))
+    assert _run_cli(tmp_path, corpus, "--limit", "5") == 3
+    assert not (tmp_path / "log.jsonl").exists()
+
+
+def test_the_positive_control_must_name_the_expected_jig_not_just_any(fake_answers):
+    def answers(state):
+        chore = "pgrep" in state.get("command", "")
+        return {jp.CHOICE_ID: "newest" if chore else jp.ORDINARY_KEY}
+    with pytest.raises(jp.ControlFailed, match="procsig"):
+        jp.check_controls(fake_answers(answers), {"procsig": "p", "newest": "n"})
+
+
+class _Outage:
+    """Answers the controls, then fails every real request the way JevClassifier.ask does."""
+    key = "k" * 20
+
+    def __init__(self):
+        self.last_reason = None
+
+    def ask(self, state, questions):
+        command = state.get("command", "")
+        if command in (c["command"] for c in jp.CONTROLS):
+            value = "procsig" if "pgrep" in command else jp.ORDINARY_KEY
+            return type("R", (), {"answers": {jp.CHOICE_ID: type("A", (), {"value": value})()},
+                                  "input_tokens": 1})()
+        self.last_reason = "HTTP 503"
+        return None
+
+
+def test_an_outage_is_not_recorded_as_jev_being_silent(tmp_path, corpus, monkeypatch, capsys):
+    monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: _Outage())
+    rc = _run_cli(tmp_path, corpus, "--limit", "5")
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False
+    assert env["data"]["unanswered"] == 2
+    assert env["data"]["neither"] == 0 and env["data"]["regex_only"] == 0
+    assert "HTTP 503" in (tmp_path / "log.jsonl").read_text(encoding="utf-8")
+
+
+def test_a_classifier_that_cannot_answer_the_controls_is_not_a_passed_negative(fake_answers):
+    class _Dead:
+        key = "k" * 20
+        last_reason = "timeout"
+
+        def ask(self, state, questions):
+            return None
+    with pytest.raises(jp.ClassifierFailed, match="timeout"):
+        jp.check_controls(_Dead(), {"procsig": "p"})
+
+
+def test_the_regex_arm_reads_a_write_payload_as_the_hook_does():
+    content = "Find the daemon with 'pgrep -f my-daemon' and kill it."
+    hook = jp.toolbox_nudge()
+    hit = hook.match_tool(hook.extract_text("Write", {"content": content}), tool_name="Write")
+    assert jp.regex_jig({"command": content}, tool="Write") == (hit[0] if hit else None)
+    assert jp.regex_jig({"command": "pgrep -f x"}, tool="Write") == "procsig"
+
+
+def test_run_with_tool_write_judges_the_keyword_arm_as_write(tmp_path, fake_answers, monkeypatch,
+                                                              capsys):
+    root = tmp_path / "projects"
+    _transcript(root / "p" / "s.jsonl", [("Write", {"file_path": "x", "content": "pgrep -f d"})])
+    monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: fake_answers(_separating))
+    rc = _run_cli(tmp_path, root, "--limit", "5", "--tool", "Write")
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0, env
+    row = json.loads((tmp_path / "log.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["regex_jig"] == "procsig"
+
+
+@pytest.mark.parametrize("limit", ["-1", "-5", "0"])
+def test_a_limit_below_one_is_a_usage_error(tmp_path, limit, capsys):
+    with pytest.raises(SystemExit) as info:
+        jp.main(["size", "--limit", limit, "--root", str(tmp_path), "--json"])
+    assert info.value.code == 2
+
+
+def test_a_missing_root_exits_2_before_any_paid_request(tmp_path, fake_answers, monkeypatch,
+                                                        capsys):
+    asked = []
+
+    def counting(state):
+        asked.append(state)
+        return _separating(state)
+    monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: fake_answers(counting))
+    assert jp.main(["size", "--root", str(tmp_path / "nope"), "--json"]) == 2
+    assert _run_cli(tmp_path, tmp_path / "nope", "--limit", "5") == 2
+    assert asked == []
+
+
+def test_an_empty_corpus_is_nothing_to_report_and_costs_nothing(tmp_path, fake_answers,
+                                                                  monkeypatch, capsys):
+    asked = []
+
+    def counting(state):
+        asked.append(state)
+        return _separating(state)
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setattr(jp, "get_classifier", lambda *a, **k: fake_answers(counting))
+    assert _run_cli(tmp_path, tmp_path / "empty", "--limit", "5") == 1
+    assert asked == []
+
+
+def test_an_unreadable_transcript_is_forwarded_as_skipped(tmp_path, capsys):
+    root = tmp_path / "projects"
+    _transcript(root / "p" / "ok.jsonl", [("Bash", {"command": "ls"})])
+    bad = root / "p" / "bad.jsonl"
+    bad.mkdir()  # a directory named like a transcript: reading it fails on every platform
+    (bad / "inner.txt").write_text("x", encoding="utf-8")
+    rc = jp.main(["size", "--root", str(root), "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert any("bad.jsonl" in item for item in env["skipped"])
+
+
+def test_an_unknown_tool_is_a_usage_error_not_a_traceback(tmp_path, corpus, capsys):
+    assert jp.main(["size", "--root", str(corpus), "--tool", "Read", "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_a_torn_log_line_is_skipped_and_counted_not_a_traceback(tmp_path, capsys):
+    log = tmp_path / "log.jsonl"
+    log.write_text(json.dumps(_row("a", "procsig", "procsig")) + "\n{torn\n", encoding="utf-8")
+    rc = jp.main(["report", "--log", str(log), "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert env["data"]["rows"] == 1 and env["data"]["malformed_lines"] == 1
+
+
+def test_report_reads_back_a_row_holding_a_unicode_line_separator(tmp_path, capsys):
+    log = tmp_path / "log.jsonl"
+    row = _row("echo a b", None, None)
+    log.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert jp.main(["report", "--log", str(log), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["rows"] == 1
+
+
+def test_report_reads_a_log_with_a_bom(tmp_path, capsys):
+    log = tmp_path / "log.jsonl"
+    log.write_bytes(b"\xef\xbb\xbf" + (json.dumps(_row("a", None, None)) + "\n").encode("utf-8"))
+    assert jp.main(["report", "--log", str(log), "--json"]) == 0
+
+
+def test_report_survives_a_cp1252_console(tmp_path):
+    import os
+    import subprocess
+    import sys
+    log = tmp_path / "log.jsonl"
+    # UNCOVERED, so the command is echoed back in uncovered_examples and reaches the console
+    log.write_text(json.dumps(_row("echo ✓", None, jp.UNCOVERED_KEY), ensure_ascii=False)
+                   + "\n", encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    done = subprocess.run([sys.executable, jp.__file__, "report", "--log", str(log)],
+                          capture_output=True, env=env, timeout=60)
+    assert done.returncode == 0, done.stderr.decode("cp1252", "replace")

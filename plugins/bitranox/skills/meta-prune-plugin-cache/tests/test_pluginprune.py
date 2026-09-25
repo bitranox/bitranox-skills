@@ -521,8 +521,9 @@ def test_apply_does_not_rescan_after_building_the_plan(cache: Path) -> None:
     plan = plan_for(cache)
     assert str(late) in paths(plan.prune)
     later = make_version(cache, "own-marketplace", "own-plugin", "0.8.0")
-    refusals = P.apply_plan(plan)
-    assert refusals == []
+    result = P.apply_plan(plan)
+    assert result.failures == ()
+    assert str(late) in paths(result.removed)
     assert not late.exists()
     assert later.exists()
 
@@ -534,10 +535,11 @@ def test_apply_refuses_a_directory_that_gained_a_live_lock_after_the_plan(cache:
     assert str(latecomer) in paths(plan.prune)
     write_lock(latecomer, os.getpid(), P.process_start_ticks(os.getpid()))
 
-    refusals = P.apply_plan(plan)
+    result = P.apply_plan(plan)
 
     assert latecomer.exists()
-    assert any(str(latecomer) in item and "in use" in item for item in refusals)
+    assert any(str(latecomer) in item and "in use" in item for item in result.failures)
+    assert str(latecomer) not in paths(result.removed)
     assert not (cache / "own-marketplace" / "own-plugin" / "1.1.0").exists()
 
 
@@ -592,3 +594,430 @@ def test_no_warning_when_a_live_lock_answers_the_session_question(cache: Path, c
     )
     P.main(["--cache-dir", str(cache)])
     assert "--keep" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------------------------
+# Fail closed: any doubt about what is installed, pinned or live keeps or refuses, never prunes
+# --------------------------------------------------------------------------------------------
+
+SCRIPT = Path(P.__file__).resolve()
+
+# A permission fault cannot be staged on Windows with chmod, and root reads through mode 000.
+needs_posix_perms = pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits enforced against a non-root user",
+)
+
+
+def run_cli(
+    args: list[str], *, cwd: Path, home: Path, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """The script as a user runs it, with HOME pointed into the fixture so nothing real is read."""
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    env.pop("PYTHONUTF8", None)
+    env.update(extra_env or {})
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+
+
+def kept_reasons(plan: P.Plan) -> dict[str, str | None]:
+    return {str(entry.path): entry.keep_reason for entry in plan.keep}
+
+
+def test_a_symlinked_marketplace_dir_is_refused_and_the_installed_version_survives(
+    cache: Path, tmp_path: Path
+) -> None:
+    """Removing through an alias of a real marketplace deletes the real, installed version."""
+    alias = cache / "alias"
+    alias.symlink_to(cache / "own-marketplace", target_is_directory=True)
+    installed = cache / "own-marketplace" / "own-plugin" / "1.2.0"
+
+    plan = plan_for(cache)
+    refused = {str(entry.path): entry.refusal for entry in plan.refused}
+    assert "symlink" in (refused.get(str(alias / "own-plugin" / "1.2.0")) or "")
+    assert not any(str(alias) in path for path in paths(plan.prune))
+    assert kept_reasons(plan)[str(installed)] == "installed"
+
+    rc = P.main(["--cache-dir", str(cache), "--marketplace", "alias", "--apply", "--json"])
+    assert rc == 1
+    assert installed.exists()
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+
+
+def test_a_marketplace_symlink_pointing_outside_the_cache_is_refused(
+    cache: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside-mkt"
+    make_version(outside.parent, outside.name, "plug", "1.0.0")
+    (outside / "plug" / "1.0.0" / ".in_use").mkdir()
+    (cache / "linked").symlink_to(outside, target_is_directory=True)
+    rc = P.main(["--cache-dir", str(cache), "--apply", "--json"])
+    assert rc == 1
+    assert (outside / "plug" / "1.0.0" / "skills" / "filler.md").exists()
+
+
+def test_refusal_for_a_path_outside_the_base_names_it(cache: Path, tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    assert "outside" in (P.refusal_for(elsewhere, base=cache) or "")
+
+
+def test_keep_through_another_spelling_of_the_cache_is_honoured(
+    cache: Path, tmp_path: Path
+) -> None:
+    """Scanning through a symlinked spelling must not lose --keep nor the install record."""
+    link = tmp_path / "lnk"
+    link.symlink_to(cache.parent, target_is_directory=True)
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    plan = plan_for(link / "cache", keep=[target])
+    kept = kept_reasons(plan)
+    assert kept[str(target)] == "named with --keep"
+    assert kept[str(cache / "own-marketplace" / "own-plugin" / "1.2.0")] == "installed"
+
+    plan = plan_for(cache, keep=[link / "cache" / "own-marketplace" / "own-plugin" / "1.0.0"])
+    assert kept_reasons(plan)[str(target)] == "named with --keep"
+
+
+def test_a_relative_keep_is_resolved_against_the_working_directory(
+    cache: Path, tmp_path: Path
+) -> None:
+    result = run_cli(
+        ["--cache-dir", str(cache), "--keep", "./1.0.0", "--json"],
+        cwd=cache / "own-marketplace" / "own-plugin",
+        home=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    kept = {e["path"]: e["keep_reason"] for e in json.loads(result.stdout)["data"]["keep"]}
+    assert kept[str(cache / "own-marketplace" / "own-plugin" / "1.0.0")] == "named with --keep"
+
+
+def test_a_keep_inside_a_version_dir_keeps_that_version(cache: Path) -> None:
+    """The base path a skill invocation prints sits INSIDE the version directory."""
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    plan = plan_for(cache, keep=[target / "skills" / "some-skill"])
+    assert kept_reasons(plan)[str(target)] == "named with --keep"
+
+
+def test_a_keep_that_names_no_scanned_version_is_a_usage_error(
+    cache: Path, tmp_path: Path
+) -> None:
+    result = run_cli(
+        ["--cache-dir", str(cache), "--keep", str(tmp_path / "typo" / "1.0.0"), "--apply"],
+        cwd=tmp_path,
+        home=tmp_path,
+    )
+    assert result.returncode == 2
+    assert "--keep" in result.stderr
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+
+
+def test_a_relative_cache_dir_keeps_the_installed_version(cache: Path, tmp_path: Path) -> None:
+    result = run_cli(["--cache-dir", "plugins/cache", "--json"], cwd=tmp_path, home=tmp_path)
+    assert result.returncode == 0, result.stderr
+    kept = {e["path"]: e["keep_reason"] for e in json.loads(result.stdout)["data"]["keep"]}
+    assert kept[str(cache / "own-marketplace" / "own-plugin" / "1.2.0")] == "installed"
+
+
+@needs_posix_perms
+def test_an_unreadable_lock_dir_keeps_the_version(cache: Path) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    write_lock(target, os.getpid(), P.process_start_ticks(os.getpid()))
+    (target / ".in_use").chmod(0)
+    try:
+        plan = plan_for(cache)
+    finally:
+        (target / ".in_use").chmod(0o755)
+    assert str(target) not in paths(plan.prune)
+    assert "unreadable" in (kept_reasons(plan)[str(target)] or "")
+
+
+def test_a_lock_dir_that_is_not_a_directory_keeps_the_version(cache: Path) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    (target / ".in_use").write_text("not a dir", encoding="utf-8")
+    plan = plan_for(cache)
+    assert str(target) not in paths(plan.prune)
+
+
+@pytest.mark.parametrize("prefix", ["~", "$HOME", "${HOME}"])
+def test_a_pin_spelled_relative_to_home_is_found(tmp_path: Path, prefix: str) -> None:
+    home = tmp_path / "home"
+    pinned = home / ".claude" / "plugins" / "cache" / "mkt" / "plug" / "1.0.0"
+    pinned.mkdir(parents=True)
+    settings = tmp_path / "settings.json"
+    command = f"bash {prefix}/.claude/plugins/cache/mkt/plug/1.0.0/hooks/x.sh"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"command": command}]}}), encoding="utf-8")
+    assert P.pinning_settings(pinned, [settings], homes=[home]) == settings.name
+    other = pinned.parent / "1.0.1"
+    other.mkdir()
+    assert P.pinning_settings(other, [settings], homes=[home]) is None
+
+
+def test_a_home_relative_pin_keeps_the_version_end_to_end(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    root = home / ".claude" / "plugins" / "cache"
+    pinned = make_version(root, "mkt", "plug", "1.0.0")
+    make_version(root, "mkt", "plug", "1.2.0")
+    (pinned / ".in_use").mkdir()
+    write_installed(root.parent, {"plug@mkt": root / "mkt" / "plug" / "1.2.0"})
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"command": "bash ~/.claude/plugins/cache/mkt/plug/1.0.0/x"}]}}),
+        encoding="utf-8",
+    )
+    result = run_cli(["--cache-dir", str(root), "--json"], cwd=tmp_path, home=home)
+    assert result.returncode == 0, result.stderr
+    kept = {e["path"]: e["keep_reason"] for e in json.loads(result.stdout)["data"]["keep"]}
+    assert kept[str(pinned)] == "pinned in settings.json"
+
+
+def test_text_output_survives_a_console_that_cannot_encode_a_path(
+    cache: Path, tmp_path: Path
+) -> None:
+    make_temp_dir(cache, "temp_✓", age_seconds=7200)
+    result = run_cli(
+        ["--cache-dir", str(cache)],
+        cwd=tmp_path,
+        home=tmp_path,
+        extra_env={"PYTHONIOENCODING": "cp1252"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "temp_" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux filesystems take a non-UTF-8 name")
+def test_a_non_utf8_dir_name_does_not_crash_after_apply(cache: Path, tmp_path: Path) -> None:
+    raw = os.fsencode(str(cache)) + b"/temp_\xff"
+    os.mkdir(raw)
+    os.utime(raw, (0, 0))
+    result = run_cli(
+        ["--cache-dir", str(cache), "--apply"],
+        cwd=tmp_path,
+        home=tmp_path,
+        extra_env={"PYTHONIOENCODING": "utf-8:strict"},
+    )
+    assert "Traceback" not in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert not os.path.exists(raw)
+
+
+def test_pid_alive_treats_an_out_of_range_pid_as_alive() -> None:
+    assert P.pid_alive(99999999999) is True
+
+
+def test_a_lock_with_an_out_of_range_pid_keeps_the_version(cache: Path) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    lock_dir = target / ".in_use"
+    lock_dir.mkdir()
+    (lock_dir / "99999999999").write_text(json.dumps({"pid": 99999999999}), encoding="utf-8")
+    plan = plan_for(cache)
+    assert str(target) not in paths(plan.prune)
+
+
+def test_a_corrupt_install_record_refuses_every_otherwise_unkept_version(cache: Path) -> None:
+    (cache.parent / "installed_plugins.json").write_text("{bad", encoding="utf-8")
+    plan = plan_for(cache)
+    assert not any(entry.kind == P.KIND_VERSION for entry in plan.prune)
+    refused = {str(entry.path): entry.refusal for entry in plan.refused}
+    assert "installed_plugins.json" in (
+        refused[str(cache / "own-marketplace" / "own-plugin" / "1.2.0")] or ""
+    )
+    assert str(cache / "temp_git_2_def") in paths(plan.prune)
+
+
+def test_a_missing_install_record_refuses_and_exits_one(cache: Path, capsys) -> None:
+    (cache.parent / "installed_plugins.json").unlink()
+    rc = P.main(["--cache-dir", str(cache), "--apply"])
+    assert rc == 1
+    assert (cache / "own-marketplace" / "own-plugin" / "1.2.0").exists()
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+    assert "installed_plugins.json" in capsys.readouterr().err
+
+
+def test_an_explicit_install_record_that_cannot_be_read_is_a_usage_error(
+    cache: Path, tmp_path: Path, capsys
+) -> None:
+    rc = P.main(
+        ["--cache-dir", str(cache), "--installed-plugins", str(tmp_path / "typo.json"), "--apply"]
+    )
+    assert rc == 2
+    assert "typo.json" in capsys.readouterr().err
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+
+
+def test_an_install_record_listing_nothing_is_not_a_refusal(cache: Path) -> None:
+    """Claude Code writes an empty plugins map once everything is uninstalled; that is valid."""
+    (cache.parent / "installed_plugins.json").write_text(
+        json.dumps({"version": 2, "plugins": {}}), encoding="utf-8"
+    )
+    plan = plan_for(cache)
+    assert plan.refused == ()
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.2.0") in paths(plan.prune)
+
+
+def test_a_bom_does_not_hide_enabled_plugins_or_the_install_record(
+    cache: Path, tmp_path: Path
+) -> None:
+    settings = tmp_path / "bom-settings.json"
+    payload = json.dumps({"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+    settings.write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+    record = cache.parent / "installed_plugins.json"
+    record.write_bytes(b"\xef\xbb\xbf" + record.read_bytes())
+    plan = plan_for(cache, settings_files=[settings])
+    kept = kept_reasons(plan)
+    assert kept[str(cache / "other-marketplace" / "orphan-plugin" / "3.0.0")] == (
+        f"only version, enabled in {settings.name}"
+    )
+    assert kept[str(cache / "own-marketplace" / "own-plugin" / "1.2.0")] == "installed"
+
+
+def test_a_bom_in_claude_json_still_discovers_project_settings(
+    cache: Path, tmp_path: Path
+) -> None:
+    project = tmp_path / "some-project"
+    write_project_settings(project, {"enabledPlugins": {}})
+    claude_json = tmp_path / "claude.json"
+    claude_json.write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"projects": {str(project): {}}}).encode("utf-8")
+    )
+    assert P.project_settings_files(claude_json)
+
+
+def test_the_readonly_retry_makes_a_file_writable_and_retries(tmp_path: Path) -> None:
+    """What Windows needs for a read-only git pack file; the retry is exercised with a strict
+    remover that refuses a read-only file the way Windows does."""
+    target = tmp_path / "pack.idx"
+    target.write_text("x", encoding="utf-8")
+    target.chmod(0o444)
+
+    def strict_unlink(path: str) -> None:
+        if not os.access(path, os.W_OK):
+            raise PermissionError(13, "read-only", path)
+        os.unlink(path)
+
+    P._retry_writable(strict_unlink, str(target), PermissionError(13, "read-only"))
+    assert not target.exists()
+
+
+def test_the_readonly_retry_never_touches_a_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.write_text("x", encoding="utf-8")
+    real.chmod(0o444)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    with pytest.raises(PermissionError):
+        P._retry_writable(os.unlink, str(link), PermissionError(13, "original"))
+    assert not os.access(real, os.W_OK) or os.name == "nt"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the read-only attribute blocks deletion only on Windows")
+def test_apply_removes_a_temp_clone_holding_read_only_files(cache: Path) -> None:
+    temp = make_temp_dir(cache, "temp_git_9_ro", age_seconds=7200)
+    pack = temp / "objects" / "pack.idx"
+    pack.parent.mkdir()
+    pack.write_text("x", encoding="utf-8")
+    pack.chmod(0o444)
+    os.utime(temp, (0, 0))
+    assert P.main(["--cache-dir", str(cache), "--apply"]) == 0
+    assert not temp.exists()
+
+
+def test_help_states_the_sole_version_rule_and_apply_replans(capsys) -> None:
+    with pytest.raises(SystemExit):
+        P.main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "plugin's only version" not in text
+    assert "enabledPlugins" in text
+    assert "EXACTLY what the plan listed" not in (P.__doc__ or "")
+    assert "re-plans" in " ".join((P.__doc__ or "").split())
+
+
+@needs_posix_perms
+def test_apply_does_not_report_a_directory_it_failed_to_remove(cache: Path, capsys) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    (target / "skills").chmod(0o555)
+    try:
+        rc = P.main(["--cache-dir", str(cache), "--apply"])
+    finally:
+        (target / "skills").chmod(0o755)
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert target.exists()
+    assert f"removed: {target} " not in out
+    assert "FAILED" in err and str(target) in err
+    assert not (cache / "own-marketplace" / "own-plugin" / "1.1.0").exists()
+
+
+@needs_posix_perms
+def test_apply_json_lists_only_what_was_removed(cache: Path, capsys) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    (target / "skills").chmod(0o555)
+    try:
+        rc = P.main(["--cache-dir", str(cache), "--apply", "--json"])
+    finally:
+        (target / "skills").chmod(0o755)
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    removed = set(payload["data"]["removed"])
+    assert str(target) not in removed
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.1.0") in removed
+
+
+def test_text_mode_names_the_files_it_read(cache: Path, tmp_path: Path, capsys) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}", encoding="utf-8")
+    P.main(["--cache-dir", str(cache), "--settings", str(settings)])
+    out = capsys.readouterr().out
+    assert str(settings) in out
+    assert str(cache.parent / "installed_plugins.json") in out
+
+
+def test_a_corrupt_lock_body_with_a_non_numeric_name_keeps_the_version(cache: Path) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    (target / ".in_use").mkdir()
+    (target / ".in_use" / "garbage").write_text("{not json", encoding="utf-8")
+    assert kept_reasons(plan_for(cache))[str(target)] == "in use (unreadable lock garbage)"
+
+
+def test_parse_duration_reads_minutes_by_default_and_rejects_garbage() -> None:
+    assert P.parse_duration("90") == 5400.0
+    assert P.parse_duration("2h") == 7200.0
+    with pytest.raises(Exception, match="not a duration"):
+        P.parse_duration("x")
+
+
+def test_an_unexpected_crash_exits_two_not_one(cache: Path, tmp_path: Path) -> None:
+    """Exit 1 means "refused or not removed"; a crash must never read as that."""
+    driver = tmp_path / "drive.py"
+    driver.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+        "import pluginprune\n"
+        "def boom(*a, **k):\n    raise RuntimeError('unplanned')\n"
+        "pluginprune.build_plan = boom\n"
+        f"sys.exit(pluginprune.main(['--cache-dir', {str(cache)!r}]))\n",
+        encoding="utf-8",
+    )
+    done = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2
+    assert "unplanned" in done.stderr
+
+
+@needs_posix_perms
+def test_an_unreadable_subtree_is_not_a_silent_size_undercount(cache: Path) -> None:
+    target = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    (target / "skills").chmod(0)
+    try:
+        plan = plan_for(cache)
+    finally:
+        (target / "skills").chmod(0o755)
+    entry = next(e for e in plan.entries if e.path == target)
+    assert entry.size_complete is False
+    assert entry.as_dict()["size_complete"] is False

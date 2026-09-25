@@ -6,6 +6,13 @@ terminal yet?" test over an empty list is vacuous, so the loop spins to its dead
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 import pytest
 
 import ci_wait
@@ -113,7 +120,7 @@ class TestWaitLoop:
         )
 
         assert result.state == "no-runs"
-        assert len(calls) == 3
+        assert len(calls) == 4  # empty at 0, 30, 60 and 90s: the full 90s of grace was waited
 
     def test_the_appear_grace_is_a_DURATION_so_a_short_interval_cannot_shrink_it(self):
         """The defect this replaced: expressed as a poll COUNT, --interval 5 silently cut the
@@ -128,7 +135,7 @@ class TestWaitLoop:
             fetch, deadline_polls=100, sleep=lambda _s: None, interval_s=5.0, appear_grace_s=90.0
         )
 
-        assert len(calls) == 18  # 90s of grace at 5s per poll, NOT 3 polls
+        assert len(calls) == 19  # empty at 0, 5, ... 90s: 90s of grace at 5s per poll, NOT 3 polls
 
 
 class TestSettleBeforeCallingItGreen:
@@ -400,7 +407,7 @@ class TestATransientGhFailureIsRetried:
 
         assert result.state == "error"
         assert "502" in result.summary
-        assert len(seen) == 3, "90s of grace at 30s a poll, not the 100-poll deadline"
+        assert len(seen) == 4, "failing at 0, 30, 60, 90s: 90s of grace, not the 100-poll deadline"
 
     def test_the_error_grace_is_a_DURATION_so_a_short_interval_cannot_shrink_it(self):
         """The same defect the appear-grace carries a test for: as a poll COUNT, `--interval 5`
@@ -415,7 +422,7 @@ class TestATransientGhFailureIsRetried:
             fetch, deadline_polls=100, sleep=lambda _s: None, interval_s=5.0, error_grace_s=90.0
         )
 
-        assert len(seen) == 18
+        assert len(seen) == 19
 
     def test_it_sleeps_between_retries_rather_than_hammering_the_api(self):
         """A retry loop with no wait turns one 502 into a burst against an API already struggling."""
@@ -428,7 +435,7 @@ class TestATransientGhFailureIsRetried:
             fetch, deadline_polls=100, sleep=slept.append, interval_s=30.0, error_grace_s=90.0
         )
 
-        assert slept == [30.0, 30.0], "between the three attempts, and none after the verdict"
+        assert slept == [30.0, 30.0, 30.0], "between the four attempts, none after the verdict"
 
     def test_a_deadline_reached_while_gh_is_failing_reports_the_failure_not_a_timeout(self):
         """Whichever budget runs out first, the report must name the cause it actually saw."""
@@ -584,3 +591,230 @@ class TestTheRetryReachesTheRealCommandLine:
         ci_wait.main(["--sha", "a" * 40, "--error-grace", "300"])
 
         assert seen["error_grace_s"] == 300.0
+
+
+# --------------------------------------------------------------------------------------------
+# Review findings (rank 10, group R): each class pins one confirmed defect
+# --------------------------------------------------------------------------------------------
+
+SHA = "a" * 40
+SCRIPT = Path(ci_wait.__file__).resolve()
+
+
+def emulated_gh(rows_newest_first: list[dict[str, object]], calls: list[list[str]]):
+    """A stand-in for `gh run list` with gh's own semantics: `--commit` filters server-side,
+    then `--limit` keeps the newest N. `subprocess` is the true external edge here."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        rows = rows_newest_first
+        if "--commit" in argv:
+            wanted = argv[argv.index("--commit") + 1]
+            rows = [r for r in rows if r["headSha"] == wanted]
+        limit = int(argv[argv.index("--limit") + 1])
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(rows[:limit]), stderr="")
+
+    return fake_run
+
+
+class TestTheShaIsAskedForServerSide:
+    def test_older_runs_of_the_sha_beyond_the_limit_window_are_still_seen(self, monkeypatch):
+        """29 newer runs of other shas pushed the failing CI run out of a 30-row window, and the
+        tool reported the remaining CodeQL success as a green push."""
+        others = [run("CI", "completed", "success", "b" * 40) for _ in range(29)]
+        rows = others + [run("CodeQL", "completed", "success"), run("CI", "completed", "failure")]
+        calls: list[list[str]] = []
+        monkeypatch.setattr(ci_wait.subprocess, "run", emulated_gh(rows, calls))
+
+        result = ci_wait.verdict(ci_wait.gh_runs(SHA, limit=30))
+
+        assert result.state == "failed"
+        assert "--commit" in calls[0] and SHA in calls[0]
+
+
+class TestGracesAreMeasuredInTime:
+    def test_an_interval_as_long_as_the_grace_still_waits_the_grace_once(self):
+        slept: list[float] = []
+        result = ci_wait.wait_for(
+            lambda: [], deadline_polls=100, sleep=slept.append, interval_s=120.0, appear_grace_s=120.0
+        )
+        assert result.state == "no-runs"
+        assert sum(slept) >= 120.0
+
+    def test_a_grace_that_is_not_a_multiple_of_the_interval_is_honoured(self):
+        slept: list[float] = []
+        ci_wait.wait_for(
+            lambda: [], deadline_polls=100, sleep=slept.append, interval_s=2.0, appear_grace_s=3.0
+        )
+        assert sum(slept) >= 3.0
+
+    def test_the_error_grace_is_honoured_when_the_interval_equals_it(self):
+        slept: list[float] = []
+
+        def fetch() -> list[dict[str, object]]:
+            raise ci_wait.GhFailed("gh exited 1: HTTP 502")
+
+        result = ci_wait.wait_for(
+            fetch, deadline_polls=100, sleep=slept.append, interval_s=5.0, error_grace_s=5.0
+        )
+        assert result.state == "error"
+        assert sum(slept) >= 5.0
+
+    def test_an_injected_clock_counts_the_time_a_slow_fetch_took(self):
+        """In real use elapsed time includes the gh calls themselves, not only the sleeps."""
+        now = [0.0]
+        calls: list[int] = []
+
+        def slow_empty() -> list[dict[str, object]]:
+            calls.append(1)
+            now[0] += 50.0
+            return []
+
+        ci_wait.wait_for(
+            slow_empty, deadline_polls=100, sleep=lambda s: now.__setitem__(0, now[0] + s),
+            interval_s=10.0, appear_grace_s=100.0, clock=lambda: now[0],
+        )
+        assert len(calls) == 3  # empty at 50, 110, 170: 120s since the first empty >= 100
+
+
+class TestAStalledGhCannotOutliveTheTimeout:
+    def test_gh_runs_bounds_the_call_and_maps_a_timeout_to_a_retryable_failure(self, monkeypatch):
+        seen: dict[str, object] = {}
+
+        def fake_run(argv, **kwargs):
+            seen.update(kwargs)
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", fake_run)
+        with pytest.raises(ci_wait.GhFailed, match="did not answer"):
+            ci_wait.gh_runs(SHA, timeout_s=7.0)
+        assert seen["timeout"] == 7.0
+
+    def test_the_wall_clock_deadline_ends_the_wait(self):
+        now = [0.0]
+        calls: list[int] = []
+
+        def hung() -> list[dict[str, object]]:
+            calls.append(1)
+            now[0] += 100.0
+            raise ci_wait.GhFailed("gh did not answer within 100s")
+
+        result = ci_wait.wait_for(
+            hung, deadline_polls=1000, sleep=lambda s: None, interval_s=1.0,
+            error_grace_s=10_000.0, deadline_s=150.0, clock=lambda: now[0],
+        )
+        assert result.state == "error"
+        assert len(calls) == 2
+
+    @pytest.mark.skipif(os.name == "nt", reason="a fake gh on PATH needs a POSIX shebang")
+    def test_a_hanging_gh_is_ended_by_timeout_end_to_end(self, tmp_path):
+        fake = tmp_path / "bin" / "gh"
+        fake.parent.mkdir()
+        fake.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n", encoding="utf-8")
+        fake.chmod(0o755)
+        env = {**os.environ, "PATH": f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}"}
+        started = time.monotonic()
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--sha", SHA, "--repo", "o/r", "--timeout", "2",
+             "--interval", "1"],
+            capture_output=True, text=True, env=env, timeout=45,
+        )
+        assert proc.returncode == 2, proc.stderr
+        assert time.monotonic() - started < 30
+
+
+class TestBadNumbersAreUsageErrors:
+    @pytest.mark.parametrize(
+        "flag,value",
+        [("--interval", "-5"), ("--interval", "0"), ("--timeout", "inf"), ("--timeout", "nan"),
+         ("--timeout", "-1"), ("--appear-grace", "-1"), ("--error-grace", "nan"),
+         ("--settle", "-2"), ("--limit", "0")],
+    )
+    def test_a_bad_value_exits_2_without_a_traceback(self, flag, value, monkeypatch, capsys):
+        # Never the real gh: a value that slips through must end fast, not poll the API.
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")], calls)
+        )
+        monkeypatch.setattr(ci_wait.time, "sleep", lambda _s: None)
+        with pytest.raises(SystemExit) as info:
+            ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", flag, value])
+        assert info.value.code == 2
+        assert "Traceback" not in capsys.readouterr().err
+
+    def test_zero_settle_and_zero_grace_stay_allowed(self):
+        args = ci_wait._parse_args(["--sha", SHA, "--settle", "0", "--appear-grace", "0"])
+        assert args.settle == 0.0 and args.appear_grace == 0.0
+
+
+class TestMainEnvelopeAndRepo:
+    def test_a_short_sha_with_json_is_an_error_envelope(self, capsys):
+        rc = ci_wait.main(["--sha", "abc1234", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2
+        assert payload["ok"] is False and payload["state"] == "error"
+        assert "40-character" in payload["summary"]
+
+    def test_repo_is_passed_to_gh_and_skips_the_local_sha_check(self, monkeypatch, capsys):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            ci_wait.subprocess, "run", emulated_gh([run("CI", "completed", "success")], calls)
+        )
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--settle", "0", "--json"])
+        assert rc == 0
+        assert all(argv[0] == "gh" for argv in calls), "no git call when --repo names another repo"
+        assert calls[0][calls[0].index("--repo") + 1] == "o/r"
+        assert json.loads(capsys.readouterr().out)["state"] == "success"
+
+    def test_a_json_object_from_gh_is_a_retryable_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            ci_wait.subprocess, "run",
+            lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout='{"a": 1}', stderr=""),
+        )
+        with pytest.raises(ci_wait.GhFailed, match="dict, not a list"):
+            ci_wait.gh_runs(SHA)
+
+    def test_an_unexpected_crash_is_could_not_tell_not_a_failed_run(self, monkeypatch, capsys):
+        def boom(argv, **kw):
+            raise RuntimeError("something nobody planned for")
+
+        monkeypatch.setattr(ci_wait.subprocess, "run", boom)
+        rc = ci_wait.main(["--sha", SHA, "--repo", "o/r", "--json"])
+        assert rc == 2
+        assert json.loads(capsys.readouterr().out)["state"] == "error"
+
+
+class TestASkippedRunIsNotAFailure:
+    def test_a_skipped_workflow_beside_a_green_one_is_green(self):
+        rows = [run("ci", "completed", "success"), run("deploy", "completed", "skipped")]
+        assert ci_wait.verdict(rows).state == "success"
+
+    def test_nothing_but_skipped_runs_is_not_green(self):
+        assert ci_wait.verdict([run("deploy", "completed", "skipped")]).state == "failed"
+
+    def test_a_failure_beside_a_skipped_run_still_fails(self):
+        rows = [run("ci", "completed", "failure"), run("deploy", "completed", "skipped")]
+        assert ci_wait.verdict(rows).state == "failed"
+
+
+class TestAConsoleThatCannotEncodeAWorkflowName:
+    def test_the_report_does_not_crash_on_cp1252(self, tmp_path):
+        driver = tmp_path / "drive.py"
+        driver.write_text(
+            "import json, subprocess, sys\n"
+            f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+            "import ci_wait\n"
+            "row = {'headSha': 'a' * 40, 'workflowName': 'CI \\u2713', 'status': 'completed',"
+            " 'conclusion': 'success', 'databaseId': 1}\n"
+            "ci_wait.subprocess.run = lambda argv, **kw: subprocess.CompletedProcess("
+            "argv, 0, stdout=json.dumps([row]), stderr='')\n"
+            "sys.exit(ci_wait.main(['--sha', 'a' * 40, '--repo', 'o/r', '--settle', '0']))\n",
+            encoding="utf-8",
+        )
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        env.pop("PYTHONUTF8", None)
+        proc = subprocess.run(
+            [sys.executable, str(driver)], capture_output=True, env=env, timeout=60
+        )
+        assert proc.returncode == 0, proc.stderr.decode("cp1252", "replace")
+        assert b"CI " in proc.stdout

@@ -34,23 +34,35 @@ that answer a different question.
 
 `scripts/pluginprune.py` classifies every version directory AND every `temp_*` leftover in ONE
 pass, stating a reason per line. Paths here are relative to this skill's own directory, which
-is announced when the skill loads. Dry run by default; `--apply` removes exactly what the plan
-listed and never re-scans for new candidates. That set can only shrink: a session starting
-between the plan and the apply claims its version, and that directory is refused instead.
+is announced when the skill loads. Dry run by default. `--apply` builds the plan again in its
+own run and removes THAT plan, not the one your earlier dry run printed: a `temp_*` leftover that
+aged past `--min-age` in between can go although the dry run kept it. Every removal still passes
+the same rules, and within one `--apply` the set only shrinks - a session starting between the
+plan and the removal claims its version, and that directory is refused. Only what was actually
+removed is reported as removed; a directory that failed to delete is reported FAILED on stderr.
 
 ```bash
 uv run scripts/pluginprune.py             # the plan, with sizes and a reason per kept directory
-uv run scripts/pluginprune.py --apply     # remove exactly that
+uv run scripts/pluginprune.py --apply     # re-plan, then remove that plan
 uv run scripts/pluginprune.py --json      # {ok, command, data, skipped}; 0 fine, 1 refused, 2 usage
 ```
 
 Run `--help` for the rest (`--marketplace`, `--keep`, `--min-age`, `--settings`).
 
-It keeps a version with a live lock, the `installPath` from `installed_plugins.json` (what a
-fresh session resolves to), anything a settings file pins, anything `--keep` names, and the
-sole version of a plugin a settings file's `enabledPlugins` lists. It reads each `temp_*`
+It keeps a version with a live lock (or an `.in_use` directory it cannot list), the
+`installPath` from `installed_plugins.json` (what a fresh session resolves to), anything a
+settings file pins (spelled absolute, or as `~/`, `$HOME/` or `${HOME}/`), anything `--keep`
+names or points inside (so the base path a skill invocation prints works), and the sole version
+of a plugin a settings file's `enabledPlugins` lists. Paths are compared resolved, so a relative
+`--keep` or `--cache-dir` or a symlinked `~/.claude` still matches; a `--keep` that matches no
+scanned version is a usage error (exit 2), never silently ignored. It reads each `temp_*`
 leftover's own mtime and keeps any younger than `--min-age` (60m), so no separate age check is
-needed. It refuses symlinks and paths outside the cache.
+needed. It refuses symlinks, anything reached THROUGH a symlinked marketplace or plugin directory
+(removing through the alias deletes the real one), and paths outside the cache.
+
+When `installed_plugins.json` is missing, unreadable or malformed, it refuses every version
+nothing else keeps and exits 1, because the installed one can no longer be told apart. An
+explicit `--installed-plugins` that cannot be read is a usage error (exit 2).
 
 A plugin nothing references at all is planned even as the only version: that is what an
 uninstalled plugin leaves behind, and nothing else reclaims it. `enabledPlugins` is the guard
@@ -59,7 +71,8 @@ version, so honouring it per version would preserve the entire history of everyt
 
 The settings files it reads are the user's pair plus the same pair inside every project
 `~/.claude.json` lists, because a plugin enabled only in a project may have no install record
-at all. The run reports which files it read; `--no-project-settings` limits it to the user's,
+at all. The run reports which files it read (the last lines of the text report;
+`settings_files` and `install_record` in `--json`); `--no-project-settings` limits it to the user's,
 and naming any `--settings` file takes over the list entirely.
 
 When locks exist but none is live it says so on stderr rather than guessing: a session whose

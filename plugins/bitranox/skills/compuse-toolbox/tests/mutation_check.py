@@ -92,12 +92,15 @@ MUTANTS: tuple[Mutant, ...] = (
     ),
     Mutant(
         name="pyvenv-validator-always-accepts",
-        find='    return any(line.split("=", 1)[0].strip() == "home" for line in text.splitlines() if "=" in line)',
+        find='    return any(line.split("=", 1)[0].strip() == "home" for line in text.split("\\n") if "=" in line)',
         replace="    return True",
         # NOT the direct-call test: for a directory read_text raises first, so the except arm
         # still returns False and that assertion holds. The asymmetry with the cachedir mutant
         # is real and is why each mutant states its own set.
-        must_kill=frozenset({"test_a_pyvenv_cfg_without_the_home_key_does_not_exclude"}),
+        must_kill=frozenset({
+            "test_a_pyvenv_cfg_without_the_home_key_does_not_exclude",
+            "test_pyvenv_cfg_lines_split_only_on_newlines",
+        }),
     ),
     Mutant(
         name="exact-names-dropped",
@@ -147,6 +150,8 @@ MUTANTS: tuple[Mutant, ...] = (
             "test_a_real_pyvenv_cfg_does_exclude",
             "test_a_venv_is_excluded_by_content_whatever_its_name",
             "test_content_exclusion_reaches_the_whole_subtree",
+            # a venv given as the ROOT is excluded only if the exclusion reaches its bin/
+            "test_a_venv_given_as_the_root_is_excluded_by_count_and_audit_alike",
         }),
     ),
     Mutant(

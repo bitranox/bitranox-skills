@@ -38,7 +38,9 @@ Run: `uv run scripts/srccount.py --root .`                        # default sour
      `uv run scripts/srccount.py --audit --root .`   # check the list against the tree
 
 Exit, counting: 0 = source found, 1 = nothing matched in ANY root (usually a wrong --ext or
-                path), 2 = could not count (missing root, unreadable tree).
+                path), 2 = could not count (missing root, any directory it could not list -
+                the root included, each named on stderr and in the envelope's `skipped` - a
+                bad flag value, or the tool itself crashing).
 Exit, --audit:  answers "is the NAME list complete for this tree". 0 = yes, 1 = it has a blind
                 spot that the content markers are covering (the COUNT is right either way),
                 2 = could not read the tree. Unused members are reported but never set the
@@ -52,6 +54,7 @@ import fnmatch
 import json
 import os
 import sys
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -134,10 +137,13 @@ def _is_cachedir_tag(path: Path) -> bool:
 def _is_pyvenv_cfg(path: Path) -> bool:
     """PEP 405 defines the file by its `home` key, so a stray file of that name is not a venv."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # utf-8-sig: a BOM glued onto the first key would hide `home` and leave a venv counted.
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
-    return any(line.split("=", 1)[0].strip() == "home" for line in text.splitlines() if "=" in line)
+    # split on "\n" only: the file is line-oriented, and str.splitlines() would also break on
+    # \f, \x1c or U+2028 inside a value and invent a `home` key that is not there.
+    return any(line.split("=", 1)[0].strip() == "home" for line in text.split("\n") if "=" in line)
 
 
 @dataclass(frozen=True)
@@ -186,6 +192,9 @@ class TreeCount:
     by_pattern: dict[str, int] = field(default_factory=dict)
     by_ext: dict[str, int] = field(default_factory=dict)
     by_top_dir: dict[str, int] = field(default_factory=dict)
+    # Directories the walk could not list. Non-empty means the count is a FLOOR, which the
+    # command line reports as "could not count" (exit 2) rather than as a smaller number.
+    unreadable: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -227,6 +236,19 @@ def _proven_marker(dirpath: Path, filenames: list[str]) -> str | None:
     return None
 
 
+def _walk_error_sink(sink: list[str]) -> Callable[[OSError], None]:
+    """An os.walk onerror that RECORDS the directory it could not list.
+
+    Without one, os.walk silently drops that subtree - an unreadable directory, the root
+    included, became a smaller count (or "nothing matched, check --ext") with nothing to notice.
+    """
+
+    def record(exc: OSError) -> None:
+        sink.append(f"{exc.filename}: {exc.strerror or exc}")
+
+    return record
+
+
 def count_tree(
     root: Path | str,
     extensions: list[str] | None = None,
@@ -250,7 +272,7 @@ def count_tree(
     # already classified by scandir, so the per-file stat disappears. The excluded subtree
     # is still walked - not pruned - because its COUNT is the whole point of the tool.
     content_excluded: dict[str, str] = {}
-    for dirpath, _dirnames, filenames in os.walk(root_str):
+    for dirpath, _dirnames, filenames in os.walk(root_str, onerror=_walk_error_sink(result.unreadable)):
         rel = os.path.relpath(dirpath, root_str)
         parts = () if rel == os.curdir else tuple(rel.split(os.sep))
         reason = excluded_reason(parts, extra)
@@ -292,6 +314,7 @@ class AuditReport:
     content_only: list[Path] = field(default_factory=list)
     top_counted_dirs: list[tuple[str, int]] = field(default_factory=list)
     ranked_total: int = 0
+    unreadable: list[str] = field(default_factory=list)
 
 
 def audit(
@@ -325,7 +348,7 @@ def audit(
         if not root.is_dir():
             raise FileNotFoundError(f"not a directory: {root}")
         root_str = str(root)
-        for dirpath, dirnames, filenames in os.walk(root_str):
+        for dirpath, dirnames, filenames in os.walk(root_str, onerror=_walk_error_sink(report.unreadable)):
             seen_dirnames.update(dirnames)
             rel = os.path.relpath(dirpath, root_str)
             parts = () if rel == os.curdir else tuple(rel.split(os.sep))
@@ -335,9 +358,12 @@ def audit(
                 reason = content_excluded.get(os.path.dirname(dirpath))
             if reason is None:
                 marker = _proven_marker(Path(dirpath), filenames)
-                if marker is not None and parts:
+                if marker is not None:
+                    # Excluded at the root too, exactly as counting does; only a SUBDIR is a
+                    # blind spot of the name list - no name could ever match the root itself.
                     reason = f"content:{marker}"
-                    report.content_only.append(Path(dirpath))
+                    if parts:
+                        report.content_only.append(Path(dirpath))
             if reason is not None and reason.startswith("content:"):
                 content_excluded[dirpath] = reason
             if reason is not None:
@@ -418,7 +444,47 @@ def render_table(counts: list[TreeCount], extensions: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _at_least_one(text: str) -> int:
+    """argparse type for --top: a negative value used to hide rows and misreport the rest."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be at least 1")
+    return value
+
+
+def _tolerant_streams() -> None:
+    """Print a path the console cannot encode (cp1252) as an escape instead of crashing on it."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
+
+
+def _report_unreadable(unreadable: list[str]) -> None:
+    for item in unreadable:
+        print(f"srccount: could not read {item}", file=sys.stderr)
+    print("srccount: the count would be a floor, not a total - reporting could-not-count", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Exit 2 for a crash as well: 1 means "nothing matched", and a crash must never read so."""
+    _tolerant_streams()
+    try:
+        return _main(argv)
+    except Exception as exc:  # noqa: BLE001 - the boundary that keeps a crash off exit code 1
+        traceback.print_exc(file=sys.stderr)
+        print(f"srccount: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+def _main(argv: list[str] | None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -430,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true", help="emit a machine-readable envelope")
     p.add_argument("--audit", action="store_true",
                    help="check the exclusion list against the tree instead of counting")
-    p.add_argument("--top", type=int, default=15,
+    p.add_argument("--top", type=_at_least_one, default=15,
                    help="how many directory names --audit ranks [15]; it says when it truncates")
     args = p.parse_args(argv)
 
@@ -446,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if args.json:
             print(json.dumps({
-                "ok": True,
+                "ok": not report.unreadable,
                 "command": "srccount --audit",
                 "data": {
                     "roots": [str(r) for r in report.roots],
@@ -455,10 +521,13 @@ def main(argv: list[str] | None = None) -> int:
                     "ranked_total": report.ranked_total,
                     "top_counted_dirs": [{"name": n, "source": c} for n, c in report.top_counted_dirs],
                 },
-                "skipped": [],
+                "skipped": report.unreadable,
             }, indent=1))
         else:
             print(render_audit(report))
+        if report.unreadable:
+            _report_unreadable(report.unreadable)
+            return 2
         return 1 if report.content_only else 0
 
     counts: list[TreeCount] = []
@@ -469,9 +538,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"srccount: {exc}", file=sys.stderr)
             return 2
 
+    unreadable = [item for c in counts for item in c.unreadable]
     if args.json:
         print(json.dumps({
-            "ok": True,
+            "ok": not unreadable,
             "command": "srccount",
             "data": {
                 "extensions": exts,
@@ -489,10 +559,14 @@ def main(argv: list[str] | None = None) -> int:
                     for c in counts
                 ],
             },
-            "skipped": [],
+            "skipped": unreadable,
         }, indent=1))
     else:
         print(render_table(counts, exts))
+
+    if unreadable:
+        _report_unreadable(unreadable)
+        return 2
 
     # 0 yes / 1 no: nothing matched in ANY root almost always means a wrong --ext or path.
     # Gated on ALL roots, not any: a genuinely empty tree among several is a real answer.

@@ -12,30 +12,69 @@ commits without modifying any tracked file.
 Single source of truth for the workspace location, so task_brief and
 review_package cannot drift to different directories.
 
-Usage: python3 sdd_workspace.py
+Usage: python3 sdd_workspace.py      (takes no arguments; exit 0 printed, 2 could not)
 """
 import subprocess
 import sys
 from pathlib import Path
 
+USAGE = "usage: python3 sdd_workspace.py  (takes no arguments; prints the workspace path)"
+
+
+class RepoRootError(RuntimeError):
+    """git could not name the working tree: not a repository, or git could not be run."""
+
+
+def repo_root(cwd=None):
+    """The working tree's top directory, EXACTLY as git names it.
+
+    Only the one trailing newline git appends is removed: .strip() also ate a trailing space in
+    the directory name and put the workspace in a sibling OUTSIDE the repo. Decoded as UTF-8
+    (what git prints) with surrogateescape, never the locale codec: on a cp1252 Windows machine
+    that turned a non-ASCII path into a different, wrong one.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, check=True,
+            text=True, encoding="utf-8", errors="surrogateescape",
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise RepoRootError(str(exc)) from exc
+    return done.stdout.removesuffix("\n")
+
 
 def workspace_dir(cwd=None):
-    """Ensure <repo-root>/.bitranox/sdd exists (self-ignoring) and return its resolved Path."""
-    root = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=cwd, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    d = Path(root) / ".bitranox" / "sdd"
+    """Ensure <repo-root>/.bitranox/sdd exists (self-ignoring) and return its resolved Path.
+
+    Raises RepoRootError when there is no working tree, OSError when the directory cannot be made.
+    """
+    d = Path(repo_root(cwd)) / ".bitranox" / "sdd"
     d.mkdir(parents=True, exist_ok=True)
     (d / ".gitignore").write_text("*\n", encoding="utf-8")
     return d.resolve()
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        # --help included: nothing may be created by a run that was only asking how to run it.
+        print(USAGE, file=sys.stderr)
+        return 2
     try:
-        print(workspace_dir())
-    except (subprocess.CalledProcessError, OSError) as exc:
+        path = workspace_dir()
+    except RepoRootError as exc:
         print("cannot resolve the git working tree: %s" % exc, file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print("cannot create the workspace: %s" % exc, file=sys.stderr)
+        return 2
+    try:
+        print(path)
+    except UnicodeEncodeError:
+        # Printing an escaped or replaced path would hand the caller a directory that does not
+        # exist; refusing is the only safe answer on a console that cannot encode it.
+        print("cannot print the workspace path in this console's encoding; set "
+              "PYTHONIOENCODING=utf-8 or call workspace_dir() from Python", file=sys.stderr)
         return 2
     return 0
 

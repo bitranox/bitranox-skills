@@ -738,3 +738,113 @@ def test_an_unrecognised_marker_leaves_the_tree_counted(tmp_path: Path) -> None:
     plant(root, ["target/gen.py", "src/app.py"])
     (root / "target" / "CACHEDIR.TAG").write_bytes(b"\x00\x01\x02not a signature")
     assert srccount.count_tree(root, extensions=[".py"]).source == 2
+
+
+# --- an unreadable tree is "could not count", never a smaller number -------------------------
+# os.walk drops a directory it cannot list unless told otherwise, so a locked subtree used to
+# vanish from the count with exit 0, and a locked ROOT read as "nothing matched, check --ext".
+
+needs_posix_perms = pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs POSIX permission bits enforced against a non-root user",
+)
+
+
+@needs_posix_perms
+def test_an_unreadable_subdir_is_reported_not_silently_skipped(tmp_path: Path) -> None:
+    root = tmp_path / "t1"
+    plant(root, ["ok/a.py", "locked/b.py", "locked/c.py"])
+    (root / "locked").chmod(0)
+    try:
+        counted = srccount.count_tree(root, extensions=[".py"])
+        done = run_cli("--root", str(root), "--ext", ".py", "--json")
+        audited = run_cli("--audit", "--root", str(root), "--ext", ".py")
+    finally:
+        (root / "locked").chmod(0o755)
+    assert any("locked" in item for item in counted.unreadable)
+    assert done.returncode == 2
+    payload = json.loads(done.stdout)
+    assert payload["ok"] is False
+    assert any("locked" in item for item in payload["skipped"])
+    assert audited.returncode == 2
+    assert "locked" in audited.stderr
+
+
+@needs_posix_perms
+def test_an_unreadable_root_exits_two_not_check_your_ext(tmp_path: Path) -> None:
+    root = tmp_path / "t2"
+    plant(root, ["d.py"])
+    root.chmod(0)
+    try:
+        done = run_cli("--root", str(root), "--ext", ".py")
+    finally:
+        root.chmod(0o755)
+    assert done.returncode == 2
+    assert "check --ext" not in done.stderr
+
+
+def test_audit_of_a_missing_root_exits_two(tmp_path: Path) -> None:
+    done = run_cli("--audit", "--root", str(tmp_path / "nope"))
+    assert done.returncode == 2
+    assert "nope" in done.stderr
+
+
+def test_a_venv_given_as_the_root_is_excluded_by_count_and_audit_alike(tmp_path: Path) -> None:
+    root = tmp_path / "myenv"
+    mark_venv(root)
+    plant(root, ["bin/act.py", "bin/b.py"])
+    assert srccount.count_tree(root, extensions=[".py"]).source == 0
+    report = srccount.audit([root], extensions=[".py"])
+    assert report.top_counted_dirs == []
+    assert report.content_only == []  # the root itself is not a blind spot of the name list
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-5"])
+def test_top_below_one_is_a_usage_error(tmp_path: Path, value: str) -> None:
+    plant(tmp_path, ["a/x.py"])
+    done = run_cli("--audit", "--root", str(tmp_path), "--top", value)
+    assert done.returncode == 2
+    assert "--top" in done.stderr
+
+
+def test_a_bom_in_pyvenv_cfg_still_marks_a_venv(tmp_path: Path) -> None:
+    cfg = tmp_path / "pyvenv.cfg"
+    cfg.write_bytes(b"\xef\xbb\xbfhome = /usr/bin\n")
+    assert srccount._is_pyvenv_cfg(cfg) is True
+
+
+def test_pyvenv_cfg_lines_split_only_on_newlines(tmp_path: Path) -> None:
+    """A \\x1c or U+2028 inside a value is not a line break in a line-oriented file."""
+    cfg = tmp_path / "pyvenv.cfg"
+    cfg.write_text("prompt = a\x1chome = b\nversion = 3.12\n", encoding="utf-8")
+    assert srccount._is_pyvenv_cfg(cfg) is False
+
+
+def test_output_survives_a_console_that_cannot_encode_a_path(tmp_path: Path) -> None:
+    root = tmp_path / "proj✓"
+    plant(root, ["src/app.py"])
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    done = subprocess.run(
+        [sys.executable, str(Path(srccount.__file__)), "--root", str(root), "--ext", ".py"],
+        capture_output=True, env=env, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr.decode("cp1252", "replace")
+    assert b"Traceback" not in done.stderr
+
+
+def test_an_unexpected_crash_is_exit_two_not_nothing_matched(tmp_path: Path) -> None:
+    """Exit 1 means 'nothing matched'; a crash must never be read that way."""
+    driver = tmp_path / "drive.py"
+    driver.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(srccount.__file__).parent)!r})\n"
+        "import srccount\n"
+        "def boom(*a, **k):\n    raise RuntimeError('unplanned')\n"
+        "srccount.count_tree = boom\n"
+        f"sys.exit(srccount.main(['--root', {str(tmp_path)!r}]))\n",
+        encoding="utf-8",
+    )
+    done = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2
+    assert "unplanned" in done.stderr

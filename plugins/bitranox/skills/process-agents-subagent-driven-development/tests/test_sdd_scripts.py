@@ -197,4 +197,62 @@ def test_workspace_main_outside_repo_exit_2(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     assert WS.main([]) == 2
-    assert capsys.readouterr().err != ""
+    assert "git working tree" in capsys.readouterr().err
+
+
+def _git_init(path):
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, capture_output=True)
+    return path
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids a trailing space in a name")
+def test_workspace_keeps_a_trailing_space_in_the_repo_root(tmp_path, monkeypatch):
+    repo = _git_init(tmp_path / "proj ")
+    monkeypatch.chdir(repo)
+    assert WS.workspace_dir() == (repo / ".bitranox" / "sdd").resolve()
+    assert not (tmp_path / "proj").exists(), "a sibling outside the repo was created"
+
+
+def test_workspace_handles_a_non_ascii_repo_root(tmp_path, monkeypatch):
+    """git prints the path as UTF-8; decoding it with a cp1252 locale lands in a sibling dir."""
+    repo = _git_init(tmp_path / "proj-ä")
+    monkeypatch.chdir(repo)
+    assert WS.workspace_dir() == (repo / ".bitranox" / "sdd").resolve()
+
+
+def test_workspace_main_rejects_arguments_and_creates_nothing(tmp_path, monkeypatch, capsys):
+    repo = _git_init(tmp_path / "fresh")
+    monkeypatch.chdir(repo)
+    for argv in (["--help"], ["stray"]):
+        assert WS.main(argv) == 2
+    assert "usage" in capsys.readouterr().err.lower()
+    assert not (repo / ".bitranox").exists()
+
+
+def test_workspace_main_prints_the_workspace_on_success(tmp_path, monkeypatch, capsys):
+    repo = _git_init(tmp_path / "ok")
+    monkeypatch.chdir(repo)
+    assert WS.main([]) == 0
+    assert capsys.readouterr().out.strip() == str((repo / ".bitranox" / "sdd").resolve())
+
+
+def test_workspace_main_names_a_mkdir_failure_as_such(tmp_path, monkeypatch, capsys):
+    repo = _git_init(tmp_path / "blocked")
+    (repo / ".bitranox").write_text("a file, not a dir", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert WS.main([]) == 2
+    err = capsys.readouterr().err
+    assert "cannot create" in err and "git working tree" not in err
+
+
+def test_workspace_cli_on_a_cp1252_console_fails_loudly_not_with_a_wrong_path(tmp_path):
+    repo = _git_init(tmp_path / "proj-✓")
+    env = {**__import__("os").environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    done = subprocess.run([sys.executable, WS.__file__], cwd=repo, capture_output=True, env=env,
+                          timeout=60)
+    assert b"Traceback" not in done.stderr
+    assert done.returncode in (0, 2)
+    if done.returncode == 0:  # a console that CAN encode it must print the exact path
+        assert done.stdout.decode("cp1252").strip() == str((repo / ".bitranox" / "sdd").resolve())
