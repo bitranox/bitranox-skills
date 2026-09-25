@@ -635,12 +635,17 @@ so Windows does not silently break it:
   Microsoft Store stub (exits non-zero in a subprocess), `python` may be Python 2, and
   `py -3` is Windows-only. Launch Python through a small bash shim that probes
   `python3 -> python -> py -3` and converts POSIX paths with `cygpath` when present.
-  The plugin's `hooks/run-python.sh` is the working reference; reuse it.
+  The plugin's `hooks/run-python.sh` is the working reference; reuse it. It is strict by default:
+  when it cannot run the script (missing file, no Python 3, an unexpected shell) it exits 3, so
+  a hook registration must pass `--hook` as the FIRST shim argument, before the script path, to
+  get the exit-0 contract below. Copy the exact command form from any entry in the plugin's
+  `hooks/hooks.json`; a skill step that launches a script never passes `--hook`.
 - **Git Bash only on Windows.** Hooks run through Git Bash (Git for Windows), not WSL or
   Cygwin (those mount drives differently and resolve a Linux interpreter). Guard
   `uname -s` and skip loudly to stderr under an unexpected shell.
 - **A hook must never wedge a turn.** Every failure path exits 0; degrade silently
-  (with a one-line stderr note) rather than erroring.
+  (with a one-line stderr note) rather than erroring. Through `run-python.sh` that holds only with
+  `--hook`; a CLI or gate call leaves it off, so a mistyped path there fails loudly.
 - **Set the executable bit in git, not the working tree.** A file run directly (`./script`, or a
   hook invoked by path with a `#!` shebang) needs its exec bit recorded in git. A working-tree
   `chmod +x` does NOT persist when `core.fileMode = false`; set it in the index with

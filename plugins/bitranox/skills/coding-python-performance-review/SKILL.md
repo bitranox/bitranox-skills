@@ -128,8 +128,10 @@ once, and writes `session.json` into that scratch dir holding every path later s
 must set it YOURSELF before the bootstrap: `session.json` is written BY
 `setup_env.py`, so the `skill_dir` field read back in the next block does not exist
 yet and cannot be used to launch the script that creates it.
-`uv run` is preferred (it fetches an isolated interpreter); plain `python`
-works too. Run it once, capturing the printed session-file path. The script prints
+`uv run` is preferred (it fetches an isolated interpreter); without uv, `bx_py` runs it with
+the first of `python3`, `python`, `py -3` that actually starts - a bare `python` is missing on
+most Linux boxes and on macOS, and Windows' `python3` can be the Store stub, which exists but
+does not run. Run it once, capturing the printed session-file path. The script prints
 `Session file: <path>` on its first line, echoes the full JSON, and exits non-zero
 with a clear stderr message if there is no `pyproject.toml` or the interpreter is
 too old. `session.json` replaces the old `/tmp/bx-perf-session` and
@@ -148,44 +150,52 @@ interpreter, because every later step runs it: a venv python that cannot start, 
 SKILL_DIR="/absolute/path/to/skills/coding-python-performance-review"
 
 # Run the bootstrap once; capture the path to session.json from its output.
-BX_PERF_OUT="$(uv run "$SKILL_DIR/setup_env.py" || python "$SKILL_DIR/setup_env.py")" || {
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+BX_PERF_OUT="$(uv run "$SKILL_DIR/setup_env.py" || bx_py "$SKILL_DIR/setup_env.py")" || {
     echo "Setup failed - aborting performance analysis"; exit 1
 }
 echo "$BX_PERF_OUT"
 BX_PERF_SESSION="$(printf '%s\n' "$BX_PERF_OUT" | sed -n 's/^Session file: //p')"
 ```
 
-Read any field back portably with a tiny stdlib `python -c` (no `jq` needed):
+**Interpreter rule.** From here on every step runs the RECORDED interpreter, `"$PYTHON_CMD"`,
+quoted because its path may hold a space. `bx_py` does only the two jobs that come before that
+interpreter is known: launching `setup_env.py` and reading `session.json` back. Each block below
+runs in a fresh shell, so it re-defines both helpers, and exits 2 when it cannot read
+`session.json` rather than writing its output under an empty scratch path.
 
 ```bash
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-PYTHON_CMD="$(read_field python)"
-BX_PERF_TMPDIR="$(read_field tmpdir)"
-SKILL_DIR="$(read_field skill_dir)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+PYTHON_CMD="$(read_field python)" && BX_PERF_TMPDIR="$(read_field tmpdir)" \
+    && SKILL_DIR="$(read_field skill_dir)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 ```
 
 ### Step 3: Validate Prerequisites and Profile
 
 ```bash
 # Re-load paths from session.json (set BX_PERF_SESSION in Step 2). All stdlib, no jq.
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"
-SKILL_DIR="$(read_field skill_dir)"
-PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 echo "Validating prerequisites..."
 # Ensure pytest is importable. Do NOT use `pip install --user` (it misbehaves in
 # uv-managed / Python 3.13+ envs). Only install if genuinely missing, preferring uv.
-if ! $PYTHON_CMD -c "import pytest" 2>/dev/null; then
+if ! "$PYTHON_CMD" -c "import pytest" 2>/dev/null; then
     echo "pytest not found - installing..."
     uv pip install pytest 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_install.txt" \
-        || $PYTHON_CMD -m pip install pytest 2>&1 | tee -a "$BX_PERF_TMPDIR/cache/pytest_install.txt" \
+        || "$PYTHON_CMD" -m pip install pytest 2>&1 | tee -a "$BX_PERF_TMPDIR/cache/pytest_install.txt" \
         || true
 fi
 
 # Detect the test directory portably: prefer pyproject [tool.pytest.ini_options]
 # testpaths, else the first existing of tests/ test/, else let pytest discover.
-TESTDIR="$(python - <<'PY'
+TESTDIR="$("$PYTHON_CMD" - <<'PY'
 import os
 try:
     import tomllib
@@ -214,16 +224,16 @@ echo "Test directory: ${TESTDIR:-<pytest discovery>}"
 # Profile unit tests
 if [ ! -f "$BX_PERF_TMPDIR/perf/test_profile.prof" ]; then
     echo "Profiling unit tests..."
-    $PYTHON_CMD -m cProfile -o "$BX_PERF_TMPDIR/perf/test_profile.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_profiling.txt" || true
+    "$PYTHON_CMD" -m cProfile -o "$BX_PERF_TMPDIR/perf/test_profile.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_profiling.txt" || true
 fi
 
 # Profile local-only tests (if marker exists)
 echo "Profiling local_only tests..."
-$PYTHON_CMD -m cProfile -o "$BX_PERF_TMPDIR/perf/test_local_only.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v -m local_only 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_local_only_profiling.txt" || true
+"$PYTHON_CMD" -m cProfile -o "$BX_PERF_TMPDIR/perf/test_local_only.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v -m local_only 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_local_only_profiling.txt" || true
 
 # Profile integration tests (if marker exists)
 echo "Profiling integrationtest tests..."
-$PYTHON_CMD -m cProfile -o "$BX_PERF_TMPDIR/perf/test_integration.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v -m integrationtest 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_integration_profiling.txt" || true
+"$PYTHON_CMD" -m cProfile -o "$BX_PERF_TMPDIR/perf/test_integration.prof" -m pytest ${TESTDIR:+"$TESTDIR"} -v -m integrationtest 2>&1 | tee "$BX_PERF_TMPDIR/cache/pytest_integration_profiling.txt" || true
 
 echo "Prerequisites validated"
 ```
@@ -236,8 +246,11 @@ Run `find_cache_candidates.py` from the skill directory against the project's Py
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 # Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
 # BX_PERF_FILES, when set, is the list to scan: one path per line.
@@ -252,7 +265,7 @@ else
 fi
 
 if [ "${#python_files[@]}" -gt 0 ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_cache_candidates.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/cache_candidates.txt" 2>&1 || true
+    "$PYTHON_CMD" "$SKILL_DIR/find_cache_candidates.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/cache_candidates.txt" 2>&1 || true
     echo "Cache candidates identified"
 fi
 ```
@@ -267,8 +280,11 @@ Run `find_uncompiled_regex.py` and scan for `re.match()`, `re.search()`, `re.fin
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 # Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
 # BX_PERF_FILES, when set, is the list to scan: one path per line.
@@ -283,7 +299,7 @@ else
 fi
 
 if [ "${#python_files[@]}" -gt 0 ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_uncompiled_regex.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/uncompiled_regex.txt" 2>&1 || true
+    "$PYTHON_CMD" "$SKILL_DIR/find_uncompiled_regex.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/uncompiled_regex.txt" 2>&1 || true
     echo "Uncompiled regex scan complete"
 fi
 ```
@@ -296,15 +312,18 @@ Run `find_hotspots.py` from the skill directory and analyze profiling data:
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 # Analyze hotspots from all available profile files
 > "$BX_PERF_TMPDIR/cache/hotspots.txt"
 for prof_file in "$BX_PERF_TMPDIR/perf/"*.prof; do
     if [ -f "$prof_file" ]; then
         echo "--- $(basename "$prof_file") ---" >> "$BX_PERF_TMPDIR/cache/hotspots.txt"
-        $PYTHON_CMD "$SKILL_DIR/find_hotspots.py" "$prof_file" >> "$BX_PERF_TMPDIR/cache/hotspots.txt" 2>&1 || true
+        "$PYTHON_CMD" "$SKILL_DIR/find_hotspots.py" "$prof_file" >> "$BX_PERF_TMPDIR/cache/hotspots.txt" 2>&1 || true
     fi
 done
 echo "Hot spots identified"
@@ -316,10 +335,13 @@ Run `prioritize_cache_candidates.py` from the skill directory:
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
-$PYTHON_CMD "$SKILL_DIR/prioritize_cache_candidates.py" "$BX_PERF_TMPDIR/cache/cache_candidates.txt" "$BX_PERF_TMPDIR/cache/hotspots.txt" > "$BX_PERF_TMPDIR/cache/priority_cache_candidates.txt" 2>&1 || true
+"$PYTHON_CMD" "$SKILL_DIR/prioritize_cache_candidates.py" "$BX_PERF_TMPDIR/cache/cache_candidates.txt" "$BX_PERF_TMPDIR/cache/hotspots.txt" > "$BX_PERF_TMPDIR/cache/priority_cache_candidates.txt" 2>&1 || true
 echo "Priority candidates identified"
 ```
 
@@ -356,8 +378,11 @@ Run `find_unbounded_memory.py` to flag code that reads big files, huge database 
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; SKILL_DIR="$(read_field skill_dir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && SKILL_DIR="$(read_field skill_dir)" \
+    && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 # Discover Python files into an ARRAY, so a path holding a space stays ONE argument.
 # BX_PERF_FILES, when set, is the list to scan: one path per line.
@@ -372,7 +397,7 @@ else
 fi
 
 if [ "${#python_files[@]}" -gt 0 ]; then
-    $PYTHON_CMD "$SKILL_DIR/find_unbounded_memory.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/memory_candidates.txt" 2>&1 || true
+    "$PYTHON_CMD" "$SKILL_DIR/find_unbounded_memory.py" "${python_files[@]}" > "$BX_PERF_TMPDIR/cache/memory_candidates.txt" 2>&1 || true
     echo "Unbounded-memory candidates identified"
 fi
 ```
@@ -463,12 +488,14 @@ Run the full test suite. Report pass/fail. Summarize effective existing caches t
 
 ```bash
 # Re-load paths from session.json (see Step 2 for read_field / BX_PERF_SESSION).
-read_field() { python -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
-BX_PERF_TMPDIR="$(read_field tmpdir)"; PYTHON_CMD="$(read_field python)"
+bx_py() { local c; for c in python3 python "py -3"; do $c -c "" >/dev/null 2>&1 && { $c "$@"; return; }; done
+    echo "no python3, python or py -3 starts on this machine" >&2; return 127; }
+read_field() { bx_py -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$BX_PERF_SESSION" "$1"; }
+BX_PERF_TMPDIR="$(read_field tmpdir)" && PYTHON_CMD="$(read_field python)" || { echo "cannot read session file '$BX_PERF_SESSION'" >&2; exit 2; }
 
 # Detect the test directory portably (same logic as Step 3): prefer pyproject
 # testpaths, else first existing of tests/ test/, else let pytest discover.
-TESTDIR="$(python - <<'PY'
+TESTDIR="$("$PYTHON_CMD" - <<'PY'
 import os
 try:
     import tomllib
@@ -500,7 +527,7 @@ if [ -f "Makefile" ] && grep -q '^test' Makefile; then
     make test 2>&1 | tee "$BX_PERF_TMPDIR/cache/final_test_run.txt"
     TEST_EXIT=${PIPESTATUS[0]}
 else
-    $PYTHON_CMD -m pytest ${TESTDIR:+"$TESTDIR"} -v 2>&1 | tee "$BX_PERF_TMPDIR/cache/final_test_run.txt"
+    "$PYTHON_CMD" -m pytest ${TESTDIR:+"$TESTDIR"} -v 2>&1 | tee "$BX_PERF_TMPDIR/cache/final_test_run.txt"
     TEST_EXIT=${PIPESTATUS[0]}
 fi
 

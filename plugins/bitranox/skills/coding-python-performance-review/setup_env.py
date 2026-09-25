@@ -31,7 +31,10 @@ What it establishes (the equivalent of the old bash Setup):
 
 Later steps read session.json instead of the /tmp side-channel files, e.g.:
 
-    python -c "import json,sys; print(json.load(open(sys.argv[1]))['tmpdir'])" SESSION_JSON
+    python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['tmpdir'])" SESSION_JSON
+
+(SKILL.md's read_field does the same with the first of python3, python, py -3 that starts: a bare
+`python` is missing on most Linux boxes and on macOS.)
 
 Exit codes: 0 session created, 2 it could not be (no pyproject.toml, or the recorded
 interpreter cannot run or is older than MIN_PYTHON; nothing is created then).
