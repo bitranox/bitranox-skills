@@ -224,8 +224,8 @@ VENDOR_DIRNAMES = {
 }
 
 # LEGACY dirnames: the retired pre-UUID store layout. Kept ONLY for the one-shot migration tools
-# (migrate_to_uuid_store, migrate_memory receipts) and gather_scan's transitional dual-read on
-# downstream installs. Nothing else may key on these.
+# (migrate_memory receipts, the store walks that must never descend into an old store) and
+# gather_scan's transitional dual-read on downstream installs. Nothing else may key on these.
 CURATED_DIRNAME = ".claude-bx-selflearning"
 CURATED_INDEX = "index.md"                    # named `index.md` (not `memory.md`) so it is never
                                               # confused with Claude Code's native `MEMORY.md` tier
@@ -287,41 +287,6 @@ def curated_state_dir(proj):
     """Tree-shared state dir in the LIVE store: `<anchor>/.claude-memory/state`. Per-project files
     inside it encode the project in their filename (see migrate_memory's receipts)."""
     return global_rules_dir(proj) / "state"
-
-
-# ---- Claude Code version gate (the @import load-path depends on a new-enough Claude Code) ---------
-# @import is only honored by a new-enough Claude Code. Detect the running version from
-# CLAUDE_CODE_EXECPATH (`.../versions/X.Y.Z`), fall back to AI_AGENT (`claude-code_X-Y-Z_agent`). No
-# shell-out. Unknown version -> assume supported (fail-open toward functioning; the gate only catches
-# a KNOWN-too-old Claude Code, where it tells the user to upgrade rather than silently misbehaving).
-
-# Conservative floor: @import + the CLAUDE.md cascade predate the changelog's memory entries and work
-# on 2.1.198 (Phase-0 verified). Keep this low; bump only if a real regression pins a higher floor.
-MIN_IMPORT_VERSION = (2, 0, 0)
-
-
-def claude_code_version(env=None):
-    """(major, minor, patch) of the running Claude Code, or None if undetectable.
-    Parses CLAUDE_CODE_EXECPATH then AI_AGENT; both are exposed to hooks (Phase-0 verified)."""
-    env = os.environ if env is None else env
-    m = re.search(r"versions[/\\](\d+)\.(\d+)\.(\d+)", env.get("CLAUDE_CODE_EXECPATH", ""))
-    if not m:
-        m = re.search(r"claude-code[_-](\d+)[._-](\d+)[._-](\d+)", env.get("AI_AGENT", ""))
-    return tuple(int(g) for g in m.groups()) if m else None
-
-
-def import_supported(env=None):
-    """True if the running Claude Code is new enough to honor CLAUDE.md `@import`. Unknown -> True
-    (fail-open). A hook uses this to decide whether to load/capture or to emit the upgrade notice."""
-    v = claude_code_version(env)
-    return True if v is None else v >= MIN_IMPORT_VERSION
-
-
-IMPORT_UPGRADE_NOTICE = (
-    "bitranox memory: this Claude Code is too old for CLAUDE.md `@import` "
-    "(need >= %d.%d.%d); curated memory is not loaded/captured until you upgrade."
-    % MIN_IMPORT_VERSION
-)
 
 
 # ---- cross-platform advisory lock for memory read-modify-write --------------------------------

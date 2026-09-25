@@ -538,3 +538,32 @@ def test_heredoc_bodies_takes_an_unterminated_body_to_the_end():
 def test_heredoc_bodies_excludes_the_opener_and_the_terminator():
     body = S.heredoc_bodies("cat > f <<'EOF'\npayload\nEOF")
     assert body == "payload"
+
+
+# ---- strip_leading_cd: the `cd <dir> &&` preamble is not the command that matters ---------------
+
+def test_strip_leading_cd_drops_a_chain_of_leading_cds():
+    """Without this every `cd /scratch && ...` call names `cd` as what it runs."""
+    assert S.strip_leading_cd("cd /tmp/scratch && cd deeper && git commit -m x") == "git commit -m x"
+
+
+def test_strip_leading_cd_drops_a_cd_on_its_own_line():
+    """A multi-line command opens `cd /path` then a newline, with no `&&` to match."""
+    assert S.strip_leading_cd("cd /tmp/scratch\npytest -q") == "pytest -q"
+
+
+def test_strip_leading_cd_accepts_a_semicolon_and_a_quoted_path():
+    assert S.strip_leading_cd("cd '/path with space'; ls") == "ls"
+    assert S.strip_leading_cd('cd "/other dir" && qm rollback 4242 clean') == "qm rollback 4242 clean"
+
+
+def test_strip_leading_cd_keeps_a_cd_that_is_not_leading():
+    """Control: a cd AFTER the first command is part of the work and stays."""
+    command = "git status && cd /elsewhere && git push"
+    assert S.strip_leading_cd(command) == command
+
+
+def test_strip_leading_cd_keeps_a_bare_cd_with_nothing_after_it():
+    """Control: a lone `cd /x` has no following command to expose, so nothing is removed."""
+    assert S.strip_leading_cd("cd /x") == "cd /x"
+    assert S.strip_leading_cd("") == ""

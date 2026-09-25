@@ -887,7 +887,7 @@ def test_load_pending_keywords_self_heals_junk_written_before_the_filter_existed
     S.clear_pending_keywords(_PROJ)
 
 
-# ---- curated-store relocation, version gate, and cross-platform lock (Phase 1) --------------------
+# ---- curated-store relocation and cross-platform lock (Phase 1) ----------------------------------
 
 def test_curated_paths():
     assert S.CURATED_INDEX == "index.md"          # named index.md, never confused with native MEMORY.md
@@ -917,19 +917,6 @@ def test_ensure_gitignored(home, tmp_path):
     plain = tmp_path / "plain"; plain.mkdir()
     S.ensure_gitignored(str(plain), "CLAUDE.local.md")
     assert not (plain / ".gitignore").exists()
-
-
-def test_claude_code_version_detection():
-    assert S.claude_code_version({"CLAUDE_CODE_EXECPATH": "/x/versions/2.1.198/bin"}) == (2, 1, 198)
-    assert S.claude_code_version({"AI_AGENT": "claude-code_2-1-198_agent"}) == (2, 1, 198)
-    assert S.claude_code_version({"CLAUDE_CODE_EXECPATH": "/no/version/here"}) is None
-    assert S.claude_code_version({}) is None
-
-
-def test_import_supported_gate():
-    assert S.import_supported({"CLAUDE_CODE_EXECPATH": "/x/versions/2.1.198/"}) is True
-    assert S.import_supported({"CLAUDE_CODE_EXECPATH": "/x/versions/1.9.9/"}) is False
-    assert S.import_supported({}) is True            # unknown -> fail-open (assume supported)
 
 
 def test_default_config_new_knobs():

@@ -32,14 +32,6 @@ the skill fires.
 """
 
 
-def _clean(desc):
-    """Strip frontmatter authoring artifacts (a leading '>', wrapping quotes) for display."""
-    desc = (desc or "").strip().lstrip(">").strip()
-    if len(desc) > 1 and desc[0] == desc[-1] == '"':
-        desc = desc[1:-1].strip()
-    return desc
-
-
 def render(skills_dir, taxonomy_file):
     """The full catalog markdown for the given skills dir and taxonomy file."""
     categories = json.loads(Path(taxonomy_file).read_text(encoding="utf-8"))["categories"]
@@ -49,7 +41,7 @@ def render(skills_dir, taxonomy_file):
         name = skill_md.parent.name
         prefix = name.split("-", 1)[0]
         key = prefix if prefix in categories else "uncategorized"
-        grouped.setdefault(key, []).append((name, _clean(_description(skill_md))))
+        grouped.setdefault(key, []).append((name, _description(skill_md)))
         total += 1
     lines = [_HEADER % total]
     order = [c for c in categories if c in grouped] + (

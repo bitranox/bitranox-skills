@@ -44,7 +44,7 @@ WHAT IT WILL NOT SEE. It is blind to damage undone by hand (re-installing, re-ty
 every repo-level undo (`git stash` / `git checkout --` / `git restore` are how a session proves a
 test RED - 101 of the 127 git undos here - and admitting the harder-looking `git reset --hard`,
 `git revert` and `cp` back from a .bak added firings that were all mutate-test-restore proofs), and
-to anything in a subagent transcript (sidechain entries are skipped, as in the ledger).
+to anything in a subagent transcript (sidechain entries are skipped).
 
 Non-blocking (additionalContext), one message per undo event, capped per session, silent on any error.
 """
@@ -56,8 +56,11 @@ import re
 import sys
 from pathlib import Path
 
-from overwatch_ledger import _strip_leading_cd as strip_leading_cd  # noqa: E402 - shared normaliser
-from shell_text import is_shell_tool, strip_heredoc_bodies           # noqa: E402 - shared with the guards
+from shell_text import (  # noqa: E402 - shared with the guards
+    is_shell_tool,
+    strip_heredoc_bodies,
+    strip_leading_cd,
+)
 
 __all__ = [
     "arm_recovery",
@@ -141,9 +144,9 @@ _OPS = tuple((name, re.compile(pattern, re.I)) for name, pattern in _OPS)
 def destructive_ops(text: str) -> set:
     """Canonical names of the destructive operations `text` performs. PURE.
 
-    The heredoc BODY is read here, unlike in the ledger's target extraction: a script authored as
+    The heredoc BODY is read here, unlike in `mentions`: a script authored as
     `cat > purge.ps1 <<'EOS' ... EOS` is where the destruction lives, and the shell line around it
-    says nothing. Comments are stripped first for the same reason the ledger strips heredocs.
+    says nothing. Comments are stripped first: a comment that NAMES a destructive verb performs none.
     """
     return {name for name, pattern in _OPS if pattern.search(strip_comment_lines(text))}
 
@@ -165,8 +168,8 @@ _UNDO = (
 )
 _UNDO = tuple((name, re.compile(pattern, re.I)) for name, pattern in _UNDO)
 
-# A search pattern is DATA. `grep 'qm rollback' log.jsonl` inspects rollbacks and performs none; the
-# ledger learned this the same way, by self-matching on its own investigation.
+# A search pattern is DATA. `grep 'qm rollback' log.jsonl` inspects rollbacks and performs none, and
+# without this the gate self-matches on the session's own investigation of its rollbacks.
 _SEARCH_ARG = re.compile(
     r"\b(?:grep|egrep|fgrep|rg|ag|ack|awk|sed|echo|printf)\b[^|;&\n]*?(?:'[^']*'|\"[^\"]*\")"
 )
@@ -207,9 +210,9 @@ def _basename(path: str) -> str:
 def mentions(tool: str, tool_input: dict) -> set:
     """Every identifiable SUBJECT this call names: guests, hosts, files. PURE.
 
-    Not the ledger's single normalised target. Repetition on a fleet crosses spellings - the guest is
-    `qm rollback 4242` to the hypervisor and an IP to the ssh that runs the script - and a one-target
-    key cannot see that the two are the same machine. Heredoc bodies are stripped: a script's own
+    Every subject, not one normalised target per call. Repetition on a fleet crosses spellings - the
+    guest is `qm rollback 4242` to the hypervisor and an IP to the ssh that runs the script - and a
+    one-target key cannot see that the two are the same machine. Heredoc bodies are stripped: a script's own
     internal paths are not what it is being run against.
     """
     tool_input = tool_input or {}
@@ -313,8 +316,8 @@ def _save(session: str, state: dict) -> None:
 def _tool_calls(chunk: str):
     """(tool, tool_input) for every MAIN-session tool call in a transcript chunk. PURE.
 
-    Sidechain entries are skipped exactly as the ledger skips them: a subagent's calls are not this
-    session's actions, and folding them in makes one dispatched agent look like a burst of repeats.
+    Sidechain entries are skipped: a subagent's calls are not this session's actions, and folding
+    them in makes one dispatched agent look like a burst of repeats.
     """
     for raw in chunk.splitlines():
         raw = raw.strip()
@@ -338,7 +341,7 @@ def _tool_calls(chunk: str):
 def _read_new_lines(transcript: str, offset: int) -> tuple:
     """(complete new text, new offset). Reads only the tail written since `offset`.
 
-    Rebuilding the whole ledger per call costs 400-500 ms on the largest transcripts on this machine
+    Re-reading the whole transcript per call costs 400-500 ms on the largest transcripts on this machine
     (50 MB, 1600 records) and this hook runs on EVERY Bash, Write and Edit. A partial trailing line is
     left for the next call - the file is being appended to while this reads.
     """

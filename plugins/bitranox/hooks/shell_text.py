@@ -546,6 +546,25 @@ def commands_only(command: str) -> str:
     return mask_data_regions(strip_heredoc_bodies(command or ""))
 
 
+# `cd /long/scratch/path && <the command that matters>`. Almost every Bash call in a real session
+# opens this way, so a reader that takes a command's SUBJECT from its opening words would name `cd`
+# for nearly all of them and treat a session's distinct work as one look-alike group.
+_LEADING_CD = re.compile(r"^\s*cd\s+(?:'[^']*'|\"[^\"]*\"|[^\s;&|\n]+)\s*(?:&&|;|\n)\s*")
+
+
+def strip_leading_cd(command: str) -> str:
+    """`command` without its leading `cd <dir> &&` / `cd <dir>;` / `cd <dir>` newline chain. PURE.
+
+    Only the LEADING chain goes: a `cd` after the first real command is part of the work, and a
+    lone `cd <dir>` with nothing after it is left as it is.
+    """
+    previous = None
+    while previous != command:
+        previous = command
+        command = _LEADING_CD.sub("", command, count=1)
+    return command
+
+
 def _split_heredocs(command: str):
     """(command lines, body lines) for `command`, split at every heredoc the shell would open.
 

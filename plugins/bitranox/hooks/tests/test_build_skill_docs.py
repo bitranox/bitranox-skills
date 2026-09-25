@@ -5,6 +5,7 @@ from pathlib import Path
 
 import build_skill_docs as D
 import self_improve_signals as S
+import skill_frontmatter as F
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -38,15 +39,18 @@ def test_render_groups_by_taxonomy_order_with_links_and_descriptions(tmp_path):
     assert "Use when beta code is written under pressure loads" in text
 
 
-def test_render_strips_frontmatter_authoring_artifacts(tmp_path):
+def test_render_prints_the_description_exactly_as_the_shared_reader_returns_it(tmp_path):
+    """The catalog applies no display clean-up of its own. A quoted or block-scalar description is
+    refused by the commit gate (harness_checks.cso_failures_for), so no shipped skill has one; a
+    second normalisation here would only be a place for the catalog and the gate to disagree."""
     skills = tmp_path / "skills"
-    _skill(skills, "meta-quoted", '"Use when quoted descriptions need cleaning for display"')
-    _skill(skills, "meta-arrow", "> Use when blockquoted descriptions need cleaning too")
+    _skill(skills, "meta-quoted", '"Use when quoted descriptions reach the catalog builder"')
     tax = tmp_path / "tax.json"
     _taxonomy(tax)
     text = D.render(skills, tax)
-    assert " - Use when quoted descriptions need cleaning for display\n" in text
-    assert " - Use when blockquoted descriptions need cleaning too\n" in text
+    shared = F.description(skills / "meta-quoted" / "SKILL.md")
+    assert shared.startswith('"')
+    assert " - %s\n" % shared in text
 
 
 def test_render_surfaces_unknown_prefix_instead_of_dropping(tmp_path):

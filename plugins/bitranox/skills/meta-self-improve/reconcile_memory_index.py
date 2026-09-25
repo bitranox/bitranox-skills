@@ -8,7 +8,8 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
     dangling), and emits an ADVISORY warning when a level's always-loaded pointer block grows large;
   * default (reconcile): reports orphan pointers whose central body is missing (a raw body carries no
     title/hook/slug, so a pointer can NOT be reconstructed from a body - orphans are reported, never
-    fabricated; unreferenced bodies are pruned by `migrate_to_uuid_store.py --sync`).
+    fabricated). A body no level points at is a DANGLING body: `--check` / `--check-tree` report
+    it and `--rehome` re-attaches it; nothing here deletes one.
   * `archive_entry` forgets a fact: drop its pointer line + move its central body to `.archive/`.
 
 `parse_frontmatter`/`derive_title`/`derive_hook` are kept for the NATIVE `~/.claude` tier (its topic

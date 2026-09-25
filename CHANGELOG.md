@@ -29,6 +29,40 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.6]
+
+### Fixed
+
+- **`migrate_to_slug_store.py` no longer points a legacy fact at another fact's body.** A slug is
+  taken when a migrated pointer in the same tree already holds it (whichever file the walk reaches
+  first), when another legacy fact claimed it, or when a body file already sits at its path; the
+  legacy fact then gets a suffixed slug (`-2`, `-3`, ...) and the collision is reported. Slugs
+  are compared per tree, so the same slug in two independent trees under one `--root` is not a
+  collision.
+- **`migrate_to_slug_store.py --apply` stops when its backup fails.** Nothing is moved or
+  rewritten, and it exits 1 with the reason. Each touched `CLAUDE.local.md` is copied under
+  `levels/<path relative to the tree anchor>` in the backup dir, so on Windows the copy no longer
+  resolves to the source file itself.
+- **`migrate_to_slug_store.py` reports an undecodable `CLAUDE.local.md` as `UNREADABLE`** and
+  migrates the rest, dry run included, instead of stopping with a traceback.
+- **`migrate_to_slug_store.py` walks hidden directories,** so a tree under `.claude/worktrees/` is
+  found. Stores, backups, vendored dirs and the dream's audit dir are still skipped.
+- **`reconcile_memory_index.py`'s docstring** names the real route for a body no level points at:
+  `--check` / `--check-tree` report it and `--rehome` re-attaches it.
+
+### Removed
+
+- `hooks/overwatch_ledger.py`, which nothing ran. The one helper `recovery-retry-gate` used from
+  it is now `shell_text.strip_leading_cd`.
+- `hooks/migrate_to_uuid_store.py` and `hooks/backfill_body_frontmatter.py`, one-off tools with no
+  caller. `migrate_to_uuid_store.py --sync` could delete live fact bodies.
+- The unused Claude Code version gate in `self_improve_signals` (`claude_code_version`,
+  `import_supported`, `MIN_IMPORT_VERSION`, `IMPORT_UPGRADE_NOTICE`); the memory store does not
+  use `@import`.
+- `build_skill_docs.py`'s own clean-up of quoted and `>` descriptions. The commit gate refuses
+  those forms, and the catalog prints each description as the shared front-matter reader returns
+  it.
+
 ## [7.22.5]
 
 ### Fixed
