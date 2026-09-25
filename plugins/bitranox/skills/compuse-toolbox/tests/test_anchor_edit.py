@@ -7,6 +7,8 @@ of a hand-rolled anchor edit is not a crash, it is a file that looks edited and 
 edited somewhere else entirely.
 """
 import json
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -321,3 +323,262 @@ def test_an_absolute_path_is_accepted(tmp_path):
                        capture_output=True, text=True, check=False, cwd=str(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "charlie" in target.read_text(encoding="utf-8")
+
+
+# --- recoverability must be asked about THIS file, literally ------------------------------------
+
+def _git(tmp_path, *a):
+    return subprocess.run(["git", *a], cwd=str(tmp_path), check=True, capture_output=True,
+                          text=True)
+
+
+def test_a_gitignored_file_with_glob_characters_in_its_name_is_backed_up(tmp_path):
+    """`f[1].md` as a pathspec is a glob matching the tracked `f1.md`, so the ignored file read
+    as tracked and clean, got no backup, and its only copy was overwritten."""
+    _git_repo(tmp_path, name="f1.md")
+    (tmp_path / ".gitignore").write_text("f[[]1].md\n", encoding="utf-8")
+    target = tmp_path / "f[1].md"
+    target.write_bytes(SAMPLE.encode("utf-8"))
+    result = AE.apply_to_file(target, lambda s: s.replace("return 2", "return 22"))
+    assert result.backup is not None, "an ignored file must be backed up"
+    assert result.backup.read_bytes() == SAMPLE.encode("utf-8")
+
+
+def test_a_tracked_clean_file_with_glob_characters_is_still_recognised(tmp_path):
+    """Control: literal matching must still find a tracked file whose name holds [ ]."""
+    target = _git_repo(tmp_path, name="g[1].md")
+    assert AE.is_recoverable_from_git(target) is True
+
+
+def test_a_skip_worktree_file_with_local_edits_is_backed_up(tmp_path):
+    """--skip-worktree makes `git status` report the file clean while it holds local work that
+    exists nowhere in git."""
+    target = _git_repo(tmp_path, name="cfg.ini", body="committed\n")
+    _git(tmp_path, "update-index", "--skip-worktree", "cfg.ini")
+    target.write_bytes(b"local work\n")
+    assert AE.is_recoverable_from_git(target) is False
+    result = AE.apply_to_file(target, lambda s: s.replace("local", "LOCAL"))
+    assert result.backup is not None and result.backup.read_bytes() == b"local work\n"
+
+
+def test_an_assume_unchanged_file_with_local_edits_is_backed_up(tmp_path):
+    target = _git_repo(tmp_path, name="cfg.ini", body="committed\n")
+    _git(tmp_path, "update-index", "--assume-unchanged", "cfg.ini")
+    target.write_bytes(b"local work\n")
+    assert AE.is_recoverable_from_git(target) is False
+
+
+# --- overlapping anchors ------------------------------------------------------------------------
+
+def test_an_overlapping_second_occurrence_makes_the_anchor_ambiguous():
+    """str.count skips overlapping matches: "}\\n}" occurs at 0 AND 2 in "}\\n}\\n}\\n"."""
+    assert AE.occurrences("}\n}\n}\n", "}\n}") == 2
+    with pytest.raises(AE.AnchorError, match="2 times"):
+        AE.replace_exact("}\n}\n}\n", "}\n}", "X")
+
+
+def test_a_non_overlapping_unique_anchor_still_applies():
+    assert AE.replace_exact("}\n}\nz\n", "}\n}", "X") == "X\nz\n"
+
+
+def test_span_refuses_an_overlapping_second_end_marker():
+    text = "start\nbody\n}\n}\n}\n"
+    with pytest.raises(AE.AnchorError, match="more than once"):
+        AE.replace_span(text, "start\n", "}\n}", "", expect_removed_lines=1)
+
+
+def test_span_refuses_a_second_end_marker_after_the_first():
+    text = "start\nbody\nEND\nmiddle\nEND\n"
+    with pytest.raises(AE.AnchorError, match="more than once"):
+        AE.replace_span(text, "start\n", "END", "", expect_removed_lines=2)
+
+
+# --- line endings and bytes ---------------------------------------------------------------------
+
+def test_a_crlf_file_keeps_its_crlf_line_endings(tmp_path):
+    target = tmp_path / "w.txt"
+    target.write_bytes(b"a\r\nb\r\nc\r\n")
+    result = AE.apply_to_file(target, lambda s: AE.replace_exact(s, "b", "B"))
+    assert target.read_bytes() == b"a\r\nB\r\nc\r\n"
+    assert result.backup.read_bytes() == b"a\r\nb\r\nc\r\n"
+
+
+def test_a_multiline_lf_anchor_matches_in_a_crlf_file(tmp_path):
+    target = tmp_path / "w.txt"
+    target.write_bytes(b"a\r\nb\r\nc\r\n")
+    AE.apply_to_file(target, lambda s: AE.insert_at(s, "a\nb\n", "new\n"))
+    assert target.read_bytes() == b"a\r\nb\r\nnew\r\nc\r\n"
+
+
+def test_an_lf_file_stays_lf(tmp_path):
+    target = tmp_path / "u.txt"
+    target.write_bytes(b"a\nb\nc\n")
+    result = AE.apply_to_file(target, lambda s: AE.replace_exact(s, "b", "B"))
+    assert target.read_bytes() == b"a\nB\nc\n"
+    assert result.backup.read_bytes() == b"a\nb\nc\n"
+
+
+def test_a_lone_cr_and_a_mixed_file_are_left_byte_exact(tmp_path):
+    target = tmp_path / "m.txt"
+    target.write_bytes(b"a\rb\r\nc\nd\n")
+    AE.apply_to_file(target, lambda s: AE.replace_exact(s, "d", "D"))
+    assert target.read_bytes() == b"a\rb\r\nc\nD\n"
+
+
+def test_a_utf8_bom_on_the_target_is_preserved(tmp_path):
+    target = tmp_path / "bom.txt"
+    target.write_bytes(b"\xef\xbb\xbfalpha\nbravo\n")
+    AE.apply_to_file(target, lambda s: AE.replace_exact(s, "bravo", "charlie"))
+    assert target.read_bytes() == b"\xef\xbb\xbfalpha\ncharlie\n"
+
+
+def test_a_form_feed_does_not_count_as_a_line_break():
+    """A Python file may hold a form feed; splitlines() would count it as a line break."""
+    text = "start\na\x0cb\nEND\n"
+    out = AE.replace_span(text, "start\n", "END", "", expect_removed_lines=2)
+    assert out == "END\n"
+
+
+def test_an_anchor_file_with_a_bom_still_matches(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\nbravo\n")
+    anchor = tmp_path / "a.txt"
+    anchor.write_bytes(b"\xef\xbb\xbfbravo")
+    proc = _run("replace", str(target), "--anchor-file", str(anchor), "--new-text", "charlie")
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_bytes() == b"alpha\ncharlie\n"
+
+
+# --- exit codes: 1 is a refusal, 2 is usage or IO ------------------------------------------------
+
+def test_a_non_utf8_file_is_exit_2_not_a_traceback(tmp_path):
+    target = tmp_path / "latin.txt"
+    target.write_bytes(b"caf\xe9\n")
+    proc = _run("replace", str(target), "--anchor", "caf", "--new-text", "x", "--json")
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert json.loads(proc.stdout)["ok"] is False
+    assert target.read_bytes() == b"caf\xe9\n"
+
+
+def test_a_missing_anchor_file_is_exit_2(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\n")
+    proc = _run("replace", str(target), "--anchor-file", str(tmp_path / "nope"),
+                "--new-text", "x")
+    assert proc.returncode == 2
+
+
+def test_no_anchor_at_all_is_exit_2(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\n")
+    assert _run("replace", str(target), "--new-text", "x").returncode == 2
+
+
+def test_anchor_and_anchor_file_together_is_exit_2(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\n")
+    anchor = tmp_path / "a.txt"
+    anchor.write_bytes(b"alpha")
+    assert _run("replace", str(target), "--anchor", "alpha", "--anchor-file", str(anchor),
+                "--new-text", "x").returncode == 2
+
+
+_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+@pytest.mark.skipif(_ROOT, reason="root ignores file permission bits")
+def test_a_read_only_target_is_exit_2_and_does_not_claim_nothing_was_written(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\n")
+    os.chmod(target, stat.S_IREAD)
+    try:
+        proc = _run("replace", str(target), "--anchor", "alpha", "--new-text", "x")
+    finally:
+        os.chmod(target, stat.S_IREAD | stat.S_IWRITE)
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert "nothing written" not in proc.stderr
+    assert "f.txt.bak" in proc.stderr
+    assert target.read_bytes() == b"alpha\n"
+
+
+@pytest.mark.skipif(_ROOT or sys.platform == "win32",
+                    reason="root ignores permission bits; a read-only DIRECTORY attribute does "
+                           "not block creating files in it on Windows")
+def test_a_backup_that_cannot_be_written_is_exit_2_and_leaves_the_file(tmp_path):
+    d = tmp_path / "ro"
+    d.mkdir()
+    target = d / "f.txt"
+    target.write_bytes(b"alpha\n")
+    os.chmod(d, stat.S_IREAD | stat.S_IEXEC)
+    try:
+        proc = _run("replace", str(target), "--anchor", "alpha", "--new-text", "x")
+    finally:
+        os.chmod(d, stat.S_IRWXU)
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert target.read_bytes() == b"alpha\n"
+
+
+def test_a_non_cp1252_path_does_not_crash_a_cp1252_stdout(tmp_path):
+    """The success line prints the path on stdout, which is strict on a cp1252 stream."""
+    target = tmp_path / "f\u2717.txt"
+    target.write_bytes(b"alpha\n")
+    proc = subprocess.run([sys.executable, str(TOOL), "replace", str(target), "--anchor",
+                           "alpha", "--new-text", "x", "--no-backup"], capture_output=True,
+                          env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert b"Traceback" not in proc.stderr
+    assert target.read_bytes() == b"x\n"
+
+
+# --- the CLI paths beyond a plain replace --------------------------------------------------------
+
+def test_cli_insert_defaults_to_after(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\nbravo\n")
+    proc = _run("insert", str(target), "--anchor", "alpha\n", "--new-text", "NEW\n", "--no-backup")
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_bytes() == b"alpha\nNEW\nbravo\n"
+
+
+def test_cli_insert_before(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\nbravo\n")
+    proc = _run("insert", str(target), "--anchor", "bravo\n", "--new-text", "NEW\n", "--before",
+                "--no-backup")
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_bytes() == b"alpha\nNEW\nbravo\n"
+
+
+def test_cli_replace_span_with_must_keep(tmp_path):
+    target = tmp_path / "f.py"
+    target.write_bytes(SAMPLE.encode("utf-8"))
+    ok = _run("replace-span", str(target), "--start", "def target():", "--end", "def also_keep():",
+              "--new-text", "", "--expect-removed-lines", "3", "--must-keep", "def keep_me():",
+              "--no-backup")
+    assert ok.returncode == 0, ok.stderr
+    assert "def target():" not in target.read_text(encoding="utf-8")
+
+
+def test_cli_replace_span_refuses_when_must_keep_is_lost(tmp_path):
+    target = tmp_path / "f.py"
+    target.write_bytes(SAMPLE.encode("utf-8"))
+    bad = _run("replace-span", str(target), "--start", "def keep_me():", "--end",
+               "def also_keep():", "--new-text", "", "--expect-removed-lines", "6",
+               "--must-keep", "def target():")
+    assert bad.returncode == 1
+    assert target.read_bytes() == SAMPLE.encode("utf-8")
+
+
+def test_cli_anchor_from_stdin_with_dry_run(tmp_path):
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"alpha\nbravo\n")
+    proc = subprocess.run([sys.executable, str(TOOL), "replace", str(target), "--anchor-file", "-",
+                           "--new-text", "one\ntwo", "--dry-run"], input=b"bravo",
+                          capture_output=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert b"would change" in proc.stdout and b"+1 lines" in proc.stdout
+    assert target.read_bytes() == b"alpha\nbravo\n"
+    assert not (tmp_path / "f.txt.bak").exists()

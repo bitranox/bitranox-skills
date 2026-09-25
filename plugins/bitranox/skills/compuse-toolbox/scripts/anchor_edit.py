@@ -35,9 +35,14 @@ A file git could not restore is copied to `<name>.bak` first - untracked, gitign
 but carrying uncommitted work. Tracked alone is not enough: `git checkout -- <file>` restores from
 HEAD, so for a dirty file it discards precisely the content nobody else has. Every run gets its
 OWN copy - `.bak`, then `.bak.1`, `.bak.2` upward, higher number newer - so no run can destroy the
-state another one recorded, and the run prints the exact path it wrote.
+state another one recorded, and the run prints the exact path it wrote. The copy is byte-exact.
 
-Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error.
+Line endings are kept: a file whose every newline is CRLF is matched and edited as LF (so an LF
+anchor still matches) and written back as CRLF; any other file is edited byte for byte. The file
+must be UTF-8; a BOM is kept.
+
+Exit codes: 0 = the edit was applied, 1 = refused (nothing written), 2 = usage or IO error
+(unreadable or non-UTF-8 file, missing anchor argument, a write that failed).
 """
 from __future__ import annotations
 
@@ -57,9 +62,35 @@ class AnchorError(Exception):
     """
 
 
+class UsageError(Exception):
+    """A bad invocation or an IO failure (exit 2), as opposed to a refusal (exit 1)."""
+
+
+def line_count(text: str) -> int:
+    """Lines as a line-oriented file has them: split on newline only.
+
+    `str.splitlines` also breaks on form feed, U+2028 and friends, so a Python file holding a
+    form feed would count one line more than it has.
+    """
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
 def occurrences(text: str, anchor: str) -> int:
-    """How many times the anchor appears. Zero and two are both refusals, for opposite reasons."""
-    return text.count(anchor)
+    """How many times the anchor appears, OVERLAPPING ones included. Zero and two are both
+    refusals, for opposite reasons.
+
+    `str.count` skips an occurrence that overlaps the previous one, so "}\\n}" in "}\\n}\\n}\\n"
+    counts once although it starts at offsets 0 and 2 - an ambiguous anchor passed as unique.
+    """
+    if not anchor:
+        return len(text) + 1
+    found, at = 0, text.find(anchor)
+    while at != -1:
+        found += 1
+        at = text.find(anchor, at + 1)
+    return found
 
 
 def require_unique(text: str, anchor: str, label: str = "anchor") -> int:
@@ -71,7 +102,7 @@ def require_unique(text: str, anchor: str, label: str = "anchor") -> int:
     """
     found = occurrences(text, anchor)
     if found != 1:
-        head = anchor.strip().splitlines()[0] if anchor.strip() else anchor
+        head = anchor.strip().split("\n")[0] if anchor.strip() else anchor
         raise AnchorError(f"{label} appears {found} times, needs exactly 1: {head!r}")
     return text.index(anchor)
 
@@ -93,7 +124,7 @@ def assert_no_removals(before: str, after: str) -> None:
             i += 1
         j += 1
     if i < len(before):
-        lost_line = before[:i + 1].splitlines()[-1] if before[:i + 1].splitlines() else before[i]
+        lost_line = before[:i + 1].rstrip("\n").split("\n")[-1] or before[i]
         raise AnchorError(f"the edit removed text it should have kept, at: {lost_line!r}")
 
 
@@ -130,7 +161,8 @@ def span_between(text: str, start: str, end: str) -> tuple[int, int]:
     stop = text.find(end, after)
     if stop == -1:
         raise AnchorError(f"end marker never occurs after the start marker: {end!r}")
-    if text.find(end, stop + len(end)) != -1:
+    # From stop + 1, not stop + len(end): a second copy OVERLAPPING the first is still a second.
+    if text.find(end, stop + 1) != -1:
         raise AnchorError(f"end marker occurs more than once after the start marker: {end!r}")
     return begin, stop
 
@@ -145,7 +177,7 @@ def replace_span(text: str, start: str, end: str, new: str, *, expect_removed_li
     check that speaks about the constructs rather than about the offsets.
     """
     begin, stop = span_between(text, start, end)
-    removed = len(text[begin:stop].splitlines())
+    removed = line_count(text[begin:stop])
     if removed != expect_removed_lines:
         raise AnchorError(
             f"the span covers {removed} lines but expected {expect_removed_lines} - "
@@ -175,11 +207,14 @@ def _git(path: Path, *args):
     """Run git in the file's directory, or None when git cannot be run at all.
 
     LC_ALL=C because a localized message is not a stable thing to branch on.
+    GIT_LITERAL_PATHSPECS=1 because the file name is passed as a pathspec, and as a glob
+    `f[1].md` matches a tracked `f1.md`, answering for a different file.
     """
     try:
         return subprocess.run(
             ["git", *args], cwd=str(path.parent), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", env={**os.environ, "LC_ALL": "C"})
+            encoding="utf-8", errors="replace",
+            env={**os.environ, "LC_ALL": "C", "GIT_LITERAL_PATHSPECS": "1"})
     except (OSError, ValueError):
         return None
 
@@ -194,9 +229,12 @@ def is_recoverable_from_git(path: Path) -> bool:
     Both questions are asked, because neither answers the other: `git status --porcelain` is
     EMPTY for a gitignored file exactly as for a clean one, so cleanliness alone reads an ignored
     file as safely stored in git.
+
+    `ls-files -v` must also tag it `H`: a skip-worktree (`S`) or assume-unchanged (lower-case)
+    file reports clean in `git status` whatever local work it holds.
     """
-    tracked = _git(path, "ls-files", "--error-unmatch", "--", path.name)
-    if tracked is None or tracked.returncode != 0:
+    tracked = _git(path, "ls-files", "-v", "--error-unmatch", "--", path.name)
+    if tracked is None or tracked.returncode != 0 or not tracked.stdout.startswith("H "):
         return False
     status = _git(path, "status", "--porcelain", "--", path.name)
     return status is not None and status.returncode == 0 and not status.stdout.strip()
@@ -223,39 +261,77 @@ def next_backup_path(path: Path) -> Path:
     return candidate
 
 
-def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
-    """Read, transform, and write the file, backing it up first when git does not track it."""
-    path = Path(path)
+def _is_all_crlf(text: str) -> bool:
+    """Every newline is part of a CRLF, and there is at least one."""
+    return "\n" in text and text.count("\r\n") == text.count("\n")
+
+
+def _read_file(path: Path) -> tuple[bytes, str]:
+    """(raw bytes, decoded text). UsageError when unreadable or not UTF-8."""
     try:
-        before = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
     except OSError as exc:
-        raise AnchorError(f"cannot read {path}: {exc}")
+        raise UsageError(f"cannot read {path}: {exc}") from exc
+    try:
+        return raw, raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UsageError(f"{path} is not UTF-8 ({exc}); nothing written") from exc
+
+
+def _write_bytes(target: Path, data: bytes, what: str) -> None:
+    try:
+        target.write_bytes(data)
+    except OSError as exc:
+        raise UsageError(f"{what}: {exc}") from exc
+
+
+def apply_to_file(path: Path, transform, *, dry_run: bool = False, backup: bool = True):
+    """Read, transform, and write the file, backing it up first when git does not track it.
+
+    Read and written as BYTES, so line endings survive: an all-CRLF file is transformed as LF
+    (an LF anchor still matches) and written back as CRLF, any other file byte for byte. The
+    backup is the original bytes.
+    """
+    path = Path(path)
+    raw, text = _read_file(path)
+    crlf = _is_all_crlf(text)
+    before = text.replace("\r\n", "\n") if crlf else text
     after = transform(before)
-    delta = len(after.splitlines()) - len(before.splitlines())
+    delta = line_count(after) - line_count(before)
     if dry_run:
         return EditResult(path, delta, None, written=False)
     saved = None
     if backup and not is_recoverable_from_git(path):
         saved = next_backup_path(path)
-        saved.write_text(before, encoding="utf-8")
-    path.write_text(after, encoding="utf-8")
+        _write_bytes(saved, raw, f"cannot write the backup {saved}, nothing written")
+    out = after.replace("\n", "\r\n") if crlf else after
+    where = f"the pre-edit content is in {saved}" if saved else "restore it from git"
+    _write_bytes(path, out.encode("utf-8"),
+                 f"writing {path} failed, it may be unchanged or partly written - {where}")
     return EditResult(path, delta, saved, written=True)
 
 
+def _read_stdin() -> str:
+    """stdin as UTF-8 whatever the locale, with the universal newlines read_text would apply."""
+    data = sys.stdin.buffer.read().decode("utf-8-sig")
+    return data.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _text_from(inline, file_arg, label):
-    """Exactly one of --X / --X-file, with `-` meaning stdin."""
+    """Exactly one of --X / --X-file, with `-` meaning stdin. utf-8-sig: a file written by
+    Windows PowerShell 5.1 starts with a BOM, which would otherwise become part of the anchor."""
     if inline is not None and file_arg is not None:
-        raise AnchorError(f"give either --{label} or --{label}-file, not both")
+        raise UsageError(f"give either --{label} or --{label}-file, not both")
     if inline is not None:
         return inline
     if file_arg is None:
-        raise AnchorError(f"--{label} or --{label}-file is required")
-    if file_arg == "-":
-        return sys.stdin.read()
+        raise UsageError(f"--{label} or --{label}-file is required")
     try:
-        return Path(file_arg).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise AnchorError(f"cannot read --{label}-file: {exc}")
+        if file_arg == "-":
+            return _read_stdin()
+        return Path(file_arg).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UsageError(f"cannot read --{label}-file: {exc}") from exc
 
 
 def _build_transform(args):
@@ -311,7 +387,24 @@ def _parser():
     return ap
 
 
+def _envelope(ok: bool, data: dict) -> str:
+    return json.dumps({"ok": ok, "command": "anchor_edit", "skipped": [], "data": data}, indent=2)
+
+
+def _reconfigure_streams() -> None:
+    """A cp1252 console or pipe must print '?' for an unencodable path, not crash after the
+    write has already happened."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv=None) -> int:
+    _reconfigure_streams()
     args = _parser().parse_args(argv)
     target = Path(args.file)
     if not target.is_absolute():
@@ -330,13 +423,18 @@ def main(argv=None) -> int:
                                backup=not args.no_backup)
     except AnchorError as exc:
         if args.json:
-            print(json.dumps({"ok": False, "command": "anchor_edit", "skipped": [],
-                              "data": {"reason": str(exc)}}, indent=2))
+            print(_envelope(False, {"reason": str(exc)}))
         print(f"anchor_edit: refused, nothing written - {exc}", file=sys.stderr)
         return 1
+    except UsageError as exc:
+        # The message itself says whether anything was written: a failed target write may
+        # already have left a backup behind.
+        if args.json:
+            print(_envelope(False, {"reason": str(exc)}))
+        print(f"anchor_edit: error - {exc}", file=sys.stderr)
+        return 2
     if args.json:
-        print(json.dumps({"ok": True, "command": "anchor_edit", "skipped": [],
-                          "data": result.as_data()}, indent=2))
+        print(_envelope(True, result.as_data()))
     else:
         verb = "would change" if args.dry_run else "changed"
         # The exact path, because a later run writes .bak.1, .bak.2 and so on - printing a bare

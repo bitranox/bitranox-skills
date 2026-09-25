@@ -16,6 +16,9 @@ outcome has THREE buckets rather than two:
     UNUSABLE    probe fired AND control fired     - the control did not discriminate, so this run
                                                     says nothing; fix the control and re-run
 
+plus ERROR when the HARNESS could not run a side at all (it timed out, or the subject could not be
+launched). That is not a firing: a hung probe scored as "fired" would read as CONFIRMED.
+
 When EVERY claim comes back UNUSABLE the fault is usually the SUBJECT rather than the controls: it
 fires on every input it is given, and under the default `--fired-when output` a banner it always
 prints counts as firing. The report says which of the two it is, because the fix differs.
@@ -39,8 +42,12 @@ Run:
                                   --control '{"tool_input":{"command":"echo y"}}'`
   `uv run scripts/adjudicate.py --hook hooks/some-guard.py --claim-file claims.jsonl --json`
 
+In a claim file, `probe`/`control` are a string or a JSON object (sent as its JSON text), and the
+optional `probe_args`/`control_args` are lists of strings.
+
 Exit codes: 0 = every claim adjudicated (confirmed or refuted), 1 = at least one UNUSABLE,
-2 = usage or IO error. `--json` emits the machine-readable envelope on every path.
+2 = usage or IO error, or at least one ERROR claim. `--json` emits the machine-readable envelope
+on every path; a usage error gives `{"ok": false, "data": {"reason": ...}}`.
 """
 from __future__ import annotations
 
@@ -50,6 +57,7 @@ import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 FIRED_MODES = ("output", "nonzero", "match")
 
@@ -61,6 +69,8 @@ class Run:
     returncode: int = 0
     stdout: str = ""
     stderr: str = ""
+    # Set only when the HARNESS failed (timeout, launch failure); the subject's own exit code is data.
+    harness_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +99,10 @@ class Adjudication:
     control_run: Run
     probe_fired: bool
     control_fired: bool
+
+
+class UsageError(Exception):
+    """A bad invocation or unreadable input; main reports it and exits 2."""
 
 
 def verdict_for(probe_fired: bool, control_fired: bool) -> str:
@@ -136,10 +150,12 @@ def run_once(subject: list[str], stdin: str, args: list[str], timeout: float = 6
             [*subject, *args], input=stdin, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        # A hung subject is not a silent zero: name it so it cannot read as "did not fire".
-        return Run(returncode=124, stderr=f"adjudicate: timed out after {timeout}s")
+        # A hung subject is neither "fired" nor "did not fire": mark it so the claim scores ERROR.
+        message = f"adjudicate: timed out after {timeout}s"
+        return Run(returncode=124, stderr=message, harness_error=message)
     except OSError as exc:
-        return Run(returncode=126, stderr=f"adjudicate: cannot run subject: {exc}")
+        message = f"adjudicate: cannot run subject: {exc}"
+        return Run(returncode=126, stderr=message, harness_error=message)
     return Run(completed.returncode, completed.stdout or "", completed.stderr or "")
 
 
@@ -150,6 +166,9 @@ def adjudicate(subject: list[str], claims: list[Claim], mode: str, pattern: str 
     for claim in claims:
         probe_run = run_once(subject, claim.probe, claim.probe_args, timeout)
         control_run = run_once(subject, claim.control, claim.control_args, timeout)
+        if probe_run.harness_error or control_run.harness_error:
+            results.append(Adjudication(claim.name, "ERROR", probe_run, control_run, False, False))
+            continue
         p_fired = fired(probe_run, mode, pattern)
         c_fired = fired(control_run, mode, pattern)
         results.append(Adjudication(claim.name, verdict_for(p_fired, c_fired),
@@ -158,12 +177,14 @@ def adjudicate(subject: list[str], claims: list[Claim], mode: str, pattern: str 
 
 
 def summarize(results: list[Adjudication]) -> dict:
-    """Counts per bucket, plus `ok` - which is FALSE when any control failed to discriminate.
+    """Counts per bucket, plus `ok` - which is FALSE when any control failed to discriminate or
+    any claim could not be run at all.
 
     `ok` deliberately does not mean "the claims were confirmed". A run where every claim is refuted
-    worked perfectly; a run with one UNUSABLE did not measure what it reports.
+    worked perfectly; a run with one UNUSABLE or ERROR did not measure what it reports.
     """
     unusable = [r.name for r in results if r.verdict == "UNUSABLE"]
+    errors = [r.name for r in results if r.verdict == "ERROR"]
     return {
         "total": len(results),
         "confirmed": sum(1 for r in results if r.verdict == "CONFIRMED"),
@@ -171,8 +192,37 @@ def summarize(results: list[Adjudication]) -> dict:
         "unusable": len(unusable),
         "unusable_names": unusable,
         "confirmed_names": [r.name for r in results if r.verdict == "CONFIRMED"],
-        "ok": not unusable,
+        "error": len(errors),
+        "error_names": errors,
+        "ok": not unusable and not errors,
     }
+
+
+def _stdin_payload(value, where: str, key: str) -> str:
+    """A side's stdin: a string as-is, a JSON object (a hook payload) as its JSON text."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value)
+    raise ValueError(f"{where}: '{key}' must be a string or a JSON object, not {type(value).__name__}")
+
+
+def _argv_list(value, where: str, key: str) -> list[str]:
+    """Extra argv for a side. A bare string is refused: list("--flag") is single characters."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{where}: '{key}' must be a list of strings")
+    return list(value)
+
+
+def _claim_from_line(line: str, where: str, number: int) -> Claim:
+    obj = json.loads(line)
+    if not isinstance(obj, dict) or "probe" not in obj or "control" not in obj:
+        raise ValueError(f"{where}: a claim needs both 'probe' and 'control'")
+    return Claim(name=str(obj.get("name") or f"line{number}"),
+                 probe=_stdin_payload(obj["probe"], where, "probe"),
+                 control=_stdin_payload(obj["control"], where, "control"),
+                 probe_args=_argv_list(obj.get("probe_args", []), where, "probe_args"),
+                 control_args=_argv_list(obj.get("control_args", []), where, "control_args"))
 
 
 def load_claims(claim_file, name, probe, control) -> list[Claim]:
@@ -183,19 +233,12 @@ def load_claims(claim_file, name, probe, control) -> list[Claim]:
     """
     claims: list[Claim] = []
     if claim_file:
-        with open(claim_file, encoding="utf-8") as handle:
+        # utf-8-sig: a claim file written by Windows PowerShell 5.1 starts with a BOM.
+        with open(claim_file, encoding="utf-8-sig") as handle:
             for number, line in enumerate(handle, start=1):
                 line = line.strip()
-                if not line:
-                    continue
-                obj = json.loads(line)
-                if not isinstance(obj, dict) or "probe" not in obj or "control" not in obj:
-                    raise ValueError(
-                        f"{claim_file}:{number}: a claim needs both 'probe' and 'control'")
-                claims.append(Claim(name=obj.get("name") or f"line{number}",
-                                    probe=obj["probe"], control=obj["control"],
-                                    probe_args=list(obj.get("probe_args", [])),
-                                    control_args=list(obj.get("control_args", []))))
+                if line:
+                    claims.append(_claim_from_line(line, f"{claim_file}:{number}", number))
     if probe is not None or control is not None:
         if probe is None or control is None:
             raise ValueError("--probe and --control must be given together")
@@ -230,12 +273,43 @@ def _report(results: list[Adjudication], summary: dict) -> None:
         if result.verdict == "UNUSABLE":
             print("             control fired too - it does not differ from the probe in the "
                   "claimed way. Fix the control and re-run.")
+        if result.verdict == "ERROR":
+            cause = result.probe_run.harness_error or result.control_run.harness_error
+            print(f"             {cause} - nothing was measured.")
     print(f"\n  {summary['confirmed']} confirmed, {summary['refuted']} refuted, "
-          f"{summary['unusable']} unusable, of {summary['total']}")
+          f"{summary['unusable']} unusable, {summary['error']} error, of {summary['total']}")
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(
+def _warn(summary: dict) -> None:
+    """Always stderr, --json included, so stdout stays a clean parseable envelope."""
+    if summary["error"]:
+        print(f"adjudicate: {summary['error']} claim(s) ERROR - the harness could not run a side "
+              f"(timed out, or the subject could not be launched), so nothing was measured: "
+              f"{', '.join(summary['error_names'])}. Do NOT read them as confirmed or refuted.",
+              file=sys.stderr)
+    if not summary["unusable"]:
+        return
+    if unusable_cause(summary) == "subject":
+        print(f"adjudicate: ALL {summary['total']} claim(s) UNUSABLE - the subject fired on "
+              f"every input, including every control, so nothing was measured. That is usually "
+              f"the subject rather than the controls: under --fired-when output any banner it "
+              f"always prints counts as firing. Try --fired-when nonzero, or --fired-when "
+              f"match with --fired-pattern. Do NOT read these as refuted.", file=sys.stderr)
+    else:
+        print(f"adjudicate: {summary['unusable']} claim(s) UNUSABLE - the control fired too, so "
+              f"these were never actually tested: {', '.join(summary['unusable_names'])}. "
+              f"Do NOT read them as refuted.", file=sys.stderr)
+
+
+class _Parser(argparse.ArgumentParser):
+    """An argparse error becomes a UsageError, so --json can still emit its envelope."""
+
+    def error(self, message):
+        raise UsageError(message)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _Parser(
         description="Score a claim about a guard by running it on a probe AND a control.")
     parser.add_argument("--hook", help="a hook/script path, run with the current interpreter")
     parser.add_argument("--name", help="name for the inline claim")
@@ -247,43 +321,69 @@ def main(argv=None) -> int:
     parser.add_argument("--fired-pattern", help="regex, required when --fired-when match")
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--json", action="store_true", help="emit the machine-readable envelope")
-    args = parser.parse_args(argv)
+    return parser
 
+
+def _validate(args) -> list[Claim]:
+    """Everything checkable BEFORE a subject runs; raises UsageError."""
     if not args.hook:
-        print("adjudicate: no subject - pass --hook <path>", file=sys.stderr)
-        return 2
+        raise UsageError("no subject - pass --hook <path>")
+    if not Path(args.hook).is_file():
+        raise UsageError(f"--hook {args.hook!r} is not a file")
     if args.fired_when == "match" and not args.fired_pattern:
-        print("adjudicate: --fired-when match needs --fired-pattern", file=sys.stderr)
-        return 2
-
+        raise UsageError("--fired-when match needs --fired-pattern")
+    if args.fired_pattern is not None:
+        try:
+            re.compile(args.fired_pattern)
+        except re.error as exc:
+            raise UsageError(f"--fired-pattern is not a valid regex: {exc}") from exc
     try:
         claims = load_claims(args.claim_file, args.name, args.probe, args.control)
     except OSError as exc:
-        print(f"adjudicate: cannot read --claim-file {args.claim_file!r}: {exc}", file=sys.stderr)
-        return 2
-    except (ValueError, json.JSONDecodeError) as exc:
-        print(f"adjudicate: {exc}", file=sys.stderr)
-        return 2
+        raise UsageError(f"cannot read --claim-file {args.claim_file!r}: {exc}") from exc
+    except ValueError as exc:  # json.JSONDecodeError is a ValueError
+        raise UsageError(str(exc)) from exc
     if not claims:
-        print("adjudicate: no claims - pass --probe/--control or --claim-file", file=sys.stderr)
-        return 2
+        raise UsageError("no claims - pass --probe/--control or --claim-file")
+    return claims
+
+
+def _usage_failure(reason: str, as_json: bool) -> int:
+    print(f"adjudicate: {reason}", file=sys.stderr)
+    if as_json:
+        print(json.dumps({"ok": False, "command": "adjudicate", "skipped": [],
+                          "data": {"reason": reason}}, indent=2))
+    return 2
+
+
+def _reconfigure_streams() -> None:
+    """A cp1252 console or pipe must print '?' for an unencodable claim name, not crash."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+def main(argv=None) -> int:
+    _reconfigure_streams()
+    raw = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = _parser().parse_args(raw)
+    except UsageError as exc:
+        # SystemExit(2) keeps argparse's contract for callers; the envelope is printed first.
+        raise SystemExit(_usage_failure(str(exc), "--json" in raw)) from exc
+    try:
+        claims = _validate(args)
+    except UsageError as exc:
+        return _usage_failure(str(exc), args.json)
 
     results = adjudicate(subject_for_hook(args.hook), claims, args.fired_when,
                          args.fired_pattern, timeout=args.timeout)
     summary = summarize(results)
-
-    if not summary["ok"]:
-        # Always stderr, --json included, so stdout stays a clean parseable envelope.
-        if unusable_cause(summary) == "subject":
-            print(f"adjudicate: ALL {summary['total']} claim(s) UNUSABLE - the subject fired on "
-                  f"every input, including every control, so nothing was measured. That is usually "
-                  f"the subject rather than the controls: under --fired-when output any banner it "
-                  f"always prints counts as firing. Try --fired-when nonzero, or --fired-when "
-                  f"match with --fired-pattern. Do NOT read these as refuted.", file=sys.stderr)
-        else:
-            print(f"adjudicate: {summary['unusable']} claim(s) UNUSABLE - the control fired too, so "
-                  f"these were never actually tested: {', '.join(summary['unusable_names'])}. "
-                  f"Do NOT read them as refuted.", file=sys.stderr)
+    _warn(summary)
 
     if args.json:
         print(json.dumps({"ok": summary["ok"], "command": "adjudicate", "skipped": [],
@@ -291,6 +391,8 @@ def main(argv=None) -> int:
                                    "results": [asdict(r) for r in results]}}, indent=2))
     else:
         _report(results, summary)
+    if summary["error"]:
+        return 2
     return 0 if summary["ok"] else 1
 
 

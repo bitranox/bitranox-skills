@@ -30,13 +30,16 @@ before the work starts provides no coverage at all while reporting success on it
 and nothing downstream can detect that.
 
 Exit codes: 0 = the work finished (or the controller cancelled), 1 = TIMEOUT, go and look,
-2 = refused to arm / usage error.
+2 = refused to arm / usage error, or the --repo signal was LOST mid-run (the repo vanished or
+git failed), which cannot tell finished from failed - go and look.
 """
 
 from __future__ import annotations
 
 import argparse
 import enum
+import math
+import re
 import subprocess
 import sys
 import time
@@ -51,12 +54,20 @@ __all__ = [
     "decide",
     "probe_now",
     "validate_arm",
+    "validate_timing",
     "wait",
 ]
+
+# An abbreviated or full commit id; "HEAD", a branch name or an empty string is not one.
+_SHA = re.compile(r"[0-9a-fA-F]{7,64}")
 
 
 class ArmRefused(Exception):
     """The backstop would provide no coverage, so it was not armed."""
+
+
+class SignalLost(Exception):
+    """A signal that was readable at arm time can no longer be read (the repo vanished)."""
 
 
 class Outcome(enum.Enum):
@@ -64,14 +75,17 @@ class Outcome(enum.Enum):
     DONE = "done"
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
+    LOST = "lost"
 
 
 @dataclass(frozen=True)
 class Probe:
-    """One sample of the world: has the controller cancelled, and is the work finished."""
+    """One sample of the world: has the controller cancelled, is the work finished, and did a
+    signal become unreadable (``lost`` holds why)."""
 
     cancelled: bool
     done: bool
+    lost: str | None = None
 
 
 def decide(probe: Probe, *, elapsed: float, deadline: float) -> Outcome:
@@ -83,30 +97,62 @@ def decide(probe: Probe, *, elapsed: float, deadline: float) -> Outcome:
       "the subject reported" must never still produce a timeout.
     * DONE outranks TIMEOUT, so a worker that finishes in the same tick the deadline expires is
       reported finished rather than hung.
+    * LOST (a signal became unreadable) ends the wait at once: waiting out the deadline on a
+      signal that can never answer would report a TIMEOUT for work that may well have finished.
     """
     if probe.cancelled:
         return Outcome.CANCELLED
     if probe.done:
         return Outcome.DONE
+    if probe.lost is not None:
+        return Outcome.LOST
     if elapsed >= deadline:
         return Outcome.TIMEOUT
     return Outcome.WAIT
 
 
 def _head(repo: Path) -> str:
-    out = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
-    return out.stdout.strip()
+    """HEAD's sha. Raises SignalLost when git cannot answer (not a repo, repo gone, no git)."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "HEAD"],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except subprocess.CalledProcessError as exc:
+        raise SignalLost(f"git rev-parse HEAD in {repo} exited {exc.returncode}") from exc
+    except OSError as exc:
+        raise SignalLost(f"cannot run git for {repo}: {exc}") from exc
+    head = out.stdout.strip()
+    if not _SHA.fullmatch(head):
+        raise SignalLost(f"git rev-parse HEAD in {repo} returned {head!r}, not a sha")
+    return head
 
 
 def _head_moved(repo: Path, base: str) -> bool:
     """True when HEAD is no longer the base commit. Compared on the SHORTER of the two strings so
-    an abbreviated base (the form a human pastes) matches a full sha."""
-    head = _head(repo)
+    an abbreviated base (the form a human pastes) matches a full sha; validate_arm guarantees the
+    base is at least 7 hex digits, so the comparison is never over zero characters."""
+    head = _head(repo).lower()
     n = min(len(head), len(base))
-    return head[:n] != base[:n]
+    return head[:n] != base.lower()[:n]
+
+
+def validate_timing(*, deadline: float, interval: float, settle: float | None) -> None:
+    """Refuse timing values that would disarm the backstop without saying so.
+
+    A NaN or infinite deadline never compares as reached, so the waiter runs forever; a zero or
+    negative one times out on the first poll. A zero interval spins and makes the default settle
+    window zero, so a half-written done-file counts as finished.
+
+    Raises:
+        ArmRefused: any value is non-finite, or deadline/interval is not positive, or settle is
+            negative.
+    """
+    for name, value in (("--deadline", deadline), ("--interval", interval)):
+        if not math.isfinite(value) or value <= 0:
+            raise ArmRefused(f"{name} must be a positive finite number of seconds, got {value}")
+    if settle is not None and (not math.isfinite(settle) or settle < 0):
+        raise ArmRefused(f"--settle must be a finite number of seconds >= 0, got {settle}")
 
 
 def validate_arm(
@@ -147,7 +193,16 @@ def validate_arm(
     if repo is not None:
         if base is None:
             raise ArmRefused("--repo needs --base (the commit the work starts from)")
-        if _head_moved(repo, base):
+        if not _SHA.fullmatch(base):
+            raise ArmRefused(
+                f"--base {base!r} is not a commit sha (7 or more hex digits) - an empty or "
+                "symbolic base can never be seen to move, so a finished worker reads as a TIMEOUT"
+            )
+        try:
+            moved = _head_moved(repo, base)
+        except SignalLost as exc:
+            raise ArmRefused(f"cannot read HEAD of {repo}: {exc}") from exc
+        if moved:
             raise ArmRefused(
                 f"{repo} HEAD has already moved past {base}, so the exit condition is satisfied "
                 "before the work starts - pass the CURRENT head as --base"
@@ -207,7 +262,8 @@ def probe_now(
     base: str | None,
     now: float = 0.0,
 ) -> Probe:
-    """Sample the world once. A missing repo or file simply contributes False.
+    """Sample the world once. A missing done-file or cancel-file simply contributes False; a
+    repo whose HEAD can no longer be read sets ``lost``, since it can never answer again.
 
     The done-file half is asked through a ``DoneFileWatch`` rather than a bare path, so no
     caller can reach exists()-only semantics and stand down over a half-written report. ``now``
@@ -215,9 +271,13 @@ def probe_now(
     """
     cancelled = cancel_file is not None and cancel_file.exists()
     done = done_watch is not None and done_watch.finished(now)
+    lost = None
     if not done and repo is not None and base is not None:
-        done = _head_moved(repo, base)
-    return Probe(cancelled=cancelled, done=done)
+        try:
+            done = _head_moved(repo, base)
+        except SignalLost as exc:
+            lost = str(exc)
+    return Probe(cancelled=cancelled, done=done, lost=lost)
 
 
 def wait(
@@ -233,13 +293,34 @@ def wait(
     now: object = time.monotonic,
     sleep: object = time.sleep,
 ) -> tuple[Outcome, float]:
-    """Poll until the work finishes, the controller cancels, or the deadline expires.
+    """Poll until the work finishes, the controller cancels, the deadline expires, or the repo
+    signal is lost.
 
     ``settle`` is how long the done-file's size must hold before it counts as finished; None
     means one poll interval, which is the shortest window a poller can actually observe.
 
     ``now`` and ``sleep`` are injected so the loop is testable without real time.
     """
+    outcome, elapsed, _ = _wait_with_probe(
+        deadline=deadline, interval=interval, done_file=done_file, cancel_file=cancel_file,
+        repo=repo, base=base, settle=settle, now=now, sleep=sleep,
+    )
+    return outcome, elapsed
+
+
+def _wait_with_probe(
+    *,
+    deadline: float,
+    interval: float,
+    done_file: Path | None,
+    cancel_file: Path | None,
+    repo: Path | None,
+    base: str | None,
+    settle: float | None,
+    now: object,
+    sleep: object,
+) -> tuple[Outcome, float, Probe]:
+    """wait(), also returning the last probe so the caller can say WHY a signal was lost."""
     clock = now  # type: ignore[assignment]
     napper = sleep  # type: ignore[assignment]
     start = clock()  # type: ignore[operator]
@@ -251,11 +332,11 @@ def wait(
         )
         outcome = decide(probe, elapsed=elapsed, deadline=deadline)
         if outcome is not Outcome.WAIT:
-            return outcome, elapsed
+            return outcome, elapsed, probe
         napper(interval)  # type: ignore[operator]
 
 
-def _report(outcome: Outcome, elapsed: float, label: str) -> int:
+def _report(outcome: Outcome, elapsed: float, label: str, lost: str | None = None) -> int:
     tag = f" [{label}]" if label else ""
     secs = f"{elapsed:.0f}s"
     if outcome is Outcome.DONE:
@@ -264,11 +345,33 @@ def _report(outcome: Outcome, elapsed: float, label: str) -> int:
     if outcome is Outcome.CANCELLED:
         print(f"BACKSTOP{tag}: cancelled by the controller at {secs} - nothing wrong")
         return 0
+    if outcome is Outcome.LOST:
+        print(f"BACKSTOP{tag}: signal LOST at {secs} ({lost}) - cannot tell finished from "
+              "failed; investigate")
+        return 2
     print(f"BACKSTOP{tag}: TIMEOUT after {secs} - investigate or take over")
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def _reconfigure_streams() -> None:
+    """A cp1252 console or pipe must print '?' for an unencodable label, not crash."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    now: object = time.monotonic,
+    sleep: object = time.sleep,
+) -> int:
+    """CLI entry point. ``now`` and ``sleep`` are the clock seam, injected by tests."""
+    _reconfigure_streams()
     p = argparse.ArgumentParser(
         description="Arm a deadline over async work; refuse to arm one already satisfied."
     )
@@ -299,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
 
     try:
+        validate_timing(deadline=a.deadline, interval=a.interval, settle=a.settle)
         validate_arm(
             done_file=a.done_file, repo=a.repo, base=a.base, cancel_file=a.cancel_file
         )
@@ -306,17 +410,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"BACKSTOP REFUSED: {exc}", file=sys.stderr)
         return 2
 
-    outcome, elapsed = wait(
+    outcome, elapsed, probe = _wait_with_probe(
         deadline=a.deadline,
         interval=a.interval,
         done_file=a.done_file,
         cancel_file=a.cancel_file,
         repo=a.repo,
         base=a.base,
-        label=a.label,
         settle=a.settle,
+        now=now,
+        sleep=sleep,
     )
-    return _report(outcome, elapsed, a.label)
+    return _report(outcome, elapsed, a.label, probe.lost)
 
 
 if __name__ == "__main__":

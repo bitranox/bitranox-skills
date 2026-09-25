@@ -5,6 +5,7 @@ folds "the control did not discriminate" into "refuted" reports a clean sweep ov
 which is what this replaces.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -258,4 +259,179 @@ def test_the_partial_unusable_warning_still_points_at_the_control(tmp_path, caps
                  '{"name":"bad","probe":"TRAP","control":"BOTH"}\n', encoding="utf-8")
     A.main(["--hook", str(hook), "--claim-file", str(f)])
     err = capsys.readouterr().err
-    assert "control" in err
+    # The control-branch wording, and the claim it names: a bare "control" also appears in the
+    # subject-branch message ("including every control"), so it could not tell the two apart.
+    assert "the control fired too" in err
+    assert "bad" in err
+    assert "the subject fired on every input" not in err
+
+
+# ---- a harness failure is its own bucket, never "fired" ----------------------------------------
+
+def _hanging_hook(tmp_path):
+    return _fake_hook(tmp_path, 'import time\ndata = sys.stdin.read()\n'
+                                'if "HANG" in data: time.sleep(30)\n')
+
+
+def test_a_timed_out_probe_is_error_not_confirmed(tmp_path):
+    claim = A.Claim(name="c", probe="HANG", control="clean")
+    result = A.adjudicate(A.subject_for_hook(_hanging_hook(tmp_path)), [claim], "output", None,
+                          timeout=1)[0]
+    assert result.verdict == "ERROR"
+    assert result.probe_fired is False
+
+
+@pytest.mark.parametrize("mode", ["output", "nonzero"])
+def test_cli_exits_2_when_the_probe_times_out(tmp_path, capsys, mode):
+    rc = A.main(["--hook", str(_hanging_hook(tmp_path)), "--name", "c", "--probe", "HANG",
+                 "--control", "clean", "--timeout", "1", "--fired-when", mode])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert "CONFIRMED" not in cap.out
+    assert "ERROR" in cap.out and "timed out" in cap.err
+
+
+def test_a_timed_out_control_is_error_too(tmp_path):
+    hook = _fake_hook(tmp_path, 'import time\ndata = sys.stdin.read()\n'
+                                'if "TRAP" in data: print("f")\nif "HANG" in data: time.sleep(30)\n')
+    claim = A.Claim(name="c", probe="TRAP", control="HANG")
+    result = A.adjudicate(A.subject_for_hook(hook), [claim], "output", None, timeout=1)[0]
+    assert result.verdict == "ERROR"
+
+
+def test_a_subject_that_cannot_be_launched_is_error(tmp_path):
+    claim = A.Claim(name="c", probe="x", control="y")
+    result = A.adjudicate([str(tmp_path / "no-such-interpreter")], [claim], "nonzero", None)[0]
+    assert result.verdict == "ERROR"
+    assert "cannot run subject" in result.probe_run.harness_error
+
+
+def test_a_subject_that_itself_exits_124_is_still_scored(tmp_path):
+    """Only the HARNESS failing is an error; a subject's own exit code is data."""
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nif "TRAP" in data: sys.exit(124)\n')
+    claim = A.Claim(name="c", probe="TRAP", control="clean")
+    assert A.adjudicate(A.subject_for_hook(hook), [claim], "nonzero", None)[0].verdict == "CONFIRMED"
+
+
+def test_summary_counts_errors_and_is_not_ok():
+    results = [A.Adjudication("e", "ERROR", A.Run(124, harness_error="timed out"), A.Run(0),
+                              False, False)]
+    s = A.summarize(results)
+    assert (s["error"], s["error_names"], s["ok"]) == (1, ["e"], False)
+
+
+# ---- claim-file validation ---------------------------------------------------------------------
+
+def test_an_object_valued_probe_is_serialised_as_json(tmp_path):
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"o","probe":{"tool_input":{"command":"TRAP"}},"control":"clean"}\n',
+                 encoding="utf-8")
+    claim = A.load_claims(str(f), None, None, None)[0]
+    assert json.loads(claim.probe) == {"tool_input": {"command": "TRAP"}}
+
+
+def test_an_object_valued_probe_runs_end_to_end(tmp_path, capsys):
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nif "TRAP" in data: print("fired")\n')
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"o","probe":{"tool_input":{"command":"TRAP"}},'
+                 '"control":{"tool_input":{"command":"x"}}}\n', encoding="utf-8")
+    assert A.main(["--hook", str(hook), "--claim-file", str(f)]) == 0
+    assert "CONFIRMED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad", ["42", "null", "true", "[1]"])
+def test_a_non_string_non_object_probe_is_rejected(tmp_path, bad):
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"o","probe":' + bad + ',"control":"clean"}\n', encoding="utf-8")
+    with pytest.raises(ValueError):
+        A.load_claims(str(f), None, None, None)
+
+
+@pytest.mark.parametrize("bad", ['"--flag"', '["--flag", 3]', '{"a": 1}'])
+def test_probe_args_must_be_a_list_of_strings(tmp_path, bad):
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"s","probe":"","control":"","probe_args":' + bad + '}\n',
+                 encoding="utf-8")
+    with pytest.raises(ValueError):
+        A.load_claims(str(f), None, None, None)
+
+
+def test_a_string_probe_args_exits_2_not_a_silent_refuted(tmp_path):
+    hook = _fake_hook(tmp_path, 'if "--flag" in sys.argv: print("fired")\n')
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name":"s","probe":"","control":"","probe_args":"--flag"}\n', encoding="utf-8")
+    assert A.main(["--hook", str(hook), "--claim-file", str(f)]) == 2
+
+
+def test_a_claim_file_with_a_utf8_bom_is_read(tmp_path):
+    f = tmp_path / "claims.jsonl"
+    f.write_bytes(b"\xef\xbb\xbf" + b'{"name":"b","probe":"TRAP","control":"clean"}\n')
+    assert [c.name for c in A.load_claims(str(f), None, None, None)] == ["b"]
+
+
+def test_a_malformed_claim_file_exits_2(tmp_path):
+    hook = _fake_hook(tmp_path, "sys.stdin.read()\n")
+    f = tmp_path / "claims.jsonl"
+    f.write_text('{"name": not json}\n', encoding="utf-8")
+    assert A.main(["--hook", str(hook), "--claim-file", str(f)]) == 2
+
+
+def test_probe_without_control_exits_2(tmp_path):
+    hook = _fake_hook(tmp_path, "sys.stdin.read()\n")
+    assert A.main(["--hook", str(hook), "--name", "c", "--probe", "x"]) == 2
+
+
+# ---- argument validation happens BEFORE any subject runs ---------------------------------------
+
+def test_an_invalid_fired_pattern_exits_2_before_running_the_subject(tmp_path):
+    marker = tmp_path / "ran"
+    hook = _fake_hook(tmp_path, f"open({str(marker)!r}, 'w').close()\n")
+    rc = A.main(["--hook", str(hook), "--name", "c", "--probe", "a", "--control", "b",
+                 "--fired-when", "match", "--fired-pattern", "("])
+    assert rc == 2
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("mode", [["--fired-when", "match", "--fired-pattern", "BLOCKED"], []])
+def test_a_missing_hook_path_exits_2(tmp_path, mode):
+    rc = A.main(["--hook", str(tmp_path / "typo.py"), "--name", "c", "--probe", "a",
+                 "--control", "b", *mode])
+    assert rc == 2
+
+
+# ---- --json emits the envelope on every exit-2 path -------------------------------------------
+
+@pytest.mark.parametrize("argv", [
+    ["--name", "c", "--probe", "x", "--control", "y"],                    # no --hook
+    ["--hook", "does-not-exist.py", "--name", "c", "--probe", "x", "--control", "y"],
+])
+def test_json_envelope_on_usage_errors(argv, capsys):
+    assert A.main([*argv, "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and payload["command"] == "adjudicate"
+    assert payload["data"]["reason"]
+
+
+def test_json_envelope_on_an_argparse_error(capsys):
+    with pytest.raises(SystemExit) as exc:
+        A.main(["--hook", "x.py", "--fired-when", "bogus", "--json"])
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False and "bogus" in payload["data"]["reason"]
+
+
+def test_json_envelope_when_a_subject_times_out(tmp_path, capsys):
+    rc = A.main(["--hook", str(_hanging_hook(tmp_path)), "--name", "c", "--probe", "HANG",
+                 "--control", "clean", "--timeout", "1", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2 and payload["ok"] is False
+    assert payload["data"]["summary"]["error"] == 1
+
+
+def test_a_non_cp1252_claim_name_does_not_crash_a_cp1252_stdout(tmp_path):
+    hook = _fake_hook(tmp_path, 'data = sys.stdin.read()\nif "TRAP" in data: print("fired")\n')
+    res = subprocess.run([sys.executable, str(SCRIPT), "--hook", str(hook), "--name", "c \u2717",
+                          "--probe", "TRAP", "--control", "clean"], capture_output=True,
+                         env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert b"CONFIRMED" in res.stdout

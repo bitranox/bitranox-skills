@@ -7,13 +7,16 @@ way to be cancelled, which fires a false alarm at a job that finished on time.
 
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from backstop import ArmRefused, Outcome, Probe, decide, validate_arm
+from backstop import ArmRefused, Outcome, Probe, decide, main, validate_arm, wait
 
 
 # --- the pure decision core -------------------------------------------------
@@ -273,3 +276,180 @@ def test_wait_does_not_report_done_while_the_report_is_still_being_written(tmp_p
     assert outcome is O.DONE
     assert elapsed > 300.0, f"stood down at {elapsed}s while the worker wrote until 300s"
     assert report.read_text(encoding="utf-8").count("a paragraph") == 5
+
+
+# --- timing arguments that would silently disarm the backstop --------------
+
+@pytest.mark.parametrize("deadline", ["nan", "inf", "-5", "0"])
+def test_main_refuses_a_deadline_that_is_not_a_positive_finite_number(tmp_path: Path, deadline: str) -> None:
+    rc = main(["--deadline", deadline, "--interval", "1", "--cancel-file", str(tmp_path / "c")],
+              now=_Clock().now, sleep=_boom)
+    assert rc == 2
+
+
+@pytest.mark.parametrize("interval", ["0", "-1", "nan", "inf"])
+def test_main_refuses_an_interval_that_is_not_a_positive_finite_number(tmp_path: Path, interval: str) -> None:
+    rc = main(["--deadline", "10", "--interval", interval, "--cancel-file", str(tmp_path / "c")],
+              now=_Clock().now, sleep=_boom)
+    assert rc == 2
+
+
+@pytest.mark.parametrize("settle", ["-1", "nan", "inf"])
+def test_main_refuses_a_bad_settle(tmp_path: Path, settle: str) -> None:
+    rc = main(["--deadline", "10", "--interval", "1", "--settle", settle,
+               "--done-file", str(tmp_path / "r.md")], now=_Clock().now, sleep=_boom)
+    assert rc == 2
+
+
+def _boom(seconds: float) -> None:
+    raise AssertionError("the loop must not start when the arguments are refused")
+
+
+# --- --base must name a commit ------------------------------------------------
+
+@pytest.mark.parametrize("base", ["", "HEAD", "abc", "zzzzzzzz"])
+def test_refuses_a_base_that_is_not_an_abbreviated_or_full_sha(repo: Path, base: str) -> None:
+    """An empty base compares zero characters, so HEAD never 'moves' and a finished commit
+    reads as a TIMEOUT."""
+    with pytest.raises(ArmRefused, match="is not a commit sha"):
+        validate_arm(done_file=None, repo=repo, base=base)
+
+
+def test_accepts_an_abbreviated_base(repo: Path) -> None:
+    validate_arm(done_file=None, repo=repo, base=_git(repo, "rev-parse", "--short", "HEAD"))
+
+
+def test_a_path_that_is_not_a_repo_is_refused_at_arm_time(tmp_path: Path) -> None:
+    with pytest.raises(ArmRefused, match="cannot read HEAD"):
+        validate_arm(done_file=None, repo=tmp_path, base="a" * 40)
+
+
+def test_main_exits_2_when_the_repo_is_not_a_repo(tmp_path: Path) -> None:
+    rc = main(["--deadline", "10", "--interval", "1", "--repo", str(tmp_path), "--base", "a" * 40],
+              now=_Clock().now, sleep=_boom)
+    assert rc == 2
+
+
+def test_main_refuses_repo_without_base(repo: Path) -> None:
+    assert main(["--deadline", "10", "--repo", str(repo)], now=_Clock().now, sleep=_boom) == 2
+
+
+# --- the repo branch of the loop, against a real repo ------------------------
+
+def test_wait_reports_done_when_a_commit_lands(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        if clock.t == 120.0:
+            (repo / "a.txt").write_text("two\n", encoding="utf-8")
+            _git(repo, "commit", "-q", "-a", "-m", "second")
+
+    outcome, elapsed = wait(deadline=600.0, interval=60.0, done_file=None, cancel_file=None,
+                            repo=repo, base=base, label="t", now=clock.now, sleep=sleep)
+    assert outcome is Outcome.DONE
+    assert elapsed == 120.0
+
+
+def test_a_repo_that_vanishes_mid_run_is_a_lost_signal_not_a_crash(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        if clock.t == 60.0:
+            _remove_repo(repo)
+
+    outcome, elapsed = wait(deadline=600.0, interval=60.0, done_file=None, cancel_file=None,
+                            repo=repo, base=base, label="t", now=clock.now, sleep=sleep)
+    assert outcome is Outcome.LOST
+    assert elapsed == 60.0
+
+
+def _remove_repo(path: Path) -> None:
+    """git marks object files read-only and Windows refuses to delete those, so clear the bit and
+    retry. `onexc` replaced the deprecated `onerror` in 3.12; 3.11 is still in the CI matrix."""
+    def retry(func, target, _exc) -> None:
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
+def test_a_cancel_still_wins_over_a_lost_repo(repo: Path, tmp_path: Path) -> None:
+    probe = Probe(cancelled=True, done=False, lost="gone")
+    assert decide(probe, elapsed=1.0, deadline=60.0) is Outcome.CANCELLED
+
+
+# --- main(): exit codes and the line it prints ------------------------------
+
+def test_main_exits_0_and_says_finished_when_the_done_file_settles(tmp_path: Path, capsys) -> None:
+    report = tmp_path / "r.md"
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        if clock.t == 10.0:
+            report.write_text("done\n", encoding="utf-8")
+
+    rc = main(["--deadline", "100", "--interval", "10", "--done-file", str(report), "--label", "x"],
+              now=clock.now, sleep=sleep)
+    assert rc == 0
+    assert "BACKSTOP [x]: work finished at 20s" in capsys.readouterr().out
+
+
+def test_main_exits_0_when_cancelled(tmp_path: Path, capsys) -> None:
+    cancel = tmp_path / "c"
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        cancel.touch()
+
+    assert main(["--deadline", "100", "--interval", "10", "--cancel-file", str(cancel)],
+                now=clock.now, sleep=sleep) == 0
+    assert "cancelled by the controller" in capsys.readouterr().out
+
+
+def test_main_exits_1_on_timeout(tmp_path: Path, capsys) -> None:
+    clock = _Clock()
+    assert main(["--deadline", "30", "--interval", "10", "--cancel-file", str(tmp_path / "c")],
+                now=clock.now, sleep=clock.sleep) == 1
+    assert "TIMEOUT after 30s" in capsys.readouterr().out
+
+
+def test_main_exits_2_when_the_repo_is_lost(repo: Path, capsys) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        _remove_repo(repo)
+
+    rc = main(["--deadline", "100", "--interval", "10", "--repo", str(repo), "--base", base],
+              now=clock.now, sleep=sleep)
+    assert rc == 2
+    assert "lost" in capsys.readouterr().out.lower()
+
+
+def test_main_exits_2_when_already_satisfied(tmp_path: Path, capsys) -> None:
+    report = tmp_path / "r.md"
+    report.write_text("stale\n", encoding="utf-8")
+    assert main(["--deadline", "10", "--done-file", str(report)], now=_Clock().now, sleep=_boom) == 2
+    assert "BACKSTOP REFUSED" in capsys.readouterr().err
+
+
+def test_a_non_cp1252_label_does_not_crash_a_cp1252_stdout(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parent.parent / "scripts" / "backstop.py"
+    cancel = tmp_path / "c"
+    res = subprocess.run(
+        [sys.executable, str(script), "--deadline", "0.2", "--interval", "0.05",
+         "--cancel-file", str(cancel), "--label", "task \u2717"],
+        capture_output=True, env={**os.environ, "PYTHONIOENCODING": "cp1252"}, timeout=60,
+    )
+    assert res.returncode == 1, res.stderr
+    assert b"TIMEOUT" in res.stdout
