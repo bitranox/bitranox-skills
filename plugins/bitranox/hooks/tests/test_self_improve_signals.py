@@ -1175,6 +1175,15 @@ def test_a_shift_operator_is_not_a_heredoc_opener():
         assert S.tool_matches_outside_fixtures(silent) == [], silent
 
 
+@pytest.mark.parametrize("herestring", ["wc -c <<<hello", "wc -c <<< hello", "tr a b <<<'x'"])
+def test_a_here_string_is_not_a_heredoc_opener(herestring):
+    """`<<<word` feeds one word on stdin and opens no body. Read as a heredoc named `word`, it
+    discounted every later line of the block, so the failure after it was never reported."""
+    block = herestring + "\nerror: no such file or directory"
+    assert "error:" in S.tool_matches_outside_fixtures(block)
+    assert S.tool_matches_outside_fixtures("cat <<'EOF'\nerror: body\nEOF") == []
+
+
 def test_a_numbered_listing_is_a_file_being_read_not_a_report():
     """A `N<TAB>` line is a file's own content. No tool announces a failure in that shape, and the
     corpus replay showed whole source files reported as tooling gaps for the text inside them."""

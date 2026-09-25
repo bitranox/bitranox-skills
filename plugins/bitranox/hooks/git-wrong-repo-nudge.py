@@ -58,9 +58,8 @@ import os
 import re
 import sys
 
-from shell_text import is_shell_tool, mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, is_shell_tool, mask_data_regions, strip_heredoc_bodies
 
-_SEPARATOR = re.compile(r"&&|\|\||;|\n|\|")
 # `cd` as the statement's own verb, optionally behind env assignments. `cd -` and a bare `cd`
 # go somewhere this hook cannot know, so they are treated as a directory change with no target.
 _CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
@@ -75,7 +74,7 @@ def _statements(command):
     """
     masked = mask_data_regions(strip_heredoc_bodies(command))
     spans, start = [], 0
-    for hit in _SEPARATOR.finditer(masked):
+    for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
         start = hit.end()
     spans.append((start, len(masked)))

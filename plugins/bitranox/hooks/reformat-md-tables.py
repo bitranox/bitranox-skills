@@ -46,7 +46,7 @@ _GIT_TREE_WRITERS = frozenset({
 })
 
 
-def _rewrites_the_tree(command: str) -> bool:
+def _rewrites_the_tree(command: str, tool_name=None) -> bool:
     """Whether a shell command runs a git subcommand that rewrites tracked files.
 
     The path-guessing fallback below must not fire for these. Reformatting a file
@@ -74,8 +74,8 @@ def _rewrites_the_tree(command: str) -> bool:
     ordering the write against the execution, the same gap already open against
     gated-prep-nudge; it belongs there, once, not hand-rolled here.
     """
-    for _at, segment in iter_segments(strip_heredoc_bodies(command or "")):
-        if is_git_verb(segment.strip().lstrip("(").strip(), _GIT_TREE_WRITERS):
+    for _at, segment in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
+        if is_git_verb(segment.strip().lstrip("(").strip(), _GIT_TREE_WRITERS, tool_name or "Bash"):
             return True
     return False
 
@@ -114,7 +114,7 @@ def _markdown_paths_from_a_command(event) -> list[str]:
     style they never adopted, so any directory below the working directory that
     holds its own `.git` is pruned. The working directory's own repo stays in scope.
     """
-    if _rewrites_the_tree((event.get("tool_input") or {}).get("command") or ""):
+    if _rewrites_the_tree((event.get("tool_input") or {}).get("command") or "", event.get("tool_name")):
         return []
     cwd = Path(event.get("cwd") or ".")
     if not cwd.is_dir():

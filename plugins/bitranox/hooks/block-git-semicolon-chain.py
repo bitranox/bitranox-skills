@@ -65,7 +65,7 @@ import sys
 # Shared with the other command-scanning guards. `mask_data_regions` replaces quoted strings,
 # command substitutions and comments INCLUDING their delimiters, so each becomes a single token -
 # without that, `git -C "$MAIN" commit` splits into two bare `"` tokens and the verb is lost.
-from shell_text import mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, mask_data_regions, strip_heredoc_bodies
 
 # Verbs whose failure invalidates whatever the author wrote next. Read-only verbs (status, log,
 # diff, rev-parse) are deliberately absent: a failed `git log` does not make the following step
@@ -170,9 +170,9 @@ NON_MOVING_TARGETS = frozenset({None, "", ".", "./", "-", "$PWD", "${PWD}", "$(p
 NEVER_THE_SECOND_HALF = frozenset({"fetch"})
 
 # Split while KEEPING the separators, because which one joined two statements is the entire
-# question. `&&` and `||` must be tried before the single `|`. A bare `&` backgrounds, which is
-# the strongest continue-regardless there is, but the lookarounds keep `2>&1` and `&>log` out.
-SEP_SPLIT = re.compile(r"(&&|\|\||[;\n|]|(?<![>&])&(?![>&]))")
+# question. The separator set is shell_text's: a bare `&` backgrounds, which is the strongest
+# continue-regardless there is, while `2>&1`, `&>log` and the `|&` pipe are not separators.
+SEP_SPLIT = re.compile("(" + SEP.pattern + ")")
 
 # Only these continue past a failure. `&&` stops, `||` runs only ON failure, `|` is a pipeline.
 CONTINUES_AFTER_FAILURE = frozenset({";", "\n", "&"})

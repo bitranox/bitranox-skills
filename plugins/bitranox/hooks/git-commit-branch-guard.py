@@ -28,7 +28,7 @@ from shell_text import is_git_verb, iter_segments, strip_heredoc_bodies
 _COMMIT_VERBS = frozenset({"commit"})
 
 
-def _is_git_commit(command):
+def _is_git_commit(command, tool_name=None):
     """True when a STATEMENT in `command` is a git commit - not merely text mentioning one.
 
     This asks shell_text the same question the repo gate asks, rather than keeping a second
@@ -37,8 +37,8 @@ def _is_git_commit(command):
     trailing `# ... commit ...` comment on a read-only `git log`, and a heredoc body all counted:
     each spent 2-4 git subprocesses and warned about a commit that was not happening.
     """
-    for _at, segment in iter_segments(strip_heredoc_bodies(command or "")):
-        if is_git_verb(segment.strip().lstrip("(").strip(), _COMMIT_VERBS):
+    for _at, segment in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
+        if is_git_verb(segment.strip().lstrip("(").strip(), _COMMIT_VERBS, tool_name or "Bash"):
             return True
     return False
 
@@ -80,7 +80,7 @@ def main():
     except Exception:  # noqa: BLE001 - no/invalid stdin: do nothing
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    if not command or not _is_git_commit(command):
+    if not command or not _is_git_commit(command, event.get("tool_name")):
         return 0
     cwd = event.get("cwd") or os.getcwd()
 

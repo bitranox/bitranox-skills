@@ -30,7 +30,7 @@ import json
 import re
 import sys
 
-from shell_text import blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies
+from shell_text import LIST_SEP, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies
 
 # Commands whose exit status is a quality verdict worth protecting.
 GATE = re.compile(
@@ -104,8 +104,9 @@ def backgrounded_gate_without_the_jig(command: str, *, background: object) -> st
     found = BACKGROUND_GATE.search(command)
     return found.group(0) if found else None
 
-# Split into statements on ; && || and newlines, keeping it simple and syntactic.
-SPLIT = re.compile(r"\s*(?:;|&&|\|\||\n)\s*")
+# Split into statements on shell_text's list separators (; && || & and newlines), trimming the
+# whitespace around each. A pipeline stays one statement: whether it masks a gate is the question.
+SPLIT = re.compile(r"\s*(?:" + LIST_SEP.pattern + r")\s*")
 
 
 # A read of the previous command's status. `$?` after a pipeline is the LAST element's status,

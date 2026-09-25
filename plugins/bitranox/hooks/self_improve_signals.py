@@ -1990,8 +1990,9 @@ _DIFF_FILE_HEADER = re.compile(r"^\s*(?:diff --git \S+ |--- |\+\+\+ )(\S+)")
 # abut the `<<`. Both halves are about the shift operator: `<<` unanchored matches `cout << x`, and
 # since a body runs to its delimiter, one such line in a source listing swallows every line after
 # it. `a << b` is exactly the shape a loose rule reads as a heredoc named b; `cat <<EOF` is not.
+# The lookarounds exclude the here-string `<<<word`, which feeds one word on stdin and has no body.
 _HEREDOC_OPENS = re.compile(
-    r"<<-?(?:\s*(?P<q>[\"'])(?P<quoted>\w+)(?P=q)|(?P<bare>\w+))\s*(?:[<>|&]\S*\s*\S*)?$")
+    r"(?<!<)<<(?!<)-?(?:\s*(?P<q>[\"'])(?P<quoted>\w+)(?P=q)|(?P<bare>\w+))\s*(?:[<>|&]\S*\s*\S*)?$")
 _TEST_FILE_TOKEN = re.compile(r"\btest_\w*\.py\b", re.IGNORECASE)
 # A line that BEGINS with a test file's path is a grep hit or a listing, so what follows is that
 # file's content. A line that merely NAMES one ("fatal: pathspec 'tests/test_x.py' did not match")

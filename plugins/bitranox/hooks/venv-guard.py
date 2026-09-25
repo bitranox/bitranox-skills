@@ -22,13 +22,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
-# Split on shell separators so each statement is judged on its own tokens: `cd x && pytest` must
-# still be seen as a pytest run.
-_SEP = re.compile(r"&&|\|\||[;\n|]")
+from shell_text import SEP
 
 _TOOLS = {"pytest", "pyright", "mypy", "ruff", "pip-audit", "tox", "nox"}
 
@@ -80,7 +77,9 @@ def _runs_a_tool(tokens: list[str]) -> bool:
 
 def looks_like_a_gate_run(command: str) -> bool:
     """True when a statement in `command` runs tests, lint, type-check or an audit."""
-    for segment in _SEP.split(command or ""):
+    # Each statement is judged on its own tokens: `cd x && pytest` must still be seen as a
+    # pytest run, and so must `sleep 1 & pytest`.
+    for segment in SEP.split(command or ""):
         tokens = segment.split()
         if not tokens:
             continue

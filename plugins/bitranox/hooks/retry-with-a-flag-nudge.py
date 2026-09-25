@@ -43,21 +43,20 @@ Pure standard library, ASCII only; launched via run-python.sh so it works on Win
 from __future__ import annotations
 
 import json
-import re
 import shlex
 import sys
 from pathlib import Path
 
-from shell_text import is_shell_tool, strip_heredoc_bodies
+from shell_text import LIST_SEP, is_shell_tool, strip_heredoc_bodies
 
-# Statement separators, NOT including `|`. A pipeline is ONE statement: its last element is
-# usually a filter, and `shell_text.SEP` splits on `|` because the guards that use it ask
+# Statement separators (`shell_text.LIST_SEP`), NOT including `|`. A pipeline is ONE statement:
+# its last element is usually a filter, and `shell_text.SEP` splits on `|` because the guards that use it ask
 # "does any segment run a forbidden command". Asking "what command is being retried" is a
 # different question, and splitting on `|` answers it wrongly - `grep ... | head -60` becomes
 # the command `head` with the flag `-60` and NO operands, so any two pipeline tails compare
 # equal. Measured over 181 real sessions before this was fixed: 536 firings, 216 of them in a
 # single session, essentially all of them pipeline tails rather than retries.
-_STATEMENT_SEP = re.compile(r"&&|\|\||[;\n]")
+_STATEMENT_SEP = LIST_SEP
 
 STATE_VERSION = 1
 MAX_RECORDED = 60          # bound the state file on a marathon session

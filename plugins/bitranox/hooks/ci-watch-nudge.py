@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 import ci_watch_state as state
-from shell_text import commands_only, is_shell_tool, iter_segments, strip_heredoc_bodies
+from shell_text import LIST_SEP, commands_only, is_shell_tool, iter_segments, strip_heredoc_bodies
 
 __all__ = ["main", "notice"]
 
@@ -273,7 +273,7 @@ def _resolve_ref(repo: str, name: str) -> tuple[str, str] | None:
     return None
 
 
-_STATEMENT_SEP = re.compile(r"&&|\|\||[;\n]")
+_STATEMENT_SEP = LIST_SEP
 
 
 def _statement_around(text: str, index: int) -> str:

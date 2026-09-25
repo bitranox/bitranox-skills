@@ -29,6 +29,37 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.2]
+
+### Fixed
+
+- **The command guards see every statement in these shapes.** A statement the shared shell parser
+  failed to separate was one no guard judged, so the repo gate, `git-footgun-guard`,
+  `block-pgrep-self-match`, `block-sed-structured-files`, `shell-prefix-selfref-guard` and
+  `block-masked-gate-exit` each allowed a command they exist to stop:
+  - a here-string (`tr a b <<< word`) is no longer read as a heredoc, which dropped every later
+    line of the command as data;
+  - an apostrophe in a `#` comment (`# don't`) no longer opens a quote that hides the lines after
+    it; a `#` starts a comment only at the start of a word;
+  - a lone `&` ends a statement (`sleep 1 & git push`), while the `&` of `2>&1`, `&>f`, `<&3`
+    and `|&` does not;
+  - an `if`, `while` or `until` condition is read as a command (`if git push; then`);
+  - an ANSI-C string (`$'it\'s'`) closes where bash closes it;
+  - a backslash-newline line continuation is joined as bash joins it, so
+    `git status && \` followed by `git commit` on the next line is a commit. Replayed over
+    81,366 recorded Bash calls, the repo gate now evaluates 41 real commits and pushes it missed,
+    and no command that is not one.
+- **One separator set.** Every guard that splits a command with a regex now takes it from
+  `shell_text` (`SEP`, or `LIST_SEP` where a pipeline stays one statement), so none keeps a
+  private copy that misses a separator.
+- **The PowerShell tool is read as PowerShell** when the repo gate, `gated-prep-nudge`,
+  `git-commit-branch-guard` and `reformat-md-tables` decide whether a statement is a git command,
+  so `C:\Git\cmd\git.exe commit` is recognised.
+- **A quoted Windows path names its program on the Bash tool too**:
+  `"C:\Program Files\Git\cmd\git.exe" commit` is a commit.
+- **The self-improve signal scan** no longer takes a here-string for a heredoc, so a failure
+  reported after one is no longer discounted as heredoc text.
+
 ## [7.22.1]
 
 ### Fixed

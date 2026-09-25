@@ -4,7 +4,7 @@ Git accepts global options between `git` and its subcommand, and two of them tak
 following token (`-c key=value`, `-C path`, `--work-tree p`, ...). Four places in this plugin ask
 "is this segment `git <verb>`?" and they answered it three different ways:
 
-  shell_text.COMMIT_RE / PUSH_RE   a regex listing `-C` plus any single `-flag`
+  a shell_text commit/push regex   a regex listing `-C` plus any single `-flag`
   git-footgun-guard                a token walk with GIT_VALUE_OPTS - the only correct one
   git-revparse-nudge               `\\bgit\\s+rev-parse\\b`, no options at all
   gated-prep-nudge                 `git\\s+(?:commit|push|tag)`, no options at all
@@ -221,7 +221,7 @@ def test_a_substitution_in_an_env_prefix_does_not_hide_the_command():
     """`FOO=$(date) git commit -m x` sets FOO for a real commit. The `)` has to CLOSE the
     substitution's segment, or the rest of the statement stays glued to it as `date) git commit`
     and anchoring at the segment start no longer finds the verb - a commit the gate cannot see.
-    The env-assignment prefix is already in scope everywhere else here (COMMIT_RE and
+    The env-assignment prefix is already in scope everywhere else here (PR_RE and
     git_verb_operands both skip one), so this was a gap in a capability, not a missing feature."""
     assert shell_text.is_gated_command("foo=$(ls) git commit -m x") is True
     assert shell_text.is_gated_command("A=`date` git push origin master") is True

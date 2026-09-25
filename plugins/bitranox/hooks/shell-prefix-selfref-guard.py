@@ -31,11 +31,12 @@ import sys
 # Shared with the other command-scanning guards: a heredoc body is DATA, and scanning it makes a
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
-from shell_text import HEREDOC_OPEN, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies  # noqa: F401
+from shell_text import (  # noqa: F401
+    HEREDOC_OPEN, SEP, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies,
+)
 
-# Statement separators. A prefix assignment dies at the end of ITS command, so a
+# Statement separators (`SEP`, shared). A prefix assignment dies at the end of ITS command, so a
 # reference after one of these is a deliberate use of the shell's own variable.
-SEP = re.compile(r"&&|\|\||[;\n|]")
 
 # NAME=value at a command position. The value is optional (`VAR= cmd` is legal).
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")

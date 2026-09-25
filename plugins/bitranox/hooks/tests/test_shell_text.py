@@ -229,9 +229,10 @@ def test_split_for_tool_inverts_list2cmdline(argv):
     ("C:" + _B + "tools" + _B + "sed.exe", "PowerShell", "sed"),
     ("C:" + _B + "tools" + _B + "sed", "PowerShell", "sed"),
     ("sed.exe", "PowerShell", "sed"),
-    # The Bash arm must NOT learn Windows separators: bash would have eaten them, so a token
-    # still carrying one is one long filename and calling it "sed" would invent a match.
-    ("C:" + _B + "tools" + _B + "sed", "Bash", "C:" + _B + "tools" + _B + "sed"),
+    # The Bash arm reads a backslash as a separator too. An UNQUOTED one never reaches here -
+    # the Bash split eats it - so a token still carrying one was quoted, and bash keeps
+    # backslashes inside double quotes: `"C:\tools\sed"` is a path Git Bash runs.
+    ("C:" + _B + "tools" + _B + "sed", "Bash", "sed"),
 ])
 def test_basename_for_tool_uses_the_tool_s_separator_rules(token, tool, expected):
     """A guard asking "is this command sed?" must strip the path, and which characters separate a

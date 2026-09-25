@@ -102,7 +102,7 @@ def _gated_start(text, tool_name=None):
     """
     for start, seg in iter_segments(text, tool_name):
         body = seg.lstrip("( \t").lstrip()
-        if is_git_verb(body, _GATED_VERBS) or _GH_PR_CREATE.match(body):
+        if is_git_verb(body, _GATED_VERBS, tool_name or "Bash") or _GH_PR_CREATE.match(body):
             return start + (len(seg) - len(body))
     return None
 
@@ -165,7 +165,7 @@ def _mechanism(verb: str) -> str:
     return "changes the working tree"
 
 
-def tree_prep_before_gate(command: str):
+def tree_prep_before_gate(command: str, tool_name=None):
     """The tree-writing git verb that PRECEDES a gated verb in this command, or None.
 
     Scanned with heredoc bodies stripped, like the gated-verb scan: a git command is a command, so
@@ -175,7 +175,7 @@ def tree_prep_before_gate(command: str):
     a false positive on an ordinary sequence.
     """
     text = strip_heredoc_bodies(command or "")
-    gate_at = _gated_start(text)
+    gate_at = _gated_start(text, tool_name)
     if gate_at is None:
         return None
     for m in _TREE_WRITING_GIT.finditer(text):
@@ -224,7 +224,7 @@ def notice(command, tool_name=None):
                 "feedback-repo-gate-pre-evaluates-the-pending-commit-command.)"
                 % what
             )
-    verb = tree_prep_before_gate(command)
+    verb = tree_prep_before_gate(command, tool_name)
     if verb:
         return (
             "This command runs `git %s`, which %s, and then a gated verb (git commit/push/tag, gh "

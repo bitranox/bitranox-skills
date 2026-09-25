@@ -56,9 +56,8 @@ import os
 import re
 import sys
 
-from shell_text import is_shell_tool, mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, is_shell_tool, mask_data_regions, strip_heredoc_bodies
 
-_SEPARATOR = re.compile(r"&&|\|\||;|\n|\|")
 _CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s|$)")
 _VERB = re.compile(
     r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\s+"
@@ -73,7 +72,7 @@ def _statements(command):
     """(masked_text, [(start, end)]) for each statement, offsets valid in the RAW string too."""
     masked = mask_data_regions(strip_heredoc_bodies(command))
     spans, start = [], 0
-    for hit in _SEPARATOR.finditer(masked):
+    for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
         start = hit.end()
     spans.append((start, len(masked)))

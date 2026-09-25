@@ -24,10 +24,9 @@ import re
 import sys
 
 import shell_text
-from shell_text import mask_data_regions, strip_heredoc_bodies
+from shell_text import SEP, mask_data_regions, strip_heredoc_bodies
 
 STRUCTURED_EXT = (".json", ".yaml", ".yml", ".toml", ".xml")
-SEP = re.compile(r"&&|\|\||[;\n|]")
 INPLACE_CMDS = {"sed", "gsed", "perl"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 REDIRECT = re.compile(r">>?\s*['\"]?(?P<f>[^\s'\";|&]+\.(?:json|ya?ml|toml|xml))\b", re.I)

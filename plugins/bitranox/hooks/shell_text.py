@@ -23,7 +23,11 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 # The opener forms bash accepts: `<<WORD`, `<<-WORD`, `<< WORD`, `<<'WORD'`, `<<"WORD"`. The
 # backreference keeps the quoting symmetric, so `<<'EOF"` is not read as a quoted delimiter.
-HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+#
+# The lookarounds exclude the HERE-STRING `<<< word`, which feeds one word on stdin and opens no
+# body. Unguarded, its last two `<` read as `<< word`, and since a body runs to its delimiter every
+# later line of the command was dropped as data - a `git push` on the next line included.
+HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 # The tools whose `tool_input.command` is a shell command string. Claude Code routes the model's
 # shell commands through the `PowerShell` tool on Windows where that tool is enabled, and on a
@@ -33,8 +37,27 @@ HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 # that never fires and one that fires and finds nothing are both silent.
 SHELL_TOOLS = ("Bash", "PowerShell")
 
-# Statement separators, and the three shapes that mean "a change is leaving this machine".
-SEP = re.compile(r"&&|\|\||[;\n|]")
+# A lone `&` ends a statement: it backgrounds the one before it and starts the next. The
+# lookarounds keep the `&` that belongs to a redirection (`2>&1`, `&>f`, `<&3`, `>&f`) or to the
+# `|&` pipe, and a backslash-escaped `\&`, from reading as one.
+_LONE_AMPERSAND = r"(?<![<>&|\\])&(?![>&])"
+
+# Statement separators as REGEXES, for a guard that splits text it has already run through
+# `mask_data_regions` (or accepts the raw text's quoting blind spot). A regex cannot carry quoting
+# state, so on unmasked text `iter_segments` is the right tool. One copy, imported by every such
+# guard: private copies had each drifted, and all of them missed the lone `&`, so the command
+# after `echo x &` was never judged by a guard that blocks.
+#
+# `SEP` also splits a PIPELINE into its elements, for the guards that ask what each program is.
+# `LIST_SEP` keeps a pipeline whole, for the ones that ask about a statement's overall status or
+# its last element.
+SEP = re.compile(r"&&|\|\||[;\n|]|" + _LONE_AMPERSAND)
+LIST_SEP = re.compile(r"&&|\|\||[;\n]|" + _LONE_AMPERSAND)
+
+# The characters after which a `#` begins a new word, and therefore a comment. Mid-word it is data:
+# `a#b`, `${#arr}`, `$#`.
+_COMMENT_MAY_FOLLOW = frozenset(" \t\n;&|(")
+
 # A statement can also begin INSIDE a command substitution, and what is in there is a real
 # command. Anchoring a match at a segment start is what makes `git commit` appearing as DATA not
 # count - but without that, anchoring also silently drops `A=$(git commit ...)`, which the older
@@ -78,10 +101,12 @@ def _iter_separators(text, tool_name=None):
     depth: list[tuple[str, bool, bool]] = []   # (closer, saved_single, saved_double)
     in_single = in_double = False
     i, n = 0, len(text)
+    escaped_end = -1                           # just past the last escaped pair: `\ #` is mid-word
     while i < n:
         ch = text[i]
         if ch == escape and not in_single:
             i += 2                             # an escaped character is data, whatever it is
+            escaped_end = i
             continue
         if in_single:
             in_single = ch != "'"
@@ -94,6 +119,20 @@ def _iter_separators(text, tool_name=None):
         if ch == '"':
             in_double = not in_double
             i += 1
+            continue
+        if (not in_double and ch == "#" and i != escaped_end
+                and (i == 0 or text[i - 1] in _COMMENT_MAY_FOLLOW)):
+            # A comment runs to the end of its line and separates nothing inside it. Walked as
+            # text, the apostrophe of `# don't` opened a single-quoted span that swallowed the
+            # newline and every command after it. The newline itself is left to end the statement.
+            newline = text.find("\n", i)
+            i = n if newline == -1 else newline
+            continue
+        if substitutes and not in_double and text.startswith("$'", i):
+            # ANSI-C quoting, where a backslash DOES escape: `$'it\'s'` is one string. Read as a
+            # plain single-quoted span it closed at `\'`, and the next quote opened a span that hid
+            # the separator after it.
+            i = _ansi_c_end(text, i + 2)
             continue
         if depth and not in_double and ch == depth[-1][0]:
             # The closer ENDS the substitution's statement. Without this the rest of the line
@@ -126,17 +165,42 @@ def _iter_separators(text, tool_name=None):
             yield i, i + 2
             i += 2
             continue
-        if ch in ";\n|":
+        if ch in ";\n|" or (ch == "&" and _is_lone_ampersand(text, i)):
             yield i, i + 1
             i += 1
             continue
         i += 1
 
 
-COMMIT_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+commit\b")
+def _is_lone_ampersand(text, i):
+    """True when the `&` at `i` backgrounds a statement rather than belonging to an operator.
+
+    The walk's twin of `_LONE_AMPERSAND`: `&&` is consumed before this is asked, and the `&` of
+    `2>&1`, `&>f`, `<&3` and `|&` is part of a redirection or a pipe.
+    """
+    return (i == 0 or text[i - 1] not in "<>&|") and text[i + 1:i + 2] not in (">", "&")
+
+
+def _ansi_c_end(text, start):
+    """Index just past the `'` that closes an ANSI-C `$'...'` string whose body starts at `start`.
+
+    Inside `$'...'` a backslash escapes the next character, `\\'` included - the one difference
+    from a plain single-quoted string, where a backslash is literal. Unterminated runs to the end,
+    as bash would keep reading.
+    """
+    i, n = start, len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == "'":
+            return i + 1
+        i += 1
+    return n
+
+
 PR_RE = re.compile(r"^(?:\w+=\S+\s+)*gh\b.*\bpr\b.*\bcreate\b")
 _GATED_GIT_VERBS = frozenset({"commit", "push"})
-PUSH_RE = re.compile(r"^(?:\w+=\S+\s+)*git\b(?:\s+-C\s+\S+|\s+--?\S+)*\s+push\b")
 
 
 # git global options that consume a SEPARATE following token, so a subcommand search never
@@ -158,8 +222,11 @@ _COMMAND_PREFIXES = frozenset({
     "nohup", "setsid", "chrt", "taskset", "time",
 })
 
-# A segment cut from a loop or branch body starts at the keyword, not at the command.
-_STATEMENT_KEYWORDS = frozenset({"do", "then", "else", "elif", "{", "!", "("})
+# A segment cut from a loop or branch body starts at the keyword, not at the command - and so does
+# a CONDITION: `if git push; then`, `while ! git push; do` and `until git push` run the push.
+_STATEMENT_KEYWORDS = frozenset({
+    "if", "while", "until", "do", "then", "else", "elif", "{", "!", "(",
+})
 
 # How far past a launcher to look. Its own flags and their values sit here, and so does an operand
 # that carries no dash at all (`timeout 1500`, `nice -n 19`), which is why this cannot simply skip
@@ -197,12 +264,11 @@ def git_verb_operands(tokens, verbs, tool_name="Bash"):
       requires the verb to sit adjacent to `git`, so any global option between them silences the
       hook - and `git -C <path>` is the shape the rev-parse nudge's own advice steers people
       toward, so the one reader who half-learned the lesson got nothing.
-    * OVER-matching, found while checking the shared module for the same class of gap: the old
-      `COMMIT_RE` treats `-C` as a bare flag, so `git -C commit status` read `-C`'s VALUE as the
-      verb and the repo gate BLOCKED a status command run in a directory named `commit`. In the
-      other direction `git -c key=value commit` was not gated at all, because `key=value` does
-      not start with `-` and ended the option run early. A commit that the gate cannot see is a
-      commit it cannot gate.
+    * OVER-matching: an anchored `git (-C \S+|-\S+)* commit` regex treats `-C` as a bare flag,
+      so `git -C commit status` reads `-C`'s VALUE as the verb and the repo gate BLOCKS a status
+      command run in a directory named `commit`. In the other direction `git -c key=value commit`
+      is not gated at all, because `key=value` does not start with `-` and ends the option run
+      early. A commit that the gate cannot see is a commit it cannot gate.
 
     Leading `VAR=value` environment assignments are skipped, and the program name is taken with
     `basename_for_tool`, so `/usr/bin/git` and `git.exe` both count.
@@ -328,7 +394,9 @@ def split_for_tool(command, tool_name="Bash", comments=False):
     A hook on a `Bash|PowerShell` matcher receives two different languages. The Bash tool is a
     POSIX command line even on Windows, because Claude Code runs it through Git Bash - verified
     against real bash, which mangles an unquoted `C:\Users\me\f.txt` to `C:Usersmef.txt` exactly
-    as `shlex` does, so shlex is not merely tolerable there, it is what the tool actually does.
+    as `shlex` does, so shlex is not merely tolerable there, it is what the tool actually does -
+    once an unquoted backslash-newline continuation is removed first, which bash does and shlex
+    does not.
     The PowerShell tool is a Windows command line, where that same backslash is a PATH SEPARATOR
     and eating it hands the caller a path that opens nothing.
 
@@ -347,7 +415,29 @@ def split_for_tool(command, tool_name="Bash", comments=False):
     """
     if tool_name == "PowerShell":
         return _windows_command_argv(command)
-    return shlex.split(command, comments=comments)
+    return shlex.split(_join_line_continuations(command), comments=comments)
+
+
+def _join_line_continuations(command):
+    r"""`command` with every unquoted backslash-newline removed, as bash removes it before splitting.
+
+    shlex does not: it keeps the newline as part of the NEXT token, so `status && \<newline>git
+    commit` handed the verb walk a program named `<newline>git` and the commit went unrecognised by
+    every guard that splits argv - the repo gate included. A continuation inside single quotes is
+    literal and stays; `mask_data_regions` is what tells the two apart, since it turns only an
+    unquoted continuation into two spaces and masks a quoted one with its string.
+    """
+    if "\\\n" not in command:
+        return command
+    masked = mask_data_regions(command)
+    out, i, n = [], 0, len(command)
+    while i < n:
+        if command.startswith("\\\n", i) and masked[i:i + 2] == "  ":
+            i += 2
+            continue
+        out.append(command[i])
+        i += 1
+    return "".join(out)
 
 
 def basename_for_tool(token, tool_name="Bash"):
@@ -362,12 +452,19 @@ def basename_for_tool(token, tool_name="Bash"):
     the guard off: split correctly and the basename still fails, fix the basename and the split
     has already eaten the separators.
 
+    On the Bash arm a BACKSLASH separates too. A token reaching this still carries one only
+    because it was quoted - bash keeps backslashes inside double quotes - so `"C:\Git\git.exe"`
+    really is a path Git Bash runs, and reading it as one long filename left it unmatched.
+
     `.exe` is dropped on BOTH arms, because it is about how a program is NAMED and not about
     separators at all - Git Bash on Windows runs `sed.exe`, and every command allowlist in this
     plugin is spelled without the suffix. Stripping it only on the PowerShell arm left
     `sed.exe -i config.json` unblocked under the tool that carries nearly all the traffic.
     """
-    name = (PureWindowsPath(token) if tool_name == "PowerShell" else PurePosixPath(token)).name
+    if tool_name == "PowerShell":
+        name = PureWindowsPath(token).name
+    else:
+        name = PurePosixPath(token.replace("\\", "/")).name
     return name[:-4] if name.lower().endswith(".exe") else name
 
 def is_shell_tool(tool_name) -> bool:
@@ -402,7 +499,7 @@ def is_gated_command(command, tool_name=None):
     """
     for _at, seg in iter_segments(strip_heredoc_bodies(command or ""), tool_name):
         seg = seg.strip().lstrip("(").strip()
-        if is_git_verb(seg, _GATED_GIT_VERBS) or PR_RE.match(seg):
+        if is_git_verb(seg, _GATED_GIT_VERBS, tool_name or "Bash") or PR_RE.match(seg):
             return True
     return False
 
@@ -517,7 +614,7 @@ def blank_unexpanded_text(command: str) -> str:
     that scans them fires on text merely DESCRIBING a footgun:
 
     - a BACKSLASH-ESCAPED character (`\\$?`), which bash passes through literally;
-    - a SINGLE-quoted string, where no expansion happens at all;
+    - a SINGLE-quoted string, where no expansion happens at all, and an ANSI-C `$'...'` one;
     - a `#` comment, which is never executed.
 
     A DOUBLE-quoted string is deliberately left alone: `$?` expands there, so `echo "rc=$?"` is a
@@ -542,6 +639,13 @@ def blank_unexpanded_text(command: str) -> str:
         elif char == "\\" and index + 1 < size and not in_double:
             out.append("  " if command[index + 1] != "\n" else " \n")
             index += 2
+        elif not in_double and command.startswith("$'", index):
+            # ANSI-C `$'...'` expands nothing either, and its `\'` does not close it.
+            stop = _ansi_c_end(command, index + 2)
+            closed = stop > index + 2 and command[stop - 1] == "'"
+            body = command[index + 2:stop - 1 if closed else stop]
+            out.append("$'" + "".join(c if c == "\n" else " " for c in body) + ("'" if closed else ""))
+            index = stop
         elif in_double:
             if char == "\\" and index + 1 < size:
                 out.append("  " if command[index + 1] != "\n" else " \n")
@@ -578,7 +682,7 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
 
     Four regions are masked, each including its own delimiters:
 
-    - single- and double-quoted strings;
+    - single- and double-quoted strings, and ANSI-C `$'...'` strings (where `\\'` does not close);
     - `$(...)` command substitution and `$((...))` arithmetic, depth-counted so nesting survives;
     - `${...}` parameter expansion and `@{...}` revspecs, whose braces are a word, not a
       brace GROUP - `git rev-list @{u}...HEAD` must not read as shell structure;
@@ -604,6 +708,12 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
             # or the two tokens it joins fuse into one word that no longer reads as a command.
             out.append("  " if command[index + 1] == "\n" else fill * 2)
             index += 2
+        elif command.startswith("$'", index):
+            # ANSI-C quoting: a backslash escapes here, so `\'` does not close the string. Scanned
+            # as a plain single quote it closed early and the next `'` masked the rest of the line.
+            stop = _ansi_c_end(command, index + 2)
+            out.append(fill * (stop - index))
+            index = stop
         elif char in "'\"":
             # Scan for the CLOSING quote rather than the next one: inside a double-quoted region
             # `\"` is an escaped quote, and `find` would stop there, leaving the rest of a commit
