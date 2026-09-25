@@ -100,6 +100,52 @@ def test_undecodable_bytes_do_not_raise(tmp_path):
     assert F.name(path) == "demo" and F.description(path).startswith("Use when")
 
 
+# ---- the scalar's text, for a consumer that is not the lint ------------------------------------
+# `field` returns the value as written, because the gate rejects a quoted or block-scalar
+# description by its first character. Third-party skills use both forms, and a consumer that
+# offers their text (the Jev roster) needs what YAML means by it.
+
+@pytest.mark.parametrize("raw, want", [
+    (GOOD, GOOD),
+    ('"Cancel active Ralph Loop"', "Cancel active Ralph Loop"),
+    ("'it''s quoted'", "it's quoted"),
+    ('"say \\"hi\\""', 'say "hi"'),
+    (">- Use when one thing or another.", "Use when one thing or another."),
+    ("| literal block", "literal block"),
+    (">2- indented block", "indented block"),
+    (">", None),
+    ('"unbalanced', '"unbalanced'),
+    ("> not a quote: x > y", "not a quote: x > y"),
+    (None, None),
+])
+def test_scalar_text_decodes_quotes_and_block_indicators(raw, want):
+    assert F.scalar_text(raw) == want
+
+
+def test_the_raw_field_still_shows_the_form_the_gate_lints():
+    block = "\nname: demo\ndescription: >-\n  Use when folded.\n"
+    assert F.field(block, "description") == ">- Use when folded."
+    assert F.scalar_text(F.field(block, "description")) == "Use when folded."
+
+
+@pytest.mark.parametrize("text, block, body", [
+    ("---\nname: d\n---\nBody.\n", "\nname: d\n", "\nBody.\n"),
+    ("﻿---\nname: d\n---\nBody.\n", "\nname: d\n", "\nBody.\n"),
+    ("# no front matter\n", None, "# no front matter\n"),
+    ("---\nname: unclosed\n", "\nname: unclosed\n", ""),
+])
+def test_split_frontmatter_returns_the_block_and_the_body(text, block, body):
+    assert F.split_frontmatter(text) == (block, body)
+    assert F.frontmatter_block(text) == block
+
+
+def test_read_text_decodes_like_the_front_matter_reader(tmp_path):
+    path = tmp_path / "SKILL.md"
+    path.write_bytes(b"\xef\xbb\xbf---\ndescription: \xff\n---\n")
+    assert F.read_text(path) == "---\ndescription: �\n---\n"
+    assert F.read_text(tmp_path / "absent.md") is None
+
+
 # ---- every consumer reads through this one function ------------------------------------------
 
 FIXTURES = {

@@ -900,10 +900,13 @@ def roster_for(prompt, shipped, mode):
     `shipped` is this plugin's own skills, which every run before `--roster` offered, so it stays
     the default and old runs stay comparable. `installed` is the listing of the prompt's OWN
     session, read from its source transcript: the question it answers is whether a wider roster
-    closes the gap, and that session's skills are what the live router would have had.
+    closes the gap, and that session's skills are what the live router would have had. A skill
+    whose description the listing trimmed takes the text of its file as it is on disk now, with a
+    project skill looked up from the prompt's `cwd`, exactly as the live router resolves it.
     """
     if mode == "installed":
-        listing = skill_roster.listing_from_transcript(prompt.get("source") or "")
+        listing = skill_roster.listing_from_transcript(prompt.get("source") or "",
+                                                       prompt.get("cwd") or None)
         if listing:
             return listing, skill_roster.SOURCE_TRANSCRIPT
     return shipped, skill_roster.SOURCE_SHIPPED

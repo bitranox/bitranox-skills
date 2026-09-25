@@ -29,6 +29,25 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.5]
+
+### Fixed
+
+- The skill router's installed roster now parses listing lines the harness trimmed to fit its
+  budget: a bare `- <name>` line no longer glues onto the previous skill's description, which
+  had corrupted the option text in about a third of real listings.
+- A skill whose description the listing trimmed is still offered to the router, with the
+  description from its own SKILL.md or command file (front matter, else the first paragraph),
+  found in this plugin, the installed plugin's directory, or the project's or user's `.claude/`;
+  a skill with no file, such as a Claude Code built-in, is offered under its name. The front
+  matter is read through the shared `hooks/skill_frontmatter.py`, whose new `scalar_text` decodes
+  the quoted and block-scalar (`>-`, `|`) descriptions third-party skills use; the commit gate
+  still lints the value as written.
+- A local skill with the same bare name as a bitranox skill no longer hides it: both are offered,
+  the bitranox one under its `bitranox:` prefix.
+- `classifier_eval --roster installed` resolves a trimmed project skill from the prompt's own
+  working directory.
+
 ## [7.22.4]
 
 ### Fixed

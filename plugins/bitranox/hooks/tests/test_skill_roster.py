@@ -30,8 +30,10 @@ def _listing(names_descs, initial=True):
 
 
 def _transcript(tmp_path, records, name="t.jsonl"):
+    """A transcript file; a str record is written verbatim, so a test can plant a broken line."""
     p = tmp_path / name
-    p.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    p.write_text("\n".join(r if isinstance(r, str) else json.dumps(r) for r in records) + "\n",
+                 encoding="utf-8")
     return str(p)
 
 
@@ -70,8 +72,229 @@ def test_parse_does_not_split_on_a_dash_line_that_names_no_listed_skill():
     assert got == {"alpha": "first line - not a skill: still alpha", "beta": "second"}
 
 
-def test_parse_drops_a_listed_name_with_no_description():
-    assert SR.parse_listing("- alpha: text", ["alpha", "ghost"]) == {"alpha": "text"}
+# ---- a budget-trimmed listing line --------------------------------------------------------------
+# When the listing would exceed its budget the harness drops descriptions and leaves the line as a
+# bare `- <name>`. The fixture below is synthetic but has the real shape: described entries, one
+# running over several lines, and trimmed ones, both bare and plugin-prefixed, interleaved.
+
+TRIMMED_LISTING = "\n".join([
+    "- bitranox:files-edit-xml: Use when editing XML.",
+    "- ralph-loop:cancel-ralph",
+    "- claude-api: Reference for the Claude API.",
+    "TRIGGER - read BEFORE opening.",
+    "- update-config",
+    "- code-review:code-review",
+    "- code-review: Review the current diff.",
+    "- loop",
+])
+TRIMMED_NAMES = ["bitranox:files-edit-xml", "ralph-loop:cancel-ralph", "claude-api",
+                 "update-config", "code-review:code-review", "code-review", "loop"]
+
+
+def _glued(roster, names):
+    """Descriptions carrying another listed skill's line - the corruption a bare line caused."""
+    return {k: v for k, v in roster.items() if any(" - %s" % n in v for n in names)}
+
+
+def test_a_bare_name_line_opens_its_own_entry_instead_of_joining_the_previous_one():
+    got = SR.parse_listing("- alpha: text\n- ghost\n- beta: b", ["alpha", "ghost", "beta"])
+    assert got["alpha"] == "text" and got["beta"] == "b"
+    assert "ghost" in got
+
+
+def test_a_bare_name_line_with_trailing_whitespace_still_opens():
+    got = SR.parse_listing("- alpha: text\n- ghost  \n- beta: b", ["alpha", "ghost", "beta"])
+    assert got["alpha"] == "text" and got["ghost"] == "ghost"
+
+
+def test_a_trimmed_listing_parses_with_no_description_glued_onto_another():
+    got = SR.parse_listing(TRIMMED_LISTING, TRIMMED_NAMES)
+    assert _glued(got, TRIMMED_NAMES) == {}
+    assert got["files-edit-xml"] == "Use when editing XML."
+    assert got["claude-api"] == "Reference for the Claude API. TRIGGER - read BEFORE opening."
+    assert got["code-review"] == "Review the current diff."
+    assert list(got) == ["files-edit-xml", "ralph-loop:cancel-ralph", "claude-api",
+                         "update-config", "code-review:code-review", "code-review", "loop"]
+
+
+def test_a_name_that_prefixes_a_longer_listed_name_does_not_open_on_its_line():
+    # "- code-review:code-review" must not open `code-review` with ":code-review" as its text.
+    got = SR.parse_listing("- code-review:code-review\n- code-review: Review the diff.",
+                           ["code-review:code-review", "code-review"])
+    assert got["code-review"] == "Review the diff."
+    assert got["code-review:code-review"] == "code-review:code-review"
+
+
+def test_a_trimmed_skill_with_no_file_anywhere_is_offered_under_its_name_alone():
+    # A Claude Code built-in has no SKILL.md on disk: the name is the only text there is.
+    got = SR.parse_listing("- alpha: text\n- update-config", ["alpha", "update-config"])
+    assert got["update-config"] == "update-config"
+
+
+def test_a_listed_name_with_no_line_at_all_is_still_offered():
+    assert SR.parse_listing("- alpha: text", ["alpha", "ghost"]) == {"alpha": "text",
+                                                                      "ghost": "ghost"}
+
+
+def test_a_bare_repeat_does_not_overwrite_a_described_line():
+    got = SR.parse_listing("- alpha: text\n- beta: b\n- alpha", ["alpha", "beta"])
+    assert got["alpha"] == "text"
+
+
+# ---- where a trimmed skill's description comes from ---------------------------------------------
+
+def _skill_md(path, description):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\nname: x\ndescription: %s\n---\n\n# body\n" % description,
+                    encoding="utf-8")
+
+
+def _install_plugin(home, plugin, root):
+    f = home / ".claude" / "plugins" / "installed_plugins.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    data = {"version": 2, "plugins": {}}
+    if f.exists():
+        data = json.loads(f.read_text(encoding="utf-8"))
+    data["plugins"]["%s@some-market" % plugin] = [{"scope": "user", "installPath": str(root)}]
+    f.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_a_trimmed_skill_of_this_plugin_takes_its_shipped_description():
+    shipped = SR.classifier.load_skill_descriptions()
+    got = SR.parse_listing("- bitranox:files-edit-xml", ["bitranox:files-edit-xml"])
+    assert got["files-edit-xml"] == shipped["files-edit-xml"]
+
+
+def test_a_trimmed_skill_of_another_plugin_takes_its_installed_skill_md(home, tmp_path):
+    root = tmp_path / "cache" / "typesafe" / "0.5.7"
+    _skill_md(root / "skills" / "typesafe-ai" / "SKILL.md", "Build AI software with TypeSafe.")
+    _install_plugin(home, "typesafe", root)
+    got = SR.parse_listing("- typesafe:typesafe-ai", ["typesafe:typesafe-ai"])
+    assert got["typesafe:typesafe-ai"] == "Build AI software with TypeSafe."
+
+
+def test_a_trimmed_plugin_command_takes_its_command_file_description(home, tmp_path):
+    root = tmp_path / "cache" / "ralph-loop" / "1.0.0"
+    cmd = root / "commands" / "cancel-ralph.md"
+    cmd.parent.mkdir(parents=True)
+    cmd.write_text('---\ndescription: "Cancel active Ralph Loop"\nallowed-tools: []\n---\n',
+                   encoding="utf-8")
+    _install_plugin(home, "ralph-loop", root)
+    got = SR.parse_listing("- ralph-loop:cancel-ralph", ["ralph-loop:cancel-ralph"])
+    assert got["ralph-loop:cancel-ralph"] == "Cancel active Ralph Loop"
+
+
+def test_a_trimmed_project_skill_is_found_from_the_cwd_and_its_ancestors(tmp_path):
+    proj = tmp_path / "proj"
+    _skill_md(proj / ".claude" / "skills" / "provmm-build" / "SKILL.md", "Build provmm.")
+    sub = proj / "src" / "deep"
+    sub.mkdir(parents=True)
+    got = SR.parse_listing("- provmm-build", ["provmm-build"], cwd=str(sub))
+    assert got["provmm-build"] == "Build provmm."
+    # Without the cwd the same line has nothing to resolve against: the name alone.
+    assert SR.parse_listing("- provmm-build", ["provmm-build"])["provmm-build"] == "provmm-build"
+
+
+def test_a_trimmed_user_command_without_front_matter_takes_its_first_line(home):
+    cmd = home / ".claude" / "commands" / "tfbpr.md"
+    cmd.parent.mkdir(parents=True)
+    cmd.write_text("Test, Fix, Bump, Push, Release - full release pipeline.\n\nExecute.\n",
+                   encoding="utf-8")
+    got = SR.parse_listing("- tfbpr", ["tfbpr"])
+    assert got["tfbpr"] == "Test, Fix, Bump, Push, Release - full release pipeline."
+
+
+def test_a_trimmed_user_skill_is_found_under_home(home):
+    _skill_md(home / ".claude" / "skills" / "toolbox" / "SKILL.md", "Check the toolbox first.")
+    got = SR.parse_listing("- toolbox", ["toolbox"])
+    assert got["toolbox"] == "Check the toolbox first."
+
+
+def test_a_multi_line_front_matter_description_is_read_whole(home):
+    md = home / ".claude" / "skills" / "folded" / "SKILL.md"
+    md.parent.mkdir(parents=True)
+    md.write_text("\ufeff---\nname: folded\ndescription: >-\n  Use when one thing\n  or another.\n"
+                  "other: x\n---\n", encoding="utf-8")
+    assert SR.parse_listing("- folded", ["folded"])["folded"] == "Use when one thing or another."
+
+
+@pytest.mark.parametrize("text, want", [
+    # With no `description:` the harness describes a skill or command by its first paragraph.
+    ("Test, Fix, Bump - full pipeline.\n\nExecute the steps.\n",
+     "Test, Fix, Bump - full pipeline."),
+    ("# Title\n\nFirst paragraph\nwraps here.\n\nSecond.\n", "First paragraph wraps here."),
+    ("---\nname: x\n---\n\n# Heading\nBody line.\n", "Body line."),
+    ("---\nname: x\n---\n", ""),
+    # Front matter that never closes reads as the shared reader splits it, as the gate does.
+    ("---\nname: x\ndescription: unclosed\n", "unclosed"),
+    ("", ""),
+    ("---\ndescription: 'quoted'\n---\nBody.\n", "quoted"),
+    ("---\ndescription: plain start\n  continued here\nname: x\n---\n",
+     "plain start continued here"),
+    ("---\ndescription: |\n  literal\n  block\n---\n", "literal block"),
+])
+def test_the_skill_file_description_reader(tmp_path, text, want):
+    md = tmp_path / "SKILL.md"
+    md.write_text(text, encoding="utf-8")
+    assert SR._file_description(md) == want  # noqa: SLF001 - the reader is the unit
+
+
+def test_a_skill_file_reads_through_the_shared_front_matter_reader(tmp_path):
+    # One reader for every consumer: whatever skill_frontmatter reads, the roster offers,
+    # decoded from its quotes or block header.
+    md = tmp_path / "SKILL.md"
+    md.write_text("---\nname: x\ndescription: >-\n  Use when folded\n  # not a comment here\n"
+                  "---\n", encoding="utf-8")
+    raw = SR.skill_frontmatter.description(md)
+    assert SR._file_description(md) == SR.skill_frontmatter.scalar_text(raw)  # noqa: SLF001
+    assert SR._file_description(md) == "Use when folded # not a comment here"  # noqa: SLF001
+
+
+def test_a_missing_or_undecodable_skill_file_never_raises(tmp_path):
+    md = tmp_path / "SKILL.md"
+    md.write_bytes(b"---\ndescription: \xff\xfe bad\n---\n")
+    assert SR._file_description(md) == "�� bad"  # noqa: SLF001
+    assert SR._file_description(tmp_path / "missing.md") == ""  # noqa: SLF001
+
+
+def test_malformed_installed_plugin_entries_are_skipped(home, tmp_path):
+    root = tmp_path / "cache" / "typesafe"
+    _skill_md(root / "skills" / "typesafe-ai" / "SKILL.md", "Build AI software.")
+    f = home / ".claude" / "plugins" / "installed_plugins.json"
+    f.parent.mkdir(parents=True)
+    f.write_text(json.dumps({"plugins": {"typesafe@m": ["junk", {"installPath": 3},
+                                                        {"installPath": str(root)}],
+                                         "other@m": "not a list"}}), encoding="utf-8")
+    got = SR.parse_listing("- typesafe:typesafe-ai", ["typesafe:typesafe-ai"])
+    assert got["typesafe:typesafe-ai"] == "Build AI software."
+
+
+def test_a_broken_installed_plugins_file_degrades_to_the_name(home):
+    f = home / ".claude" / "plugins" / "installed_plugins.json"
+    f.parent.mkdir(parents=True)
+    f.write_text("{not json", encoding="utf-8")
+    got = SR.parse_listing("- typesafe:typesafe-ai", ["typesafe:typesafe-ai"])
+    assert got["typesafe:typesafe-ai"] == "typesafe:typesafe-ai"
+
+
+def test_a_described_line_never_consults_the_skill_file(home):
+    # The listing's own text is what the session saw; a file is only the fallback.
+    _skill_md(home / ".claude" / "skills" / "toolbox" / "SKILL.md", "file text")
+    assert SR.parse_listing("- toolbox: listed text", ["toolbox"]) == {"toolbox": "listed text"}
+
+
+# ---- a bare name and this plugin's name for the same skill --------------------------------------
+
+def test_a_local_skill_sharing_a_bare_name_with_this_plugins_keeps_both():
+    got = SR.parse_listing("- bitranox:meta-self-improve: shipped\n- meta-self-improve: local",
+                           ["bitranox:meta-self-improve", "meta-self-improve"])
+    assert got == {"bitranox:meta-self-improve": "shipped", "meta-self-improve": "local"}
+
+
+def test_with_no_collision_this_plugins_skills_stay_keyed_bare():
+    got = SR.parse_listing("- bitranox:meta-self-improve: shipped\n- other: local",
+                           ["bitranox:meta-self-improve", "other"])
+    assert got == {"meta-self-improve": "shipped", "other": "local"}
 
 
 # ---- reading the transcript -------------------------------------------------------------------
@@ -113,6 +336,31 @@ def test_a_prompt_that_merely_mentions_skill_listing_is_not_a_listing(tmp_path):
                                                   "update-config"}
 
 
+def test_a_truncated_listing_line_is_skipped_and_the_next_one_read(tmp_path):
+    good = _listing(BASE)
+    cut = json.dumps(good)[:120]
+    assert '"skill_listing"' in cut  # it passes the substring filter and must fail the decode
+    t = _transcript(tmp_path, [cut, good])
+    assert set(SR.listing_from_transcript(t)) == {"files-edit-xml", "typesafe:typesafe-ai",
+                                                  "update-config"}
+
+
+def test_a_bare_name_arriving_in_a_delta_does_not_overwrite_this_plugins_skill(tmp_path):
+    t = _transcript(tmp_path, [_listing([("bitranox:meta-self-improve", "shipped")]),
+                               _listing([("meta-self-improve", "local")], initial=False)])
+    assert SR.listing_from_transcript(t) == {"bitranox:meta-self-improve": "shipped",
+                                             "meta-self-improve": "local"}
+
+
+def test_a_trimmed_line_in_a_delta_resolves_like_one_in_the_full_listing(tmp_path, home):
+    _skill_md(home / ".claude" / "skills" / "toolbox" / "SKILL.md", "Check the toolbox first.")
+    delta = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "content": "- toolbox", "names": ["toolbox"],
+        "isInitial": False}}
+    t = _transcript(tmp_path, [_listing(BASE), delta])
+    assert SR.listing_from_transcript(t)["toolbox"] == "Check the toolbox first."
+
+
 # ---- the roster the router uses ---------------------------------------------------------------
 
 def test_a_transcript_listing_is_used_and_cached_for_its_project(tmp_path):
@@ -141,3 +389,24 @@ def test_a_corrupt_cache_falls_back_to_the_shipped_skills(tmp_path):
     SR.installed_skills(_transcript(tmp_path, [_listing(BASE)]), "/p/a")
     SR._cache_file("/p/a").write_text("{not json", encoding="utf-8")  # noqa: SLF001 - the seam
     assert SR.installed_skills("", "/p/a")[1] == SR.SOURCE_SHIPPED
+
+
+@pytest.mark.parametrize("data", [[], {}, {"x": 1}, "a string"])
+def test_a_cache_of_the_wrong_shape_falls_back_to_the_shipped_skills(data):
+    path = SR._cache_file("/p/shape")  # noqa: SLF001 - the seam
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert SR.installed_skills("", "/p/shape")[1] == SR.SOURCE_SHIPPED
+
+
+def test_the_installed_roster_offers_trimmed_skills_resolved_from_the_project(tmp_path):
+    proj = tmp_path / "proj"
+    _skill_md(proj / ".claude" / "skills" / "provmm-build" / "SKILL.md", "Build provmm.")
+    rec = {"type": "attachment", "attachment": {
+        "type": "skill_listing",
+        "content": "- bitranox:compuse-git: Use when running git.\n- provmm-build\n- loop",
+        "names": ["bitranox:compuse-git", "provmm-build", "loop"], "isInitial": True}}
+    skills, source = SR.installed_skills(_transcript(tmp_path, [rec]), str(proj))
+    assert source == SR.SOURCE_TRANSCRIPT
+    assert skills == {"compuse-git": "Use when running git.", "provmm-build": "Build provmm.",
+                      "loop": "loop"}

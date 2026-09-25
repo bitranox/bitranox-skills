@@ -864,6 +864,24 @@ def test_an_installed_roster_is_the_listing_of_the_prompts_own_session(tmp_path)
     assert skills == {"compuse-bash": "shell", "typesafe:typesafe-ai": "TypeSafe"}
 
 
+def test_an_installed_roster_offers_a_trimmed_project_skill_from_the_prompts_cwd(tmp_path):
+    # The harness trims descriptions to fit its listing budget, leaving `- <name>`; the skill is
+    # still installed, and its text is read from the project the prompt was typed in.
+    md = tmp_path / "proj" / ".claude" / "skills" / "provmm-build" / "SKILL.md"
+    md.parent.mkdir(parents=True)
+    md.write_text("---\ndescription: Build provmm.\n---\n", encoding="utf-8")
+    rec = {"type": "attachment", "attachment": {
+        "type": "skill_listing", "isInitial": True, "names": ["bitranox:compuse-bash",
+                                                              "provmm-build"],
+        "content": "- bitranox:compuse-bash: shell\n- provmm-build"}}
+    src = tmp_path / "source.jsonl"
+    src.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    skills, source = ce.roster_for({"source": str(src), "cwd": str(tmp_path / "proj")}, SKILLS,
+                                   "installed")
+    assert source == "transcript"
+    assert skills == {"compuse-bash": "shell", "provmm-build": "Build provmm."}
+
+
 def test_an_installed_roster_falls_back_to_the_shipped_one_when_the_source_has_none(tmp_path):
     missing = str(tmp_path / "swept.jsonl")
     assert ce.roster_for({"source": missing}, SKILLS, "installed") == (SKILLS, "shipped")
