@@ -47,7 +47,9 @@ Every write verb reads its state back and exits 2 with an error on stderr when t
 land (an unwritable ~/.claude/self-improve-audit, a full disk) - a success line over a failed
 write is the one output a caller cannot recover from.
 
-Exit codes: 0 = done / answered, 2 = bad arguments or a write that did not land. `-h`/`--help`
+Exit codes: 0 = done / answered, 2 = bad arguments, a write that did not land, or a
+transcript that exists but cannot be read (session-review / session-reviewed: nothing is shown
+or marked, because an unreadable stretch is never "nothing new"). `-h`/`--help`
 prints this and exits 0. Launch via `hooks/run-python.sh`, which forces UTF-8; a bare launch on
 a cp1252 console is made safe too.
 
@@ -139,49 +141,41 @@ def _review_target(proj):
     current session's - the obligation is per project and outlives its session. Reviewing the
     current session while clearing the flag discharges the compacted stretch unread, so the owed
     transcript wins for as long as it still has unreviewed bytes. Once consumed (or gone from disk),
-    the target falls back to the live session so an ordinary review is unaffected."""
+    the target falls back to the live session so an ordinary review is unaffected.
+
+    Raises OSError when the owed transcript exists but cannot be read: falling back then would
+    review (and mark) the live session while the compacted stretch stays unread."""
     owed = (sig.nap_owed_info(proj) or {}).get("transcript_path") or ""
     if owed and os.path.exists(owed):
-        text, _ = sig.unreviewed_transcript_text(proj, _REVIEWER, transcript=owed)
-        if text:
+        if sig.unreviewed_transcript_part(proj, _REVIEWER, owed, REVIEW_CHUNK_BYTES).text:
             return owed
     return sig.resolve_transcript(proj)
 
 
-def _unreviewed_part(proj, path, chunk=REVIEW_CHUNK_BYTES):
-    """(text, start, end, size): the OLDEST unreviewed part of `path`, at most `chunk` bytes.
+def _part_to_review(proj):
+    """(path, TranscriptPart) this review shows and session-reviewed marks: the same resolver and
+    the same shared reader for both, or the mark lands on a different stretch than was shown.
+    Raises OSError (with the path in `filename` when known) for a transcript that cannot be read."""
+    path = _review_target(proj)
+    return path, sig.unreviewed_transcript_part(proj, _REVIEWER, path, REVIEW_CHUNK_BYTES)
 
-    Starts at the reviewer's watermark (a mark past the end means a rotated file, so it starts
-    over), and when the stretch is longer than `chunk` it is cut after the last newline inside
-    it, so the next part begins on a whole line. A single line longer than `chunk` is cut at the
-    byte bound instead: nothing is skipped either way, the watermark simply lands mid-line.
-    `end == size` means the whole stretch fits. ("", mark, mark, size) when nothing is new.
-    """
-    if not path:
-        return "", 0, 0, 0
-    try:
-        size = os.path.getsize(path)
-        mark = sig.get_watermark(proj, path, _REVIEWER)
-        mark = 0 if mark > size else mark
-        if mark >= size:
-            return "", mark, mark, size
-        end = min(size, mark + chunk)
-        with open(path, "rb") as fh:
-            fh.seek(mark)
-            data = fh.read(end - mark)
-    except OSError:
-        return "", 0, 0, 0
-    if end < size and b"\n" in data:
-        data = data[:data.rfind(b"\n") + 1]
-        end = mark + len(data)
-    return data.decode("utf-8", "replace"), mark, end, size
+
+def _unreadable(path, exc):
+    """Report a transcript that could not be read: stderr, exit 2, no review line on stdout. An
+    unreadable file is never "nothing new", and is never marked reviewed."""
+    print("error: transcript unreadable: %s (%s) - nothing was shown or marked reviewed"
+          % (path, exc), file=sys.stderr)
+    return 2
 
 
 def _session_review(proj, structured_only=False):
     """Print the session material to consolidate, read FROM DISK and only the unreviewed part."""
     meta = sig.read_session_meta(proj)
-    path = _review_target(proj)
-    text, start, offset, size = _unreviewed_part(proj, path)
+    try:
+        path, part = _part_to_review(proj)
+    except OSError as exc:
+        return _unreadable(exc.filename or "(the review target)", exc)
+    text, start, offset, size = part
     # The transcript basename IS the session id, so a SELF-LOCATED transcript (no meta recorded)
     # still recovers the subagent-learning and touched-path inputs, which are keyed by session id.
     # A transcript that is not the live session's is keyed by its OWN id, never the recorded one.
@@ -218,19 +212,19 @@ def _session_reviewed(proj):
     """Advance the dream's watermark past what session-review showed.
 
     That is the current end of the transcript, unless the stretch was longer than one part: then
-    only to the end of the part shown, so the rest is shown next time rather than discharged."""
-    tp = _review_target(proj)           # the SAME resolver review used, or the mark lands on the
-                                        # wrong file and the owed stretch is skipped forever
+    only to the end of the part shown, so the rest is shown next time rather than discharged. The
+    target is always the END OF A PART the shared reader actually read, never the file size: a
+    transcript that could not be read is refused (exit 2), not marked as consumed."""
+    try:
+        tp, part = _part_to_review(proj)    # the SAME resolver review used, or the mark lands on
+    except OSError as exc:                  # the wrong file and the owed stretch is skipped forever
+        return _unreadable(exc.filename or "(the review target)", exc)
     if not tp:
         print("no known transcript for %s - nothing to mark" % proj)
         return 0
-    try:
-        size = os.path.getsize(tp)
-    except OSError as exc:
-        print("error: transcript unreadable: %s (%s)" % (tp, exc), file=sys.stderr)
-        return 2
-    _text, _start, end, part_size = _unreviewed_part(proj, tp)
-    target = end if end < part_size else size
+    if not os.path.exists(tp):          # vanished after it was resolved: the reader's empty part
+        return _unreadable(tp, "the file is gone")          # would pull the mark back to 0
+    target, size = part.end, part.size
     try:
         sig.set_watermark(proj, tp, _REVIEWER, target)
     except OSError as exc:              # StateWriteError: the mark was not recorded

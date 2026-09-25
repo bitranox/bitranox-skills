@@ -286,6 +286,24 @@ def test_load_config_corrupt_file_returns_defaults(home):
     assert S.load_config()["dream_mode"] == "propose"
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="a write-only file is readable to root, and chmod does not bind on Windows")
+def test_save_config_never_overwrites_a_config_it_could_not_read(home):
+    """load_config answers the DEFAULTS for an unreadable file, which is right for a reader; the
+    save built on it then replaced every knob the user had set with its default."""
+    p = S._config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"dream_mode": "off", "promotion": "eager"}), encoding="utf-8")
+    p.chmod(0o200)                                          # writable, not readable
+    try:
+        with pytest.raises(OSError):
+            S.save_config({"privacy": "walled"}, strict=True)
+        S.save_config({"privacy": "walled"})               # best-effort: no raise, no write
+    finally:
+        p.chmod(0o644)
+    assert json.loads(p.read_text(encoding="utf-8")) == {"dream_mode": "off", "promotion": "eager"}
+
+
 # --------------------------------------------------------------------------
 # altitude homes
 # --------------------------------------------------------------------------
@@ -955,6 +973,85 @@ def test_load_pending_keywords_self_heals_junk_written_before_the_filter_existed
     f.write_text("1440\n404\nproxmox\nb02j3wfk7\n", encoding="utf-8")
     assert S.load_pending_keywords(_PROJ) == frozenset({"proxmox"})
     S.clear_pending_keywords(_PROJ)
+
+
+# ---- the word-list writers: their caller is the dream, which clears the queue after them --------
+# No hook calls them. The dream's filler pass (meta-dream-tree references/dream-passes.md) runs
+# add_filler_words / add_topical_words and THEN clear_pending_keywords, so a write that failed in
+# silence dropped the classification and the queue it came from, while the dream reported success.
+
+@pytest.mark.parametrize("writer, path_of", [
+    (S.add_filler_words, S._filler_local_path),
+    (S.add_topical_words, S._topical_words_path),
+], ids=["filler", "topical"])
+def test_a_word_list_write_that_fails_raises_before_the_queue_is_cleared(home, writer, path_of):
+    p = path_of(_PROJ)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.mkdir()                                              # neither readable nor writable as a file
+    with pytest.raises(S.StateWriteError):
+        writer(["wibble"], _PROJ)
+
+
+def test_a_word_list_that_cannot_be_read_is_never_replaced(home):
+    """The read-modify-write read the list through a reader that answered [] on any error, so the
+    write that followed replaced every learned word with the new one."""
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        pytest.skip("a write-only file is readable to root, and chmod does not bind on Windows")
+    S.add_filler_words(["alpha", "beta"], _PROJ)
+    p = S._filler_local_path(_PROJ)
+    before = p.read_bytes()
+    p.chmod(0o200)
+    try:
+        with pytest.raises(S.StateWriteError):
+            S.add_filler_words(["gamma"], _PROJ)
+        with pytest.raises(S.StateWriteError):
+            S.remove_filler_words(["alpha"], _PROJ)
+    finally:
+        p.chmod(0o644)
+    assert p.read_bytes() == before
+
+
+def test_a_word_list_write_that_lands_raises_nothing_and_keeps_its_format(home):
+    """The control: a writable store records the words, in the layout the file always had."""
+    S.add_topical_words(["zeta", "eta"], _PROJ)
+    text = S._topical_words_path(_PROJ).read_text(encoding="utf-8")
+    assert json.loads(text) == {"topical": ["eta", "zeta"]}
+    assert text == json.dumps({"topical": ["eta", "zeta"]}, indent=2) + "\n"
+
+
+def test_ensure_gitignored_reports_whether_the_patterns_are_ignored(home, tmp_path):
+    """A non-hook caller (the memory engine's ensure_level) relies on the private files being
+    ignored before anything stages them, so the outcome is returned rather than swallowed."""
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    (repo / ".gitignore").unlink()
+    (repo / ".gitignore").mkdir()                          # cannot be read or written as a file
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is False
+
+
+def test_ensure_gitignored_keeps_a_non_utf8_gitignore_and_never_raises(home, tmp_path):
+    """One byte in another encoding raised UnicodeDecodeError out of a best-effort function (it
+    caught OSError only); the file is now read and written back byte for byte."""
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_bytes(b"caf\xe9\n")
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    data = (repo / ".gitignore").read_bytes()
+    assert data.startswith(b"caf\xe9\n") and b"\nCLAUDE.local.md\n" in data
+
+
+def test_ensure_gitignored_keeps_a_crlf_gitignore_crlf(home, tmp_path):
+    import subprocess
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_bytes(b"a\r\nb\r\n")
+    assert S.ensure_gitignored(str(repo), "CLAUDE.local.md") is True
+    data = (repo / ".gitignore").read_bytes()
+    assert data.startswith(b"a\r\nb\r\n") and data.endswith(b"\r\nCLAUDE.local.md\r\n")
+    assert b"\n" not in data.replace(b"\r\n", b"")
 
 
 # ---- curated-store relocation and cross-platform lock (Phase 1) ----------------------------------

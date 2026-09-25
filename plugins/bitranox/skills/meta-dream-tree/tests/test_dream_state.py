@@ -382,6 +382,35 @@ def test_session_reviewed_reports_a_watermark_it_could_not_write(home, tmp_path,
     assert D.sig.get_watermark("/p/w", str(tp), "dream") == 0
 
 
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for an unreadable file")
+def test_an_unreadable_transcript_is_never_marked_reviewed(home, tmp_path, capsys):
+    """The part reader answered ("", 0, 0, 0) for a transcript it could size but not open, and
+    session-reviewed read that as "the whole stretch fits" and advanced the mark to the END -
+    discharging every byte, and the owed nap with it, without one of them having been shown."""
+    tp = _session(home, "/p/ur", tmp_path, '{"type":"user","message":{"content":"UNREAD"}}\n')
+    tp.chmod(0o000)
+    try:
+        assert D.main(["session-review", "/p/ur"]) == 2
+        review = capsys.readouterr()
+        assert "NOTHING NEW" not in review.out and "unreadable" in review.err
+        assert D.main(["session-reviewed", "/p/ur"]) == 2
+        reviewed = capsys.readouterr()
+        assert "advanced" not in reviewed.out and "unreadable" in reviewed.err
+    finally:
+        tp.chmod(0o644)
+    assert D.sig.get_watermark("/p/ur", str(tp), "dream") == 0
+
+
+def test_session_review_reads_its_parts_through_the_shared_reader(home, tmp_path):
+    """One reader for the dream CLI and the state layer: the CLI kept its own copy of the chunked
+    read, so a fix to one (the oldest-part cut, the offset bound) could miss the other."""
+    assert not hasattr(D, "_unreviewed_part")
+    tp = _session(home, "/p/sr", tmp_path, "a\nbb\nccc\n")
+    part = D.sig.unreviewed_transcript_part("/p/sr", "dream", str(tp), max_bytes=6)
+    assert (part.text, part.start, part.end, part.size) == ("a\nbb\n", 0, 5, 9)
+    assert D.sig.unreviewed_transcript_text("/p/sr", "dream", str(tp), max_bytes=6) == ("a\nbb\n", 5)
+
+
 @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
 def test_saw_promotable_reports_a_sighting_it_could_not_write(home, locked_audit, capsys):
     assert D.main(["saw-promotable", "s4", "/p/a"]) == 2

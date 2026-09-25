@@ -40,7 +40,6 @@ import json
 import math
 import os
 import random
-import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -857,6 +856,10 @@ def _load_hook(stem):
     return module
 
 
+class PrefixUnavailable(OSError):
+    """A prompt's source transcript could not be read, so the state it arrived in is unknown."""
+
+
 def _prefix_transcript(prompt, tmp_dir):
     """The transcript as it stood the moment this prompt arrived, written to a temp file.
 
@@ -867,16 +870,19 @@ def _prefix_transcript(prompt, tmp_dir):
     `line` was numbered by corpus_prompts, so the prefix is cut by corpus_prompts too: a second
     split here (splitlines() breaks on U+2028, \\f, a lone \\r and more) ended it inside a record.
     newline="" writes the lines back as read, so a CRLF transcript is not rewritten on Windows.
+
+    Raises PrefixUnavailable when the source cannot be read. An empty prefix is what a session's
+    FIRST prompt legitimately has, so writing one here made the arms judge the prompt on a state
+    it never arrived in, and nothing in the row could tell the two apart.
     """
     import corpus_prompts  # noqa: PLC0415 - only the live path builds a prefix
 
     source, line = prompt.get("source"), int(prompt.get("line") or 1)
-    out = Path(tmp_dir) / "prefix.jsonl"
     try:
         text = corpus_prompts.read_transcript(source)
-    except OSError:
-        out.write_text("", encoding="utf-8")
-        return str(out)
+    except OSError as exc:
+        raise PrefixUnavailable("cannot read the source transcript %s: %s" % (source, exc)) from exc
+    out = Path(tmp_dir) / "prefix.jsonl"
     out.write_text(corpus_prompts.transcript_prefix(text, line), encoding="utf-8", newline="")
     return str(out)
 
@@ -975,7 +981,10 @@ def selected_arms(arm):
 
 
 def _replay_one(prompt, ask, skills, bodies, router, triggers, args, router_text=None):
-    """The chosen arms' verdicts on one prompt, beside the keyword arm's, as one log row."""
+    """The chosen arms' verdicts on one prompt, beside the keyword arm's, as one log row.
+
+    Raises PrefixUnavailable, before any arm is asked, when the prompt carries no recorded state
+    and its source transcript cannot be read: see `_prefix_transcript`."""
     import tempfile  # noqa: PLC0415 - only the live path needs a prefix file
 
     # A pinned prompt carries the state its own run recorded, and it is re-sent verbatim: see
@@ -1075,18 +1084,28 @@ def _run_replay(args, clf=None, skills=None):
         check_controls(arm, ask, skills, threshold=args.threshold, shortlist=args.shortlist,
                        bodies=bodies, router_text=router_text)
     triggers = router.load_triggers()
-    rows = []
+    rows, replayed, skipped = [], [], []
     # Written as they come, not at the end: a run costs real money and several minutes, and a
     # crash on the last prompt would otherwise discard every row before it.
     with open(args.out, "a", encoding="utf-8") as fh:
         for prompt in picked:
-            row = _replay_one(prompt, ask, skills, bodies, router, triggers, args,
-                              router_text)
+            try:
+                row = _replay_one(prompt, ask, skills, bodies, router, triggers, args,
+                                  router_text)
+            except PrefixUnavailable as exc:
+                # Skipped, not scored and not logged: the log is what a later run pins to and
+                # what a report scores, and a row judged on an invented state poisons both.
+                skipped.append({"uuid": prompt.get("uuid"), "source": prompt.get("source"),
+                                "line": prompt.get("line"), "reason": str(exc)})
+                print("classifier_eval: skipped a prompt - %s" % exc, file=sys.stderr)
+                continue
             rows.append(row)
+            replayed.append(prompt)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
     report = {"corpus": {"files_read": found["files_read"], "typed_prompts": len(typed)},
-              "sampled": len(rows), "input_tokens": ask.tokens, "requests": ask.calls,
+              "sampled": len(rows), "skipped_prompts": skipped,
+              "input_tokens": ask.tokens, "requests": ask.calls,
               "failures": dict(ask.reasons), "log": str(args.out),
               "roster": getattr(args, "roster", "shipped"),
               "rosters_used": dict(Counter(r["roster"] for r in rows)),
@@ -1098,7 +1117,9 @@ def _run_replay(args, clf=None, skills=None):
                                              for k in r.get("description_overrides", [])))
             for name, _text in args.description}
     if getattr(args, "prompts", None):
-        drift = state_drift(picked, [r["state"] for r in rows])
+        # Paired with the prompts actually replayed: zipped against `picked`, one skip would
+        # shift every later comparison onto the wrong prompt.
+        drift = state_drift(replayed, [r["state"] for r in rows])
         report["pinned_to"] = str(args.prompts)
         report["state_drift"] = drift
     return 0, report, None
@@ -1190,6 +1211,10 @@ def render_replay(data):
              "spent: %d requests, %d input tokens; failures: %s"
              % (data["requests"], data["input_tokens"], data["failures"] or "none"),
              "log: %s" % data["log"]]
+    if data.get("skipped_prompts"):
+        lines.append("skipped %d prompt(s) whose source transcript could not be read - not "
+                     "scored: %s" % (len(data["skipped_prompts"]),
+                                     ", ".join(str(s["uuid"]) for s in data["skipped_prompts"])))
     for name, arm in data["arms"].items():
         lines.append("  %-20s picks/prompt %.2f  with a pick %d/%d  unanswered %d  agreed %d"
                      % (name, arm["picks_per_prompt"], arm["prompts_with_a_pick"], arm["prompts"],
@@ -1226,7 +1251,9 @@ def main(argv=None, *, clf=None, skills=None):
         except (OSError, ValueError) as exc:
             _emit(args, False, error="%s: %s" % (type(exc).__name__, exc))
             return 2
-        _emit(args, code == 0, data=data, error=error)
+        skipped = ({"prompts_without_a_prefix": len(data["skipped_prompts"])}
+                   if data and "skipped_prompts" in data else None)
+        _emit(args, code == 0, data=data, error=error, skipped=skipped)
         return code
     exclude = tuple(args.exclude_session if args.exclude_session is not None else DEFAULT_EXCLUDE)
     args.log = args.log or default_log()

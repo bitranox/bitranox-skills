@@ -152,6 +152,55 @@ def test_a_corrupt_store_is_replaced_not_refused(home, tmp_path):
     assert S.get_watermark("/p/w", str(tmp_path / "t.jsonl"), "dream") == 5
 
 
+# ---- a BOM is decoded the same way by every reader and its updater ------------------------------
+# A hand edit on Windows (Notepad, PowerShell Set-Content -Encoding UTF8) prepends a BOM.
+
+BOM = b"\xef\xbb\xbf"
+
+
+def test_a_bommed_sighting_store_reads_the_same_dwell_the_updater_sees(home):
+    """The reader decoded plain utf-8, so a BOM'd store read as dwell 0 while the updater parsed
+    it and returned 3: the gate held a candidate its own write had just counted as corroborated."""
+    f = S.promotion_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(BOM + json.dumps({"k": ["aaaa", "bbbb"]}).encode("utf-8"))
+    assert S.promotion_dwell("/p", "k") == 2
+    assert S.note_promotion_candidate("/p/x", "k") == S.promotion_dwell("/p", "k") == 3
+
+
+def _state_record():
+    return {"ts": 1.0, "session_id": "s", "transcript_path": "/t"}
+
+
+@pytest.mark.parametrize("path_of, read, data", [
+    (lambda: S.session_meta_file("/p"), lambda: S.read_session_meta("/p"), _state_record()),
+    (lambda: S.nap_owed_file("/p"), lambda: S.nap_owed_info("/p"), _state_record()),
+    (lambda: S.watermark_file("/p"), lambda: S.get_watermark("/p", "/t", "dream"),
+     {"dream": {"/t": 7}}),
+    (lambda: S._filler_local_path("/p"), lambda: S.load_filler_words("/p") - S.load_filler_words(),
+     {"filler": ["zzqq"]}),
+    (lambda: S._topical_words_path("/p"), lambda: S.load_topical_words("/p"), {"topical": ["zzqq"]}),
+], ids=["session_meta", "nap_owed", "watermark", "filler", "topical"])
+def test_every_json_state_reader_reads_a_bommed_file_like_a_plain_one(home, path_of, read, data):
+    """The sibling readers: each answered EMPTY for a BOM'd file, and for the word lists the next
+    add then rewrote the file from that empty read, erasing every learned word."""
+    f = path_of()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(json.dumps(data).encode("utf-8"))
+    plain = read()
+    assert plain                                                   # the control reads something
+    f.write_bytes(BOM + json.dumps(data).encode("utf-8"))
+    assert read() == plain
+
+
+def test_adding_a_word_to_a_bommed_list_keeps_the_words_already_there(home):
+    f = S._filler_local_path("/p")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(BOM + json.dumps({"filler": ["zzqq"]}).encode("utf-8"))
+    S.add_filler_words(["yyww"], "/p")
+    assert {"zzqq", "yyww"} <= S.load_filler_words("/p")
+
+
 # ---- a capped transcript read never returns an offset past what it returned ----------------------
 
 def _abc(tmp_path):

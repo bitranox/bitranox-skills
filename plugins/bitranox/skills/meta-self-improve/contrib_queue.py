@@ -88,6 +88,82 @@ def _resolve_from_session(qdir, key):
     return ""
 
 
+def _why_not_queued(proj, what, target):
+    """Why an add was refused: "shipped earlier", "rejected earlier" or "already queued".
+
+    The add itself already read the closed set through the raising loader, so an unreadable one
+    failed it before this runs; a read failure here is a change in between, and says so rather
+    than guessing "already queued"."""
+    try:
+        closed = {(r.get("what"), r.get("target") or ""): r.get("outcome")
+                  for r in sig.read_closed(proj)}
+    except OSError as exc:
+        return "already queued or closed - the closed set could not be read: %s" % exc
+    return {sig.SHIPPED: "shipped earlier", sig.REJECTED: "rejected earlier"}.get(
+        closed.get((what, target)), "already queued")
+
+
+def _read_or_report(reader, proj, what):
+    """`reader(proj)`, or None after printing why it failed. An unreadable store must never be
+    reported in the words an empty one produces."""
+    try:
+        return reader(proj)
+    except OSError as exc:
+        print("! failed: could not read the %s for %s (%s) - fix the store and re-run"
+              % (what, proj, exc), file=sys.stderr)
+        return None
+
+
+def _queue_rows(qdir):
+    """[(key, open count or None when unreadable, where)] for every queue file in `qdir`."""
+    rows = []
+    for f in sorted(qdir.glob("*.contrib.jsonl")):
+        key = f.name[: -len(".contrib.jsonl")]
+        try:
+            recs = sig.read_contributions(sig.QUEUE_KEY_PREFIX + key)
+        except OSError as exc:
+            rows.append((key, None, "(unreadable: %s)" % exc))
+            continue
+        path = next((r.get("proj") for r in recs if r.get("proj")), "")
+        if not path:
+            path = _resolve_from_session(qdir, key)
+        if not path:
+            where = "(project unknown - queued before the path was recorded)"
+        elif os.path.isdir(path):
+            where = path
+        else:
+            where = "%s  (cwd gone)" % path
+        rows.append((key, len(recs), where))
+    return rows
+
+
+def _print_queues():
+    """The `queues` verb. Exit 0 listed; 1 when a queue file could not be read (it is listed as
+    unreadable, never counted as holding nothing)."""
+    # The queue is addressed by cwd, and the filename is a one-way hash of it - so without this
+    # there is no way to ask which projects have pending contributions, and a queue whose cwd was
+    # deleted or renamed is invisible AND unreachable by every other verb. Entries added since the
+    # `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
+    # The DIRECTORY, asked for directly: routing a fake key through `contrib_file` just to take
+    # `.parent` stopped working once that function refused keys that are not real ones.
+    rows = _queue_rows(sig._audit_dir())
+    _hint_orphans()
+    shown = [r for r in rows if r[1] is None or r[1]]
+    if not shown:
+        print("no queue on this machine has an open contribution (%d queue file(s) seen)" % len(rows))
+        return 0
+    unreadable = sum(1 for r in shown if r[1] is None)
+    print("%d queue(s) with open contributions%s:"
+          % (len(shown), " (%d unreadable)" % unreadable if unreadable else ""))
+    for key, n, where in shown:
+        # The WHOLE key, not a prefix: the next line tells the operator to pass
+        # queue_key:<full-key>, and a truncated one selects nothing while every verb
+        # answers "no pending upstream contributions" - indistinguishable from done.
+        print("  %s  %s  %s" % (key, "? open" if n is None else "%d open" % n, where))
+    print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
+    return 1 if unreadable else 0
+
+
 def _hint_orphans():
     """One line when closed-set files sit under the wrong key, so `queues` - the verb an operator
     runs to see every queue - also shows that some closes are not protecting their queue."""
@@ -210,54 +286,18 @@ def main(argv=None):
         if not queued:
             # already queued, or CLOSED earlier - either way not a new TODO. Name the outcome that
             # closed it: "rejected" for work that was already DONE would send the reader to redo it.
-            key = (args.what, args.target)
-            closed = {(r.get("what"), r.get("target") or ""): r.get("outcome") for r in sig.read_closed(proj)}
-            why = {sig.SHIPPED: "shipped earlier", sig.REJECTED: "rejected earlier"}.get(
-                closed.get(key), "already queued")
-            print("not queued (%s): %s" % (why, args.what))
+            print("not queued (%s): %s" % (_why_not_queued(proj, args.what, args.target), args.what))
             return 0
         print("queued: %s%s" % (args.what, " -> %s" % args.target if args.target else ""))
         return 0
 
     if args.cmd == "queues":
-        # The queue is addressed by cwd, and the filename is a one-way hash of it - so without this
-        # there is no way to ask which projects have pending contributions, and a queue whose cwd was
-        # deleted or renamed is invisible AND unreachable by every other verb. Entries added since
-        # the `proj` stamp landed carry their own path; older ones cannot be resolved and say so.
-        # The DIRECTORY, asked for directly. This used to route a fake key through
-        # `contrib_file` just to take `.parent`, which stopped working the moment that
-        # function started refusing keys that are not real ones.
-        qdir = sig._audit_dir()
-        rows = []
-        for f in sorted(qdir.glob("*.contrib.jsonl")):
-            key = f.name[: -len(".contrib.jsonl")]
-            recs = sig.read_contributions(sig.QUEUE_KEY_PREFIX + key)
-            path = next((r.get("proj") for r in recs if r.get("proj")), "")
-            if not path:
-                path = _resolve_from_session(qdir, key)
-            if not path:
-                where = "(project unknown - queued before the path was recorded)"
-            elif os.path.isdir(path):
-                where = path
-            else:
-                where = "%s  (cwd gone)" % path
-            rows.append((key, len(recs), where))
-        _hint_orphans()
-        open_rows = [r for r in rows if r[1]]
-        if not open_rows:
-            print("no queue on this machine has an open contribution (%d queue file(s) seen)" % len(rows))
-            return 0
-        print("%d queue(s) with open contributions:" % len(open_rows))
-        for key, n, where in open_rows:
-            # The WHOLE key, not a prefix: the next line tells the operator to pass
-            # queue_key:<full-key>, and a truncated one selects nothing while every verb
-            # answers "no pending upstream contributions" - indistinguishable from done.
-            print("  %s  %d open  %s" % (key, n, where))
-        print("address one with: contrib_queue.py list|ship|drop ... queue_key:<full-key>|<path>")
-        return 0
+        return _print_queues()
 
     if args.cmd == "list":
-        recs = sig.read_contributions(proj)
+        recs = _read_or_report(sig.read_contributions, proj, "queue")
+        if recs is None:
+            return 1
         if not recs:
             print("no pending upstream contributions for %s" % proj)
             return 0
@@ -294,7 +334,10 @@ def main(argv=None):
 
     if args.cmd in ("rejected", "shipped"):
         shipping = args.cmd == "shipped"
-        recs = sig.read_shipped(proj) if shipping else sig.read_rejected(proj)
+        recs = _read_or_report(sig.read_shipped if shipping else sig.read_rejected, proj,
+                               "closed set")
+        if recs is None:
+            return 1
         label, field = ("shipped", "note") if shipping else ("dropped", "reason")
         if not recs:
             print("no %s contributions for %s" % (label, proj))

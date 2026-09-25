@@ -24,6 +24,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 # ---- Audit-file location (shared by self-improve-audit.py writer + session-start reader) --
 
@@ -252,30 +253,43 @@ def claude_local_md_path(proj):
 
 def ensure_gitignored(proj, *patterns):
     """Best-effort: on a git repo, ensure each `pattern` is in the repo-root `.gitignore`. Honors
-    `track_private` (skip if set - the user wants memory committed). Non-git dir or any error -> skip
-    (fail-open). Used by per-turn capture so a fresh untracked `CLAUDE.local.md` + curated store are
-    never accidentally staged into a public repo."""
+    `track_private` (skip if set - the user wants memory committed). Used by per-turn capture so a
+    fresh untracked `CLAUDE.local.md` + curated store are never accidentally staged into a public
+    repo.
+
+    Never raises (a hook reaches it through the memory engine). Returns True when nothing is left
+    to do - the patterns are listed, `track_private` is set, or `proj` is not in a git repo - and
+    False when it could not make sure: git did not answer, or the `.gitignore` could not be read
+    or written. A caller that goes on to rely on the files being ignored reads that, rather than
+    assuming a write it cannot see.
+
+    The file is decoded with surrogateescape and written back the same way, so a byte in another
+    encoding survives the rewrite instead of raising (UnicodeDecodeError is not an OSError, and
+    escaped every fail-open handler here); the file's own line ending is kept."""
     if load_config().get("track_private"):
-        return
+        return True
     import subprocess
     try:
         top = subprocess.run(["git", "-C", str(proj), "rev-parse", "--show-toplevel"],
                              capture_output=True, text=True, timeout=5).stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        return
+        return False
     if not top:
-        return
+        return True
     try:
         gi = Path(top) / ".gitignore"
-        cur = gi.read_text(encoding="utf-8") if gi.is_file() else ""
-        have = set(cur.splitlines())
+        cur = gi.read_bytes().decode("utf-8", "surrogateescape") if os.path.lexists(gi) else ""
+        have = set(cur.lstrip("\ufeff").splitlines())
         add = [p for p in patterns if p not in have and p.rstrip("/") not in have]
         if add:
-            gi.write_text((cur.rstrip("\n") + "\n" if cur.strip() else "")
-                          + "# bitranox curated memory (local; CLAUDE.local.md @imports it)\n"
-                          + "\n".join(add) + "\n", encoding="utf-8")
+            nl = "\r\n" if "\r\n" in cur else "\n"
+            text = ((cur.rstrip("\r\n") + nl if cur.strip() else "")
+                    + "# bitranox curated memory (local; CLAUDE.local.md @imports it)" + nl
+                    + nl.join(add) + nl)
+            gi.write_bytes(text.encode("utf-8", "surrogateescape"))
     except OSError:
-        pass
+        return False
+    return True
 
 
 def curated_index(proj):
@@ -604,11 +618,18 @@ def _load_queue(f):
 
 
 def read_contributions(proj):
-    """The pending contributions for `proj`, oldest first. [] when none. Never consumes."""
+    """The pending contributions for `proj`, oldest first. Never consumes.
+
+    [] only when there is no queue: the file is absent, or `proj` is a malformed queue key (which
+    names no file). Raises OSError when the queue file exists but cannot be read - an unreadable
+    queue answered [] made `list` print "no pending upstream contributions" and `queues` count it
+    as nothing open, the exact words an emptied queue produces. A hook that must never wedge
+    catches the error itself."""
     try:
-        return _read_jsonl_records(contrib_file(proj))
-    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
+        f = contrib_file(proj)
+    except ValueError:                # contrib_file refusing a malformed queue key
         return []
+    return _load_queue(f)
 
 
 def add_contribution(proj, record, max_items=100, strict=False):
@@ -633,9 +654,11 @@ def add_contribution(proj, record, max_items=100, strict=False):
             # A CLOSED intent stays closed, whichever outcome closed it. Without this the dedup key
             # only spans the LIVE queue, so a later dream that re-notices a disproven gap silently
             # re-queues it and every future dream re-evaluates it again - and a DELIVERED one comes
-            # back as a TODO for work already shipped. Read the closed set, never just rejections.
+            # back as a TODO for work already shipped. Read the closed set, never just rejections,
+            # and through the RAISING loader: a closed set that exists but cannot be read must
+            # refuse the add, not let every closed intent back in.
             if any((str(r.get("what")), str(r.get("target") or "")) == key
-                   for r in read_closed(proj)):
+                   for r in _load_closed(proj)):
                 return False
             rec = dict(record)
             rec.setdefault("ts", time.time())
@@ -717,14 +740,15 @@ def read_closed(proj):
 
     This is the set the re-queue block must consult: a delivered intent and a disproven one are
     equally not-a-TODO. Records written before the outcome field existed were all drops, so a
-    missing `outcome` reads as rejected."""
+    missing `outcome` reads as rejected.
+
+    [] only when nothing was ever closed (absent file, or a malformed queue key, which names no
+    file). Raises OSError when the file exists but cannot be read: answering [] there let a closed
+    intent be re-queued and made `shipped` / `rejected` report nothing."""
     try:
-        out = _read_jsonl_records(rejected_file(proj))
-    except (OSError, ValueError):     # ValueError: a malformed queue key names no file
+        return _load_closed(proj)
+    except ValueError:                # a malformed queue key names no file
         return []
-    for rec in out:
-        rec.setdefault("outcome", REJECTED)
-    return out
 
 
 def _tombstone(rec, outcome, note=""):
@@ -737,9 +761,9 @@ def _tombstone(rec, outcome, note=""):
 
 
 def _load_closed(proj):
-    """`proj`'s closed set for a read-modify-write: [] only when the file does not exist. Any other
-    read failure raises, because `read_closed`'s [] there made the next close REPLACE every earlier
-    tombstone with its own - each earlier intent then became re-queueable."""
+    """`proj`'s closed set: [] only when the file does not exist. Any other read failure raises,
+    because an [] there made the next close REPLACE every earlier tombstone with its own - each
+    earlier intent then became re-queueable. Raises ValueError for a malformed queue key."""
     try:
         out = _read_jsonl_records(rejected_file(proj))
     except FileNotFoundError:
@@ -768,12 +792,14 @@ def _append_tombstones(proj, tombs, max_items=200):
 
 
 def read_rejected(proj):
-    """The contributions dropped as wrong or stale, oldest first. Excludes what SHIPPED."""
+    """The contributions dropped as wrong or stale, oldest first. Excludes what SHIPPED. Raises
+    OSError on an unreadable closed set, like `read_closed`."""
     return [r for r in read_closed(proj) if r.get("outcome") != SHIPPED]
 
 
 def read_shipped(proj):
-    """The contributions that actually shipped, oldest first."""
+    """The contributions that actually shipped, oldest first. Raises OSError on an unreadable
+    closed set, like `read_closed`."""
     return [r for r in read_closed(proj) if r.get("outcome") == SHIPPED]
 
 
@@ -783,7 +809,8 @@ def resolve_contribution(proj, index=None, match=None):
     `match` is a case-insensitive substring of the entry's `what` or `target`, and exists because an
     INDEX SHIFTS under the previous close: closing two entries by the indices of one listing hits
     the wrong second entry, which silently destroys a contribution that was meant to stay queued.
-    Raises IndexError (out of range, no match, or an ambiguous match) rather than guessing."""
+    Raises IndexError (out of range, no match, or an ambiguous match) rather than guessing, and
+    OSError when the queue cannot be read."""
     return _resolve_in(read_contributions(proj), index, match)
 
 
@@ -982,7 +1009,7 @@ def nap_owed_info(proj):
     Tolerates a LEGACY marker written before the session was recorded (it carries only `ts`), so an
     obligation from an older plugin version still blocks - it just cannot name its transcript."""
     try:
-        d = json.loads(nap_owed_file(proj).read_text(encoding="utf-8"))
+        d = _decode_json_file(nap_owed_file(proj))
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -1097,11 +1124,16 @@ def save_config(updates, strict=False):
 
     Best-effort by default (hooks must never fail a turn over it). `strict=True` re-raises the
     OSError of a failed write instead: an operator CLI that reports the new value after a write
-    that never happened tells the user a choice is recorded when it is not."""
+    that never happened tells the user a choice is recorded when it is not.
+
+    A config that exists but cannot be READ is never written: `load_config` answers the defaults
+    for it, so the save would replace every knob the user set with its default."""
     cfg = load_config()
     cfg.update({k: updates[k] for k in updates if k in DEFAULT_CONFIG})
     try:
         p = _config_path()
+        if os.path.lexists(p):
+            p.read_bytes()                             # raises when it cannot be read
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
@@ -1358,7 +1390,7 @@ def record_session_meta(proj, session, transcript_path):
 def read_session_meta(proj):
     """{'session_id','transcript_path','ts'} for `proj`, or {} when unknown."""
     try:
-        d = json.loads(session_meta_file(proj).read_text(encoding="utf-8"))
+        d = _decode_json_file(session_meta_file(proj))
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -1367,31 +1399,53 @@ def read_session_meta(proj):
 class StateWriteError(OSError):
     """A state file whose write the caller reports as done could not be written; nothing changed.
 
-    Raised, never swallowed, by the writers of the review watermark and the promotion sightings.
+    Raised, never swallowed, by the writers of the review watermark, the promotion sightings and
+    the learned word lists.
     Those used to swallow every OSError, so a failed write returned exactly what a successful one
     did and only a caller that happened to read the value back could tell. An OSError subclass, so
     a hook's fail-open handler that already catches OSError still keeps the turn moving."""
 
 
-def _load_json_for_update(path):
-    """The JSON object at `path` for a read-modify-write: {} when the file is absent or does not
-    parse into an object (it then holds nothing to lose). A file that EXISTS but cannot be READ
-    raises StateWriteError: answering {} there makes the writer replace every other entry with
+def _decode_json_file(path):
+    """The parsed JSON at `path`. Raises OSError (unreadable) or ValueError (does not parse).
+
+    The ONE decoder for this module's JSON state files, readers and updaters alike. utf-8-sig
+    because a hand edit on Windows prepends a BOM that plain utf-8 keeps as U+FEFF, which JSON
+    refuses: a reader decoding differently from its updater then answered EMPTY (a sighting dwell
+    of 0) for a store its own updater parsed and counted."""
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def _load_any_json_for_update(path):
+    """The parsed JSON at `path` for a read-modify-write, any shape: None when the file is absent
+    or does not parse (it then holds nothing to lose). A file that EXISTS but cannot be READ
+    raises StateWriteError: answering empty there makes the writer replace every other entry with
     its one new value."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        return _decode_json_file(path)
     except FileNotFoundError:
-        return {}
+        return None
     except ValueError:
-        return {}
+        return None
     except OSError as exc:
         raise StateWriteError("cannot read %s to update it, so it was left unchanged (%s)"
                               % (path, exc)) from exc
+
+
+def _load_json_for_update(path):
+    """The JSON object at `path` for a read-modify-write: {} when the file is absent or does not
+    parse into an object. Raises StateWriteError like `_load_any_json_for_update`."""
+    data = _load_any_json_for_update(path)
     return data if isinstance(data, dict) else {}
 
 
 def _write_json_state(path, data):
-    """Write `data` to `path` as JSON through a temp file and a replace, so a failure leaves the
+    """Write `data` to `path` as JSON; see `_write_text_state`. Raises StateWriteError."""
+    _write_text_state(path, json.dumps(data, sort_keys=True))
+
+
+def _write_text_state(path, text):
+    """Write `text` to `path` through a temp file and a replace, so a failure leaves the
     previous content whole rather than a torn file that later reads as empty. Raises
     StateWriteError when the write does not land.
 
@@ -1404,8 +1458,8 @@ def _write_json_state(path, data):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(data, sort_keys=True))
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
         retry_while_shared(os.replace, tmp, str(path))
         tmp = None
     except OSError as exc:
@@ -1425,7 +1479,7 @@ def watermark_file(proj):
 
 def _watermarks(proj):
     try:
-        d = json.loads(watermark_file(proj).read_text(encoding="utf-8-sig"))
+        d = _decode_json_file(watermark_file(proj))
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -1457,44 +1511,58 @@ def set_watermark(proj, transcript, reviewer, offset):
     _write_json_state(f, marks)
 
 
-def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
-    """(new_text, new_offset) - the OLDEST part of the transcript `reviewer` has NOT consumed yet,
-    and the byte offset where that part ends.
+class TranscriptPart(NamedTuple):
+    """One part of a transcript's unreviewed stretch: bytes `start`..`end` of a `size`-byte file,
+    decoded as `text`. `end == size` means the part reaches the end of the file."""
+    text: str
+    start: int
+    end: int
+    size: int
 
-    `new_offset` is always the end of the text returned, never further: marking it reviewed can
-    only ever discharge what the caller was shown. The cap used to return the NEWEST `max_bytes`
-    with the offset of the file END, so a caller that marked that offset discharged everything
-    older unread; and a single unreviewed line longer than the cap came back as "", which reads as
+
+def unreviewed_transcript_part(proj, reviewer, transcript=None, max_bytes=2_000_000):
+    """The OLDEST part of the transcript `reviewer` has NOT consumed yet, as a TranscriptPart.
+
+    `end` is always the end of the text returned, never further: marking it reviewed can only ever
+    discharge what the caller was shown. The cap used to return the NEWEST `max_bytes` with the
+    offset of the file END, so a caller that marked that offset discharged everything older
+    unread; and a single unreviewed line longer than the cap came back as "", which reads as
     "nothing new". Now a stretch over `max_bytes` is cut after its last newline, so the next call
     resumes on a whole line; a single line longer than the cap is cut at the byte bound. Call again
     after marking to get the next part.
 
-    Returns ("", mark) when nothing is new: that is what stops a second dream in one session from
-    re-analyzing (and re-paying for) the whole transcript. A transcript SHORTER than the mark means a
-    rotated/replaced file, so the mark is ignored and the file is read from the start rather than
-    silently skipping a fresh session."""
+    Nothing new is ("", mark, mark, size): that is what stops a second dream in one session from
+    re-analyzing (and re-paying for) the whole transcript. A transcript SHORTER than the mark means
+    a rotated/replaced file, so the mark is ignored and the file is read from the start rather than
+    silently skipping a fresh session. No transcript at all (none recorded, or the file is gone) is
+    ("", 0, 0, 0).
+
+    Raises OSError when the transcript exists but cannot be read. Answering "nothing new" there let
+    a caller that marks the returned end discharge every unread byte of it."""
     transcript = transcript or (read_session_meta(proj) or {}).get("transcript_path") or ""
     if not transcript:
-        return "", 0
+        return TranscriptPart("", 0, 0, 0)
     try:
         size = os.path.getsize(transcript)
-    except OSError:
-        return "", 0
+    except (FileNotFoundError, NotADirectoryError):   # gone, or can never exist
+        return TranscriptPart("", 0, 0, 0)
     mark = get_watermark(proj, transcript, reviewer)
     if mark > size:
         mark = 0                                   # rotated/replaced: never skip a fresh transcript
-    if mark >= size:
-        return "", mark
     end = min(size, mark + max(1, int(max_bytes)))
-    try:
-        with open(transcript, "rb") as fh:
-            fh.seek(mark)
-            data = fh.read(end - mark)
-    except OSError:
-        return "", mark
+    with open(transcript, "rb") as fh:             # opened even when nothing is new: an unreadable
+        fh.seek(mark)                              # file must raise, not read as consumed
+        data = fh.read(end - mark)
     if mark + len(data) < size and b"\n" in data:
         data = data[:data.rfind(b"\n") + 1]        # resume on a whole line next time
-    return data.decode("utf-8", "replace"), mark + len(data)
+    return TranscriptPart(data.decode("utf-8", "replace"), mark, mark + len(data), size)
+
+
+def unreviewed_transcript_text(proj, reviewer, transcript=None, max_bytes=2_000_000):
+    """(new_text, new_offset) of `unreviewed_transcript_part`: the oldest unreviewed part and the
+    byte offset where it ends. Raises OSError, like it, for a transcript that cannot be read."""
+    part = unreviewed_transcript_part(proj, reviewer, transcript, max_bytes)
+    return part.text, part.end
 
 
 def resolve_transcript(proj):
@@ -1726,7 +1794,7 @@ def _read_sightings():
     which is precisely the evidence this gate no longer accepts; that file is not read at all, and
     a hand-edited or truncated store cannot crash a dream or be reinterpreted as corroboration."""
     try:
-        data = json.loads(promotion_file().read_text(encoding="utf-8"))
+        data = _decode_json_file(promotion_file())     # the updater's decoder, BOM included
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
@@ -1942,9 +2010,14 @@ def _recall_pending_path(proj):
 def _read_word_json(path):
     """Read a word-list JSON that may be a bare list or {"filler"/"words"/"topical": [...]}. Fail-open []."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = _decode_json_file(path)
     except (OSError, ValueError):
         return []
+    return _words_of(data)
+
+
+def _words_of(data):
+    """The normalised words of a parsed word-list document (a bare list or a keyed object)."""
     if isinstance(data, list):
         words = data
     elif isinstance(data, dict):
@@ -1954,12 +2027,20 @@ def _read_word_json(path):
     return [str(w).strip().lower() for w in words if isinstance(w, str) and str(w).strip()]
 
 
+def _load_words_for_update(path):
+    """A learned word list for a read-modify-write: [] when absent or unparseable. Raises
+    StateWriteError when the file exists but cannot be read - the fail-open reader's [] there made
+    the write that followed replace every learned word with the new ones."""
+    return _words_of(_load_any_json_for_update(path))
+
+
 def _write_word_json(path, words, key="words"):
-    try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(json.dumps({key: sorted(set(words))}, indent=2) + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    """Persist a learned word list. Raises StateWriteError when the write does not land.
+
+    Raised, not swallowed: no hook writes these lists. The dream's filler pass does, and it clears
+    the pending-keyword queue right after, so a write that failed in silence dropped the whole
+    classification along with the queue it came from."""
+    _write_text_state(path, json.dumps({key: sorted(set(words))}, indent=2) + "\n")
 
 
 def load_filler_words(proj=None):
@@ -1973,12 +2054,13 @@ def load_filler_words(proj=None):
 
 
 def add_filler_words(words, proj):
-    """Append classifier-confirmed filler to the PROJECT's learned blacklist (never the shipped baseline)."""
+    """Append classifier-confirmed filler to the PROJECT's learned blacklist (never the shipped baseline).
+    Raises StateWriteError when the list cannot be read or written (see `_write_word_json`)."""
     new = {str(w).strip().lower() for w in words if str(w).strip()}
     if not new:
         return
     p = _filler_local_path(proj)
-    _write_word_json(p, set(_read_word_json(p)) | new, key="filler")
+    _write_word_json(p, set(_load_words_for_update(p)) | new, key="filler")
 
 
 def load_topical_words(proj):
@@ -1992,13 +2074,14 @@ def remove_filler_words(words, proj):
     The classification is a JUDGEMENT over ambiguous words, so it is sometimes wrong, and a word
     left as filler is dropped from recall keywords forever. The return value is the point: only the
     project's LEARNED list can be edited, so a word that is filler because the shipped BASELINE says
-    so comes back as not-removed rather than silently staying suppressed.
+    so comes back as not-removed rather than silently staying suppressed. Raises StateWriteError
+    when the list cannot be read or written.
     """
     drop = {str(w).strip().lower() for w in words if str(w).strip()}
     if not drop:
         return []
     p = _filler_local_path(proj)
-    current = set(_read_word_json(p))
+    current = set(_load_words_for_update(p))
     removed = current & drop
     if removed:
         _write_word_json(p, current - removed, key="filler")
@@ -2006,12 +2089,13 @@ def remove_filler_words(words, proj):
 
 
 def remove_topical_words(words, proj):
-    """Un-classify learned topical words for `proj`. Returns the words actually removed, sorted."""
+    """Un-classify learned topical words for `proj`. Returns the words actually removed, sorted.
+    Raises StateWriteError when the list cannot be read or written."""
     drop = {str(w).strip().lower() for w in words if str(w).strip()}
     if not drop:
         return []
     p = _topical_words_path(proj)
-    current = set(_read_word_json(p))
+    current = set(_load_words_for_update(p))
     removed = current & drop
     if removed:
         _write_word_json(p, current - removed, key="topical")
@@ -2025,12 +2109,13 @@ def add_topical_words(words, proj):
     removed from the filler list as well. Recording it in both lists would leave it suppressed,
     because the union of the two is consulted only to decide whether to re-QUEUE a word, never to
     decide whether to DROP one - so the topical entry would have no effect a reader could see.
+    Raises StateWriteError when either list cannot be read or written.
     """
     new = {str(w).strip().lower() for w in words if str(w).strip()}
     if not new:
         return
     p = _topical_words_path(proj)
-    _write_word_json(p, set(_read_word_json(p)) | new, key="topical")
+    _write_word_json(p, set(_load_words_for_update(p)) | new, key="topical")
     remove_filler_words(new, proj)
 
 

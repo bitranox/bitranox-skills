@@ -1119,9 +1119,9 @@ def test_replay_of_an_empty_prompt_log_exits_1(tmp_path, capsys):
 
 def test_a_pinned_prompt_carrying_a_line_separator_is_read_whole(tmp_path):
     log = tmp_path / "run.jsonl"
-    row = {"uuid": "a", "state": {"user_prompt": "first second"}, "arms": {}}
+    row = {"uuid": "a", "state": {"user_prompt": "first\u2028second"}, "arms": {}}
     log.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["first second"]
+    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["first\u2028second"]
 
 
 # ---- Asker: a rate limit is retried, any other failure is not ----------------------------------
@@ -1159,7 +1159,7 @@ def test_a_cp1252_console_survives_a_json_envelope_it_cannot_encode(tmp_path):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     env.update(HOME=str(tmp_path), USERPROFILE=str(tmp_path), PYTHONIOENCODING="cp1252")
     r = subprocess.run([sys.executable, ce.__file__, "report", "--json", "--log",
-                        str(tmp_path / "日本.jsonl")],
+                        str(tmp_path / "\u65e5\u672c.jsonl")],
                        env=env, capture_output=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2, r.stderr
     assert "UnicodeEncodeError" not in r.stderr
@@ -1216,3 +1216,77 @@ def test_the_replay_prefix_of_the_first_line_is_empty(tmp_path):
 
     (prompt,) = corpus_prompts.collect_prompts(str(corpus))["prompts"]
     assert _prefix_of(tmp_path, prompt) == ""
+
+
+# ---- a prefix that cannot be built is never judged as an empty state ---------------------------
+
+def test_an_unreadable_source_transcript_refuses_the_prefix_rather_than_writing_an_empty_one(
+        tmp_path):
+    """An EMPTY prefix is also what the first prompt of a session legitimately has, so writing
+    one for a transcript that could not be read made the arms judge the prompt on a state it
+    never had, with nothing in the row to say so."""
+    prompt = {"uuid": "gone", "source": str(tmp_path / "missing.jsonl"), "line": 3}
+    with pytest.raises(ce.PrefixUnavailable, match="missing.jsonl"):
+        ce._prefix_transcript(prompt, tmp_path)
+    assert not (tmp_path / "prefix.jsonl").exists()
+
+
+class DeletingClassifier(FakeClassifier):
+    """Removes one corpus transcript on its first request: the replay's planted controls ask
+    before any prompt is replayed, so the transcript is read at sampling and gone at replay."""
+
+    def __init__(self, doomed):
+        super().__init__()
+        self.doomed = doomed
+
+    def ask(self, state, questions):
+        if self.doomed.exists():
+            self.doomed.unlink()
+        return super().ask(state, questions)
+
+
+def test_a_replay_skips_a_prompt_whose_prefix_cannot_be_built_and_says_so(tmp_path, capsys):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    doomed = corpus / "a.jsonl"
+    doomed.write_text(_cli_record("x0", "please reformat the markdown table for me") + "\n"
+                      + _cli_record("xa", "now reformat the other markdown table too") + "\n",
+                      encoding="utf-8")
+    (corpus / "b.jsonl").write_text(_cli_record("xb", "go ahead") + "\n", encoding="utf-8")
+    out = tmp_path / "out.jsonl"
+    rc = ce.main(["replay", "--root", str(corpus), "--limit", "1", "--arm", "choice_full",
+                  "--out", str(out), "--json"], clf=DeletingClassifier(doomed), skills=SKILLS)
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0, env
+    skipped = env["data"]["skipped_prompts"]
+    assert [s["uuid"] for s in skipped] in (["x0"], ["xa"])
+    assert "a.jsonl" in skipped[0]["reason"]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert [r["uuid"] for r in rows] == ["xb"], "the skipped prompt was scored anyway"
+    assert env["data"]["sampled"] == 1
+    assert env["skipped"] == {"prompts_without_a_prefix": 1}
+
+
+def test_a_replay_with_every_prefix_readable_skips_nothing(tmp_path, capsys):
+    """The control: the same corpus, nothing removed."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.jsonl").write_text(_cli_record("x0", "please reformat the markdown table for me")
+                                    + "\n", encoding="utf-8")
+    (corpus / "b.jsonl").write_text(_cli_record("xb", "go ahead") + "\n", encoding="utf-8")
+    rc = ce.main(["replay", "--root", str(corpus), "--limit", "1", "--arm", "choice_full",
+                  "--out", str(tmp_path / "out.jsonl"), "--json"],
+                 clf=FakeClassifier(), skills=SKILLS)
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0 and env["data"]["skipped_prompts"] == [] and env["data"]["sampled"] == 2
+
+
+# ---- this file stays ASCII: an invisible separator in a literal is unreviewable ----------------
+
+def test_this_test_file_holds_only_ascii():
+    """A raw U+2028 in a literal renders as nothing (or as a line break) in a diff, so a reader
+    cannot see what the test asserts. Spell such characters as escapes."""
+    text = pathlib.Path(__file__).read_text(encoding="utf-8")
+    offenders = [(n, hex(ord(c))) for n, line in enumerate(text.split("\n"), 1)
+                 for c in line if ord(c) > 127]
+    assert offenders == []

@@ -117,7 +117,9 @@ The per-prompt recall hook is model-free: it queues any not-yet-classified keywo
 project (`load_pending_keywords(proj)`). If the queue is non-empty, hand it to a `sonnet` subagent
 to classify each word as **filler** (no topical signal: "again", "previous") or **topical** (a
 real term: "bindsnap"). Apply per-project: `add_filler_words(filler, proj)`,
-`add_topical_words(topical, proj)`, `clear_pending_keywords(proj)`. Learned lists are PER-PROJECT
+`add_topical_words(topical, proj)`, `clear_pending_keywords(proj)`, in that order: the two adds
+raise `StateWriteError` when a list cannot be read or written, and clearing the queue after a
+failed add would lose the classification, so stop and report instead. Learned lists are PER-PROJECT
 (a word can be noise here, a topic there; see `recall-filler-per-project`); only universal
 generic-English filler belongs in the shipped baseline, via PR. Be conservative: unsure ->
 topical. Empty queue -> no-op.

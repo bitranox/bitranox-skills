@@ -495,8 +495,8 @@ def test_a_line_separator_inside_a_value_does_not_split_the_entry():
 
 
 def test_an_unreadable_queue_is_never_overwritten_by_add():
-    """read_contributions answers [] for an unreadable file (right for a hook); add must not then
-    rewrite the queue with only the new entry."""
+    """An unreadable queue must not be read as empty by add and then rewritten with only the new
+    entry."""
     f = S.contrib_file("/p/u5")
     f.mkdir(parents=True)                                     # unreadable AND unwritable as a file
     assert S.add_contribution("/p/u5", {"what": "new"}) is False
@@ -540,6 +540,67 @@ def test_add_contribution_best_effort_default_is_unchanged():
     f = S.contrib_file("/p/e4")
     f.mkdir(parents=True)
     assert S.add_contribution("/p/e4", {"what": "x"}) is False
+
+
+# ---- an unreadable store is never an empty one -------------------------------------------------
+# A directory where the file must be is unreadable as a file on every OS, which is what these use.
+
+def test_an_unreadable_closed_set_does_not_let_a_closed_intent_back_in(capsys):
+    """The re-queue block read the closed set through a reader that answered [] on ANY error, so a
+    closed set that exists but cannot be read let a shipped intent be queued again as a new TODO."""
+    S.rejected_file("/p/rc1").mkdir(parents=True)
+    assert Q.main(["add", "--what", "gap", "/p/rc1"]) == 1
+    out = capsys.readouterr()
+    assert "queued: gap" not in out.out and "failed" in out.err
+    assert S.contrib_file("/p/rc1").exists() is False                 # nothing was queued
+    assert S.add_contribution("/p/rc1", {"what": "gap"}) is False      # best-effort: refused
+    with pytest.raises(OSError):
+        S.add_contribution("/p/rc1", {"what": "gap"}, strict=True)
+
+
+@pytest.mark.parametrize("verb", ["shipped", "rejected"])
+def test_shipped_and_rejected_fail_on_an_unreadable_closed_set(capsys, verb):
+    S.rejected_file("/p/rc2").mkdir(parents=True)
+    assert Q.main([verb, "/p/rc2"]) == 1
+    out = capsys.readouterr()
+    assert "no shipped" not in out.out and "no dropped" not in out.out
+    assert "could not read" in out.err
+
+
+@pytest.mark.parametrize("verb", ["shipped", "rejected"])
+def test_shipped_and_rejected_stay_quiet_on_an_absent_closed_set(capsys, verb):
+    """The control: a closed set that was never written is genuinely empty."""
+    assert Q.main([verb, "/p/rc3"]) == 0
+    assert "no " in capsys.readouterr().out
+
+
+def test_list_fails_on_an_unreadable_queue(capsys):
+    S.contrib_file("/p/rc4").mkdir(parents=True)
+    assert Q.main(["list", "/p/rc4"]) == 1
+    out = capsys.readouterr()
+    assert "no pending" not in out.out and "could not read" in out.err
+
+
+def test_queues_reports_an_unreadable_queue_instead_of_hiding_it(capsys):
+    Q.main(["add", "--what", "readable", "/p/rc5"])
+    S.contrib_file("/p/rc6").mkdir(parents=True)
+    capsys.readouterr()
+    assert Q.main(["queues"]) == 1
+    out = capsys.readouterr().out
+    assert S.proj_key("/p/rc6") in out and "unreadable" in out
+    assert S.proj_key("/p/rc5") in out                                # the readable one still listed
+
+
+def test_the_readers_raise_on_an_unreadable_file_and_answer_empty_on_an_absent_one():
+    """Every reader, not just the loaders the writers use: a caller that forgets to ask for the
+    raising variant must not get the empty answer an unreadable file used to produce."""
+    for reader in (S.read_contributions, S.read_closed, S.read_shipped, S.read_rejected):
+        assert reader("/p/rc7") == []
+    S.contrib_file("/p/rc7").mkdir(parents=True)
+    S.rejected_file("/p/rc7").mkdir(parents=True)
+    for reader in (S.read_contributions, S.read_closed, S.read_shipped, S.read_rejected):
+        with pytest.raises(OSError):
+            reader("/p/rc7")
 
 
 # ---- queues with nothing open ------------------------------------------------------------------
