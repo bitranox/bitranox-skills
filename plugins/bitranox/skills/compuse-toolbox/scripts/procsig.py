@@ -43,9 +43,10 @@ What `--cmdline` searches, exactly:
         `bash-static`, `pwsh`, `ssh host '<cmd>'`), and the same behind a FORKING wrapper, which
         keeps its own argv in /proc (`timeout 30 ssh host '<cmd>'`, `sudo ssh host '<cmd>'`,
         `sshpass -f /k ssh host '<cmd>'`);
-      - a `-c`/`--command` flag whose VALUE carries whitespace or a shell metacharacter, which
-        is the only trace left when the program running the shell names no shell at all
-        (`su root -c '<text>'`, `flock /tmp/lock -c 'a && b'`).
+      - a `-c`/`--command` flag, or a short cluster ending in `c` (`-lc`, `-qc`), whose VALUE
+        carries whitespace or a shell metacharacter, which is the only trace left when the
+        program running the shell names no shell at all (`su root -c '<text>'`,
+        `su root -lc '<text>'`, `script -qc '<text>' /dev/null`, `flock /tmp/lock -c 'a && b'`).
 
 What `--cmdline` does NOT cover - stated here so this file never promises more than it delivers:
 
@@ -80,8 +81,20 @@ the basename `wash` is short and ends in `sh`). A dot-prefixed basename is exemp
 (`/home/u/.ssh` is never read as a shell name - no shell is ever called `.ssh`), so an ordinary
 path operand under a dotdir does not poison the whole argv.
 
-Default action lists matches; `--kill` (with `--signal`, default TERM) signals them. Excluded
-matches (self/ancestors, or an unreadable proc) are shown but never signaled.
+Default action lists matches; `--kill` (with `--signal`, default TERM) signals them. Matches
+that are this process or one of its ancestors are shown but never signaled, and do not count
+towards the exit code. A process whose exe, comm or command line cannot be read never matches
+the filter that needs it, and an empty or whitespace-only needle is refused outright - an unset
+variable in `--exe "$NAME" --kill` must not match every process whose exe link is unreadable.
+
+Names the kernel reports differently are normalised: an exe link ending ` (deleted)` (the binary
+was replaced, typically by a package upgrade) matches by its path, and a `--comm` name longer
+than the 15 bytes the kernel keeps matches the truncated comm only when the exe or argv[0]
+basename confirms the full name.
+
+Exit codes: 0 = at least one match that is not this process or an ancestor (with `--kill`: every
+one of them signaled), 1 = no such match, 2 = could not answer or could not act (a blank needle,
+an unknown signal, no /proc, or a signal that could not be delivered).
 
 Run: `uv run scripts/procsig.py --exe myserver`
      `uv run scripts/procsig.py --kill --signal TERM --cmdline job-1234`
@@ -99,12 +112,21 @@ from typing import NamedTuple
 PROC = Path("/proc")                                          # overridden in tests with a fake tree
 
 
+_DELETED_SUFFIX = " (deleted)"
+
+
 def _read_exe(pdir: Path) -> str:
-    """Resolved target of /proc/<pid>/exe, or '' if unreadable (kernel thread, permission)."""
+    """Resolved target of /proc/<pid>/exe, or '' if unreadable (kernel thread, permission).
+
+    The kernel appends ` (deleted)` once the binary on disk was replaced or removed. After a
+    package upgrade the old daemons are exactly the processes one hunts, so the marker is cut
+    off here rather than making every such process unmatchable by name.
+    """
     try:
-        return os.readlink(pdir / "exe")
+        target = os.readlink(pdir / "exe")
     except OSError:
         return ""
+    return target[: -len(_DELETED_SUFFIX)] if target.endswith(_DELETED_SUFFIX) else target
 
 
 def _read_comm(pdir: Path) -> str:
@@ -198,7 +220,11 @@ _SHELL_NAME_MAX_CORE = 5                        # sh, ash, ksh, zsh, yash, posh,
 # them is a shell or hands anything to one. `-agent` is part of the name, not a variant of ssh.
 _NAME_SUFFIX_RE = re.compile(r"(?:[.\-](?:static|distrib|real))?(?:[.\-]?\d+(?:\.\d+)*)?$")
 _COMMAND_STRING_FLAGS = frozenset({"-c", "--command"})
+# A short-option CLUSTER ending in c (`script -qc`, `su root -lc`) hands its value over exactly
+# like a standalone -c does; testing only the standalone spelling searched those argvs in full.
+_COMMAND_STRING_CLUSTER_RE = re.compile(r"^-[A-Za-z]*c$")
 _COMMAND_STRING_MARKS = ";|&$<>()`"                            # shell metacharacters
+_COMM_LEN = 15                                                 # bytes of comm the kernel keeps
 
 _UNCERTAIN = "uncertain"                                       # sentinel: cannot classify -> never match
 _NO_SHELL = "no-shell"                                         # sentinel: plain argv -> search all of it
@@ -287,9 +313,10 @@ def _carries_a_command_string(tokens: list[str]) -> bool:
 
     `su`, `runuser`, and every unmodelled shell spell it `-c`/`--command`, so the flag followed
     by a command-shaped value is the only signal available once the program itself is unknown.
+    A short cluster ending in `c` (`script -qc`, `su root -lc`) counts as the same flag.
     """
     for i, tok in enumerate(tokens):
-        if tok in _COMMAND_STRING_FLAGS:
+        if tok in _COMMAND_STRING_FLAGS or _COMMAND_STRING_CLUSTER_RE.match(tok):
             if i + 1 < len(tokens) and _is_command_string(tokens[i + 1]):
                 return True
         elif tok.startswith("--command=") and _is_command_string(tok.partition("=")[2]):
@@ -459,13 +486,43 @@ def _ppid(pdir: Path) -> int | None:
     return int(rest[1]) if len(rest) >= 2 and rest[1].lstrip("-").isdigit() else None
 
 
+def _is_blank(needle) -> bool:
+    return needle is not None and not needle.strip()
+
+
+def _exe_matches(p_exe: str, needle: str) -> bool:
+    # An unreadable exe is '' and must never match: '' equals the basename of '' too.
+    return bool(p_exe) and (p_exe == needle or os.path.basename(p_exe) == needle)
+
+
+def _comm_matches(p_comm: str, needle: str, p_exe: str, parts: list[str]) -> bool:
+    """Exact comm, or - for a name longer than the kernel keeps - its truncation CONFIRMED.
+
+    The kernel stores 15 bytes of comm, so `backup-scheduler` runs as `backup-schedule` and an
+    exact comparison never matches it, silently. The truncation alone is not enough to match on:
+    `backup-scheduler-v2` truncates the same way, so the full name must also be the basename of
+    the exe or of argv[0].
+    """
+    if not p_comm:
+        return False
+    raw = needle.encode("utf-8")
+    if len(raw) <= _COMM_LEN:
+        return p_comm == needle
+    truncated = raw[:_COMM_LEN].decode("utf-8", errors="replace")
+    full_names = {os.path.basename(p_exe)} | ({_program_name(parts[0])} if parts else set())
+    return p_comm == truncated and needle in full_names
+
+
 def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
     """Processes under `proc_root` matching the one given filter. PURE over proc_root - unit-testable.
 
-    exe matches the exe path OR its basename; comm matches exactly; cmdline matches as a
-    substring of the process's IDENTITY tokens - never of a command string a shell was handed,
-    and never at all for a shell argv that cannot be classified (see _cmdline_search_text).
+    exe matches the exe path OR its basename; comm matches exactly (or confirmed-truncated, see
+    _comm_matches); cmdline matches as a substring of the process's IDENTITY tokens - never of a
+    command string a shell was handed, and never at all for a shell argv that cannot be
+    classified (see _cmdline_search_text). A blank needle matches nothing.
     """
+    if _is_blank(exe) or _is_blank(comm) or _is_blank(cmdline):
+        return []
     hits = []
     for pdir in sorted(Path(proc_root).glob("[0-9]*"), key=lambda p: int(p.name)):
         pid = int(pdir.name)
@@ -473,9 +530,9 @@ def scan(proc_root, *, exe=None, comm=None, cmdline=None) -> list[dict]:
         parts = _read_cmdline_parts(pdir)
         p_cmd = " ".join(parts).strip()                         # full cmdline, for display/self-check
         if exe is not None:
-            ok = p_exe == exe or os.path.basename(p_exe) == exe
+            ok = _exe_matches(p_exe, exe)
         elif comm is not None:
-            ok = p_comm == comm
+            ok = _comm_matches(p_comm, comm, p_exe, parts)
         else:
             searchable = _cmdline_search_text(parts, p_exe, p_comm)
             ok = bool(cmdline) and searchable is not None and cmdline in searchable
@@ -534,6 +591,20 @@ def main(argv=None) -> int:
     ap.add_argument("--kill", action="store_true", help="signal the matches (default: just list)")
     ap.add_argument("--signal", default="TERM", help="signal name for --kill (default TERM)")
     args = ap.parse_args(argv)
+    _tolerate_unencodable_output()
+
+    needle = next(v for v in (args.exe, args.comm, args.cmdline) if v is not None)
+    if not needle.strip():
+        print("procsig: refusing an empty match string - it would match every process whose "
+              "exe, comm or command line cannot be read", file=sys.stderr)
+        return 2
+    sig = resolve_signal(args.signal)
+    if sig is None:
+        print(f"unknown signal: {args.signal}", file=sys.stderr)
+        return 2
+    if not Path(PROC).is_dir():
+        print(f"procsig: no {PROC} on this system, so nothing can be answered", file=sys.stderr)
+        return 2
 
     procs = scan(PROC, exe=args.exe, comm=args.comm, cmdline=args.cmdline)
     excluded = _self_and_ancestors()
@@ -543,20 +614,48 @@ def main(argv=None) -> int:
         tag = "  [self/ancestor - skipped]" if p["pid"] in excluded else ""
         print(f"{p['pid']:>8}  {p['exe'] or p['comm'] or '?':40.40}  {p['cmdline'][:60]}{tag}")
 
+    # Self and ancestors never count: procsig's own argv carries a --cmdline needle, so counting
+    # them made `procsig --cmdline X && echo running` true for a process that does not exist.
     if not args.kill:
-        return 0 if procs else 1
-    try:
-        sig = getattr(signal, args.signal if args.signal.startswith("SIG") else "SIG" + args.signal)
-    except AttributeError:
-        print(f"unknown signal: {args.signal}", file=sys.stderr)
-        return 2
+        return 0 if targets else 1
+    failed = 0
     for pid in targets:
         try:
             _kill(pid, int(sig))
             print(f"signaled {pid} with {args.signal}")
         except OSError as exc:
+            failed += 1
             print(f"failed to signal {pid}: {exc}", file=sys.stderr)
+    if failed:
+        return 2
     return 0 if targets else 1
+
+
+def resolve_signal(name: str) -> signal.Signals | None:
+    """The signal `name` names (TERM, SIGTERM, term), or None.
+
+    Resolved through the Signals enum only: `getattr(signal, "SIG" + name)` also finds SIG_IGN,
+    SIG_DFL and SIG_SETMASK, which are handler and mask constants whose integer values are 1, 0
+    and 2 - so `--signal _IGN` sent SIGHUP.
+    """
+    upper = name.strip().upper()
+    key = upper if upper.startswith("SIG") else "SIG" + upper
+    try:
+        return signal.Signals[key]
+    except KeyError:
+        return None
+
+
+def _tolerate_unencodable_output() -> None:
+    """A cp1252 console must not turn a listing into a traceback whose exit 1 reads 'not running'."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
 
 
 if __name__ == "__main__":

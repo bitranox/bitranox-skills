@@ -6,6 +6,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 import newest as N
 
 TOOL = Path(__file__).resolve().parents[1] / "scripts" / "newest.py"
@@ -274,3 +276,160 @@ def test_cli_name_timestamp_refuses_when_nothing_is_stamped(tmp_path):
     )
     assert proc.returncode == 1, (proc.returncode, proc.stdout, proc.stderr)
     assert "stamp" in proc.stderr.lower()
+
+
+# --------------------------------------------------------------------------
+# --name-timestamp must not borrow the mtime for its age, nor pick a path that is gone
+# --------------------------------------------------------------------------
+
+def _strict_json(text):
+    """json.loads that refuses Infinity/NaN, the way every non-Python parser does."""
+    def refuse(token):
+        raise ValueError(f"non-strict JSON constant {token}")
+    return json.loads(text, parse_constant=refuse)
+
+
+def test_name_timestamp_age_comes_from_the_stamp_not_the_mtime(tmp_path):
+    """A rewrite pass (compression) refreshes mtime. Reporting that as the age makes a stale set
+    look fresh, and the age is the documented stale detector."""
+    f = tmp_path / "s-20260102T000000Z.gz"
+    _touch(f, time.time())                                   # rewritten just now
+    stamp = N.parse_name_stamp(f.name)
+    r = _run(["--name-timestamp", "--json", str(f)])
+    assert r.returncode == 0, r.stderr
+    item = _strict_json(r.stdout)["data"][0]
+    assert abs(item["age_seconds"] - (time.time() - stamp)) < 120
+    assert item["age_basis"] == "name_stamp"
+    text = _run(["--name-timestamp", str(f)]).stdout
+    assert "name stamp" in text
+
+
+def test_default_mode_age_is_still_the_mtime(tmp_path):
+    f = tmp_path / "s-20260102T000000Z.gz"
+    _touch(f, time.time() - 3600)
+    item = _strict_json(_run(["--json", str(f)]).stdout)["data"][0]
+    assert 3500 < item["age_seconds"] < 3700
+    assert item["age_basis"] == "mtime"
+
+
+def test_name_timestamp_skips_a_path_that_is_gone(tmp_path):
+    """A dangling stamped symlink, or a file deleted after the glob, must not be the answer -
+    and the envelope must stay strict JSON (no Infinity)."""
+    real = tmp_path / "s-20260101T000000Z.gz"
+    _touch(real, 100.0)
+    gone = str(tmp_path / "gone-20260901.gz")
+    r = _run(["--name-timestamp", "--json", str(real), gone])
+    assert r.returncode == 0, r.stderr
+    env = _strict_json(r.stdout)
+    assert [d["path"] for d in env["data"]] == [str(real)]
+    assert gone in env["skipped"]
+    assert "unreadable" in r.stderr
+
+
+def test_name_timestamp_with_every_stamped_path_gone_is_no_match(tmp_path):
+    r = _run(["--name-timestamp", str(tmp_path / "gone-20260901.gz")])
+    assert r.returncode == 1
+    assert "Infinity" not in r.stdout
+
+
+def test_the_disagreement_warning_ignores_a_stamp_winner_that_is_gone(tmp_path):
+    real = tmp_path / "s-20260101T000000Z.gz"
+    _touch(real, 100.0)
+    gone = str(tmp_path / "gone-20260901.gz")
+    assert N.keys_disagree([str(real), gone]) is False
+    r = _run([str(real), gone])
+    assert r.returncode == 0
+    assert "--name-timestamp" not in r.stderr
+
+
+def test_the_disagreement_warning_still_fires_when_both_exist(tmp_path):
+    """Control for the test above."""
+    old_content = tmp_path / "s-20260101T000000Z.gz"
+    new_content = tmp_path / "present-20260901.gz"
+    _touch(new_content, 1000.0)
+    _touch(old_content, 2000.0)
+    assert N.keys_disagree([str(old_content), str(new_content)]) is True
+
+
+# --------------------------------------------------------------------------
+# Output that a console cannot encode must not become exit 1 ("no match")
+# --------------------------------------------------------------------------
+
+def test_a_non_latin_name_does_not_crash_a_cp1252_console(tmp_path):
+    f = tmp_path / "日本-20260101"
+    _touch(f, 100.0)
+    r = subprocess.run([sys.executable, str(TOOL), str(f)], capture_output=True, check=False,
+                       env={**os.environ, "PYTHONIOENCODING": "cp1252"})
+    assert r.returncode == 0, r.stderr
+    assert b"Traceback" not in r.stderr
+    assert b"20260101" in r.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="only Linux filesystems accept a filename that is not valid UTF-8")
+def test_a_filename_that_is_not_utf8_does_not_crash_text_output(tmp_path):
+    raw = os.fsencode(str(tmp_path)) + b"/bad-\xff-20260101"
+    fd = os.open(raw, os.O_CREAT | os.O_WRONLY, 0o644)
+    os.close(fd)
+    r = subprocess.run([sys.executable, str(TOOL), raw], capture_output=True, check=False,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert r.returncode == 0, r.stderr
+    assert b"Traceback" not in r.stderr
+    assert b"20260101" in r.stdout
+
+
+# --------------------------------------------------------------------------
+# A glob the shell did not expand (cmd.exe, PowerShell, a quoted argument)
+# --------------------------------------------------------------------------
+
+def test_an_unexpanded_glob_is_expanded_here(tmp_path):
+    older = tmp_path / "s-1"
+    newer = tmp_path / "s-2"
+    _touch(older, 100.0)
+    _touch(newer, 200.0)
+    r = subprocess.run([sys.executable, str(TOOL), "s-*"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", cwd=str(tmp_path), check=False)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.startswith("s-2")
+
+
+def test_a_glob_that_matches_nothing_is_still_no_match(tmp_path):
+    r = subprocess.run([sys.executable, str(TOOL), "nothing-*"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", cwd=str(tmp_path), check=False)
+    assert r.returncode == 1
+    assert "nothing-*" in r.stderr
+
+
+def test_an_existing_name_with_brackets_is_taken_literally(tmp_path):
+    literal = tmp_path / "snap[1]"
+    _touch(literal, 100.0)
+    decoy = tmp_path / "snap1"
+    _touch(decoy, 900.0)
+    assert N.expand_args([str(literal)]) == [str(literal)]
+
+
+# --------------------------------------------------------------------------
+# The docstring says the FIRST stamp wins; so must the code
+# --------------------------------------------------------------------------
+
+def test_the_leftmost_stamp_wins_whatever_its_width():
+    first = N.parse_name_stamp("db-20250101-restored-from-20240101-120000.sql")
+    assert first == N.parse_name_stamp("x-20250101.sql")
+
+
+def test_a_single_stamp_still_parses_at_full_width():
+    """Control: at the same position the 14-digit form beats its own 8-digit prefix."""
+    assert N.parse_name_stamp("x-20240101-120000.sql") \
+        == N.parse_name_stamp("x-20240101T120000Z.sql") != N.parse_name_stamp("x-20240101.sql")
+
+
+# --------------------------------------------------------------------------
+# The age text itself
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("seconds, text", [
+    (0, "0s"), (59, "59s"), (60, "1.0m"), (3599, "60.0m"), (3600, "1.0h"),
+    (86399, "24.0h"), (86400, "1.0d"), (90 * 86400, "90.0d"), (float("inf"), "unknown"),
+])
+def test_human_age_thresholds(seconds, text):
+    assert N._human_age(seconds) == text

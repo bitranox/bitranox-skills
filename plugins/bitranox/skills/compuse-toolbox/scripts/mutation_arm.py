@@ -37,14 +37,21 @@ is the one outcome worse than a wrong verdict.
   the arm and reports the hang as its own verdict, never as `killed`. The restore still runs when
   the timeout fires: the copy is taken before the first edit and put back in a `finally`.
 
-Run:
-  `uv run scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
+Run it with the PROJECT's interpreter - the one that has pytest and the project installed - since
+the arm is `<this interpreter> -m pytest`. `uv run scripts/mutation_arm.py` gives an interpreter
+with neither; an arm whose pytest exits 1 without naming a failure is reported INCONCLUSIVE, never
+KILLED, so that mistake shows as a column of exit-2 arms rather than a battery of perfect tests.
+  `.venv/bin/python scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
   `... --mutate a.py o1.txt n1.txt --mutate b.py o2.txt n2.txt --test tests/t.py::test_y`
   add `--json` for an envelope
 
+Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF source keeps its
+CRLF while mutated, and an LF anchor file matches it.
+
 Exit codes: 0 = KILLED (the arm noticed the mutation), 1 = SURVIVED (it did not - the finding),
-2 = INCONCLUSIVE, TIMEOUT, a failed restore, or a usage error (an absent anchor, a test that never
-ran, or an arm still running at --timeout).
+2 = INCONCLUSIVE, TIMEOUT, ERROR (a source that could not be written), a failed restore, or a
+usage error (an absent anchor, a file that is not UTF-8, a test that never ran, a pytest that
+exited 1 without reporting a failure, or an arm still running at --timeout).
 """
 from __future__ import annotations
 
@@ -85,24 +92,44 @@ def failure_reason(output: str) -> str | None:
     `pytest.raises(X)` line makes a grep for X report that X was raised when the run says the
     opposite.
     """
-    lines = output.splitlines()
+    # Split on newlines only: splitlines() also cuts at form feed and U+2028, which an assertion
+    # message can carry, and that would truncate the reason mid-sentence.
+    lines = [line.rstrip("\r") for line in output.split("\n")]
     start = next((i for i, line in enumerate(lines) if _SUMMARY_HEADER in line), None)
     if start is None:
         return None
     for line in lines[start + 1:]:
         if not line.startswith(("FAILED ", "ERROR ")):
             continue
-        _, _, reason = line.partition(" - ")
-        return reason.strip() or line.strip()
+        rest = line.split(" ", 1)[1]
+        return _reason_after_nodeid(rest) or line.strip()
     return None
 
 
-def verdict_for(returncode: int | None) -> str:
+def _reason_after_nodeid(rest: str) -> str:
+    """The text after `<nodeid> - `. A parametrize id may itself contain ` - ` inside its
+    brackets (`test_x[a - b]`), so the separator is searched after the closing bracket."""
+    search_from = 0
+    bracket, first_sep = rest.find("["), rest.find(" - ")
+    if bracket != -1 and (first_sep == -1 or bracket < first_sep):
+        close = rest.find("] - ", bracket)
+        if close != -1:
+            search_from = close + 1
+    _, sep, reason = rest[search_from:].partition(" - ")
+    return reason.strip() if sep else ""
+
+
+def verdict_for(returncode: int | None, output: str | None = None) -> str:
     """What a pytest exit code means for a mutation arm.
 
     5 is the one that matters: pytest collected NOTHING, so the arm never ran. Folding that into
     "passed" would report an untested line as a covered one, which is the exact false all-clear a
     mutation battery exists to prevent.
+
+    1 is KILLED only when pytest's summary names a failure. An interpreter with no pytest exits 1
+    too (`No module named pytest`), and so does a runner that dies before collecting; scoring
+    that as the arm noticing reported every arm of a battery as a perfect test that never ran.
+    When `output` is given, an exit 1 without a FAILED/ERROR summary line is INCONCLUSIVE.
 
     `None` means the arm was KILLED at the timeout, which is its own verdict and not a failure to
     notice: a mutation can make a test loop forever rather than fail, when the test's only exit is
@@ -111,6 +138,8 @@ def verdict_for(returncode: int | None) -> str:
     """
     if returncode is None:
         return "timeout"
+    if returncode == 1 and output is not None and failure_reason(output) is None:
+        return "inconclusive"
     return {0: "survived", 1: "killed"}.get(returncode, "inconclusive")
 
 
@@ -163,21 +192,44 @@ def purge_bytecode(paths):
     return removed
 
 
+def _read_source(path: Path) -> str:
+    """The source exactly as stored - newline="" keeps CRLF, so writing it back keeps it too."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def _write_source(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def _read_anchor(path_arg, crlf: bool) -> str:
+    """An anchor file, BOM dropped (Notepad writes one) and line endings matched to the source."""
+    text = Path(path_arg).read_text(encoding="utf-8-sig")
+    return text.replace("\n", "\r\n") if crlf else text
+
+
 def plan_mutations(specs):
     """Validate every anchor BEFORE writing anything, returning (path, old, new) triples.
 
     All or nothing: one absent or ambiguous anchor refuses the whole arm. A partly-applied arm
-    would run the tests against a state nobody described.
+    would run the tests against a state nobody described. Each anchor is checked against the text
+    as the EARLIER mutations to the same file leave it, which is the text the arm will edit -
+    checking against the original accepted a chain that then failed half-way through writing.
     """
     planned = []
+    texts: dict[Path, str] = {}
     for path_arg, old_file, new_file in specs:
         path = Path(path_arg)
         if not path.is_file():
             raise AnchorError(f"not a file: {path}")
-        text = path.read_text(encoding="utf-8")
-        old = Path(old_file).read_text(encoding="utf-8")
-        new = Path(new_file).read_text(encoding="utf-8")
-        require_unique(text, old, label=f"anchor for {path}")
+        key = path.resolve()
+        if key not in texts:
+            texts[key] = _read_source(path)
+        crlf = "\r\n" in texts[key]
+        old, new = _read_anchor(old_file, crlf), _read_anchor(new_file, crlf)
+        require_unique(texts[key], old, label=f"anchor for {path}")
+        texts[key] = replace_exact(texts[key], old, new)
         planned.append((path, old, new))
     return planned
 
@@ -204,46 +256,70 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
             copy = Path(tmp) / f"{index}-{path.name}"
             shutil.copy2(path, copy)
             saved.setdefault(path, copy)
+        returncode, output, error = None, "", None
         try:
-            for path, old, new in planned:
-                text = path.read_text(encoding="utf-8")
-                path.write_text(replace_exact(text, old, new), encoding="utf-8")
             try:
-                proc = subprocess.run(
-                    [*runner, nodeid, "-q", "--no-header", "-rfE", "--tb=no",
-                     "-p", "no:cacheprovider"],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=timeout,
-                    # Merged onto the real environment, never a fresh dict: on Windows a child
-                    # without SystemRoot loses Winsock and dies with EMPTY output.
-                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-                )
-                returncode, output = proc.returncode, proc.stdout + proc.stderr
-            except subprocess.TimeoutExpired as expired:
-                # A killed run has no exit code. Its partial output is bytes when the process was
-                # killed before the text wrapper saw it, so it is decoded defensively rather than
-                # concatenated blindly.
-                returncode, output = None, _partial_output(expired)
+                for path, old, new in planned:
+                    _write_source(path, replace_exact(_read_source(path), old, new))
+            except OSError as exc:
+                # An unwritable source must not escape as a traceback: its exit 1 reads as
+                # SURVIVED. The restore below still runs for whatever was already written.
+                error = f"could not apply the mutation: {exc}"
+            else:
+                returncode, output = _run_pytest(runner, nodeid, timeout)
         finally:
-            restored = True
-            for path, copy in saved.items():
-                shutil.copy2(copy, path)
-                if path.read_bytes() != copy.read_bytes():
-                    restored = False
+            restored = _restore(saved)
             # Belt and braces: the flag above stops this arm writing bytecode, but a caller
             # supplying its own runner can put the writing back.
             purged += purge_bytecode(list(saved))
-    verdict = verdict_for(returncode)
+    verdict = "error" if error else verdict_for(returncode, output)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
         "test": nodeid,
         "pytest_returncode": returncode,
         "timeout_s": timeout,
         "verdict": verdict,
-        "failure": failure_reason(output),
+        "failure": error or failure_reason(output),
         "restored": restored,
         "bytecode_purged": purged,
     }
+
+
+def _run_pytest(runner, nodeid, timeout):
+    """(returncode, merged output) of the arm; returncode None when it hit the timeout."""
+    try:
+        proc = subprocess.run(
+            [*runner, nodeid, "-q", "--no-header", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
+            # Merged onto the real environment, never a fresh dict: on Windows a child without
+            # SystemRoot loses Winsock and dies with EMPTY output.
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    except subprocess.TimeoutExpired as expired:
+        # A killed run has no exit code. Its partial output is bytes when the process was killed
+        # before the text wrapper saw it, so it is decoded defensively rather than concatenated.
+        return None, _partial_output(expired)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def _restore(saved) -> bool:
+    """Put every saved copy back; True only when every file now matches its copy byte for byte.
+
+    A file that already matches is left alone, so a source that could never be written (and so
+    was never changed) is not reported as a failed restore. A copy that cannot be written back is
+    reported as False rather than raised: raising here would replace the verdict with a
+    traceback and skip the loud RESTORE FAILED that this outcome needs.
+    """
+    restored = True
+    for path, copy in saved.items():
+        try:
+            if path.read_bytes() != copy.read_bytes():
+                shutil.copy2(copy, path)
+            restored = restored and path.read_bytes() == copy.read_bytes()
+        except OSError:
+            restored = False
+    return restored
 
 
 def main(argv=None) -> int:
@@ -256,6 +332,7 @@ def main(argv=None) -> int:
                     help="bound the arm; a mutation can make a test SPIN rather than fail")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     args = ap.parse_args(argv)
+    _tolerate_unencodable_output()
 
     if not args.mutate:
         print("mutation_arm: no --mutate given", file=sys.stderr)
@@ -263,13 +340,17 @@ def main(argv=None) -> int:
 
     try:
         planned = plan_mutations(args.mutate)
+    except UnicodeDecodeError as exc:
+        print(f"mutation_arm: refused, nothing written - a source or anchor file is not UTF-8 "
+              f"({exc.reason} at byte {exc.start})", file=sys.stderr)
+        return 2
     except (AnchorError, OSError) as exc:
         print(f"mutation_arm: refused, nothing written - {exc}", file=sys.stderr)
         return 2
 
     try:
         report = run_arm(planned, args.test, timeout=args.timeout)
-    except AnchorError as exc:
+    except (AnchorError, OSError) as exc:
         print(f"mutation_arm: refused before mutating - {exc}", file=sys.stderr)
         return 2
 
@@ -285,11 +366,27 @@ def main(argv=None) -> int:
         if report["verdict"] == "inconclusive":
             print(f"  pytest exit {report['pytest_returncode']} - the arm did not run",
                   file=sys.stderr)
+            if report["pytest_returncode"] == 1:
+                print("  no FAILED/ERROR line in pytest's summary: is pytest installed for "
+                      f"{sys.executable}? Run this tool with the project's own interpreter.",
+                      file=sys.stderr)
         if report["verdict"] == "timeout":
             print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
                   "nothing about whether it would have noticed; the mutation may make it SPIN",
                   file=sys.stderr)
     return 2 if not report["restored"] else exit_code_for(report["verdict"])
+
+
+def _tolerate_unencodable_output() -> None:
+    """A cp1252 console must not crash the report: that traceback exits 1, which reads SURVIVED."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
 
 
 if __name__ == "__main__":

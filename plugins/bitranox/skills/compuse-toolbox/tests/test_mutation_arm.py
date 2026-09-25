@@ -346,3 +346,234 @@ def test_a_cache_that_cannot_be_removed_refuses_the_arm(tmp_path):
         assert (p / "src.py").read_bytes() == before, "the refusal must precede the mutation"
     finally:
         cache.chmod(0o755)
+
+
+# --------------------------------------------------------------------------
+# An exit 1 is KILLED only when pytest actually reported a failure
+# --------------------------------------------------------------------------
+
+
+def test_a_runner_without_pytest_is_inconclusive_not_killed(tmp_path):
+    """The documented `uv run scripts/mutation_arm.py` gives an interpreter with no pytest:
+    `python -m pytest` then exits 1 with "No module named pytest", which read as KILLED for
+    every arm - a whole battery reporting perfect tests that never ran."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "negative"', encoding="utf-8")
+    (p / "new.txt").write_text('return "NEGATIVE"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+
+    report = M.run_arm(planned, "test_src.py::test_zero",
+                       runner=[sys.executable, "-m", "no_such_module_pytest_zz"])
+
+    assert report["pytest_returncode"] == 1
+    assert report["verdict"] == "inconclusive"
+    assert M.exit_code_for(report["verdict"]) == 2
+
+
+def test_the_cli_reports_a_pytest_that_never_ran_as_inconclusive(tmp_path):
+    """End to end: a `pytest` module that exits 1 without running anything, as a missing or
+    broken pytest does, must not be scored as the arm noticing the mutation."""
+    p = make_project(tmp_path)
+    (p / "pytest.py").write_text(
+        "import sys\nprint('No module named pytest', file=sys.stderr)\nraise SystemExit(1)\n",
+        encoding="utf-8")
+    (p / "old.txt").write_text('return "negative"', encoding="utf-8")
+    (p / "new.txt").write_text('return "NEGATIVE"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["data"]["verdict"] == "inconclusive"
+
+
+def test_verdict_needs_a_summary_line_for_killed():
+    assert M.verdict_for(1, "FAILED t.py::x - AssertionError\n") == "inconclusive"
+    summary =("=== short test summary info ===\n"
+               "FAILED t.py::x - AssertionError: boom\n")
+    assert M.verdict_for(1, summary) == "killed"
+    assert M.verdict_for(1, "No module named pytest\n") == "inconclusive"
+    assert M.verdict_for(0, "") == "survived"
+    assert M.verdict_for(None, "") == "timeout"
+
+
+# --------------------------------------------------------------------------
+# Every failure to read or write is exit 2, never a traceback read as SURVIVED
+# --------------------------------------------------------------------------
+
+
+def test_no_mutate_is_a_usage_error(tmp_path):
+    proc = run(make_project(tmp_path), "--test", "test_src.py::test_zero")
+    assert proc.returncode == 2
+    assert "no --mutate" in proc.stderr
+
+
+def test_a_non_utf8_source_is_refused_before_anything_is_written(tmp_path):
+    p = make_project(tmp_path)
+    latin = b"# -*- coding: latin-1 -*-\n" + SOURCE.replace("zero", "z\xe9ro").encode("latin-1")
+    (p / "src.py").write_bytes(latin)
+    (p / "old.txt").write_text('return "negative"', encoding="utf-8")
+    (p / "new.txt").write_text('return "NEGATIVE"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "Traceback" not in proc.stderr
+    assert "nothing written" in proc.stderr
+    assert (p / "src.py").read_bytes() == latin
+
+
+def test_a_non_utf8_anchor_file_is_refused(tmp_path):
+    p = make_project(tmp_path)
+    (p / "old.txt").write_bytes(b'return "z\xe9ro"')
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "Traceback" not in proc.stderr
+
+
+def test_a_bom_anchor_file_still_matches(tmp_path):
+    """Notepad writes a BOM; read as plain utf-8 it becomes part of the anchor, which then
+    appears 0 times in the source."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_bytes(b'\xef\xbb\xbfreturn "zero"')
+    (p / "new.txt").write_bytes(b'\xef\xbb\xbfreturn "ZERO"')
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt", "--test", "test_src.py::test_zero",
+               "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert (p / "src.py").read_text(encoding="utf-8") == SOURCE
+
+
+def _cannot_write(path):
+    """True when making `path` read-only really stops this user writing it (not root)."""
+    path.chmod(0o444)
+    try:
+        with open(path, "ab"):
+            pass
+    except OSError:
+        return True
+    return False
+
+
+def test_an_unwritable_source_is_exit_2_not_a_traceback(tmp_path):
+    p = make_project(tmp_path)
+    before = (p / "src.py").read_bytes()
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    try:
+        if not _cannot_write(p / "src.py"):
+            pytest.skip("this user can write a read-only file, so there is no failure to test")
+        proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+                   "--test", "test_src.py::test_zero", "--json")
+    finally:
+        (p / "src.py").chmod(0o644)
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "Traceback" not in proc.stderr
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "error" and data["restored"] is True
+    assert "RESTORE FAILED" not in proc.stderr, "an untouched file is not a failed restore"
+    assert (p / "src.py").read_bytes() == before
+
+
+def test_a_restore_that_cannot_write_is_reported_loudly(tmp_path):
+    """The arm leaves the mutant on disk and makes it unwritable, so the restore fails. That must
+    be exit 2 and RESTORE FAILED, never a traceback."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    probe = p / "probe.txt"
+    probe.write_text("x", encoding="utf-8")
+    if not _cannot_write(probe):
+        pytest.skip("this user can write a read-only file, so there is no failure to test")
+    lock = f"import os; os.chmod({str(p / 'src.py')!r}, 0o444); raise SystemExit(1)"
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+    try:
+        report = M.run_arm(planned, "test_src.py::test_zero", runner=[sys.executable, "-c", lock])
+    finally:
+        (p / "src.py").chmod(0o644)
+    assert report["restored"] is False
+    assert 'return "ZERO"' in (p / "src.py").read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Several mutations: each anchor is checked against the text the earlier ones leave
+# --------------------------------------------------------------------------
+
+
+def test_an_anchor_consumed_by_an_earlier_mutation_is_refused_before_writing(tmp_path):
+    p = make_project(tmp_path)
+    (p / "a_old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "a_new.txt").write_text('return "ZERO"', encoding="utf-8")
+    specs = [[str(p / "src.py"), str(p / "a_old.txt"), str(p / "a_new.txt")],
+             [str(p / "src.py"), str(p / "a_old.txt"), str(p / "a_new.txt")]]
+    with pytest.raises(M.AnchorError):
+        M.plan_mutations(specs)
+    proc = run(p, "--mutate", "src.py", "a_old.txt", "a_new.txt",
+               "--mutate", "src.py", "a_old.txt", "a_new.txt", "--test", "test_src.py::test_zero")
+    assert proc.returncode == 2
+    assert "nothing written" in proc.stderr
+
+
+def test_a_second_anchor_created_by_the_first_mutation_is_accepted(tmp_path):
+    """The control: validation sees the text as the arm will, so a chain that only makes sense
+    in order is planned, not refused."""
+    p = make_project(tmp_path)
+    (p / "a_old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "a_new.txt").write_text('return "ZERO"', encoding="utf-8")
+    (p / "b_old.txt").write_text('return "ZERO"', encoding="utf-8")
+    (p / "b_new.txt").write_text('return "Zero"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "a_old.txt"), str(p / "a_new.txt")],
+                                [str(p / "src.py"), str(p / "b_old.txt"), str(p / "b_new.txt")]])
+    assert len(planned) == 2
+
+
+# --------------------------------------------------------------------------
+# CRLF sources stay CRLF while the arm runs
+# --------------------------------------------------------------------------
+
+
+def test_a_crlf_source_keeps_its_line_endings_during_the_arm(tmp_path):
+    p = make_project(tmp_path)
+    crlf = SOURCE.replace("\n", "\r\n").encode("utf-8")
+    (p / "src.py").write_bytes(crlf)
+    (p / "old.txt").write_text('if value == 0:\n        return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('if value == 0:\n        return "ZERO"', encoding="utf-8")
+    seen = p / "seen.bin"
+    probe = (f"import pathlib; pathlib.Path({str(seen)!r}).write_bytes("
+             f"pathlib.Path({str(p / 'src.py')!r}).read_bytes()); raise SystemExit(0)")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+    M.run_arm(planned, "test_src.py::test_zero", runner=[sys.executable, "-c", probe])
+    during = seen.read_bytes()
+    assert b'return "ZERO"\r\n' in during
+    assert during.count(b"\n") == during.count(b"\r\n")
+    assert (p / "src.py").read_bytes() == crlf
+
+
+# --------------------------------------------------------------------------
+# The reported reason, and output a console cannot encode
+# --------------------------------------------------------------------------
+
+
+def test_a_parametrize_id_containing_the_separator_does_not_cut_the_reason():
+    output = ("=========================== short test summary info ============================\n"
+              "FAILED test_src.py::test_x[a - b] - AssertionError: assert 'ZERO' == 'zero'\n")
+    assert M.failure_reason(output) == "AssertionError: assert 'ZERO' == 'zero'"
+
+
+def test_a_line_separator_inside_the_reason_does_not_cut_it():
+    output = ("=========================== short test summary info ============================\n"
+              "FAILED test_src.py::test_x - AssertionError: a b\n")
+    assert M.failure_reason(output) == "AssertionError: a b"
+
+
+def test_a_non_cp1252_node_id_does_not_crash_a_cp1252_console(tmp_path):
+    """A traceback here exits 1, which reads as SURVIVED - a false finding."""
+    p = make_project(tmp_path)
+    (p / "test_src.py").write_text(TEST + "\n\ndef test_日本():\n"
+                                   "    assert classify(0) == 'zero'\n", encoding="utf-8")
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--mutate", "src.py", "old.txt", "new.txt",
+         "--test", "test_src.py::test_日本"],
+        capture_output=True, cwd=str(p), check=False,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"})
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert b"Traceback" not in proc.stderr
+    assert proc.stdout.startswith(b"KILLED")

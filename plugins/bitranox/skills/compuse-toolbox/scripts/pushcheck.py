@@ -20,7 +20,9 @@ Two things make this a tool rather than a habit:
    refusal.
 
 Only ADDED lines are scanned. A `-` line is content leaving the repo, and flagging it would make
-a cleanup commit unpushable, which is backwards.
+a cleanup commit unpushable, which is backwards. They are read from EVERY commit in the range,
+not from the diff between its two ends: a value added in one commit and removed in the next is
+still published, in that first commit.
 
 Documentation-safe values are deliberately NOT findings: the RFC5737 ranges (192.0.2.0/24,
 198.51.100.0/24, 203.0.113.0/24), `example.com`/`.test`/`.invalid`, loopback, and placeholder
@@ -59,9 +61,11 @@ _URL_RX = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?(?P<host>[^:/]+)(?::\d+)
 
 # Absolute paths that carry local layout. Deliberately not "every absolute path": /usr/bin/python3
 # belongs in documentation, and flagging it would bury the findings that matter.
+# A Windows profile path is written with one backslash, with two once it sits inside a JSON or
+# source string literal, and in any case (NTFS is case-insensitive, `c:\users` is common).
 _ABS_RX = re.compile(
     r"(?P<hit>(?:/home/|/Users/|/root/|/media/|/mnt/|/srv/)[A-Za-z0-9._-]+"
-    r"|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+)")
+    r"|(?i:[a-z]:\\{1,2}users\\{1,2})[A-Za-z0-9._-]+)")
 # Home directories written as documentation. `alice` is NOT here on purpose: a real-looking name
 # is a candidate for a human to clear, and the cost of clearing one is a sentence.
 _PLACEHOLDER_USERS = {"user", "username", "youruser", "you", "me", "example", "USER", "$USER"}
@@ -186,11 +190,24 @@ def _private_ip_hits(line: str) -> list[str]:
     return out
 
 
+def _lines(text: str) -> list[str]:
+    """`text` split on newlines ONLY, with a trailing CR dropped.
+
+    `str.splitlines()` also splits on form feed, U+2028 and the other Unicode separators. In a
+    diff that turns the tail of an ADDED line into a fake context line, which is never scanned -
+    a value placed after such a character would pass the gate unread.
+    """
+    parts = (text or "").split("\n")
+    if parts and parts[-1] == "":
+        parts.pop()
+    return [p[:-1] if p.endswith("\r") else p for p in parts]
+
+
 def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
     """Every private-looking value in `text`, with 1-based line numbers. PURE."""
     terms = [t.strip().lower() for t in denylist if t.strip()]
     found: list[Finding] = []
-    for n, line in enumerate((text or "").splitlines(), start=1):
+    for n, line in enumerate(_lines(text), start=1):
         for hit in _abs_path_hits(line):
             found.append(Finding("abs_path", path, n, hit))
         for hit in _hostname_hits(line):
@@ -205,41 +222,86 @@ def scan_text(text: str, path: str, denylist: tuple[str, ...] | list[str] = ()) 
 
 
 _HUNK_RX = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
+_C_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34}
+
+
+def _unquote_path(raw: str) -> str:
+    """A header path as git wrote it, with git's C-style quoting undone.
+
+    git quotes a path holding a double quote, a backslash or a control character (and, unless
+    core.quotePath is off, every non-ASCII byte as octal). Left quoted, the finding names a file
+    that does not exist and no --exclude pattern can ever match it.
+    """
+    if len(raw) < 2 or not (raw.startswith('"') and raw.endswith('"')):
+        return raw
+    body, out, i = raw[1:-1], bytearray(), 0
+    while i < len(body):
+        if body[i] == "\\" and i + 1 < len(body):
+            octal = body[i + 1:i + 4]
+            if len(octal) == 3 and all(c in "01234567" for c in octal):
+                out.append(int(octal, 8) & 0xFF)
+                i += 4
+                continue
+            out.append(_C_ESCAPES.get(body[i + 1], ord(body[i + 1]) & 0xFF))
+            i += 2
+            continue
+        out.extend(body[i].encode("utf-8"))
+        i += 1
+    return out.decode("utf-8", errors="replace")
+
+
+def _header_path(field_text: str) -> str:
+    # git appends a TAB to a header path that contains a space; that tab is not part of the name.
+    target = _unquote_path(field_text.rstrip("\t"))
+    return target[2:] if target.startswith(("a/", "b/")) else target
+
+
+def _added_lines(diff: str):
+    """(path, new-file line, text) for every ADDED line of a unified diff.
+
+    A `+++ `/`--- ` line is a file header only BETWEEN a `diff ` line and the first `@@` of that
+    file. Inside a hunk the same prefix is content: an added line that itself begins `++ ` shows
+    as `+++ ...`, and a parser keyed on the prefix alone would read it as a header and never scan
+    it. Inside a hunk a line starting `@@` or `diff ` cannot be content (content lines start with
+    `+`, `-`, a space or a backslash), so those two are the only way out of one.
+    """
+    path, lineno, in_header = "?", 0, True
+    for raw in _lines(diff):
+        if raw.startswith("diff "):
+            in_header = True
+            continue
+        hunk = _HUNK_RX.match(raw)
+        if hunk:
+            in_header, lineno = False, int(hunk.group("start"))
+            continue
+        if in_header:
+            if raw.startswith("+++ "):
+                path = _header_path(raw[4:])
+            continue
+        if raw.startswith("+"):
+            yield path, lineno, raw[1:]
+            lineno += 1
+        elif not raw.startswith("-"):
+            lineno += 1
 
 
 def scan_diff(diff: str, denylist: tuple[str, ...] | list[str] = ()) -> list[Finding]:
     """Findings in the ADDED lines of a unified diff, attributed to file and new-file line.
 
     Removed lines are skipped deliberately: they are content LEAVING the repo, so flagging them
-    would refuse exactly the commit that cleans a leak up.
+    would refuse exactly the commit that cleans a leak up. The same value found twice at the same
+    place (a merge's first-parent diff repeats its side branch's commits) is reported once.
     """
     found: list[Finding] = []
-    path = "?"
-    lineno = 0
-    for raw in (diff or "").splitlines():
-        if raw.startswith("+++ "):
-            target = raw[4:].strip()
-            path = target[2:] if target.startswith(("a/", "b/")) else target
-            continue
-        if raw.startswith("--- ") or raw.startswith("diff --git"):
-            continue
-        hunk = _HUNK_RX.match(raw)
-        if hunk:
-            lineno = int(hunk.group("start"))
-            continue
-        if raw.startswith("+"):
-            found.extend(Finding(f.kind, path, lineno, f.text_excerpt)
-                         for f in scan_text(raw[1:], path, denylist))
-            lineno += 1
-        elif not raw.startswith("-"):
-            lineno += 1
-    return found
+    for path, lineno, text in _added_lines(diff):
+        found.extend(Finding(f.kind, path, lineno, f.text_excerpt)
+                     for f in scan_text(text, path, denylist))
+    return list(dict.fromkeys(found))
 
 
 def added_line_count(diff: str) -> int:
     """How many added lines the scan actually read - the denominator the verdict must report."""
-    return sum(1 for line in (diff or "").splitlines()
-               if line.startswith("+") and not line.startswith("+++"))
+    return sum(1 for _ in _added_lines(diff))
 
 
 def exclude_findings(findings: list[Finding], patterns: list[str]) -> tuple[list[Finding],
@@ -315,8 +377,30 @@ def default_range(repo: Path) -> str:
     return "@{u}..HEAD"
 
 
+def repo_root(repo: Path) -> Path:
+    """The work tree's top level, so the tool works from any subdirectory of it."""
+    if not repo.is_dir():
+        raise PushCheckError(f"not a git repository: {repo}")
+    try:
+        top = _run(["git", "rev-parse", "--show-toplevel"], repo).strip()
+    except PushCheckError as exc:
+        raise PushCheckError(f"not a git repository: {repo}") from exc
+    if not top:
+        raise PushCheckError(f"not a git repository: {repo}")
+    return Path(top)
+
+
 def range_diff(repo: Path, rev_range: str) -> str:
-    return _run(["git", "diff", "--unified=0", rev_range], repo)
+    """The diff of EVERY commit in the range, not the diff between its two ends.
+
+    A push publishes each commit, so a value added in one commit and removed in the next is in
+    public history although the endpoint diff never shows it. A merge contributes its diff
+    against its first parent, which covers a conflict resolution. `core.quotePath=false` keeps a
+    non-ASCII path readable, so a finding names the real file and --exclude can match it.
+    """
+    return _run(["git", "-c", "core.quotePath=false", "log", "-p", "--format=", "--unified=0",
+                 "--no-color", "--no-ext-diff", "--diff-merges=first-parent", rev_range, "--"],
+                repo)
 
 
 def gh_visibility(host: str, owner: str, repo: str, gh: str = "gh") -> str | None:
@@ -380,17 +464,36 @@ def _denylist(path: str | None) -> list[str]:
     if not path:
         return []
     try:
-        return Path(path).expanduser().read_text(encoding="utf-8").splitlines()
+        # utf-8-sig: Notepad and PowerShell 5 write a BOM, which plain utf-8 glues onto the
+        # FIRST term so that it silently matches nothing.
+        text = Path(path).expanduser().read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise PushCheckError(f"cannot read --denylist-file: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # The exception's own text is not echoed: the offending bytes are part of a term, and
+        # the terms are what this file exists to keep out of every log.
+        raise PushCheckError(f"--denylist-file is not UTF-8 text (undecodable byte at offset "
+                             f"{exc.start}); re-save it as UTF-8") from None
+    return _lines(text)
+
+
+def _tolerate_unencodable_output() -> None:
+    """A cp1252 console or redirect must not turn a verdict into a traceback (exit 1 = leak)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
 
 
 def main(argv: list[str] | None = None) -> int:
+    _tolerate_unencodable_output()
     args = build_parser().parse_args(argv)
     try:
-        repo = Path(args.repo).expanduser()
-        if not (repo / ".git").exists():
-            raise PushCheckError(f"not a git repository: {repo}")
+        repo = repo_root(Path(args.repo).expanduser())
         visibility = args.visibility
         if visibility is None:
             parsed = parse_remote(remote_url(repo, args.remote))

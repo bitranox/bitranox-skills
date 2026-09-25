@@ -23,15 +23,23 @@ job. Then mtime records when THAT pass ran, not when the content was produced, s
 ordered by the wrong event: rotated samples gzipped off the hot path carry mtimes hours after
 the data they hold ended, and every rate computed across a file boundary used the wrong
 neighbour, with no error. `--name-timestamp` keys on a fixed-width stamp in the filename
-instead. The default run WARNS when the two keys disagree about the answer, which is exactly
-when the choice of key matters.
+instead, and then reports the age from that stamp too (`age_basis` in --json says which), since
+an mtime age would make a stale set look fresh. A stamped path that no longer exists is skipped
+and reported, never picked. The default run WARNS when the two keys disagree about the answer,
+which is exactly when the choice of key matters.
+
+A glob the shell did not expand (cmd.exe, PowerShell, a quoted argument) is expanded here; an
+argument that names an existing path is always taken literally.
 
 Exit codes: 0 = a match, 1 = no match, 2 = usage error.
 """
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import math
+import os
 import re
 import sys
 import time
@@ -74,31 +82,37 @@ def parse_name_stamp(name) -> float | None:
 
     The digits must be a real date: a number of the right WIDTH is not a timestamp, and reading
     `build-20261345.log` as a date would be a fresh way to get the same silent wrong answer. The
-    FIRST parseable stamp wins when a name carries more than one.
+    FIRST (leftmost) parseable stamp wins when a name carries more than one, whatever its width;
+    at the same position the wider form wins, so a 14-digit stamp is never read as its own
+    8-digit prefix. Stamps are read as UTC.
     """
     text = str(name)
-    for pattern, fmt in _STAMP_PATTERNS:
+    best = None
+    for rank, (pattern, fmt) in enumerate(_STAMP_PATTERNS):
         for hit in pattern.finditer(text):
-            joined = "".join(hit.groups())
             try:
-                parsed = datetime.strptime(joined, fmt)
+                parsed = datetime.strptime("".join(hit.groups()), fmt)
             except ValueError:
                 continue                       # right width, not a real date
-            return parsed.replace(tzinfo=timezone.utc).timestamp()
-    return None
+            candidate = (hit.start(), rank, parsed.replace(tzinfo=timezone.utc).timestamp())
+            best = candidate if best is None or candidate < best else best
+            break                              # later hits of this pattern are further right
+    return None if best is None else best[2]
 
 
 def by_name_stamp(paths) -> list[Path]:
-    """Every path carrying a parseable name stamp, NEWEST FIRST by that stamp.
+    """Every EXISTING path carrying a parseable name stamp, NEWEST FIRST by that stamp.
 
     Paths with no stamp are EXCLUDED rather than sorted to one end: their position would be an
     invention, and an invented order is what this whole tool refuses to produce. `unstamped()`
-    names them so the caller can report them.
+    names them so the caller can report them. A path that cannot be stat'd (a dangling stamped
+    symlink, a file removed after the glob) is excluded too: the newest name of something that
+    is gone is not an answer, and `unreadable()` names it.
     """
     stamped = []
     for raw in paths or []:
         stamp = parse_name_stamp(Path(raw).name)
-        if stamp is not None:
+        if stamp is not None and _readable(raw) is not None:
             stamped.append((Path(raw), stamp))
     stamped.sort(key=lambda pair: pair[1], reverse=True)
     return [path for path, _ in stamped]
@@ -162,6 +176,35 @@ def age_seconds(path: Path, now: float | None = None) -> float:
     return (time.time() if now is None else now) - mtime
 
 
+def stamp_age_seconds(path: Path, now: float | None = None) -> float:
+    """How old the CONTENT is by its name stamp - the age that matches --name-timestamp.
+
+    Under --name-timestamp the mtime is by definition the wrong event (a later pass rewrote the
+    file), so an age read from it makes a stale set look fresh.
+    """
+    stamp = parse_name_stamp(Path(path).name)
+    if stamp is None:
+        return float("inf")
+    return (time.time() if now is None else now) - stamp
+
+
+def expand_args(paths) -> list[str]:
+    """Paths as given, with any glob the shell did NOT expand expanded here.
+
+    cmd.exe, PowerShell and a quoted argument all hand the pattern over literally. A literal
+    that names an existing path is kept as it is (`snap[1]` is a real name, not a class); a
+    pattern matching nothing is kept too, so it is reported as unreadable rather than vanishing.
+    """
+    out: list[str] = []
+    for raw in paths or []:
+        raw = str(raw)
+        if os.path.lexists(raw) or not any(ch in raw for ch in "*?["):
+            out.append(raw)
+            continue
+        out.extend(sorted(glob.glob(raw)) or [raw])
+    return out
+
+
 def _human_age(seconds: float) -> str:
     if seconds == float("inf"):
         return "unknown"
@@ -181,17 +224,24 @@ def main(argv=None) -> int:
                     help="key on a fixed-width timestamp in the FILENAME, not mtime - "
                          "correct when a later pass rewrote the files")
     args = ap.parse_args(argv)
+    _tolerate_unencodable_output()
 
     if not args.paths:
         print("newest: no paths - did the glob match nothing?", file=sys.stderr)
         return 2
+    paths = expand_args(args.paths)
 
     if args.name_timestamp:
-        ordered = by_name_stamp(args.paths)
-        skipped = unstamped(args.paths)
-        if skipped:
-            print(f"newest: skipped {len(skipped)} path(s) with no fixed-width name stamp: "
-                  f"{', '.join(skipped)}", file=sys.stderr)
+        ordered = by_name_stamp(paths)
+        no_stamp = unstamped(paths)
+        gone = [raw for raw in unreadable(paths) if raw not in no_stamp]
+        skipped = no_stamp + gone
+        if no_stamp:
+            print(f"newest: skipped {len(no_stamp)} path(s) with no fixed-width name stamp: "
+                  f"{', '.join(no_stamp)}", file=sys.stderr)
+        if gone:
+            print(f"newest: skipped {len(gone)} unreadable path(s): {', '.join(gone)}",
+                  file=sys.stderr)
         if not ordered:
             # Never fall back to mtime here. A silent fallback answers the question the caller
             # explicitly said was the wrong one, which is the defect this flag exists to fix.
@@ -199,8 +249,8 @@ def main(argv=None) -> int:
                   "(YYYYMMDDTHHMMSSZ, YYYYMMDD-HHMMSS or YYYYMMDD)", file=sys.stderr)
             return 1
     else:
-        ordered = by_mtime(args.paths)
-        skipped = unreadable(args.paths)
+        ordered = by_mtime(paths)
+        skipped = unreadable(paths)
         if skipped:
             # Always to stderr, --json included, so stdout stays a clean parseable envelope.
             print(f"newest: skipped {len(skipped)} unreadable path(s): {', '.join(skipped)}",
@@ -208,23 +258,48 @@ def main(argv=None) -> int:
         if not ordered:
             print("newest: nothing readable among the given paths", file=sys.stderr)
             return 1
-        if keys_disagree(args.paths):
+        if keys_disagree(paths):
             print("newest: mtime and the name stamps pick DIFFERENT files - a later pass "
                   "(compression, re-encoding, a fixup job) likely rewrote these, so mtime "
                   "records that pass and not the content. Re-run with --name-timestamp.",
                   file=sys.stderr)
 
-    data = [{"path": str(p), "age_seconds": round(age_seconds(p), 3)} for p in ordered]
+    basis = "name_stamp" if args.name_timestamp else "mtime"
+    age_of = stamp_age_seconds if args.name_timestamp else age_seconds
+    data = [{"path": str(p), "age_seconds": _json_age(age_of(p)), "age_basis": basis}
+            for p in ordered]
     if not args.all:
         data = data[:1]
 
     if args.json:
         print(json.dumps({"ok": True, "command": "newest", "skipped": skipped, "data": data},
-                          indent=2))
+                         indent=2, allow_nan=False))
     else:
+        label = ", from name stamp" if args.name_timestamp else ""
         for item in data:
-            print(f"{item['path']}  (age {_human_age(item['age_seconds'])})")
+            age = item["age_seconds"]
+            print(f"{item['path']}  (age {_human_age(float('inf') if age is None else age)}"
+                  f"{label})")
     return 0
+
+
+def _json_age(seconds: float) -> float | None:
+    """Rounded seconds, or None for an age that cannot be known - never Infinity, which strict
+    JSON parsers (every one but Python's) refuse."""
+    return round(seconds, 3) if math.isfinite(seconds) else None
+
+
+def _tolerate_unencodable_output() -> None:
+    """A cp1252 console, or a filename that is not UTF-8, must not turn the answer into a
+    traceback whose exit 1 reads as "no match"."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
 
 
 if __name__ == "__main__":

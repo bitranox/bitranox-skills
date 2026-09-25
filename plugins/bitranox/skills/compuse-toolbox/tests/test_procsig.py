@@ -3,7 +3,13 @@
 The load-bearing property is the exclusion: a match set NEVER contains the tool's own process or
 any ancestor (the shell), so it cannot kill the caller the way `pkill -f` does.
 """
+import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 import procsig as P
 
@@ -142,3 +148,191 @@ def test_scan_by_cmdline_still_matches_a_plain_argv(tmp_path):
     _mkproc(tmp_path, 600, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-79099-disk-0"])
     _mkproc(tmp_path, 601, exe="/x/openvmm", cmdline=["openvmm", "--vm", "vm-64000-disk-0"])
     assert [h["pid"] for h in P.scan(tmp_path, cmdline="vm-79099")] == [600]
+
+
+# ---- a short-option CLUSTER ending in c hands over a command string too -------------------------
+
+@pytest.mark.parametrize("parts", [
+    ["script", "-qc", "python3 w.py; true", "/dev/null"],
+    ["su", "root", "-lc", "python3 w.py; true"],
+    ["runuser", "-u", "root", "-lc", "python3 w.py && true"],
+])
+def test_a_clustered_c_on_a_non_shell_is_never_searched(parts):
+    """`script -qc '<cmd>'` and `su root -lc '<cmd>'` hand a whole command to a shell exactly like
+    a standalone `-c` does; only testing the standalone spelling searched them in full."""
+    assert P._cmdline_search_text(parts, exe="/usr/bin/" + parts[0], comm=parts[0]) is None
+
+
+@pytest.mark.parametrize("parts", [
+    ["gcc", "-c", "foo.c"],
+    ["grep", "-ic", "pattern", "file"],
+    ["script", "-q", "out.log"],
+])
+def test_a_one_word_clustered_c_value_is_still_identity(parts):
+    """The control: a one-word value after a c-cluster is an option value, not a command."""
+    assert P._cmdline_search_text(parts, exe="/usr/bin/" + parts[0], comm=parts[0]) \
+        == " ".join(parts)
+
+
+# ---- the shell-option walker, one case per documented regression --------------------------------
+
+@pytest.mark.parametrize("parts, expected", [
+    (["bash", "-O", "extglob", "-c", "python3 w.py"], "bash -O extglob -c"),
+    (["zsh", "-o", "pipefail", "-c", "python3 w.py"], "zsh -o pipefail -c"),
+    (["bash", "--rcfile", "/etc/rc", "-c", "python3 w.py"], "bash --rcfile /etc/rc -c"),
+    (["bash", "--rcfile=/etc/rc", "-c", "python3 w.py"], "bash --rcfile=/etc/rc -c"),
+    (["bash", "--norc", "-c", "python3 w.py"], "bash --norc -c"),
+    (["fish", "--command", "python3 w.py"], "fish --command"),
+    (["fish", "--command=python3 w.py"], "fish"),
+    (["bash", "-oc", "pipefail", "python3 w.py"], None),
+    (["bash", "-oO", "pipefail", "extglob", "-c", "python3 w.py"], None),
+    (["bash", "--not-modelled", "-c", "python3 w.py"], None),
+    (["busybox", "sh", "-c", "python3 w.py"], "busybox sh -c"),
+    (["busybox", "httpd", "-f"], "busybox httpd -f"),
+    (["setsid", "bash", "-lc", "python3 w.py"], "setsid bash -lc"),
+    (["bash", "deploy.sh", "--flag"], "bash deploy.sh --flag"),
+    (["rsync", "-av", "/home/u/.ssh", "/backup"], "rsync -av /home/u/.ssh /backup"),
+])
+def test_the_shell_option_walker(parts, expected):
+    assert P._cmdline_search_text(parts, exe="/usr/bin/" + parts[0], comm=parts[0]) == expected
+
+
+# ---- a blank needle matches nothing, and an unreadable proc never matches ------------------------
+
+def _no_exe_proc(root, pid, comm="kthreadd"):
+    d = root / str(pid)
+    d.mkdir(parents=True)
+    (d / "comm").write_text(comm + "\n", encoding="utf-8")
+    (d / "cmdline").write_bytes(b"")
+    (d / "stat").write_text(f"{pid} ({comm}) S 1 0 0\n", encoding="utf-8")
+
+
+def _harness(tmp_path, monkeypatch, excluded=frozenset()):
+    monkeypatch.setattr(P, "PROC", tmp_path)
+    monkeypatch.setattr(P, "_self_and_ancestors", lambda: set(excluded))
+    sent = []
+    monkeypatch.setattr(P, "_kill", lambda pid, sig: sent.append((pid, sig)))
+    return sent
+
+
+@pytest.mark.parametrize("flag, needle", [
+    ("--exe", ""), ("--exe", "   "), ("--comm", ""), ("--comm", " "), ("--cmdline", ""),
+    ("--cmdline", "\t"),
+])
+def test_a_blank_needle_is_refused_and_signals_nothing(tmp_path, monkeypatch, capsys, flag,
+                                                       needle):
+    """`--exe "$UNSET" --kill` matched every process whose exe link is unreadable - kernel
+    threads, and the user's own `systemd --user` - and signaled them."""
+    _no_exe_proc(tmp_path, 2)
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    sent = _harness(tmp_path, monkeypatch)
+    assert P.main(["--kill", flag, needle]) == 2
+    assert sent == []
+    assert "empty" in capsys.readouterr().err
+
+
+def test_a_proc_with_an_unreadable_exe_never_matches_by_exe(tmp_path):
+    _no_exe_proc(tmp_path, 2)
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    assert P.scan(tmp_path, exe="") == []
+    assert [h["pid"] for h in P.scan(tmp_path, exe="worker")] == [300]
+
+
+# ---- names the kernel reports differently from the name you know -------------------------------
+
+def test_a_replaced_binary_still_matches_by_exe(tmp_path):
+    """After a package upgrade the old daemon's exe link reads `<path> (deleted)` - and the old
+    daemons are exactly the processes one goes looking for."""
+    _mkproc(tmp_path, 300, exe="/usr/sbin/worker (deleted)", comm="worker", cmdline=["worker"])
+    assert [h["pid"] for h in P.scan(tmp_path, exe="worker")] == [300]
+    assert [h["pid"] for h in P.scan(tmp_path, exe="/usr/sbin/worker")] == [300]
+    assert P.scan(tmp_path, exe="worker (deleted)") == []
+
+
+def test_a_long_name_matches_by_comm_despite_kernel_truncation(tmp_path):
+    """The kernel keeps 15 bytes of comm, so `backup-scheduler` is `backup-schedule` there."""
+    _mkproc(tmp_path, 300, exe="/opt/backup-scheduler", comm="backup-schedule",
+            cmdline=["./backup-scheduler"])
+    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-scheduler")] == [300]
+    assert [h["pid"] for h in P.scan(tmp_path, comm="backup-schedule")] == [300]
+
+
+def test_a_truncated_comm_alone_does_not_match_a_different_long_name(tmp_path):
+    """The control: two long names sharing 15 bytes must not be confused - the full name has to
+    be confirmed from the exe or argv[0]."""
+    _mkproc(tmp_path, 300, exe="/opt/backup-scheduler-v2", comm="backup-schedule",
+            cmdline=["/opt/backup-scheduler-v2"])
+    assert P.scan(tmp_path, comm="backup-scheduler") == []
+
+
+# ---- exit codes: 0 found / 1 none / 2 could not answer or could not act -------------------------
+
+def test_list_mode_exit_code_ignores_self_and_ancestors(tmp_path, monkeypatch):
+    """A needle typed on procsig's own command line matches procsig itself. Counting that as a hit
+    made `procsig --cmdline X && echo running` print running for a process that does not exist."""
+    _mkproc(tmp_path, 20, exe="/usr/bin/python3", cmdline=["python3", "procsig.py", "--cmdline",
+                                                           "zz-nothing"])
+    _harness(tmp_path, monkeypatch, excluded={20, 1})
+    assert P.main(["--cmdline", "zz-nothing"]) == 1
+
+
+def test_list_mode_exit_code_is_0_for_a_real_match(tmp_path, monkeypatch):
+    _mkproc(tmp_path, 20, exe="/usr/bin/python3", cmdline=["python3", "procsig.py"])
+    _mkproc(tmp_path, 300, exe="/x/zz-worker", cmdline=["zz-worker"])
+    _harness(tmp_path, monkeypatch, excluded={20, 1})
+    assert P.main(["--exe", "zz-worker"]) == 0
+
+
+def test_a_missing_proc_is_an_error_not_not_running(tmp_path, monkeypatch, capsys):
+    _harness(tmp_path / "no-proc-here", monkeypatch)
+    assert P.main(["--exe", "worker"]) == 2
+    assert "nothing can be answered" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["_IGN", "_DFL", "_SETMASK", "SIG_IGN", "BOGUS", "NSIG"])
+def test_a_name_that_is_not_a_signal_is_refused(tmp_path, monkeypatch, capsys, name):
+    """`getattr(signal, "SIG" + name)` also finds SIG_IGN (1), SIG_DFL (0) and SIG_SETMASK (2),
+    so `--signal _IGN` sent SIGHUP."""
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    sent = _harness(tmp_path, monkeypatch)
+    assert P.main(["--kill", "--signal", name, "--exe", "worker"]) == 2
+    assert sent == []
+    assert "unknown signal" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["TERM", "SIGTERM", "term"])
+def test_a_real_signal_name_is_accepted(tmp_path, monkeypatch, name):
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    sent = _harness(tmp_path, monkeypatch)
+    assert P.main(["--kill", "--signal", name, "--exe", "worker"]) == 0
+    assert sent == [(300, int(signal.SIGTERM))]
+
+
+@pytest.mark.parametrize("error", [PermissionError(1, "Operation not permitted"),
+                                   ProcessLookupError(3, "No such process")])
+def test_kill_exits_2_when_a_signal_could_not_be_delivered(tmp_path, monkeypatch, capsys, error):
+    _mkproc(tmp_path, 300, exe="/x/worker", cmdline=["worker"])
+    _harness(tmp_path, monkeypatch)
+
+    def refuse(pid, sig):
+        raise error
+
+    monkeypatch.setattr(P, "_kill", refuse)
+    assert P.main(["--kill", "--exe", "worker"]) == 2
+    assert "failed to signal 300" in capsys.readouterr().err
+
+
+def test_a_non_cp1252_cmdline_does_not_crash_a_cp1252_console(tmp_path):
+    """Listing prints each match's command line; a cp1252 stdout must not turn that into a
+    traceback whose exit 1 reads as "not running"."""
+    proc_root = tmp_path / "proc"
+    _mkproc(proc_root, 300, exe="/x/worker", cmdline=["worker", "東京"])
+    script = (f"import sys; sys.path.insert(0, {str(Path(P.__file__).parent)!r}); "
+              "import procsig as P; from pathlib import Path; "
+              f"P.PROC = Path({str(proc_root)!r}); P._self_and_ancestors = lambda: set(); "
+              "sys.exit(P.main(['--exe', 'worker']))")
+    r = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False,
+                       env={**os.environ, "PYTHONIOENCODING": "cp1252"})
+    assert r.returncode == 0, r.stderr
+    assert b"Traceback" not in r.stderr
+    assert b"300" in r.stdout
