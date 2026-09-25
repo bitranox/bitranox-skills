@@ -7,8 +7,9 @@ no fix has been started. The next step is a question to the user, not code.
 
 ## Committed, or not
 
-- **In git (this commit):** this handover and the OPEN-WORK.md rank-10 update. No plugin change,
-  so no version bump.
+- **In git:** this handover and the OPEN-WORK.md rank-10 update. No plugin change, so no version
+  bump. Its first push (9b1bfe0) went RED on macOS from a flaky timing test, not from this change:
+  OPEN-WORK rank 45 has the numbers and the fix. Expect every push to be at risk until it is fixed.
 - **Not in git, by design (gitignored, main checkout):** `.plan/rank10-skillscript-2026-09-25/`,
   the whole record: `TRIAGE.md` (tally, batches A-F, every HIGH/MED line), `reports/` (79 plus
   6 `.recovered`), `adj/<group>/verdicts.txt` (16 files, copied verbatim from the agent
@@ -54,7 +55,9 @@ no fix has been started. The next step is a question to the user, not code.
 
 Rank 10 is the top open USER item that can move (rank 12 is blocked on data). Read
 `.plan/rank10-skillscript-2026-09-25/TRIAGE.md` in the main checkout, put batches A-F to the user
-with a recommendation (A first: guards that delete or leak data), and wait for their pick.
+with a recommendation (A first: guards that delete or leak data), and wait for their pick. Fold the
+rank-45 timing-test fix into the first batch release: it is small, and until it lands a red macOS
+cell can hide a real failure in that release.
 
 ## Files that matter
 
@@ -70,7 +73,7 @@ with a recommendation (A first: guards that delete or leak data), and wait for t
 
 - `ls .plan/rank10-skillscript-2026-09-25/reports | wc -l` in the main checkout prints 85.
 - `grep -c '^- ' .plan/rank10-skillscript-2026-09-25/TRIAGE.md` prints 224 (221 HIGH/MED lines).
-- `git log --oneline origin/master -3` shows this handover commit on top of 858e712.
+- `git log --oneline origin/master -3` shows the handover commits on top of 858e712.
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.
