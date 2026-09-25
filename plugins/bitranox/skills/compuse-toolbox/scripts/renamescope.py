@@ -45,22 +45,29 @@ Three things it deliberately does rather than the easy version:
 THE INDENTATION TRAP, which this warns about but cannot fix for you: an indent-bearing literal is
 a SUBSTRING of a deeper-indented occurrence, so a 4-space pattern silently rewrites the 8-space
 one as well. `--regex` is compiled with `re.MULTILINE` precisely so you can anchor it
-(`(?m)^(\s*)if x:$`) instead of leading it with spaces; a pattern that starts with whitespace and
-is not anchored gets a warning naming the depths its matches actually landed at.
+(`(?m)^([ \t]*)if x:$`) instead of leading it with spaces; a pattern that starts with whitespace
+and is not anchored gets a warning naming the depths its matches actually landed at. Use
+`[ \t]*` for indentation, not `\s*`: `\s` also matches a newline, so `^(\s*)` starts on the blank
+line above and a substitution with it eats that line. A hit is placed at the first non-blank
+character of its match, and such a match is warned about.
 
 KNOWN LIMITS, and they are the honest ones. This reads the files you hand it and nothing else, so
 a file-wide rename that also touches a sibling module is invisible unless you pass that module
-too. A bare `--intended` name that matches two qualified names (the same method on two classes)
-blesses BOTH, and warns rather than choosing - an unwarned choice there is how a hit in the wrong
-class reads as intended. Names bound dynamically (`globals()[...]`, `setattr`, `exec`) are not
-visible to any AST. And this reports where a substitution LANDS; whether the replacement is
-correct in a scope that legitimately owns the name is still yours to read.
+too. A bare `--intended` name that matches two qualified names (the same method on two classes,
+or the same function in two files) blesses ALL of them, and warns rather than choosing - an
+unwarned choice there is how a hit in the wrong place reads as intended. Qualify it with the class
+(`Runner.run`) or the file (`net.py::helper`, the file as passed or its bare name) to mean one.
+Names bound dynamically (`globals()[...]`, `setattr`, `exec`) are not visible to any AST. And
+this reports where a substitution LANDS; whether the replacement is correct in a scope that
+legitimately owns the name is still yours to read.
 
-Run: uv run tools/renamescope.py src/net.py --name mac \
+Run: uv run scripts/renamescope.py src/net.py --name mac \
        --intended _guest_new_iface --intended _apply_iface
-     uv run tools/renamescope.py src/*.py --regex '(?m)^(\s*)if x:$' --intended run --json
+     uv run scripts/renamescope.py src/*.py --regex '(?m)^([ \t]*)if x:$' --intended run --json
 Exit 0 = every hit is inside a function you named; 1 = hits fall OUTSIDE that list (the finding);
-2 = error - no such file, unparseable source, or a pattern that matched nothing.
+2 = error - no such file, a directory, an unreadable or undecodable or unparseable source, or a
+pattern that matched nothing. A file that could not be read makes the whole run exit 2: a mandate
+checked against part of the files cannot come back clean.
 """
 
 from __future__ import annotations
@@ -101,11 +108,7 @@ class RenamescopeError(Exception):
 
 
 class Unparseable(RenamescopeError):
-    """The source does not parse, so no enclosing function can be resolved for any hit."""
-
-
-class NothingMatched(RenamescopeError):
-    """The pattern matched nowhere. A scan that examined nothing must not report "no findings"."""
+    """The source does not decode or parse, so no enclosing function can be resolved for any hit."""
 
 
 class Bucket(Enum):
@@ -475,15 +478,32 @@ def _occurrences(tree: ast.Module, lines: list[str], name: str) -> list[_Occ]:
     return out
 
 
+# From 3.12 an f-string is a run of tokens (FSTRING_START ... FSTRING_END), and from 3.14 a
+# t-string likewise; there is no single STRING token to take the span from.
+_STRING_OPENERS = {t for t in (getattr(tokenize, "FSTRING_START", None),
+                               getattr(tokenize, "TSTRING_START", None)) if t is not None}
+_STRING_CLOSERS = {t for t in (getattr(tokenize, "FSTRING_END", None),
+                               getattr(tokenize, "TSTRING_END", None)) if t is not None}
+
+
 def _token_spans(source: str) -> list[tuple[tuple[int, int], tuple[int, int], SiteKind]]:
-    """Comment and string token spans, so a hit in a docstring is named rather than guessed at."""
+    """Comment and string token spans, so a hit in a docstring is named rather than guessed at.
+
+    An f-string's whole span counts as a string; a name inside one of its `{fields}` is still an
+    AST node, and `_kind_at` consults the AST occurrences first, so it stays a load.
+    """
     spans: list[tuple[tuple[int, int], tuple[int, int], SiteKind]] = []
+    open_strings: list[tuple[int, int]] = []
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
             if tok.type == tokenize.COMMENT:
                 spans.append((tok.start, tok.end, SiteKind.COMMENT))
             elif tok.type == tokenize.STRING:
                 spans.append((tok.start, tok.end, SiteKind.STRING))
+            elif tok.type in _STRING_OPENERS:
+                open_strings.append(tok.start)
+            elif tok.type in _STRING_CLOSERS and open_strings:
+                spans.append((open_strings.pop(), tok.end, SiteKind.STRING))
     except (tokenize.TokenError, IndentationError, SyntaxError):
         # A tokenize failure costs precision on string/comment hits, never correctness of the
         # enclosing-function answer, which comes from the AST.
@@ -513,7 +533,8 @@ def name_pattern(name: str) -> re.Pattern[str]:
     return re.compile(r"\b" + re.escape(name) + r"\b", re.MULTILINE)
 
 
-_INLINE_FLAGS = ("(?m)", "(?s)", "(?i)", "(?x)", "(?a)")
+# Any run of leading inline-flag groups: `(?m)`, `(?mi)`, `(?m)(?i)` alike.
+_LEADING_INLINE_FLAGS = re.compile(r"^(?:\(\?[aiLmsux]+\))+")
 
 
 def indent_trap_warning(pattern: str) -> str | None:
@@ -522,23 +543,76 @@ def indent_trap_warning(pattern: str) -> str | None:
     `"    if x:"` is a substring of `"        if x:"`, so the shallow pattern rewrites the deeper
     occurrence too and the diff looks fine.
     """
-    body = pattern
-    changed = True
-    while changed:
-        changed = False
-        for flag in _INLINE_FLAGS:
-            if body.startswith(flag):
-                body = body[len(flag) :]
-                changed = True
+    body = _LEADING_INLINE_FLAGS.sub("", pattern)
     if body.startswith("^"):
         return None
     if body[:1] in (" ", "\t") or body.startswith(("\\s", "\\t")):
         return (
             "the pattern leads with indentation and is not line-anchored: an indent-bearing "
             "literal is a SUBSTRING of a deeper-indented occurrence, so a 4-space pattern "
-            "silently rewrites the 8-space one too. Anchor it as (?m)^(\\s*)... instead."
+            "silently rewrites the 8-space one too. Anchor it as (?m)^([ \\t]*)... instead."
         )
     return None
+
+
+FILE_SEPARATOR = "::"
+"""Joins a file to a function in `--intended`, for a name defined in more than one file."""
+
+
+def _names_file(path: str, file_part: str) -> bool:
+    """`file_part` names `path` as passed, by its resolved location, or by its bare file name."""
+    if path == file_part or Path(path).name == file_part:
+        return True
+    try:
+        return Path(path).resolve() == Path(file_part).resolve()
+    except OSError:
+        return False
+
+
+def _matching_functions(want: str, functions: tuple[str, ...]) -> list[str]:
+    """A qualified name matches itself; otherwise a bare name matches every qualname ending in it."""
+    if want in functions:
+        return [want]
+    return [q for q in functions if q.rsplit(".", 1)[-1] == want]
+
+
+def _resolve_mandate(
+    wanted: list[str], functions_by_path: dict[str, tuple[str, ...]]
+) -> tuple[set[tuple[str, str]], bool, list[str]]:
+    """Resolve `--intended` entries to (path, qualname) pairs across every scanned file.
+
+    A name matching more than one pair blesses ALL of them and warns, whether the pairs differ by
+    class or by file: choosing one silently is how a hit in the wrong place reads as intended.
+    """
+    resolved: set[tuple[str, str]] = set()
+    module_blessed = False
+    notes: list[str] = []
+    several_files = len(functions_by_path) > 1
+    for want in wanted:
+        if want == MODULE_SCOPE:
+            module_blessed = True
+            continue
+        file_part, sep, name = want.rpartition(FILE_SEPARATOR)
+        paths = [p for p in functions_by_path if not sep or _names_file(p, file_part)]
+        if sep and not paths:
+            notes.append(f"--intended {want!r} names no scanned file ({file_part!r})")
+            continue
+        matches = [(p, q) for p in paths for q in _matching_functions(name, functions_by_path[p])]
+        if not matches:
+            notes.append(
+                f"--intended {want!r} matches no function in the scanned files; your mandate "
+                "names something that is not there (typo, or the wrong file)"
+            )
+            continue
+        if len(matches) > 1:
+            shown = sorted(f"{p}{FILE_SEPARATOR}{q}" if several_files else q for p, q in matches)
+            how = "the qualified name or <file>::<name>" if several_files else "the qualified name"
+            notes.append(
+                f"--intended {want!r} is ambiguous and blesses ALL of {shown}; pass {how} to "
+                "mean just one"
+            )
+        resolved.update(matches)
+    return resolved, module_blessed, notes
 
 
 def resolve_intended(
@@ -550,30 +624,16 @@ def resolve_intended(
     matching two qualnames blesses BOTH - the alternative is picking one silently, which is how a
     hit in the wrong class reads as intended.
     """
-    resolved: set[str] = set()
-    module_blessed = False
-    notes: list[str] = []
-    for want in wanted:
-        if want == MODULE_SCOPE:
-            module_blessed = True
-            continue
-        if want in functions:
-            resolved.add(want)
-            continue
-        matches = [q for q in functions if q.rsplit(".", 1)[-1] == want]
-        if not matches:
-            notes.append(
-                f"--intended {want!r} matches no function in the scanned files; your mandate "
-                "names something that is not there (typo, or the wrong file)"
-            )
-            continue
-        if len(matches) > 1:
-            notes.append(
-                f"--intended {want!r} is ambiguous and blesses ALL of {sorted(matches)}; "
-                "pass the qualified name to mean just one"
-            )
-        resolved.update(matches)
-    return resolved, module_blessed, notes
+    pairs, module_blessed, notes = _resolve_mandate(wanted, {"": functions})
+    return {q for _, q in pairs}, module_blessed, notes
+
+
+def _bucket_of(
+    path: str, enclosing: str | None, resolved: set[tuple[str, str]], module_blessed: bool
+) -> Bucket:
+    if enclosing is None:
+        return Bucket.INTENDED if module_blessed else Bucket.MODULE
+    return Bucket.INTENDED if (path, enclosing) in resolved else Bucket.OUTSIDE
 
 
 # --------------------------------------------------------------------------------------------
@@ -600,6 +660,92 @@ def _position(starts: list[int], offset: int) -> tuple[int, int]:
     return lo + 1, offset - starts[lo]
 
 
+CROSSES_LINES_WARNING = (
+    "a match began on an earlier line than the text it matched: `\\s` also matches a newline, so "
+    "`^(\\s*)` crosses the blank lines above, and a substitution with this pattern would eat "
+    "them. Each such hit is placed at its first non-blank character; use [ \\t]* for indentation."
+)
+
+
+def _first_visible(match: re.Match[str]) -> tuple[int, bool]:
+    """Offset of the first non-whitespace character of a match, and whether a newline preceded it.
+
+    A pattern led by indentation starts its match in the whitespace, and `^(\\s*)` can start it on
+    a blank line ABOVE the text it is about. Placing the hit at match.start() then puts it on the
+    wrong line - in the wrong function - with no identifier under it.
+    """
+    token = match.group(0)
+    lead = len(token) - len(token.lstrip())
+    if lead == len(token):
+        return match.start(), False
+    return match.start() + lead, "\n" in token[:lead]
+
+
+@dataclass(frozen=True)
+class _Lambda:
+    start: tuple[int, int]
+    end: tuple[int, int]
+    params: frozenset[str]
+
+
+def _lambdas(tree: ast.Module, lines: list[str]) -> list[_Lambda]:
+    """Every lambda with its CHARACTER span: a lambda binds its parameters inside that span only."""
+    found: list[_Lambda] = []
+
+    def char_col(line: int, byte_col: int) -> int:
+        return _byte_col_to_char(lines[line - 1] if 1 <= line <= len(lines) else "", byte_col)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Lambda) and node.end_lineno is not None:
+            found.append(
+                _Lambda(
+                    start=(node.lineno, char_col(node.lineno, node.col_offset)),
+                    end=(node.end_lineno, char_col(node.end_lineno, node.end_col_offset or 0)),
+                    params=frozenset(_parameter_names(node)),
+                )
+            )
+    return found
+
+
+def _with_lambda_binding(
+    bindings: tuple[Binding, ...], word: str, line: int, col: int, lambdas: list[_Lambda]
+) -> tuple[Binding, ...]:
+    """A name inside `lambda mac: mac` is that lambda's PARAMETER, whatever the def around it has."""
+    if not any(lam.start <= (line, col) < lam.end and word in lam.params for lam in lambdas):
+        return bindings
+    rest = tuple(b for b in bindings if b not in (Binding.PARAMETER, Binding.FREE))
+    return (Binding.PARAMETER, *rest)
+
+
+def _binding_holder(
+    tree: ast.Module, any_scope: _Scope | None, binds_outward: bool, scope_nodes: dict[str, ast.AST]
+) -> tuple[ast.AST, str]:
+    """The scope whose bindings answer for this occurrence, and its cache key.
+
+    `enclosing` is TEXTUAL - the innermost span holding the line, which is the question "which
+    hunk of my diff is this". The BINDING is a different question, and for two site kinds the
+    answer is one scope OUT: a `def x` line opens x's scope but binds `x` in the enclosing one, and
+    a decorator expression is evaluated before the function exists. Read in the inner scope both
+    come back FREE or, worse, pick up a same-named parameter and report a binding that is not the
+    one this occurrence has.
+    """
+    if any_scope is None:
+        return tree, MODULE_SCOPE
+    if binds_outward:
+        key = any_scope.parent or MODULE_SCOPE
+        return scope_nodes.get(key, tree), key
+    return any_scope.node, any_scope.qualname
+
+
+def _parse(source: str, path: str) -> ast.Module:
+    try:
+        return ast.parse(source)
+    except (SyntaxError, ValueError) as exc:
+        # ValueError: a NUL byte on Python 3.10, where ast.parse does not report it as SyntaxError.
+        line = getattr(exc, "lineno", None)
+        raise Unparseable(f"{path}: {getattr(exc, 'msg', exc)} (line {line})") from exc
+
+
 def scan_source(
     source: str,
     *,
@@ -608,27 +754,30 @@ def scan_source(
     path: str = "<source>",
 ) -> Scan:
     """Place every match of `pattern` in `source` against the caller's intended function list."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as exc:
-        raise Unparseable(f"{path}: {exc.msg} (line {exc.lineno})") from exc
+    tree = _parse(source, path)
 
-    lines = source.splitlines()
+    # Split on LF only, the way the AST numbers lines: splitlines() also breaks at a form feed,
+    # U+2028 and friends, after which every line text, kind and binding is read off the wrong line.
+    lines = source.split("\n")
     scopes = _scopes(tree)
     scope_nodes = {s.qualname: s.node for s in scopes}
     functions = tuple(s.qualname for s in scopes if s.is_function)
-    resolved, module_blessed, notes = resolve_intended(list(intended or []), functions)
+    resolved, module_blessed, notes = _resolve_mandate(list(intended or []), {path: functions})
 
     starts = _line_starts(source)
     spans = _token_spans(source)
+    lambdas = _lambdas(tree, lines)
     binding_cache: dict[str, tuple[Binding, ...]] = {}
     occ_cache: dict[str, list[_Occ]] = {}
 
     sites: list[Site] = []
+    crossed_any = False
     for match in pattern.finditer(source):
-        line, col = _position(starts, match.start())
+        offset, crossed = _first_visible(match)
+        crossed_any = crossed_any or crossed
+        line, col = _position(starts, offset)
         text = lines[line - 1] if 1 <= line <= len(lines) else ""
-        token = match.group(0)
+        token = match.group(0).strip()
         word = token if token.isidentifier() else _word_at(text, col)
 
         if word not in occ_cache:
@@ -638,35 +787,14 @@ def scan_source(
         fn = _innermost(scopes, line, functions_only=True)
         any_scope = _innermost(scopes, line, functions_only=False)
         enclosing = fn.qualname if fn else None
-        scope_name = any_scope.qualname if any_scope else MODULE_SCOPE
 
-        # `enclosing` is TEXTUAL - the innermost span holding the line, which is the question
-        # "which hunk of my diff is this". The BINDING is a different question, and for two site
-        # kinds the answer is one scope OUT: a `def x` line opens x's scope but binds `x` in the
-        # enclosing one, and a decorator expression is evaluated before the function exists. Read
-        # in the inner scope both come back FREE or, worse, pick up a same-named parameter and
-        # report a binding that is not the one this occurrence has.
         on_decorator = any_scope is not None and line < any_scope.def_line
         binds_outward = kind is SiteKind.DEF_NAME or on_decorator
-        if any_scope is None:
-            holder, holder_key = tree, MODULE_SCOPE
-        elif binds_outward:
-            holder_key = any_scope.parent or MODULE_SCOPE
-            holder = scope_nodes.get(holder_key, tree)
-        else:
-            holder, holder_key = any_scope.node, any_scope.qualname
-
+        holder, holder_key = _binding_holder(tree, any_scope, binds_outward, scope_nodes)
         cache_key = f"{holder_key}\0{word}"
         if cache_key not in binding_cache:
             binding_cache[cache_key] = _bindings_in(holder, word) if word else (Binding.FREE,)
-        bindings = binding_cache[cache_key]
-
-        if enclosing is None:
-            bucket = Bucket.INTENDED if module_blessed else Bucket.MODULE
-        elif enclosing in resolved:
-            bucket = Bucket.INTENDED
-        else:
-            bucket = Bucket.OUTSIDE
+        bindings = _with_lambda_binding(binding_cache[cache_key], word, line, col, lambdas)
 
         sites.append(
             Site(
@@ -675,14 +803,16 @@ def scan_source(
                 col=col,
                 text=text.rstrip(),
                 enclosing=enclosing,
-                scope=scope_name,
-                bucket=bucket,
+                scope=any_scope.qualname if any_scope else MODULE_SCOPE,
+                bucket=_bucket_of(path, enclosing, resolved, module_blessed),
                 site_kind=kind,
                 binding=bindings[0],
                 bindings=bindings,
                 in_decorator=on_decorator,
             )
         )
+    if crossed_any:
+        notes.append(CROSSES_LINES_WARNING)
     return Scan(sites=tuple(sites), functions=functions, warnings=tuple(notes))
 
 
@@ -692,37 +822,51 @@ def _word_at(text: str, col: int) -> str:
     return found.group(0) if found and found.start() == 0 else ""
 
 
+def _read_source(path: Path) -> str:
+    """Decode a file the way Python does: its coding cookie or BOM, else UTF-8.
+
+    Raises OSError when it cannot be read and Unparseable when it cannot be decoded.
+    """
+    try:
+        with tokenize.open(path) as fh:
+            return fh.read()
+    except (SyntaxError, ValueError) as exc:
+        # SyntaxError: an unknown coding cookie; ValueError covers UnicodeDecodeError.
+        raise Unparseable(f"{path}: cannot decode: {exc}") from exc
+
+
 def scan_paths(
     paths: list[Path], *, pattern: re.Pattern[str], intended: list[str] | None = None
 ) -> Scan:
-    """Scan several files as one mandate, so a per-file green cannot hide a cross-file hit."""
-    sites: list[Site] = []
-    functions: list[str] = []
+    """Scan several files as one mandate, so a per-file green cannot hide a cross-file hit.
+
+    Functions are keyed by FILE as well as by qualname: the same name defined in two files is two
+    functions, and `--intended` warns when a bare name blesses both.
+    """
     skipped: list[str] = []
     per_file: list[Scan] = []
+    functions_by_path: dict[str, tuple[str, ...]] = {}
     for path in paths:
         try:
-            source = path.read_text(encoding="utf-8")
+            source = _read_source(path)
         except OSError as exc:
             skipped.append(f"{path}: {exc}")
             continue
         one = scan_source(source, pattern=pattern, intended=None, path=str(path))
         per_file.append(one)
-        functions.extend(one.functions)
+        functions_by_path[str(path)] = one.functions
 
-    resolved, module_blessed, notes = resolve_intended(list(intended or []), tuple(functions))
+    resolved, module_blessed, notes = _resolve_mandate(list(intended or []), functions_by_path)
+    sites = [
+        replace(site, bucket=_bucket_of(site.path, site.enclosing, resolved, module_blessed))
+        for one in per_file
+        for site in one.sites
+    ]
     for one in per_file:
-        for site in one.sites:
-            if site.enclosing is None:
-                bucket = Bucket.INTENDED if module_blessed else Bucket.MODULE
-            elif site.enclosing in resolved:
-                bucket = Bucket.INTENDED
-            else:
-                bucket = Bucket.OUTSIDE
-            sites.append(replace(site, bucket=bucket))
+        notes.extend(w for w in one.warnings if w not in notes)
     return Scan(
         sites=tuple(sites),
-        functions=tuple(functions),
+        functions=tuple(q for one in per_file for q in one.functions),
         warnings=tuple(notes),
         skipped=tuple(skipped),
     )
@@ -792,26 +936,58 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _fail(message: str, *, as_json: bool, command: str = "renamescope") -> int:
+def _fail(message: str, *, as_json: bool, command: str = "renamescope",
+          skipped: tuple[str, ...] = ()) -> int:
     if as_json:
         print(json.dumps({"ok": False, "command": command, "data": {"error": message},
-                          "skipped": []}, indent=1))
+                          "skipped": list(skipped)}, indent=1))
+    for note in skipped:
+        print(f"renamescope: skipped: {note}", file=sys.stderr)
     print(f"renamescope: {message}", file=sys.stderr)
     return 2
 
 
+def _read_intended_file(path: Path) -> list[str]:
+    """One name per line; `#` comments and blank lines ignored. Raises OSError / ValueError.
+
+    utf-8-sig and a split on LF alone: a BOM would otherwise glue itself to the first name, which
+    then matches no function, and a CR is stripped with the rest of the line's whitespace.
+    """
+    text = path.read_bytes().decode("utf-8-sig")
+    return [ln.strip() for ln in text.split("\n") if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def _tolerate_console_encoding() -> None:
+    """A cp1252 console cannot encode every source line; escape it, never crash."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
+
+
+def _path_problem(paths: list[Path]) -> str | None:
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        return f"no such file: {', '.join(missing)}"
+    dirs = [str(p) for p in paths if p.is_dir()]
+    if dirs:
+        return (f"is a directory, not a Python file: {', '.join(dirs)}; pass the files "
+                "themselves (for example src/*.py)")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerate_console_encoding()
     args = _build_parser().parse_args(argv)
 
     intended = list(args.intended)
     if args.intended_file:
         try:
-            intended += [
-                ln.strip()
-                for ln in args.intended_file.read_text(encoding="utf-8").splitlines()
-                if ln.strip() and not ln.lstrip().startswith("#")
-            ]
-        except OSError as exc:
+            intended += _read_intended_file(args.intended_file)
+        except (OSError, ValueError) as exc:
             return _fail(f"--intended-file: {exc}", as_json=args.json_)
 
     raw = args.regex if args.regex is not None else None
@@ -821,14 +997,19 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(f"bad --regex: {exc}", as_json=args.json_)
     shown = raw if raw is not None else args.name
 
-    missing = [str(p) for p in args.paths if not p.exists()]
-    if missing:
-        return _fail(f"no such file: {', '.join(missing)}", as_json=args.json_)
+    problem = _path_problem(args.paths)
+    if problem:
+        return _fail(problem, as_json=args.json_)
 
     try:
         scan = scan_paths(args.paths, pattern=pattern, intended=intended)
     except Unparseable as exc:
         return _fail(str(exc), as_json=args.json_)
+
+    if scan.skipped:
+        # A mandate checked against part of the files cannot come back clean.
+        return _fail(f"{len(scan.skipped)} file(s) could not be read; the scan is incomplete",
+                     as_json=args.json_, skipped=scan.skipped)
 
     warnings = list(scan.warnings)
     trap = indent_trap_warning(raw) if raw is not None else None

@@ -22,12 +22,18 @@ wins and the flat one is named as suspect.
     # send one to another host, capped and resumable (rsync --bwlimit is KiB/s, so 8 Mbit = 976)
     uv run transfer.py push big.iso root@host:/dst/ --rate 8Mbit --ssh "ssh -i /key"
 
-check: exit 0 ADVANCING, 1 STALLED, 2 UNKNOWN.  fetch/push: exit 0 ok, 1 failed.
+    # a sampler runs with NO shell: wrap a pipeline in one explicitly
+    uv run transfer.py check --file big.iso --cmd "sh -c 'grep eth0 /proc/net/dev'"
+
+check: exit 0 ADVANCING, 1 STALLED, 2 UNKNOWN (or a usage error).
+fetch/push: exit 0 ok, 1 the transfer failed, 2 usage error (bad rate, no output name, curl or
+rsync missing). --pid reads /proc, so it is Linux-only; elsewhere its signals read unusable.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -36,6 +42,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
@@ -85,9 +92,10 @@ def decide(signals: list[Signal]) -> tuple[int, str]:
         return 0, msg
 
     if len(usable) < 2:
+        extra = f" | unreadable: {', '.join(unusable)}" if unusable else ""
         return 2, (f"UNKNOWN: only one usable signal ({usable[0].name}) and it is flat. "
                    "One instrument cannot prove a stall - add a second, independent one "
-                   "(process CPU, io counters, a remote-side count).")
+                   f"(process CPU, io counters, a remote-side count).{extra}")
 
     names = ", ".join(s.name for s in usable)
     extra = f" | unreadable: {', '.join(unusable)}" if unusable else ""
@@ -130,25 +138,82 @@ def read_pid_io_bytes(pid: int) -> int | None:
     return total
 
 
-def read_command_number(cmd: str) -> float | None:
-    """First number printed by a command - the generic/remote sampler.
+# A number standing on its own: not the 0 of `eth0`, not a piece of `v1.2.3`, not `42MB`.
+_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])")
 
-    Split with shlex and run WITHOUT a shell: the toolbox contract forbids shell=True, and
-    a sampler needs no local shell anyway. A remote sampler still works, because the remote
-    command travels as ONE quoted argument and the far side runs its own shell:
+# Tokens that only mean something to a shell. With no shell they reach the first program as
+# plain arguments, and it may still print a number - of the wrong thing.
+_SHELL_OPERATORS = frozenset({"|", "||", "|&", "&", "&&", ";", ";;", ">", ">>", "<", "<<",
+                              "2>", "2>>", "2>&1", "&>", "1>"})
+
+
+def _split_windows(cmd: str) -> list[str]:
+    """Split the way Windows itself does (CommandLineToArgvW); shlex eats the backslashes."""
+    import ctypes  # noqa: PLC0415 - Windows-only API, never loaded elsewhere
+    from ctypes import wintypes  # noqa: PLC0415 - same
+
+    shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    argc = ctypes.c_int(0)
+    # A leading dummy argv[0]: the first token follows different quoting rules.
+    argv = shell32.CommandLineToArgvW("x " + cmd, ctypes.byref(argc))
+    if not argv:
+        raise ValueError(f"cannot split command line {cmd!r}")
+    try:
+        return [argv[i] for i in range(1, argc.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(argv)  # type: ignore[attr-defined]
+
+
+def split_command(cmd: str) -> list[str]:
+    """argv for a --cmd string, split by this platform's rules. Raises ValueError if unsplittable.
+
+    POSIX shlex reads a backslash as an escape, so an unquoted `C:\\Tools\\x.exe` would come back
+    as `C:Toolsx.exe`; Windows has its own rules and no single quotes.
+    """
+    return _split_windows(cmd) if os.name == "nt" else shlex.split(cmd)
+
+
+def command_argument(cmd: str) -> str:
+    """argparse type for --cmd: refuse what cannot run as intended without a shell."""
+    try:
+        argv = split_command(cmd)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"cannot split {cmd!r}: {exc}") from exc
+    if not argv:
+        raise argparse.ArgumentTypeError("empty command")
+    bad = [t for t in argv if t in _SHELL_OPERATORS or (len(t) > 1 and t.endswith(";"))]
+    if bad:
+        raise argparse.ArgumentTypeError(
+            f"{cmd!r} uses shell syntax ({' '.join(bad)}) but runs with no shell; wrap it in one "
+            "explicitly, e.g. sh -c '...', or quote the pipeline into the remote ssh argument")
+    return cmd
+
+
+def read_command_number(cmd: str) -> float | None:
+    """First standalone number printed by a command that SUCCEEDED - the generic/remote sampler.
+
+    Run WITHOUT a shell: the toolbox contract forbids shell=True, and a sampler needs no local
+    shell anyway. A remote sampler still works, because the remote command travels as ONE
+    quoted argument and the far side runs its own shell:
         --cmd "ssh host 'powershell -File C:\\count.ps1'"
+    A non-zero exit is unreadable, never a reading: the number it printed may be an error
+    count, a line number or a partial output.
     """
     try:
-        argv = shlex.split(cmd)
+        argv = split_command(cmd)
     except ValueError:
         return None
     if not argv:
         return None
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    m = re.search(r"-?\d+(?:\.\d+)?", p.stdout or "")
+    if p.returncode != 0:
+        return None
+    m = _NUMBER.search(p.stdout or "")
     return float(m.group(0)) if m else None
 
 
@@ -170,9 +235,34 @@ def parse_rate(text: str) -> int:
     value, scale, unit = float(m.group(1)), m.group(2).lower(), m.group(3).lower()
     if unit == "bit":
         mult = {"": 1, "k": 1_000, "m": 1_000_000, "g": 1_000_000_000}[scale]
-        return int(value * mult / 8)
-    mult = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[scale]
-    return int(value * mult)
+        rate = int(value * mult / 8)
+    else:
+        mult = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[scale]
+        rate = int(value * mult)
+    if rate <= 0:
+        # 0 B/s is not a cap: curl gets no --limit-rate and rsync reads 0 as unlimited.
+        raise ValueError(f"rate {text!r} is under 1 byte/s, which would remove the cap")
+    return rate
+
+
+def rate_argument(text: str) -> int:
+    """argparse type for --rate: a bad rate is a usage error (exit 2), never a traceback."""
+    try:
+        return parse_rate(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def default_output_name(url: str) -> str:
+    """The last PATH segment of `url`; the query and fragment may hold slashes of their own.
+
+    Raises ValueError when the path names no file (a trailing slash, a bare host), because
+    curl would then be handed an empty or directory-like -o.
+    """
+    name = posixpath.basename(urlsplit(url).path)
+    if name in ("", ".", ".."):
+        raise ValueError(f"cannot derive a file name from {url!r}; pass -o NAME")
+    return name
 
 
 # ---- commands -----------------------------------------------------------------------
@@ -189,6 +279,9 @@ def cmd_check(args: argparse.Namespace) -> int:
             out.append((f"cmd{i}", read_command_number(c)))
         return out
 
+    if args.pid and not Path("/proc").is_dir():
+        print(f"check: --pid reads /proc, which only Linux has; pid{args.pid} will be unreadable",
+              file=sys.stderr)
     first = sample()
     time.sleep(args.interval)
     second = sample()
@@ -204,8 +297,11 @@ def build_fetch_args(url: str, out: str, rate_bps: int | None) -> list[str]:
     --no-progress-meter is not cosmetic: curl's meter emits \\r updates with no newline, and
     piping that into a consumer (PowerShell `| Out-Null` was the live case) makes it buffer
     one ever-growing line and peg a core.
+
+    --fail is what makes an HTTP error a failure: without it curl saves a 404 page as the
+    file and exits 0, so the "download" succeeds with the wrong bytes.
     """
-    argv = ["curl", "-L", "--no-progress-meter", "--retry", "5", "--retry-delay", "5",
+    argv = ["curl", "-L", "--fail", "--no-progress-meter", "--retry", "5", "--retry-delay", "5",
             "-C", "-", "-o", out, url]
     if rate_bps:
         argv[1:1] = ["--limit-rate", str(rate_bps)]
@@ -215,9 +311,13 @@ def build_fetch_args(url: str, out: str, rate_bps: int | None) -> list[str]:
 def cmd_fetch(args: argparse.Namespace) -> int:
     if shutil.which("curl") is None:
         print("fetch: curl not found on PATH", file=sys.stderr)
-        return 1
-    rate = parse_rate(args.rate) if args.rate else None
-    out = args.output or args.url.rsplit("/", 1)[-1]
+        return 2
+    rate = args.rate
+    try:
+        out = args.output or default_output_name(args.url)
+    except ValueError as exc:
+        print(f"fetch: {exc}", file=sys.stderr)
+        return 2
     argv = build_fetch_args(args.url, out, rate)
     if rate:
         print(f"# cap {rate} B/s ({rate * 8 / 1e6:.3g} Mbit/s) -> {out}", file=sys.stderr)
@@ -259,13 +359,14 @@ def build_push_args(src: str, dest: str, rate_bps: int | None,
 def cmd_push(args: argparse.Namespace) -> int:
     if shutil.which("rsync") is None:
         print("push: rsync not found on PATH", file=sys.stderr)
-        return 1
-    rate = parse_rate(args.rate) if args.rate else None
+        return 2
+    rate = args.rate
     argv = build_push_args(args.src, args.dest, rate, ssh=args.ssh)
     if rate:
         print(f"# cap {rate} B/s ({rate * 8 / 1e6:.3g} Mbit/s) -> {args.dest}", file=sys.stderr)
     p = subprocess.run(argv)
     return 0 if p.returncode == 0 else 1
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__,
@@ -274,28 +375,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("check", help="sample signals twice and judge motion")
     c.add_argument("--file", help="watch this file's size")
-    c.add_argument("--pid", type=int, help="watch this pid's CPU + io counters")
-    c.add_argument("--cmd", action="append",
-                   help="shell command printing a number (repeatable; use for remote hosts)")
+    c.add_argument("--pid", type=int, help="watch this pid's CPU + io counters (Linux: /proc)")
+    c.add_argument("--cmd", action="append", type=command_argument,
+                   help="command printing a number, run with no shell (repeatable; a failing "
+                        "command reads as unreadable; wrap a pipeline in sh -c '...'; use for "
+                        "remote hosts via ssh)")
     c.add_argument("--interval", type=float, default=10.0, help="seconds between samples [10]")
     c.set_defaults(func=cmd_check)
 
     f = sub.add_parser("fetch", help="download resumably with a real rate cap")
     f.add_argument("url")
-    f.add_argument("-o", "--output")
-    f.add_argument("--rate", help="e.g. 8Mbit (bits) or 1M (MiB/s, curl-style)")
+    f.add_argument("-o", "--output", help="output file [the URL path's last segment]")
+    f.add_argument("--rate", type=rate_argument,
+                   help="e.g. 8Mbit (bits) or 1M (MiB/s, curl-style)")
+    f.set_defaults(func=cmd_fetch)
 
     u = sub.add_parser("push", help="send a file to another host, resumably, with a rate cap")
     u.add_argument("src", help="local path to send")
     u.add_argument("dest", help="[user@]host:/path/ destination")
-    u.add_argument("--rate", help="e.g. 8Mbit (bits) or 1M (MiB/s); converted to rsync KiB/s")
+    u.add_argument("--rate", type=rate_argument,
+                   help="e.g. 8Mbit (bits) or 1M (MiB/s); converted to rsync KiB/s")
     u.add_argument("--ssh", help="ssh command, e.g. 'ssh -i /key -o BatchMode=yes'")
     u.set_defaults(func=cmd_push)
-    f.set_defaults(func=cmd_fetch)
     return p
 
 
+def _tolerate_console_encoding() -> None:
+    """A cp1252 console cannot encode every file name; escape it, never crash."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerate_console_encoding()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

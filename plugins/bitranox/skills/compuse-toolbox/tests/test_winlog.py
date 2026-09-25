@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -147,6 +148,159 @@ class TestCli:
         p = run("read", str(f), "--json")
         json.loads(p.stdout)          # stdout must be pure JSON
         assert "mixed" in p.stderr.lower()   # the advisory belongs on stderr
+
+
+class TestWideSegmentation:
+    """UTF-16 lines must be found by their aligned terminator, not by a NUL share or a bare 0x0A."""
+
+    def test_non_latin_utf16_line_is_wide_not_mixed(self, tmp_path):
+        """Cyrillic code units carry no NUL, so a per-line NUL share judged this line narrow."""
+        f = tmp_path / "ru.log"
+        f.write_bytes("11:50:39 Ошибка установки\n".encode("utf-16-le"))
+        p = run("read", str(f), "--grep", "Ошибка", "--json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        doc = json.loads(p.stdout)
+        assert doc["data"]["encoding"] == "utf-16-le (no BOM)"
+        assert doc["data"]["lines"] == ["11:50:39 Ошибка установки"]
+
+    def test_pure_non_latin_line_without_any_ascii(self):
+        raw = "Ошибка\nустановки\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == "Ошибка\nустановки\n"
+        assert winlog.describe_encoding(raw) == "utf-16-le (no BOM)"
+
+    def test_control_cyrillic_with_ascii_already_worked(self, tmp_path):
+        f = tmp_path / "rumix.log"
+        f.write_bytes("11:50:39 step one two three Ошибка\n".encode("utf-16-le"))
+        p = run("read", str(f), "--grep", "Ошибка")
+        assert p.returncode == 0, p.stderr
+
+    def test_a_character_with_a_0a_low_byte_does_not_cut_the_line(self, tmp_path):
+        """U+4E0A is the bytes 0A 4E in UTF-16LE: splitting on the bare byte lost the marker."""
+        f = tmp_path / "cn.log"
+        f.write_bytes("step \u4e0a DONE-OK\n".encode("utf-16-le"))
+        p = run("read", str(f), "--grep", "DONE-OK", "--json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert json.loads(p.stdout)["data"]["lines"] == ["step \u4e0a DONE-OK"]
+
+    def test_a_0a_low_byte_character_at_line_start(self):
+        raw = "\u4e0a DONE-OK\n\u4e0a\u4e0a\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == "\u4e0a DONE-OK\n\u4e0a\u4e0a\n"
+
+    def test_control_a_character_without_a_0a_byte(self, tmp_path):
+        f = tmp_path / "cn_ctl.log"
+        f.write_bytes("step \u4e0b DONE-OK\n".encode("utf-16-le"))
+        p = run("read", str(f), "--grep", "DONE-OK")
+        assert p.returncode == 0, p.stderr
+
+    @pytest.mark.parametrize("nl", ["\n", "\r\n"])
+    def test_narrow_after_wide_keeps_no_orphan_nul(self, tmp_path, nl):
+        """A Tee-Object write followed by an Add-Content append: the wide LF's NUL is not text."""
+        f = tmp_path / "wn.log"
+        f.write_bytes(f"first{nl}".encode("utf-16-le") + f"DONE-OK{nl}".encode("ascii"))
+        p = run("read", str(f), "--grep", "^DONE-OK", "--json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert json.loads(p.stdout)["data"]["lines"] == ["DONE-OK"]
+
+    def test_control_the_documented_order_narrow_then_wide(self, tmp_path):
+        f = tmp_path / "nw.log"
+        f.write_bytes(b"first\n" + "DONE-OK\n".encode("utf-16-le"))
+        p = run("read", str(f), "--grep", "^DONE-OK")
+        assert p.returncode == 0, p.stderr
+
+    @pytest.mark.parametrize("head", [b"ab\n", b"abc\n", b"ab\ncdef\n", b"a\nbb\nccc\n", b"\n"])
+    def test_narrow_lines_before_a_wide_segment_stay_narrow(self, head):
+        """Whatever the narrow line lengths, the transition must not be read as one wide line."""
+        raw = head + "x\n\u4e0a\nDONE-OK\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == head.decode() + "x\n\u4e0a\nDONE-OK\n"
+
+    @pytest.mark.parametrize("line", [b"abc\x00def\n", b"abc\x00de\n", b"ab\x00d\n"])
+    def test_a_stray_nul_does_not_flip_a_narrow_line(self, line):
+        raw = line + b"next line\nDONE-OK\n"
+        out = winlog.decode_windows_text(raw)
+        assert out.endswith("next line\nDONE-OK\n")
+        assert out.startswith(line.decode().split("\x00")[0])
+
+    def test_mostly_cjk_line_with_one_ascii_space_before_a_0a_character(self):
+        raw = "\u6f22\u6f22\u6f22\u6f22 \u4e0a DONE-OK\n".encode("utf-16-le")
+        assert winlog.decode_windows_text(raw) == "\u6f22\u6f22\u6f22\u6f22 \u4e0a DONE-OK\n"
+
+    def test_a_long_narrow_file_is_not_quadratic(self):
+        raw = b"line of narrow text\n" * 50_000 + "tail\n".encode("utf-16-le")
+        out = winlog.decode_windows_text(raw)
+        assert out.endswith("line of narrow text\ntail\n")
+
+
+class TestTailAndPattern:
+    def test_tail_zero_prints_nothing(self, tmp_path):
+        f = tmp_path / "t.log"
+        f.write_bytes(b"l1\nl2\nl3\n")
+        p = run("read", str(f), "--tail", "0")
+        assert p.returncode == 0, p.stderr
+        assert p.stdout == ""
+
+    def test_negative_tail_is_refused(self, tmp_path):
+        f = tmp_path / "t.log"
+        f.write_bytes(b"l1\nl2\nl3\n")
+        p = run("read", str(f), "--tail", "-1")
+        assert p.returncode == 2
+        assert p.stdout == ""
+
+    def test_control_tail_one(self, tmp_path):
+        f = tmp_path / "t.log"
+        f.write_bytes(b"l1\nl2\nl3\n")
+        assert run("read", str(f), "--tail", "1").stdout == "l3\n"
+
+    def test_invalid_grep_regex_exits_2_not_1(self, tmp_path):
+        f = tmp_path / "a.log"
+        f.write_bytes(b"x\n")
+        p = run("read", str(f), "--grep", "(")
+        assert p.returncode == 2
+        assert "Traceback" not in p.stderr
+        assert "--grep" in p.stderr
+
+    def test_invalid_grep_regex_json_envelope(self, tmp_path):
+        f = tmp_path / "a.log"
+        f.write_bytes(b"x\n")
+        p = run("read", str(f), "--grep", "(", "--json")
+        assert p.returncode == 2
+        doc = json.loads(p.stdout)
+        assert doc["ok"] is False
+        assert "--grep" in doc["error"]
+
+    def test_form_feed_does_not_split_a_log_line(self, tmp_path):
+        f = tmp_path / "ff.log"
+        f.write_bytes("a\fb DONE-OK\nc\u2028d\n".encode())
+        p = run("read", str(f), "--json")
+        assert json.loads(p.stdout)["data"]["lines"] == ["a\fb DONE-OK", "c\u2028d"]
+
+
+class TestDescribeLabels:
+    def test_empty(self):
+        assert winlog.describe_encoding(b"") == "empty"
+
+    def test_utf16_bom(self):
+        assert winlog.describe_encoding("x\n".encode("utf-16")) == "utf-16-le (BOM)"
+
+    def test_utf8_bom(self):
+        assert winlog.describe_encoding("x\n".encode("utf-8-sig")) == "utf-8 (BOM)"
+
+    def test_cp1252(self):
+        assert winlog.describe_encoding("AUTORITÄT\n".encode("cp1252")) == "cp1252/ansi"
+
+    def test_plain_utf8(self):
+        assert winlog.describe_encoding(b"hello\n") == "utf-8"
+
+
+class TestConsoleEncoding:
+    def test_cp1252_stdout_does_not_crash_on_a_replacement_char(self, tmp_path):
+        f = tmp_path / "c.log"
+        f.write_bytes(b"bad \x81 byte\n")
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        env.pop("PYTHONUTF8", None)
+        p = subprocess.run([sys.executable, str(SCRIPT), "read", str(f), "--grep", "bad"],
+                           capture_output=True, env=env, check=False)
+        assert p.returncode == 0, p.stderr
+        assert b"bad" in p.stdout
 
 
 class TestReadFile:

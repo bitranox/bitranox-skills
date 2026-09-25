@@ -17,8 +17,14 @@ a later reader learns the limit from the suite instead of from a bad rename.
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+import renamescope
 from renamescope import (
     Binding,
     Bucket,
@@ -372,3 +378,212 @@ class TestWhatItCannotSee:
             SiteKind.PARAMETER_DECL,
             SiteKind.LOAD,
         ]
+
+
+# ---- several files, one mandate ------------------------------------------------------------
+
+
+def _files(tmp_path, **sources: str) -> list[str]:
+    out = []
+    for name, source in sources.items():
+        p = tmp_path / f"{name}.py"
+        p.write_text(source, encoding="utf-8")
+        out.append(str(p))
+    return out
+
+
+HELPER = "def helper(mac):\n    return mac\n"
+
+
+class TestSeveralFiles:
+    def test_the_same_function_name_in_two_files_warns(self, tmp_path, capsys) -> None:
+        a, b = _files(tmp_path, a=HELPER, b=HELPER)
+        rc = main([a, b, "--name", "mac", "--intended", "helper"])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert "ambiguous" in err
+        assert "a.py::helper" in err and "b.py::helper" in err
+
+    def test_a_file_qualified_name_blesses_only_that_file(self, tmp_path, capsys) -> None:
+        a, b = _files(tmp_path, a=HELPER, b=HELPER)
+        assert main([a, b, "--name", "mac", "--intended", "a.py::helper", "--json"]) == 1
+        payload = json.loads(capsys.readouterr().out)
+        outside = {s["path"] for s in payload["data"]["sites"] if s["bucket"] == "outside"}
+        assert outside == {b}
+        assert payload["data"]["counts"] == {"intended": 2, "outside": 2, "module": 0}
+
+    def test_the_full_path_qualifies_too(self, tmp_path) -> None:
+        a, b = _files(tmp_path, a=HELPER, b=HELPER)
+        assert main([a, b, "--name", "mac", "--intended", f"{b}::helper",
+                     "--intended", f"{a}::helper"]) == 0
+
+    def test_a_file_qualifier_naming_no_scanned_file_warns(self, tmp_path, capsys) -> None:
+        (a,) = _files(tmp_path, a=HELPER)
+        assert main([a, "--name", "mac", "--intended", "zzz.py::helper"]) == 1
+        assert "zzz.py" in capsys.readouterr().err
+
+    def test_control_one_file_with_two_classes_still_warns(self, tmp_path, capsys) -> None:
+        (c,) = _files(tmp_path, c="class A:\n    def helper(self, mac):\n        return mac\n"
+                                  "class B:\n    def helper(self, mac):\n        return mac\n")
+        main([c, "--name", "mac", "--intended", "helper"])
+        assert "['A.helper', 'B.helper']" in capsys.readouterr().err
+
+    def test_a_directory_argument_is_refused_not_skipped(self, tmp_path, capsys) -> None:
+        (a,) = _files(tmp_path, a=HELPER)
+        adir = tmp_path / "adir"
+        adir.mkdir()
+        (adir / "x.py").write_text("def other(mac):\n    return mac\n", encoding="utf-8")
+        assert main([a, str(adir), "--name", "mac", "--intended", "helper"]) == 2
+        assert "directory" in capsys.readouterr().err
+
+    def test_a_directory_alone_says_why(self, tmp_path, capsys) -> None:
+        adir = tmp_path / "adir"
+        adir.mkdir()
+        assert main([str(adir), "--name", "mac"]) == 2
+        assert "directory" in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                        reason="chmod 000 does not deny access on Windows or to root")
+    def test_an_unreadable_file_makes_the_run_exit_2(self, tmp_path, capsys) -> None:
+        a, locked = _files(tmp_path, a=HELPER, locked="def other(mac):\n    return mac\n")
+        Path(locked).chmod(0)
+        try:
+            assert main([a, locked, "--name", "mac", "--intended", "helper", "--json"]) == 2
+            captured = capsys.readouterr()
+            payload = json.loads(captured.out)
+            assert payload["ok"] is False
+            assert any("locked.py" in s for s in payload["skipped"])
+            assert "locked.py" in captured.err
+        finally:
+            Path(locked).chmod(0o644)
+
+    def test_control_both_files_readable_reports_the_outside_hit(self, tmp_path) -> None:
+        a, x = _files(tmp_path, a=HELPER, x="def other(mac):\n    return mac\n")
+        assert main([a, x, "--name", "mac", "--intended", "helper"]) == 1
+
+
+# ---- regex positions ---------------------------------------------------------------------
+
+
+NESTED = "def outer():\n    y = 1\n\n    def target():\n        pass\n"
+
+
+class TestRegexPositions:
+    def test_a_leading_backslash_s_that_crosses_a_blank_line_lands_on_the_def(self) -> None:
+        pattern = re.compile(r"(?m)^(\s*)def target\(")
+        result = scan_source(NESTED, pattern=pattern, intended=["outer"])
+        assert [(s.line, s.enclosing, s.bucket) for s in result.sites] == [
+            (4, "outer.target", Bucket.OUTSIDE)]
+
+    def test_the_cli_is_no_longer_a_false_green(self, tmp_path, capsys) -> None:
+        (nl2,) = _files(tmp_path, nl2=NESTED)
+        assert main([nl2, "--regex", r"(?m)^(\s*)def target\(", "--intended", "outer"]) == 1
+        assert "crosses" in capsys.readouterr().err
+
+    def test_control_blank_free_file(self) -> None:
+        pattern = re.compile(r"(?m)^([ \t]*)def target\(")
+        result = scan_source(NESTED, pattern=pattern, intended=["outer"])
+        assert [s.bucket for s in result.sites] == [Bucket.OUTSIDE]
+
+    def test_an_indent_led_regex_still_gets_binding_and_kind(self) -> None:
+        source = "def f(mac):\n    x = 1\n\n    mac = 2\n"
+        result = scan_source(source, pattern=re.compile(r"(?m)^([ \t]*)mac = "), intended=["f"])
+        (site,) = result.sites
+        assert (site.line, site.col) == (4, 4)
+        assert site.binding is Binding.PARAMETER
+        assert site.site_kind is SiteKind.ASSIGN_TARGET
+
+    def test_control_the_bare_regex(self) -> None:
+        source = "def f(mac):\n    x = 1\n\n    mac = 2\n"
+        (site,) = scan_source(source, pattern=re.compile("mac = "), intended=["f"]).sites
+        assert (site.binding, site.site_kind) == (Binding.PARAMETER, SiteKind.ASSIGN_TARGET)
+
+    def test_the_docstring_recommends_the_newline_safe_form(self) -> None:
+        doc = renamescope.__doc__ or ""
+        assert r"(?m)^(\s*)" not in doc
+        assert r"(?m)^([ \t]*)" in doc
+        assert "uv run tools/" not in doc
+        assert "uv run scripts/renamescope.py" in doc
+
+
+class TestSourceShapes:
+    def test_a_form_feed_does_not_shift_the_line_text(self) -> None:
+        source = "x = 1\n\x0c\ndef mac():\n    a = 1\n"
+        (site,) = scan(source, "mac", "mac").sites
+        assert site.text == "def mac():"
+        assert site.site_kind is SiteKind.DEF_NAME
+        assert site.binding is Binding.DEFINED
+
+    def test_a_lambda_parameter_is_bound_as_a_parameter(self) -> None:
+        result = scan("def f(items):\n    return sorted(items, key=lambda mac: mac.x)\n", "mac", "f")
+        assert [(s.site_kind, s.binding) for s in result.sites] == [
+            (SiteKind.PARAMETER_DECL, Binding.PARAMETER), (SiteKind.LOAD, Binding.PARAMETER)]
+
+    def test_control_outside_the_lambda_the_name_stays_free(self) -> None:
+        result = scan("def f(items):\n    g = lambda mac: mac\n    return mac\n", "mac", "f")
+        assert [s.binding for s in result.sites] == [
+            Binding.PARAMETER, Binding.PARAMETER, Binding.FREE]
+
+    def test_fstring_literal_text_is_a_string_on_every_version(self) -> None:
+        result = scan('def f(x):\n    return f"mac is {x}"\n', "mac", "f")
+        assert [s.site_kind for s in result.sites] == [SiteKind.STRING]
+
+    def test_a_name_inside_an_fstring_field_is_still_a_load(self) -> None:
+        result = scan('def f(mac):\n    return f"is {mac}"\n', "mac", "f")
+        assert [s.site_kind for s in result.sites] == [SiteKind.PARAMETER_DECL, SiteKind.LOAD]
+
+    @pytest.mark.parametrize("pattern", ["(?mi)    if x:", "(?im)    if x:", "(?m)(?i)    if x:",
+                                         "(?m)    if x:"])
+    def test_combined_inline_flags_still_get_the_indent_warning(self, pattern) -> None:
+        assert indent_trap_warning(pattern) is not None
+
+    def test_a_non_utf8_source_with_a_coding_cookie_is_read(self, tmp_path) -> None:
+        p = tmp_path / "lat.py"
+        p.write_bytes(b"# -*- coding: latin-1 -*-\ndef f(mac):\n    return '\xe4' + mac\n")
+        assert main([str(p), "--name", "mac", "--intended", "f"]) == 0
+
+    def test_an_undecodable_source_exits_2(self, tmp_path, capsys) -> None:
+        p = tmp_path / "bad.py"
+        p.write_bytes(b"def f(mac):\n    return '\xe4' + mac\n")
+        assert main([str(p), "--name", "mac", "--intended", "f", "--json"]) == 2
+        assert json.loads(capsys.readouterr().out)["ok"] is False
+
+    def test_a_bom_source_is_read(self, tmp_path) -> None:
+        p = tmp_path / "bom.py"
+        p.write_bytes(b"\xef\xbb\xbfdef f(mac):\n    return mac\n")
+        assert main([str(p), "--name", "mac", "--intended", "f"]) == 0
+
+    def test_a_nul_byte_is_unparseable_not_a_crash(self) -> None:
+        with pytest.raises(Unparseable):
+            scan_source("def f(mac):\n    return mac\x00\n", pattern=name_pattern("mac"))
+
+    def test_cp1252_stdout_does_not_crash(self, tmp_path) -> None:
+        p = tmp_path / "arrow.py"
+        p.write_text("def f(mac):\n    return mac  # a \u2192 b\n", encoding="utf-8")
+        script = Path(__file__).resolve().parent.parent / "scripts" / "renamescope.py"
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+        r = subprocess.run([sys.executable, str(script), str(p), "--name", "mac", "--intended", "f"],
+                           capture_output=True, env=env, check=False)
+        assert r.returncode == 0, r.stderr
+
+
+class TestCoverageGaps:
+    def test_a_decorator_hit_binds_in_the_outer_scope(self) -> None:
+        """`@deco(LIMIT)` is evaluated before `run` exists, so its LIMIT is the module's."""
+        result = scan(TestDecoratorLines.DECORATED, "LIMIT", "run")
+        assert [s.binding for s in result.sites if s.line == 5] == [Binding.ASSIGNED]
+        assert [s.binding for s in result.sites if s.line == 7] == [Binding.PARAMETER]
+
+    def test_a_missing_intended_file_exits_2(self, tmp_path, capsys) -> None:
+        (a,) = _files(tmp_path, a=HELPER)
+        assert main([a, "--name", "mac", "--intended-file", str(tmp_path / "nope.txt")]) == 2
+        assert "--intended-file" in capsys.readouterr().err
+
+    def test_an_intended_file_with_a_bom_and_crlf(self, tmp_path) -> None:
+        (a,) = _files(tmp_path, a=HELPER)
+        listing = tmp_path / "m.txt"
+        listing.write_bytes(b"\xef\xbb\xbfhelper\r\n")
+        assert main([a, "--name", "mac", "--intended-file", str(listing)]) == 0
+
+    def test_nothing_matched_is_not_a_dead_exception_class(self) -> None:
+        assert not hasattr(renamescope, "NothingMatched")
