@@ -82,7 +82,7 @@ _MIN_KEY_MATERIAL = 64
 # A labelled value, in every shape a human, a config file or a tool writes one: `Password: x`,
 # `api key = x`, `DB_PASSWORD=x`, `export DB_PASSWORD='x'`, `docker run -e DB_PASSWORD=x`,
 # `{"password": "x"}`, `  POSTGRES_PASSWORD: x`, `"SecretAccessKey": "x"`. The regex only finds
-# CANDIDATES (a name holding a secret-ish keyword, a `:` or `=`, a value); `_names_a_secret` then
+# CANDIDATES (a name holding a secret-ish keyword, a `:` or `=`, a value); `_secret_words` then
 # decides from the name's words whether it really names a secret, which keeps `max_tokens: 800`,
 # `bypass=1` and the shell's `PWD=/home/x` out. A quoted value is taken whole, up to its closing
 # quote; an unquoted one runs to the next whitespace.
@@ -101,21 +101,39 @@ _NAMED_VALUE_RX = re.compile(
 _URL_USERINFO_RX = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)([^/\s@]+)(@)")
 _BEARER_RX = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})")
 
-# The LAST word of a name decides, as it does when a person reads one: `DB_PASSWORD`,
-# `smtpPassword`, `x-api-key` and `SecretAccessKey` name a secret, while `password_policy`,
-# `token_count`, `credential.helper` and `TREE_DENSITY_TOKENS` name something about one.
+# A name is secret when ANY of its words is a secret word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`,
+# `client_secret`), unless its LAST word names something ABOUT the secret rather than the secret
+# itself (`API_KEY_ID`, `PASSWORD_FILE`, `password_policy`, `token_count`, `credential.helper`).
 _SECRET_WORDS = frozenset({
     "pass", "passwd", "password", "passphrase", "pwd", "secret", "token", "credential",
     "credentials", "apikey", "accesskey", "privatekey", "secretkey",
 })
-# The same, run together into one word (PGPASSWORD, clientsecret). A bare "pass" suffix counts
-# only in an all-capitals environment name (DBPASS, SMTPPASS), where BYPASS is the one exception;
-# in ordinary words it would take bypass and compass along.
+# The same, run together into one word (PGPASSWORD, clientsecret, NPMTOKEN). A bare "pass" or
+# "pwd" suffix counts only in an all-capitals environment name (DBPASS, DBPWD), where BYPASS and
+# OLDPWD are the exceptions; in ordinary words it would take bypass and compass along.
 _SECRET_SUFFIXES = ("password", "passwd", "passphrase", "secret", "apikey", "accesskey",
-                    "privatekey", "secretkey")
-# `key` names a secret only after one of these (`api_key`, `access-key`, `Private key`).
+                    "privatekey", "secretkey", "token", "credential", "credentials")
+_UPPER_SUFFIXES = ("PASS", "PWD")
+_UPPER_NOT_SECRET = frozenset({"PASS", "PWD", "BYPASS", "OLDPWD"})
+# `key` is a secret word only after one of these (`api_key`, `access-key`, `Private key`).
 _KEY_QUALIFIERS = frozenset({"api", "access", "private", "secret"})
-# Names that end like a secret and are not one: the shell's working-directory variables hold a
+# "pass" before one of these is a mode, not a password (`PASS_THROUGH`).
+_PASS_MODES = frozenset({"through", "thru"})
+# Last words that make the name about a secret rather than the secret: an identifier or a
+# location, a setting, a measure. `key` is not here: `SECRET_KEY` is the secret.
+_NON_SECRET_TAILS = frozenset({
+    "id", "ids", "file", "files", "path", "dir", "url", "uri", "host", "port", "user",
+    "username", "name", "names", "policy", "count", "helper", "helpers", "type", "types", "env",
+    "len", "length", "expiry", "expires", "ttl", "timeout", "size", "mode", "cap", "limit",
+    "budget", "usage", "kind", "format", "prefix", "suffix", "pattern", "patterns", "regex",
+    "rx", "re", "hint", "label", "field", "fields", "header", "store", "source", "provider",
+    "manager", "check", "checks", "rule", "rules", "shape", "min", "max", "floor", "ceiling",
+    "rate", "version", "enabled", "required", "set", "exists", "index", "list", "map",
+})
+# A name of this many words is a slug or a sentence (a memory index line, a heading), not a
+# variable: only its last word can make it secret, as in any other prose.
+_SLUG_WORDS = 6
+# Names that carry a secret word and are not one: the shell's working-directory variables hold a
 # path, and NOPASSWD is a sudoers tag.
 _NOT_SECRET_NAMES = frozenset({"PWD", "OLDPWD", "NOPASSWD"})
 _CAMEL_RX = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
@@ -182,35 +200,47 @@ def _name_words(name):
     return [w for w in words if w]
 
 
-def _names_a_secret(name):
-    """True when the last word of `name` (or its last two, for `api key`) names a secret."""
-    if name.split(" ")[-1] in _NOT_SECRET_NAMES:
-        return False
+def _secret_words(name):
+    """The secret words `name` carries, in order; empty when it names no secret.
+
+    Empty too when its last word names something about a secret (`_NON_SECRET_TAILS`), and for a
+    slug-length name whose last word is not itself secret.
+    """
+    parts = [p for p in re.split(r"[ _.-]+", name) if p]
+    if not parts or parts[-1] in _NOT_SECRET_NAMES:
+        return []
     words = _name_words(name)
-    if not words:
-        return False
-    last = words[-1]
-    if last in _SECRET_WORDS or last.endswith(_SECRET_SUFFIXES):
-        return True
-    raw_last = re.split(r"[ _.-]+", name)[-1]
-    if raw_last.isupper() and raw_last.endswith("PASS") and raw_last != "BYPASS":
-        return True
-    return last == "key" and len(words) > 1 and words[-2] in _KEY_QUALIFIERS
+    if not words or words[-1] in _NON_SECRET_TAILS:
+        return []
+    found = []
+    for i, word in enumerate(words):
+        following = words[i + 1] if i + 1 < len(words) else ""
+        if word == "pass" and following in _PASS_MODES:
+            continue
+        if word in _SECRET_WORDS or word.endswith(_SECRET_SUFFIXES):
+            found.append(word)
+        elif word == "key" and i and words[i - 1] in _KEY_QUALIFIERS:
+            found.append("key")
+    found.extend(p.lower() for p in parts
+                 if p.isupper() and p.endswith(_UPPER_SUFFIXES) and p not in _UPPER_NOT_SECRET)
+    if len(words) >= _SLUG_WORDS and words[-1] not in found and not (
+            words[-1] == "key" and "key" in found):
+        return []
+    return found
 
 
 def _redact_named_value(m):
     """Replace the value of a secret-named assignment; None to leave the match alone.
 
-    A number after a name ending in "token" is a count (`max_token: 800`), which an LLM tool's
-    output is full of; a reference to a secret carries none.
+    A number after a name whose only secret word is "token" is a count (`max_token: 800`,
+    `access_token_expires_in: 3600`), which an LLM tool's output is full of; a reference to a
+    secret carries none.
     """
     value = m.group("val")
     if value.startswith(REDACTED) or _REFERENCE_VALUE_RX.match(value):
         return None
-    name = m.group("name")
-    if not _names_a_secret(name):
-        return None
-    if value.isdigit() and _name_words(name)[-1] == "token":
+    found = _secret_words(m.group("name"))
+    if not found or (value.isdigit() and all(w.endswith("token") for w in found)):
         return None
     return m.group("pre") + REDACTED + m.group("post")
 

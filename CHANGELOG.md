@@ -50,11 +50,14 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
     `?token=x`), bare `PASSWD=` and `PRIVATE_KEY=`, and dotted or dashed names
     (`spring.datasource.password`, `X-Api-Key`). A quoted value is redacted whole and keeps its
     quotes.
-- **Fewer false alarms from labelled values.** The last word of a name decides whether it names a
-  secret, so `password_policy`, `token_count`, `credential.helper`, `TREE_DENSITY_TOKENS`,
-  `bypass=1`, `NOPASSWD:`, the shell's `PWD`/`OLDPWD`, token counts (`max_tokens: 800`), `==`
-  comparisons and `::` paths are left alone, and so is a value that only points at a secret
-  (`$DB_PASSWORD`, `$(cat keyfile)`, `<token>`). A value no longer spills onto the next line.
+- **Fewer false alarms from labelled values.** A name is secret when any of its words is a secret
+  word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`, `NPMTOKEN`), unless its last word names something
+  about the secret (`API_KEY_ID`, `PASSWORD_FILE`, `password_policy`, `token_count`,
+  `credential.helper`). Plural and look-alike words (`TREE_DENSITY_TOKENS`, `bypass=1`,
+  `PASS_THROUGH`, `NOPASSWD:`), the shell's `PWD`/`OLDPWD`, token counts (`max_tokens: 800`),
+  `==` comparisons, `::` paths and memory-slug lines are left alone, and so is a value that only
+  points at a secret (`$DB_PASSWORD`, `$(cat keyfile)`, `<token>`). A value no longer spills onto
+  the next line.
 - **Detection and redaction agree.** A `Bearer` header now makes a memory note count as holding a
   credential, as it was already redacted on egress.
 - **No slowdown on long lines.** The environment-name rule backtracked quadratically on a long
