@@ -517,13 +517,25 @@ def test_main_exits_one_on_findings(tmp_path, capsys):
 
 
 def test_main_exits_two_not_one_when_a_check_crashes(tmp_path, capsys):
-    """One means "findings"; a crash must never be read as that. An undecodable SKILL.md is a
-    real input that raises a non-OSError inside the front-matter check."""
-    home, skill = _healthy_project(tmp_path)
-    (skill / "SKILL.md").write_bytes(b"---\nname: demo\ndescription: caf\xe9\n---\n")
+    """One means "findings"; a crash must never be read as that. A hook command that is not a
+    string passes `settings_problem`'s shape screen and is refused by `hook_registrations`, a
+    real input that raises a non-OSError inside the registration check."""
+    home, _ = _healthy_project(tmp_path)
+    (home / ".claude" / "settings.json").write_text(
+        '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 7}]}]}}', encoding="utf-8")
     code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
     assert code == 2
     assert "error" in capsys.readouterr().err
+
+
+def test_main_reports_an_undecodable_skill_md_as_a_finding(tmp_path, capsys):
+    """An undecodable SKILL.md is a finding about the file (exit 1) now that the front-matter
+    readers decode it the way the router does, not a crash of the audit."""
+    home, skill = _healthy_project(tmp_path)
+    (skill / "SKILL.md").write_bytes(b"---\nname: demo\ndescription: caf\xe9\n---\n")
+    code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
+    assert code == 1
+    assert "not valid UTF-8" in capsys.readouterr().out
 
 
 def test_main_targets_exit_codes(tmp_path, capsys):

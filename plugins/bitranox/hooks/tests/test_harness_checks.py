@@ -408,6 +408,64 @@ def test_hook_registrations_is_empty_for_a_settings_file_without_hooks(tmp_path)
     assert hc.hook_registrations(path) == []
 
 
+def test_hook_registrations_reads_through_a_bom(tmp_path):
+    """A settings file saved by a Windows editor with a BOM read as registering NOTHING, so every
+    registration in it went unchecked. Control: the plain-UTF-8 test above."""
+    path = _settings(tmp_path, "bash /x/y.sh", event="Stop")
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    assert hc.hook_registrations(path) == [("Stop", "Bash", "bash /x/y.sh")]
+
+
+def test_hook_registrations_is_empty_for_a_missing_settings_file(tmp_path):
+    """An absent settings file registers nothing - that is what the harness reads it as too."""
+    assert hc.hook_registrations(tmp_path / "absent.json") == []
+
+
+@pytest.mark.parametrize("raw", [
+    b"{not json",                                              # not JSON
+    b'{"hooks": {"Stop": []}, "x": "caf\xe9"}',                # not UTF-8
+    b"[]",                                                     # top level not an object
+    b'{"hooks": []}',                                          # hooks not keyed by event
+    b'{"hooks": {"Stop": {"matcher": ""}}}',                   # groups not a list
+    b'{"hooks": {"Stop": ["bash /x.sh"]}}',                    # group not an object
+    b'{"hooks": {"Stop": [{"hooks": {"command": "x"}}]}}',     # inner hooks not a list
+    b'{"hooks": {"Stop": [{"hooks": ["bash /x.sh"]}]}}',       # hook not an object
+    b'{"hooks": {"Stop": [{"hooks": [{"command": 7}]}]}}',     # command not a string
+], ids=["json", "utf8", "toplevel", "hooks", "groups", "group", "inner", "hook", "command"])
+def test_hook_registrations_refuses_a_file_it_cannot_read_for_hooks(tmp_path, raw):
+    """An unparsable file used to return [] - indistinguishable from a file with no hooks, so the
+    audit reported a harness whose every hook was dead as clean - and a wrong shape raised a bare
+    AttributeError. Both are now one named error the caller can tell from "none"."""
+    path = tmp_path / "settings.json"
+    path.write_bytes(raw)
+    with pytest.raises(hc.SettingsUnreadable) as info:
+        hc.hook_registrations(path)
+    assert str(path) in str(info.value)
+
+
+def test_hook_registrations_refuses_a_path_it_cannot_open(tmp_path):
+    """A directory where the file should be: an OSError other than "not there" is unreadable."""
+    with pytest.raises(hc.SettingsUnreadable):
+        hc.hook_registrations(tmp_path)
+
+
+def test_hook_registrations_reads_null_hooks_and_groups_as_none(tmp_path):
+    """Control for the shape refusals: null is how an emptied section is often left."""
+    path = tmp_path / "settings.json"
+    path.write_text('{"hooks": {"Stop": null, "PreToolUse": [{"hooks": null}]}}', encoding="utf-8")
+    assert hc.hook_registrations(path) == []
+
+
+def test_registration_problems_does_not_call_an_unreadable_file_clean(tmp_path):
+    """The caller that reports problems must not turn "could not read" into "zero problems"."""
+    path = tmp_path / "settings.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(hc.SettingsUnreadable):
+        hc.registration_problems(path, home=tmp_path)
+    with pytest.raises(hc.SettingsUnreadable):
+        hc.registered_paths([path], home=tmp_path)
+
+
 def test_the_pathish_test_accepts_every_windows_absolute_shape():
     r"""The audit was DEAD on Windows: the rule matched only a leading '/', so a registration
     naming C:\dir\hook.sh yielded no paths at all and registration_problems reported zero
@@ -1133,6 +1191,56 @@ def test_an_empty_description_is_reported_missing_not_as_the_next_key(tmp_path):
     skills = _skill_dir_with(tmp_path, "---\ndescription:\nname: demo\n---\n")
     problems = hc.frontmatter_problems(skills)
     assert any("has no `description:`" in p for p in problems), problems
+
+
+# --- front matter: a SKILL.md that is not UTF-8 -----------------------------------------------
+
+_LATIN1_SKILL = ("---\nname: demo\ndescription: %s caf\xe9\n---\n# body\n" % GOOD_DESC)
+
+
+def _latin1_skills(tmp_path):
+    skills = tmp_path / "skills"
+    (skills / "demo").mkdir(parents=True)
+    (skills / "demo" / "SKILL.md").write_bytes(_LATIN1_SKILL.encode("latin-1"))
+    return skills
+
+
+def test_a_non_utf8_skill_md_is_reported_not_raised(tmp_path):
+    """A cp1252/latin-1 save on Windows: the sweep raised UnicodeDecodeError and took the whole
+    gate down with it, instead of naming the one file."""
+    problems = hc.frontmatter_problems(_latin1_skills(tmp_path))
+    assert any("not valid UTF-8" in p and "0xe9" in p for p in problems), problems
+    assert all(p.startswith("demo: ") for p in problems), problems
+
+
+def test_the_same_skill_md_saved_as_utf8_passes(tmp_path):
+    """Control for the test above: identical text, UTF-8 bytes, nothing to report."""
+    skills = tmp_path / "skills"
+    (skills / "demo").mkdir(parents=True)
+    (skills / "demo" / "SKILL.md").write_bytes(_LATIN1_SKILL.encode("utf-8"))
+    assert hc.frontmatter_problems(skills) == []
+
+
+def test_a_non_utf8_skill_md_still_gets_the_structural_checks(tmp_path):
+    """The undecodable byte is not a reason to skip the other checks: an unterminated block in
+    the same file is still named, read through the same replacing decoder the router uses."""
+    skills = tmp_path / "skills"
+    (skills / "demo").mkdir(parents=True)
+    (skills / "demo" / "SKILL.md").write_bytes(
+        b"---\nname: demo\ndescription: Use when caf\xe9 x.---\n# body\n")
+    problems = hc.frontmatter_problems(skills)
+    assert any("not valid UTF-8" in p for p in problems), problems
+    assert any("never closes" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("check", [hc.frontmatter_unterminated, hc.frontmatter_second_block,
+                                   hc.frontmatter_scalar_colon, hc.frontmatter_yaml_error])
+def test_no_front_matter_reader_raises_on_undecodable_bytes(tmp_path, check):
+    """Each reader is public and the commit gate may call it alone, so each must survive the
+    bytes on its own rather than rely on `frontmatter_file_problems` screening first."""
+    md = tmp_path / "SKILL.md"
+    md.write_bytes(_LATIN1_SKILL.encode("latin-1"))
+    check(md)                                   # must not raise
 
 
 # --- old git echoes an unknown rev-parse flag back with exit 0 --------------------------------

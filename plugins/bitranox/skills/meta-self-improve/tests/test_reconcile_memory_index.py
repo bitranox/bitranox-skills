@@ -651,6 +651,37 @@ def test_check_tree_reports_a_directory_it_could_not_read(tmp_path, capsys):
     assert "unreadable directory" in out and "locked" in out
 
 
+def test_check_tree_reports_a_level_file_that_is_not_utf8(tmp_path, capsys):
+    """A cp1252 save of one level's CLAUDE.local.md crashed --check-tree with a bare
+    UnicodeDecodeError; it is one finding naming the file, and the other levels are still checked."""
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    ME.add_or_update_entry(b, "Only B", "h", body="B", scope_default="b")
+    local_b = Path(b) / "CLAUDE.local.md"
+    local_b.write_bytes(local_b.read_bytes() + b"caf\xe9\n")
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "tree integrity: 1 curated level(s)" in out
+    assert "UTF-8" in out and str(local_b) in out
+    # B's body is pointed at from the level that could not be read, so it is NOT dangling -
+    # reporting it would send --rehome to re-attach a fact that still has its pointer
+    assert "dangling body" not in out
+
+
+def test_check_tree_is_clean_when_the_same_level_file_is_utf8(tmp_path, capsys):
+    """Control for the test above: the same byte written as UTF-8 is an ordinary level."""
+    anchor, a, b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    ME.add_or_update_entry(b, "Only B", "h", body="B", scope_default="b")
+    local_b = Path(b) / "CLAUDE.local.md"
+    local_b.write_bytes(local_b.read_bytes() + "caf\u00e9\n".encode("utf-8"))
+    rc = R.main(["--check-tree", anchor])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "tree integrity: 2 curated level(s)" in out
+
+
 def test_parse_frontmatter_keeps_a_value_carrying_a_line_separator():
     meta, _body = R.parse_frontmatter("---\nname: x\ndescription: a b\n---\nbody\n")
     assert meta["description"] == "a b"

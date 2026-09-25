@@ -1459,7 +1459,54 @@ def _other_levels_pointing_in(anchor, slug):
     return False
 
 
-def curated_levels_under(anchor):
+class TreeWalkError(RuntimeError):
+    """The level walk could not read part of the tree: a directory it cannot list, or a
+    `CLAUDE.local.md` it cannot read or decode. Raised, never skipped - a partial level list is an
+    undercount every caller would read as the whole tree (check-tree says clean, relocate sees no
+    inbound refs to protect)."""
+
+    def __init__(self, path, reason):
+        super().__init__("%s: %s" % (path, reason))
+        self.path, self.reason = str(path), reason
+
+
+def _raise_walk_error(err):
+    """os.walk's onerror: a directory it cannot list stops the walk with a named TreeWalkError."""
+    raise TreeWalkError(getattr(err, "filename", None) or "?",
+                        "cannot list this directory, so the levels under it are unknown: %s"
+                        % err) from err
+
+
+def _walk_error_sink(unreadable):
+    """os.walk's onerror for `curated_levels_under`: raise when no `unreadable` list was given, so
+    a caller cannot get a partial answer by forgetting to ask for one; append the directory's path
+    to the list when one was."""
+    if unreadable is None:
+        return _raise_walk_error
+    return lambda err: unreadable.append(str(getattr(err, "filename", None) or err))
+
+
+def _carries_pointer_block(path):
+    """True when the `CLAUDE.local.md` at `path` holds a managed pointer block.
+
+    False when it has vanished or is a dangling link - absent is a fact about the tree. Any other
+    read failure, and bytes that are not UTF-8, raise TreeWalkError: whether such a file holds a
+    block cannot be known, so it is neither counted nor dropped."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise TreeWalkError(path, "unreadable: %s" % exc) from exc
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise TreeWalkError(path, "not UTF-8 (byte 0x%02x at offset %d) - re-save it as UTF-8"
+                            % (data[exc.start], exc.start)) from exc
+    return us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text
+
+
+def curated_levels_under(anchor, unreadable=None):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` carrying a managed pointer block),
     pruning vendored/build/cache dirs and the dream's own backup root - a bounded os.walk of the
     whole subtree, SIBLINGS included.
@@ -1470,20 +1517,27 @@ def curated_levels_under(anchor):
     `CLAUDE.md`, and `~` is an excluded anchor so the walk stops there), putting the backup root
     INSIDE that tree - every backed-up pointer block then reads as a live level (measured: 6028
     spurious problems from `--check-tree ~/.claude`). Prune by RESOLVED PATH, never by dirname, so a
-    project that happens to own a `self-improve-audit/` dir is still walked."""
+    project that happens to own a `self-improve-audit/` dir is still walked.
+
+    Raises TreeWalkError when a directory cannot be listed (the anchor itself included) or a
+    `CLAUDE.local.md` cannot be read or is not UTF-8: a list with a subtree silently missing is
+    the answer every caller would trust, so the walk refuses instead of undercounting. A caller
+    that REPORTS rather than acts (check-tree) passes a list as `unreadable` instead: it receives
+    the path of each directory or level file that could not be read, and the walk goes on."""
     audit_root = sig._audit_dir().resolve()
     out = []
-    for root, dirs, files in os.walk(str(anchor)):
+    for root, dirs, files in os.walk(str(anchor), onerror=_walk_error_sink(unreadable)):
         dirs[:] = [d for d in dirs if d not in sig.VENDOR_DIRNAMES
                    and Path(root, d).resolve() != audit_root]
         if "CLAUDE.local.md" not in files:
             continue
         try:
-            text = sig.claude_local_md_path(root).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text:
-            out.append(root)
+            if _carries_pointer_block(sig.claude_local_md_path(root)):
+                out.append(root)
+        except TreeWalkError as exc:
+            if unreadable is None:
+                raise
+            unreadable.append(exc.path)
     return out
 
 

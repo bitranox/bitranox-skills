@@ -410,20 +410,68 @@ def _expand(token, home):
     return token
 
 
-def hook_registrations(settings_path):
-    """(event, matcher, command) for every hook a settings file registers, empty if it has none."""
+class SettingsUnreadable(ValueError):
+    """A settings file that exists but cannot be read for its hooks: unopenable, not UTF-8, not
+    JSON, or not the shape Claude Code reads hooks from.
+
+    Its own error rather than an empty result, because an empty result is also the honest answer
+    for a file with no hooks - and a caller that cannot tell the two apart reports a harness whose
+    every hook is dead as clean."""
+
+    def __init__(self, path, reason):
+        super().__init__("%s: %s" % (path, reason))
+        self.path, self.reason = str(path), reason
+
+
+def _load_settings(settings_path):
+    """The parsed settings object, None when the file does not exist, SettingsUnreadable else.
+
+    Decoded as `utf-8-sig`: a BOM is what a Windows editor leaves, and reading it strictly made
+    the file look like it registered nothing."""
     try:
-        data = json.loads(Path(settings_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = Path(settings_path).read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SettingsUnreadable(settings_path, "unreadable: %s" % exc) from exc
+    try:
+        return json.loads(raw.decode("utf-8-sig"))
+    except UnicodeDecodeError as exc:
+        raise SettingsUnreadable(settings_path, "not UTF-8: %s" % exc) from exc
+    except ValueError as exc:
+        raise SettingsUnreadable(settings_path, "not valid JSON: %s" % exc) from exc
+
+
+def _as(value, kind, path, what):
+    """`value` when it is a `kind` (None reads as empty), SettingsUnreadable naming `what` else."""
+    if value is None:
+        return kind()
+    if not isinstance(value, kind):
+        raise SettingsUnreadable(path, "%s is %s, not a %s" % (what, type(value).__name__,
+                                                               kind.__name__))
+    return value
+
+
+def hook_registrations(settings_path):
+    """(event, matcher, command) for every hook a settings file registers.
+
+    Empty when the file has no hooks or does not exist; raises SettingsUnreadable when it exists
+    but cannot be read for them, so "none" and "could not look" never share an answer."""
+    data = _load_settings(settings_path)
+    if data is None:
         return []
+    data = _as(data, dict, settings_path, "the top level")
     out = []
-    for event, groups in (data.get("hooks") or {}).items():
-        for group in groups or []:
+    for event, groups in _as(data.get("hooks"), dict, settings_path, '"hooks"').items():
+        for group in _as(groups, list, settings_path, '"hooks.%s"' % event):
+            group = _as(group, dict, settings_path, 'a "hooks.%s" group' % event)
             matcher = group.get("matcher", "")
-            for hook in group.get("hooks") or []:
+            for hook in _as(group.get("hooks"), list, settings_path, '"hooks.%s[].hooks"' % event):
+                hook = _as(hook, dict, settings_path, 'a "hooks.%s" hook' % event)
                 command = hook.get("command")
                 if command:
-                    out.append((event, matcher, command))
+                    out.append((event, matcher,
+                                _as(command, str, settings_path, 'a "hooks.%s" command' % event)))
     return out
 
 
@@ -745,6 +793,31 @@ def shipped_descriptions(skills_dir):
 
 # --- front matter parity ----------------------------------------------------------------------
 
+def _skill_lines(path):
+    """The lines of a SKILL.md as every front-matter reader here sees them, or None if unreadable.
+
+    Decoded by `skill_frontmatter.read_text` - BOM dropped, undecodable bytes REPLACED - so these
+    structural checks read exactly the text the router and the catalog read. Each reader used to
+    decode strictly on its own, and a single cp1252 byte raised UnicodeDecodeError out of the
+    whole sweep; `frontmatter_undecodable` is where such a byte is reported instead."""
+    text = skill_frontmatter.read_text(path)
+    return None if text is None else text.lstrip("\ufeff").splitlines()
+
+
+def frontmatter_undecodable(path):
+    """Where a SKILL.md stops being UTF-8 (`byte 0xe9 at offset 141`), or None when it is UTF-8
+    or cannot be read at all (a missing file is the callers' problem, reported elsewhere)."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    try:
+        data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        return "byte 0x%02x at offset %d" % (data[exc.start], exc.start)
+    return None
+
+
 def frontmatter_unterminated(path):
     """True when a SKILL.md opens a front-matter block that never closes on a line of its own.
 
@@ -753,9 +826,8 @@ def frontmatter_unterminated(path):
     so they all recover the right value and no other check here notices - the file reads as
     perfectly fine until a loader that wants the delimiter on its own line refuses it.
     """
-    try:
-        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
-    except OSError:
+    lines = _skill_lines(path)
+    if lines is None:
         return False
     if not lines or lines[0].strip() != "---":
         return False  # no front matter at all is a different problem, reported by the callers
@@ -822,10 +894,7 @@ def frontmatter_second_block(path):
     passes all of them. A bare `---` in the body is an ordinary horizontal rule though, so a
     delimiter alone proves nothing - what makes a later region a second FRONT MATTER is that it
     carries front-matter keys."""
-    try:
-        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
-    except OSError:
-        return None
+    lines = _skill_lines(path)
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -847,10 +916,7 @@ def frontmatter_scalar_colon(path):
     above is a regex that recovers the value regardless, which is why three shipped skills
     carried one. Quoted and block scalars are exempt - the colon is inside the quoting - and
     the CSO rules reject those styles separately."""
-    try:
-        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
-    except OSError:
-        return None
+    lines = _skill_lines(path)
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -901,10 +967,7 @@ def frontmatter_yaml_error(path):
     load = _load_yaml()
     if load is None:
         return None
-    try:
-        lines = Path(path).read_text(encoding="utf-8").lstrip("\ufeff").splitlines()
-    except OSError:
-        return None
+    lines = _skill_lines(path)
     if not lines or lines[0].strip() != "---":
         return None
     closes = [i for i in _bare_delimiters(lines) if i > 0]
@@ -926,6 +989,11 @@ def frontmatter_file_problems(md, label, expect_name=None):
     files a change touches. Two callers, one implementation: a second copy would drift, and the
     half that drifted would be the one nobody runs."""
     problems = []
+    undecodable = frontmatter_undecodable(md)
+    if undecodable is not None:
+        problems.append("%s: SKILL.md is not valid UTF-8 (%s) - every reader here replaces the "
+                        "bad bytes, so the name and description that ship are not the ones in "
+                        "the file; re-save it as UTF-8." % (label, undecodable))
     if frontmatter_unterminated(md):
         problems.append("%s: SKILL.md front matter never closes - the `---` is glued to the "
                         "end of a value instead of standing on its own line." % label)

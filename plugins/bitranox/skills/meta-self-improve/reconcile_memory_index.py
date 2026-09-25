@@ -366,11 +366,12 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
 
 # ---- CLI ---------------------------------------------------------------------------------------
 
-def _all_curated_levels(anchor):
+def _all_curated_levels(anchor, unreadable=None):
     """Every curated level dir under `anchor` (a `CLAUDE.local.md` with a managed pointer block).
     Delegates to the engine's `curated_levels_under` (the single tree-walk) so this tool and the
-    engine's `lint --tree` never enumerate the tree differently."""
-    return ME.curated_levels_under(anchor)
+    engine's `lint --tree` never enumerate the tree differently. It raises on anything it cannot
+    read unless `unreadable` is a list, which then receives each such path instead."""
+    return ME.curated_levels_under(anchor, unreadable=unreadable)
 
 
 def find_dangling_bodies(anchor):
@@ -505,7 +506,8 @@ def check_tree(anchor):
     report dict; `duplicates`/`orphan_pointers`/`orphan_refs` are the HARD problems."""
     anchor = ME._anchor(str(anchor))
     anchor_res = Path(anchor).resolve()
-    levels = [lvl for lvl in _all_curated_levels(anchor)
+    unreadable = []                             # a report names what it could not check
+    levels = [lvl for lvl in _all_curated_levels(anchor, unreadable=unreadable)
               if Path(ME._anchor(lvl)).resolve() == anchor_res]
     slug_levels = {}                            # canonical slug -> [level dirs pointing at it]
     orphan_pointers = []                        # (level, slug) whose central body is missing
@@ -542,11 +544,14 @@ def check_tree(anchor):
         return False
     sideways_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources
                                if r in all_targets and not _reachable(r, lvl)))
-    unreadable = []
     decoys = find_decoy_anchors(anchor, unreadable=unreadable)
+    # A body pointed at only from a level that could not be read would list as dangling, and
+    # --rehome would then re-attach a fact that still has a pointer - so with anything unreadable
+    # the danglers are not assessed; the unreadable finding already fails the run.
+    danglers = [] if unreadable else find_dangling_bodies(anchor)
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
-            "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor),
+            "sideways_refs": sideways_refs, "danglers": danglers,
             "decoy_anchors": decoys, "unreadable_dirs": sorted(set(unreadable)),
             "frame_only_bodies": find_frame_only_bodies(anchor)}
 
@@ -737,7 +742,11 @@ def main(argv=None):
                   "and the reader gets an empty file): %s" % slug)
             problems += 1
         for path in rep["unreadable_dirs"]:
-            print("    ! unreadable directory (not checked - fix its permissions): %s" % path)
+            if Path(path).name == "CLAUDE.local.md":
+                print("    ! unreadable level file (not checked - fix its permissions, or re-save "
+                      "it as UTF-8): %s" % path)
+            else:
+                print("    ! unreadable directory (not checked - fix its permissions): %s" % path)
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)

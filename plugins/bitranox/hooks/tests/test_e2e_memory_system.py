@@ -51,6 +51,7 @@ def _mem(proj, name, text):
 
 def _recall(prompt, cwd, sid):
     rc, out = _hook("recall-memory.py", {"prompt": prompt, "cwd": cwd, "session_id": sid})
+    assert rc == 0, "recall-memory.py crashed; its silence is not a no-hit answer"
     if not out:
         return []
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
@@ -91,7 +92,8 @@ def test_memory_system_end_to_end(sandbox):
     _, out = _hook("session-start.py", {"cwd": proj_a, "session_id": "x", "source": "startup"})
     ctx = json.loads(out).get("hookSpecificOutput", {}).get("additionalContext", "") if out else ""
     assert mark in ctx
-    _, out2 = _hook("session-start.py", {"cwd": proj_a, "session_id": "x2", "source": "startup"})
+    rc, out2 = _hook("session-start.py", {"cwd": proj_a, "session_id": "x2", "source": "startup"})
+    assert rc == 0                              # a crash also prints no nudge
     ctx2 = json.loads(out2).get("hookSpecificOutput", {}).get("additionalContext", "") if out2 else ""
     assert mark not in ctx2
 
@@ -108,7 +110,7 @@ def test_memory_system_end_to_end(sandbox):
 
     # S5 - filler classification flow (per-prompt queue -> dream classifier), all PER-PROJECT
     pend = sig.load_pending_keywords(proj_a)
-    assert "zorblax" in pend or "frobnicator" in pend
+    assert {"zorblax", "frobnicator"} <= pend
     sig.add_filler_words(["wibble"], proj_a); sig.add_topical_words(["zorblax"], proj_a)
     sig.clear_pending_keywords(proj_a)
     assert sig.load_pending_keywords(proj_a) == frozenset()
@@ -128,7 +130,7 @@ def test_memory_system_end_to_end(sandbox):
     dream = SK / "meta-dream-tree" / "dream_state.py"
     _, out, _ = _cli(dream, "mode", proj_b)
     assert out == "propose"
-    _cli(dream, "done", proj_b)
+    assert _cli(dream, "done", proj_b)[0] == 0
     _, out, _ = _cli(dream, "due", proj_b)
     assert out == "not-due"
 
@@ -142,12 +144,13 @@ def test_memory_system_end_to_end(sandbox):
     slug = ME.slugify("Zorblax config")
     us.body_path(proj_b, slug).unlink()
     rc, out, err = _cli(recon, proj_b)
-    assert "orphan" in (out + err).lower() and slug in (out + err)
+    # "orphan" alone matches the always-printed "orphan pointers (...): 0" header
+    assert rc == 1 and "! orphan (pointer line, no central body): %s" % slug in out
     ME.add_or_update_entry(proj_b, "Zorblax config", "set the zorblax flag before deploy",
                            body="Configure the zorblax frobnicator.")    # restore the body
     ME.add_or_update_entry(proj_b, "Bad ref", "see [[does-not-exist-anywhere]]", body="x")
     rc, out, err = _cli(recon, "--check", proj_b)                 # orphan [[ref]] is flagged
-    assert rc != 0 or "does-not-exist-anywhere" in (out + err)
+    assert rc == 1 and "! orphan ref: [[does-not-exist-anywhere]] in bad-ref" in out
 
     # S9 - self-improve-gate (Stop-hook learning detection)
     tr = sandbox / "transcript.jsonl"
@@ -160,8 +163,8 @@ def test_memory_system_end_to_end(sandbox):
     clean.write_text(
         json.dumps({"type": "user", "message": {"content": "what time is it in tokyo"}}) + "\n"
         + json.dumps({"type": "assistant", "message": {"content": "Around noon."}}) + "\n", encoding="utf-8")
-    _, out = _hook("self-improve-gate.py", {"transcript_path": str(clean), "cwd": proj_a})
-    assert out == ""
+    rc, out = _hook("self-improve-gate.py", {"transcript_path": str(clean), "cwd": proj_a})
+    assert rc == 0 and out == ""                # a crash is silent too
 
     # S9 - multi-tree end to end: two independent trees discovered, scaffolded, isolated
     work = sandbox / "work"
