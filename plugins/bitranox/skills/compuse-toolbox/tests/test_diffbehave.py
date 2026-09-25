@@ -1,4 +1,5 @@
 """Tests for diffbehave.py - do two implementations BEHAVE the same on the same inputs?"""
+import io
 import json
 import os
 import subprocess
@@ -172,6 +173,182 @@ def test_case_file_jsonl_row_carries_name_stdin_and_args(tmp_path):
     payload = json.loads(r.stdout)
     assert payload["data"]["results"][0]["name"] == "greet"
     assert payload["data"]["results"][0]["verdict"] == "AGREE"
+
+
+# --- whitespace: only TRAILING whitespace is formatting --------------------------------------
+
+def test_leading_whitespace_is_a_behaviour_difference():
+    assert D.verdict(_res(0, "  x"), _res(0, "x")) == "DIFFER"
+
+
+def test_a_leading_blank_line_is_a_behaviour_difference():
+    assert D.verdict(_res(0, "\nx"), _res(0, "x")) == "DIFFER"
+
+
+def test_a_form_feed_is_not_read_as_a_line_break():
+    """splitlines() treated \\f as a newline, so 'a<FF>b' and 'a<LF>b' compared equal."""
+    assert D.verdict(_res(0, "a\x0cb"), _res(0, "a\nb")) == "DIFFER"
+
+
+def test_trailing_blank_lines_and_crlf_are_still_formatting():
+    assert D.verdict(_res(0, "a\r\nb\r\n\n"), _res(0, "a\nb")) == "AGREE"
+
+
+# --- a case neither side could run is an ERROR, never AGREE -----------------------------------
+
+def test_both_sides_failing_to_launch_is_an_error_not_agreement():
+    """A typo copied into both commands used to read as 'behave the same'."""
+    results = D.compare("definitely-not-a-real-command-xyz", "definitely-not-a-real-command-xyz",
+                        [D.Case(name="c", stdin="")])
+    assert results[0].verdict == "ERROR"
+    assert results[0].a.returncode == 127 and results[0].a.launched is False
+
+
+def test_both_sides_timing_out_is_an_error_not_agreement():
+    sleeper = _py("import time;time.sleep(5)")
+    results = D.compare(sleeper, sleeper, [D.Case(name="c", stdin="")], timeout=0.5)
+    assert results[0].verdict == "ERROR"
+    assert results[0].a.returncode == 124 and results[0].b.returncode == 124
+
+
+def test_one_side_timing_out_is_a_difference():
+    sleeper = _py("import time;time.sleep(5)")
+    results = D.compare(sleeper, _py("pass"), [D.Case(name="c", stdin="")], timeout=0.5)
+    assert results[0].verdict == "DIFFER"
+    assert "timeout" in results[0].a.stderr
+
+
+def test_cli_both_sides_unlaunchable_exits_2_and_says_why():
+    r = _run(["--a", "pyhton3-typo old.py", "--b", "pyhton3-typo new.py", "--case", "x"])
+    assert r.returncode == 2
+    assert "ERROR" in r.stdout
+    assert "could not run" in r.stderr
+
+
+def test_cli_json_reports_the_error_count():
+    r = _run(["--a", "pyhton3-typo", "--b", "pyhton3-typo", "--case", "x", "--json"])
+    assert r.returncode == 2
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert payload["data"]["summary"]["error"] == 1
+    assert payload["data"]["summary"]["erroring"] == ["case1"]
+
+
+# --- human output ---------------------------------------------------------------------------
+
+def test_cli_human_output_shows_what_each_side_did_on_a_difference():
+    hello = _py("import sys;sys.stdout.write('hello')")
+    goodbye = _py("import sys;sys.stdout.write('goodbye')")
+    r = _run(["--a", hello, "--b", goodbye, "--case", "x"])
+    assert r.returncode == 0
+    assert "DIFFER  case1" in r.stdout
+    assert "a: rc=0 out='hello'" in r.stdout
+    assert "b: rc=0 out='goodbye'" in r.stdout
+    assert "0/1 agree, 1 differ" in r.stdout
+
+
+def test_cli_output_the_console_cannot_encode_is_printed_not_a_crash():
+    arrow = _py("import sys;sys.stdout.buffer.write('\\u2192'.encode('utf-8'))")
+    plain = _py("import sys;sys.stdout.write('x')")
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, str(TOOL), "--a", arrow, "--b", plain, "--case", "x"],
+                       capture_output=True, env=env, check=False)
+    assert r.returncode == 0, r.stderr
+    assert b"DIFFER" in r.stdout
+
+
+class _FailingStdout(io.StringIO):
+    """A stdout whose device fails, the way a redirect to a full disk does."""
+
+    def write(self, s):
+        raise OSError(28, "No space left on device")
+
+
+def test_an_unexpected_error_exits_2_not_the_expectation_code(monkeypatch, capsys):
+    hello = _py("import sys;sys.stdout.write('hello')")
+    monkeypatch.setattr(sys, "stdout", _FailingStdout())
+    assert D.main(["--a", hello, "--b", hello, "--case", "x"]) == 2
+    assert "No space left" in capsys.readouterr().err
+
+
+# --- command strings and case rows are validated, not crashed on ---------------------------
+
+@pytest.mark.parametrize("command", ["", "   "] + ([] if os.name == "nt" else ["python3 -c 'print(1)"]))
+def test_cli_an_unusable_command_string_is_a_usage_error(command):
+    r = _run(["--a", command, "--b", _py("pass"), "--case", "x"])
+    assert r.returncode == 2
+    assert "Traceback" not in r.stderr
+    assert "--a" in r.stderr
+
+
+def _case_file(tmp_path, *rows):
+    f = tmp_path / "cases.jsonl"
+    f.write_text("".join(r + "\n" for r in rows), encoding="utf-8")
+    return str(f)
+
+
+@pytest.mark.parametrize("row", [
+    '{"args": "hi there"}',
+    '{"args": [1]}',
+    '{"stdin": 5}',
+    '{"stdin": "", "args": {"a": 1}}',
+])
+def test_cli_a_malformed_case_row_is_a_usage_error(tmp_path, row):
+    echo = _py("import sys;sys.stdout.write(repr(sys.argv[1:]))")
+    r = _run(["--a", echo, "--b", echo, "--case-file", _case_file(tmp_path, row)])
+    assert r.returncode == 2
+    assert "Traceback" not in r.stderr
+    assert "line1" in r.stderr
+
+
+def test_cli_a_null_stdin_is_empty_input_not_the_parent_stdin(tmp_path):
+    """A null stdin used to inherit the parent's stdin: the first side drained it, fake DIFFER."""
+    cat = _py("import sys;sys.stdout.write(sys.stdin.read())")
+    r = subprocess.run(
+        [sys.executable, str(TOOL), "--a", cat, "--b", cat, "--json",
+         "--case-file", _case_file(tmp_path, '{"stdin": null}')],
+        input="PARENTSTDIN", capture_output=True, text=True, encoding="utf-8", check=False)
+    payload = json.loads(r.stdout)
+    result = payload["data"]["results"][0]
+    assert result["verdict"] == "AGREE"
+    assert result["a"]["stdout"] == ""
+
+
+def test_cli_raw_lines_and_argless_objects_are_fed_as_stdin(tmp_path):
+    cat = _py("import sys;sys.stdout.write(sys.stdin.read())")
+    r = _run(["--a", cat, "--b", cat, "--json",
+              "--case-file", _case_file(tmp_path, "raw text line", '{"x":1}')])
+    assert r.returncode == 0, r.stderr
+    results = json.loads(r.stdout)["data"]["results"]
+    assert [(x["name"], x["a"]["stdout"]) for x in results] == [
+        ("line1", "raw text line"), ("line2", '{"x":1}')]
+
+
+def test_cli_a_utf16_case_file_is_decoded(tmp_path):
+    """PowerShell 5.1's > writes UTF-16LE with a BOM."""
+    cat = _py("import sys;sys.stdout.write(sys.stdin.read())")
+    f = tmp_path / "cases.jsonl"
+    f.write_bytes('{"name": "w", "stdin": "abc"}\n'.encode("utf-16"))
+    r = _run(["--a", cat, "--b", cat, "--case-file", str(f), "--json"])
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["data"]["results"][0]["a"]["stdout"] == "abc"
+
+
+def test_cli_a_utf8_bom_case_file_keeps_its_first_row(tmp_path):
+    cat = _py("import sys;sys.stdout.write(sys.stdin.read())")
+    f = tmp_path / "cases.jsonl"
+    f.write_bytes(b'\xef\xbb\xbf{"name": "first", "stdin": "abc"}\n')
+    r = _run(["--a", cat, "--b", cat, "--case-file", str(f), "--json"])
+    assert json.loads(r.stdout)["data"]["results"][0]["name"] == "first"
+
+
+def test_cli_a_case_file_that_is_not_text_is_a_typed_error(tmp_path):
+    f = tmp_path / "cases.jsonl"
+    f.write_bytes(b"\xc3\x28 not utf-8\n")
+    r = _run(["--a", "true", "--b", "true", "--case-file", str(f)])
+    assert r.returncode == 2
+    assert "Traceback" not in r.stderr
+    assert "cannot read --case-file" in r.stderr
 
 
 # --------------------------------------------------------------------------

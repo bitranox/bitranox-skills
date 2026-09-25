@@ -12,13 +12,20 @@ it was built to stop.
 
 from __future__ import annotations
 
+import io
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
 from confound import (
     Arm,
     Verdict,
+    _classify_outcome,
+    _parse_tolerance,
     compare_arms,
     main,
     pairs_inconclusive,
@@ -869,3 +876,211 @@ class TestInconclusiveHasItsOwnExitCode:
             ]
         )
         assert rc == 0
+
+
+class TestInputsThatUsedToLaunderAConfound:
+    """Each of these produced a confident verdict from a table that could not support it."""
+
+    def test_an_omitted_label_is_refused_rather_than_eating_the_first_dimension(self) -> None:
+        """'model=opus text=a' with no label made model=opus the LABEL, so the model difference
+        vanished from the table and a confounded pair came back CLEAN."""
+        with pytest.raises(ValueError, match="label"):
+            parse_arm("model=opus text=a outcome=1")
+
+    def test_an_omitted_label_exits_2_on_the_command_line(self) -> None:
+        rc = main(
+            [
+                "--claim",
+                "text",
+                "--arm",
+                "model=opus text=a outcome=1",
+                "--arm",
+                "model=fable text=b outcome=2",
+            ]
+        )
+        assert rc == 2
+
+    def test_the_same_arms_with_labels_are_confounded(self) -> None:
+        """The control: with labels, the table shows both moving dimensions."""
+        rc = main(
+            [
+                "--claim",
+                "text",
+                "--arm",
+                "x model=opus text=a outcome=1",
+                "--arm",
+                "y model=fable text=b outcome=2",
+            ]
+        )
+        assert rc == 1
+
+    def test_a_repeated_key_in_one_arm_is_refused(self) -> None:
+        """A second model= silently replaced the first and erased the confounder."""
+        with pytest.raises(ValueError, match="model"):
+            parse_arm("a model=opus text=a model=fable outcome=1")
+
+    def test_an_outcome_on_one_arm_only_is_refused(self) -> None:
+        """A forgotten outcome= read as MOVED ('5 -> None') and supported the claim."""
+        arms = [
+            Arm("a", {"model": "opus"}, outcome="5"),
+            Arm("b", {"model": "fable"}),
+        ]
+        with pytest.raises(ValueError, match="outcome"):
+            compare_arms(arms)
+
+    def test_an_outcome_on_one_arm_only_exits_2_with_or_without_a_band(self) -> None:
+        arms = ["--arm", "a model=opus outcome=5", "--arm", "b model=fable", "--claim", "model"]
+        assert main(arms) == 2
+        assert main([*arms, "--outcome-tolerance", "1"]) == 2
+
+    def test_outcomes_on_every_arm_or_on_none_are_both_accepted(self) -> None:
+        both = main(
+            ["--arm", "a model=opus outcome=5", "--arm", "b model=fable outcome=5",
+             "--claim", "model"]
+        )
+        neither = main(["--arm", "a model=opus", "--arm", "b model=fable", "--claim", "model"])
+        assert (both, neither) == (1, 0)
+
+    def test_the_classifier_itself_refuses_a_one_sided_outcome(self) -> None:
+        """Called directly, it refuses too, rather than guessing MOVED."""
+        with pytest.raises(ValueError, match="outcome"):
+            _classify_outcome(Arm("a", {"m": "1"}, "5"), Arm("b", {"m": "2"}), None)
+        with pytest.raises(ValueError, match="outcome"):
+            _classify_outcome(
+                Arm("a", {"m": "1"}, "5"), Arm("b", {"m": "2"}), _parse_tolerance("o", "1")
+            )
+
+    def test_the_classifier_itself_refuses_a_band_over_a_word(self) -> None:
+        """compare_arms refuses this first; the classifier must not fall back to string equality."""
+        with pytest.raises(ValueError, match="number"):
+            _classify_outcome(
+                Arm("a", {"m": "1"}, "passed"),
+                Arm("b", {"m": "2"}, "5"),
+                _parse_tolerance("o", "1"),
+            )
+
+
+class TestAnOutcomeBandRespectsUnits:
+    def test_different_units_are_refused_under_a_band(self) -> None:
+        """42ms and 42s read as the same number, so the band called a 1000x change NO EFFECT."""
+        arms = [
+            Arm("a", {"model": "opus"}, outcome="42ms"),
+            Arm("b", {"model": "fable"}, outcome="42s"),
+        ]
+        with pytest.raises(ValueError, match="unit"):
+            compare_arms(arms, outcome_tolerance="1")
+
+    def test_different_units_exit_2_on_the_command_line(self) -> None:
+        rc = main(
+            [
+                "--claim",
+                "model",
+                "--outcome-tolerance",
+                "1",
+                "--arm",
+                "a model=opus outcome=42ms",
+                "--arm",
+                "b model=fable outcome=42s",
+            ]
+        )
+        assert rc == 2
+
+    def test_the_same_unit_on_every_arm_is_still_banded(self) -> None:
+        arms = [
+            Arm("a", {"model": "opus"}, outcome="42ms"),
+            Arm("b", {"model": "fable"}, outcome="42.5 ms"),
+        ]
+        report = compare_arms(arms, outcome_tolerance="1")
+        assert pairs_inconclusive(report, "model")
+
+    def test_without_a_band_the_raw_strings_still_decide(self) -> None:
+        arms = [
+            Arm("a", {"model": "opus"}, outcome="42ms"),
+            Arm("b", {"model": "fable"}, outcome="42s"),
+        ]
+        assert pairs_supporting(compare_arms(arms), "model")
+
+
+class TestNonFiniteTolerances:
+    @pytest.mark.parametrize("amount", ["nan", "inf", "-inf", "nan%", "inf%"])
+    def test_a_non_finite_dimension_tolerance_is_refused(self, amount: str) -> None:
+        arms = [Arm("a", {"t": "1"}, outcome="1"), Arm("b", {"t": "1.0001"}, outcome="1")]
+        with pytest.raises(ValueError, match="finite"):
+            compare_arms(arms, tolerances={"t": amount})
+
+    def test_a_non_finite_outcome_tolerance_exits_2(self) -> None:
+        rc = main(
+            [
+                "--outcome-tolerance",
+                "nan",
+                "--arm",
+                "a t=1 outcome=5",
+                "--arm",
+                "b t=2 outcome=5.001",
+            ]
+        )
+        assert rc == 2
+
+
+class TestWhatReachesTheReader:
+    def test_a_pair_that_moved_with_nothing_recorded_warns_on_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc = main(
+            [
+                "--claim",
+                "model",
+                "--arm",
+                "a model=opus outcome=1",
+                "--arm",
+                "b model=fable outcome=2",
+                "--arm",
+                "c model=fable outcome=3",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert (
+            "warning: 1 pair(s) moved with no recorded dimension differing (b vs c)"
+            in captured.err
+        )
+        assert "the arm table is missing something" in captured.err
+        assert "warning" not in captured.out
+
+    def test_an_outcome_the_console_cannot_encode_is_printed_not_a_crash(
+        self, tmp_path: Path
+    ) -> None:
+        tool = Path(__file__).resolve().parents[1] / "scripts" / "confound.py"
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(tool),
+                "--claim",
+                "model",
+                "--arm",
+                "a model=opus outcome=\u22485",
+                "--arm",
+                "b model=fable outcome=\u22486",
+            ],
+            capture_output=True,
+            env=env,
+            cwd=tmp_path,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert b"CLAIM SUPPORTED" in proc.stdout
+
+    def test_an_unexpected_error_exits_2_not_the_refuted_code(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class FailingStdout(io.StringIO):
+            """A stdout whose device fails, the way a redirect to a full disk does."""
+
+            def write(self, s: str) -> int:
+                raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(sys, "stdout", FailingStdout())
+        rc = main(["--arm", "a model=opus outcome=1", "--arm", "b model=fable outcome=2"])
+        assert rc == 2
+        assert "No space left" in capsys.readouterr().err

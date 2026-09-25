@@ -56,7 +56,9 @@ Run: uv run scripts/confound.py --claim model --tolerance rendered_tokens=1 \
 Exit 0 = the claim is supported (or, with no --claim, no pair is confounded);
      1 = REFUTED - a confounded or unexplained pair exists, or the claimed dimension is isolated
          and the outcome did not move, or no pair isolates it at all;
-     2 = usage error;
+     2 = usage error (including an outcome recorded on some arms but not all, a label missing,
+         a key given twice in one arm, or outcomes in different units under an outcome band),
+         or the tool itself failed;
      3 = INCONCLUSIVE - the claim is isolated but the outcome moved less than the declared band.
          Only reachable with --claim, because without one there is no claim to be unsure about.
 """
@@ -65,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -162,6 +165,10 @@ def _parse_tolerance(name: str, spec: str) -> _Tolerance:
         amount = float(text[:-1] if fractional else text)
     except ValueError:
         raise ValueError(f"tolerance for {name!r} is not a number: {spec!r}") from None
+    if not math.isfinite(amount):
+        # float() accepts nan and inf. A nan band forgives nothing while the report echoes it as
+        # applied, and an infinite one forgives everything - neither is a judgement anyone made.
+        raise ValueError(f"tolerance for {name!r} is not a finite number: {spec!r}")
     if amount < 0:
         raise ValueError(f"tolerance for {name!r} is negative: {spec!r}")
     return _Tolerance(amount / 100 if fractional else amount, fractional)
@@ -189,6 +196,16 @@ def _as_measurement(value: str) -> float | None:
         # caller must say which number is the reading.
         return None
     return float(match.group(1))
+
+
+def _measurement_unit(value: str) -> str:
+    """The unit written after an outcome's number ("42ms" -> "ms", "19 min" -> "min", "5" -> "").
+
+    `_as_measurement` keeps only the number, so without this a band compared 42ms with 42s as
+    equal and reported a thousandfold change as NO EFFECT.
+    """
+    match = _LEADING_NUMBER.match(str(value))
+    return str(value)[match.end() :].strip() if match else ""
 
 
 def _as_number(value: str) -> float | None:
@@ -270,13 +287,22 @@ def _classify_outcome(a: Arm, b: Arm, tolerance: _Tolerance | None) -> OutcomeCh
     """
     if a.outcome is None and b.outcome is None:
         return OutcomeChange.UNRECORDED
+    if a.outcome is None or b.outcome is None:
+        # "5 -> None" is not a movement, it is a missing reading, and reading it as MOVED let a
+        # forgotten outcome= turn "no effect" into "supported". compare_arms refuses it for the
+        # whole table first; this keeps the classifier from ever guessing on its own.
+        raise ValueError(
+            f"outcome recorded on only one of {a.label!r} and {b.label!r}; record it on every "
+            f"arm, or on none to skip effect-checking"
+        )
     if tolerance is None:
         return OutcomeChange.SAME if a.outcome == b.outcome else OutcomeChange.MOVED
-    left, right = _as_measurement(a.outcome or ""), _as_measurement(b.outcome or "")
-    if (
-        left is None or right is None
-    ):  # pragma: no cover - _resolve_outcome_tolerance refuses these
-        return OutcomeChange.SAME if a.outcome == b.outcome else OutcomeChange.MOVED
+    left, right = _as_measurement(a.outcome), _as_measurement(b.outcome)
+    if left is None or right is None:
+        raise ValueError(
+            f"outcome tolerance needs a number on both {a.label!r} and {b.label!r}: "
+            f"{a.outcome!r}, {b.outcome!r}"
+        )
     if left == right:
         return OutcomeChange.SAME
     return (
@@ -357,7 +383,26 @@ def _resolve_outcome_tolerance(
             f"A word ('passed') has no band, and a second number ('0.5 to 1.2') is a range - "
             f"say which number is the reading"
         )
+    units = {
+        arm.label: _measurement_unit(arm.outcome) for arm in arms if arm.outcome is not None
+    }
+    if len(set(units.values())) > 1:
+        shown = ", ".join(f"{label}={unit!r}" for label, unit in sorted(units.items()))
+        raise ValueError(
+            f"outcome tolerance compares numbers, but the arms carry different units: {shown}. "
+            f"Write every outcome in one unit"
+        )
     return parsed
+
+
+def _require_outcome_everywhere_or_nowhere(arms: Sequence[Arm]) -> None:
+    missing = [arm.label for arm in arms if arm.outcome is None]
+    if missing and len(missing) != len(arms):
+        recorded = [arm.label for arm in arms if arm.outcome is not None]
+        raise ValueError(
+            f"outcome recorded on {recorded} but not on {missing}; record it on every arm, "
+            f"or on none to skip effect-checking"
+        )
 
 
 def compare_arms(
@@ -372,6 +417,7 @@ def compare_arms(
     labels = [arm.label for arm in arms]
     if len(set(labels)) != len(labels):
         raise ValueError(f"duplicate arm label in {labels}")
+    _require_outcome_everywhere_or_nowhere(arms)
     declared = dict(tolerances or {})
     resolved = _resolve_tolerances(arms, declared)
     outcome_band = _resolve_outcome_tolerance(arms, outcome_tolerance)
@@ -402,11 +448,20 @@ def parse_arm(spec: str) -> Arm:
 
     `outcome=` swallows the remainder of the spec, so a measured result may carry spaces
     (`outcome=read 0 of 23556`) without needing to be quoted twice.
+
+    A label holding "=" and a key given twice are both refused: each silently dropped one
+    recorded value from the table, and a dropped value is exactly how a confounded pair came
+    back CLEAN.
     """
     tokens = spec.split()
     if not tokens:
         raise ValueError("empty arm spec")
     label, rest = tokens[0], tokens[1:]
+    if "=" in label:
+        raise ValueError(
+            f"arm spec {spec!r} starts with {label!r}, which looks like key=value, not a label; "
+            f"start every --arm with a label ('x {spec}')"
+        )
     outcome: str | None = None
     for index, token in enumerate(rest):
         if token.startswith(_OUTCOME_KEY):
@@ -418,6 +473,10 @@ def parse_arm(spec: str) -> Arm:
         if "=" not in token:
             raise ValueError(f"arm {label!r}: expected key=value, got {token!r}")
         key, _, value = token.partition("=")
+        if key in dimensions:
+            raise ValueError(
+                f"arm {label!r} records {key!r} twice ({dimensions[key]!r} and {value!r})"
+            )
         dimensions[key] = value
     if not dimensions:
         raise ValueError(
@@ -504,7 +563,31 @@ def _fail(message: str, as_json: bool) -> int:
     return 2
 
 
+def _harden_stdout() -> None:
+    """Escape what the console cannot encode rather than crash mid-report.
+
+    Under a cp1252 console or pipe (Windows, launched by plain `python` or `uv run`) an outcome
+    holding U+2248 raised UnicodeEncodeError and exited 1, REFUTED's code. Called only when run as
+    a script, so an importer's stdout is never reconfigured.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):  # a stream that cannot be reconfigured keeps its setting
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI. An unexpected failure exits 2, never 1 (REFUTED) or 0 (supported)."""
+    try:
+        return _main(argv)
+    except Exception as error:  # noqa: BLE001 - a crash must not read as a verdict
+        print(f"confound: error: {type(error).__name__}: {error}", file=sys.stderr)
+        return 2
+
+
+def _main(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -616,4 +699,5 @@ def _has_finding(report: Report) -> bool:
 
 
 if __name__ == "__main__":
+    _harden_stdout()
     raise SystemExit(main())
