@@ -122,6 +122,13 @@ def main(raw: str | None = None) -> int:
             return 0
         newest = max(live, key=lambda e: float(e.get("at") or 0))
         reason = verdict(live, int(newest.get("blocks") or 1))
+        if reason and spent:
+            # A push can be dropped here too, just not ALL of them (that path already returned
+            # above with its own message): say so, or the session never learns that this one's
+            # CI went unchecked forever - it just stops hearing about it.
+            shas = ", ".join(str(e.get("sha") or "")[:12] for e in spent)
+            reason += ("\n\n(CI for %s was never checked and the watch gate has released it after "
+                       "%d reminders. It will not ask again.)" % (shas, state.MAX_BLOCKS))
     except Exception:  # noqa: BLE001 - a gate that crashes must not wedge a turn
         return 0
     if not reason:

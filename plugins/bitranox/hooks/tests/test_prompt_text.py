@@ -99,6 +99,20 @@ def test_a_path_with_a_line_number_keeps_only_its_file_type_whatever_its_depth()
     assert P.prose("see plugins/bitranox/hooks/x.py:40") == "see py"
 
 
+def test_prose_reduces_a_path_with_a_colon_line_range_to_its_file_type():
+    # `dir/file.py:84-85` is a grep -n or diff-hunk RANGE, not a single line - the plain `:\d+`
+    # suffix pattern left the "-85" glued to "py", so the extension never matched a real keyword.
+    for token in ("claude/code.py:84-85", "plugins/bitranox/hooks/x.py:84-85"):
+        assert P.prose("look at %s now" % token).lower() == "look at py now", token
+
+
+def test_prose_reduces_a_path_with_a_github_line_anchor_to_its_file_type():
+    # `file.py#L12` / `file.py#L12-L20` is how a GitHub URL names a line or a range.
+    for token in ("claude/code.py#L12", "claude/code.py#L12-L20",
+                  "plugins/bitranox/hooks/x.py#L12-L20"):
+        assert P.prose("look at %s now" % token).lower() == "look at py now", token
+
+
 def test_prose_keeps_the_words_between_a_comparison_and_a_later_greater_than():
     # A `<` followed by a space or a digit opens no tag; the old rule deleted everything up to
     # the next `>`, which here was the whole subject of the sentence.

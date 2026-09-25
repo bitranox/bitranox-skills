@@ -36,9 +36,10 @@ _TAG = re.compile(r"</[A-Za-z][^<>]{0,400}>|(?<!\w)<[A-Za-z!?][^<>]{0,400}>")
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _FILENAME_TAIL = re.compile(r"/[^/]*\.[A-Za-z0-9]{1,8}$")
-# The `:12` or `:12:5` a traceback, linter or `grep -n` appends to a file name. It is not part of
-# the name, and left on it hid the file from the one-separator test and stuck to the file type.
-_LINE_SUFFIX = re.compile(r"(?::\d+)+$")
+# The `:12`, `:12:5` or `:84-85` a traceback, linter or `grep -n` appends to a file name, or the
+# `#L12` / `#L12-L20` a GitHub URL uses for the same thing. None of it is part of the name, and
+# left on it hid the file from the one-separator test and stuck to the file type.
+_LINE_SUFFIX = re.compile(r"(?:(?::\d+(?:-\d+)?)+|#L\d+(?:-L\d+)?)$")
 
 # Opaque identifiers: a uuid, a long hex run (a sha or an id fragment), a Claude tool-use id. The
 # bar is 16 hex characters because the SHORT hex codes are real trigger keywords - `0xc1900200`

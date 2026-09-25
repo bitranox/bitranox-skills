@@ -101,6 +101,31 @@ def _seed_taken(levels):
     return taken
 
 
+def _tree_wide_levels(levels):
+    """`levels` extended with every OTHER pointer file belonging to the same tree(s), read from
+    each tree's own resolved anchor rather than from `--root`.
+
+    A slug registry keyed only on files under `--root` misses an already-migrated pointer that
+    sits at (or above) the anchor when `--root` names a narrower subtree: `--root` never walks
+    UPWARD, so that pointer's slug reads as free and a legacy fact below it can be handed the same
+    slug. Slugs are unique per TREE (its anchor), never per `--root`, so seeding must be too. Used
+    only to build the taken-slug registry; the levels actually planned and migrated stay exactly
+    those `--root` reached.
+    """
+    seen = {lv["local"] for lv in levels}
+    out = list(levels)
+    for anchor in {lv["anchor"] for lv in levels}:
+        for local in find_pointer_files(str(anchor)):
+            if local in seen:
+                continue
+            seen.add(local)
+            try:
+                out.append(_read_level(local))
+            except (OSError, UnicodeDecodeError):
+                pass
+    return out
+
+
 def _slug_busy(anchor, slug, old_body, taken):
     """True when `slug` in `anchor`'s tree belongs to something other than the fact at `old_body`."""
     owner = taken.get((str(anchor), slug))
@@ -119,20 +144,34 @@ def _free_slug(anchor, slug, old_body, taken):
     return "%s-%d" % (slug, n), True
 
 
-def plan_level(level, taken):
+def plan_level(level, taken, seen_bodies=None):
     """Plan one parsed level's migration (from `_read_level`), filling `level["actions"]` with
     [{slug, final_slug, uuid, old_body, new_body, collided, missing, pointer}]. `taken` is the
-    per-tree registry from `_seed_taken`, extended with every slug planned here."""
+    per-tree registry from `_seed_taken`, extended with every slug planned here.
+
+    `seen_bodies` maps a legacy body already planned in THIS run (per anchor, keyed by its old
+    sharded path) to the slug it is migrating to. Two legacy pointers can share one uuid - hence
+    one body - under different `bx:slug=` tokens (hand damage, or a fact re-slugged at one level
+    but not another); planning them independently would hand the second a different final slug,
+    and applying it would try to move a source the first action already moved away. The second
+    re-points to the first's slug instead of being freshly allocated one.
+    """
     anchor = level["anchor"]
+    seen_bodies = {} if seen_bodies is None else seen_bodies
     for p in level["pointers"]:
         if not p.legacy:
             continue
         old_body = us.legacy_body_path(anchor, p.uuid)
-        final, collided = _free_slug(anchor, p.slug, old_body, taken)
-        taken[(str(anchor), final)] = str(old_body)
+        body_key = (str(anchor), str(old_body))
+        if body_key in seen_bodies:
+            final = seen_bodies[body_key]
+        else:
+            final, _collided = _free_slug(anchor, p.slug, old_body, taken)
+            taken[(str(anchor), final)] = str(old_body)
+            seen_bodies[body_key] = final
         level["actions"].append({"slug": p.slug, "final_slug": final, "uuid": p.uuid,
                                  "old_body": old_body, "new_body": us.body_path(anchor, final),
-                                 "collided": collided, "missing": not old_body.is_file(),
+                                 "collided": final != p.slug, "missing": not old_body.is_file(),
                                  "pointer": p})
     return level
 
@@ -193,11 +232,29 @@ def _apply(plans, report):
             us.write_if_changed(plan["local"], new_text)
 
 
+def _poisoned_anchors(unreadable):
+    """The resolved anchor (as `str`) of every unreadable pointer file's tree.
+
+    An unreadable `CLAUDE.local.md` might itself hold a MIGRATED pointer whose slug we simply
+    cannot read - so it cannot be kept out of `taken`, and handing that slug to a legacy fact in
+    the same tree would silently make the two pointers mean different facts. Anchor resolution is
+    purely path-based (`resolve_anchor` never reads the file's content), so it still works here.
+    """
+    out = set()
+    for path in unreadable:
+        parent = Path(path).parent
+        anchor = us.resolve_anchor(str(parent)) or parent
+        out.add(str(Path(os.path.abspath(anchor))))
+    return out
+
+
 def migrate(roots, apply=False):
     """Migrate every tree under `roots`. Returns a report dict; `backup_failed` is set (and nothing
-    was written) when --apply could not back up first."""
+    was written) when --apply could not back up first. `refused_trees` lists every tree --apply
+    skipped because one of its pointer files could not be read (nothing is written for it)."""
     report = {"files": 0, "legacy_lines": 0, "moved": 0, "collisions": 0, "missing": 0,
-              "backups": [], "items": [], "unreadable": [], "backup_failed": None}
+              "backups": [], "items": [], "unreadable": [], "backup_failed": None,
+              "refused_trees": []}
     levels = []
     for root in roots:
         for local in find_pointer_files(root, report["unreadable"]):
@@ -205,9 +262,10 @@ def migrate(roots, apply=False):
                 levels.append(_read_level(local))
             except (OSError, UnicodeDecodeError):
                 report["unreadable"].append(str(local))
-    taken = _seed_taken(levels)
+    taken = _seed_taken(_tree_wide_levels(levels))
+    seen_bodies = {}
     for level in levels:
-        plan_level(level, taken)
+        plan_level(level, taken, seen_bodies)
         report["files"] += 1
         for a in level["actions"]:
             report["legacy_lines"] += 1
@@ -217,12 +275,15 @@ def migrate(roots, apply=False):
                                     a["collided"], a["missing"]))
     if not apply:
         return report
+    poisoned = _poisoned_anchors(report["unreadable"])
+    report["refused_trees"] = sorted(poisoned)
+    apply_levels = [lv for lv in levels if str(lv["anchor"]) not in poisoned]
     try:
-        report["backups"] = _backup(levels, time.strftime("%Y%m%d-%H%M%S"))
+        report["backups"] = _backup(apply_levels, time.strftime("%Y%m%d-%H%M%S"))
     except OSError as exc:
         report["backup_failed"] = str(exc)
         return report
-    _apply(levels, report)
+    _apply(apply_levels, report)
     return report
 
 
@@ -247,6 +308,8 @@ def main(argv=None):
         print("    %s [%s]%s" % (slug, level, flag))
     for path in rep["unreadable"]:
         print("    UNREADABLE (not scanned): %s" % path)
+    for tree in rep["refused_trees"]:
+        print("    REFUSED (unreadable pointer file in this tree, nothing applied): %s" % tree)
     for b in rep["backups"]:
         print("    backup: %s" % b)
     return 0

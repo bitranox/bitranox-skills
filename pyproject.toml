@@ -7,7 +7,7 @@ name = "bitranox-skills"
 # Kept equal to plugins/bitranox/.claude-plugin/plugin.json by repo-gate.py
 # (check_version_sync). The plugin manifest is the source of truth; this is the copy
 # the build backend can read, and the gate is what stops the two drifting.
-version = "7.23.5"
+version = "7.23.6"
 description = "The bitranox Claude Code skill collection: 82 skills and 64 hooks, installable without the plugin marketplace."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,10 +41,12 @@ bitranox-skills = "bitranox_skills.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/bitranox_skills"]
 
-[tool.hatch.build.targets.wheel.force-include]
-# The whole plugin ships as package data: the skills ARE the product, and a wheel
-# carrying only the CLI would install a tool with nothing to install.
-"plugins/bitranox" = "bitranox_skills/plugin"
+[tool.hatch.build.targets.wheel.hooks.custom]
+# `hatch_build.py` force-includes plugins/bitranox itself, filtering out every gitignored,
+# machine-local path under it. A declarative `force-include` here would ship them regardless of
+# any `exclude` config (see that file's docstring for why `only-include` + `sources` cannot
+# replace this: it breaks editable installs).
+path = "hatch_build.py"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -53,4 +55,9 @@ include = [
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "hatch_build.py",
 ]
+# CLAUDE.local.md and .claude-memory/ are already gitignored, so the sdist's normal (non-forced)
+# walk already drops them; .remember/ is not gitignored here, so it needs the same explicit
+# exclude as the wheel target above.
+exclude = ["CLAUDE.local.md", ".claude-memory", ".claude-bx-selflearning", ".remember"]

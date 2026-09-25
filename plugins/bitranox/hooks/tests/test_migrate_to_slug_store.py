@@ -187,6 +187,47 @@ def test_a_dangling_body_at_the_slug_path_is_a_collision_too(tmp_path):
     assert us.body_path(anchor, "foo").read_text(encoding="utf-8") == "DANGLING BODY\n"
 
 
+def test_two_legacy_lines_sharing_one_uuid_repoint_instead_of_crashing(tmp_path):
+    """Two legacy lines can share one uuid with different `bx:slug=` tokens (hand damage, or a
+    fact re-slugged at one level but not another); both name the SAME body. Planning the second
+    independently would hand it a different final slug, and applying it would try to `shutil.move`
+    a source the first action already moved away - FileNotFoundError, mid-write. The second must
+    re-point to whatever the first is migrating to instead."""
+    anchor, proj = _tree(tmp_path)
+    u = us.fact_uuid(str(proj), "a")
+    bp = us.legacy_body_path(str(anchor), u)
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text("SHARED BODY\n", encoding="utf-8")
+    line_a = "- [A](uuid:%s) - hook a <!-- bx:slug=a -->" % u
+    line_b = "- [B](uuid:%s) - hook b <!-- bx:slug=b -->" % u
+    (proj / "CLAUDE.local.md").write_text(_legacy_block([line_a, line_b]), encoding="utf-8")
+    rep = MS.migrate([str(tmp_path)], apply=True)          # must not raise
+    assert rep["moved"] == 2 and rep["collisions"] == 1
+    text = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
+    assert "uuid:" not in text
+    assert text.count("(mem:a)") == 2 and "(mem:b)" not in text
+    assert us.body_path(anchor, "a").read_text(encoding="utf-8") == "SHARED BODY\n"
+    assert not us.body_path(anchor, "b").exists()
+    assert not bp.exists()                                  # the shared old body moved, not orphaned
+
+
+def test_seeding_reaches_the_trees_anchor_even_when_root_is_narrower_than_it(tmp_path):
+    """--root names only `proj`, a level BELOW the anchor: `find_pointer_files` never walks
+    upward, so a naive scan never sees the anchor's own (dangling) migrated `foo` pointer. The
+    registry must still know the anchor's tree owns `foo`, because slugs are unique per TREE, not
+    per --root."""
+    anchor, proj = _tree(tmp_path)
+    (anchor / "CLAUDE.local.md").write_text(
+        us.upsert_pointer_block("", "anchor scope", [us.Pointer(slug="foo", title="Foo", hook="h")]),
+        encoding="utf-8")                                    # no body written: dangling, like above
+    (proj / "CLAUDE.local.md").write_text(
+        _legacy_block([_legacy_line(anchor, proj, "foo", "PROJ LEGACY BODY")]), encoding="utf-8")
+    rep = MS.migrate([str(proj)], apply=True)
+    assert _only_pointer(proj).slug == "foo-2" and rep["collisions"] == 1
+    assert us.body_path(anchor, "foo").exists() is False     # the anchor's own pointer, untouched
+    assert us.body_path(anchor, "foo-2").read_text(encoding="utf-8") == "PROJ LEGACY BODY\n"
+
+
 def test_the_same_slug_in_two_independent_trees_is_not_a_collision(tmp_path):
     """Control for the registry: slugs are unique per TREE, so a migrated `foo` in one tree says
     nothing about a legacy `foo` in another under the same --root."""
@@ -217,6 +258,31 @@ def test_a_non_utf8_pointer_file_is_reported_and_the_rest_still_migrates(tmp_pat
     assert MS.main(["--root", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "UNREADABLE" in out and str(other / "CLAUDE.local.md") in out
+
+
+def test_apply_refuses_a_tree_that_holds_an_unreadable_pointer_file(tmp_path):
+    """An unreadable sibling's own pointer might already own a slug we cannot see: --apply must
+    not write anything for ITS tree, though an unrelated tree in the same run still migrates."""
+    anchor, proj = _tree(tmp_path, "tree1")
+    (proj / "CLAUDE.local.md").write_text(
+        _legacy_block([_legacy_line(anchor, proj, "proj-fact", "PROJ BODY")]), encoding="utf-8")
+    bad = anchor / "bad"
+    bad.mkdir()
+    (bad / "CLAUDE.local.md").write_bytes(b"caf\xe9 " + us.LEGACY_INDEX_BEGIN.encode("ascii"))
+    other_anchor, other_proj = _tree(tmp_path, "tree2")
+    (other_proj / "CLAUDE.local.md").write_text(
+        _legacy_block([_legacy_line(other_anchor, other_proj, "proj-fact", "OTHER BODY")]),
+        encoding="utf-8")
+    before = (proj / "CLAUDE.local.md").read_text(encoding="utf-8")
+    rep = MS.migrate([str(tmp_path)], apply=True)
+    # the poisoned tree: nothing moved, nothing rewritten, no backup for it
+    assert (proj / "CLAUDE.local.md").read_text(encoding="utf-8") == before
+    assert not us.body_path(anchor, "proj-fact").exists()
+    assert str(anchor) in rep["refused_trees"]
+    assert not any(str(anchor) in b for b in rep["backups"])
+    # the unrelated tree: migrates normally
+    assert us.body_path(other_anchor, "proj-fact").read_text(encoding="utf-8") == "OTHER BODY\n"
+    assert any(str(other_anchor) in b for b in rep["backups"])
 
 
 # ---- a failed backup stops the apply -----------------------------------------------------------

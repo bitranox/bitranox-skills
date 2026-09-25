@@ -145,8 +145,11 @@ def test_a_keyword_list_is_joined_into_one_query(fake_cli):
 
 
 @pytest.mark.parametrize("query, limit", [("q", None), ("q", "abc"), (5, 10), (None, 10),
-                                          ("   ", 10), (["", " "], 10)])
+                                          ("   ", 10), (["", " "], 10),
+                                          ("q", float("inf")), ("q", float("-inf"))])
 def test_search_returns_none_for_unusable_arguments_rather_than_raising(fake_cli, query, limit):
+    # int(float("inf")) raises OverflowError, not ValueError/TypeError - a caller that reached
+    # here with no bound on limit (or a bug upstream) must still get None, not a crash.
     fake_cli()
     assert X.search(query, limit=limit) is None
 

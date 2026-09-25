@@ -88,6 +88,42 @@ def test_an_indented_continuation_is_joined(tmp_path):
     assert F.description(md) == "Use when wrapped and tabbed"
 
 
+def test_a_trailing_inline_comment_on_a_plain_value_is_dropped(tmp_path):
+    """YAML: a `#` preceded by whitespace on a plain scalar starts a comment. It used to be read
+    as text and leaked into the router's keywords and the catalog."""
+    md = _md(tmp_path, "---\nname: demo\ndescription: Use when a # tail\n---\n")
+    assert F.description(md) == "Use when a"
+
+
+def test_an_indented_comment_only_continuation_line_is_dropped(tmp_path):
+    """A plain scalar's continuation line that is ONLY a comment once un-indented must not join
+    the value at all - unlike the block-scalar case below, where the same line is literal text."""
+    md = _md(tmp_path, "---\nname: demo\ndescription: Use when a\n  # not a comment in plain scalar\n"
+             "---\n")
+    assert F.description(md) == "Use when a"
+
+
+def test_an_inline_and_an_indented_comment_both_drop_together(tmp_path):
+    md = _md(tmp_path, "---\nname: demo-skill\ndescription: Use when rotating widgets "
+             "# zebrafrobnicate\n  # quokkaflux\n---\n")
+    assert F.description(md) == "Use when rotating widgets"
+
+
+def test_a_hash_with_no_preceding_whitespace_is_not_a_comment(tmp_path):
+    """YAML only starts a comment at `#` preceded by whitespace or at the start of the scalar; a
+    hash glued to a word (a C# example, a hashtag) is plain text."""
+    md = _md(tmp_path, "---\nname: demo\ndescription: Use when writing C#code\n---\n")
+    assert F.description(md) == "Use when writing C#code"
+
+
+def test_a_hash_inside_a_block_scalar_stays_literal(tmp_path):
+    """Control: comments are a PLAIN-scalar rule only - inside `|`/`>` the same line is content."""
+    md = _md(tmp_path, "---\nname: demo\ndescription: >-\n  Use when a\n  # literal, not a comment\n"
+             "---\n")
+    assert F.description(md) == ">- Use when a # literal, not a comment"
+    assert F.scalar_text(F.description(md)) == "Use when a # literal, not a comment"
+
+
 @pytest.mark.parametrize("crlf", [False, True])
 @pytest.mark.parametrize("blank", ["", "   ", "\t"])
 def test_a_blank_line_inside_a_value_does_not_end_it(tmp_path, crlf, blank):

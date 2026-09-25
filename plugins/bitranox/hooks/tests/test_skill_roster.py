@@ -142,6 +142,17 @@ def test_a_bare_repeat_does_not_overwrite_a_described_line():
     assert got["alpha"] == "text"
 
 
+def test_a_continuation_line_that_reads_like_a_listed_name_does_not_open_early():
+    # "- beta" here is prose INSIDE alpha's own multi-line description (more text follows on the
+    # next line), not a real trimmed entry for beta - the real beta entry is the line after that.
+    # Entries appear in `names` order in every real listing, so a bare candidate line only opens
+    # when nothing follows it or what follows is itself a real entry line.
+    content = "- alpha: Use with:\n- beta\nand more alpha text\n- beta: real beta"
+    got = SR.parse_listing(content, ["alpha", "beta"])
+    assert got["alpha"] == "Use with: - beta and more alpha text"
+    assert got["beta"] == "real beta"
+
+
 # ---- where a trimmed skill's description comes from ---------------------------------------------
 
 def _skill_md(path, description):

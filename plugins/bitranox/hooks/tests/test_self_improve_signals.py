@@ -6,6 +6,7 @@ All content is ASCII.
 import sys
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -537,6 +538,51 @@ def test_contribution_queue_ignores_junk(home):
     S.add_contribution("/p/x", {})                            # no 'what' -> not a contribution
     S.add_contribution("/p/x", "not a dict")
     assert S.read_contributions("/p/x") == []
+
+
+def test_add_contribution_takes_the_lock_so_a_concurrent_add_is_not_lost(home):
+    """Two sessions racing add_contribution's read-modify-write must not lose either record: a
+    concurrent add has to wait on the SAME lock, not race a plain read + overwrite."""
+    proj = "/p/lockrace"
+    S.add_contribution(proj, {"what": "first", "target": "a"})
+    f = S.contrib_file(proj)
+    done = threading.Event()
+
+    def add_second():
+        S.add_contribution(proj, {"what": "second", "target": "b"})
+        done.set()
+
+    with S.memory_lock(f):
+        t = threading.Thread(target=add_second)
+        t.start()
+        time.sleep(0.3)                        # an unguarded add would have raced in by now
+        assert not done.is_set()                # it must be BLOCKED while we hold the lock
+        assert {r["what"] for r in S.read_contributions(proj)} == {"first"}
+    t.join(timeout=5)
+    assert done.is_set()
+    assert {r["what"] for r in S.read_contributions(proj)} == {"first", "second"}
+
+
+def test_drain_contributions_takes_the_lock_too(home):
+    """A concurrent drain must not race an in-flight add's read-modify-write either."""
+    proj = "/p/drainrace"
+    S.add_contribution(proj, {"what": "x", "target": "a"})
+    f = S.contrib_file(proj)
+    done = threading.Event()
+
+    def drain():
+        S.drain_contributions(proj)
+        done.set()
+
+    with S.memory_lock(f):
+        t = threading.Thread(target=drain)
+        t.start()
+        time.sleep(0.3)
+        assert not done.is_set()
+        assert f.exists()
+    t.join(timeout=5)
+    assert done.is_set()
+    assert not f.exists()
 
 
 # ---- nap-owed marker: make the post-compaction nap non-optional -------------------------------

@@ -85,7 +85,7 @@ def search(query, limit=10, timeout=20):
     try:
         q = query if isinstance(query, str) else " ".join(str(k) for k in query if k)
         page_size = str(int(limit))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):    # OverflowError: int(float("inf"))
         return None
     if not q.strip():
         return None

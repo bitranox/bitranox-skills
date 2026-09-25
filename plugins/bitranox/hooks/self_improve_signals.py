@@ -588,48 +588,58 @@ def add_contribution(proj, record, max_items=100):
     """Queue one pending contribution: {'what' (required), 'target', 'why', 'source'}.
 
     Deduped on (what, target) - re-noticing the same gap is not a second TODO. Stamped with `ts`.
-    Best-effort: never raises."""
+    The read-modify-write runs under `memory_lock` on the queue file: unguarded, a concurrent
+    close (drain) or add racing the same file loses whichever write lands second. Best-effort:
+    never raises."""
     if not isinstance(record, dict) or not record.get("what"):
         return False
     try:
-        cur = read_contributions(proj)
-        key = (str(record.get("what")), str(record.get("target") or ""))
-        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
-            return False
-        # A CLOSED intent stays closed, whichever outcome closed it. Without this the dedup key only
-        # spans the LIVE queue, so a later dream that re-notices a disproven gap silently re-queues
-        # it and every future dream re-evaluates it again - and a DELIVERED one comes back as a TODO
-        # for work already shipped. Read the closed set, never just the rejections.
-        if any((str(r.get("what")), str(r.get("target") or "")) == key for r in read_closed(proj)):
-            return False
-        rec = dict(record)
-        rec.setdefault("ts", time.time())
-        # Stamp the project PATH: the filename is a one-way hash, so without this the only way to
-        # answer "which projects have pending contributions?" is to brute-force sha1 over the
-        # filesystem (measured: a walk of 705,896 directories), and a queue whose cwd was deleted
-        # resolves to nothing at all.
-        if not rec.get("proj") and not (isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX)):
-            try:
-                rec["proj"] = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
-            except (TypeError, ValueError):
-                pass
-        cur.append(rec)
-        if len(cur) > max_items:
-            cur = cur[-max_items:]
         f = contrib_file(proj)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
+        with memory_lock(f):
+            cur = read_contributions(proj)
+            key = (str(record.get("what")), str(record.get("target") or ""))
+            if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
+                return False
+            # A CLOSED intent stays closed, whichever outcome closed it. Without this the dedup key
+            # only spans the LIVE queue, so a later dream that re-notices a disproven gap silently
+            # re-queues it and every future dream re-evaluates it again - and a DELIVERED one comes
+            # back as a TODO for work already shipped. Read the closed set, never just rejections.
+            if any((str(r.get("what")), str(r.get("target") or "")) == key
+                   for r in read_closed(proj)):
+                return False
+            rec = dict(record)
+            rec.setdefault("ts", time.time())
+            # Stamp the project PATH: the filename is a one-way hash, so without this the only way
+            # to answer "which projects have pending contributions?" is to brute-force sha1 over
+            # the filesystem (measured: a walk of 705,896 directories), and a queue whose cwd was
+            # deleted resolves to nothing at all.
+            if (not rec.get("proj")
+                    and not (isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX))):
+                try:
+                    rec["proj"] = os.path.abspath(os.fspath(proj) if proj else os.getcwd())
+                except (TypeError, ValueError):
+                    pass
+            cur.append(rec)
+            if len(cur) > max_items:
+                cur = cur[-max_items:]
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n",
+                         encoding="utf-8")
         return True
     except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
-        return False
+        return False                  # OSError also covers memory_lock's TimeoutError
 
 
 def drain_contributions(proj):
-    """Clear the queue - ONLY after the contributions actually shipped. Best-effort."""
+    """Clear the queue - ONLY after the contributions actually shipped. Locked like
+    `add_contribution`, so a drain can never remove a record an in-flight add has not written
+    yet, nor race its read-modify-write. Best-effort."""
     try:
-        contrib_file(proj).unlink()
+        f = contrib_file(proj)
+        with memory_lock(f):
+            f.unlink()
     except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
-        pass
+        pass                          # OSError also covers a missing file and the lock timeout
 
 
 # ---- closed: an intent leaves the queue AND stays gone, by one of two OUTCOMES -----------------

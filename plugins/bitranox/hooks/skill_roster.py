@@ -47,7 +47,8 @@ _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 # ---- one listing's text --------------------------------------------------------------------------
 
 def _opener(line, names):
-    """(name, first description text) when `line` opens a listed skill's entry, else None.
+    """(name, first description text, is_bare) when `line` opens a listed skill's entry, else
+    None.
 
     An entry opens with `- <name>: <description>`, or with a bare `- <name>` when the harness
     trimmed the description. Only a LISTED name opens one, so a description line that happens to
@@ -58,10 +59,23 @@ def _opener(line, names):
         return None
     head, sep, text = line[2:].partition(": ")
     if sep and head in names:
-        return head, text
+        return head, text, False
     bare = line[2:].rstrip()
     bare = bare[:-1] if bare.endswith(":") else bare
-    return (bare, "") if bare in names else None
+    return (bare, "", True) if bare in names else None
+
+
+def _really_opens(lines, index, names):
+    """Whether the bare candidate at `lines[index]` is a real entry, not a description line that
+    merely reads like one.
+
+    Entries appear in `names` order in every real listing (measured 2136/2136), so a genuinely
+    trimmed entry is followed only by the next entry's own line, or by nothing at all. A bare
+    line followed by ordinary prose is that prose's OWN continuation, still open under whatever
+    entry came before it.
+    """
+    nxt = lines[index + 1] if index + 1 < len(lines) else None
+    return nxt is None or _opener(nxt, names) is not None
 
 
 def _raw_listing(content, names):
@@ -72,6 +86,7 @@ def _raw_listing(content, names):
     """
     names = [n for n in names if isinstance(n, str) and n]
     nameset = set(names)
+    lines = (content or "").splitlines()
     out, current, parts = {}, None, []
 
     def close():
@@ -81,8 +96,10 @@ def _raw_listing(content, names):
         if text or current not in out:
             out[current] = text
 
-    for line in (content or "").splitlines():
+    for index, line in enumerate(lines):
         opened = _opener(line, nameset)
+        if opened is not None and opened[2] and not _really_opens(lines, index, nameset):
+            opened = None
         if opened is None:
             parts.append(line)
             continue

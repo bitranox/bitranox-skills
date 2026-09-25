@@ -29,6 +29,10 @@ _FIELD_RX = {}
 # A YAML block-scalar header: `|` or `>`, an optional chomping sign and indentation digit in
 # either order, then the end of the header.
 _BLOCK_HEADER = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+|$)")
+# A YAML comment on a PLAIN scalar: `#` at the start of a line, or preceded by whitespace - never
+# a `#` glued to a word, which is ordinary text (`C#`, a hashtag). Comments do not exist inside a
+# quoted or block-scalar value, so this is applied only when `_is_plain_scalar` says so.
+_COMMENT_RX = re.compile(r"(?:^|(?<=[ \t]))#.*")
 
 
 def _field_rx(key):
@@ -72,14 +76,38 @@ def read_frontmatter(path):
     return None if text is None else frontmatter_block(text)
 
 
+def _is_plain_scalar(raw):
+    """True unless `raw` (the captured, still multi-line value) opens as a quoted or block-scalar
+    YAML value - the only two forms where a `#` is literal text rather than a comment."""
+    first = raw.split("\n", 1)[0]
+    return first[:1] not in ("'", '"') and _BLOCK_HEADER.match(first) is None
+
+
+def _drop_comment(line):
+    """`line` with a YAML plain-scalar comment (see `_COMMENT_RX`) cut off; unchanged without
+    one. A continuation line that is ONLY a comment (once its indentation is consumed by the same
+    match) is left holding just that indentation, which `field`'s whitespace collapse then drops
+    like any other blank line - so it never joins the value at all."""
+    m = _COMMENT_RX.search(line)
+    return line[:m.start()] if m else line
+
+
 def field(block, key):
-    """`key`'s value in a front-matter block, collapsed to one line; None when absent or empty."""
+    """`key`'s value in a front-matter block, collapsed to one line; None when absent or empty.
+
+    A plain (unquoted, non-block) value has any `# comment` cut off first - a trailing one on its
+    own line, or a whole continuation line that is nothing but a comment - matching how YAML
+    reads it. Inside a quoted or block-scalar value `#` is literal text and is left alone.
+    """
     if block is None:
         return None
     match = _field_rx(key).search(block)
     if not match:
         return None
-    value = " ".join(match.group(1).split())
+    raw = match.group(1)
+    if _is_plain_scalar(raw):
+        raw = "\n".join(_drop_comment(line) for line in raw.split("\n"))
+    value = " ".join(raw.split())
     return value or None
 
 

@@ -18,6 +18,7 @@ its `end` delete another session's receipt - and let one session's plan executio
 in every other session on the machine. Machine-local; pure standard library.
 """
 import json
+import math
 import os
 import sys
 import time
@@ -63,11 +64,18 @@ def _read(path):
 
 
 def _age(data, now=None):
-    """Seconds since the receipt was written, or None when its timestamp is not a number."""
+    """Seconds since the receipt was written, or None when its timestamp is not a number, is not
+    finite (inf/-inf/NaN - never what `time.time()` writes, so only tampering or corruption
+    produces one), or lies in the future (a negative age - a receipt cannot predate its own
+    write)."""
     ts = data.get("ts")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return None
-    return (time.time() if now is None else now) - float(ts)
+    ts = float(ts)
+    if not math.isfinite(ts):
+        return None
+    age = (time.time() if now is None else now) - ts
+    return age if age >= 0 else None
 
 
 def _prune(skill, ttl=TTL_SECONDS):

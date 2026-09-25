@@ -255,6 +255,42 @@ def test_a_receipt_of_the_wrong_shape_is_stale_not_a_crash(monkeypatch, capsys, 
     assert "stale-or-missing" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("ts_json", ["1e400", "-1e400", "NaN"])
+def test_a_non_finite_timestamp_is_stale_not_fresh(monkeypatch, capsys, ts_json):
+    """A receipt is written with time.time(), which is always finite - inf/-inf/NaN can only come
+    from tampering or a corrupt write, and `age = now - inf` is a huge NEGATIVE number, which used
+    to read as "fresh" (age < ttl is trivially true for -inf)."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    p = SR.start("meta-skill-writer", session_id=THIS)
+    p.write_text('{"skill": "meta-skill-writer", "session_id": "%s", "ts": %s}' % (THIS, ts_json),
+                 encoding="utf-8")
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    assert "stale-or-missing" in capsys.readouterr().out
+
+
+def test_a_future_timestamp_is_stale_not_fresh(monkeypatch, capsys):
+    """A receipt cannot have been written in the future; a future `ts` makes `now - ts` negative,
+    which read as "fresh" under a bare `age < ttl` check."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", THIS)
+    p = SR.start("meta-skill-writer", session_id=THIS)
+    future = time.time() + 10_000
+    p.write_text('{"skill": "meta-skill-writer", "session_id": "%s", "ts": %r}' % (THIS, future),
+                 encoding="utf-8")
+    assert SR.is_fresh("meta-skill-writer", session_id=THIS) is False
+    assert SR.main(["check", "meta-skill-writer"]) == 1
+    assert "stale-or-missing" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("ts, ok", [(float("inf"), False), (float("-inf"), False),
+                                    (float("nan"), False), (1.0, False), (0.0, True), (-1.0, True)])
+def test_age_rejects_non_finite_and_future_timestamps(ts, ok):
+    # `now` is pinned to 0.0: ts=1.0 is one second in the FUTURE (age would be -1, rejected);
+    # ts=-1.0 is one second in the past (age = 1, a perfectly ordinary receipt).
+    age = SR._age({"ts": ts}, now=0.0)                     # noqa: SLF001 - the unit under test
+    assert (age is not None) == ok
+
+
 def _cli(home, sid, *args):
     env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), CLAUDE_CODE_SESSION_ID=sid)
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,

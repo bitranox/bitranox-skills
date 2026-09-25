@@ -170,6 +170,10 @@ def test_a_later_push_still_gets_its_own_reminders(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["decision"] == "block" and "b" * 12 in payload["reason"]
     assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == ["b" * 40]
+    # a's release must still be NAMED, not silently dropped because a newer push is still live -
+    # otherwise the session never learns that a's CI went unchecked forever.
+    assert "a" * 12 in payload["reason"]
+    assert "released" in payload["reason"] and "never checked" in payload["reason"]
 
 
 def test_the_last_reminder_says_it_is_the_last(tmp_path, capsys):

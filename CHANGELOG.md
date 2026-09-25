@@ -29,6 +29,41 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.6]
+
+### Fixed
+
+- The skill roster parser no longer truncates a listed skill's description at a continuation
+  line that happens to read like another listed name (`- <name>`). Entries appear in listing
+  order, so a bare candidate line only opens a new entry when nothing follows it, or the next
+  line is itself a real entry.
+- `migrate_to_slug_store.py`'s slug registry is now seeded from each tree's resolved anchor, not
+  just the files `--root` reaches, so a migrated pointer above a narrower `--root` still keeps
+  its slug reserved.
+- `migrate_to_slug_store.py --apply` now refuses to write a tree that holds an unreadable pointer
+  file, naming the refused tree, instead of guessing a slug that file might already own.
+- Two legacy pointer lines sharing one uuid under different slugs no longer crash
+  `migrate_to_slug_store.py --apply` with `FileNotFoundError`. The second now re-points to
+  whatever the first is migrating to.
+- `add_contribution`/`drain_contributions` now read-modify-write the contribution queue under
+  `memory_lock`, so a concurrent add or drain can no longer lose a queued entry.
+- The shared front-matter reader drops a YAML comment from a plain `description:`/`name:` value -
+  a trailing `# comment` and a continuation line that is only a comment - instead of reading it as
+  text. A quoted or block-scalar value is unaffected, since `#` is literal there.
+- `skill_receipt.py` now treats a non-finite (`inf`/`-inf`/`NaN`) or future receipt timestamp as
+  stale rather than reading it as fresh.
+- The CI-watch Stop gate now names a released (spent-and-dropped) push in its block reason even
+  when a newer push from the same session is still live, instead of dropping it silently.
+- `prompt_text.py` strips a `:84-85` line-range suffix and a `#L12`/`#L12-L20` GitHub line-anchor
+  suffix from a path token, matching the existing `:12` handling, so the file extension is still
+  recognised as prose.
+- `mcp_search.search()` no longer raises `OverflowError` for `limit=float("inf")`; it now returns
+  `None`, like every other unusable argument.
+- The wheel and sdist built from this repo no longer ship a machine-local `CLAUDE.local.md`,
+  `.claude-memory/`, or `.remember/` from under `plugins/bitranox/`, whatever the local working
+  tree happens to hold. `force-include` bypassed both the project's own exclude config and its
+  automatic `.gitignore` consultation, so the wheel target now uses an explicit `only-include`.
+
 ## [7.23.5]
 
 ### Fixed
@@ -149,7 +184,6 @@ two "versions with no entry" notes came to sit in this file disagreeing with it.
   a heredoc body, a commit message, an `echo` operand, a message flag or a comment, and when only
   a local git verb that fails loudly on a missing object consumes it. It never blocks, because a
   sha pasted from a CI page or by the user has to keep working.
-
 ## [7.22.10]
 
 ### Fixed
