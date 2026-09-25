@@ -118,6 +118,50 @@ def test_base_equal_to_head_is_an_empty_but_valid_range(repo, tmp_path, capsys):
     assert "0 commit(s)" in capsys.readouterr().out
 
 
+# ---- no repository, no git ----------------------------------------------------------------------
+@pytest.fixture
+def no_repo(tmp_path, monkeypatch):
+    """A directory git cannot find a repository from, however tmp_path is mounted."""
+    d = tmp_path / "norepo"
+    d.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    monkeypatch.chdir(d)
+    return d
+
+
+def test_outside_a_repository_names_the_repository_not_the_ref(no_repo, tmp_path, capsys):
+    """The arm: every ref fails to resolve outside a repository, so the message blamed BASE,
+    sending the reader to check a ref that was fine."""
+    rc, data = _package(tmp_path, "HEAD~1", "HEAD")
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert data == b""
+    assert "not inside a git repository" in err
+    assert "bad BASE" not in err
+
+
+def test_inside_a_repository_a_bad_base_is_still_named(repo, tmp_path, capsys):
+    """The control: in a repository, an unresolvable BASE is exactly what is wrong."""
+    rc, _data = _package(tmp_path, "no-such-ref", "HEAD")
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "bad BASE: no-such-ref" in err
+    assert "not inside a git repository" not in err
+
+
+def test_a_git_that_cannot_be_run_is_exit_2_not_a_traceback(repo, tmp_path, monkeypatch, capsys):
+    """git missing from PATH raised FileNotFoundError out of main(): exit 1, which is not in the
+    contract, and a traceback instead of a sentence."""
+    _r, base = repo
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    rc, data = _package(tmp_path, base, base)
+    assert rc == 2
+    assert data == b""
+    assert "could not run git" in capsys.readouterr().err
+
+
 # ---- arguments ----------------------------------------------------------------------------------
 def test_more_than_three_arguments_is_a_usage_error(repo, capsys):
     _r, base = repo

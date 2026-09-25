@@ -8,8 +8,9 @@ Default OUTFILE: <repo-root>/.bitranox/sdd/review-<base7>..<head7>.diff
 (named per range, so a re-review after fixes gets a distinct fresh file).
 
 BASE must be an ancestor of HEAD (swapped arguments, or a BASE rewritten away,
-exit 2). Any git failure while building the package exits 2 and writes nothing, as does
-a workspace or OUTFILE that cannot be written.
+exit 2). A working directory outside any git repository, or a git that cannot be run,
+exits 2 naming that rather than the refs. Any git failure while building the package
+exits 2 and writes nothing, as does a workspace or OUTFILE that cannot be written.
 The diff is kept byte-exact, so a line-ending change shows as one.
 """
 import subprocess
@@ -24,9 +25,14 @@ class GitError(Exception):
 
 
 def _git(*args):
+    """Run git. Raises GitError, never OSError, when git itself cannot be started."""
     # Bytes, not text=True: universal-newline decoding turns "+a\r\n" into "+a\n" and a lone
     # "\r" into a line break, which hides exactly the CRLF regression a reviewer must see.
-    return subprocess.run(["git", *args], capture_output=True)
+    try:
+        return subprocess.run(["git", *args], capture_output=True)
+    except OSError as exc:
+        # Escaping, this was a traceback and exit 1, which the exit-code contract does not have.
+        raise GitError(f"could not run git: {exc}") from exc
 
 
 def _git_text(*args):
@@ -77,8 +83,27 @@ def _tolerate_unencodable_output():
                 pass
 
 
+def _repository_problem():
+    """An error message when the working directory is not in a git repository, or None.
+
+    Checked before the refs: outside a repository NO ref resolves, so the first ref check
+    reported "bad BASE" and sent the reader to inspect a ref that was fine.
+    """
+    proc = _git("rev-parse", "--git-dir")
+    if proc.returncode == 0:
+        return None
+    err = proc.stderr.decode("utf-8", "replace").strip()
+    return f"not inside a git repository: {Path.cwd()} (git rev-parse: {err})"
+
+
 def _check_refs(base, head):
-    """An error message for an unusable BASE/HEAD pair, or None."""
+    """An error message for no repository or an unusable BASE/HEAD pair, or None.
+
+    Raises GitError when git cannot be run at all.
+    """
+    problem = _repository_problem()
+    if problem:
+        return problem
     if not _resolves(base):
         return "bad BASE: %s" % base
     if not _resolves(head):
@@ -96,7 +121,10 @@ def main(argv=None):
         print("usage: review_package.py BASE HEAD [OUTFILE]", file=sys.stderr)
         return 2
     base, head = argv[0], argv[1]
-    problem = _check_refs(base, head)
+    try:
+        problem = _check_refs(base, head)
+    except GitError as exc:
+        problem = str(exc)
     if problem:
         print(problem, file=sys.stderr)
         return 2

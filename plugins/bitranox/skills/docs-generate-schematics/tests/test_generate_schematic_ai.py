@@ -4,9 +4,39 @@ No network is performed: _make_request is monkeypatched where a response is
 needed. The module imports cleanly because its only third-party dependency is httpx2.
 """
 
+import ast
 import base64
+from pathlib import Path
 
 import pytest
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+
+
+def _placeholderless_fstrings(source: str) -> list[int]:
+    """Line numbers of f-strings with no placeholder (ruff F541), read with the stdlib only.
+
+    A format spec (the `.2f` in `f"{x:.2f}"`) is itself a placeholder-less JoinedStr, so specs
+    are excluded rather than reported.
+    """
+    tree = ast.parse(source)
+    specs = {id(n.format_spec) for n in ast.walk(tree)
+             if isinstance(n, ast.FormattedValue) and n.format_spec is not None}
+    return [n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.JoinedStr) and id(n) not in specs
+            and not any(isinstance(v, ast.FormattedValue) for v in n.values)]
+
+
+def test_the_fstring_detector_finds_a_bare_fstring_and_passes_a_format_spec():
+    assert _placeholderless_fstrings('a = f"plain"\nb = f"{x:.2f}"\nc = "s"\n') == [1]
+
+
+@pytest.mark.parametrize("script", ["generate_schematic_ai.py", "generate_schematic.py"])
+def test_no_fstring_without_a_placeholder(script):
+    """ruff F541: an `f` prefix with nothing to format is noise, and it hides the one f-string
+    that was MEANT to carry a placeholder and lost it."""
+    source = (SCRIPTS / script).read_text(encoding="utf-8")
+    assert _placeholderless_fstrings(source) == []
 
 
 def test_constructor_raises_without_key(gen_ai, monkeypatch):

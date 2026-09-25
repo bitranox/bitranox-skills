@@ -40,7 +40,8 @@ from typing import Optional, Dict, Any, List, Tuple
 try:
     import httpx2 as httpx
 except ImportError:
-    print("Error: httpx2 library not found. Run via: uv run --with httpx2 generate_schematic_ai.py")
+    print("Error: httpx2 library not found. Run via: uv run --with httpx2 generate_schematic_ai.py",
+          file=sys.stderr)
     sys.exit(1)
 
 def _configure_console() -> None:
@@ -627,7 +628,7 @@ USER REQUEST: {user_prompt}
 Generate a publication-quality scientific diagram that meets all the guidelines above."""
         
         print(f"\n{'='*60}")
-        print(f"Generating Scientific Schematic")
+        print("Generating Scientific Schematic")
         print(f"{'='*60}")
         print(f"Description: {user_prompt}")
         print(f"Document Type: {doc_type}")
@@ -644,7 +645,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             print("-" * 40)
 
             # Generate image
-            print(f"Generating image...")
+            print("Generating image...")
             image_data = self.generate_image(current_prompt)
 
             if not image_data:
@@ -664,7 +665,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             print(f"[OK] Saved: {iter_path}")
 
             # Review image using Gemini 3.1 Pro Preview
-            print(f"Reviewing image with Gemini 3.1 Pro Preview...")
+            print("Reviewing image with Gemini 3.1 Pro Preview...")
             critique, score, needs_improvement = self.review_image(
                 str(iter_path), user_prompt, i, doc_type, iterations
             )
@@ -698,7 +699,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             # Check if quality is acceptable - STOP EARLY if so
             if not needs_improvement:
                 print(f"\n[OK] Quality meets {doc_type} threshold ({score} >= {threshold})")
-                print(f"  No further iterations needed!")
+                print("  No further iterations needed!")
                 results["final_image"] = str(iter_path)
                 results["final_score"] = score
                 results["success"] = True
@@ -709,12 +710,12 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             # If this is the last iteration, we're done regardless. The image kept is chosen
             # below from every reviewed one: a retry can score WORSE than what it replaced.
             if i == iterations:
-                print(f"\n[WARN] Maximum iterations reached")
+                print("\n[WARN] Maximum iterations reached")
                 break
 
             # Quality below threshold - improve prompt for next iteration
             print(f"\n[WARN] Quality below threshold ({score} < {threshold})")
-            print(f"Improving prompt based on feedback...")
+            print("Improving prompt based on feedback...")
             current_prompt = self.improve_prompt(user_prompt, critique, i + 1)
 
         if not results["success"] and best is not None:
@@ -745,7 +746,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
         print(f"[OK] Review log: {log_path}")
 
         print(f"\n{'='*60}")
-        print(f"Generation Complete!")
+        print("Generation Complete!")
         final_score = results["final_score"]
         print(f"Final Score: {'not reviewed' if final_score is None else f'{final_score}/10'}")
         if results["early_stop"]:
@@ -822,17 +823,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--api-key is not accepted: a key on the command line is visible in the "
                      "process list for the whole run. Set OPENROUTER_API_KEY in the environment.")
 
-    # Check for API key
+    # Validate iterations - enforce max of 2. A usage error (exit 2), checked before the key so a
+    # bad argument is named even where no key is set.
+    if args.iterations < 1 or args.iterations > 2:
+        parser.error("Iterations must be between 1 and 2")
+
+    # Check for API key. Errors go to stderr: stdout carries the run's progress lines.
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        print("Error: OPENROUTER_API_KEY environment variable not set")
-        print("\nSet it with:")
-        print("  export OPENROUTER_API_KEY='your_api_key'")
-        return 1
-
-    # Validate iterations - enforce max of 2
-    if args.iterations < 1 or args.iterations > 2:
-        print("Error: Iterations must be between 1 and 2")
+        print("Error: OPENROUTER_API_KEY environment variable not set", file=sys.stderr)
+        print("\nSet it with:", file=sys.stderr)
+        print("  export OPENROUTER_API_KEY='your_api_key'", file=sys.stderr)
         return 1
 
     try:
@@ -845,7 +846,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
         if not results["success"]:
-            print(f"\n[FAIL] Generation failed. Check review log for details.")
+            print("\n[FAIL] Generation failed. Check review log for details.")
             return 1
         if results.get("review_skipped"):
             print(f"\n[WARN] Image saved to {args.output}, but its quality was NOT verified "
@@ -856,7 +857,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  (Completed in {len([r for r in results['iterations'] if r.get('success')])} iteration(s) - quality threshold met)")
         return 0
     except Exception as e:
-        print(f"\n[FAIL] Error: {str(e)}")
+        print(f"\n[FAIL] Error: {str(e)}", file=sys.stderr)
         return 1
 
 

@@ -641,3 +641,89 @@ def test_a_non_cp1252_node_id_does_not_crash_a_cp1252_console(tmp_path):
     assert proc.returncode == 0, (proc.stdout, proc.stderr)
     assert b"Traceback" not in proc.stderr
     assert proc.stdout.startswith(b"KILLED")
+
+
+# --------------------------------------------------------------------------
+# The --json envelope's "ok" follows the exit code: false exactly when it is 2
+# --------------------------------------------------------------------------
+
+
+def test_json_ok_is_false_when_the_arm_is_inconclusive(tmp_path):
+    """The arm: an inconclusive arm exits 2, and an envelope reading "ok": true beside it tells a
+    caller that parses the JSON rather than the exit code that the arm gave a verdict."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_does_not_exist", "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    envelope = json.loads(proc.stdout)
+    assert envelope["data"]["verdict"] == "inconclusive"
+    assert envelope["ok"] is False
+
+
+@pytest.mark.parametrize(("anchor", "mutant", "code", "verdict"), [
+    ('return "zero"', 'return "ZERO"', 0, "killed"),
+    ('return "negative"', 'return "NEGATIVE"', 1, "survived"),
+])
+def test_json_ok_is_true_for_a_verdict_killed_or_survived(tmp_path, anchor, mutant, code,
+                                                          verdict):
+    """The control: SURVIVED exits 1 as the FINDING, not as an error, so it keeps "ok": true."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text(anchor, encoding="utf-8")
+    (p / "new.txt").write_text(mutant, encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == code, (proc.stdout, proc.stderr)
+    envelope = json.loads(proc.stdout)
+    assert envelope["data"]["verdict"] == verdict
+    assert envelope["ok"] is True
+
+
+def test_json_ok_is_false_when_the_restore_failed(tmp_path):
+    """A failed restore exits 2 whatever the verdict was; the envelope must say so too."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    probe = p / "probe.txt"
+    probe.write_text("x", encoding="utf-8")
+    if not _cannot_write(probe):
+        pytest.skip("this user can write a read-only file, so there is no failure to test")
+    lock = f"import os; os.chmod({str(p / 'src.py')!r}, 0o444); raise SystemExit(0)"
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+    try:
+        report = M.run_arm(planned, "test_src.py::test_zero", runner=[sys.executable, "-c", lock])
+    finally:
+        (p / "src.py").chmod(0o644)
+    assert report["restored"] is False and report["verdict"] == "survived"
+    assert M.outcome_code(report) == 2
+    assert json.loads(M.json_envelope(report))["ok"] is False
+
+
+@pytest.mark.parametrize("verdict", ["inconclusive", "timeout", "error"])
+def test_json_ok_is_false_for_every_verdict_that_exits_2(verdict):
+    report = {"verdict": verdict, "restored": True, "bytecode_left": []}
+    assert M.outcome_code(report) == 2
+    assert json.loads(M.json_envelope(report))["ok"] is False
+
+
+def test_a_json_refusal_still_prints_an_envelope(tmp_path):
+    """A --json caller parses stdout; a refusal that printed only to stderr handed it an empty
+    string, which fails as a JSON error rather than as the refusal it was."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text("this text is not in the file", encoding="utf-8")
+    (p / "new.txt").write_text("x", encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    envelope = json.loads(proc.stdout)
+    assert envelope["ok"] is False
+    assert envelope["command"] == "mutation_arm"
+    assert "nothing written" in envelope["error"]
+    assert "nothing written" in proc.stderr
+
+
+def test_a_json_usage_error_still_prints_an_envelope(tmp_path):
+    proc = run(make_project(tmp_path), "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 2
+    assert json.loads(proc.stdout)["ok"] is False

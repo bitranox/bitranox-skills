@@ -146,7 +146,42 @@ def test_missing_api_key_exits_1(script_runner, tmp_path, fakes):
     assert "--api-key" not in run.output
 
 
-SECRET = "sk-or-v1-ARGV-SECRET-MUST-NOT-BE-USED"
+def test_a_missing_input_file_is_reported_on_stderr(script_runner, tmp_path, fakes):
+    """The arm: the error went to STDOUT, where a caller capturing the progress lines (or piping
+    them on) reads it as output and a caller watching stderr sees nothing."""
+    run = _ai(script_runner, tmp_path, fakes, ["absent.png", "out.md"])
+
+    assert run.returncode == 1, run.output
+    assert "does not exist" in run.stderr
+    assert "does not exist" not in run.stdout
+    assert not (tmp_path / "out.md").exists()
+    assert _calls(tmp_path) == 0
+
+
+def test_a_directory_as_input_is_refused_as_not_a_file(script_runner, tmp_path, fakes):
+    """A directory named like an image passed the existence check and reached markitdown, which
+    failed with an error about the converter rather than about the input."""
+    (tmp_path / "shots.png").mkdir()
+
+    run = _ai(script_runner, tmp_path, fakes, ["shots.png", "out.md"])
+
+    assert run.returncode == 1, run.output
+    assert "is not a file" in run.stderr
+    assert "is not a file" not in run.stdout
+    assert _calls(tmp_path) == 0
+
+
+def test_an_existing_input_file_passes_the_input_check(script_runner, tmp_path, fakes):
+    """The control: the same call with the file present converts."""
+    (tmp_path / "absent.png").write_text("PNG", encoding="utf-8")
+
+    run = _ai(script_runner, tmp_path, fakes, ["absent.png", "out.md"])
+
+    assert run.returncode == 0, run.output
+    assert "does not exist" not in run.output
+
+
+SECRET ="sk-or-v1-ARGV-SECRET-MUST-NOT-BE-USED"
 
 
 @pytest.mark.parametrize(

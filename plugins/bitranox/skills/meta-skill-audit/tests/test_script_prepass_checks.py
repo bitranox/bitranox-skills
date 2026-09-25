@@ -250,9 +250,37 @@ def test_main_survives_a_console_that_cannot_encode_the_room_path(tmp_path):
 
 # ---- the documented launcher cannot fail silently -----------------------------------------------
 
-def test_skill_md_never_sends_a_cli_through_the_fail_open_launcher_unguarded():
-    """run-python.sh exits 0 on a mistyped script path unless BITRANOX_RUN_PYTHON_STRICT is set."""
-    text = SKILL_MD.read_text(encoding="utf-8")
-    bad = [line for line in text.split("\n")
-           if "run-python.sh" in line and "BITRANOX_RUN_PYTHON_STRICT=1" not in line]
+SKILLS_DIR = Path(__file__).resolve().parents[2]
+# The shim's own first argument, quoted or not. `--hook` is also an ordinary flag of other tools
+# (adjudicate.py --hook HOOK.py, memory_engine add --hook "When ..."), so only the word directly
+# after run-python.sh selects the shim's fail-open mode.
+_FAIL_OPEN_LAUNCH = re.compile(r"run-python\.sh[\"']?\s+--hook\b")
+
+
+def _fail_open_launches(text):
+    """Lines that launch a script through run-python.sh in its `--hook` (fail-open) mode."""
+    return [line for line in text.split("\n") if _FAIL_OPEN_LAUNCH.search(line)]
+
+
+def test_the_fail_open_launch_detector_tells_the_hook_mode_from_a_flag_named_hook():
+    assert _fail_open_launches('bash hooks/run-python.sh --hook x.py') != []
+    assert _fail_open_launches('bash "$ROOT/hooks/run-python.sh" --hook "$ROOT/x.py"') != []
+    assert _fail_open_launches("BITRANOX_RUN_PYTHON_STRICT=1 bash run-python.sh --hook x.py") != []
+    assert _fail_open_launches("bash hooks/run-python.sh x.py") == []
+    assert _fail_open_launches("bash hooks/run-python.sh x.py --hook H.py") == []
+    assert _fail_open_launches("uv run scripts/adjudicate.py --hook HOOK.py") == []
+    assert _fail_open_launches("(only a `--hook` launch fails open)") == []
+
+
+def test_no_skill_md_sends_a_cli_through_the_fail_open_launcher():
+    """run-python.sh is strict by default: a CLI launch that cannot run its script (a mistyped
+    path, no Python 3) exits 3 with a stderr line. Only `--hook` - the mode hooks.json registers
+    hooks with - turns that into exit 0, so a skill step launched that way reads a typo as a clean
+    run. BITRANOX_RUN_PYTHON_STRICT=1 does not rescue it: `--hook` also honours the
+    BITRANOX_HOOKS_OFF kill-switch, which exits 0 before the script is even looked for.
+    A hooks.json registration example belongs in a reference file, not a SKILL.md step."""
+    skill_mds = sorted(SKILLS_DIR.glob("*/SKILL.md"))
+    assert SKILL_MD.resolve() in [p.resolve() for p in skill_mds], "scanned the wrong directory"
+    bad = [f"{path.parent.name}: {line.strip()}" for path in skill_mds
+           for line in _fail_open_launches(path.read_text(encoding="utf-8"))]
     assert bad == []

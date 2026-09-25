@@ -43,7 +43,8 @@ with neither; an arm whose pytest exits 1 without naming a failure is reported I
 KILLED, so that mistake shows as a column of exit-2 arms rather than a battery of perfect tests.
   `.venv/bin/python scripts/mutation_arm.py --mutate src/x.py old.txt new.txt --test tests/t.py::test_y --timeout 90`
   `... --mutate a.py o1.txt n1.txt --mutate b.py o2.txt n2.txt --test tests/t.py::test_y`
-  add `--json` for an envelope
+  add `--json` for an envelope; its "ok" is false exactly when the exit code is 2, and a
+  refusal prints one too (`"data": null` and an `"error"`)
 
 Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF source keeps its
 CRLF while mutated, and an LF anchor file matches it.
@@ -363,24 +364,20 @@ def main(argv=None) -> int:
     _tolerate_unencodable_output()
 
     if not args.mutate:
-        print("mutation_arm: no --mutate given", file=sys.stderr)
-        return 2
+        return _refuse("no --mutate given", as_json=args.json)
 
     try:
         planned = plan_mutations(args.mutate)
     except UnicodeDecodeError as exc:
-        print(f"mutation_arm: refused, nothing written - a source or anchor file is not UTF-8 "
-              f"({exc.reason} at byte {exc.start})", file=sys.stderr)
-        return 2
+        return _refuse(f"refused, nothing written - a source or anchor file is not UTF-8 "
+                       f"({exc.reason} at byte {exc.start})", as_json=args.json)
     except (AnchorError, OSError) as exc:
-        print(f"mutation_arm: refused, nothing written - {exc}", file=sys.stderr)
-        return 2
+        return _refuse(f"refused, nothing written - {exc}", as_json=args.json)
 
     try:
         report = run_arm(planned, args.test, timeout=args.timeout)
     except (AnchorError, OSError) as exc:
-        print(f"mutation_arm: refused before mutating - {exc}", file=sys.stderr)
-        return 2
+        return _refuse(f"refused before mutating - {exc}", as_json=args.json)
 
     if not report["restored"]:
         print("mutation_arm: RESTORE FAILED - the files on disk are NOT the originals",
@@ -390,7 +387,7 @@ def main(argv=None) -> int:
               "survived removal and a later run could execute it instead of the source - delete "
               "it before the next run: " + ", ".join(report["bytecode_left"]), file=sys.stderr)
     if args.json:
-        print(json.dumps({"ok": True, "command": "mutation_arm", "data": report}, indent=2))
+        print(json_envelope(report))
     else:
         print(f"{report['verdict'].upper()}: {args.test}")
         if report["failure"]:
@@ -406,9 +403,36 @@ def main(argv=None) -> int:
             print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
                   "nothing about whether it would have noticed; the mutation may make it SPIN",
                   file=sys.stderr)
+    return outcome_code(report)
+
+
+def outcome_code(report) -> int:
+    """The exit code a finished arm earns: its verdict's, unless the restore or the purge failed.
+
+    The one place the code is decided, so the envelope's "ok" and the process exit cannot disagree.
+    """
     if not report["restored"] or report["bytecode_left"]:
         return 2
     return exit_code_for(report["verdict"])
+
+
+def json_envelope(report) -> str:
+    """The --json envelope. "ok" is false exactly when the exit code is 2 (an error): SURVIVED
+    exits 1 as the FINDING, so it is still ok. Derived from outcome_code, never set on its own -
+    a literal true here reported every inconclusive, timed-out and unrestored arm as ok."""
+    return json.dumps({"ok": outcome_code(report) != 2, "command": "mutation_arm",
+                       "data": report}, indent=2)
+
+
+def _refuse(message: str, *, as_json: bool) -> int:
+    """Report a refusal (exit 2) on stderr, and on stdout too as an envelope under --json:
+    a caller parsing stdout would otherwise read an empty string, which fails as a JSON error
+    rather than as the refusal it was."""
+    print(f"mutation_arm: {message}", file=sys.stderr)
+    if as_json:
+        print(json.dumps({"ok": False, "command": "mutation_arm", "data": None,
+                          "error": message}, indent=2))
+    return 2
 
 
 def _tolerate_unencodable_output() -> None:

@@ -9,6 +9,7 @@ key is a fake from the environment; no test prints or uses a real one.
 import base64
 import io
 import json
+import subprocess
 import sys
 
 import pytest
@@ -225,3 +226,71 @@ def test_help_and_missing_key_message_do_not_offer_a_key_flag(gen_ai, monkeypatc
     captured = capsys.readouterr()
     assert rc == 1
     assert "--api-key" not in captured.out + captured.err
+
+
+# ---- refusals go to stderr, and a bad argument is a usage error (exit 2) ------------------------
+def test_a_missing_key_is_reported_on_stderr(gen_ai, monkeypatch, capsys, tmp_path):
+    """The error, and its remedy, went to STDOUT beside the run's progress lines."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", "o.png")
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "OPENROUTER_API_KEY environment variable not set" in captured.err
+    assert "export OPENROUTER_API_KEY" in captured.err
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("count", ["0", "3", "-1"])
+def test_iterations_out_of_range_is_a_usage_error(gen_ai, scripted, monkeypatch, capsys, tmp_path,
+                                                  count):
+    """The contract says 2 for a usage error; an out-of-range --iterations exited 1, the code for
+    a failed generation, and printed its reason to stdout."""
+    calls = scripted()
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--iterations", count)
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "between 1 and 2" in captured.err
+    assert "between 1 and 2" not in captured.out
+    assert calls == []
+
+
+def test_iterations_in_range_still_runs(gen_ai, scripted, monkeypatch, tmp_path):
+    """The control for the refusal: --iterations 1 is accepted and generates."""
+    calls = scripted(image("V1"), review("SCORE: 9.0"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--iterations", "1")
+
+    assert rc == 0
+    assert len(calls) == 2
+
+
+def test_an_unexpected_error_is_reported_on_stderr(gen_ai, scripted, monkeypatch, capsys, tmp_path):
+    """An output path under a regular FILE cannot be created; the failure must reach stderr."""
+    scripted(image("V1"), review("SCORE: 9.0"))
+    (tmp_path / "a-file").write_text("x", encoding="utf-8")
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(tmp_path / "a-file" / "out.png"))
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "[FAIL] Error:" in captured.err
+    assert "[FAIL] Error:" not in captured.out
+
+
+def test_a_missing_httpx2_is_reported_on_stderr(gen_ai, tmp_path):
+    """-S drops site-packages, where httpx2 lives, so the import guard is the one that runs."""
+    script = gen_ai.__file__
+    probe = subprocess.run([sys.executable, "-S", "-c", "import httpx2"], capture_output=True,
+                           check=False)
+    if probe.returncode == 0:
+        pytest.skip("httpx2 is importable without site-packages here, so the guard cannot fire")
+    proc = subprocess.run([sys.executable, "-S", script, "--help"], capture_output=True,
+                          cwd=str(tmp_path), timeout=60, check=False)
+    assert proc.returncode == 1
+    assert b"httpx2 library not found" in proc.stderr
+    assert proc.stdout == b""

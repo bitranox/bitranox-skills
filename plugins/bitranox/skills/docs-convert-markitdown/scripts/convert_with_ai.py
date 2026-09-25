@@ -299,9 +299,14 @@ def main(argv: list[str] | None = None) -> int:
         print("Get your API key at: https://openrouter.ai/keys", file=sys.stderr)
         return 1
 
-    # Validate input file
+    # Validate input file. Errors go to stderr: stdout carries the progress lines.
     if not args.input.exists():
-        print(f"Error: Input file '{args.input}' does not exist")
+        print(f"Error: Input file '{args.input}' does not exist", file=sys.stderr)
+        return 1
+    if not args.input.is_file():
+        # A directory named like an image otherwise reaches markitdown, whose failure names the
+        # converter rather than the input.
+        print(f"Error: Input '{args.input}' is not a file", file=sys.stderr)
         return 1
 
     if args.input.suffix.lower() not in AI_DESCRIBED_SUFFIXES:
