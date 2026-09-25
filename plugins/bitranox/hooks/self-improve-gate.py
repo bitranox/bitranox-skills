@@ -79,6 +79,30 @@ def _routing_hint(event, proj):
         return ""
 
 
+def _drop_unsatisfiable_nap(proj, session_id=""):
+    """Clear an owed nap that no pass can discharge any more, and return a note saying so ('' if none).
+
+    A block is only worth its cost while doing the work can lift it. A flag naming a transcript
+    Claude Code has since deleted, or an earlier session's transcript the dream already read to the
+    end, blocks every stop in that cwd for a read that cannot happen or has already happened. The
+    note is shown to the user (systemMessage), because silently dropping an obligation would hide
+    that the pre-compaction stretch of a deleted transcript was never consolidated."""
+    try:
+        path, why = _sig.unsatisfiable_nap_owed(proj, session_id)
+        if not path:
+            return ""
+        _sig.clear_nap_owed(proj)
+        if why == _sig.NAP_OWED_TRANSCRIPT_GONE:
+            return ("bitranox: dropped an owed post-compaction nap - the transcript it names, %s, no "
+                    "longer exists (most likely deleted by Claude Code's transcript retention, "
+                    "cleanupPeriodDays, 30 days by default), so no nap can consume it. Its "
+                    "pre-compaction stretch was never consolidated and cannot be now." % path)
+        return ("bitranox: dropped an owed post-compaction nap - its transcript, %s, is already "
+                "consumed to the end under the dream watermark." % path)
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        return ""
+
+
 def _nap_owed_hint(proj, session_id=""):
     """Prose demanding the post-compaction consolidation, or '' when none is owed.
 
@@ -225,9 +249,12 @@ def main():
     sub_hint = _subagent_hint(event.get("session_id") or "")
 
     # A compaction cleared the CONTEXT (the transcript file survives). A hook cannot run the
-    # consolidation pass, so PostCompact records an obligation and we refuse to stop while it stands.
+    # consolidation pass, so PostCompact records an obligation and we refuse to stop while it stands
+    # - unless nothing can discharge it any more, which is dropped first with a visible note.
+    dropped_note = _drop_unsatisfiable_nap(proj, event.get("session_id") or "")
     nap_hint = _nap_owed_hint(proj, event.get("session_id") or "")
 
+    out = {"systemMessage": dropped_note} if dropped_note else {}
     if (nap_hint or sub_hint or _USER_PATTERN.search(last_user) or _ASST_PATTERN.search(last_asst)
             or _REALIZATION_PATTERN.search(last_asst)
             or _ENDORSE_PATTERN.search(last_user) or _ENDORSE_PATTERN.search(last_asst)):
@@ -236,10 +263,9 @@ def main():
                 fh.write(sig)
         except OSError:
             pass
-        sys.stdout.write(json.dumps({"decision": "block",
-                                     "reason": (nap_hint + _REASON + _routing_hint(event, proj)
-                                                + sub_hint) if nap_hint else
-                                               (_REASON + _routing_hint(event, proj) + sub_hint)}))
+        out["decision"] = "block"
+        out["reason"] = ((nap_hint + _REASON + _routing_hint(event, proj) + sub_hint) if nap_hint
+                         else (_REASON + _routing_hint(event, proj) + sub_hint))
         if sub_hint:
             # Consumed once, like the SessionStart audit: a non-empty hint ALWAYS blocks, so the
             # model has now seen the findings verbatim and owns the judgement. Leaving them queued
@@ -248,6 +274,8 @@ def main():
                 _sig.drain_subagent_learnings(event.get("session_id") or "")
             except Exception:                             # noqa: BLE001 - never wedge a turn
                 pass
+    if out:
+        sys.stdout.write(json.dumps(out))
     return 0
 
 

@@ -574,6 +574,30 @@ def test_nap_owed_info_is_empty_when_nothing_is_owed(home):
     assert S.nap_owed_info("/p/x") == {}
 
 
+def test_unsatisfiable_nap_owed_keeps_a_legacy_marker_it_cannot_judge(home):
+    # A marker without a transcript names nothing to check, so it is not declared unsatisfiable.
+    S.mark_nap_owed("/p/x")
+    assert S.unsatisfiable_nap_owed("/p/x", "sid-current") == ("", "")
+
+
+def test_unsatisfiable_nap_owed_never_judges_the_current_session_consumed(home, tmp_path):
+    # The live transcript keeps growing past the compaction point, so a watermark at its CURRENT
+    # end says nothing about whether the pre-compaction stretch was read. Only an earlier
+    # session's transcript can be judged consumed.
+    tp = tmp_path / "live.jsonl"
+    tp.write_text("{}\n", encoding="utf-8")
+    S.mark_nap_owed("/p/x", session_id="sid-current", transcript_path=str(tp))
+    S.set_watermark("/p/x", str(tp), S.DREAM_REVIEWER, tp.stat().st_size)
+    assert S.unsatisfiable_nap_owed("/p/x", "sid-current") == ("", "")
+    assert S.unsatisfiable_nap_owed("/p/x", "sid-later") == (str(tp), S.NAP_OWED_TRANSCRIPT_CONSUMED)
+
+
+def test_unsatisfiable_nap_owed_reports_a_deleted_transcript(home, tmp_path):
+    gone = tmp_path / "deleted.jsonl"
+    S.mark_nap_owed("/p/x", session_id="sid-old", transcript_path=str(gone))
+    assert S.unsatisfiable_nap_owed("/p/x", "sid-current") == (str(gone), S.NAP_OWED_TRANSCRIPT_GONE)
+
+
 def test_mark_dream_done_clears_a_owed_nap(home):
     # running the nap is what discharges the obligation - the marker must not outlive it
     _mem(home, "/p/x")

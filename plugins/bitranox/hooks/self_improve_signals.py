@@ -770,6 +770,48 @@ def clear_nap_owed(proj):
         pass
 
 
+# The watermark reviewer the dream (and the nap) consume transcripts under. dream_state.py marks
+# with this same name, so the gate can tell whether an owed transcript has any unread bytes left.
+DREAM_REVIEWER = "dream"
+
+NAP_OWED_TRANSCRIPT_GONE = "gone"
+NAP_OWED_TRANSCRIPT_CONSUMED = "consumed"
+
+
+def unsatisfiable_nap_owed(proj, session_id=""):
+    """(transcript_path, why) when the owed nap names a transcript nothing can still consume.
+
+    The flag is written at compaction and cleared only by `dream_state.py done`, so it can outlive
+    its transcript by weeks. Claude Code deletes old transcripts under its retention setting
+    (`cleanupPeriodDays`, 30 days by default), and a block naming a deleted file can never be
+    satisfied: every later session in that cwd is stopped for a read that cannot happen. Why is
+    `NAP_OWED_TRANSCRIPT_GONE` then.
+
+    `NAP_OWED_TRANSCRIPT_CONSUMED` covers an EARLIER session's transcript whose dream watermark has
+    already reached its end: the obligation was that file's unread bytes and there are none. The
+    current session's own transcript is never judged consumed, because it keeps growing after the
+    compaction point and its watermark cannot say where that point was.
+
+    Returns ("", "") while the obligation is real, or when the flag names no transcript at all (a
+    legacy marker: nothing to judge, so it stays)."""
+    info = nap_owed_info(proj)
+    path = str(info.get("transcript_path") or "")
+    if not path:
+        return "", ""
+    if not os.path.exists(path):
+        return path, NAP_OWED_TRANSCRIPT_GONE
+    owed_session = str(info.get("session_id") or "")
+    if not owed_session or owed_session == str(session_id or ""):
+        return "", ""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return "", ""
+    if get_watermark(proj, path, DREAM_REVIEWER) >= size:
+        return path, NAP_OWED_TRANSCRIPT_CONSUMED
+    return "", ""
+
+
 # ---- machine-local config: one JSON for all informed-consent knobs (recommended defaults) ----
 # Every habit-dependent decision is recorded here and applied automatically (asked once, never
 # re-nagged). The `meta-memory-settings` skill views / sets / resets it.

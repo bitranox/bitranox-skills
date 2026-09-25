@@ -245,6 +245,83 @@ def test_owed_nap_from_this_session_still_reads_as_this_session(tmp_path, monkey
     assert "meta-dream-nap" in reason
 
 
+def _gate_output(capsys):
+    out = capsys.readouterr().out.strip()
+    return json.loads(out) if out else {}
+
+
+def test_owed_nap_naming_a_deleted_transcript_is_dropped_with_a_visible_note(
+        tmp_path, monkeypatch, capsys):
+    # Measured 2026-09-22 and 2026-09-24: two flags from mid-August named transcripts Claude Code
+    # had since deleted under its transcript retention (cleanupPeriodDays). No nap can consume a
+    # file that is gone, so the block could never be satisfied. Drop the flag and SAY so.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    gone = tmp_path / "deleted-session.jsonl"                 # never created: the file is gone
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(gone))
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")      # no signal at all
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    out = _gate_output(capsys)
+    assert out.get("decision") is None                        # nothing left to consume: no block
+    assert not S.is_nap_owed(str(tmp_path))                   # and the flag is gone for good
+    note = out.get("systemMessage", "")
+    assert str(gone) in note                                  # names the file that is missing
+    assert "retention" in note.lower()                        # and the likely cause
+
+
+def test_owed_nap_naming_an_existing_earlier_transcript_still_blocks(tmp_path, monkeypatch, capsys):
+    # Control for the test above: a flag whose transcript is still on disk and still unread is a
+    # real obligation, and the missing-file rule must not discharge it.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    old = tmp_path / "older-session.jsonl"
+    old.write_text('{"type": "user"}\n', encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    out = _gate_output(capsys)
+    assert out.get("decision") == "block"
+    assert S.is_nap_owed(str(tmp_path))
+    assert "systemMessage" not in out
+
+
+def test_owed_nap_whose_earlier_transcript_the_dream_fully_consumed_is_dropped(
+        tmp_path, monkeypatch, capsys):
+    # Measured 2026-09-02: the gate named an 8,251,772-byte transcript whose dream watermark stood
+    # at exactly 8,251,772. The obligation is that file's unread bytes; there were none.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    old = tmp_path / "older-session.jsonl"
+    old.write_text('{"type": "user"}\n', encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    S.set_watermark(str(tmp_path), str(old), "dream", old.stat().st_size)
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    out = _gate_output(capsys)
+    assert out.get("decision") is None
+    assert not S.is_nap_owed(str(tmp_path))
+    assert str(old) in out.get("systemMessage", "")
+
+
+def test_owed_nap_whose_earlier_transcript_is_partly_consumed_still_blocks(
+        tmp_path, monkeypatch, capsys):
+    # Control: a watermark BEHIND the file's end is unread material, so the block stands.
+    import self_improve_signals as S
+    _iso_home(tmp_path, monkeypatch)
+    old = tmp_path / "older-session.jsonl"
+    old.write_text('{"type": "user"}\n', encoding="utf-8")
+    S.mark_nap_owed(str(tmp_path), session_id="sid-old", transcript_path=str(old))
+    S.set_watermark(str(tmp_path), str(old), "dream", old.stat().st_size - 1)
+    tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")
+    run_gate(monkeypatch, tmp_path, {"transcript_path": tp, "cwd": str(tmp_path),
+                                     "session_id": "sid-current"})
+    assert _gate_output(capsys).get("decision") == "block"
+    assert S.is_nap_owed(str(tmp_path))
+
+
 def test_no_owed_nap_no_block_on_a_quiet_turn(tmp_path, monkeypatch, capsys):
     _iso_home(tmp_path, monkeypatch)
     tp = make_transcript(tmp_path, user="ok thanks", asst="Done.")

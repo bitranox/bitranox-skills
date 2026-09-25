@@ -29,6 +29,17 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.10]
+
+### Fixed
+
+- The Stop gate no longer blocks on an owed post-compaction nap that nothing can discharge. The
+  flag outlives its transcript, and Claude Code deletes old transcripts under its retention setting
+  (`cleanupPeriodDays`), so a flag from weeks earlier could name a file that no longer exists and
+  block every later stop in that cwd. Such a flag is now cleared, with a visible note naming the
+  missing file. The same happens when the flag names an EARLIER session's transcript that the dream
+  watermark has already consumed to the end. An unread earlier transcript still blocks.
+
 ## [7.22.9]
 
 ### Fixed

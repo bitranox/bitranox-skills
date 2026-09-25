@@ -50,7 +50,9 @@ import self_improve_signals as sig  # noqa: E402
 
 
 _PROMOTE_CMDS = ("saw-promotable", "should-promote", "promoted")
-_REVIEWER = "dream"          # the dream's own watermark; the regex audit marks separately
+_REVIEWER = sig.DREAM_REVIEWER   # the dream's own watermark; the regex audit marks separately.
+                                 # Shared with the Stop gate, which reads it to tell a consumed
+                                 # owed transcript from an unread one.
 
 
 def _render_review(subs, touched, skills, text, offset, proj, structured_only=False, path="",
