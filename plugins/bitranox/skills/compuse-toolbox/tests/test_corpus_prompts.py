@@ -240,6 +240,28 @@ def test_cli_a_predicate_option_without_its_module_is_a_usage_error(tmp_path, ca
     assert "corpus_prompts:" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("extra", [
+    ["--module", "pred.py", "--func", "b"],
+    ["--module", "pred.py", "--func", "b", "--module-b", "pred.py", "--func-b", "a"],
+])
+def test_cli_count_with_a_predicate_is_refused_not_run_without_it(tmp_path, capsys, extra):
+    """--count called no predicate, so `--count --module` printed a bare prompt count, exit 0,
+    and the predicate the caller named was never asked anything."""
+    root, pred = _corpus(tmp_path)
+    extra = [str(pred) if a == "pred.py" else a for a in extra]
+    assert cp.main(["--root", str(root), "--count", *extra]) == 2
+    captured = capsys.readouterr()
+    assert "--count" in captured.err and "--module" in captured.err
+    assert captured.out == ""
+
+
+def test_cli_the_same_predicate_without_count_reports_its_firings(tmp_path, capsys):
+    """Control for the refusal above: dropping --count is how a predicate's count is printed."""
+    root, pred = _corpus(tmp_path)
+    assert cp.main(["--root", str(root), "--module", str(pred), "--func", "b"]) == 0
+    assert "a fired: 1" in capsys.readouterr().out
+
+
 @pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
                     reason="needs POSIX permissions that bind the running user (root reads anyway)")
 def test_cli_an_unreadable_transcript_exits_2_and_says_so_on_stderr(tmp_path, capsys):

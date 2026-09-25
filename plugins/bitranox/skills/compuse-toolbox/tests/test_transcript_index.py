@@ -264,3 +264,117 @@ def test_the_project_label_survives_a_nested_transcript(tmp_path):
     ti.index_dir(tmp_path, db)
     hits = ti.search(db, "xyzneedle")
     assert hits and hits[0]["project"] == "-proj-b"
+
+
+# --- only the message TEXT is searchable; the label columns are not ------------------------------
+
+# The DDL every index built before the label columns became UNINDEXED carries. An old database on a
+# user's machine keeps it until something rebuilds the table, so the migration is tested against it.
+OLD_DDL = ("CREATE VIRTUAL TABLE messages "
+           "USING fts5(project, path, role, text, tokenize='porter unicode61')")
+
+
+def _labelled_corpus(root):
+    """One message says 'animals'; NEITHER says 'zebraproject', which is only in their path."""
+    return _write_transcript(root, "-media-zebraproject", [
+        {"type": "user", "message": {"content": "nothing about animals here"}},
+        {"type": "assistant", "message": {"content": "a reply that names no project"}},
+    ])
+
+
+def _fresh_index(root):
+    _labelled_corpus(root)
+    db = sqlite3.connect(":memory:")
+    ti.ensure_schema(db)
+    ti.index_dir(root, db)
+    return db
+
+
+def test_a_word_only_in_the_transcript_path_matches_nothing(tmp_path):
+    """A path word matched EVERY message in that transcript, so a miss read as a hit."""
+    db = _fresh_index(tmp_path)
+    assert ti.search(db, "zebraproject") == []
+    assert [h["text"] for h in ti.search(db, "animals")] == ["nothing about animals here"]
+
+
+def test_a_word_only_in_the_role_matches_nothing(tmp_path):
+    """'assistant' is a role label, not something the message said."""
+    db = _fresh_index(tmp_path)
+    assert ti.search(db, "assistant") == []
+    assert [h["text"] for h in ti.search(db, "reply")] == ["a reply that names no project"]
+
+
+def test_the_label_columns_are_still_returned_with_a_hit(tmp_path):
+    db = _fresh_index(tmp_path)
+    (hit,) = ti.search(db, "animals")
+    path = tmp_path / "-media-zebraproject" / "session.jsonl"
+    assert (hit["project"], hit["path"], hit["role"]) == ("-media-zebraproject", str(path), "user")
+
+
+def _old_database(db_path, transcript):
+    """A database exactly as the pre-fix tool left it: old DDL, two rows, their seen keys."""
+    db = sqlite3.connect(db_path)
+    db.execute(OLD_DDL)
+    db.execute("CREATE TABLE seen (key TEXT PRIMARY KEY)")
+    for lineno, (role, text) in enumerate([("user", "nothing about animals here"),
+                                           ("assistant", "a reply that names no project")]):
+        db.execute("INSERT INTO seen(key) VALUES (?)", (f"{transcript}:{lineno}",))
+        db.execute("INSERT INTO messages(project, path, role, text) VALUES (?, ?, ?, ?)",
+                   ("-media-zebraproject", str(transcript), role, text))
+    db.commit()
+    db.close()
+
+
+def test_an_old_schema_database_is_migrated_not_left_matching_paths(tmp_path):
+    """CREATE ... IF NOT EXISTS never touched an existing table, so an old index would have kept
+    matching path words after the fix while the code claimed otherwise."""
+    transcript = _labelled_corpus(tmp_path / "projects")
+    db_path = tmp_path / "old.db"
+    _old_database(db_path, transcript)
+    db = sqlite3.connect(db_path)
+    assert ti.search(db, "zebraproject")          # control: the old table DOES match the path
+    ti.ensure_schema(db)
+    assert ti.search(db, "zebraproject") == []
+    assert ti.search(db, "assistant") == []
+    # Nothing was lost: every row, its labels, its newest-first order and its seen key survive.
+    assert [h["text"] for h in ti.search(db, "about OR reply", raw=True)] == [
+        "a reply that names no project", "nothing about animals here"]
+    assert ti.search(db, "animals")[0]["project"] == "-media-zebraproject"
+    assert ti.index_dir(tmp_path / "projects", db) == 0
+
+
+def test_migrating_twice_is_a_no_op(tmp_path):
+    transcript = _labelled_corpus(tmp_path / "projects")
+    db_path = tmp_path / "old.db"
+    _old_database(db_path, transcript)
+    db = sqlite3.connect(db_path)
+    ti.ensure_schema(db)
+    ti.ensure_schema(db)
+    assert len(ti.search(db, "about OR reply", raw=True)) == 2
+    assert ti.search(db, "zebraproject") == []
+
+
+def test_a_migration_that_fails_part_way_keeps_the_old_index(tmp_path):
+    """The sqlite3 module opens no implicit transaction before DDL, so without an explicit BEGIN
+    the DROP committed on its own and a failed rebuild left no index at all."""
+    transcript = _labelled_corpus(tmp_path / "projects")
+    db_path = tmp_path / "old.db"
+    _old_database(db_path, transcript)
+    db = sqlite3.connect(db_path)
+    with pytest.raises(sqlite3.OperationalError, match="nosuchmodule"):
+        ti._migrate_messages(db, ddl="CREATE VIRTUAL TABLE messages USING nosuchmodule(x)")
+    db.close()
+    kept = sqlite3.connect(db_path).execute("SELECT text FROM messages ORDER BY rowid").fetchall()
+    assert kept == [("nothing about animals here",), ("a reply that names no project",)]
+
+
+def test_cli_search_on_an_old_database_does_not_match_path_words(tmp_path):
+    """End to end: the database a previous version left in ~/.claude is what a user searches."""
+    transcript = _labelled_corpus(tmp_path / ".claude" / "projects")
+    _old_database(tmp_path / ".claude" / "transcript-index.db", transcript)
+    p = _cli(tmp_path, "search", "zebraproject", "--json")
+    assert p.returncode == 1, p.stdout
+    assert json.loads(p.stdout)["data"] == []
+    p = _cli(tmp_path, "search", "animals", "--json")
+    assert p.returncode == 0, p.stderr
+    assert [h["text"] for h in json.loads(p.stdout)["data"]] == ["nothing about animals here"]

@@ -863,15 +863,21 @@ def _prefix_transcript(prompt, tmp_dir):
     The arms must be judged on the state the live hook would have built, and the only way to be
     sure of that is to call the hook's own `_router_fields` rather than to rebuild its logic
     here. That function reads a transcript PATH, so the prefix becomes a file.
+
+    `line` was numbered by corpus_prompts, so the prefix is cut by corpus_prompts too: a second
+    split here (splitlines() breaks on U+2028, \\f, a lone \\r and more) ended it inside a record.
+    newline="" writes the lines back as read, so a CRLF transcript is not rewritten on Windows.
     """
+    import corpus_prompts  # noqa: PLC0415 - only the live path builds a prefix
+
     source, line = prompt.get("source"), int(prompt.get("line") or 1)
     out = Path(tmp_dir) / "prefix.jsonl"
     try:
-        text = Path(source).read_text(encoding="utf-8", errors="replace")
+        text = corpus_prompts.read_transcript(source)
     except OSError:
         out.write_text("", encoding="utf-8")
         return str(out)
-    out.write_text("\n".join(text.splitlines()[:max(0, line - 1)]), encoding="utf-8")
+    out.write_text(corpus_prompts.transcript_prefix(text, line), encoding="utf-8", newline="")
     return str(out)
 
 

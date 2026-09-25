@@ -1,9 +1,11 @@
 """Tests for classifier_eval.py - the shadow-log report comparing the regex and Jev per site."""
 import json
+import pathlib
 
 import pytest
 
 import classifier_eval as ce
+import corpus_prompts  # importable because classifier_eval puts compuse-toolbox/scripts on sys.path
 
 
 def _noul(v):
@@ -1162,3 +1164,55 @@ def test_a_cp1252_console_survives_a_json_envelope_it_cannot_encode(tmp_path):
     assert r.returncode == 2, r.stderr
     assert "UnicodeEncodeError" not in r.stderr
     assert json.loads(r.stdout)["ok"] is False
+
+
+# ---- the replay prefix ends exactly where corpus_prompts says the prompt's line is --------------
+
+def _cli_record(uuid, content):
+    return json.dumps({"type": "user", "uuid": uuid, "entrypoint": "cli", "isSidechain": False,
+                       "message": {"role": "user", "content": content}}, ensure_ascii=False)
+
+
+# Records a JSONL writer can leave in a transcript: str.splitlines() breaks each of them in two
+# (U+2028, U+2029, U+0085 are legal unescaped in a JSON string; a raw \f, \x1c or \r inside a line
+# makes it unparseable, but it is still ONE line), so a splitlines() count drifts from a "\n" one.
+_AWKWARD = [
+    json.dumps({"type": "assistant", "message": {"content": "a\u2028b"}}, ensure_ascii=False),
+    '{"type": "assistant", "message": {"content": "form\ffeed"}}',
+    _cli_record("u1", "first\u2029second\x85third"),
+    'half\x1cwritten\rrecord',
+    _cli_record("u2", "the prompt after all of them"),
+]
+
+
+def _prefix_of(tmp_path, prompt):
+    out_dir = tmp_path / ("out-%s" % prompt["uuid"])
+    out_dir.mkdir()
+    return pathlib.Path(ce._prefix_transcript(prompt, out_dir)).read_bytes().decode("utf-8")
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_the_replay_prefix_and_corpus_prompts_count_the_same_lines(tmp_path, eol):
+    """The prefix is cut at the line corpus_prompts numbered; splitlines() cut it elsewhere, so the
+    arm was judged on a state holding half a record, or missing earlier ones."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    text = eol.join(_AWKWARD) + eol
+    (corpus / "t.jsonl").write_bytes(text.encode("utf-8"))
+    prompts = corpus_prompts.collect_prompts(str(corpus))["prompts"]
+    assert [(p["uuid"], p["line"]) for p in prompts] == [("u1", 3), ("u2", 5)]
+    records = text.split("\n")
+    for prompt in prompts:
+        prefix = _prefix_of(tmp_path, prompt)
+        assert prefix == "\n".join(records[:prompt["line"] - 1])
+        assert prefix.split("\n") == records[:prompt["line"] - 1]
+        assert prompt["uuid"] not in prefix
+
+
+def test_the_replay_prefix_of_the_first_line_is_empty(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "t.jsonl").write_text(_cli_record("u1", "hi") + "\n", encoding="utf-8")
+
+    (prompt,) = corpus_prompts.collect_prompts(str(corpus))["prompts"]
+    assert _prefix_of(tmp_path, prompt) == ""

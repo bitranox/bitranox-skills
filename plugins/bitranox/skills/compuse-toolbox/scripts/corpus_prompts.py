@@ -45,7 +45,8 @@ or the first N prompts when no predicate is given; `--json` carries the same N. 
 transcripts and directories are listed on stderr.
 
 Exit codes: 0 fine, 1 the corpus held no prompt, 2 usage or IO error - a --root that does not
-exist, a predicate option without its module, or any transcript or directory that could not be
+exist, a predicate option without its module, --count together with --module (--count calls no
+predicate; drop it to get the firing counts), or any transcript or directory that could not be
 read (the counts printed then cover only what was read).
 """
 
@@ -57,7 +58,8 @@ from pathlib import Path
 
 __all__ = [
     "DEFAULT_ROOT", "TYPED_ENTRYPOINTS", "UsageError", "collect_prompts", "diff_predicates",
-    "extract_prompts", "main", "prompt_key", "prompt_text_of",
+    "extract_prompts", "main", "prompt_key", "prompt_text_of", "read_transcript",
+    "transcript_lines", "transcript_prefix",
 ]
 
 DEFAULT_ROOT = "~/.claude/projects"
@@ -101,17 +103,43 @@ def prompt_text_of(message):
     return "\n".join(texts)
 
 
+def read_transcript(path):
+    """A transcript's text, decoded the one way every line number here is counted against.
+
+    Bytes, not text mode: text mode turns a lone \\r into a line break and so renumbers every
+    later line. utf-8-sig: a BOM would otherwise make the first record unparseable.
+    """
+    return Path(path).read_bytes().decode("utf-8-sig", errors="replace")
+
+
+def transcript_lines(text):
+    """The lines of a transcript, split the one way `line` numbers here count them.
+
+    Newline only, because JSONL is newline-delimited: JSON may carry U+2028/U+2029/U+0085
+    unescaped inside a string, and a half-written line may hold a raw \\f, \\x1c or \\r, and
+    splitlines() breaks each of those in two, dropping the record and shifting every later number.
+    """
+    return text.split("\n")
+
+
+def transcript_prefix(text, line):
+    """The transcript as it stood before 1-based `line`: every earlier line, byte for byte.
+
+    A replay rebuilds a prompt's state from this, so it must end exactly where `extract_prompts`
+    numbered the prompt; a caller cutting it with its own split drifts at the first odd record.
+    """
+    return "\n".join(transcript_lines(text)[:max(0, line - 1)])
+
+
 def extract_prompts(text, source="", sidechain=False):
     """Every typed prompt in one transcript, with the context a replay needs to rebuild its state.
 
     Each carries `source` and the 1-based `line` it came from, so a caller can reconstruct the
-    transcript PREFIX and ask the production code what state it would have built at that moment,
-    rather than reimplementing that state here and drifting from it.
+    transcript PREFIX (`transcript_prefix`) and ask the production code what state it would have
+    built at that moment, rather than reimplementing that state here and drifting from it.
     """
     out = []
-    # Newline only: JSON may carry U+2028/U+2029/U+0085 unescaped inside a string, and
-    # splitlines() breaks a record in two there, dropping it and shifting every later line number.
-    for number, line in enumerate(text.split("\n"), start=1):
+    for number, line in enumerate(transcript_lines(text), start=1):
         if not line.strip():
             continue
         try:
@@ -166,7 +194,7 @@ def collect_prompts(root, sidechain=False):
     prompts, files_read, seen, duplicates = [], 0, set(), 0
     for path in files:
         try:
-            text = path.read_bytes().decode("utf-8-sig", errors="replace")
+            text = read_transcript(path)
         except OSError as exc:
             skipped.append("%s: %s" % (path, exc))
             continue
@@ -244,6 +272,11 @@ def _check_predicate_options(args):
         raise UsageError("--func, --module-b and --func-b need --module")
     if args.module_b is None and args.func_b:
         raise UsageError("--func-b needs --module-b")
+    if args.count and args.module is not None:
+        # --count calls no predicate, so honouring both printed a bare prompt count and asked the
+        # named predicate nothing. Without --count the output already carries its firing count.
+        raise UsageError("--count calls no predicate, so it cannot be combined with --module; "
+                         "drop --count to print the predicate's firing counts")
 
 
 def _check_root(root):
@@ -293,7 +326,7 @@ def _run(args):
     _check_root(args.root)
     report = collect_prompts(args.root, sidechain=args.sidechain)
     sample = report["prompts"]
-    if not args.count and args.module:
+    if args.module:
         first = _load(args.module, args.func or DEFAULT_FUNC)
         second = (_load(args.module_b, args.func_b or DEFAULT_FUNC) if args.module_b
                   else (lambda _t: False))

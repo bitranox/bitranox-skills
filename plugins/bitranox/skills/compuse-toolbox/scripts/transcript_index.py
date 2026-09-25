@@ -21,6 +21,12 @@ occur (in any order), so a filename, a flag or error text is searchable as
 typed: `search anchor_edit.py`, `search ssh-keygen`. Pass --fts to write raw
 SQLite FTS5 syntax instead (OR, NEAR, "exact phrase", prefix*).
 
+Only the message text is searched. The project, path and role printed with a
+hit are labels, not searchable text, so a word that occurs only in a
+transcript's path matches nothing, and an --fts column filter on one of them
+(`project : foo`) matches nothing either. An index built by an older version,
+which searched the labels too, is rebuilt in place on the next run.
+
 Usage:
     transcript_index.py index
     transcript_index.py search "zpool scrub" --limit 5
@@ -55,15 +61,55 @@ class QueryError(ValueError):
     """The query could not be run, so it answered nothing - never report it as a miss."""
 
 
+# Only `text` is tokenised. The other three are labels returned with a hit: indexed as full text, a
+# word in a transcript's PATH matched every message in that transcript, and "assistant" matched
+# every reply, so a query answered yes about something no message ever said.
+MESSAGES_DDL = (
+    "CREATE VIRTUAL TABLE messages USING fts5("
+    "project UNINDEXED, path UNINDEXED, role UNINDEXED, text, tokenize='porter unicode61')"
+)
+# Recorded in PRAGMA user_version. A database below it predates the UNINDEXED labels, and
+# `CREATE ... IF NOT EXISTS` would leave its old table matching path words for ever.
+SCHEMA_VERSION = 1
+
+
+def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    row = db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)).fetchone()
+    return row is not None
+
+
+def _migrate_messages(db: sqlite3.Connection, *, ddl: str = MESSAGES_DDL) -> None:
+    """Rebuild an old `messages` table under `ddl`, keeping every row and its rowid.
+
+    The rowid is kept because search orders newest-first by it, and the `seen` registry is left
+    alone so a re-index after the migration adds nothing twice. One transaction: a failure part way
+    leaves the old table, never an empty one.
+    """
+    db.commit()
+    with db:
+        # Explicit: the sqlite3 module opens no implicit transaction before DDL, so without this
+        # the DROP would commit on its own and a failed copy would lose the whole index.
+        db.execute("BEGIN")
+        db.execute("CREATE TEMP TABLE messages_old AS "
+                   "SELECT rowid AS rid, project, path, role, text FROM messages")
+        db.execute("DROP TABLE messages")
+        db.execute(ddl)
+        db.execute("INSERT INTO messages(rowid, project, path, role, text) "
+                   "SELECT rid, project, path, role, text FROM messages_old ORDER BY rid")
+        db.execute("DROP TABLE messages_old")
+
+
 def ensure_schema(db: sqlite3.Connection) -> None:
-    """Create the FTS5 table and the seen-line registry if absent."""
-    db.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS messages "
-        "USING fts5(project, path, role, text, tokenize='porter unicode61')"
-    )
+    """Create the FTS5 table and the seen-line registry, migrating an older version's table."""
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if not _table_exists(db, "messages"):
+        db.execute(MESSAGES_DDL)
+    elif version < SCHEMA_VERSION:
+        _migrate_messages(db)
     db.execute(
         "CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY)"
     )
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     db.commit()
 
 
