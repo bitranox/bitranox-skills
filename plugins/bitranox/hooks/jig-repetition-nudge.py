@@ -42,7 +42,7 @@ import re
 import sys
 from pathlib import Path
 
-from shell_text import HEREDOC_OPEN, is_shell_tool  # noqa: E402 - shared with the other command guards
+from shell_text import is_shell_tool, iter_heredocs  # noqa: E402 - shared with the other command guards
 
 SCRIPT_SUFFIXES = {".ps1", ".py", ".sh", ".bash", ".psm1"}
 VARIANTS_BEFORE_NUDGE = 3        # a group of three is the smallest that shows a PATTERN, not a retry
@@ -102,19 +102,8 @@ def heredoc_writes(command):
     """
     out = []
     lines = (command or "").split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        opener = HEREDOC_OPEN.search(line)
-        i += 1
-        if not opener:
-            continue
-        delimiter = opener.group(2)
-        body = []
-        while i < len(lines) and lines[i].strip() != delimiter:
-            body.append(lines[i])
-            i += 1
-        i += 1                                        # drop the terminator
+    for at, opener, (start, end) in iter_heredocs(command):
+        line, body = lines[at], lines[start:end]
         # The redirect target must come from the text BEFORE the `<<`, or `<<'EOS'` itself and any
         # redirect inside the body would be mistaken for the destination.
         #

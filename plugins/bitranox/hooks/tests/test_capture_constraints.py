@@ -71,3 +71,46 @@ def test_a_working_procedure_is_not_flagged():
 
 def test_advise_never_raises_on_empty_input():
     assert cc.advise("", "") == []
+
+
+# ---- an imperative is not a claim ------------------------------------------------------------
+
+
+def _negative(hook):
+    return any("negative claim" in a for a in cc.advise(hook, ""))
+
+
+def test_an_imperative_do_not_work_is_not_a_negative_claim():
+    assert not _negative("When on a shared checkout, do not work on main directly.")
+    assert not _negative("When a task needs root, don't work as root; use sudo per command.")
+    assert not _negative("Do not work around a failing gate.")
+
+
+def test_control_a_subject_before_do_not_work_is_still_a_claim():
+    assert _negative("When using foo, know --bar and --baz do not work together.")
+    assert _negative("When using foo, know the flags don't work on Windows.")
+    assert _negative("When using foo, know it does not work.")
+
+
+# ---- contractions and the curly apostrophe read like their spelled-out forms -----------------
+
+
+def test_contracted_negative_claims_are_flagged():
+    assert _negative("When using foo, know --bar isn't supported.")
+    assert _negative("When using foo, know the old API can't be used.")
+    assert _negative("When using foo, know it doesn%st work." % chr(0x2019))
+
+
+def test_a_contracted_unresolved_failure_is_flagged():
+    out = cc.advise("When X happens, check Y.", "We didn't find a working fix yet.")
+    assert any("unresolved" in a for a in out), out
+
+
+def test_control_spelled_out_forms_still_flag():
+    assert _negative("When using foo, know --bar is not supported.")
+    assert _negative("When using foo, know the old API cannot be used.")
+
+
+def test_control_a_contraction_that_is_not_a_negative_claim_is_quiet():
+    assert not _negative("When releasing, don't skip the gate; run make test first.")
+    assert cc.advise("When X, run Y.", "It didn't take long.") == []

@@ -398,7 +398,7 @@ def _gap_continues_after_failure(parts: list[str], start: int, stop: int) -> boo
     return False
 
 
-def chained_state_changes(command: str) -> list[str] | None:
+def chained_state_changes(command: str, tool_name: str = "Bash") -> list[str] | None:
     """The first pair of state-changing git verbs joined across an unguarded `;`, or None.
 
     EVERY pair is examined, not just consecutive ones. Consecutive-only looked equivalent and is
@@ -408,7 +408,7 @@ def chained_state_changes(command: str) -> list[str] | None:
     ff-merge run the second merge on a stale base and push it sat right there.
     """
     stripped = strip_heredoc_bodies(command or "")
-    text = _mask_groups(mask_data_regions(stripped))
+    text = _mask_groups(mask_data_regions(stripped, tool_name=tool_name))
     if _unjudgeable(text):
         return None
 
@@ -457,7 +457,7 @@ def main() -> int:
     except Exception:
         return 0
     command = (event.get("tool_input") or {}).get("command") or ""
-    verbs = chained_state_changes(command)
+    verbs = chained_state_changes(command, event.get("tool_name") or "Bash")
     if not verbs:
         return 0
     sys.stderr.write(

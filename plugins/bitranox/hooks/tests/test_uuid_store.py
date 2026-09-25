@@ -536,3 +536,26 @@ def test_slugify_output_is_always_a_valid_slug():
     for title in ("No em dashes", "", "  ---  ", "C:\\path\\to", "../../etc", "ps7.6 hosting"):
         assert us.is_valid_slug(us.slugify(title)), title
         assert us.is_valid_slug(us.slugify(title, "feedback")), title
+
+
+# ---- Windows device names ---------------------------------------------------------------------
+# A slug becomes `facts/<slug>.md`, and Windows maps CON, PRN, AUX, NUL, COM0-9 and LPT0-9 to
+# devices whatever the extension: `con.md` cannot be created there, and `nul.md` swallows the write.
+
+
+@pytest.mark.parametrize("slug", ["con", "prn", "aux", "nul", "com1", "com9", "com0", "lpt1",
+                                  "lpt9", "lpt0", "con.backup", "nul.1.2"])
+def test_is_valid_slug_rejects_a_windows_device_name(slug):
+    assert not us.is_valid_slug(slug)
+
+
+@pytest.mark.parametrize("slug", ["console", "aux-fact", "com10", "feedback-con", "nullable",
+                                  "lpt-printing", "prn2", "a.con"])
+def test_control_a_name_that_merely_contains_a_device_name_is_valid(slug):
+    assert us.is_valid_slug(slug)
+
+
+@pytest.mark.parametrize("title", ["CON", "Aux", "nul", "COM3", "lpt1"])
+def test_slugify_never_produces_a_windows_device_name(title):
+    assert us.is_valid_slug(us.slugify(title)), us.slugify(title)
+    assert us.slugify(title, "feedback") == "feedback-" + title.lower()

@@ -29,6 +29,46 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.8]
+
+### Fixed
+
+- The tell scan and `strip_typographic_tells.py` close a code fence the CommonMark way: only on a
+  bare run of the opener's own character, at least as long. A `~~~` line inside a backtick block,
+  or a three-backtick example inside a four-backtick fence, no longer ends the block early, and a
+  prose line that merely starts with an inline span (```` ```x``` ````) no longer opens one.
+- Inline code spans of any backtick-run length (` ``like this`` `) are treated as code by the scan
+  and the rewriter; only single-backtick spans were before.
+- `strip_typographic_tells.py` adds no space beside an em dash at the edge of a line: an em dash at
+  column 0 no longer gains indentation, and one at the end of a file or before a CRLF no longer
+  leaves trailing whitespace. A line or paragraph separator whose new line would start with a
+  fence marker becomes a space rather than a newline, so a second run leaves the output unchanged.
+  Stdin mode reads and writes UTF-8 whatever the console locale, and keeps CRLF line endings.
+- The memory engine's negative-claim advisory reads contractions and the curly apostrophe like
+  their spelled-out forms (`isn't supported`, `can't be used`, `didn't find a working`), and no
+  longer fires on an instruction such as "When on main, do not work there".
+- The command guards find a heredoc the way the shell does: a `<<` inside arithmetic
+  (`(( x << y ))`, `$((1 << n))`) opens nothing, a quoted mention of `<<EOF` no longer hides a
+  real opener later on the same line, and quoting is read across lines, so a `<<EOF` inside a
+  multi-line `python3 -c "..."` string is not taken for one. Before, the lines after such a shift
+  were dropped as a heredoc body and no guard saw them.
+- Under the PowerShell tool the statement masks treat a backtick as the escape and a backslash as
+  a path separator, so `cd C:\; ...` and `"C:\temp\"; ...` no longer hide the next statement from
+  `block-sed-structured-files`, `shell-prefix-selfref-guard`, `block-git-semicolon-chain`,
+  `block-masked-gate-exit`, `git-path-not-here-nudge`, `git-wrong-repo-nudge` or
+  `tooling-detour-nudge`.
+- A `#` after an escaped character (`a\ #b`) or after a line continuation that follows a word is
+  mid-word, not a comment, so the rest of that line is no longer blanked from the guards.
+- `dedup_scan.py`, `store_manifest.py`, `statusrot.py`, `ref_map.py` and `mem_levels.py` read a
+  level's pointers with the engine's own parser: only the managed block counts, each slug once,
+  and a pointer-shaped line in the surrounding prose is no longer taken for a fact.
+- `reconcile_memory_index.py --archive` no longer moves a file named by a damaged pointer such as
+  `mem:../../CLAUDE`; it drops the pointer and touches nothing. `--rehome` skips a dangling body
+  whose filename is not a valid slug instead of stopping at it, names it, and exits 1.
+- A slug may no longer be a Windows device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`,
+  `lpt0`-`lpt9`, with or without a dotted suffix), which no Windows machine can store as a file;
+  a title that would slugify to one gets a `-note` suffix.
+
 ## [7.22.7]
 
 ### Fixed

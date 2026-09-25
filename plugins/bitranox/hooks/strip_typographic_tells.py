@@ -11,8 +11,13 @@ three, and the rest) are described in SKILL.md and stay with the model.
 An em dash becomes a spaced hyphen carrying one space per side, reusing the space
 already beside it, so a spaced em dash needs no hand tidy afterwards. Wider
 spacing beside the dash is column padding and stays as it is, as does whitespace
-at either end of the line. The other dashes become a bare hyphen and keep the
-text's spacing.
+at either end of the line, and a dash AT a line edge gets no space on that side.
+The other dashes become a bare hyphen and keep the text's spacing. A line or
+paragraph separator becomes a newline, or a space where a newline would start a
+code fence the original did not have.
+
+Stdin mode reads and writes UTF-8 whatever the console's locale, with line
+endings passed through as they arrived.
 
 This is the exact inverse of the tell-sweep detector: running it makes a file
 pass that check. Symbols that are intentionally allowed (arrow, multiply sign,
@@ -105,35 +110,75 @@ TABLE = _build_table()
 # item) and a trailing run can be a markdown hard line break (two spaces), so a run against a
 # newline is neither consumed nor created.
 _EM_DASHES = "".join(chr(cp) for cp in (0x2014, 0x2E3A, 0x2E3B))
-_ON_THE_LINE = "[^ \t\n]"          # neither horizontal whitespace nor a line break
+_ON_THE_LINE = "[^ \t\r\n]"        # neither horizontal whitespace nor a line break
 _EM_DASH_RUN = re.compile(
     "(?:(?<=%s)[ \t]?)?[%s](?:[ \t]?(?=%s))?" % (_ON_THE_LINE, _EM_DASHES, _ON_THE_LINE)
 )
-_SPACE_OR_BREAK = (" ", "\t", "\n")
+_SPACE_OR_BREAK = (" ", "\t", "\r", "\n")
 
 
-def _spaced_hyphen(match):
+def _spaced_hyphen(match, starts_line, ends_line):
     """Return the hyphen with a space only on the sides that face text on the same line.
 
-    A side with NO character at all is a segment edge, which is not necessarily a line edge: the
-    caller splits each line at its inline-code spans, so "`x`<em dash>y" arrives here as
-    "<em dash>y". A space is the safe answer there (dropping it would weld the hyphen onto the
-    code span) and it is also what the old table entry produced."""
+    A side with NO character at all is a stretch edge, and that is either a LINE edge or the edge
+    of an inline-code span: the caller splits each line at its spans, so "`x`<em dash>y" arrives
+    here as "<em dash>y". Beside a span a space is right (dropping it would weld the hyphen onto the
+    code). At a line edge it is wrong in both directions - a leading one is new indentation and a
+    trailing one is new trailing whitespace - so `starts_line` / `ends_line` say which edge it is."""
     text = match.string
-    before = text[match.start() - 1] if match.start() else ""
-    after = text[match.end()] if match.end() < len(text) else ""
-    left = "" if before in _SPACE_OR_BREAK else " "
-    right = "" if after in _SPACE_OR_BREAK else " "
+    at_start, at_end = match.start() == 0, match.end() == len(text)
+    before = text[match.start() - 1] if not at_start else ""
+    after = text[match.end()] if not at_end else ""
+    left = "" if before in _SPACE_OR_BREAK or (at_start and starts_line) else " "
+    right = "" if after in _SPACE_OR_BREAK or (at_end and ends_line) else " "
     return left + "-" + right
 
 
-def _normalize_prose(text):
+def _normalize_prose(text, starts_line, ends_line):
     """Translate the tells in one non-code stretch, then fix the em-dash spacing.
 
     The order matters: the table turns non-breaking spaces into plain ones and drops the
     zero-width characters, so an em dash padded with either reaches the dash pass surrounded by
     ordinary spaces and collapses like any other."""
-    return _EM_DASH_RUN.sub(_spaced_hyphen, text.translate(TABLE))
+    return _EM_DASH_RUN.sub(lambda m: _spaced_hyphen(m, starts_line, ends_line),
+                            text.translate(TABLE))
+
+
+_SEPARATORS = "".join(chr(cp) for cp in (0x0085, 0x2028, 0x2029))
+_SEPARATOR_RUN = re.compile("[%s]" % _SEPARATORS)
+
+
+def _break_prose_separators(text):
+    """Turn every line/paragraph separator OUTSIDE code into a newline, before the code walk.
+
+    They are line breaks by meaning, and they have to become real ones FIRST: which lines are fence
+    lines decides what is code, and a rewrite that makes new lines after that decision leaves a
+    file whose structure differs from the one it was judged on. The one exception is a separator
+    whose new line would begin with a fence marker. A newline there OPENS a block the original never
+    had - its later fences then pair up differently, a second run rewrites the example the first run
+    kept as code, and the output is no longer a fixed point. That separator becomes a space.
+
+    Separators inside an inline-code span or a fenced block stay, like every other tell there."""
+    if not _SEPARATOR_RUN.search(text or ""):
+        return text
+    out = []
+    for line, is_code in tell_chars.lines_with_code_state(text, keepends=True):
+        if is_code:
+            out.append(line)
+            continue
+        parts = tell_chars.split_inline(line)
+        for i in range(0, len(parts), 2):          # prose stretches; the spans between stay
+            pieces = _SEPARATOR_RUN.split(parts[i])
+            rebuilt = pieces[0]
+            for j, piece in enumerate(pieces[1:], 1):
+                # The new line runs to the next separator, which for the last piece of a stretch
+                # may lie beyond the spans that follow it.
+                rest = piece if j < len(pieces) - 1 else piece + "".join(parts[i + 1:])
+                new_line = _SEPARATOR_RUN.split(rest, maxsplit=1)[0]
+                rebuilt += (" " if tell_chars.fence_opener(new_line) else "\n") + piece
+            parts[i] = rebuilt
+        out.append("".join(parts))
+    return "".join(out)
 
 
 def normalize(text):
@@ -142,7 +187,8 @@ def normalize(text):
     Inline-code spans and fenced blocks are left byte-identical: a tell inside them is usually a
     deliberate example of the very character being documented, and rewriting it destroys the
     example. This is the same code definition the tell-sweep hook uses."""
-    return tell_chars.transform_outside_code(text, _normalize_prose)
+    return tell_chars.transform_outside_code(
+        _break_prose_separators(text), _normalize_prose, edges=True)
 
 
 def _main(argv):
@@ -152,6 +198,13 @@ def _main(argv):
         check, args = True, args[1:]
 
     if not args or args == ["-"]:
+        # The stream's encoding is the locale's unless something overrides it, and a cp1252
+        # console turns an em dash into three garbage bytes before this ever sees it. Same
+        # newline="" reasoning as the file branch below: line endings pass through untouched.
+        # An in-memory stream (a caller's StringIO) has no encoding to fix and no reconfigure.
+        for stream in (sys.stdin, sys.stdout):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", newline="")
         data = sys.stdin.read()
         out = normalize(data)
         if check:

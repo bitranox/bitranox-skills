@@ -30,8 +30,8 @@ from pathlib import Path
 # whether a given `[[x]]` is a reference or quoted syntax
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import memory_engine as ME  # noqa: E402
+import uuid_store  # noqa: E402 - the engine's pointer parser, so a level holds what the engine reads
 
-POINTER_RX = re.compile(r"^- \[(?P<title>[^\]]*)\]\(mem:(?P<slug>[^)]+)\)")
 REF_RX = re.compile(r"\[\[([^\]]+)\]\]")
 _SKIP_DIRS = ("node_modules", ".git")
 
@@ -56,10 +56,9 @@ def read_levels(root: Path) -> dict[str, str]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for line in text.splitlines():
-            match = POINTER_RX.match(line.strip())
-            if match:
-                levels[canon(match.group("slug"))] = str(path.parent)
+        for pointer in uuid_store.parse_pointer_index(text)[1]:
+            if not pointer.legacy:
+                levels[canon(pointer.slug)] = str(path.parent)
     return levels
 
 

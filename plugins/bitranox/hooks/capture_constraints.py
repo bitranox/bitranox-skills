@@ -14,7 +14,9 @@ NEGATIVE_RX matches gets the negative-claim advisory - whether a version or
 date sits nearby does not change that, because a regex over the surrounding
 text cannot tell an incidental version from one that actually scopes the
 claim. The author judges: record the working alternative instead, or state
-the version and date so a later reader can re-test the claim.
+the version and date so a later reader can re-test the claim. Two readings are
+settled before matching: contractions count as their spelled-out forms, and a
+clause-initial "do not work" is an instruction, not a claim about a tool.
 """
 
 from __future__ import annotations
@@ -23,11 +25,13 @@ import re
 
 __all__ = ["advise", "NEGATIVE_RX", "UNRESOLVED_RX"]
 
+# Both patterns match the SPELLED-OUT forms. `advise` expands contractions first (`_spelled_out`),
+# so "isn't supported" and "can't be used" are read as "is not supported" and "cannot be used".
 NEGATIVE_RX = re.compile(
     r"\b(?:"
-    r"do(?:es)?\s+not\s+work|doesn't\s+work|don't\s+work"
+    r"(?P<plain>do)\s+not\s+work|does\s+not\s+work"
     r"|is\s+broken|are\s+broken"
-    r"|is\s+not\s+supported|unsupported"
+    r"|(?:is|are)\s+not\s+supported|unsupported"
     r"|never\s+works|cannot\s+be\s+used"
     r")\b",
     re.IGNORECASE,
@@ -74,10 +78,40 @@ def advise(hook: str, body: str) -> list[str]:
         []
     """
     out: list[str] = []
-    hook = hook or ""
-    body = body or ""
-    if NEGATIVE_RX.search(hook) is not None:
+    hook = _spelled_out(hook or "")
+    body = _spelled_out(body or "")
+    if any(not _is_imperative(hook, m) for m in NEGATIVE_RX.finditer(hook)):
         out.append(_NEGATIVE_ADVICE)
     if UNRESOLVED_RX.search(body):
         out.append(_UNRESOLVED_ADVICE)
     return out
+
+
+_CONTRACTION_RX = re.compile(r"\b(\w+)n't\b", re.IGNORECASE)
+_IRREGULAR = {"ca": "cannot", "wo": "will not", "sha": "shall not"}
+
+
+def _spelled_out(text: str) -> str:
+    """`text` with the curly apostrophe made plain and every n't contraction written out.
+
+    "isn't supported", "can't be used" and "didn't find a working" are the same claims as their
+    spelled-out forms, and matching only the long form let every contracted one through.
+    """
+    text = text.replace(chr(0x2019), "'")
+
+    def expand(m: re.Match[str]) -> str:
+        stem = m.group(1)
+        return _IRREGULAR.get(stem.lower()) or stem + " not"
+
+    return _CONTRACTION_RX.sub(expand, text)
+
+
+# What a clause-initial "do not work" follows: the start of the hook or a clause boundary. There
+# it is an instruction ("When on main, do not work there"), not a claim about a tool.
+_CLAUSE_START_RX = re.compile(r"(?:^|[,;:.!?(]|\s-)\s*$")
+
+
+def _is_imperative(text: str, m: re.Match[str]) -> bool:
+    """True when a "do not work" match has no subject before it, so it tells the reader what not
+    to do rather than saying something does not work. "does not work" always has a subject."""
+    return m.group("plain") is not None and _CLAUSE_START_RX.search(text[:m.start()]) is not None

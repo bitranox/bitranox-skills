@@ -8,8 +8,9 @@ every `CLAUDE.local.md` with a `mem:` regex - and that regex is the whole proble
 contain a DOT (`reference-pwshpy-tier-b-hosting-reuse-installed-ps7.6-assemblies`), so the
 intuitive `[a-z0-9-]+` does not match a truncated slug, it fails to match the LINE AT ALL: the
 pointer becomes invisible, and the body it points at reads as an orphan. That misreading is what
-this tool exists to prevent, so the pattern here is deliberately permissive - everything up to the
-closing paren - matching the engine's own `mem:[^)]+`.
+this tool exists to prevent, so it has no pattern of its own: it reads each level with the
+engine's pointer parser (`uuid_store.parse_pointer_index`), which takes a slug up to the closing
+paren, reads only the managed block, and counts each slug once.
 
 The other reason to have it: `reconcile_memory_index.py --check-tree` reports PROBLEMS, and
 `ref_map.py` maps one fact's refs. Neither answers the plain question "what is where", so it kept
@@ -29,14 +30,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Permissive on purpose: a slug's charset is [a-z0-9._-], so anything up to the closing paren.
-# A narrower class silently skips a dotted slug's whole line - the bug this tool prevents.
-POINTER_RX = re.compile(r"\]\(mem:([^)\s]+)\)")
+# The engine's pointer parser, from the plugin's hooks dir: scripts -> compuse-toolbox -> skills
+# -> bitranox. A private regex matched `](mem:x)` anywhere, so a pointer-shaped line in the prose
+# around the managed block counted as a fact at that level and hid a real dangling body.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+import uuid_store  # noqa: E402
+
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIR = ".claude-memory"
 PRUNE = {".git", "node_modules", ".venv", "__pycache__", "target"}
@@ -95,13 +98,8 @@ def _iter_level_files(root: Path):
 
 
 def slugs_in(text: str) -> list[str]:
-    """Pointer slugs in a level file, in order, de-duplicated."""
-    seen, out = set(), []
-    for slug in POINTER_RX.findall(text):
-        if slug not in seen:
-            seen.add(slug)
-            out.append(slug)
-    return out
+    """Pointer slugs in a level file, in order, de-duplicated, as the engine reads them."""
+    return [p.slug for p in uuid_store.parse_pointer_index(text)[1] if not p.legacy]
 
 
 def scan(root: str | Path) -> Report:

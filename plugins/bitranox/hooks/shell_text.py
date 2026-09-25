@@ -565,6 +565,101 @@ def strip_leading_cd(command: str) -> str:
     return command
 
 
+def iter_heredocs(command: str):
+    """Yield (line, opener, body) for every heredoc the shell would open in `command`.
+
+    `line` is the opener's index in `command.split("\\n")`, `opener` its `HEREDOC_OPEN` match on
+    that raw line, and `body` the half-open (start, end) range of body lines; the terminator, when
+    there is one, is line `end`. An unterminated body runs to the last line. THE heredoc walk:
+    every reader of heredocs uses it, so none can disagree about where a body starts.
+
+    The regex knows the opener's SYNTAX; where a `<<` sits decides whether it is one, and two
+    places make it something else:
+
+    - a QUOTED argument, a comment or a substitution: `git commit -m "docs: explain <<EOF
+      heredocs"` opens nothing, and reading it as an opener swallowed the rest of the command, so
+      every guard downstream went silent on a real `git push` after it;
+    - ARITHMETIC, where `<<` is a left shift: `(( z = x << y ))` and `$((1 << n))` read as a
+      heredoc delimited by `y` or `n`, and every later line up to one spelling it was dropped.
+
+    The test is whether the `<<` ITSELF sits in such a region, so a quoted mention does not hide a
+    real opener later on the same line. Quoting is read over the whole remaining text, not line by
+    line: a string can span lines (`python3 -c "...` with `\\"cat <<EOF\\"` inside it), and a line
+    read alone loses the quote it is in. The walk restarts after each body, because a body is data
+    and an apostrophe in it would otherwise open a quote that hides the next opener. The delimiter
+    is read from the RAW match: masking hides the quotes of `<<'EOF'`, which are heredoc syntax
+    rather than a string, and reading the masked form made that opener look bare.
+    """
+    lines = (command or "").split("\n")
+    index = 0
+    while index < len(lines):
+        found = _next_opener(lines, index)
+        if found is None:
+            return
+        at, opener = found
+        end = at + 1
+        # The terminator is the first line that is exactly the delimiter; bash allows leading
+        # whitespace with the `<<-` form, so the comparison is made on the stripped line.
+        while end < len(lines) and lines[end].strip() != opener.group(2):
+            end += 1
+        yield at, opener, (at + 1, end)
+        index = end + 1
+
+
+def _next_opener(lines, start):
+    """(line index, match) of the first real heredoc opener at or after line `start`, or None."""
+    if not any("<<" in line for line in lines[start:]):
+        return None
+    masked = _blank_arithmetic(mask_data_regions("\n".join(lines[start:])))
+    offset = 0
+    for index in range(start, len(lines)):
+        line = lines[index]
+        region = masked[offset:offset + len(line)]
+        for match in HEREDOC_OPEN.finditer(line):
+            if region[match.start():match.start() + 2] == "<<":
+                return index, match
+        offset += len(line) + 1
+    return None
+
+
+def find_heredoc_opener(line: str):
+    """The `HEREDOC_OPEN` match for the first `<<` on `line` that opens a heredoc, or None."""
+    for _at, opener, _body in iter_heredocs(line):
+        return opener
+    return None
+
+
+def _blank_arithmetic(masked: str) -> str:
+    """`masked` with every bare `(( ... ))` arithmetic command blanked, length preserved.
+
+    Only the bare form is left for this to find: `mask_data_regions` already fills `$(( ))`. At
+    the start of a command bash reads `((` as arithmetic, so a subshell inside a subshell has to be
+    written `( (`, and a `((` here is arithmetic. An unclosed one is blanked to the end of its
+    line only, so a stray `((` cannot hide every opener after it.
+    """
+    out = list(masked)
+    start = masked.find("((")
+    while start != -1:
+        depth, cursor, closed = 0, start, False
+        while cursor < len(masked):
+            if masked[cursor] == "(":
+                depth += 1
+            elif masked[cursor] == ")":
+                depth -= 1
+                if depth == 0:
+                    cursor += 1
+                    closed = True
+                    break
+            cursor += 1
+        if not closed:
+            newline = masked.find("\n", start)
+            cursor = len(masked) if newline == -1 else newline
+        for index in range(start, cursor):
+            out[index] = " "
+        start = masked.find("((", cursor)
+    return "".join(out)
+
+
 def _split_heredocs(command: str):
     """(command lines, body lines) for `command`, split at every heredoc the shell would open.
 
@@ -572,34 +667,15 @@ def _split_heredocs(command: str):
     AUTHORED TEXT when asking what is being written. Deriving the two from separate walks let them
     disagree about where a body starts, so they share this one.
     """
+    lines = command.split("\n")
     kept: list[str] = []
     bodies: list[str] = []
-    lines = command.split("\n")
     index = 0
-    while index < len(lines):
-        kept.append(lines[index])
-        # `<<EOF` inside a quoted ARGUMENT opens nothing: `git commit -m "docs: explain <<EOF
-        # heredocs"` was read as an opener, so the strip swallowed the rest of the command and
-        # every guard downstream went SILENT on a real `git push` after it.
-        #
-        # The test is whether the `<<` ITSELF is quoted, not whether the line contains quotes.
-        # Searching the masked line instead is wrong and was measured so: `mask_data_regions`
-        # masks the delimiter's own quotes in the standard `<<'EOF'` form, which is heredoc
-        # SYNTAX rather than a string, and 23 tests went red. The mask is length-preserving, so
-        # the raw match offset indexes it directly.
-        opener = HEREDOC_OPEN.search(lines[index])
-        if opener and mask_data_regions(lines[index])[opener.start():opener.start() + 2] != "<<":
-            opener = None
-        index += 1
-        if not opener:
-            continue
-        delimiter = opener.group(2)
-        # The terminator is the first line that is exactly the delimiter; bash allows leading
-        # whitespace with the `<<-` form, so the comparison is made on the stripped line.
-        while index < len(lines) and lines[index].strip() != delimiter:
-            bodies.append(lines[index])
-            index += 1
-        index += 1                                    # drop the terminator line itself
+    for _at, _opener, (start, end) in iter_heredocs(command):
+        kept.extend(lines[index:start])
+        bodies.extend(lines[start:end])
+        index = end + 1                               # drop the terminator line itself
+    kept.extend(lines[index:])
     return kept, bodies
 
 
@@ -649,6 +725,13 @@ def blank_unexpanded_text(command: str) -> str:
     out: list[str] = []
     index, size = 0, len(command)
     in_single = in_double = False
+    # Whether a `#` may open a comment is decided by the character BEFORE it as bash reads it, and
+    # an escaped pair is blanked to spaces here - so the blank alone said "word start" and `a\ #b`,
+    # one word to bash, lost the rest of its line. `word_at` marks the out-position just past an
+    # escaped character (mid-word); a continuation is deleted before bash splits words, so what
+    # decides after one is the character before its backslash (`cont_prev`, valid at `cont_at`).
+    word_at = cont_at = -1
+    cont_prev = ""
     while index < size:
         char = command[index]
         if in_single:
@@ -656,7 +739,13 @@ def blank_unexpanded_text(command: str) -> str:
             in_single = char != "'"
             index += 1
         elif char == "\\" and index + 1 < size and not in_double:
-            out.append("  " if command[index + 1] != "\n" else " \n")
+            if command[index + 1] == "\n":
+                cont_prev = cont_prev if len(out) == cont_at else (out[-1][-1:] if out else "")
+                out.append(" \n")
+                cont_at = len(out)
+            else:
+                out.append("  ")
+                word_at = len(out)
             index += 2
         elif not in_double and command.startswith("$'", index):
             # ANSI-C `$'...'` expands nothing either, and its `\'` does not close it.
@@ -681,7 +770,7 @@ def blank_unexpanded_text(command: str) -> str:
             in_double = True
             out.append(char)
             index += 1
-        elif char == "#" and (not out or out[-1].isspace()):
+        elif char == "#" and _hash_starts_a_word(out, word_at, cont_at, cont_prev):
             while index < size and command[index] != "\n":
                 out.append(" ")
                 index += 1
@@ -691,7 +780,20 @@ def blank_unexpanded_text(command: str) -> str:
     return "".join(out)
 
 
-def mask_data_regions(command: str, fill: str = "Q") -> str:
+def _hash_starts_a_word(out, word_at, cont_at, cont_prev):
+    """Whether a `#` appended at position len(out) of a blanking walk begins a word, and so a
+    comment. `word_at` / `cont_at` are the out-positions just past an escaped character and just
+    past a line continuation; `cont_prev` is the character before that continuation's backslash."""
+    if not out:
+        return True
+    if len(out) == word_at:
+        return False                           # right after an escaped character: mid-word
+    if len(out) == cont_at:
+        return not cont_prev or cont_prev.isspace()
+    return out[-1].isspace()
+
+
+def mask_data_regions(command: str, fill: str = "Q", tool_name="Bash") -> str:
     """Replace every region that cannot affect STATEMENT STRUCTURE with a filler character.
 
     `blank_unexpanded_text` above answers "will the shell expand this?" and therefore must leave
@@ -717,17 +819,31 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
     Length is preserved so offsets still line up. Newlines INSIDE a masked region are replaced as
     well: a newline in a quoted commit message is not a statement separator, and leaving it would
     manufacture one.
+
+    `tool_name` picks the escape character, by the rule `_iter_separators` states: under Bash a
+    backslash escapes and a backtick substitutes; under PowerShell a BACKTICK escapes and a
+    backslash is a path separator, and there is no ANSI-C string. Reading `\\` as an escape under
+    PowerShell masked the `;` of `cd C:\\; git commit` and closed no quote at `"C:\\temp\\"`, so the
+    statement after it never reached a guard. An unrecognised tool escapes nothing.
     """
+    escape = {"Bash": "\\", "PowerShell": "`"}.get(tool_name, "")
+    bash_quoting = tool_name != "PowerShell"
     out: list[str] = []
     index, size = 0, len(command)
+    cont_at, cont_prev = -1, ""                # see blank_unexpanded_text: `a\<nl>#b` is one word
     while index < size:
         char = command[index]
-        if char == "\\" and index + 1 < size:
-            # A backslash-NEWLINE is a line continuation: it must become whitespace, not filler,
+        if escape and char == escape and index + 1 < size:
+            # An escaped NEWLINE is a line continuation: it must become whitespace, not filler,
             # or the two tokens it joins fuse into one word that no longer reads as a command.
-            out.append("  " if command[index + 1] == "\n" else fill * 2)
+            if command[index + 1] == "\n":
+                cont_prev = cont_prev if len(out) == cont_at else (out[-1][-1:] if out else "")
+                out.append("  ")
+                cont_at = len(out)
+            else:
+                out.append(fill * 2)
             index += 2
-        elif command.startswith("$'", index):
+        elif bash_quoting and command.startswith("$'", index):
             # ANSI-C quoting: a backslash escapes here, so `\'` does not close the string. Scanned
             # as a plain single quote it closed early and the next `'` masked the rest of the line.
             stop = _ansi_c_end(command, index + 2)
@@ -739,7 +855,7 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
             # message to be scanned as shell. Single quotes have no escape, so only `"` looks.
             cursor = index + 1
             while cursor < size:
-                if char == '"' and command[cursor] == "\\" and cursor + 1 < size:
+                if char == '"' and escape and command[cursor] == escape and cursor + 1 < size:
                     cursor += 2
                     continue
                 if command[cursor] == char:
@@ -748,7 +864,7 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
                 cursor += 1
             out.append(fill * (cursor - index))       # unterminated quote runs to the end
             index = cursor
-        elif char == "`":
+        elif char == "`" and bash_quoting:
             closing = command.find("`", index + 1)
             stop = size if closing == -1 else closing + 1
             out.append(fill * (stop - index))
@@ -778,7 +894,7 @@ def mask_data_regions(command: str, fill: str = "Q") -> str:
                 cursor += 1
             out.append(fill * (cursor - index))
             index = cursor
-        elif char == "#" and (not out or out[-1].isspace()):
+        elif char == "#" and _hash_starts_a_word(out, -1, cont_at, cont_prev):
             while index < size and command[index] != "\n":
                 out.append(" ")
                 index += 1

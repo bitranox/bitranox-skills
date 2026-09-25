@@ -151,7 +151,7 @@ def reads_masked_status(command: str) -> bool:
     return False
 
 
-def masks_a_gate(statement: str) -> bool:
+def masks_a_gate(statement: str, tool_name: str = "Bash") -> bool:
     """True when a gate runs in this pipeline but is not what sets its status.
 
     The GATE search runs on the statement with quoted regions masked, because a gate NAME inside
@@ -166,7 +166,7 @@ def masks_a_gate(statement: str) -> bool:
     if len(elements) < 2:
         return False
     # Length-preserving, so the element split below still lines up with the raw text.
-    masked = mask_data_regions(statement)
+    masked = mask_data_regions(statement, tool_name=tool_name)
     masked_elements = [e for e in masked.split("|") if e.strip()]
     if not GATE.search(masked):
         return False
@@ -241,7 +241,7 @@ def main() -> int:
     masked_at = None
     for i, st in enumerate(statements):
         if masked_at is None:
-            if masks_a_gate(st):
+            if masks_a_gate(st, data.get("tool_name") or "Bash"):
                 masked_at = i
             continue
         if CONSUMER.search(st):

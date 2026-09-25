@@ -325,6 +325,11 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
     anchor = ME._anchor(str(d))
     for e in entries:
         if _canon(e.slug) == qcanon:
+            # The key comes from a POINTER line, which a hand edit can damage: `mem:../../CLAUDE`
+            # names the tree's CLAUDE.md, not a body. Such a pointer owns no body - it is dropped
+            # below and no file is touched.
+            if not us.is_valid_slug(e.uuid if e.legacy else e.slug):
+                continue
             src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
             # archive the body ONLY when no other level in the tree still points at this slug
             others = _other_levels_pointing(anchor, d, e.slug)
@@ -544,11 +549,16 @@ def find_frame_only_bodies(anchor):
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
     """Re-attach a pointer for each dangling body at `to_level` (default: the anchor top) so it becomes
     visible + loadable again; a later dream re-levels it. The hook is read from the body frontmatter; the
-    title is derived from the slug (a body stores no title). Returns the rehomed slugs."""
+    title is derived from the slug (a body stores no title). Returns the rehomed slugs.
+
+    A body whose filename is not a valid slug (`unrehomable_bodies`) is skipped: the engine refuses
+    that slug, and letting its refusal escape stopped the re-home of every body after it."""
     anchor = Path(anchor)
     to_level = str(to_level or anchor)
     done = []
     for slug in find_dangling_bodies(anchor):
+        if not us.is_valid_slug(slug):
+            continue
         try:
             text = us.body_path(anchor, slug).read_text(encoding="utf-8")
         except OSError:
@@ -562,6 +572,12 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
                                    allow_over_cap_hook=True)
         done.append(slug)
     return done
+
+
+def unrehomable_bodies(anchor):
+    """Dangling bodies whose filename is not a valid slug, so no pointer can name them. They need a
+    rename to a valid slug (lowercase letters, digits, hyphens, dots) before a re-home can take them."""
+    return [slug for slug in find_dangling_bodies(Path(anchor)) if not us.is_valid_slug(slug)]
 
 
 def _print_report(rep):
@@ -583,7 +599,8 @@ def main(argv=None):
                     help="re-attach every dangling body (a central body no level points at) so it is "
                          "visible + loadable again; a later dream re-levels it. Default target is the "
                          "tree top - use --rehome-to for a subtree so a subtree's danglers are not "
-                         "over-promoted to the whole tree")
+                         "over-promoted to the whole tree. Exit 1 when a dangling body's filename is "
+                         "not a valid slug, which it names and cannot re-home")
     ap.add_argument("--rehome-to", metavar="LEVEL", default=None, dest="rehome_to",
                     help="with --rehome: re-attach the dangling bodies at LEVEL (a dir in the tree) "
                          "instead of the tree top - so a subtree's orphaned bodies land in that subtree")
@@ -679,7 +696,10 @@ def main(argv=None):
         for slug in done:
             print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
         print("TOTAL re-homed: %d" % len(done))
-        return 0
+        stuck = unrehomable_bodies(anchor)
+        for slug in stuck:
+            print("cannot re-home: %s.md - its name is not a valid slug; rename the body file" % slug)
+        return 1 if stuck else 0
 
     if args.check:
         refs = check_references(args.dirs)

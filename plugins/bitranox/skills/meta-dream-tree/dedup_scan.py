@@ -38,12 +38,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# The engine's pointer parser, from the plugin's hooks dir: skills/<skill> -> skills -> bitranox.
+# A private regex read loose pointer-shaped prose outside the managed block as facts at that level.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import uuid_store  # noqa: E402
+
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
 STORE_DIR = ".claude-memory"
 FACTS_SUBDIR = "facts"
 LEVEL_FILE = "CLAUDE.local.md"
-POINTER_RX = re.compile(r"\]\(mem:([^)\s]+)\)")
 WORD_RX = re.compile(r"[a-z0-9]+")
 CONTROL_PREFIX = "__control__"
 # The control asks "can this scorer see a paraphrase AT ALL", which is a property of the scorer
@@ -282,8 +286,9 @@ def load_facts(start: Path) -> list[Fact]:
             text = (lvl / LEVEL_FILE).read_text(encoding="utf-8")
         except OSError:
             continue
-        for slug in POINTER_RX.findall(text):
-            level_of.setdefault(slug, str(lvl))
+        for pointer in uuid_store.parse_pointer_index(text)[1]:
+            if not pointer.legacy:
+                level_of.setdefault(pointer.slug, str(lvl))
     out: list[Fact] = []
     for path in sorted((anchor / STORE_DIR / FACTS_SUBDIR).glob("*.md")):
         slug = path.stem

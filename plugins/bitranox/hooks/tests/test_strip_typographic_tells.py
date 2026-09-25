@@ -66,7 +66,7 @@ def test_normalize_returns_str():
 @pytest.mark.parametrize(
     "src, expected",
     [
-        (EM_DASH, " - "),
+        (EM_DASH, "-"),             # both sides are line edges; mid-line spacing is tested below
         (EN_DASH, "-"),
         (HYPHEN, "-"),
         (NB_HYPHEN, "-"),
@@ -374,7 +374,7 @@ def test_a_dash_alone_on_its_line_does_not_absorb_either_newline():
     src = "a\n" + EM_DASH + "\nb\n"
     out = mod.normalize(src)
     assert out.count("\n") == src.count("\n")
-    assert out == "a\n -\nb\n"
+    assert out == "a\n-\nb\n"
 
 
 def test_em_dash_before_a_markdown_hard_line_break_keeps_both_trailing_spaces():
@@ -559,3 +559,85 @@ def test_the_coverage_sentence_still_names_something_the_table_does(skill):
     """A control: the sentence must not pass by naming nothing at all."""
     sentence = _coverage_sentence(skill).lower()
     assert "ascii" in sentence and ("bom" in sentence or "zero" in sentence or "null" in sentence)
+
+
+# ---- a line edge is not a code-span edge -----------------------------------------------------
+#
+# The spacing pass saw a stretch with nothing beyond it and could not tell whether that was the
+# edge of an inline-code span (where a space keeps the hyphen off the code) or the edge of the
+# LINE, where a space is new indentation or new trailing whitespace.
+
+
+def test_an_em_dash_at_column_zero_gets_no_leading_space():
+    assert mod.normalize("Intro\n%s a quoted aside\n" % EM_DASH) == "Intro\n- a quoted aside\n"
+
+
+def test_an_em_dash_ending_the_file_gets_no_trailing_space():
+    assert mod.normalize("foo %s" % EM_DASH) == "foo -"
+
+
+def test_an_em_dash_before_crlf_gets_no_trailing_space():
+    assert mod.normalize("a %s\r\nb\r\n" % EM_DASH) == "a -\r\nb\r\n"
+
+
+def test_an_em_dash_at_column_zero_after_crlf_gets_no_leading_space():
+    assert mod.normalize("a\r\n%sb\r\n" % EM_DASH) == "a\r\n- b\r\n"
+
+
+def test_control_an_em_dash_beside_a_code_span_still_gets_its_space():
+    assert mod.normalize("`x`%sy\n" % EM_DASH) == "`x` - y\n"
+    assert mod.normalize("y%s`x`\n" % EM_DASH) == "y - `x`\n"
+
+
+def test_control_a_mid_line_and_an_lf_line_end_em_dash_are_unchanged():
+    assert mod.normalize("x %s a\n" % EM_DASH) == "x - a\n"
+    assert mod.normalize("foo %s\n" % EM_DASH) == "foo -\n"
+
+
+# ---- a line separator must not manufacture a fence ------------------------------------------
+
+
+def test_a_separator_before_a_fence_marker_does_not_open_a_block():
+    """U+2028 became a newline, and a newline in front of ``` opened a block the original never had,
+    so a second run rewrote the example that the first run had treated as code."""
+    src = "p%s```\ntext\n```\nexample %s\n```\n" % (LINE_SEP, RDQUO)
+    once = mod.normalize(src)
+    assert mod.normalize(once) == once
+    assert "example %s" % RDQUO in once
+    assert TC_find(once) == []
+
+
+def test_control_a_separator_in_prose_still_becomes_a_newline():
+    for sep in (LINE_SEP, PARA_SEP, NEL):
+        assert mod.normalize("a%sb\n" % sep) == "a\nb\n"
+
+
+def test_a_separator_in_a_code_span_or_fence_is_left_alone():
+    src = "`a%sb` and\n```\nc%sd\n```\n" % (LINE_SEP, LINE_SEP)
+    assert mod.normalize(src) == src
+
+
+def TC_find(text):
+    import tell_chars
+    return tell_chars.find_tell_lines(text)
+
+
+# ---- stdin is UTF-8 whatever the locale says ------------------------------------------------
+
+
+def test_stdin_mode_reads_and_writes_utf8_under_a_legacy_locale():
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+    res = subprocess.run(
+        [sys.executable, SCRIPT_PATH, "-"],
+        input=("a %s b\r\nc %s\n" % (EM_DASH, RDQUO)).encode("utf-8"),
+        capture_output=True, env=env,
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout == b'a - b\r\nc "\n'
+
+
+def test_stdin_check_mode_under_a_legacy_locale():
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+    res = subprocess.run([sys.executable, SCRIPT_PATH, "--check", "-"],
+                         input="clean\r\n".encode("utf-8"), capture_output=True, env=env)
+    assert res.returncode == 0, res.stderr

@@ -37,12 +37,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# The engine's pointer parser, from the plugin's hooks dir: skills/<skill> -> skills -> bitranox.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import uuid_store  # noqa: E402
 
 __all__ = ["Entry", "Diff", "NoAnchor", "derive", "diff", "manifest_key", "main"]
 
@@ -54,10 +57,6 @@ STORE_DIR = ".claude-memory"
 # `venv_<project>` all occur, and an exact-name set matches none of them.
 PRUNE_NAMES = {".git", "node_modules", "__pycache__", "target", "site-packages"}
 PRUNE_PREFIXES = (".venv", "venv-", "venv_")
-
-# `- [Title](mem:slug) - hook <!-- bx:pin -->`; the hook runs to the first meta comment.
-POINTER_RX = re.compile(r"^\s*-\s*\[(?P<title>[^\]]*)\]\(mem:(?P<slug>[^)\s]+)\)"
-                        r"(?P<rest>.*)$")
 
 
 class StoreManifestError(Exception):
@@ -183,15 +182,13 @@ def levels_on_chain(start: Path, anchor: Path) -> list[Path]:
 
 
 def parse_level(text: str, level: str) -> list[Entry]:
-    """Every pointer in one level file. PURE."""
-    out: list[Entry] = []
-    for raw in (text or "").splitlines():
-        m = POINTER_RX.match(raw)
-        if not m:
-            continue
-        out.append(Entry(level=level, slug=m.group("slug"), title=m.group("title").strip(),
-                         pin="bx:pin" in (m.group("rest") or "")))
-    return out
+    """Every pointer in one level file, read the way the engine reads it. PURE.
+
+    Only the managed block counts, and each slug once: a pointer-shaped line in the prose around
+    the block is not a fact the engine will ever load, so a manifest counting it would vouch for a
+    fact that does not exist."""
+    return [Entry(level=level, slug=p.slug, title=p.title.strip(), pin=p.pin)
+            for p in uuid_store.parse_pointer_index(text or "")[1] if not p.legacy]
 
 
 def derive(root: Path, *, scope: str = "tree", start: Path | None = None,

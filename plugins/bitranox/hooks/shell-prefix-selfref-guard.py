@@ -32,7 +32,7 @@ import sys
 # guard fire on prose that merely mentions the footgun it guards. Re-exported so callers and tests
 # can keep reaching it as `shell_prefix_selfref_guard.strip_heredoc_bodies`.
 from shell_text import (  # noqa: F401
-    HEREDOC_OPEN, SEP, blank_unexpanded_text, mask_data_regions, strip_heredoc_bodies,
+    SEP, blank_unexpanded_text, iter_heredocs, mask_data_regions, strip_heredoc_bodies,
 )
 
 # Statement separators (`SEP`, shared). A prefix assignment dies at the end of ITS command, so a
@@ -112,11 +112,11 @@ def substitutes_inside_text_arg(command: str) -> bool:
                    blank_unexpanded_text(strip_heredoc_bodies(command))))
 
 
-def _statements(text: str) -> list[str]:
+def _statements(text: str, tool_name: str = "Bash") -> list[str]:
     """`text` split into statements, ignoring separators inside quotes, comments and
     substitutions. Offsets come from the length-preserving mask and index the raw text."""
     out, start = [], 0
-    masked = mask_data_regions(text)
+    masked = mask_data_regions(text, tool_name=tool_name)
     for m in SEP.finditer(masked):
         out.append(text[start:m.start()])
         start = m.end()
@@ -124,7 +124,7 @@ def _statements(text: str) -> list[str]:
     return out
 
 
-def self_referencing_prefix(command: str) -> bool:
+def self_referencing_prefix(command: str, tool_name: str = "Bash") -> bool:
     """Return whether any segment references a variable it assigns as a prefix."""
 
     # Split statements on the MASKED text and slice the raw. Two wrong tools were tried first:
@@ -134,7 +134,7 @@ def self_referencing_prefix(command: str) -> bool:
     # is right for statements and wrong here: `MSG="$(cat f)" make push` is ONE assignment, and
     # splitting it lost the prefix instead. `mask_data_regions` is length-preserving, so the
     # separator offsets it yields index the raw text exactly.
-    for segment in _statements(strip_heredoc_bodies(command)):
+    for segment in _statements(strip_heredoc_bodies(command), tool_name):
         names = _prefix_names(segment)
         if not names:
             continue
@@ -160,13 +160,11 @@ def substitutes_inside_unquoted_heredoc(command: str) -> bool:
     serve the check: it hides EVERY heredoc body from every command-scanning guard, which is right
     for a quoted delimiter and wrong for a bare one. It is left alone; 16 hooks depend on it.
 
-    Openers are located on MASKED lines so a heredoc merely MENTIONED inside a quoted string is
-    not read as opening one - priced against real history, that was the guard's only false
-    positive, and it is the shape that makes a guard block its own documentation. The BODY is read
-    from the original line, because masking would erase the very substitution being looked for.
-    `mask_data_regions` preserves length, so the two line up; the delimiter and its quoting are
-    re-read from the original, since masking a quoted delimiter would otherwise make `<<'EOF'`
-    read as a bare one.
+    Openers come from `iter_heredocs`, so a heredoc merely MENTIONED inside a quoted string
+    is not read as opening one - priced against real history, that was the guard's only false
+    positive, and it is the shape that makes a guard block its own documentation - and neither is
+    the left shift of `(( x << y ))`, whose "body" would be every later line. The BODY is read from
+    the original lines, because masking would erase the very substitution being looked for.
 
     Backslash-escaped forms are blanked before the search: a bare heredoc still honours `\\``, so
     an author who escaped had already made the text safe. That was 9 of the 12 firings this rule
@@ -175,24 +173,8 @@ def substitutes_inside_unquoted_heredoc(command: str) -> bool:
     """
 
     lines = (command or "").split("\n")
-    masked = [mask_data_regions(line) for line in lines]
-    index = 0
-    while index < len(lines):
-        found = HEREDOC_OPEN.search(masked[index])
-        index += 1
-        if found is None:
-            continue
-        opener = HEREDOC_OPEN.search(lines[index - 1], found.start())
-        if opener is None:
-            # Masking manufactured the opener, so there is no heredoc here and no body to skip.
-            continue
-        delimiter = opener.group(2)
-        body: list[str] = []
-        while index < len(lines) and lines[index].strip() != delimiter:
-            body.append(lines[index])
-            index += 1
-        index += 1
-        raw = _HEREDOC_ESCAPED_RX.sub("", "\n".join(body))
+    for _at, opener, (start, end) in iter_heredocs(command):
+        raw = _HEREDOC_ESCAPED_RX.sub("", "\n".join(lines[start:end]))
         if not opener.group(1) and _HEREDOC_SUBSTITUTION_RX.search(raw):
             return True
     return False
@@ -230,7 +212,7 @@ def main() -> int:
             "Then READ THE RESULT BACK before pushing.\n"
         )
         return 2
-    if not self_referencing_prefix(command):
+    if not self_referencing_prefix(command, event.get("tool_name") or "Bash"):
         return 0
     sys.stderr.write(
         "A prefix assignment is referenced on the same command line, so it expands EMPTY.\n"

@@ -40,11 +40,11 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The engine's slug charset allows a dot, so `mem:[^)]+` is the only safe pointer pattern; a
-# hand-rolled [a-z0-9-]+ silently skips a dotted slug and mistakes its body for an orphan.
-_PTR = re.compile(r"^- \[(?P<title>[^\]]+)\]\(mem:(?P<slug>[^)]+)\)\s*-\s*(?P<hook>.*)$")
-# The managed trailer is metadata, not part of the hook the model reads as an instruction.
-_TRAILER = re.compile(r"<!--.*?-->|<!--.*$")
+# The engine's pointer parser, from the plugin's hooks dir: skills/<skill> -> skills -> bitranox.
+# One parser, so this tool and the engine agree on which facts a level holds - including a dotted
+# slug, which a hand-rolled [a-z0-9-]+ silently skips and so mistakes its body for an orphan.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
+import uuid_store  # noqa: E402
 
 PATTERNS: dict[str, re.Pattern[str]] = {
     "SHIPPED": re.compile(
@@ -97,15 +97,10 @@ class ScanResult:
 
 
 def parse_pointers(text: str, level: str = "") -> list[Pointer]:
-    """Extract every `- [Title](mem:slug) - hook` line, with the managed trailer stripped."""
-    out: list[Pointer] = []
-    for raw in text.splitlines():
-        m = _PTR.match(raw.strip())
-        if not m:
-            continue
-        hook = _TRAILER.sub("", m["hook"]).strip()
-        out.append(Pointer(level, m["slug"], m["title"].strip(), hook))
-    return out
+    """Every `- [Title](mem:slug) - hook` pointer the engine reads from `text`, each slug once, the
+    hook without its managed trailer (metadata, not part of the instruction the model reads)."""
+    return [Pointer(level, p.slug, p.title.strip(), p.hook)
+            for p in uuid_store.parse_pointer_index(text)[1] if not p.legacy]
 
 
 def classify(ptr: Pointer) -> set[str]:

@@ -66,13 +66,13 @@ _CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd\s+(?P<target>[^\s;&|]+)")
 _GIT = re.compile(r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\b")
 
 
-def _statements(command):
+def _statements(command, tool_name="Bash"):
     """(start, end) offsets of each statement, read from the MASKED text.
 
     Structure comes from the mask; the caller slices the RAW string at these offsets, because a
     path compared on masked text would be compared as filler characters.
     """
-    masked = mask_data_regions(strip_heredoc_bodies(command))
+    masked = mask_data_regions(strip_heredoc_bodies(command), tool_name=tool_name)
     spans, start = [], 0
     for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
@@ -111,7 +111,7 @@ def _resolve(target, base):
     return os.path.normpath(os.path.join(base, expanded))
 
 
-def notice(command, cwd):
+def notice(command, cwd, tool_name="Bash"):
     """The nudge text when a later git answers about a DIFFERENT work tree, else None.
 
     Silent unless the call's cd targets span more than one work tree: two cd's inside a single
@@ -121,7 +121,7 @@ def notice(command, cwd):
     """
     if not command or not isinstance(command, str) or not cwd:
         return None
-    masked, spans = _statements(command)
+    masked, spans = _statements(command, tool_name)
     here, landed = str(cwd), []
     for start, end in spans:
         raw = command[start:end]
@@ -157,7 +157,7 @@ def main() -> int:
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
     cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    message = notice((event.get("tool_input") or {}).get("command"), cwd)
+    message = notice((event.get("tool_input") or {}).get("command"), cwd, event.get("tool_name"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

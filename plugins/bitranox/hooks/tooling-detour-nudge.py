@@ -170,7 +170,7 @@ def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name=None):
             here = str(_resolve(moved.group(1), here))
             continue
         root = None
-        for target in _redirect_targets(seg):
+        for target in _redirect_targets(seg, tool_name):
             root = root or marketplace_root(_resolve(target, here), is_root)
         if root is None and _WRITE_VERB.search(seg):
             root = _first_marketplace_path(seg, here, is_root)
@@ -186,7 +186,7 @@ def notice_bash(command, cwd, is_root=_is_marketplace_root, tool_name=None):
     return None
 
 
-def _redirect_targets(seg):
+def _redirect_targets(seg, tool_name="Bash"):
     """The targets of the redirections in one statement, with quoted regions ignored.
 
     A `>` inside quotes is data - a comparison in `python3 -c "... if n > 126"`, an awk program -
@@ -194,7 +194,7 @@ def _redirect_targets(seg):
     masked text is read off the RAW text at the same offsets; the target itself may be quoted
     (`> "plugins/x.py"`), which the mask hides, so the raw slice is what gets resolved.
     """
-    masked = mask_data_regions(seg)
+    masked = mask_data_regions(seg, tool_name=tool_name)
     out = []
     for m in _REDIRECT_TARGET.finditer(masked):
         raw = seg[m.start(1):m.end(1)].strip("'\"")

@@ -67,7 +67,7 @@ def assess(command, tool_name="Bash"):
     command = strip_heredoc_bodies(command or "")
     # Split on the length-preserving MASKED text: a `;` inside a quoted string separates nothing,
     # and splitting there manufactured a sed invocation out of an `echo` argument.
-    masked = mask_data_regions(command)
+    masked = mask_data_regions(command, tool_name=tool_name)
     starts = [0] + [m.end() for m in SEP.finditer(masked)]
     ends = [m.start() for m in SEP.finditer(masked)] + [len(command)]
     for segment in [command[a:b] for a, b in zip(starts, ends)]:

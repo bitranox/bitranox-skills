@@ -47,7 +47,16 @@ def _char_class():
 
 
 _TELL = re.compile("[" + _char_class() + "]")
-_INLINE = re.compile(r"`[^`]*`")
+
+# An inline code span: a run of N backticks closed by a run of EXACTLY N, as CommonMark reads it.
+# A single-backtick-only pattern scanned every ``double`` span as prose - the one form a writer
+# uses precisely when the code itself contains a backtick.
+_INLINE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+
+# A fence line, after its indentation: a run of three or more backticks or tildes, then an info
+# string. Indentation is not limited to three spaces here: a fence nested in a list item sits
+# deeper, and reading it as prose would flag every deliberate example inside it.
+_FENCE_RUN = re.compile(r"(`{3,}|~{3,})(.*)")
 
 # A PDF or HTML extraction marks a WRAPPED line with U+2190 at the join. Two shapes are artifacts,
 # one is prose:
@@ -77,9 +86,11 @@ def split_lines(text, keepends=False):
     and rewrote through it. A file the sweep hook called clean could therefore still be rewritten,
     splitting a code span across two lines.
 
-    Both halves share this one splitter so they can only ever answer the same question. On text
-    without those codepoints it is `str.splitlines()` exactly, including the empty-string and
-    trailing-newline cases.
+    Both halves share this one splitter so they can only ever answer the same question.
+    It splits only on `\\r\\n`, `\\r` and `\\n` - the breaks an editor numbers lines by - so it keeps a
+    form feed, a vertical tab and the U+001C..U+001E separators inside their line, where
+    `str.splitlines()` would break. The empty-string and trailing-newline cases match
+    `str.splitlines()`.
     """
     src = text or ""
     out, pos = [], 0
@@ -91,34 +102,82 @@ def split_lines(text, keepends=False):
     return out
 
 
-def transform_outside_code(text, fn):
+def fence_opener(line):
+    """(char, width) when `line` would OPEN a fenced block, else None.
+
+    CommonMark's rule for an opener: a BACKTICK fence's info string may hold no backtick. Without
+    that clause a prose line that merely begins with an inline span (```x```) reads as an opener,
+    and the block it opens never closes, hiding every line after it."""
+    m = _FENCE_RUN.fullmatch(line.lstrip().rstrip("\r\n"))
+    if m is None or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return None
+    return m.group(1)[0], len(m.group(1))
+
+
+def _closes(line, fence):
+    """Whether `line` closes the block `fence` = (char, width) opened: the same character, a run
+    at least as long, and nothing after it."""
+    m = _FENCE_RUN.fullmatch(line.lstrip().rstrip("\r\n"))
+    return (m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]
+            and not m.group(2).strip())
+
+
+def lines_with_code_state(text, keepends=False):
+    """Yield (line, is_code) for every line of `text`: is_code is True for a fence line and for
+    every line inside a fenced block. An unclosed fence runs to the end.
+
+    Closing follows CommonMark. A fence closes only on a bare run of its OWN character at least as
+    long as its opener: toggling on any fence-looking line let a `~~~` inside a backtick block close
+    it, and a four-backtick fence showing a three-backtick example close at the example - after
+    which the example was treated as prose and the real prose after the block as code."""
+    fence = None
+    for line in split_lines(text, keepends=keepends):
+        if fence is None:
+            fence = fence_opener(line)
+            yield line, fence is not None
+            continue
+        if _closes(line, fence):
+            fence = None
+        yield line, True
+
+
+def transform_outside_code(text, fn, edges=False):
     """Rebuild `text` with `fn` applied to every stretch that is NOT code, leaving inline-code
     spans and fenced blocks byte-identical.
+
+    With `edges=True`, `fn` is called as fn(stretch, starts_line, ends_line), so a rewriter can
+    tell a LINE edge from the edge of an inline-code span: both reach it as a stretch with nothing
+    beyond it, and only the first is the end of the text on that line.
 
     This is the write-side twin of `find_tell_lines`, and it exists so the detector and any
     rewriter agree about what counts as code. Without a shared primitive they drift: the sweep hook
     skipped code while a rewriter did not, so a file could pass the hook and still have the tell
     inside a deliberate example rewritten - which is how a curly-quote example in this repo was
     once flattened into two identical halves."""
+    call = fn if edges else (lambda stretch, _starts, _ends: fn(stretch))
     out = []
-    in_fence = False
-    for line in split_lines(text, keepends=True):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+    for line, is_code in lines_with_code_state(text, keepends=True):
+        if is_code:
             out.append(line)
             continue
-        if in_fence:
-            out.append(line)
-            continue
-        pos, parts = 0, []
-        for m in _INLINE.finditer(line):
-            parts.append(fn(line[pos:m.start()]))
-            parts.append(m.group(0))            # the span, verbatim
-            pos = m.end()
-        parts.append(fn(line[pos:]))
+        parts = split_inline(line)
+        last = len(parts) - 1
+        for i in range(0, len(parts), 2):          # even indices are prose; spans stay verbatim
+            parts[i] = call(parts[i], i == 0, i == last)
         out.append("".join(parts))
     return "".join(out)
+
+
+def split_inline(line):
+    """[prose, span, prose, span, ..., prose] for one line: the inline-code spans at the odd
+    indices, verbatim, and the stretches around them (possibly empty) at the even ones."""
+    pos, parts = 0, []
+    for m in _INLINE.finditer(line):
+        parts.append(line[pos:m.start()])
+        parts.append(m.group(0))
+        pos = m.end()
+    parts.append(line[pos:])
+    return parts
 
 
 def decode_utf8(raw, truncated=False):
@@ -153,15 +212,9 @@ def _scannable(text):
     `scrubbed` is the line with inline-code spans removed - the form to MATCH against; `line` is
     the original, for quoting back. Fenced blocks are skipped entirely. Both public scanners are
     built on this so they can never disagree about what counts as code."""
-    in_fence = False
-    for n, line in enumerate(split_lines(text), 1):
-        stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        yield n, line, _INLINE.sub("", line)
+    for n, (line, is_code) in enumerate(lines_with_code_state(text), 1):
+        if not is_code:
+            yield n, line, _INLINE.sub("", line)
 
 
 def find_tell_lines(text):

@@ -52,6 +52,8 @@ def slugify(title, type_=None):
     base = base or "note"
     if type_ and type_ in TYPE_PREFIXES and not base.startswith(type_ + "-"):
         base = "%s-%s" % (type_, base)
+    if _WINDOWS_DEVICE_RX.fullmatch(base.split(".", 1)[0]):
+        base += "-note"                          # `con.md` cannot exist on Windows; see is_valid_slug
     return base
 
 
@@ -62,12 +64,18 @@ def slugify(title, type_=None):
 # always matches.
 _SLUG_RX = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 
+# Windows maps these names to DEVICES whatever follows the first dot, so `con.md` or `nul.1.2.md`
+# cannot be a file there: creating one fails, or the write vanishes into the device. The store is
+# shared across machines, so a slug any one of them cannot hold is not a slug.
+_WINDOWS_DEVICE_RX = re.compile(r"con|prn|aux|nul|com[0-9]|lpt[0-9]")
+
 
 def is_valid_slug(slug):
-    """True when `slug` is a plain filename the store can own. THE slug check every write path that
-    takes a caller-supplied slug applies before building a body path from it: without it `../..`
-    reaches outside `facts/`, and the engine becomes an arbitrary `.md` writer."""
-    return isinstance(slug, str) and _SLUG_RX.fullmatch(slug) is not None
+    """True when `slug` is a plain filename the store can own on every platform. THE slug check
+    every write path that takes a caller-supplied slug applies before building a body path from it:
+    without it `../..` reaches outside `facts/`, and the engine becomes an arbitrary `.md` writer."""
+    return (isinstance(slug, str) and _SLUG_RX.fullmatch(slug) is not None
+            and _WINDOWS_DEVICE_RX.fullmatch(slug.split(".", 1)[0]) is None)
 
 INDEX_BEGIN = "<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
 INDEX_END = "<!-- BITRANOX-MEMORY-INDEX:END -->"

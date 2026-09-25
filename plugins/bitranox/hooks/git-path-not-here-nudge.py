@@ -68,9 +68,9 @@ _UNKNOWABLE = re.compile(r"[$`<>*?]")
 _REDIRECT = re.compile(r"^\d*[<>]")
 
 
-def _statements(command):
+def _statements(command, tool_name="Bash"):
     """(masked_text, [(start, end)]) for each statement, offsets valid in the RAW string too."""
-    masked = mask_data_regions(strip_heredoc_bodies(command))
+    masked = mask_data_regions(strip_heredoc_bodies(command), tool_name=tool_name)
     spans, start = [], 0
     for hit in SEP.finditer(masked):
         spans.append((start, hit.start()))
@@ -157,13 +157,13 @@ def _ancestor_holding(path, cwd):
         current = parent
 
 
-def notice(command, cwd):
+def notice(command, cwd, tool_name="Bash"):
     """The nudge text when a path-status verb asks about a path that is not here, else None."""
     if not command or not isinstance(command, str) or not cwd:
         return None
     if _in_linked_worktree(cwd):
         return None                        # a worktree's file set legitimately differs; no signal
-    masked, spans = _statements(command)
+    masked, spans = _statements(command, tool_name)
     if any(_CD.match(masked[start:end]) for start, end in spans):
         return None                        # an explicit cd states the subject
     for start, end in spans:
@@ -203,7 +203,7 @@ def main() -> int:
     if not isinstance(event, dict) or not is_shell_tool(event.get("tool_name")):
         return 0
     cwd = event.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    message = notice((event.get("tool_input") or {}).get("command"), cwd)
+    message = notice((event.get("tool_input") or {}).get("command"), cwd, event.get("tool_name"))
     if message:
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -410,3 +410,81 @@ def test_the_german_checklist_unifies_quotes_rather_than_removing_them():
     assert bullets, "control: no checklist bullet mentions quotation marks"
     bad = [ln.strip() for ln in bullets if "entfernt" in ln or "vereinheitlicht" not in ln]
     assert bad == [], bad
+
+
+# ---- fences close the CommonMark way: same character, at least as long, bare -----------------
+#
+# Any fence-looking line used to TOGGLE the state, whatever its character or length. So a `~~~`
+# line inside a backtick block closed it early (the code after it was scanned and rewritten as
+# prose while the real prose after the block was treated as code), and a four-backtick fence that
+# shows a three-backtick example closed at the example.
+
+
+def test_a_tilde_line_inside_a_backtick_fence_does_not_close_it():
+    src = "```\n~~~\ncode %s\n```\nprose %s\n" % (EM_DASH, EM_DASH)
+    assert TC.find_tell_lines(src) == ["5: prose %s" % EM_DASH]
+    out = TC.transform_outside_code(src, lambda s: s.replace(EM_DASH, "-"))
+    assert out == "```\n~~~\ncode %s\n```\nprose -\n" % EM_DASH
+
+
+def test_a_shorter_inner_fence_does_not_close_a_longer_one():
+    src = "````\n```\necho a %s b\n```\n````\nprose %s\n" % (EM_DASH, EM_DASH)
+    assert TC.find_tell_lines(src) == ["6: prose %s" % EM_DASH]
+    out = TC.transform_outside_code(src, lambda s: s.replace(EM_DASH, "-"))
+    assert "echo a %s b" % EM_DASH in out and out.endswith("prose -\n")
+
+
+def test_an_unbalanced_inner_fence_does_not_hide_the_prose_after_the_block():
+    src = "````\n```\n````\nprose %s\n" % EM_DASH
+    assert TC.find_tell_lines(src) == ["4: prose %s" % EM_DASH]
+
+
+def test_a_closer_must_be_bare():
+    """A fence line carrying an info string inside a block is content, not a closer."""
+    src = "```\n```python\ncode %s\n```\nprose %s\n" % (EM_DASH, EM_DASH)
+    assert TC.find_tell_lines(src) == ["5: prose %s" % EM_DASH]
+
+
+def test_a_backtick_opener_with_a_backtick_in_its_info_string_is_prose():
+    """```x``` on a prose line is an inline span, not a fence; reading it as one hid the rest."""
+    src = "```inline``` then %s\nmore %s\n" % (EM_DASH, EM_DASH)
+    assert len(TC.find_tell_lines(src)) == 2
+
+
+def test_control_a_plain_balanced_fence_still_hides_its_content():
+    src = "```\ncode %s\n```\nprose %s\n~~~\ntilde %s\n~~~\n" % (EM_DASH, EM_DASH, EM_DASH)
+    assert TC.find_tell_lines(src) == ["4: prose %s" % EM_DASH]
+
+
+def test_control_an_indented_fence_in_a_list_item_still_counts():
+    src = "1. step\n\n    ```\n    code %s\n    ```\n" % EM_DASH
+    assert TC.find_tell_lines(src) == []
+
+
+# ---- inline code spans of any backtick-run length --------------------------------------------
+
+
+def test_a_double_backtick_span_is_code():
+    assert TC.find_tell_lines("use ``a%sb`` here\n" % EM_DASH) == []
+    assert TC.find_tell_lines("use ``a%s`b`` here\n" % EM_DASH) == []
+
+
+def test_transform_leaves_a_double_backtick_span_untouched():
+    src = "use ``a%s`b`` and %s\n" % (EM_DASH, EM_DASH)
+    out = TC.transform_outside_code(src, lambda s: s.replace(EM_DASH, "-"))
+    assert out == "use ``a%s`b`` and -\n" % EM_DASH
+
+
+def test_control_prose_beside_a_double_backtick_span_is_still_scanned():
+    assert TC.find_tell_lines("``code`` then %s\n" % EM_DASH) != []
+
+
+def test_control_a_single_backtick_span_is_still_code():
+    assert TC.find_tell_lines("use `a%sb` here\n" % EM_DASH) == []
+
+
+def test_split_lines_breaks_only_on_cr_lf_and_crlf():
+    """Form feed, vertical tab and the file/group/record separators stay inside the line."""
+    for ch in ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e"):
+        assert TC.split_lines("a%sb" % ch) == ["a%sb" % ch]
+    assert "splits only on" in TC.split_lines.__doc__
