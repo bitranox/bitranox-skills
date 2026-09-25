@@ -348,6 +348,70 @@ def test_a_cache_that_cannot_be_removed_refuses_the_arm(tmp_path):
         cache.chmod(0o755)
 
 
+# The ARM leaves behind something named like a cache for the mutated source that cannot be
+# unlinked: a DIRECTORY. unlink() refuses a directory on every platform, so the after-arm purge
+# fails the same way a read-only __pycache__ would, with no chmod and no root caveat.
+_LEAVES_UNREMOVABLE_CACHE = TEST + '''
+
+def test_leaves_cache():
+    here = __import__("pathlib").Path(__file__).parent
+    (here / "__pycache__" / "src.cpython-399.pyc").mkdir(parents=True)
+'''
+
+
+def test_a_cache_that_survives_the_arm_is_not_reported_as_refused_before_mutating(tmp_path):
+    """The purge after the arm raised the same error as the purge before it, so main() said
+    "refused before mutating" about an arm that had mutated, run and restored."""
+    p = make_project(tmp_path)
+    (p / "test_src.py").write_text(_LEAVES_UNREMOVABLE_CACHE, encoding="utf-8")
+    before = (p / "src.py").read_bytes()
+    (p / "old.txt").write_text('return "negative"', encoding="utf-8")
+    (p / "new.txt").write_text('return "NEGATIVE"', encoding="utf-8")
+
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_leaves_cache", "--json")
+
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+    assert "refused before mutating" not in proc.stderr
+    assert "the arm ran" in proc.stderr and "restored" in proc.stderr
+    assert "src.cpython-399.pyc" in proc.stderr
+    data = json.loads(proc.stdout)["data"]
+    assert data["verdict"] == "survived", "the verdict the arm earned is still reported"
+    assert data["restored"] is True
+    assert data["bytecode_left"] and data["bytecode_left"][0].endswith("src.cpython-399.pyc")
+    assert (p / "src.py").read_bytes() == before, "restored even though the purge failed"
+
+
+def test_an_arm_that_cannot_start_is_an_error_after_restoring_not_a_refusal(tmp_path):
+    """Sibling of the above: the runner fails to START after the mutation is on disk. Raised, it
+    reached main() as "refused before mutating" about a file that had been mutated."""
+    p = make_project(tmp_path)
+    before = (p / "src.py").read_bytes()
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    planned = M.plan_mutations([[str(p / "src.py"), str(p / "old.txt"), str(p / "new.txt")]])
+
+    report = M.run_arm(planned, "test_src.py::test_zero",
+                       runner=[str(tmp_path / "no-such-interpreter")])
+
+    assert report["verdict"] == "error"
+    assert "could not start the arm" in report["failure"]
+    assert report["restored"] is True
+    assert (p / "src.py").read_bytes() == before
+    assert M.exit_code_for(report["verdict"]) == 2
+
+
+def test_a_clean_arm_reports_no_bytecode_left(tmp_path):
+    """Control: the field is empty when the after-arm purge succeeded."""
+    p = make_project(tmp_path)
+    (p / "old.txt").write_text('return "zero"', encoding="utf-8")
+    (p / "new.txt").write_text('return "ZERO"', encoding="utf-8")
+    proc = run(p, "--mutate", "src.py", "old.txt", "new.txt",
+               "--test", "test_src.py::test_zero", "--json")
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout)["data"]["bytecode_left"] == []
+
+
 # --------------------------------------------------------------------------
 # An exit 1 is KILLED only when pytest actually reported a failure
 # --------------------------------------------------------------------------

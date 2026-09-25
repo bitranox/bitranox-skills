@@ -1,7 +1,9 @@
 """Tests for toolbox-nudge.py (PreToolUse nudge on Bash, PowerShell, Edit, Write, MultiEdit and NotebookEdit toward a local toolbox tool). ASCII only."""
 import io
 import json
+import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -579,3 +581,87 @@ def test_the_command_reading_keeps_precedence_over_the_authored_one():
     command = _REPLACE_IN_A_HEREDOC + "pgrep -f something\n"
     text = N.extract_text("Bash", {"command": command})
     assert N.match_tool(text, tool_name="Bash")[0] == "procsig"
+
+
+# ---- how to LAUNCH the tool comes from the tool, not from the hook ------------------------------
+#
+# The nudge suggested `uv run <tool>.py --help` for every tool. mutation_arm runs its arm as
+# `<its own interpreter> -m pytest`, so under `uv run` - an isolated interpreter with neither
+# pytest nor the project - every arm reads INCONCLUSIVE. The tool DECLARES its launch
+# (`LAUNCH_WITH`), read from its source without importing it, so the next tool with the same need
+# states it once and cannot be forgotten by a special case in this hook.
+
+def _nudge_for(cmd, session, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))          # no local toolbox: the shipped copy answers
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return _run(_event(cmd, session=session), monkeypatch, capsys)
+
+
+def test_mutation_arm_is_suggested_with_the_project_interpreter_not_uv_run(tmp_path, monkeypatch,
+                                                                            capsys):
+    msg = _nudge_for("git stash && pytest tests/t.py::test_y", "m1", tmp_path, monkeypatch, capsys)
+    assert msg is not None and "mutation_arm" in msg
+    assert "uv run" not in msg, msg
+    assert ".venv" in msg and "mutation_arm.py --help" in msg
+
+
+def test_a_tool_declaring_nothing_is_still_suggested_with_uv_run(tmp_path, monkeypatch, capsys):
+    """Control: the default launch is unchanged for every tool that declares no requirement."""
+    msg = _nudge_for("pkill -f myserver", "m2", tmp_path, monkeypatch, capsys)
+    assert msg is not None and "uv run " in msg and "procsig.py --help" in msg
+
+
+def test_the_declaration_is_read_without_executing_the_tool(tmp_path):
+    tool = tmp_path / "t.py"
+    tool.write_text('raise SystemExit("importing me is a bug")\nLAUNCH_WITH = "project-python"\n',
+                    encoding="utf-8")
+    assert N.declared_launch(tool) == "project-python"
+
+
+def test_an_absent_or_unreadable_declaration_means_uv(tmp_path):
+    plain = tmp_path / "plain.py"
+    plain.write_text("x = 1\n", encoding="utf-8")
+    broken = tmp_path / "broken.py"
+    broken.write_text("def (:\n", encoding="utf-8")
+    assert N.declared_launch(plain) == "uv"
+    assert N.declared_launch(broken) == "uv"
+    assert N.declared_launch(tmp_path / "missing.py") == "uv"
+
+
+def test_an_unknown_declaration_never_falls_back_to_uv_run(tmp_path):
+    """A value this hook does not know is a requirement it cannot honour - naming `uv run` anyway
+    would be the defect this section exists to remove."""
+    tool = tmp_path / "t.py"
+    tool.write_text('LAUNCH_WITH = "conda-env"\n', encoding="utf-8")
+    cmd, note = N.launch_command(tool)
+    assert "uv run" not in cmd + note and str(tool) in cmd
+    assert "conda-env" in note, "the reader is told why no launcher was given"
+
+
+def _shipped_nudge_targets(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    targets = {}
+    for tool in sorted(N.ruled_tools()):
+        found = N._tool_invocation(tool)
+        if found is not None:
+            targets[tool] = found[1]
+    return targets
+
+
+def test_every_nudged_tool_declares_a_launch_this_hook_knows(tmp_path, monkeypatch):
+    for tool, path in _shipped_nudge_targets(tmp_path, monkeypatch).items():
+        assert N.declared_launch(path) in N.LAUNCHERS, tool
+
+
+def test_a_nudged_tool_that_runs_pytest_on_its_own_interpreter_declares_the_project_python(
+        tmp_path, monkeypatch):
+    """The shape, not the instance: a tool whose work is `sys.executable -m pytest` is only as good
+    as the interpreter it was launched with, so it must say so or the nudge sends it to uv."""
+    runs_own_pytest = re.compile(r"sys\.executable\s*,\s*[\"']-m[\"']\s*,\s*[\"']pytest[\"']")
+    checked = []
+    for tool, path in _shipped_nudge_targets(tmp_path, monkeypatch).items():
+        if runs_own_pytest.search(Path(path).read_text(encoding="utf-8")):
+            checked.append(tool)
+            assert N.declared_launch(path) == "project-python", tool
+    assert "mutation_arm" in checked, "the detector must see the tool it was written for"

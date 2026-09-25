@@ -21,7 +21,9 @@ on every call, and three traps sit in that one-liner.
 Host-key checking is left at ssh's own strict default. `--trust-changing-host-keys` is for a fleet
 you reimage, where a changed key is expected rather than an attack: it turns strict checking off,
 keeps that churn in a SEPARATE known-hosts file instead of polluting your real one, and heals a
-changed key by dropping the stale entry. It retries - exactly once - ONLY when ssh itself refused
+changed key by dropping the stale entry - also when the command SUCCEEDED under ssh's warning
+banner, since ssh never replaces that entry itself and the banner would otherwise repeat on every
+call. It retries - exactly once - ONLY when ssh itself refused
 the key before running anything (exit 255 plus ssh's own "Host key verification failed"). Under
 strict checking off a changed key is only a warning: ssh logs in with the key and RUNS the command,
 so a non-zero exit after the banner is the remote command's own, and re-running it would apply a
@@ -76,6 +78,12 @@ DEFAULT_FLEET_KNOWN_HOSTS = "{home}/.ssh/known_hosts_fleet"
 # ssh's two ways of saying "the key on file is not the key I was offered".
 HOST_KEY_CHANGED = re.compile(
     r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.I
+)
+# ssh's framed WARNING line, printed before authenticating whether or not it then proceeds:
+# `@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @`. Anchored to the frame so a
+# command that merely prints the phrase is not read as ssh saying it.
+HOST_KEY_BANNER = re.compile(
+    r"^@+\s+(?:WARNING:\s+)?REMOTE HOST IDENTIFICATION HAS CHANGED!\s+@+\s*$", re.MULTILINE
 )
 # ssh's FATAL line: it aborted before authenticating, so no remote command can have run. The banner
 # alone does not say that - under StrictHostKeyChecking=no ssh prints it and then runs the command.
@@ -250,28 +258,47 @@ def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts:
     replacement, because what arrives there is partly the REMOTE command's stderr, in whatever
     encoding the remote wrote, and a strict locale decode would crash after the command ran.
 
-    Healing (dropping the stale entry) needs healing enabled, a non-zero exit, a known host and
-    stderr that really is a mismatch. The RETRY needs more: ssh's own failure status AND its fatal
-    "Host key verification failed" line, which together say it stopped before authenticating.
-    Anything less can be a command that ran under the banner - StrictHostKeyChecking=no makes a
-    changed key a warning - and `argv` can be MUTATING, so a second run would apply it twice. `run`
+    Healing (dropping the stale entry) needs healing enabled, a known host and stderr that really
+    is a mismatch - whatever the exit status. Under StrictHostKeyChecking=no a changed key is only
+    a warning: ssh runs the command, often successfully, and never replaces the entry on file, so
+    healing only on a non-zero exit left the stale key there for good and every later call printed
+    the banner again. Dropping the entry runs nothing remote, so it is safe on any status.
+
+    The RETRY needs more: ssh's own failure status AND its fatal "Host key verification failed"
+    line, which together say it stopped before authenticating. Anything less can be a command that
+    ran under the banner, and `argv` can be MUTATING, so a second run would apply it twice. `run`
     is injected so that is testable without a live host and a real changed key.
     """
     proc = _run_capturing_stderr(argv, run)
     err = proc.stderr or ""
-    if heal and proc.returncode != 0 and host and known_hosts and HOST_KEY_CHANGED.search(err):
+    if heal and host and known_hosts and _key_mismatch(proc.returncode, err):
         run(["ssh-keygen", "-R", host, "-f", known_hosts],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        print(f"fleet_ssh: host key for {host} changed; dropped the stale entry "
+              f"{_after_the_drop(proc.returncode, err)}", file=sys.stderr)
         if proc.returncode == SSH_FAILED and HOST_KEY_REFUSED.search(err):
-            print(f"fleet_ssh: host key for {host} changed; dropped the stale entry and retried",
-                  file=sys.stderr)
             proc = _run_capturing_stderr(argv, run)
             err = proc.stderr or ""
-        else:
-            print(f"fleet_ssh: host key for {host} changed; dropped the stale entry (not retried: "
-                  "the command may already have run)", file=sys.stderr)
     forward_stderr(err)
     return proc.returncode
+
+
+def _key_mismatch(returncode: int, err: str) -> bool:
+    """Did ssh report a changed host key? On success only its framed WARNING banner counts: the
+    fatal "verification failed" line cannot come from ssh when the command ran, so there it is the
+    remote command's own output and says nothing about the key."""
+    if returncode == 0:
+        return bool(HOST_KEY_BANNER.search(err))
+    return bool(HOST_KEY_CHANGED.search(err))
+
+
+def _after_the_drop(returncode: int, err: str) -> str:
+    """What happens to the command once the stale entry is gone - said, because it differs."""
+    if returncode == SSH_FAILED and HOST_KEY_REFUSED.search(err):
+        return "and retried (ssh refused before running anything)"
+    if returncode == 0:
+        return "(the command ran under the warning; the next connect records the new key)"
+    return "(not retried: the command may already have run)"
 
 
 def _run_capturing_stderr(argv: list[str], run):

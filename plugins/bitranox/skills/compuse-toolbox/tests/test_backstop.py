@@ -453,3 +453,65 @@ def test_a_non_cp1252_label_does_not_crash_a_cp1252_stdout(tmp_path: Path) -> No
     )
     assert res.returncode == 1, res.stderr
     assert b"TIMEOUT" in res.stdout
+
+
+# --- a --repo must be the repository ROOT git resolves, never a directory inside another repo ---
+#
+# git -C <dir> walks UP until it finds a repository. A --repo that is only a subdirectory - or a
+# nested repo whose .git was removed mid-run - answers with the ENCLOSING repo's HEAD, which is a
+# different sha from --base, so the backstop reported DONE for work it never watched.
+
+@pytest.fixture()
+def nested(tmp_path: Path) -> tuple[Path, Path]:
+    """(parent repo, child repo inside it), each with one commit of its own."""
+    parent = tmp_path / "parent"
+    for r in (parent, parent / "child"):
+        r.mkdir()
+        _git(r, "init", "-q", "-b", "main")
+        _git(r, "config", "user.email", "t@example.invalid")
+        _git(r, "config", "user.name", "t")
+        (r / "f.txt").write_text(r.name + "\n", encoding="utf-8")
+        _git(r, "add", "f.txt")
+        _git(r, "commit", "-q", "-m", r.name)
+    return parent, parent / "child"
+
+
+def test_a_nested_repo_whose_git_dir_vanishes_mid_run_is_lost_not_done(nested) -> None:
+    parent, child = nested
+    base = _git(child, "rev-parse", "HEAD")
+    assert base != _git(parent, "rev-parse", "HEAD")
+    clock = _Clock()
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        if clock.t == 60.0:
+            _remove_repo(child / ".git")
+
+    outcome, elapsed = wait(deadline=600.0, interval=60.0, done_file=None, cancel_file=None,
+                            repo=child, base=base, label="t", now=clock.now, sleep=sleep)
+    assert outcome is Outcome.LOST, "the enclosing repo's HEAD said nothing about this one"
+    assert elapsed == 60.0
+
+
+def test_a_subdirectory_of_a_repo_is_refused_at_arm_time(nested) -> None:
+    parent, _child = nested
+    sub = parent / "plain"
+    sub.mkdir()
+    with pytest.raises(ArmRefused, match="not the root"):
+        validate_arm(done_file=None, repo=sub, base=_git(parent, "rev-parse", "HEAD"))
+
+
+def test_the_nested_repo_root_itself_still_arms(nested) -> None:
+    """Control: a nested repo that IS a root is watched on its own HEAD, not the parent's."""
+    _parent, child = nested
+    validate_arm(done_file=None, repo=child, base=_git(child, "rev-parse", "HEAD"))
+
+
+def test_main_exits_2_for_a_subdirectory_repo(nested, capsys) -> None:
+    parent, _child = nested
+    sub = parent / "plain"
+    sub.mkdir()
+    rc = main(["--deadline", "10", "--repo", str(sub), "--base", _git(parent, "rev-parse", "HEAD")],
+              now=_Clock().now, sleep=_boom)
+    assert rc == 2
+    assert "not the root" in capsys.readouterr().err

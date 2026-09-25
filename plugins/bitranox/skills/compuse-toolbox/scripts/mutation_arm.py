@@ -49,7 +49,9 @@ Sources and anchor files are UTF-8 (an anchor file's BOM is ignored); a CRLF sou
 CRLF while mutated, and an LF anchor file matches it.
 
 Exit codes: 0 = KILLED (the arm noticed the mutation), 1 = SURVIVED (it did not - the finding),
-2 = INCONCLUSIVE, TIMEOUT, ERROR (a source that could not be written), a failed restore, or a
+2 = INCONCLUSIVE, TIMEOUT, ERROR (a source that could not be written, or an arm that could not
+be started), a failed restore, cached bytecode that survived the purge AFTER the arm (the arm ran
+and was restored; the verdict is still reported, and the leftover files are named), or a
 usage error (an absent anchor, a file that is not UTF-8, a test that never ran, a pytest that
 exited 1 without reporting a failure, or an arm still running at --timeout).
 """
@@ -66,6 +68,11 @@ import tempfile
 from pathlib import Path
 
 from anchor_edit import AnchorError, replace_exact, require_unique
+
+#: How this tool must be launched, read by hooks/toolbox-nudge.py from the source without importing
+#: it: the arm is `<this interpreter> -m pytest`, so only the PROJECT's interpreter (which has
+#: pytest and the project) gives a verdict - under `uv run` every arm is INCONCLUSIVE.
+LAUNCH_WITH = "project-python"
 
 _SUMMARY_HEADER = "short test summary info"
 
@@ -170,12 +177,11 @@ def bytecode_caches(path):
     return found
 
 
-def purge_bytecode(paths):
-    """Remove the cached bytecode for each source, then REFUSE if any survived.
+def remove_bytecode(paths):
+    """Remove the cached bytecode for each source; return (removed, remaining). Never raises.
 
-    The check is on the resulting state rather than on the unlink calls: a cache left behind by a
-    read-only directory or a permission error would silently defeat the guarantee, and an arm that
-    may be running bytecode nobody wrote is worth refusing outright.
+    `remaining` is read from the resulting state rather than from the unlink calls: a cache left
+    behind by a read-only directory or a permission error is still there whatever unlink said.
     """
     removed = []
     for path in paths:
@@ -186,6 +192,17 @@ def purge_bytecode(paths):
                 continue
             removed.append(str(cache))
     remaining = [str(cache) for path in paths for cache in bytecode_caches(path)]
+    return removed, remaining
+
+
+def purge_bytecode(paths):
+    """Remove the cached bytecode for each source, then REFUSE if any survived.
+
+    For the purge BEFORE the arm: an arm that may be running bytecode nobody wrote is worth
+    refusing outright. The purge after the arm must not raise - by then the mutation was applied
+    and restored, and refusing would misreport that - so it uses remove_bytecode and reports.
+    """
+    removed, remaining = remove_bytecode(paths)
     if remaining:
         raise AnchorError(
             "cached bytecode survived removal, the arm could run it: " + ", ".join(remaining))
@@ -248,7 +265,9 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
     # the mutation preserves the file's size and lands in the same second, which reports a test as
     # SURVIVED though the mutant never ran.
     purged = purge_bytecode([path for path, _, _ in planned])
-    with tempfile.TemporaryDirectory(prefix="mutation-arm-") as tmp:
+    # ignore_cleanup_errors: the cleanup runs AFTER the arm, and a raise there would reach main()
+    # as "refused before mutating" about an arm that mutated, ran and restored.
+    with tempfile.TemporaryDirectory(prefix="mutation-arm-", ignore_cleanup_errors=True) as tmp:
         saved = {}
         for index, (path, _, _) in enumerate(planned):
             # Index-prefixed: two mutations may target the same file, and two files in different
@@ -266,12 +285,20 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
                 # SURVIVED. The restore below still runs for whatever was already written.
                 error = f"could not apply the mutation: {exc}"
             else:
-                returncode, output = _run_pytest(runner, nodeid, timeout)
+                try:
+                    returncode, output = _run_pytest(runner, nodeid, timeout)
+                except OSError as exc:
+                    # The mutation is ON DISK by now, so this must not escape to main(), whose
+                    # handler says the arm was refused before mutating.
+                    error = f"could not start the arm: {exc}"
         finally:
             restored = _restore(saved)
             # Belt and braces: the flag above stops this arm writing bytecode, but a caller
-            # supplying its own runner can put the writing back.
-            purged += purge_bytecode(list(saved))
+            # supplying its own runner can put the writing back. Reported, never raised: the
+            # arm has run and been restored, and a raise here reached main() as "refused
+            # before mutating" and dropped the verdict the arm earned.
+            removed, left = remove_bytecode(list(saved))
+            purged += removed
     verdict = "error" if error else verdict_for(returncode, output)
     return {
         "mutations": [{"path": str(p)} for p, _, _ in planned],
@@ -282,6 +309,7 @@ def run_arm(planned, nodeid, *, runner=None, timeout=None):
         "failure": error or failure_reason(output),
         "restored": restored,
         "bytecode_purged": purged,
+        "bytecode_left": left,
     }
 
 
@@ -357,6 +385,10 @@ def main(argv=None) -> int:
     if not report["restored"]:
         print("mutation_arm: RESTORE FAILED - the files on disk are NOT the originals",
               file=sys.stderr)
+    if report["bytecode_left"]:
+        print("mutation_arm: the arm ran and the sources were restored, but cached bytecode "
+              "survived removal and a later run could execute it instead of the source - delete "
+              "it before the next run: " + ", ".join(report["bytecode_left"]), file=sys.stderr)
     if args.json:
         print(json.dumps({"ok": True, "command": "mutation_arm", "data": report}, indent=2))
     else:
@@ -374,7 +406,9 @@ def main(argv=None) -> int:
             print(f"  killed at {report['timeout_s']}s - the arm did not finish, so this says "
                   "nothing about whether it would have noticed; the mutation may make it SPIN",
                   file=sys.stderr)
-    return 2 if not report["restored"] else exit_code_for(report["verdict"])
+    if not report["restored"] or report["bytecode_left"]:
+        return 2
+    return exit_code_for(report["verdict"])
 
 
 def _tolerate_unencodable_output() -> None:

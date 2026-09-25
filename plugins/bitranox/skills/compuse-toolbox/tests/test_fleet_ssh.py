@@ -362,6 +362,48 @@ def test_a_verification_failure_that_is_not_ssh_s_own_exit_is_not_retried():
     assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"]
 
 
+def test_a_command_that_succeeded_under_the_banner_still_drops_the_stale_entry(capsys):
+    """Under StrictHostKeyChecking=no ssh warns, RUNS the command, and exits 0 - and it never
+    replaces the entry on file. Healing only on a non-zero exit left the stale key there for good,
+    so every later call printed the banner again and the new key was never recorded."""
+    r = _Runner(_FakeProc(0, _CHANGED))
+    assert _heal(r, argv=("ssh", "h", "uptime")) == 0
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"], "dropped, and the command ran ONCE"
+    assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
+    assert "not retried" not in capsys.readouterr().err, "nothing failed, so nothing to retry"
+
+
+def test_a_clean_zero_exit_touches_no_known_hosts_entry():
+    """Control: with no banner there is nothing stale, so ssh-keygen is never run."""
+    r = _Runner(_FakeProc(0, "some remote stderr\n"))
+    assert _heal(r) == 0
+    assert [c[0] for c in r.calls] == ["ssh"]
+
+
+def test_ssh_s_real_framed_banner_is_recognised_on_success():
+    real = ("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+            "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n"
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n")
+    r = _Runner(_FakeProc(0, real))
+    assert _heal(r) == 0
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"]
+
+
+def test_a_successful_command_that_prints_the_phrase_is_not_a_mismatch():
+    """Control: on success only ssh's FRAMED banner counts. A remote log line naming the phrase is
+    the command's own output, and dropping a good key over it would be healing nothing."""
+    r = _Runner(_FakeProc(0, "sshd: REMOTE HOST IDENTIFICATION HAS CHANGED for 10.0.0.9\n"))
+    assert _heal(r, argv=("ssh", "h", "tail /var/log/x")) == 0
+    assert [c[0] for c in r.calls] == ["ssh"]
+
+
+def test_a_banner_under_strict_checking_is_never_healed_even_on_success():
+    """Control: without --trust-changing-host-keys the mismatch is the user's to judge."""
+    r = _Runner(_FakeProc(0, _CHANGED))
+    assert _heal(r, heal=False) == 0
+    assert [c[0] for c in r.calls] == ["ssh"]
+
+
 def _stub_ssh_bin(tmp_path, exit_code):
     """A fake `ssh` and `ssh-keygen` on a private PATH, so no test can reach a real host.
 
@@ -399,6 +441,23 @@ def test_end_to_end_a_remote_command_runs_once_under_the_banner(tmp_path):
                           env=env, capture_output=True, timeout=60)
     assert b"Traceback" not in done.stderr, "an undecodable byte on ssh's stderr must not crash"
     assert done.returncode == 3, done.stderr
+    assert log.read_text(encoding="utf-8").split() == ["ssh", "REMOTE-COMMAND-EXECUTED",
+                                                        "ssh-keygen"]
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the stub ssh is a #!/bin/sh script, which CreateProcess cannot launch by "
+                           "bare name; the healing rule itself is covered by the injected-run tests")
+def test_end_to_end_a_zero_exit_under_the_banner_still_heals(tmp_path):
+    bindir, log = _stub_ssh_bin(tmp_path, 0)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+           "HOME": str(home), "USERPROFILE": str(home)}
+    done = subprocess.run([sys.executable, F.__file__, "--key", "/k", "--trust-changing-host-keys",
+                           "h", "uptime"],
+                          env=env, capture_output=True, timeout=60)
+    assert done.returncode == 0, done.stderr
     assert log.read_text(encoding="utf-8").split() == ["ssh", "REMOTE-COMMAND-EXECUTED",
                                                         "ssh-keygen"]
 

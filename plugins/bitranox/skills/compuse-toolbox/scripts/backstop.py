@@ -29,9 +29,14 @@ refuses at arm time when the exit condition is ALREADY true. A backstop whose co
 before the work starts provides no coverage at all while reporting success on its first poll,
 and nothing downstream can detect that.
 
+`--repo` must be a repository ROOT. git resolves a subdirectory to the enclosing repository, so
+a nested repo whose .git disappears would report the PARENT's HEAD - a different sha, read as
+DONE. A --repo that is not the root git resolves is refused at arm time and LOST mid-run.
+
 Exit codes: 0 = the work finished (or the controller cancelled), 1 = TIMEOUT, go and look,
-2 = refused to arm / usage error, or the --repo signal was LOST mid-run (the repo vanished or
-git failed), which cannot tell finished from failed - go and look.
+2 = refused to arm / usage error, or the --repo signal was LOST mid-run (the repo vanished, git
+failed, or --repo stopped being a repository root), which cannot tell finished from failed - go
+and look.
 """
 
 from __future__ import annotations
@@ -112,17 +117,35 @@ def decide(probe: Probe, *, elapsed: float, deadline: float) -> Outcome:
 
 
 def _head(repo: Path) -> str:
-    """HEAD's sha. Raises SignalLost when git cannot answer (not a repo, repo gone, no git)."""
+    """HEAD's sha, of the repository whose ROOT is `repo`.
+
+    git -C walks UP to the nearest repository, so a subdirectory - or a nested repo whose .git
+    was removed mid-run - answers with the ENCLOSING repo's HEAD. That is a different sha from
+    --base, so it read as DONE for work nobody watched. `--show-prefix` is asked in the same call:
+    it is empty exactly when `repo` is the root git resolved (a bare repo included), so a
+    non-empty prefix is refused rather than compared.
+
+    Raises:
+        SignalLost: git cannot answer (not a repo, repo gone, no git), or `repo` is not the root
+            of the repository git resolved it to.
+    """
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "HEAD"],
+            ["git", "-C", str(repo), "rev-parse", "--show-prefix", "--verify", "-q", "HEAD"],
             check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except subprocess.CalledProcessError as exc:
         raise SignalLost(f"git rev-parse HEAD in {repo} exited {exc.returncode}") from exc
     except OSError as exc:
         raise SignalLost(f"cannot run git for {repo}: {exc}") from exc
-    head = out.stdout.strip()
+    lines = out.stdout.split("\n")
+    prefix, head = lines[0].strip(), (lines[1].strip() if len(lines) > 1 else "")
+    if prefix:
+        raise SignalLost(
+            f"{repo} is not the root of a repository - git resolved it to a directory {prefix!r} "
+            "inside an enclosing repo, whose HEAD says nothing about this one; pass the "
+            "repository root as --repo"
+        )
     if not _SHA.fullmatch(head):
         raise SignalLost(f"git rev-parse HEAD in {repo} returned {head!r}, not a sha")
     return head

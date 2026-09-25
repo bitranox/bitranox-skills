@@ -25,14 +25,19 @@ Run:
   `uv run scripts/diffbehave.py --a "python3 hook_old.py" --b "python3 hook_new.py" \\
       --case '{"x":1}' --expect-differ 1`
 
-A case where NEITHER side ran (both failed to launch, or both timed out) is ERROR, never AGREE:
-two identical failures to start compare equal, which read as "behave the same" for a typo copied
-into both commands. Only trailing whitespace (and trailing blank lines) is ignored; leading
-whitespace and a form feed are behaviour.
+A case where EITHER side did not run (could not be started, or its launcher exited 126/127) is
+ERROR, and so is one where both sides timed out - never AGREE and never DIFFER. Two identical
+failures to start compare equal, which read as "behave the same" for a typo copied into both
+commands; a typo in ONE command differs from any real output, which satisfied --expect-differ
+without anything being compared. A script operand that does not exist (`python3 old.py` with no
+old.py) is refused before anything runs, naming the side. One side timing out while the other
+answers IS a difference: that side ran and hung. Only trailing whitespace (and trailing blank
+lines) is ignored; leading whitespace and a form feed are behaviour.
 
 Exit codes: 0 = expectation met, 1 = expectation not met (or nothing differed when it had to),
-2 = usage/IO error - a command string that does not split, a malformed --case-file row, a case
-that ran on neither side, or the tool itself failing. `--json` emits the machine-readable envelope.
+2 = usage/IO error - a command string that does not split, a missing script operand, a malformed
+--case-file row, a case where a side did not run, or the tool itself failing. `--json` emits the
+machine-readable envelope.
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -54,6 +60,8 @@ class Run:
     stderr: str = ""
     launched: bool = True
     """False when the command never ran to completion: not found, not startable, or timed out."""
+    timed_out: bool = False
+    """True when it STARTED and was killed at --timeout: a hang is behaviour, a failed start is not."""
 
 
 @dataclass(frozen=True)
@@ -82,13 +90,33 @@ def _norm(text: str) -> str:
     return "\n".join(line.rstrip() for line in (text or "").split("\n")).rstrip()
 
 
+# What a shell, `env` or `bash script.sh` exits with when the command could not be run at all:
+# 127 not found, 126 found but not executable. Neither is an answer the program gave.
+_NOT_RUN_EXITS = frozenset({126, 127})
+
+
+def did_not_run(run: Run) -> bool:
+    """True when this side never got as far as behaving: it could not be started, or its launcher
+    reported not-found / not-executable. A TIMEOUT is not this - the program ran and hung."""
+    if not run.launched and not run.timed_out:
+        return True
+    return run.returncode in _NOT_RUN_EXITS
+
+
 def verdict(a: Run, b: Run) -> str:
-    """AGREE when exit code, stdout and stderr all match; DIFFER otherwise; ERROR when neither ran.
+    """AGREE when exit code, stdout and stderr all match; DIFFER otherwise; ERROR when a side did
+    not run, or neither side finished.
 
     stderr is compared on purpose: a guard's whole output is its refusal message, so two guards
     that both exit 2 with different reasons are NOT equivalent.
+
+    ONE side failing to run is ERROR too, never DIFFER: a typo in one command differs from any
+    real output, so it satisfied --expect-differ - the known-negative check - without anything
+    having been compared.
     """
     if not a.launched and not b.launched:
+        return "ERROR"
+    if did_not_run(a) or did_not_run(b):
         return "ERROR"
     same = (a.returncode == b.returncode
             and _norm(a.stdout) == _norm(b.stdout)
@@ -163,7 +191,8 @@ def _run_one(command: str, case: Case, timeout: float) -> Run:
     except FileNotFoundError as exc:
         return Run(returncode=127, stderr=str(exc), launched=False)
     except subprocess.TimeoutExpired:
-        return Run(returncode=124, stderr=f"timeout after {timeout}s", launched=False)
+        return Run(returncode=124, stderr=f"timeout after {timeout}s", launched=False,
+                   timed_out=True)
     except OSError as exc:
         return Run(returncode=126, stderr=str(exc), launched=False)
     return Run(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
@@ -253,14 +282,50 @@ def _load_cases(args) -> list[Case]:
     return cases
 
 
+# A token with one of these suffixes, as the first operand, is the script the interpreter runs.
+_SCRIPT_SUFFIXES = (".py", ".pyw", ".sh", ".bash", ".ps1", ".js", ".mjs", ".cjs", ".rb", ".pl")
+# Options after which the next token is inline code or a module, so no script operand follows.
+_CODE_OPTIONS = frozenset({"-c", "-m", "-e", "--eval", "-Command", "-EncodedCommand"})
+
+
+def _script_operand(argv: list[str]) -> str | None:
+    """The script file this command runs (`python3 old.py`, `uv run x.py`, `bash t.sh`), or None.
+
+    It is the FIRST script-suffixed operand, because a later one is an argument to that script -
+    possibly a file it is about to create. Inline code (`-c`, `-e`) or a module (`-m`) means there
+    is no script file, and anything after it is data.
+    """
+    for token in argv[1:]:
+        if token in _CODE_OPTIONS:
+            return None
+        if token.startswith("-"):
+            continue
+        if token.lower().endswith(_SCRIPT_SUFFIXES):
+            return token
+    return None
+
+
 def _check_command(flag: str, command: str) -> None:
-    """Split the command once up front, so a bad string is a usage error before anything runs."""
+    """Split the command once up front, so a bad string is a usage error before anything runs.
+
+    A script operand that does not exist is refused here too: `python3 old.py` with no old.py
+    exits 2 from the interpreter itself, which no exit code can tell apart from the program's own
+    answer - so a missing script would read as a behaviour difference.
+    """
     try:
         argv = _split_command(command)
     except (ValueError, OSError) as exc:  # shlex raises ValueError, CommandLineToArgvW WinError
         raise UsageError(f"{flag} {command!r} cannot be split: {exc}") from exc
     if not argv:
         raise UsageError(f"{flag} is empty")
+    if shutil.which(argv[0]) is None:
+        # An unrunnable interpreter is reported per case, as ERROR naming this side; its script
+        # operand is meaningless until there is something to run it.
+        return
+    script = _script_operand(argv)
+    if script is not None and not os.path.isfile(script):
+        raise UsageError(f"{flag} runs {script!r}, which is not a file - a side that cannot run "
+                         f"has no behaviour to compare")
 
 
 def _print_human(results: list[CaseResult], summary: dict) -> None:
@@ -300,13 +365,23 @@ def _prepare(args) -> list[Case]:
         raise UsageError(f"cannot read --case-file {args.case_file!r}: {exc}") from exc
 
 
-def _report_problems(args, summary: dict) -> None:
+def _which_did_not_run(result: CaseResult) -> str:
+    """`case1: --a did not run (rc=127)`, naming every side that never got as far as behaving."""
+    both_unfinished = not result.a.launched and not result.b.launched
+    sides = [f"{flag} {'timed out' if run.timed_out else 'did not run'} (rc={run.returncode})"
+             for flag, run in (("--a", result.a), ("--b", result.b))
+             if did_not_run(run) or both_unfinished]
+    return f"{result.name}: {', '.join(sides)}"
+
+
+def _report_problems(args, summary: dict, results: list[CaseResult]) -> None:
     """Diagnostics always go to stderr, --json included, so stdout stays a parseable envelope."""
     if summary["error"]:
-        print(f"diffbehave: ERROR - {summary['error']} case(s) could not run on EITHER side "
-              f"({', '.join(summary['erroring'])}): not found, not startable, or timed out. Two "
-              f"failures to start compare equal, so this is no evidence the sides agree.",
-              file=sys.stderr)
+        detail = "; ".join(_which_did_not_run(r) for r in results if r.verdict == "ERROR")
+        print(f"diffbehave: ERROR - {summary['error']} case(s) could not run on one or both "
+              f"sides ({detail}): not found, not startable, exit 126/127, or both timed out. A "
+              f"side that never ran has no behaviour, so this is no evidence the sides agree OR "
+              f"differ.", file=sys.stderr)
     if args.expect_differ and not meets_expectation(summary, args.expect_differ):
         print(f"diffbehave: FAILED - required at least {args.expect_differ} case(s) to DIFFER, got "
               f"{summary['differ']}. A comparison that never says DIFFER has proved nothing.",
@@ -327,7 +402,7 @@ def _main(argv) -> int:
     results = compare(args.a, args.b, cases, timeout=args.timeout)
     summary = summarize(results)
     ok = meets_expectation(summary, args.expect_differ) and not summary["error"]
-    _report_problems(args, summary)
+    _report_problems(args, summary, results)
 
     if args.json:
         print(json.dumps({"ok": ok, "command": "diffbehave", "skipped": [],

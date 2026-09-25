@@ -13,6 +13,7 @@ the tool - the closest thing Claude Code offers to "a supervisor noticing and sa
 tool for that". additionalContext reaches the model as a system-reminder (probe-verified), never
 blocks.
 """
+import ast
 import json
 import os
 import re
@@ -320,16 +321,19 @@ def _sibling_skill_script(tool):
 
 
 def _tool_invocation(tool):
-    """How to run `tool`: the local copy if there is one, else the shipped one, else None.
+    """(where it lives, its path, the path as shown) for `tool`: the local copy if there is one,
+    else the shipped one, else None.
 
     A tool broadly useful enough to be contributed upstream gets DELETED locally (one source of
     truth), and those are precisely the ones most worth nudging about - so keying the nudge on the
     local file alone would turn every successful contribution into a silently lost guard."""
-    if (_toolbox_dir() / (tool + ".py")).is_file():
-        return "the local `toolbox` skill", "uv run ~/.claude/skills/toolbox/tools/%s.py --help" % tool
-    if (_shipped_dir() / (tool + ".py")).is_file():
-        return ("the shipped `bitranox:compuse-toolbox` skill",
-                "uv run %s/%s.py --help" % (_shipped_dir(), tool))
+    local = _toolbox_dir() / (tool + ".py")
+    if local.is_file():
+        return "the local `toolbox` skill", local, "~/.claude/skills/toolbox/tools/%s.py" % tool
+    shipped = _shipped_dir() / (tool + ".py")
+    if shipped.is_file():
+        return "the shipped `bitranox:compuse-toolbox` skill", shipped, "%s/%s.py" % (
+            _shipped_dir(), tool)
     sibling = _sibling_skill_script(tool)
     if sibling is not None:
         # Name the skill that actually owns it: pointing a reader at compuse-toolbox for a tool
@@ -337,8 +341,58 @@ def _tool_invocation(tool):
         # component directly under `skills/`, never `parent.parent` - that is the skill only for
         # the scripts/ layout and resolves to `skills` itself for a tool kept at the skill root.
         owner = sibling.relative_to(_shipped_dir().parent.parent).parts[0]
-        return ("the shipped `bitranox:%s` skill" % owner, "uv run %s --help" % sibling)
+        return "the shipped `bitranox:%s` skill" % owner, sibling, str(sibling)
     return None
+
+
+#: How a tool asks to be LAUNCHED, declared in its own source as a top-level
+#: `LAUNCH_WITH = "<key>"` and read here without importing it. No declaration means "uv".
+#:
+#: The launch belongs to the tool, not to this hook: `uv run` gives a script an isolated
+#: interpreter, which is right for almost every tool and wrong for one whose work is its OWN
+#: interpreter running the project's pytest (mutation_arm) - there every arm reads INCONCLUSIVE.
+#: A special case here would be forgotten by the next such tool; a declaration travels with it.
+#:
+#: Each entry is (command template, note appended after the command).
+LAUNCHERS = {
+    "uv": ("uv run %s --help", ""),
+    "project-python": (
+        (".venv\\Scripts\\python.exe" if os.name == "nt" else ".venv/bin/python") + " %s --help",
+        (" - launch it with the PROJECT's own interpreter, which has the project's pytest and the "
+         "project installed; the isolated environment `uv` would give it has neither")),
+}
+
+
+def declared_launch(path):
+    """The tool's `LAUNCH_WITH` value, read by parsing its source (never executing it); "uv" when
+    it declares none or cannot be read. A hook must not run arbitrary module-level code."""
+    try:
+        tree = ast.parse(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, SyntaxError, ValueError):
+        return "uv"
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, ast.AnnAssign) else [])
+        value = getattr(node, "value", None)
+        if (any(isinstance(t, ast.Name) and t.id == "LAUNCH_WITH" for t in targets)
+                and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            return value.value
+    return "uv"
+
+
+def launch_command(path, shown=None):
+    """(command, note) to suggest for the tool at `path`, shown as `shown` (default: the path).
+
+    A declaration this hook does not know is a requirement it cannot honour, so it never falls
+    back to `uv run` - that would be the wrong-interpreter suggestion this exists to prevent."""
+    shown = shown or str(path)
+    declared = declared_launch(path)
+    if declared not in LAUNCHERS:
+        note = (f" - launch it as its docstring says: it declares LAUNCH_WITH={declared!r}, "
+                f"which this hook does not know")
+        return f"{shown} --help", note
+    template, note = LAUNCHERS[declared]
+    return template % shown, note
 
 
 def _nudge_flag(session):
@@ -386,12 +440,14 @@ def main():
     found = _tool_invocation(tool)
     if not found:                                        # nowhere local, nowhere shipped -> silent
         return 0
-    home, invoke = found
+    home, path, shown = found
+    invoke, note = launch_command(path, shown)
     if _already_nudged(event.get("session_id") or "", tool):
         return 0
-    msg = ("%s has a tested tool for this (%s): `%s`. Prefer it over hand-rolling; if it "
+    msg = ("%s has a tested tool for this (%s): `%s`%s. Prefer it over hand-rolling; if it "
            "falls short, ENHANCE it (propose-first, per bitranox:meta-self-improve) rather than "
-           "working around it." % (home.capitalize() if home.startswith("the") else home, why, invoke))
+           "working around it." % (home.capitalize() if home.startswith("the") else home, why,
+                                   invoke, note))
     sys.stdout.write(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "additionalContext": msg}}) + "\n")
     return 0

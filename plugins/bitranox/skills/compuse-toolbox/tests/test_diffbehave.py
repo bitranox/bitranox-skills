@@ -95,10 +95,12 @@ def test_stdin_is_delivered_to_both_sides():
 
 
 def test_a_command_that_fails_to_start_is_a_result_not_a_crash():
+    """A result, and an ERROR one: a side that never ran has no behaviour to differ in. Reading it
+    as DIFFER let a typo on ONE side satisfy --expect-differ without anything being compared."""
     noop = _py("pass")
     results = D.compare("definitely-not-a-real-command-xyz", noop, [D.Case(name="c", stdin="")])
-    assert results[0].verdict == "DIFFER"
-    assert results[0].a.returncode != 0
+    assert results[0].verdict == "ERROR"
+    assert results[0].a.returncode != 0 and results[0].a.launched is False
 
 
 def test_non_ascii_output_round_trips_through_utf8_capture():
@@ -404,3 +406,78 @@ def test_split_command_survives_the_c_runtime_quote_escape_on_windows():
 def test_split_command_handles_a_quoted_path_with_spaces_on_windows():
     argv = D._split_command(r'"C:\Program Files\py.exe" --version')
     assert argv == [r"C:\Program Files\py.exe", "--version"], argv
+
+
+# --- a side that never ran is not a behaviour: ERROR (exit 2), never DIFFER --------------------
+#
+# --expect-differ exists to prove a comparison CAN say DIFFER. A typo on one side made it say so
+# without comparing anything, so the known-negative check passed on a run that tested nothing.
+
+def test_one_side_failing_to_launch_is_an_error_not_a_difference():
+    unlaunched = D.Run(returncode=127, stderr="No such file", launched=False)
+    assert D.verdict(unlaunched, _res(0, "x")) == "ERROR"
+    assert D.verdict(_res(0, "x"), unlaunched) == "ERROR"
+
+
+@pytest.mark.parametrize("code", [126, 127])
+def test_a_not_found_or_not_executable_exit_is_an_error_not_a_difference(code):
+    """126/127 are what a shell, env or bash reports for a command it could not run at all."""
+    assert D.verdict(_res(code, "", "bash: old.sh: No such file"), _res(0, "x")) == "ERROR"
+
+
+def test_a_real_behaviour_exit_is_still_a_difference():
+    """Control: any other non-zero exit is the program's own answer, and it differs."""
+    assert D.verdict(_res(3, "", "boom"), _res(0, "x")) == "DIFFER"
+
+
+def test_one_side_timing_out_is_still_a_difference():
+    """Control: a hang is behaviour - the new version spinning where the old returned."""
+    hung = D.Run(returncode=124, stderr="timeout after 1s", launched=False, timed_out=True)
+    assert D.verdict(hung, _res(0, "x")) == "DIFFER"
+
+
+def test_cli_a_typo_on_one_side_cannot_satisfy_expect_differ():
+    hello = _py("import sys;sys.stdout.write('hello')")
+    r = _run(["--a", "pyhton3-typo old.py", "--b", hello, "--case", "x", "--expect-differ", "1"])
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "--a" in r.stderr and "did not run" in r.stderr
+    assert "--b did not run" not in r.stderr
+
+
+def test_cli_a_side_exiting_127_is_named_in_the_error():
+    hello = _py("import sys;sys.stdout.write('hello')")
+    gone = _py("import sys;sys.exit(127)")
+    r = _run(["--a", hello, "--b", gone, "--case", "x", "--expect-differ", "1", "--json"])
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert json.loads(r.stdout)["data"]["results"][0]["verdict"] == "ERROR"
+    assert "--b did not run" in r.stderr
+
+
+def test_cli_a_missing_script_path_is_refused_before_anything_runs(tmp_path):
+    """`python3 old.py` with no old.py exits 2 from the interpreter, which is not 126/127 - so it is
+    caught up front, where the script operand can be named."""
+    marker = tmp_path / "ran.txt"
+    b = _py(f"open(r'{marker}','w').write('x')")
+    missing = tmp_path / "old.py"
+    r = _run(["--a", f'{sys.executable} "{missing}"', "--b", b, "--case", "x",
+              "--expect-differ", "1"])
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "--a" in r.stderr and "old.py" in r.stderr
+    assert not marker.exists(), "refused before running either side"
+
+
+def test_cli_an_existing_script_path_is_not_refused(tmp_path):
+    """Control for the pre-flight: the same shape with the script present runs normally."""
+    script = tmp_path / "old.py"
+    script.write_text("import sys; sys.stdout.write('hello')\n", encoding="utf-8")
+    r = _run(["--a", f'{sys.executable} "{script}"', "--b", f'{sys.executable} "{script}"',
+              "--case", "x"])
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_a_script_named_after_dash_c_is_an_argument_not_the_script():
+    """`python -c CODE out.py` runs CODE; out.py is data it may be about to create."""
+    assert D._script_operand([sys.executable, "-c", "pass", "out.py"]) is None
+    assert D._script_operand([sys.executable, "-m", "pkg", "out.py"]) is None
+    assert D._script_operand(["uv", "run", "--with", "x", "tool.py", "out.py"]) == "tool.py"
+    assert D._script_operand([sys.executable, "-X", "utf8", "old.py"]) == "old.py"
