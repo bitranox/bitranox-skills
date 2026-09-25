@@ -35,6 +35,7 @@ _HOOK_MODULES = {
     "git-footgun-guard": "git_footgun_guard",
     "git-wrong-repo-nudge": "git_wrong_repo_nudge",
     "git-revparse-nudge": "git_revparse_nudge",
+    "sha-literal-nudge": "sha_literal_nudge",
     "tooling-detour-nudge": "tooling_detour_nudge",
     "block-git-semicolon-chain": "block_git_semicolon_chain",
     "gated-prep-nudge": "gated_prep_nudge",

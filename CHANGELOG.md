@@ -29,6 +29,21 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.0]
+
+### Added
+
+- `sha-literal-nudge.py`, a non-blocking PreToolUse hook for Bash and PowerShell. It warns when a
+  command carries a full 40-character sha as a literal that the session transcript never showed:
+  no tool result, user message or attachment held that exact string. A sha padded out from a
+  short one passes every shape check, and `gh run list --commit` answers `[]` with exit 0, so a
+  wait armed on it polls to its deadline. The warning says to derive the sha in the same command
+  or to check it with `git cat-file -e <sha>^{commit}` first. It stays silent when the command
+  derives or asserts a sha (`$(...)`, `rev-parse`, `cat-file`, `merge-base`), when the sha sits in
+  a heredoc body, a commit message, an `echo` operand, a message flag or a comment, and when only
+  a local git verb that fails loudly on a missing object consumes it. It never blocks, because a
+  sha pasted from a CI page or by the user has to keep working.
+
 ## [7.22.10]
 
 ### Fixed
