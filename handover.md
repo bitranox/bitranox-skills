@@ -43,8 +43,10 @@ its fixers found are fixed and released as 7.25.1. The next step is the top back
 
 - Rank 8 (USER): independent review of the 16 fix groups in 7.24.0-7.24.1.
 - Rank 173 (FOUND): 15 follow-ups from the 7.25.x fixers; decide the toolbox `--json` "ok" rule first.
-- Rank 175 (FOUND, blocked on the user): three decisions - schematic exit code, the real-store
-  tombstone repair, the table-padding exception.
+- Rank 175 (FOUND): the user decided all three on 2026-09-26. (a) schematic below threshold exits
+  1 and (c) repo-gate verifies padding-only table diffs and waives the checklist - both to
+  implement; (b) the real-store tombstone repair is DONE (backup verified, 15 files / 63 records),
+  with one re-run owed after every session is on 7.25.x.
 - Rank 176 (FOUND): one mirrored table left.
 
 ## Lessons for the next nap
@@ -71,8 +73,9 @@ its fixers found are fixed and released as 7.25.1. The next step is the top back
 Rank 8 is the top open USER item. Invoke `bitranox:process-review-requesting-code-review` and
 dispatch one reviewer per group commit in `git log --oneline 7b82825..ef94aa2` (16 group commits),
 each told to check its diff against `.plan/rank10-skillscript-2026-09-25/adj/<group>/verdicts.txt`
-in the main checkout and to demand an executed failing input per finding. Rank 175 is a quick ask
-of the user that can go first if they are present.
+in the main checkout and to demand an executed failing input per finding. Rank 175's two decided
+implementations (schematic exit 1; the gate's padding-only waiver) are the natural next release
+after it.
 
 ## Files that matter
 
