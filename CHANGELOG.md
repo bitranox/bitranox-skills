@@ -29,6 +29,41 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.7]
+
+### Fixed
+
+- The Jev classifier reads a keyfile saved with a UTF-8 BOM, and refuses a keyfile in any other
+  encoding (`unreadable keyfile`) or a key that is not printable ASCII (`api key is not printable
+  ascii`) with a reason, instead of raising or failing every request on the header. A malformed
+  answer (a choice outside the options or of the wrong type, a non-numeric token count) is a
+  clean "bad response"; a bad token count no longer discards the answers.
+- The prompt text a keyword matcher scores keeps the words between a comparison `<` and a later
+  `>` (only tag-shaped markup is dropped, and `Vec<String>` keeps its type), and reduces a
+  `dir/file.py:12` reference to its file type like any other path.
+- The last-turn reader keeps widening until it has the reply the prompt answered, not only the
+  prompt, so a large tool output between the two no longer loses it; it skips transcript lines
+  that are not JSON objects, applies the whole not-typed registry (including the
+  `N background agents were stopped` notice), and `excerpt` with a cap of 0 or 1 is bounded.
+- The post-push CI watch keeps one entry per session and sha, so two sessions pushing the same
+  commit no longer erase each other's; writes are locked and use a private temp file, so
+  concurrent writers lose nothing; re-recording a push keeps its reminder count; and several
+  pushes left unchecked together share one set of reminders instead of three each.
+- The basic-memory search passes the query after `--`, so a query starting with `-` is searched
+  for rather than parsed as an option; unusable arguments and a missing, corrupt or wrongly
+  shaped `~/.basic-memory/config.json` degrade to "no result" instead of raising.
+- The skill router's roster cache is written through a private temp file, so concurrent sessions
+  of one project cannot install each other's half-written cache.
+- A SKILL.md front-matter value keeps its later paragraphs: an empty line between two indented
+  lines of a block scalar no longer ends it.
+- The secret detector recognises an `Authorization: Basic` credential (a value that decodes to
+  `user:password`) and redacts it. It no longer takes values that cannot be secrets for one: a
+  function word after a prose label (`one pass: the loop`), a value a tool already masked
+  (`***`, `[scrubbed]`), a one-character placeholder, a type annotation (`password: str`), an
+  attribute reference naming the secret (`smtp_password=self.smtp_password`), or the code between
+  two string literals (`"PASS: " if ok else "FAIL: "`). Recall withholds fewer notes for these;
+  every real value that was caught before is still caught.
+
 ## [7.22.6]
 
 ### Fixed

@@ -27,12 +27,18 @@ if str(_HOOKS_DIR) not in sys.path:
 import transcript_turns  # noqa: E402
 
 # Tag markup, not the prose between tags: `<system-reminder priority="high">` carries `system`,
-# `reminder`, `priority` and `high`, none of which the person said. Bounded so an unclosed `<` in
-# real prose ("x < y is the condition") cannot swallow the rest of the line.
-_TAG = re.compile(r"<[^<>]{0,400}>")
+# `reminder`, `priority` and `high`, none of which the person said. Only a TAG-SHAPED span counts:
+# a name (or `!`/`?`) right after the `<`, so a comparison ("free < 3 GB ... is > 90%", "x < y and
+# y > z") keeps the words between its `<` and a later `>`. An opening tag must also not be glued
+# to a word, which keeps the type in `Vec<String>`; a closing tag may be (`failed</x>`). Bounded so
+# an unclosed `<` cannot swallow the rest of the line.
+_TAG = re.compile(r"</[A-Za-z][^<>]{0,400}>|(?<!\w)<[A-Za-z!?][^<>]{0,400}>")
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 _FILENAME_TAIL = re.compile(r"/[^/]*\.[A-Za-z0-9]{1,8}$")
+# The `:12` or `:12:5` a traceback, linter or `grep -n` appends to a file name. It is not part of
+# the name, and left on it hid the file from the one-separator test and stuck to the file type.
+_LINE_SUFFIX = re.compile(r"(?::\d+)+$")
 
 # Opaque identifiers: a uuid, a long hex run (a sha or an id fragment), a Claude tool-use id. The
 # bar is 16 hex characters because the SHORT hex codes are real trigger keywords - `0xc1900200`
@@ -64,7 +70,7 @@ def typed_by_a_person(prompt):
 def _looks_like_a_path(token):
     """True for a filesystem path. One separator is not enough on its own - `and/or`, `yes/no` and
     `24/7` are prose - so a single-separator token counts only when a segment names a file."""
-    core = token.strip(_EDGE_PUNCTUATION)
+    core = _LINE_SUFFIX.sub("", token.strip(_EDGE_PUNCTUATION))
     if not core:
         return False
     if core.startswith(("/", "~/", "./", "../")) or _WINDOWS_DRIVE.match(core):
@@ -92,7 +98,8 @@ def _file_type(token):
     admitted nothing - the directories carry project and tool names, the stem carries a branch or
     a scratch script, and the extension carries the file TYPE a request is usually about.
     """
-    base = token.strip(_EDGE_PUNCTUATION).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    core = _LINE_SUFFIX.sub("", token.strip(_EDGE_PUNCTUATION))
+    base = core.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     return base.rsplit(".", 1)[-1] if "." in base[1:] else ""
 
 

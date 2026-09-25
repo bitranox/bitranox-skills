@@ -7,6 +7,7 @@ ever proposed were of that kind. The session's real listing is in its transcript
 sessions measured), so the roster falls back to a per-project cache, then to the shipped glob.
 """
 import json
+import os
 
 import pytest
 
@@ -345,6 +346,15 @@ def test_a_truncated_listing_line_is_skipped_and_the_next_one_read(tmp_path):
                                                   "update-config"}
 
 
+def test_a_marker_line_that_is_not_a_listing_attachment_is_skipped(tmp_path):
+    # Both pass the substring filter: an attachment of another type naming the marker, and a
+    # JSON line that is not an object at all.
+    other = {"type": "attachment", "attachment": {"type": "hook_note", "text": "skill_listing"}}
+    t = _transcript(tmp_path, [_listing(BASE), other, '["skill_listing"]'])
+    assert set(SR.listing_from_transcript(t)) == {"files-edit-xml", "typesafe:typesafe-ai",
+                                                  "update-config"}
+
+
 def test_a_bare_name_arriving_in_a_delta_does_not_overwrite_this_plugins_skill(tmp_path):
     t = _transcript(tmp_path, [_listing([("bitranox:meta-self-improve", "shipped")]),
                                _listing([("meta-self-improve", "local")], initial=False)])
@@ -389,6 +399,36 @@ def test_a_corrupt_cache_falls_back_to_the_shipped_skills(tmp_path):
     SR.installed_skills(_transcript(tmp_path, [_listing(BASE)]), "/p/a")
     SR._cache_file("/p/a").write_text("{not json", encoding="utf-8")  # noqa: SLF001 - the seam
     assert SR.installed_skills("", "/p/a")[1] == SR.SOURCE_SHIPPED
+
+
+def test_an_unchanged_listing_does_not_rewrite_the_cache(tmp_path):
+    t = _transcript(tmp_path, [_listing(BASE)])
+    SR.installed_skills(t, "/p/a")
+    path = SR._cache_file("/p/a")  # noqa: SLF001 - the seam
+    os.utime(path, ns=(10**9, 10**9))
+    SR.installed_skills(t, "/p/a")
+    assert path.stat().st_mtime_ns == 10**9
+    # Control: a changed listing does rewrite it.
+    SR.installed_skills(_transcript(tmp_path, [_listing(BASE[:2])], name="b.jsonl"), "/p/a")
+    assert path.stat().st_mtime_ns != 10**9
+
+
+def test_an_unwritable_cache_never_costs_the_roster(tmp_path, home):
+    # The audit dir is a FILE, so the cache cannot be created; the transcript still answers.
+    audit = home / ".claude" / "self-improve-audit"
+    audit.write_text("in the way", encoding="utf-8")
+    skills, source = SR.installed_skills(_transcript(tmp_path, [_listing(BASE)]), "/p/a")
+    assert source == SR.SOURCE_TRANSCRIPT and "update-config" in skills
+
+
+def test_a_failed_cache_write_leaves_no_temp_file_behind(tmp_path):
+    # A directory where the cache file belongs makes the final rename fail. The temp file must
+    # not stay behind, and its name must be private to the writer: a fixed `.tmp` name is shared
+    # by every concurrent session of the project.
+    path = SR._cache_file("/p/a")  # noqa: SLF001 - the seam
+    path.mkdir(parents=True)
+    SR.installed_skills(_transcript(tmp_path, [_listing(BASE)]), "/p/a")
+    assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
 
 
 @pytest.mark.parametrize("data", [[], {}, {"x": 1}, "a string"])

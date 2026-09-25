@@ -162,3 +162,86 @@ def test_excerpt_keeps_both_ends_of_a_long_text():
     assert out.endswith("Shall I do that?")
     assert " [...] " in out
     assert len(out) <= 100 + len(" [...] ")
+
+
+def test_excerpt_with_a_tiny_cap_is_bounded_by_the_cap():
+    # half = cap // 2 is 0 for a cap of 0 or 1, and text[-0:] is the WHOLE text.
+    assert T.excerpt("abcdef", 1) == "a"
+    assert T.excerpt("abcdef", 0) == ""
+    assert T.excerpt("abcdefghij", 4) == "ab [...] ij"   # control: the normal path is unchanged
+
+
+# ---- the reply before the prompt, when it sits outside the first window ---------------------
+
+def _big_result(n):
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t",
+                                                     "content": "x" * n}]}}
+
+
+def test_the_reply_before_the_prompt_is_found_past_a_huge_output_before_the_prompt(tmp_path):
+    # The prompt fits in the first window but the reply it answers does not: a large tool output
+    # sits between them. Finding the prompt is not enough to stop widening.
+    t = _write(tmp_path, [_user("start"), _asst("Shall I go on?"), _tool_use(),
+                          _big_result(10_000), _user("yes"), _asst("Done.")])
+    turn = T.read_turn(t, tail_bytes=1024)
+    assert turn.prompt == "yes"
+    assert turn.reply_before_prompt == "Shall I go on?"
+    assert T.last_reply(t, tail_bytes=1024) == "Done."
+
+
+def test_a_previous_turn_with_no_text_is_final_once_its_prompt_is_in_the_window(tmp_path):
+    # Control: the turn before had no assistant text at all. Once the previous PROMPT is in the
+    # window there is nothing further back to find, so the empty answer is the right one - the
+    # text before THAT prompt answered an older question.
+    t = _write(tmp_path, [_asst("Ancient text that answers an older prompt."), _big_result(10_000),
+                          _user("run it"), _tool_use(), _tool_result(), _user("again")])
+    turn = T.read_turn(t, tail_bytes=256)
+    assert turn.prompt == "again" and turn.reply_before_prompt == ""
+
+
+def test_widening_stops_at_max_bytes(tmp_path):
+    # The only prompt sits at the very start, behind ~40 KiB of tool output. A 4 KiB cap must
+    # stop the widening before it gets there; the uncapped read is the control that it exists.
+    t = _write(tmp_path, [_user("far back")] + [_tool_result() for _ in range(600)])
+    assert T.read_turn(t, tail_bytes=1024, max_bytes=4096) == T.Turn("", "", "")
+    assert T.read_turn(t, tail_bytes=1024).prompt == "far back"
+
+
+# ---- records that are not what a reader expects ----------------------------------------------
+
+def test_a_line_that_is_json_but_not_an_object_is_skipped(tmp_path):
+    p = tmp_path / "t.jsonl"
+    lines = [json.dumps(_asst("Ready?")), "[]", "42", '"text"', "null",
+             json.dumps({"type": "user", "message": None}),
+             json.dumps({"type": "assistant", "message": None}),
+             json.dumps({"type": "assistant", "message": "a string"}),
+             json.dumps(_user("go")), json.dumps(_call("Skill", skill="bitranox:x"))]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    t = str(p)
+    turn = T.read_turn(t)
+    assert turn.prompt == "go" and turn.reply_before_prompt == "Ready?"
+    assert T.recent_activity(t) == "Skill: x"
+    assert T.skills_used(t) == ["x"]
+
+
+def test_human_text_and_is_hook_feedback_reject_what_is_not_a_record():
+    for obj in (None, [], "text", {"type": "user", "message": None},
+                {"type": "user", "message": "not a dict"}):
+        assert T.human_text(obj) == ""
+        assert T.is_hook_feedback(obj) is False
+
+
+def test_a_compact_summary_after_the_prompt_is_not_the_prompt(tmp_path):
+    summary = {"type": "user", "isCompactSummary": True, "origin": {"kind": "human"},
+               "message": {"content": "This session is being continued from a previous one."}}
+    t = _write(tmp_path, [_asst("Ready."), _user("go on"), summary, _asst("Continuing.")])
+    turn = T.read_turn(t)
+    assert turn.prompt == "go on" and turn.reply_before_prompt == "Ready."
+
+
+def test_human_text_uses_the_whole_not_typed_registry():
+    # A pattern shape (no literal prefix to list) must be refused here too, not only by
+    # looks_typed: read_turn would otherwise take the harness's notice as the person's prompt.
+    assert T.human_text(_user("3 background agents were stopped by the user.")) == ""
+    assert T.human_text(_user("<task-notification>x</task-notification>")) == ""
+    assert T.human_text(_user("the 3 background agents were fine")) != ""   # control

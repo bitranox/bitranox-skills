@@ -6,12 +6,16 @@ classifier REDACTS one before text leaves the machine. One definition keeps a pa
 one of them from being silently missing in the others.
 
 The test is always a VALUE, never a word: "never commit a password" names the concept and
-carries nothing, while `Password: <value>`, `DB_PASSWORD=<value>`, `{"password": "<value>"}` and
-`scheme://user:pw@host` are the secret itself.
+carries nothing, while `Password: <value>`, `DB_PASSWORD=<value>`, `{"password": "<value>"}`,
+`Authorization: Basic <base64 of user:password>` and `scheme://user:pw@host` are the secret itself.
+A value that cannot be a secret whatever the name before it - a function word in prose, a mask a
+tool already applied, a type annotation, an attribute reference - is not one.
 
 Pure standard library.
 """
 
+import base64
+import binascii
 import re
 
 __all__ = [
@@ -100,6 +104,9 @@ _NAMED_VALUE_RX = re.compile(
 )
 _URL_USERINFO_RX = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)([^/\s@]+)(@)")
 _BEARER_RX = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})")
+# `Basic` is an ordinary word, so the candidate is only a credential when it DECODES to the
+# `user:password` pair the scheme carries (see `_redact_basic`).
+_BASIC_RX = re.compile(r"(?i)(\bbasic\s+)([A-Za-z0-9+/]{4,}={0,2})(?![A-Za-z0-9+/=])")
 
 # A name is secret when ANY of its words is a secret word (`SECRET_KEY_BASE`, `DB_PASSWORD_PROD`,
 # `client_secret`), unless its LAST word names something ABOUT the secret rather than the secret
@@ -142,6 +149,25 @@ _CAMEL_RX = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 # such as a closing backtick). Lowercase after a bare `$` is left alone, since a password may well
 # start with one.
 _REFERENCE_VALUE_RX = re.compile(r"\$(?:\{|\(|[A-Z_][A-Z0-9_]*\b)|<[^<>\s]+>[`'\",;:.)\]}]*$")
+
+# Values that cannot be a secret whatever name precedes them. Each is a closed class, so no real
+# credential falls into one: a label in prose followed by a function word ("one pass: the loop"),
+# a mask a tool already applied, a type annotation (`password: str`), and an attribute reference
+# whose last name is itself the secret's name (`smtp_password=self.smtp_password`).
+_PROSE_TRAILING = "`'\",;:.)]}"
+_FUNCTION_WORDS = frozenset({
+    "a", "an", "the", "it", "its", "is", "are", "was", "be", "this", "that", "these", "those",
+    "one", "each", "every", "all", "any", "some", "no", "not", "and", "or", "but", "if", "then",
+    "so", "to", "of", "in", "on", "at", "by", "for", "with", "as", "from", "into", "which", "who",
+    "what", "when", "where", "how", "there", "here", "we", "you", "they", "he", "she",
+})
+_MASKED_VALUE_RX = re.compile(
+    r"(?i)^(?:[*x\u2022#.]{3,}|\*{3,}[a-z_ ]*\*{3,}"
+    r"|\[(?:redacted|scrubbed|masked|hidden|omitted|removed|filtered|sensitive)\])$")
+_TYPE_NAME_RX = re.compile(
+    r"(?i)^(?:str|string|int|integer|bytes|bool|boolean|float|number|any|none|null|object"
+    r"|secret(?:str|bytes)|(?:optional|list|dict|tuple|set|sequence|mapping)\[.*\])$")
+_DOTTED_REFERENCE_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 
 
 def _key_material(body):
@@ -229,15 +255,43 @@ def _secret_words(name):
     return found
 
 
+def _cannot_be_a_secret(value):
+    """True for a value in one of the closed classes above, which no credential belongs to.
+
+    An unquoted value runs to the next whitespace, so it may carry the prose punctuation after
+    it (`str`,); a bracket may also be the value's own (`[scrubbed]`), so both forms are tried.
+    """
+    for core in dict.fromkeys((value, value.rstrip(_PROSE_TRAILING))):
+        if len(core) <= 1 or core.lower() in _FUNCTION_WORDS:
+            return True
+        if _MASKED_VALUE_RX.match(core) or _TYPE_NAME_RX.match(core):
+            return True
+        if _DOTTED_REFERENCE_RX.match(core) and _secret_words(core.rsplit(".", 1)[-1]):
+            return True
+    return False
+
+
+def _opens_inside_the_names_literal(m):
+    """True when the value's opening quote is really the CLOSING quote of a string literal the
+    name itself sits in (`"PASS: " if ok else "FAIL: "`): the "value" is then the code between
+    two literals, not a secret."""
+    quote = m.group("q")
+    start, end = m.start("name"), m.end("name")
+    text = m.string
+    return bool(quote) and start > 0 and text[start - 1] == quote and text[end:end + 1] not in "\"'"
+
+
 def _redact_named_value(m):
     """Replace the value of a secret-named assignment; None to leave the match alone.
 
     A number after a name whose only secret word is "token" is a count (`max_token: 800`,
     `access_token_expires_in: 3600`), which an LLM tool's output is full of; a reference to a
-    secret carries none.
+    secret carries none, and neither does a value that cannot be a secret at all.
     """
     value = m.group("val")
     if value.startswith(REDACTED) or _REFERENCE_VALUE_RX.match(value):
+        return None
+    if _cannot_be_a_secret(value) or _opens_inside_the_names_literal(m):
         return None
     found = _secret_words(m.group("name"))
     if not found or (value.isdigit() and all(w.endswith("token") for w in found)):
@@ -257,12 +311,27 @@ def _redact_group_2(m):
     return m.group(1) + REDACTED + tail
 
 
+def _redact_basic(m):
+    """Replace a `Basic` credential; None unless the value decodes to `user:password`."""
+    token = m.group(2)
+    if token.startswith(REDACTED):
+        return None
+    try:
+        decoded = base64.b64decode(token + "=" * (-len(token) % 4), validate=True).decode("utf-8")
+    except (binascii.Error, ValueError):
+        return None
+    if ":" not in decoded or not decoded.isprintable():
+        return None
+    return m.group(1) + REDACTED
+
+
 # The value rules, in redaction order: each is a regex and a builder that returns the
 # replacement, or None to leave that match alone. redact() applies them and holds_a_credential()
 # asks the same builders, so a rule can never be in one and missing from the other.
 _VALUE_RULES = (
     (_URL_USERINFO_RX, _redact_group_2),
     (_BEARER_RX, _redact_group_2),
+    (_BASIC_RX, _redact_basic),
     (_NAMED_VALUE_RX, _redact_named_value),
 )
 

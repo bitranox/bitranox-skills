@@ -36,15 +36,19 @@ def enabled():
 
 
 def _config():
+    """basic-memory's config as a dict; {} when it is missing, unreadable or not a JSON object."""
     try:
-        return json.loads((Path.home() / ".basic-memory" / "config.json").read_text(encoding="utf-8"))
+        data = json.loads((Path.home() / ".basic-memory" / "config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def watched_roots():
     """Filesystem paths basic-memory has a project for (so it would index files under them)."""
-    projects = (_config().get("projects") or {})
+    projects = _config().get("projects")
+    if not isinstance(projects, dict):
+        return []
     out = []
     for v in projects.values():
         if isinstance(v, dict) and v.get("path"):
@@ -72,15 +76,23 @@ def covers(path):
 def search(query, limit=10, timeout=20):
     """Read-only cross-project search via `basic-memory tool search-notes`. Returns a ranked list of
     result identifiers (permalinks/paths/titles), or None on any failure/empty output/error (the caller
-    then falls back to the keyword scan). Never raises; never writes."""
+    then falls back to the keyword scan). Never raises; never writes.
+
+    `query` is a string or an iterable of keywords. It goes after a `--`, so a query that starts
+    with `-` (`--no-verify hook bypass`) is searched for rather than parsed as an option."""
     if not query or not available():
         return None
-    q = query if isinstance(query, str) else " ".join(str(k) for k in query if k)
+    try:
+        q = query if isinstance(query, str) else " ".join(str(k) for k in query if k)
+        page_size = str(int(limit))
+    except (TypeError, ValueError):
+        return None
     if not q.strip():
         return None
     try:
-        r = subprocess.run([_CLI, "tool", "search-notes", q, "--page-size", str(int(limit))],
-                           capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([_CLI, "tool", "search-notes", "--page-size", page_size, "--", q],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     out = (r.stdout or "").strip()

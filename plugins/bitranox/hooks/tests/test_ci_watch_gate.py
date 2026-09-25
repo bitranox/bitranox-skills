@@ -135,6 +135,43 @@ def test_it_blocks_up_to_the_cap_then_releases_loudly(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_several_pending_pushes_share_one_cap(tmp_path, capsys):
+    """The cap counted only the newest sha, so N pushes before a stop blocked up to 3 x N times."""
+    for sha in ("a" * 40, "b" * 40, "c" * 40):
+        state.record_push(str(tmp_path), "sess-1", sha)
+    blocks = 0
+    for _ in range(4 * state.MAX_BLOCKS):
+        hook.main(_event(tmp_path))
+        out = capsys.readouterr().out
+        if not out:
+            break
+        payload = json.loads(out)
+        if payload.get("decision") != "block":
+            context = payload["hookSpecificOutput"]["additionalContext"]
+            assert all(c * 12 in context for c in "abc"), context   # every released sha is named
+            break
+        blocks += 1
+    assert blocks == state.MAX_BLOCKS
+    assert state.pending_for(str(tmp_path), "sess-1") == []
+
+
+def test_a_later_push_still_gets_its_own_reminders(tmp_path, capsys):
+    """Control for the shared cap: a push made after some reminders is new CI and is not
+    released with the older one."""
+    state.record_push(str(tmp_path), "sess-1", "a" * 40)
+    for _ in range(state.MAX_BLOCKS - 1):
+        hook.main(_event(tmp_path))
+        capsys.readouterr()
+    time.sleep(0.01)
+    state.record_push(str(tmp_path), "sess-1", "b" * 40)
+    hook.main(_event(tmp_path))           # a's last reminder, b's first
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+    hook.main(_event(tmp_path))           # a is spent and released, b still blocks
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["decision"] == "block" and "b" * 12 in payload["reason"]
+    assert [e["sha"] for e in state.pending_for(str(tmp_path), "sess-1")] == ["b" * 40]
+
+
 def test_the_last_reminder_says_it_is_the_last(tmp_path, capsys):
     state.record_push(str(tmp_path), "sess-1", "a" * 40)
     for _ in range(state.MAX_BLOCKS - 1):

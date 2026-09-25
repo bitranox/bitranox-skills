@@ -314,6 +314,81 @@ def test_a_literal_password_that_starts_with_a_dollar_is_still_redacted():
     assert "$ecret1x" not in text and n == 1
 
 
+@pytest.mark.parametrize("line", [
+    # A function word after a prose label: "pass" the noun, not a password. Measured: 5 of the 20
+    # memory facts recall withheld were exactly this shape.
+    "they share one pass: the loop is HaliHaltSystem",
+    "give that bucket its OWN pass: a list built by iterating",
+    "indistinguishable from a clean pass: it is the",
+    "run on the next pass: one that reads the new state",
+    # A value a tool already masked, or a one-character placeholder.
+    '"authToken": "[scrubbed]"',
+    "password: ***",
+    "DB_PASSWORD=********",
+    '{"password": "***REDACTED***"}',
+    '{"auth": {"token": "T"}}',
+    # A type annotation names the field's type, not its value.
+    "a pydantic `password: str` field",
+    "token: Optional[str] = None",
+    "smtp_password: SecretStr",
+    # A dotted reference whose attribute names the secret it passes along.
+    "ConfMail(smtp_password=self.smtp_password)",
+    "client(token=args.token)",
+    "api_key=settings.OPENAI_API_KEY",
+    # A label inside one string literal whose "value quote" is that literal's own closing quote.
+    'print("PASS: " if ok else "FAIL: ")',
+    "x = 'token: ' + name",
+])
+def test_values_that_cannot_be_a_secret_are_left_alone(line):
+    assert sp.redact(line) == (line, 0), line
+    assert not sp.holds_a_credential(line), line
+
+
+@pytest.mark.parametrize("line, value", [
+    # Controls for each exemption above: the nearest REAL secret keeps being caught.
+    ("user bob pass: hunter2", "hunter2"),
+    ("Pass: the2nd", "the2nd"),
+    ('{"token": "Tx9"}', "Tx9"),
+    ("DB_PASSWORD=x1*x2*x3", "x1*x2*x3"),
+    ("password: string4u", "string4u"),
+    ("password=hunter.two", "hunter.two"),
+    ("password=self.hunter2", "self.hunter2"),
+    ('x = "token: abc123def"', "abc123def"),
+    ('{"password": "hunter2xyz"}', "hunter2xyz"),
+    ("print('DB_PASSWORD=\"hunter2xyz\"')", "hunter2xyz"),
+])
+def test_the_nearest_real_secret_to_each_exemption_is_still_redacted(line, value):
+    text, n = sp.redact(line)
+    assert value not in text and n >= 1, text
+    assert sp.holds_a_credential(line), line
+
+
+@pytest.mark.parametrize("line, value", [
+    ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA=="),
+    ("curl -H 'Authorization: Basic YWRtaW46aHVudGVyMg==' https://x", "YWRtaW46aHVudGVyMg=="),
+    ('{"Authorization": "Basic dXNlcjpwYXNz"}', "dXNlcjpwYXNz"),
+    ("authorization: basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+])
+def test_a_basic_auth_credential_is_redacted_and_detected(line, value):
+    # base64 of "user:password" is the password itself, one decode away.
+    text, n = sp.redact(line)
+    assert value not in text and n == 1, text
+    assert "Basic" in text or "basic" in text          # the scheme stays as context
+    assert sp.holds_a_credential(line), line
+
+
+@pytest.mark.parametrize("line", [
+    "basic functionality works",
+    "Basic setup of the proxy",
+    "we use basic auth here",
+    "Basic dGVzdHRlc3Q=",             # base64 of "testtest": no user:password colon
+    "the basic ABCDEFGHIJKL keys",    # base64-ish, decodes to binary
+])
+def test_the_word_basic_before_anything_else_is_not_a_credential(line):
+    assert sp.redact(line) == (line, 0), line
+    assert not sp.holds_a_credential(line), line
+
+
 # --- detection and redaction agree ----------------------------------------------------------------
 
 

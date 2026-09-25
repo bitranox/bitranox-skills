@@ -235,13 +235,24 @@ def _parse(raw, questions, latency):
         if not isinstance(a, dict) or a.get("type") != q.type or q.type not in a:
             raise _BadResponse("missing or mistyped answer %r" % q.id)
         value = a[q.type]
-        if q.type == "choice" and isinstance(q.criteria, dict) and value not in q.criteria:
-            raise _BadResponse("choice %r not among the options" % value)
+        # A str test first: an unhashable value (a list, a dict) cannot be looked up at all.
+        if q.type == "choice" and isinstance(q.criteria, dict) and (
+                not isinstance(value, str) or value not in q.criteria):
+            raise _BadResponse("choice %r not among the options" % (value,))
         answers[q.id] = Answer(type=q.type, value=value, probabilities=a.get("probabilities"),
                                confidence=a.get("confidence"))
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     return Result(answers=answers, latency_ms=latency,
-                  input_tokens=int(usage.get("input_tokens") or 0), model=str(data.get("model", "")))
+                  input_tokens=_token_count(usage.get("input_tokens")),
+                  model=str(data.get("model", "")))
+
+
+def _token_count(value):
+    """A usage count, or 0. Accounting metadata must never cost the answers it came with."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 # ---- configuration -------------------------------------------------------------------------
@@ -251,18 +262,29 @@ def load_key(env, home):
 
     A keyfile any other user could read is refused: the key is billing authority, and a
     permissive mode usually means it was created by accident rather than by `install -m 600`.
+    The file is read as UTF-8 with an optional BOM (Windows editors write one); a file in any
+    other encoding is refused as unreadable - UTF-16 without a BOM decodes as UTF-8, so a NUL
+    byte is the tell for it. A key that is not printable ASCII is refused outright: it can only
+    go out in an HTTP header, and would fail there on every request instead of once, here.
     """
     key = (env.get(KEY_ENV) or "").strip()
-    if key:
-        return key, None
-    path = Path(home) / ".credentials" / "typesafe.key"
-    try:
-        if os.name != "nt" and path.stat().st_mode & 0o077:
-            return None, "keyfile permissions"
-        key = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    if not key:
+        path = Path(home) / ".credentials" / "typesafe.key"
+        try:
+            if os.name != "nt" and path.stat().st_mode & 0o077:
+                return None, "keyfile permissions"
+            key = path.read_text(encoding="utf-8-sig").strip()
+        except UnicodeError:
+            return None, "unreadable keyfile"
+        except OSError:
+            return None, "no api key"
+        if "\x00" in key:
+            return None, "unreadable keyfile"
+    if not key:
         return None, "no api key"
-    return (key, None) if key else (None, "no api key")
+    if not all("!" <= ch <= "~" for ch in key):
+        return None, "api key is not printable ascii"
+    return key, None
 
 
 def shadow_enabled(cfg, site):

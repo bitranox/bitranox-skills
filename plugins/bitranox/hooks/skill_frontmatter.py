@@ -8,7 +8,8 @@ following `# comment` line the builder shipped as keywords. Every one of them re
 so they cannot disagree.
 
 A value is the rest of its key's line plus any INDENTED continuation lines (a YAML plain scalar
-may also begin on the next indented line). A line at column 0 - the next key of any shape, a
+may also begin on the next indented line), including empty lines that sit BETWEEN two of them, as
+a block scalar's paragraph break does. A line at column 0 - the next key of any shape, a
 comment - ends it, and a key with nothing after it reads as absent rather than capturing the next
 line. A leading UTF-8 BOM is dropped, and undecodable bytes are replaced rather than raised.
 
@@ -33,7 +34,10 @@ _BLOCK_HEADER = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+|$)")
 def _field_rx(key):
     rx = _FIELD_RX.get(key)
     if rx is None:
-        rx = re.compile(r"^%s:[ \t]*(.*(?:\n[ \t]+.*)*)" % re.escape(key), re.M)
+        # Continuation lines are indented; empty lines between two of them belong to the value
+        # too (a block scalar's paragraph break), but only when an indented line follows.
+        rx = re.compile(r"^%s:[ \t]*(.*(?:(?:\n[ \t\r]*(?=\n))*\n[ \t]+.*)*)" % re.escape(key),
+                        re.M)
         _FIELD_RX[key] = rx
     return rx
 

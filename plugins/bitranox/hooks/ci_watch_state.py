@@ -15,11 +15,17 @@ Entries also EXPIRE. A block is only worth serving while the answer is still act
 push made four hours ago has long since finished, so blocking on it teaches nothing and costs a
 turn. `MAX_AGE_SECONDS` is that horizon, not a guess at how long CI runs.
 
+An entry is one (session, sha) pair: two sessions in one project may push the same commit, and
+each owes its own watch. Every write is a read-modify-write under an exclusive lock, through a
+uniquely named temp file, so writers that overlap (the nudge and the gate, or two sessions) cannot
+drop each other's entries.
+
 Every function here swallows its own IO errors and degrades to "nothing pending". A hook must never
 wedge a turn, and a state file that cannot be read is not evidence that a push needs watching.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -30,7 +36,7 @@ from pathlib import Path
 __all__ = [
     "MAX_AGE_SECONDS",
     "MAX_BLOCKS",
-    "bump_blocks",
+    "bump_session_blocks",
     "session_key",
     "clear_session",
     "clear_sha",
@@ -47,6 +53,9 @@ MAX_AGE_SECONDS = 4 * 60 * 60
 # released on the first attempt is not a gate. This bounds the pressure instead of removing it.
 MAX_BLOCKS = 3
 
+# A hook waits this long for another writer before giving up on its write. Every write here is a
+# few hundred bytes, so contention past this means a stuck holder, and the lock reclaims those.
+_LOCK_TIMEOUT = 2.0
 
 
 def session_key(event: dict) -> str:
@@ -82,47 +91,97 @@ def _load(path: Path) -> list[dict]:
 
 
 def _save(path: Path, entries: list[dict]) -> None:
+    """Replace the file atomically. The temp name is unique per call: a fixed one is shared by
+    every concurrent writer, so one could rename another's half-written file into place."""
+    tmp = None
     try:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"pending": entries}), encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"pending": entries}))
         os.replace(tmp, path)
+        tmp = None
     except (OSError, ValueError):
         return
+    finally:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+
+
+def _update(project_dir: str, change, default=None):
+    """Run `change(entries) -> (entries, result)` as one locked read-modify-write; return result.
+
+    A lock that cannot be had in time, or any IO failure, skips the write and returns `default`.
+    """
+    # Imported here, not at the top: the nudge runs after EVERY shell call and almost never
+    # writes, so the lock's module is loaded only on the rare call that does.
+    import self_improve_signals  # noqa: PLC0415 - kept off the per-shell-call import path
+
+    path = state_path(project_dir)
+    try:
+        with self_improve_signals.memory_lock(path, timeout=_LOCK_TIMEOUT):
+            entries, result = change(_load(path))
+            _save(path, entries)
+            return result
+    except (OSError, TimeoutError, ValueError):
+        return default
+
+
+def _blocks(entry: dict) -> int:
+    try:
+        return int(entry.get("blocks") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def record_push(project_dir: str, session: str, sha: str, repo: str = "", branch: str = "") -> None:
-    """Remember that `sha` was pushed and its CI has not been looked at yet."""
-    path = state_path(project_dir)
-    entries = [e for e in _load(path) if e.get("sha") != sha]
-    entries.append({"sha": sha, "session": session, "repo": repo,
-                    "branch": branch, "at": time.time()})
-    _save(path, entries)
+    """Remember that `sha` was pushed by `session` and its CI has not been looked at yet.
+
+    Re-recording the same sha to the same repo keeps its block count: pushing a commit again
+    starts no new CI, so it must not buy that push a fresh set of reminders. A push of it to
+    another repo does start new CI, and counts from zero.
+    """
+    def change(entries):
+        mine = [e for e in entries if e.get("session") == session and e.get("sha") == sha]
+        kept = [e for e in entries if not (e.get("session") == session and e.get("sha") == sha)]
+        entry = {"sha": sha, "session": session, "repo": repo, "branch": branch, "at": time.time()}
+        carried = max((_blocks(e) for e in mine if e.get("repo", "") == repo), default=0)
+        if carried:
+            entry["blocks"] = carried
+        return kept + [entry], None
+
+    _update(project_dir, change)
 
 
-def clear_sha(project_dir: str, sha: str) -> None:
-    """Drop one sha - its CI was watched."""
-    path = state_path(project_dir)
-    _save(path, [e for e in _load(path) if e.get("sha") != sha])
+def clear_sha(project_dir: str, sha: str, session: str | None = None) -> None:
+    """Drop one sha - its CI was watched. With `session`, only that session's entry for it."""
+    def change(entries):
+        return [e for e in entries if not (e.get("sha") == sha
+                                           and (session is None or e.get("session") == session))], None
+
+    _update(project_dir, change)
 
 
 def clear_session(project_dir: str, session: str) -> None:
     """Drop every pending sha for this session - CI was watched without naming a sha."""
-    path = state_path(project_dir)
-    _save(path, [e for e in _load(path) if e.get("session") != session])
+    _update(project_dir, lambda entries: ([e for e in entries if e.get("session") != session], None))
 
 
+def bump_session_blocks(project_dir: str, session: str) -> list[dict]:
+    """Count one block against EVERY entry of this session; return those entries, updated.
 
-def bump_blocks(project_dir: str, sha: str) -> int:
-    """Count one block against this sha and return the new total."""
-    path = state_path(project_dir)
-    entries = _load(path)
-    total = 0
-    for entry in entries:
-        if entry.get("sha") == sha:
-            total = int(entry.get("blocks") or 0) + 1
-            entry["blocks"] = total
-    _save(path, entries)
-    return total
+    One stop blocked for all of them, so all of them are charged: charging only the newest let a
+    session holding N unwatched pushes be blocked up to MAX_BLOCKS times N.
+    """
+    def change(entries):
+        mine = []
+        for entry in entries:
+            if entry.get("session") == session:
+                entry["blocks"] = _blocks(entry) + 1
+                mine.append(dict(entry))
+        return entries, mine
+
+    return _update(project_dir, change, default=[])
 
 
 def pending_for(project_dir: str, session: str, now: float | None = None) -> list[dict]:

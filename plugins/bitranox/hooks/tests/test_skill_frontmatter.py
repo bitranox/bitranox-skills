@@ -88,6 +88,23 @@ def test_an_indented_continuation_is_joined(tmp_path):
     assert F.description(md) == "Use when wrapped and tabbed"
 
 
+@pytest.mark.parametrize("crlf", [False, True])
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_line_inside_a_value_does_not_end_it(tmp_path, crlf, blank):
+    """A blank line inside a block scalar (or between two indented lines of a plain scalar) is
+    part of the value in YAML. It ended the value, dropping every paragraph after the first."""
+    md = _md(tmp_path, "---\nname: demo\ndescription: >-\n  Use when one.\n%s\n  Also two.\n"
+             "---\n" % blank, crlf=crlf)
+    assert F.description(md) == ">- Use when one. Also two."
+    assert F.scalar_text(F.description(md)) == "Use when one. Also two."
+
+
+def test_a_blank_line_before_a_column_zero_key_still_ends_the_value(tmp_path):
+    """Control: a blank line followed by the next key is the end of the value, not a bridge."""
+    md = _md(tmp_path, "---\ndescription: %s\n\nname: demo\n\n---\n" % GOOD)
+    assert F.description(md) == GOOD and F.name(md) == "demo"
+
+
 def test_no_front_matter_and_missing_file_read_as_none(tmp_path):
     md = _md(tmp_path, "# heading only\n")
     assert F.name(md) is None and F.description(md) is None

@@ -26,7 +26,10 @@ the same bare name is also listed, this plugin's keeps its prefix so neither hid
 
 Pure standard library; every failure degrades to the next source, never raises.
 """
+import contextlib
 import json
+import os
+import tempfile
 from pathlib import Path
 
 import classifier
@@ -252,14 +255,24 @@ def _cache_file(cwd):
 
 
 def _write_cache(cwd, skills):
+    """Replace the project's cache atomically, never raising. The temp file is named per write:
+    every session of a project writes this one cache, and a shared fixed temp name let one
+    session rename another's half-written file into place."""
+    tmp = None
     try:
         path = _cache_file(cwd)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(skills, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(skills, ensure_ascii=False))
+        os.replace(tmp, path)
+        tmp = None
     except OSError:
         pass
+    finally:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
 
 def _read_cache(cwd):

@@ -139,6 +139,10 @@ How the stdlib covers what httpx2 would have provided:
   the same lookup, never via argv.
 - The keyfile must be owned by the user and mode 600. With any group or other permission bit set,
   the adapter refuses the file and reports `skipped: keyfile permissions`.
+- The keyfile is read as UTF-8, with or without a BOM. A file in another encoding (UTF-16 from
+  Notepad's "Unicode", latin-1) is refused as `unreadable keyfile`, and a key that is not
+  printable ASCII, from either source, as `api key is not printable ascii`: it could only ever
+  fail in the request header.
 - **Getting the key:** sign in at https://console.typesafe.ai/keys (the docs quickstart links it as
   "dashboard") and generate a key.
 - **Setting it (recommended: the keyfile):** the file works however Claude Code was launched (IDE,

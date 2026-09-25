@@ -99,19 +99,29 @@ def main(raw: str | None = None) -> int:
         pending = state.pending_for(key, session)
         if not pending:
             return 0
-        newest = max(pending, key=lambda e: float(e.get("at") or 0))
-        sha = str(newest.get("sha") or "")
-        attempt = state.bump_blocks(key, sha) if sha else 1
-        if attempt > state.MAX_BLOCKS:
+        # One stop blocks for every pending push, so every one of them is charged: charging
+        # only the newest let N unwatched pushes block N times over. A push made later has a
+        # lower count and keeps its own reminders after the older ones are released.
+        fresh = {str(e.get("sha") or "") for e in pending}
+        charged = [e for e in state.bump_session_blocks(key, session)
+                   if str(e.get("sha") or "") in fresh]
+        spent = [e for e in charged if int(e.get("blocks") or 0) > state.MAX_BLOCKS]
+        live = [e for e in charged if int(e.get("blocks") or 0) <= state.MAX_BLOCKS]
+        for entry in spent:
+            state.clear_sha(key, str(entry.get("sha") or ""), session=session)
+        if spent and not live:
             # Give up LOUDLY rather than silently: a gate that just stops speaking reads as broken.
-            state.clear_sha(key, sha)
+            shas = ", ".join(str(e.get("sha") or "")[:12] for e in spent)
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "Stop",
                 "additionalContext": ("CI for %s was never checked and the watch gate has now "
                                       "released it after %d reminders. It will not ask again."
-                                      % (sha[:12], state.MAX_BLOCKS))}}))
+                                      % (shas, state.MAX_BLOCKS))}}))
             return 0
-        reason = verdict(pending, attempt)
+        if not live:  # the charge could not be written: say nothing rather than guess
+            return 0
+        newest = max(live, key=lambda e: float(e.get("at") or 0))
+        reason = verdict(live, int(newest.get("blocks") or 1))
     except Exception:  # noqa: BLE001 - a gate that crashes must not wedge a turn
         return 0
     if not reason:

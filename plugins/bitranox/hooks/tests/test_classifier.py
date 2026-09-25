@@ -75,6 +75,61 @@ def test_a_missing_answer_returns_none(fake_jev):
     assert c.last_reason.startswith("bad response")
 
 
+def test_a_dict_body_without_answers_is_a_bad_response(fake_jev):
+    c = _jev(fake_jev(body={"model": "m", "usage": {}}).url)
+    assert c.ask({"user_message": "x"}, [NOUL]) is None
+    assert c.last_reason == "bad response: no answers"
+
+
+def _answer_body(answer, usage=None):
+    return {"model": "m", "answers": {answer[0]: answer[1]},
+            "usage": {"input_tokens": 7} if usage is None else usage}
+
+
+@pytest.mark.parametrize("answer, reason", [
+    # A key the question never offered: a caller indexing its roster by it would KeyError.
+    (("lang", {"type": "choice", "choice": "fr"}), "choice 'fr' not among the options"),
+    # An unhashable value cannot even be looked up among the options.
+    (("lang", {"type": "choice", "choice": ["en"]}), "choice ['en'] not among the options"),
+    (("lang", {"type": "choice", "choice": {"en": 1}}), "choice {'en': 1} not among the options"),
+    # The answer names the wrong type for the question it answers.
+    (("lang", {"type": "noul", "noul": 0.5}), "missing or mistyped answer 'lang'"),
+    # The right type, but the value under it is missing.
+    (("lang", {"type": "choice"}), "missing or mistyped answer 'lang'"),
+])
+def test_a_choice_answer_outside_the_contract_is_a_bad_response(fake_jev, answer, reason):
+    c = _jev(fake_jev(body=_answer_body(answer)).url)
+    assert c.ask({"user_message": "x"}, [CHOICE]) is None
+    assert c.last_reason == "bad response: " + reason
+
+
+def test_an_offered_choice_is_accepted(fake_jev):
+    # Control for the rows above: the nearest valid answer still parses.
+    c = _jev(fake_jev(body=_answer_body(("lang", {"type": "choice", "choice": "de"}))).url)
+    result = c.ask({"user_message": "x"}, [CHOICE])
+    assert result is not None and result.answers["lang"].value == "de"
+
+
+@pytest.mark.parametrize("usage, expected", [
+    ({"input_tokens": 12}, 12),
+    ({"input_tokens": "12"}, 12),
+    ({}, 0),
+    ({"input_tokens": None}, 0),
+    ({"input_tokens": "n/a"}, 0),
+    ({"input_tokens": [1]}, 0),
+    ({"input_tokens": float("inf")}, 0),
+    ("not a dict", 0),
+])
+def test_usage_tokens_are_read_defensively(fake_jev, usage, expected):
+    # Token accounting is metadata: a malformed count must not throw away the answers it came with.
+    body = _answer_body(("correction", {"type": "noul", "noul": 0.9}), usage=usage)
+    raw = json.dumps(body, allow_nan=True).encode()
+    c = _jev(fake_jev(body=raw).url)
+    result = c.ask({"user_message": "x"}, [NOUL])
+    assert result is not None, c.last_reason
+    assert result.input_tokens == expected
+
+
 def test_the_overall_deadline_holds_against_a_trickling_server(fake_jev):
     # Every byte lands inside a per-socket timeout, so only an OVERALL deadline stops this.
     c = _jev(fake_jev(trickle=True).url, deadline=0.5)
@@ -133,6 +188,50 @@ def test_a_keyfile_readable_by_others_is_refused(tmp_path):
 
 def test_no_key_anywhere_is_reported(tmp_path):
     assert cl.load_key({}, tmp_path) == (None, "no api key")
+
+
+def _raw_keyfile(home, data):
+    p = home / ".credentials" / "typesafe.key"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    os.chmod(p, 0o600)
+    return p
+
+
+@pytest.mark.parametrize("data", [
+    "sk-abc\n".encode("utf-16"),     # Notepad's "Unicode", with its BOM: not UTF-8 at all
+    "sk-abc\n".encode("utf-16-le"),  # no BOM: decodes as UTF-8, a NUL between every char
+    b"sk-\xe9abc\n",                   # a latin-1 byte, not valid UTF-8
+])
+def test_a_keyfile_that_is_not_utf8_is_refused_not_raised(tmp_path, data):
+    _raw_keyfile(tmp_path, data)
+    assert cl.load_key({}, tmp_path) == (None, "unreadable keyfile")
+
+
+def test_a_keyfile_with_a_utf8_bom_loses_the_bom(tmp_path):
+    # Windows editors write one; kept, it made every request die encoding the header.
+    _raw_keyfile(tmp_path, b"\xef\xbb\xbfsk-abc\r\n")
+    assert cl.load_key({}, tmp_path) == ("sk-abc", None)
+
+
+@pytest.mark.parametrize("source", ["env", "file"])
+@pytest.mark.parametrize("bad", ["sk-éabc", "sk-ab c", "sk-ab\tc"])
+def test_a_key_that_is_not_printable_ascii_is_refused_with_a_reason(tmp_path, source, bad):
+    # An HTTP header is latin-1 at best; such a key can never authenticate, and would
+    # otherwise surface as a per-request encoding error instead of one clear reason.
+    env = {}
+    if source == "env":
+        env["TYPESAFE_API_KEY"] = bad
+    else:
+        _raw_keyfile(tmp_path, (bad + "\n").encode("utf-8"))
+    assert cl.load_key(env, tmp_path) == (None, "api key is not printable ascii")
+
+
+def test_get_classifier_reports_an_unreadable_keyfile_instead_of_raising(tmp_path):
+    _raw_keyfile(tmp_path, "sk-abc".encode("utf-16"))
+    cfg = {"classifier_backend": "jev", "classifier_stop_signal": "shadow"}
+    c = cl.get_classifier(cfg, "stop_signal", env={}, home=tmp_path)
+    assert isinstance(c, cl.NullClassifier) and c.last_reason == "unreadable keyfile"
 
 
 # ---- config -> adapter ---------------------------------------------------------------------

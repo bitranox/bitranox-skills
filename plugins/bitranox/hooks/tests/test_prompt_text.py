@@ -82,8 +82,43 @@ def test_prose_drops_a_relative_path_and_a_windows_path():
 
 
 def test_prose_keeps_a_word_pair_that_merely_contains_a_slash():
-    for text in ("and/or", "yes/no", "it runs 24/7"):
+    for text in ("and/or", "yes/no", "it runs 24/7", "it runs 24/7:30"):
         assert P.prose(text) == text
+
+
+def test_prose_reduces_a_single_separator_path_with_a_line_number_to_its_file_type():
+    # `dir/file.py:12` is how tracebacks, linters and grep -n name a file. The line suffix hid
+    # the file name from the one-separator test, so the directory and stem reached the matcher.
+    for token in ("claude/code.py:12", "claude/code.py:12:5", "(claude/code.py:12),"):
+        got = P.prose("look at %s now" % token).lower()
+        assert got == "look at py now", (token, got)
+
+
+def test_a_path_with_a_line_number_keeps_only_its_file_type_whatever_its_depth():
+    # Control: a deeper path was already a path; its file type must not carry the ":12".
+    assert P.prose("see plugins/bitranox/hooks/x.py:40") == "see py"
+
+
+def test_prose_keeps_the_words_between_a_comparison_and_a_later_greater_than():
+    # A `<` followed by a space or a digit opens no tag; the old rule deleted everything up to
+    # the next `>`, which here was the whole subject of the sentence.
+    for text in ("when free < 3 GB the proxmox storage is > 90% full",
+                 "if x < y and y > z then swap",
+                 "x<y and z>w",
+                 "a Vec<String> of names"):
+        assert P.prose(text) == text, text
+
+
+def test_prose_still_drops_a_closing_tag_glued_to_the_text_before_it():
+    # Control: a closing tag right after a word is still markup, not the word it touches.
+    got = P.prose("the deploy failed</system-reminder> again <b>now</b>").lower()
+    assert "system" not in got and "reminder" not in got
+    assert got.split() == ["the", "deploy", "failed", "again", "now"]
+
+
+def test_prose_drops_comment_and_declaration_markup():
+    got = P.prose("<!-- note --> kept <?xml version=\"1.0\"?> too <!DOCTYPE html> end")
+    assert got.split() == ["kept", "too", "end"]
 
 
 def test_prose_drops_tag_markup_and_keeps_what_is_between_the_tags():

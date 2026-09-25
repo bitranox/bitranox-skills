@@ -12,9 +12,10 @@ import re
 from typing import NamedTuple
 
 # Transcripts grow to many MB, so only the tail is read: 64 KiB first, widened 4x at a time until
-# the human prompt is in the window. A single tool output can be larger than the first window, and
-# the prompt sits BEFORE every tool call of the turn. The cap bounds a pathological file; a miss
-# only costs recall, never a wedged turn.
+# the window holds the human prompt AND the reply it answered (or the prompt before it, past which
+# there is nothing to find). A single tool output can be larger than the first window, and it can
+# sit on either side of the prompt. The cap bounds a pathological file; a miss only costs recall,
+# never a wedged turn.
 TAIL_BYTES = 65536
 MAX_TAIL_BYTES = 16 * 1024 * 1024
 
@@ -65,6 +66,12 @@ class Turn(NamedTuple):
     reply_before_prompt: str  # the assistant text the prompt answered
 
 
+def _content(obj):
+    """The `message.content` of a record, or None - whatever shape the line turned out to have."""
+    message = obj.get("message") if isinstance(obj, dict) else None
+    return message.get("content") if isinstance(message, dict) else None
+
+
 def text_of(content):
     """Flatten a transcript message's content (string, or list of blocks) to text."""
     if isinstance(content, str):
@@ -87,6 +94,8 @@ def human_text(obj):
     are told apart by `entrypoint: sdk-*`. A transcript old enough to have neither falls back to
     excluding the known injected shapes.
     """
+    if not isinstance(obj, dict):
+        return ""
     if obj.get("type") != "user" or obj.get("isMeta") or obj.get("isCompactSummary"):
         return ""
     # A headless SDK run writes no `origin` key; its records name the entrypoint instead.
@@ -96,24 +105,21 @@ def human_text(obj):
         origin = obj["origin"]
         if not (isinstance(origin, dict) and origin.get("kind") == "human"):
             return ""
-    text = text_of(obj.get("message", {}).get("content"))
-    if not text.strip() or text.lstrip().startswith(NOT_TYPED_PREFIXES):
+    text = text_of(_content(obj))
+    if not text.strip() or not looks_typed(text):
         return ""
     return text
 
 
 def is_hook_feedback(obj):
     """True for the record a blocking Stop hook writes into the transcript."""
-    if obj.get("type") != "user":
+    if not isinstance(obj, dict) or obj.get("type") != "user":
         return False
-    text = text_of(obj.get("message", {}).get("content")).lstrip()
-    return text.startswith(HOOK_FEEDBACK_PREFIXES)
+    return text_of(_content(obj)).lstrip().startswith(HOOK_FEEDBACK_PREFIXES)
 
 
-def scan(data):
-    """The Turn among the complete JSONL lines of `data` (bytes)."""
-    prompt = reply = before = ""
-    answering_hook = False
+def _records(data):
+    """The JSON objects among the complete lines of `data` (bytes); any other line is skipped."""
     for raw in data.splitlines():
         line = raw.strip()
         if not line:
@@ -122,11 +128,21 @@ def scan(data):
             obj = json.loads(line.decode("utf-8", "replace"))
         except ValueError:
             continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def _scan(data):
+    """(Turn, number of typed prompts seen) for the complete JSONL lines of `data` (bytes)."""
+    prompt = reply = before = ""
+    prompts = 0
+    answering_hook = False
+    for obj in _records(data):
         if obj.get("type") == "assistant":
             # Each content block is its own record (thinking, text, tool_use), so skip the ones
             # with no text rather than letting a trailing tool_use blank the reply.
             if not answering_hook:
-                reply = text_of(obj.get("message", {}).get("content")) or reply
+                reply = text_of(_content(obj)) or reply
             continue
         if is_hook_feedback(obj):
             answering_hook = True
@@ -134,7 +150,13 @@ def scan(data):
         typed = human_text(obj)
         if typed:
             prompt, before, reply, answering_hook = typed, reply, "", False
-    return Turn(prompt, reply or "", before)
+            prompts += 1
+    return Turn(prompt, reply or "", before), prompts
+
+
+def scan(data):
+    """The Turn among the complete JSONL lines of `data` (bytes)."""
+    return _scan(data)[0]
 
 
 def _tail(path, window):
@@ -147,15 +169,21 @@ def _tail(path, window):
 
 
 def read_turn(transcript_path, tail_bytes=TAIL_BYTES, max_bytes=MAX_TAIL_BYTES):
-    """The last Turn of the transcript, widening the tail until the prompt is in it."""
+    """The last Turn of the transcript, widening the tail until the turn is complete in it.
+
+    Complete means the prompt is in the window and so is what it answered: an assistant text
+    before it (the newest one is then necessarily inside the window, which is a suffix), or the
+    PREVIOUS prompt, which proves the turn before had no text to find.
+    """
     window = tail_bytes
     while True:
         try:
             data, size = _tail(transcript_path, window)
         except (OSError, TypeError, ValueError):
             return Turn("", "", "")
-        turn = scan(data)
-        if turn.prompt or window >= size or window >= max_bytes:
+        turn, prompts = _scan(data)
+        complete = bool(turn.prompt) and (bool(turn.reply_before_prompt) or prompts >= 2)
+        if complete or window >= size or window >= max_bytes:
             return turn
         window *= 4
 
@@ -183,14 +211,10 @@ def _tool_calls(transcript_path, window):
     except (OSError, TypeError, ValueError):
         return []
     calls = []
-    for raw in data.splitlines():
-        try:
-            obj = json.loads(raw.decode("utf-8", "replace"))
-        except ValueError:
-            continue
+    for obj in _records(data):
         if obj.get("type") != "assistant":
             continue
-        content = obj.get("message", {}).get("content")
+        content = _content(obj)
         for block in content if isinstance(content, list) else []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 inp = block.get("input") if isinstance(block.get("input"), dict) else {}
@@ -235,4 +259,6 @@ def excerpt(text, cap):
     if len(text) <= cap:
         return text
     half = cap // 2
+    if half == 0:  # text[-0:] would be the whole text
+        return text[:max(0, cap)]
     return text[:half].rstrip() + EXCERPT_MARK + text[-half:].lstrip()
