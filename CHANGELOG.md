@@ -29,6 +29,34 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.2]
+
+### Fixed
+
+- Secret redaction (the classifier's egress, recall's withhold check) no longer lets these values
+  through: any `*_PWD` name (`DB_PWD`, `MYSQL_PWD`; only the whole names `PWD` and `OLDPWD` are the
+  shell's paths); a password starting with `$`, a capital and a symbol (`$P@ss...`), since a bare
+  `$NAME` is now a reference only as the whole value or the start of a path; Vault's `secret_id`;
+  a long all-digit token (only nine digits or fewer after a token name read as a count); a long
+  all-capitals environment name (`GOOGLE_OAUTH_CLIENT_SECRET_PROD_EU`), which the slug rule took for
+  prose; JSON escaped inside a string (`curl -d "{\"password\": \"...\"}"`) and a value holding an
+  escaped quote; keys named by their use (`ENCRYPTION_KEY`, `SIGNING_KEY`, `MASTER_KEY`, `SSH_KEY`,
+  `DEPLOY_KEY`, `JWT_KEY`, `HMAC_KEY`, `..._ACCOUNT_KEY`); a password passed as the next argument
+  (`--password x`, `--api-key x`, `sshpass -p x`, and the mysql family's attached `-px`);
+  `Authorization: token <x>`; Cookie and Set-Cookie values; a dotted password (`super.secret`),
+  since a dotted value is now an attribute reference only behind a code receiver (`self.`,
+  `args.`, `settings.`, ...); a private key flattened onto one line and cut off; and OpenAI
+  `sk-None-` keys.
+- Values that are not secrets are no longer redacted: nsswitch's `passwd: files systemd`, a time or
+  schedule (`PASS_MAX_DAYS`, `*_at`, `*_lifetime`, `*_interval`, `*_rotation`), an OAuth setting
+  (`*_endpoint`, `*_audience`, `*_issuer`, `*_scope`), a program (`credential_process`,
+  `GIT_ASKPASS`), a switch value (`true`, `enabled`), a credential class
+  (`DefaultAzureCredential`), a kebab-case slug whose only secret word is a qualified `key`, and a
+  German function word after a label.
+- A long hyphenated run no longer makes the URL-credential scan quadratic: it now starts only where
+  a run of scheme characters starts, so a 300,000-character adversarial input takes about 0.1 s
+  instead of minutes.
+
 ## [7.23.1]
 
 ### Fixed

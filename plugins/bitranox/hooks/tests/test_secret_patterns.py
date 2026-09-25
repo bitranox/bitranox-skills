@@ -415,3 +415,170 @@ def test_a_long_run_of_name_characters_is_scanned_in_linear_time():
         sp.redact(text)
         sp.holds_a_credential(text)
     assert time.monotonic() - start < 5
+
+
+# --- review findings: leaks and over-matches ---------------------------------------------------
+
+V = "hunter2Xq9"
+UUID = "3f1c9a7e-2b44-4d1e-9a51-0c6b8e2f7d11"
+B64_RUN = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7"
+
+
+@pytest.mark.parametrize("line, value", [
+    # Any *_PWD name holds a password; only the WHOLE names PWD and OLDPWD are the shell's paths.
+    ("DB_PWD=" + V, V),
+    ("MYSQL_PWD=" + V, V),
+    ("export MYSQL_PWD='" + V + "'", V),
+    ("ROOT_PWD=" + V, V),
+    ("docker run -e MYSQL_PWD=" + V + " img", V),
+    # A dollar sign followed by a capital is a variable only when the WHOLE value is the reference.
+    ("DB_PASSWORD=$P@ssw0rd99", "$P@ssw0rd99"),
+    ("password: $X!" + V, "$X!" + V),
+    ("PASSWORD=$ABC#123def", "$ABC#123def"),
+    # Vault's AppRole secret_id is the credential, not an identifier of one.
+    ("VAULT_SECRET_ID=" + UUID, UUID),
+    ("vault write auth/approle/login role_id=abc secret_id=" + UUID, UUID),
+    # A long run of digits is a token, not a count.
+    ("GITHUB_TOKEN=" + "1234567890" * 2 + "123456", "1234567890" * 2 + "123456"),
+    ("API_TOKEN=982734982374982374", "982734982374982374"),
+    # An upper-case environment name is a variable however many words it has.
+    ("GOOGLE_OAUTH_CLIENT_SECRET_PROD_EU=" + V, V),
+    ("COMPANY_PROD_DB_ADMIN_PASSWORD_OVERRIDE=" + V, V),
+    # JSON escaped inside a string (curl -d, a log line), and a quote escaped inside a value.
+    ('curl -d "{\\"password\\": \\"' + V + '\\"}"', V),
+    ('"{\\"password\\":\\"' + V + '\\"}"', V),
+    ('{"password": "ab\\"cd-' + V + '"}', "cd-" + V),
+    ('"{\\"password\\":\\"ab\\\\\\"cd-' + V + '\\"}"', "cd-" + V),
+    # Keys named by what they do.
+    ("ENCRYPTION_KEY=" + V + "abcdef", V),
+    ("SIGNING_KEY=" + V, V),
+    ("MASTER_KEY=" + V, V),
+    ("SSH_KEY=" + V, V),
+    ("DEPLOY_KEY=" + V, V),
+    ("JWT_KEY=" + V, V),
+    ("HMAC_KEY=" + V, V),
+    ("jwt_signing_key: " + V, V),
+    ("AZURE_STORAGE_ACCOUNT_KEY=" + V, V),
+    # A password passed as a separate command-line argument.
+    ("mysqldump --password " + V + " db", V),
+    ("app --api-key " + V + " run", V),
+    ("sshpass -p " + V + " ssh admin@host", V),
+    ("sshpass -p" + V + " ssh admin@host", V),
+    ("mysql -u root -p" + V + " appdb", V),
+    # GitHub's `token` Authorization scheme, and a session cookie.
+    ("Authorization: token " + V + "abcdef", V),
+    ('curl -H "Authorization: token ' + V + 'abcdef" https://api.github.com', V),
+    ("Cookie: session=" + V, V),
+    ("Cookie: theme=dark; session=" + V, V),
+    ("Set-Cookie: sid=" + V + "; Path=/; HttpOnly", V),
+    # A dotted value is an attribute reference only behind a code receiver.
+    ("DB_PASSWORD=super.secret", "super.secret"),
+    ("export SECRET_KEY=django.secret", "django.secret"),
+    ("POSTGRES_PASSWORD: my.secret", "my.secret"),
+    ("password: s3cr3t.token", "s3cr3t.token"),
+    ("api_key=prod.apikey", "prod.apikey"),
+    # The kebab-case slug exemption covers only a qualified `key`, never a real secret word.
+    ('"db-admin-password-prod": "' + V + '"', V),
+    # A reference followed by anything but a path is not a reference.
+    ("DB_PASSWORD=$ABC!" + V, "$ABC!" + V),
+])
+def test_review_findings_secret_values_are_redacted(line, value):
+    text, n = sp.redact(line)
+    assert value not in text and n >= 1, text
+    assert sp.holds_a_credential(line), line
+
+
+def test_a_flattened_truncated_key_on_one_line_is_redacted():
+    line = "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY----- " + B64_RUN + " " + B64_RUN
+    text, n = sp.redact(line)
+    assert B64_RUN[:20] not in text and n >= 1, text
+    bare = "-----BEGIN RSA PRIVATE KEY----- " + B64_RUN + " " + B64_RUN[:30]
+    text, n = sp.redact("see " + bare + " end")
+    assert B64_RUN[:20] not in text and n == 1, text
+    assert len(list(sp.real_private_key_blocks(bare))) == 1
+
+
+def test_an_openai_none_key_is_found_and_redacted():
+    key = "sk-" + "None-" + "Ab1_" * 12
+    assert sp.find_secret_labels("x " + key) == ["OpenAI-style key"]
+    text, n = sp.redact("x " + key + " y")
+    assert key not in text and n == 1
+
+
+@pytest.mark.parametrize("line", [
+    "passwd:         files systemd",
+    "shadow: files",
+    "PASS_MAX_DAYS=99999",
+    "PASS_WARN_AGE=7",
+    "password_changed_at: 2024-01-02",
+    "token_expires_at: 2024-01-02T00:00",
+    "TOKEN_LIFETIME=3600s",
+    "token_refresh_interval: 5m",
+    "token_endpoint: https://login.example.com/oauth2/token",
+    "TOKEN_AUDIENCE=api://default",
+    "credential_process = /usr/bin/aws-vault",
+    "use_token_auth: true",
+    "SECRET_KEY_ROTATION: enabled",
+    "secret_scanning: enabled",
+    "TokenCredential: DefaultAzureCredential",
+    "GIT_ASKPASS=/usr/bin/true git fetch",
+    "PASSWORD_HASHERS=django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "GITHUB_TOKEN_PATH=/home/u/.tok",
+    "MAX_TOKEN_COUNT=4096",
+    "PASS_THROUGH=1",
+    "max_tokens: 100000",
+    "SECRET_KEY_ID=abc123",
+    "TOKEN_ID=abc123",
+    # A secret-named flag that takes no value, or a value that is not the secret.
+    "echo x | docker login --username u --password-stdin registry.example.com",
+    "tool --token-file /run/tok",
+    "ansible-playbook --ask-pass site.yml",
+    "pg_dump --no-password db1",
+    # -p is a port, a parent flag or a publish flag everywhere but sshpass and mysql.
+    "ssh -p 2222 admin@host",
+    "mkdir -p " + V,
+    "docker run -p 8080:80 img",
+    "psql -h db -p 5432 -U app",
+    "mysql -u root -p appdb",
+    # The word token in prose is not the Authorization scheme.
+    "the token abcdefghijklmnop was rotated",
+    # Found by replaying real transcripts: a wait flag takes a duration, a cookie header in a
+    # prose code span holds a placeholder and ends at its backtick.
+    "launch detached with `--wait-for-token 43200`.",
+    "carries the wait behind `--wait-for-token SECONDS`, defaulting to 0",
+    "`Cookie: session=<x>` and `Cookie: session=...` are missed; only `--password=x` works",
+    "a count of `access_token_expires_in: 3600`.",
+    "run --log-dir $R/logs --credentials $R/fixtures/creds.json",
+    '"proxmox-install-ssh-key-pmxcfs": "When installing an SSH key on a node, write it whole"',
+    "API-Token auf der Maschine, nur den SSH-Key: den legt das Skript an",
+    "SSH_ASKPASS=/tmp/ap.sh SSH_ASKPASS_REQUIRE=force ssh host",
+    # A reference is still a reference, braces and trailing punctuation included.
+    "export DB_PASSWORD=$VAULT_DB_PASSWORD;",
+    "TOKEN=${A}${B}",
+])
+def test_review_findings_non_secrets_are_left_alone(line):
+    assert sp.redact(line) == (line, 0), line
+    assert not sp.holds_a_credential(line), line
+
+
+def test_adversarial_inputs_stay_linear():
+    cases = (
+        '\\"password\\": \\"' + "\\\\" * 100000,
+        "--password " * 30000,
+        "sshpass " * 40000,
+        "mysql -p" * 40000,
+        "-----BEGIN RSA PRIVATE KEY----- " + (B64_RUN + " ") * 6000,
+        "Cookie: " + "a=b; " * 60000,
+        "Authorization: token " * 15000,
+        "password=$" + "A" * 300000,
+        'password: "' + "\\" * 300000,
+        # A long hyphenated run: a scheme regex starting at every word boundary rescans the rest
+        # of the run from each hyphen, quadratic in its length.
+        "a-" * 50000 + "://x",
+        "--api-key-" * 10000 + " x",
+    )
+    for text in cases:
+        start = time.monotonic()
+        sp.redact(text)
+        sp.holds_a_credential(text)
+        assert time.monotonic() - start < 0.5, text[:40]
