@@ -59,6 +59,30 @@ def test_a_setext_heading_underline_is_not_a_conflict_marker():
     assert C.scan_text("Summary\n=======\n") == []   # heading as the last thing in the file
 
 
+@pytest.mark.parametrize("text", [
+    "=======\nTitle\n=======\n\nBody.\n",              # an RST title opening the file
+    "Intro.\n\n=======\nTitle\n=======\n\nBody.\n",    # an RST title mid-document
+    "=======\nTitle\n=======\n",                       # an RST title as the whole file
+])
+def test_an_rst_overline_title_is_not_a_conflict_marker(text):
+    # The underline already passed as a heading; its overline has a blank line (or nothing)
+    # above and the title below, so it was flagged as a half-resolved hunk's middle marker.
+    assert C.scan_text(text) == []
+
+
+@pytest.mark.parametrize("text, lines", [
+    # A real conflict whose ours side is empty has the overline's shape - inside a span it counts.
+    ("<<<<<<< HEAD\n\n=======\ntheirs\n>>>>>>> b\n", [1, 3, 5]),
+    ("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n", [1, 3, 5]),
+    # Blank above and text below, but no matching underline: not a title, so it still counts.
+    ("a\n\n=======\ntheirs\nmore\n", [3]),
+    # Overline and underline with text directly under the underline: not a clean title shape.
+    ("=======\nTitle\n=======\nBody\n", [1, 3]),
+])
+def test_a_marker_that_is_not_a_complete_rst_title_still_counts(text, lines):
+    assert [ln for ln, _ in C.scan_text(text)] == lines
+
+
 def test_a_lone_middle_marker_between_text_lines_still_counts():
     """A half-resolved hunk can leave only the middle marker, with code on both sides."""
     assert [ln for ln, _ in C.scan_text("ours\n=======\ntheirs\n")] == [2]

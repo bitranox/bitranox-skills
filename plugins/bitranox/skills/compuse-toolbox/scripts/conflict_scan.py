@@ -10,7 +10,9 @@ tree; a stray marker that compiles/passes still corrupts the file. This finds al
 A lone ======= outside any <<<<<<< ... >>>>>>> span is the one ambiguous marker: a half-resolved
 hunk can leave only the middle marker, but a Markdown setext heading underline ("Summary" over
 seven equals signs) is the same line. It is skipped only in the heading shape - text above it and a
-blank line (or the end of the file) below - and still counted when text sits on both sides.
+blank line (or the end of the file) below - and still counted when text sits on both sides. The
+overline of an RST title (======= / Title / =======) is skipped too, but only as that whole block:
+a blank line or the start of the file above, and an underline that is itself in the heading shape.
 
 Output: one `path:line: text` row per marker line, then a summary line.
 Exit codes: 0 = no markers, 1 = markers found, 2 = a path or directory could not be read (or the
@@ -48,6 +50,22 @@ def _is_setext_underline(lines: list[str], i: int) -> bool:
     return bool(above) and not _MARKER.match(lines[i - 1]) and not below
 
 
+def _is_rst_overline(lines: list[str], i: int) -> bool:
+    """A lone ======= opening an RST title: nothing or a blank line above it, the title text below
+    it, and under the title an identical ======= that is itself a heading underline. Requiring the
+    whole three-line block keeps a stray middle marker with plain text under it a marker."""
+    above = lines[i - 1].strip() if i > 0 else ""
+    if above or i + 2 >= len(lines):
+        return False
+    title, under = lines[i + 1], lines[i + 2]
+    return (bool(title.strip()) and not _MARKER.match(title)
+            and under.rstrip() == _MIDDLE and _is_setext_underline(lines, i + 2))
+
+
+def _is_heading_rule(lines: list[str], i: int) -> bool:
+    return _is_setext_underline(lines, i) or _is_rst_overline(lines, i)
+
+
 def scan_text(text: str) -> list[tuple[int, str]]:
     """[(1-based line number, the line)] for every conflict-marker line in `text`."""
     lines, hits, in_span = _split_lines(text), [], False
@@ -58,7 +76,7 @@ def scan_text(text: str) -> list[tuple[int, str]]:
             in_span = True
         elif line.startswith(_CLOSE):
             in_span = False
-        elif line.startswith(_MIDDLE) and not in_span and _is_setext_underline(lines, i):
+        elif line.startswith(_MIDDLE) and not in_span and _is_heading_rule(lines, i):
             continue
         hits.append((i + 1, line))
     return hits

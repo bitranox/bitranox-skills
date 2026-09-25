@@ -16,7 +16,9 @@ two failure modes that both look fine in the output.
 2. **The stray block marker.** `textwrap` knows nothing about markdown, so a wrap point falling
    just before a " - " clause puts a dash at the start of a line, which CommonMark then renders as
    a bullet - silently splitting the paragraph in two when the file is viewed. A " # " or " > "
-   does the same as a heading or a blockquote. Hit in the same session.
+   does the same as a heading or a blockquote, a " ``` " or " <tag>" as a code fence or an HTML
+   block, and a " --- " or " === " left alone on a line underlines the text above it as a setext
+   heading (or, as "---", "***" or "___", becomes a thematic break). Hit in the same session.
 
 So this takes an ANCHOR (a substring that identifies the paragraph) rather than a rule, refuses
 when the anchor is missing or matches more than one paragraph, and reports the changed line range
@@ -25,11 +27,12 @@ and the line delta so the caller can check the radius against the change they me
 Paragraph = the maximal run of non-blank lines around the anchor, stopping at an ATX heading or a
 thematic break (a heading directly above or below prose is its own block). It is REFUSED rather
 than reflowed when rewrapping would corrupt it: a table row, a fence line, a paragraph that sits
-inside a fenced code block, a heading (ATX or setext), a list (the first line is an item, two or
-more lines start one, or one follows a lead-in line ending in ':'), or a Markdown hard line break
-(a line ending in two spaces or a backslash). A SINGLE continuation line starting with '- ' is the
-damage a previous bad wrap leaves, and is repaired. The paragraph's own leading indent is taken
-from its first line and preserved.
+inside a fenced code block, a blockquote (any line starting with '>'), a heading (ATX or setext),
+a list (the first line is an item, two or more lines start one, or one follows a lead-in line
+ending in ':'), or a Markdown hard line break (a line ending in two spaces or a backslash). A
+SINGLE continuation line starting with '- ' is the damage a previous bad wrap leaves, and is
+repaired. The paragraph's own leading indent is taken from its first line and preserved. A wrap
+that would still leave a block marker alone on a line after the repair is refused, never written.
 
 `--width` is the TOTAL line length including the paragraph's leading indent, matching how the
 file is read and how a linter counts it - not the prose width alone.
@@ -169,9 +172,38 @@ def _starts_a_list(line: str) -> bool:
 
 
 def _starts_a_block(line: str) -> bool:
-    """A wrapped line CommonMark would read as a new block: a list item, heading or blockquote."""
+    """A wrapped line CommonMark would NOT read as a continuation of the paragraph above it.
+
+    A list item, heading or blockquote opens a new block; a code fence or an HTML tag can open
+    one too; and a line holding only '=' or '-' underlines the text above it as a setext heading,
+    as a run of '***' or '___' turns into a thematic break. Any '<' counts, not just a block-level
+    tag: pulling an inline tag or an autolink up a line costs nothing.
+    """
     s = line.lstrip()
-    return _starts_a_list(line) or bool(_ATX.match(s)) or s.startswith(">")
+    return (_starts_a_list(line) or bool(_ATX.match(s) or _SETEXT.match(s) or _THEMATIC.match(s))
+            or s.startswith((">", "<") + _FENCES))
+
+
+def _pull_up(out: list[str], i: int, indent: str) -> None:
+    """Move line `i`'s first token onto the end of line `i - 1`, dropping line `i` if emptied."""
+    head, _, rest = out[i].lstrip().partition(" ")
+    out[i - 1] = out[i - 1] + " " + head
+    out[i] = indent + rest.lstrip() if rest.strip() else ""
+    if not out[i].strip():
+        del out[i]
+
+
+def _first_line_is_a_break(out: list[str]) -> bool:
+    # The paragraph's first line sits under a blank line or a boundary, so '===' there is plain
+    # text - but a thematic-break run ('---', '***', '_ _ _') is a horizontal rule anywhere.
+    return len(out) > 1 and bool(_THEMATIC.match(out[0].lstrip()))
+
+
+def _marker_line(out: list[str]) -> int:
+    """Index of the first line CommonMark would not read as this paragraph's text, else -1."""
+    if _THEMATIC.match(out[0].lstrip()):
+        return 0
+    return next((i for i in range(1, len(out)) if _starts_a_block(out[i])), -1)
 
 
 def _list_refusal(block: list[str]) -> str:
@@ -196,6 +228,11 @@ def _refusal(lines: list[str], lo: int, hi: int, fenced: set[int]) -> str:
         return "paragraph contains a code fence - refusing to reflow it"
     if any(i in fenced for i in range(lo, hi + 1)):
         return "paragraph is inside a fenced code block - refusing to reflow it"
+    if any(l.lstrip().startswith(">") for l in block):
+        # Joining the lines keeps only the first '> ' and turns every later one into literal
+        # text inside the quote. A '>' line under prose is a quote too (it interrupts the
+        # paragraph), so there is no safe reading of it to repair.
+        return "paragraph is or holds a blockquote - refusing to reflow it"
     if _is_heading(block[0]) or _THEMATIC.match(block[0].lstrip()):
         return "anchor is on a heading or thematic break - refusing to reflow it"
     if hi + 1 < len(lines) and _SETEXT.match(lines[hi + 1].lstrip()):
@@ -208,23 +245,23 @@ def _refusal(lines: list[str], lo: int, hi: int, fenced: set[int]) -> str:
 
 
 def _protect_dash_clauses(wrapped: list[str], indent: str) -> list[str]:
-    """Never leave a line starting with a list, heading or blockquote marker.
+    """Never leave a line CommonMark would read as something other than this paragraph's text.
 
-    A wrap point falling before a ' - ', ' # ' or ' > ' clause makes CommonMark render the
-    continuation as a new block, silently splitting the paragraph. Pull such a line's first token
-    up onto the previous line; the result is a few chars over the width at worst, which is
-    strictly better than a paragraph that renders wrong. The repaired line is checked AGAIN,
-    because its new first token can be a marker too ('- -').
+    A wrap point falling before a ' - ', ' # ', ' > ', ' ``` ' or ' <tag>' clause makes the
+    continuation a new block, and one falling after it can leave '---' or '===' alone on a line,
+    which underlines everything above it as a heading - both silently change the document. Pull
+    such a line's first token up onto the previous line; the result is a few chars over the width
+    at worst, which is strictly better than a paragraph that renders wrong. The repaired line is
+    checked AGAIN, because its new first token can be a marker too ('- -'). A first line that is a
+    bare thematic break ('--- rest' wrapped at 3) takes the next line's first token instead.
     """
     out = list(wrapped)
+    while _first_line_is_a_break(out):
+        _pull_up(out, 1, indent)
     i = 1
     while i < len(out):
         if _starts_a_block(out[i]) and out[i - 1].strip():
-            head, _, rest = out[i].lstrip().partition(" ")
-            out[i - 1] = out[i - 1] + " " + head
-            out[i] = indent + rest.lstrip() if rest.strip() else ""
-            if not out[i].strip():
-                del out[i]
+            _pull_up(out, i, indent)
             continue
         i += 1
     return out
@@ -260,6 +297,13 @@ def rewrap(text: str, anchor: str, width: int = 98) -> Result:
         break_long_words=False, break_on_hyphens=False,
     ) or [indent + para.strip()]
     wrapped = _protect_dash_clauses(wrapped, indent)
+    if (bad := _marker_line(wrapped)) >= 0:
+        # The repair ran out of tokens to pull up (a paragraph made only of marker runs, or a
+        # pull-up that joined two short runs into a thematic break). Writing it would change what
+        # the document renders, so it is never written.
+        return Result(False, start_line=lo + 1, end_line=hi + 1,
+                      reason=f"rewrapping would leave {wrapped[bad].strip()!r} alone on a line, "
+                             "which Markdown reads as a new block - refusing to reflow it")
 
     eol = _paragraph_ending(endings, lo, hi)
     new_endings = [eol] * (len(wrapped) - 1) + [endings[hi]]

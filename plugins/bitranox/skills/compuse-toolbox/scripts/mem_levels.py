@@ -27,7 +27,9 @@ Exit: 0 = listed, or the slug was found. 1 = the slug is at no level (a real "no
       internal error.
 
 Pre-pivot `uuid:` pointers count as facts at their level; their bodies are looked for at the old
-sharded path `facts/<2 chars>/<uuid>.md`, exactly where the engine reads them.
+sharded path `facts/<2 chars>/<uuid>.md`, exactly where the engine reads them. A sharded body no
+`uuid:` pointer names is dangling like a flat one, and is listed as `<2 chars>/<uuid>` (a slug
+never holds a '/', so the two kinds cannot be confused).
 
 Read-only: it never writes to the store. Writes go through the engine (`memory_engine.py`).
 """
@@ -77,6 +79,9 @@ class Report:
     unreadable: list[str] = field(default_factory=list)
     # slug -> legacy uuid, for pre-pivot pointers whose body lives at the sharded path.
     legacy: dict[str, str] = field(default_factory=dict)
+    # Every legacy uuid any level points at. Kept apart from `legacy`, which is keyed on the slug:
+    # two levels pointing one slug at two uuids would otherwise hide one uuid's body as dangling.
+    legacy_uuids: set[str] = field(default_factory=set)
 
     def level_of(self, slug: str) -> list[str]:
         """Every level pointing at `slug` (normally one - slugs are tree-unique)."""
@@ -139,12 +144,43 @@ def _read_levels(root: Path, report: Report) -> None:
         pointers = _pointers_in(text)
         report.levels[rel] = [p.slug for p in pointers]
         report.legacy.update({p.slug: p.uuid for p in pointers if p.legacy})
+        report.legacy_uuids.update(p.uuid for p in pointers if p.legacy)
 
 
 def _has_body(root: Path, slug: str, legacy_uuid: str | None, bodies: set[str]) -> bool:
     if legacy_uuid is None:
         return slug in bodies
     return uuid_store.legacy_body_path(root, legacy_uuid).is_file()
+
+
+def _listdir(d: Path, unreadable: list[str]) -> list[Path]:
+    try:
+        return list(d.iterdir())
+    except OSError as exc:
+        unreadable.append("%s: %s" % (d, exc.strerror or exc))
+        return []
+
+
+def _store_bodies(facts: Path, unreadable: list[str]) -> tuple[set[str], dict[str, str]]:
+    """`(flat slugs, {legacy uuid: "<shard>/<uuid>"})` for every body in the central store.
+
+    Both layouts the engine reads: `facts/<slug>.md`, and the pre-pivot `facts/<2 chars>/<uuid>.md`
+    (`uuid_store.legacy_body_path`). Listing only the first let a sharded body that no pointer
+    names - a copy a migration left behind, or one whose pointer was deleted - go unreported. A
+    file anywhere else under `facts/` is not where the engine looks, so it is not a body at all.
+    """
+    if not facts.is_dir():
+        return set(), {}
+    entries = _listdir(facts, unreadable)
+    flat = {e.stem for e in entries if e.suffix == ".md" and e.is_file()}
+    sharded: dict[str, str] = {}
+    for d in entries:
+        if not d.is_dir() or d.is_symlink():
+            continue
+        for f in _listdir(d, unreadable):
+            if f.suffix == ".md" and f.is_file() and uuid_store.shard(f.stem) == d.name:
+                sharded[f.stem] = "%s/%s" % (d.name, f.stem)
+    return flat, sharded
 
 
 def scan(root: str | Path) -> Report:
@@ -165,11 +201,13 @@ def scan(root: str | Path) -> Report:
             pointed.setdefault(s, []).append(lvl)
     report.duplicates = {s: sorted(l) for s, l in pointed.items() if len(set(l)) > 1}
 
-    facts = root / STORE_DIR / "facts"
-    bodies = {p.stem for p in facts.glob("*.md")} if facts.is_dir() else set()
-    report.dangling = sorted(bodies - set(pointed))
+    bodies, sharded = _store_bodies(root / STORE_DIR / "facts", report.unreadable)
+    report.dangling = sorted(bodies - set(pointed)) + sorted(
+        rel for uuid, rel in sharded.items() if uuid not in report.legacy_uuids)
     report.bodyless = sorted(s for s in pointed
                              if not _has_body(root, s, report.legacy.get(s), bodies))
+    # The level walk descends into the store too, so one unreadable shard can be met twice.
+    report.unreadable = list(dict.fromkeys(report.unreadable))
     return report
 
 

@@ -80,7 +80,7 @@ def test_tracked_and_ignored_precedence_tracked_wins(tmp_path):
 def test_no_repo_is_distinct_from_untracked(tmp_path):
     """A file with no enclosing git repo at all must never be conflated with "inside a repo,
     not tracked, not ignored" - they are different facts about the file."""
-    repo = _five_state_repo(tmp_path)
+    _five_state_repo(tmp_path)                     # built for loose.md, the in-repo sibling
     plain = tmp_path / "plain"
     plain.mkdir()
     (plain / "orphan.md").write_text("no repo here\n", encoding="utf-8")

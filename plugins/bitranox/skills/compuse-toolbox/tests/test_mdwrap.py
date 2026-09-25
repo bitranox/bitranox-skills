@@ -1,4 +1,5 @@
 """Bounded paragraph rewrap: only the anchored paragraph may change."""
+import re
 import textwrap
 
 import pytest
@@ -241,6 +242,78 @@ def test_a_repaired_line_is_checked_again():
         assert r.ok
         assert not any(l.lstrip().startswith("- ") or l.strip() == "-"
                        for l in r.text.split("\n")[1:]), (width, r.text)
+
+
+@pytest.mark.parametrize("doc", [
+    "Intro.\n\n> quoted ANCHOR paragraph long enough to wrap\n> second quoted line here\n\nEnd.\n",
+    "> quoted first line\nlazy ANCHOR continuation that is long enough to wrap\n",
+    "Prose ANCHOR above a quote that is long enough to wrap\n> a quote with no blank line\n",
+    "  > indented quoted ANCHOR paragraph long enough to wrap\n  > and its second line\n",
+])
+def test_a_blockquote_paragraph_is_refused(doc):
+    # Joining the lines kept the first '> ' and turned every later one into literal text inside
+    # the quote ("here. > second"), which changes what the document says.
+    r = mdwrap.rewrap(doc, anchor="ANCHOR", width=20)
+    assert not r.ok and "blockquote" in r.reason, r.text
+
+
+def test_a_greater_than_sign_inside_prose_is_not_a_blockquote():
+    r = mdwrap.rewrap("ANCHOR a > b holds for every pair of values in the set\n",
+                      anchor="ANCHOR", width=20)
+    assert r.ok and r.changed
+
+
+# An oracle of its own, not mdwrap's predicates: CommonMark reads each of these, at the start of a
+# line directly under paragraph text, as something other than a continuation of that paragraph -
+# a setext underline, a thematic break, a code fence or an HTML block.
+_SETEXT_OR_BREAK = re.compile(r"(?:=+|-+|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$")
+
+
+def _renders_as_a_new_block(line: str) -> bool:
+    s = line.strip()
+    return bool(_SETEXT_OR_BREAK.match(s)) or s.startswith(("```", "~~~", "<"))
+
+
+@pytest.mark.parametrize("token", ["---", "===", "-", "=", "***", "___", "_ _ _", "```", "~~~",
+                                   "<div>"])
+@pytest.mark.parametrize("shape", ["ANCHOR aaaa bbbb cccc dddd {t}\n",
+                                   "ANCHOR aaaa {t} bbbb cccc {t} dddd eeee ffff\n"])
+def test_a_wrap_never_leaves_a_line_markdown_reads_as_a_new_block(token, shape):
+    src = shape.format(t=token)
+    for width in range(4, 60):
+        r = mdwrap.rewrap(src, anchor="ANCHOR", width=width)
+        if not r.ok:
+            assert "block" in r.reason, (width, r.reason)
+            continue
+        lines = [l for l in r.text.split("\n") if l]
+        assert not any(_renders_as_a_new_block(l) for l in lines[1:]), (width, r.text)
+
+
+@pytest.mark.parametrize("token", ["---", "***", "_ _ _"])
+def test_a_wrap_never_turns_the_first_line_into_a_thematic_break(token):
+    # A first line reading only '---' after a blank line is a thematic break: the paragraph's
+    # opening words become a horizontal rule.
+    src = f"{token} ANCHOR aaaa bbbb cccc\n"
+    for width in range(3, 30):
+        r = mdwrap.rewrap(src, anchor="ANCHOR", width=width)
+        if not r.ok:
+            assert "block" in r.reason, (width, r.reason)
+            continue
+        first = r.text.split("\n")[0].strip()
+        assert not _SETEXT_OR_BREAK.match(first) or first.startswith("="), (width, r.text)
+
+
+def test_a_wrap_the_repair_cannot_make_safe_is_refused_not_written():
+    # Width 2 leaves '--' then '-': pulling the '-' up joins them into '-- -', a thematic break.
+    # With no token left to pull, the only safe answer is to write nothing.
+    r = mdwrap.rewrap("-- - ANCHOR\n", anchor="ANCHOR", width=2)
+    assert not r.ok and "new block" in r.reason and r.text == ""
+
+
+def test_the_block_marker_guard_still_rewraps_plain_prose():
+    # The control for the two tests above: prose with none of those tokens still wraps.
+    r = mdwrap.rewrap("ANCHOR aaaa bbbb cccc dddd eeee ffff gggg\n", anchor="ANCHOR", width=12)
+    assert r.ok and r.line_delta > 0
 
 
 @pytest.mark.parametrize("brk", ["  ", "\\"])

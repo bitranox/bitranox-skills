@@ -208,6 +208,73 @@ def test_a_legacy_pointer_without_its_sharded_body_is_bodyless(tmp_path):
     assert mem_levels.scan(root).bodyless == ["old-fact"]
 
 
+def _sharded_body(root: Path, uuid: str = LEGACY_UUID, name: str = "old-fact") -> Path:
+    shard = root / ".claude-memory" / "facts" / uuid[:2]
+    shard.mkdir(parents=True, exist_ok=True)
+    body = shard / f"{uuid}.md"
+    body.write_text(f"---\nname: {name}\n---\nbody\n", encoding="utf-8")
+    return body
+
+
+def test_a_sharded_body_no_pointer_names_is_dangling(tmp_path, capsys):
+    # A pre-pivot body the migration left behind (or whose pointer was deleted) is loaded by
+    # nothing - exactly what a flat orphan is - but only facts/*.md was ever listed.
+    root = _tree(tmp_path / "t", {".": ["kept"]})
+    _sharded_body(root)
+
+    report = mem_levels.scan(root)
+    rc = mem_levels.main(["--root", str(root)])
+
+    assert report.dangling == [f"{LEGACY_UUID[:2]}/{LEGACY_UUID}"]
+    assert rc == 0 and f"dangling body (no pointer at any level): {LEGACY_UUID[:2]}/" in (
+        capsys.readouterr().out)
+
+
+def test_a_sharded_body_its_legacy_pointer_names_is_not_dangling(tmp_path):
+    # The control: the same body with the pre-pivot pointer that reads it is healthy.
+    root = _tree(tmp_path / "t", {".": ["kept"]})
+    _level(root, ".", [_row("kept"), _legacy_row("old-fact")])
+    _sharded_body(root)
+
+    report = mem_levels.scan(root)
+
+    assert report.dangling == [] and report.bodyless == []
+
+
+def test_a_sharded_body_is_dangling_even_when_its_slug_has_a_flat_pointer(tmp_path):
+    # Migrated: the pointer is `mem:old-fact` and the flat body exists, so nothing reads the
+    # sharded copy any more. Matching on the slug in its frontmatter would call it pointed.
+    root = _tree(tmp_path / "t", {".": ["old-fact"]})
+    _sharded_body(root, name="old-fact")
+
+    assert mem_levels.scan(root).dangling == [f"{LEGACY_UUID[:2]}/{LEGACY_UUID}"]
+
+
+def test_a_file_in_a_non_shard_subdir_is_not_a_body(tmp_path):
+    # Only facts/<first 2 chars of the uuid>/<uuid>.md is where the engine reads a legacy body;
+    # anything else under facts/ is not a fact, so it cannot be an orphaned one.
+    root = _tree(tmp_path / "t", {".": ["kept"]})
+    notes = root / ".claude-memory" / "facts" / "notes"
+    notes.mkdir()
+    (notes / "readme.md").write_text("x\n", encoding="utf-8")
+
+    assert mem_levels.scan(root).dangling == []
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a shard unreadable")
+def test_an_unreadable_shard_is_an_error_not_a_clean_answer(tmp_path, capsys):
+    root = _tree(tmp_path / "t", {".": ["kept"]})
+    shard = _sharded_body(root).parent
+    shard.chmod(0)
+    try:
+        rc = mem_levels.main(["--root", str(root)])
+        err = capsys.readouterr().err
+    finally:
+        shard.chmod(0o755)
+    assert rc == 2 and LEGACY_UUID[:2] in err
+
+
 def test_an_empty_store_still_reports_every_pointer_as_bodyless(tmp_path):
     root = _tree(tmp_path / "t", {".": ["gone-fact"]}, bodies=[])
 
