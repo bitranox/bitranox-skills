@@ -191,8 +191,10 @@ In Python, DELETE those keys from a copy of `os.environ` for the child rather th
 
 `git_state.py` automates the pre-commit / pre-push state check above across one or many repos
 (read-only): for each repo it prints the branch, whether HEAD is in sync with its upstream
-(ahead/behind/diverged, or `no-upstream`), and the dirty count, and it exits non-zero if ANY repo
-is out of sync - so it doubles as a bulk pre-push guard.
+(ahead/behind/diverged, `no-upstream`, or an upstream gone on the remote), the dirty count and
+each staged file; it exits 1 if ANY repo is out of sync and 2 if the check was incomplete (a repo
+git could not read, or a `--root` that is missing, holds no repo, or has an unreadable directory) -
+so it doubles as a bulk pre-push guard.
 
 It ships ONCE, in the skill that owns the jigs: `skills/compuse-toolbox/scripts/git_state.py`
 (see `bitranox:compuse-toolbox` for the rest of them).
@@ -200,7 +202,7 @@ It ships ONCE, in the skill that owns the jigs: `skills/compuse-toolbox/scripts/
 ```bash
 uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py                 # current directory
 uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py repoA repoB     # named repos
-uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py --root ~/src    # every .git repo below a dir
+uv run <plugin>/skills/compuse-toolbox/scripts/git_state.py --root ~/src    # every repo below a dir (a .git dir, or a worktree's or submodule's .git file)
 ```
 
 ## Hooks

@@ -21,7 +21,8 @@ record it. So the instant a learning looks skill/hook-worthy:
 That queue is DURABLE and per-project: SessionStart surfaces it every session and does NOT consume it
 (unlike the miss-audit), so the intent outlives the session and gets picked up when the work suits.
 Queue first, then do the steps below now or later. `contrib_queue.py list` shows what is pending
-(numbered); `contrib_queue.py drain` clears it - ONLY after the change actually shipped.
+(numbered); `contrib_queue.py drain` clears it and records each entry as shipped, so a drained
+intent is not queued again - ONLY after the change actually shipped.
 
 **Close every entry by its OUTCOME, and close it individually.** `ship --match <text> --note <where
 it landed>` for one that DELIVERED; `drop --match <text> --reason "<why>"` for one that turns out

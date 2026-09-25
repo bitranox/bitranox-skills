@@ -47,7 +47,9 @@ Create one todo per step.
    FILE (rendered inline it is silently truncated): your context is not the session (a
    compaction clears the context, never the transcript file), and it also surfaces the SUBAGENT
    learnings and the touched-path routing evidence you would otherwise never see. Finish with
-   `dream_state.py session-reviewed "<cwd>"`. It is incremental and the watermark is shared with the
+   `dream_state.py session-reviewed "<cwd>"`; a stretch over 2 MB comes in parts, so while the
+   review prints a `TRUNCATED` line, repeat `session-review` and `session-reviewed` until it prints
+   `NOTHING NEW`. It is incremental and the watermark is shared with the
    other dream modes, so if a nap already reviewed this session this costs nothing.
 1. **Back up first.** Snapshot every store this run may touch - each affected tree's TOP store and, for any level you will write, the anchor's central
    `.claude-memory/` note bodies + that level's `CLAUDE.local.md` pointer block (+ native `memory/`) - to
