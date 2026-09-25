@@ -243,15 +243,15 @@ prescribes (proven in real galleries). Deviate only with a reason.
 
 Stay sharp - these belong elsewhere:
 
-| Concern                                                   | Skill                      |
-|-----------------------------------------------------------|----------------------------|
+| Concern                                                   | Skill                                                                                                                                                                                                                  |
+|-----------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Performance/SEO scoring, full Lighthouse, Core Web Vitals | `web-frontend-pagespeed` - but check its own scope note first: it lists Core Web Vitals, LCP and the Lighthouse workflow as NOT YET WRITTEN, so the handoff is a pointer to the right owner, not a promise of coverage |
-| Localization infra (catalogs, locale routing, hreflang)   | `web-frontend-i18n` (PLANNED, not yet shipped)        |
-| Brand/CI alignment to a reference/landing page            | `design-brand-consistency` (PLANNED, not yet shipped) |
-| Self-hosting fonts (GDPR), font subsetting                | `web-frontend-fonts` (PLANNED, not yet shipped)       |
-| GDPR/privacy compliance (consent, IP-leak, third-party)   | `sec-privacy-web-gdpr` (PLANNED, not yet shipped)     |
-| Deep accessibility beyond the axe baseline                | `web-frontend-a11y-audit` (PLANNED, not yet shipped)  |
-| `sitemap.xml` + SEO sitemap practices                     | `web-frontend-sitemap` (PLANNED, not yet shipped)     |
+| Localization infra (catalogs, locale routing, hreflang)   | `web-frontend-i18n` (PLANNED, not yet shipped)                                                                                                                                                                         |
+| Brand/CI alignment to a reference/landing page            | `design-brand-consistency` (PLANNED, not yet shipped)                                                                                                                                                                  |
+| Self-hosting fonts (GDPR), font subsetting                | `web-frontend-fonts` (PLANNED, not yet shipped)                                                                                                                                                                        |
+| GDPR/privacy compliance (consent, IP-leak, third-party)   | `sec-privacy-web-gdpr` (PLANNED, not yet shipped)                                                                                                                                                                      |
+| Deep accessibility beyond the axe baseline                | `web-frontend-a11y-audit` (PLANNED, not yet shipped)                                                                                                                                                                   |
+| `sitemap.xml` + SEO sitemap practices                     | `web-frontend-sitemap` (PLANNED, not yet shipped)                                                                                                                                                                      |
 
 ## Common mistakes
 
