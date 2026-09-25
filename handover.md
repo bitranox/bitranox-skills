@@ -1,4 +1,4 @@
-# Handover - 2026-09-25, rank 10 hook-lib batches shipped (7.22.1-7.22.9); REVIEW THEM FIRST
+# STALE - read 2026-09-25, work continued (ranks 7, 12, 14 dispatched to subagents)
 
 ## In flight
 
