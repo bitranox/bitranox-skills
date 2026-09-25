@@ -406,3 +406,159 @@ def test_ship_succeeds_and_records_when_the_store_is_writable(capsys):
     assert Q.main(["ship", "--index", "1", "/p/f3"]) == 0
     assert S.read_contributions("/p/f3") == []
     assert [r["what"] for r in S.read_shipped("/p/f3")] == ["fine"]
+
+
+# ---- drain closes every entry as SHIPPED, so a drained intent stays gone -----------------------
+
+def test_a_drained_intent_is_not_requeued_and_is_listed_as_shipped(capsys):
+    Q.main(["add", "--what", "gap A", "--target", "skill:x", "/p/dr1"])
+    Q.main(["add", "--what", "gap B", "/p/dr1"])
+    assert Q.main(["drain", "/p/dr1"]) == 0
+    capsys.readouterr()
+    assert Q.main(["add", "--what", "gap A", "--target", "skill:x", "/p/dr1"]) == 0
+    assert "not queued (shipped earlier)" in capsys.readouterr().out
+    assert S.read_contributions("/p/dr1") == []
+    assert Q.main(["shipped", "/p/dr1"]) == 0
+    out = capsys.readouterr().out
+    assert "gap A" in out and "gap B" in out
+
+
+def test_drain_on_an_unwritable_store_fails_and_keeps_the_queue(capsys):
+    Q.main(["add", "--what", "gap A", "/p/dr2"])
+    _block_tombstones("/p/dr2")
+    capsys.readouterr()
+    assert Q.main(["drain", "/p/dr2"]) == 1
+    out = capsys.readouterr()
+    assert "drained" not in out.out and out.err.strip()
+    assert [r["what"] for r in S.read_contributions("/p/dr2")] == ["gap A"]
+
+
+def test_drain_of_an_empty_queue_is_not_an_error(capsys):
+    assert Q.main(["drain", "/p/dr3"]) == 0
+    assert S.read_shipped("/p/dr3") == []
+
+
+# ---- a queue_key: close writes the SAME tombstone file a path close does -----------------------
+
+def test_a_ship_by_queue_key_blocks_a_requeue_by_path(tmp_path, capsys):
+    gone = tmp_path / "gone"
+    Q.main(["add", "--what", "vanishing gap", str(gone)])
+    key = S.QUEUE_KEY_PREFIX + S.proj_key(str(gone))
+    assert S.rejected_file(key) == S.rejected_file(str(gone))
+    assert Q.main(["ship", "--match", "vanishing", key]) == 0
+    capsys.readouterr()
+    gone.mkdir()
+    assert Q.main(["add", "--what", "vanishing gap", str(gone)]) == 0
+    assert "not queued (shipped earlier)" in capsys.readouterr().out
+    assert S.read_contributions(str(gone)) == []
+    assert [r["what"] for r in S.read_shipped(key)] == ["vanishing gap"]
+
+
+# ---- an undecodable queue line never empties the queue -----------------------------------------
+
+def test_a_non_utf8_byte_does_not_hide_or_wipe_the_queue(capsys):
+    Q.main(["add", "--what", "first", "/p/u1"])
+    Q.main(["add", "--what", "second", "/p/u1"])
+    with S.contrib_file("/p/u1").open("ab") as fh:
+        fh.write(b'{"what":"caf\xe9 note"}\n')             # a cp1252 hand edit
+    capsys.readouterr()
+    assert Q.main(["list", "/p/u1"]) == 0
+    out = capsys.readouterr().out
+    assert "first" in out and "second" in out and "caf" in out
+    assert Q.main(["add", "--what", "new", "/p/u1"]) == 0
+    whats = [r["what"] for r in S.read_contributions("/p/u1")]
+    assert whats[:2] == ["first", "second"] and whats[-1] == "new" and len(whats) == 4
+
+
+def test_a_malformed_json_line_is_skipped_and_the_rest_kept(capsys):
+    """Control for the undecodable case: a torn JSON line was already skipped, not fatal."""
+    Q.main(["add", "--what", "first", "/p/u2"])
+    with S.contrib_file("/p/u2").open("ab") as fh:
+        fh.write(b"{not json\n")
+    Q.main(["add", "--what", "second", "/p/u2"])
+    assert [r["what"] for r in S.read_contributions("/p/u2")] == ["first", "second"]
+
+
+def test_a_bom_on_the_queue_file_does_not_drop_the_first_entry():
+    Q.main(["add", "--what", "first", "/p/u3"])
+    f = S.contrib_file("/p/u3")
+    f.write_bytes(b"\xef\xbb\xbf" + f.read_bytes())
+    assert [r["what"] for r in S.read_contributions("/p/u3")] == ["first"]
+
+
+def test_a_line_separator_inside_a_value_does_not_split_the_entry():
+    import json
+    f = S.contrib_file("/p/u4")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"what": "a b"}, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert [r["what"] for r in S.read_contributions("/p/u4")] == ["a b"]
+
+
+def test_an_unreadable_queue_is_never_overwritten_by_add():
+    """read_contributions answers [] for an unreadable file (right for a hook); add must not then
+    rewrite the queue with only the new entry."""
+    f = S.contrib_file("/p/u5")
+    f.mkdir(parents=True)                                     # unreadable AND unwritable as a file
+    assert S.add_contribution("/p/u5", {"what": "new"}) is False
+    with pytest.raises(OSError):
+        S.add_contribution("/p/u5", {"what": "new"}, strict=True)
+    assert f.is_dir()
+
+
+# ---- add: an empty intent and a failed write are not "already queued" --------------------------
+
+@pytest.mark.parametrize("what", ["", "   "])
+def test_add_refuses_an_empty_what(capsys, what):
+    assert Q.main(["add", "--what", what, "/p/e1"]) == 2
+    out = capsys.readouterr()
+    assert "already queued" not in out.out
+    assert "--what" in out.err
+    assert S.read_contributions("/p/e1") == []
+
+
+def test_add_reports_a_store_write_failure_with_exit_1(capsys):
+    Q.main(["add", "--what", "gap A", "/p/e2"])
+    f = S.contrib_file("/p/e2")
+    f.unlink()
+    f.mkdir()                                                 # the queue file cannot be written
+    capsys.readouterr()
+    assert Q.main(["add", "--what", "gap B", "/p/e2"]) == 1
+    out = capsys.readouterr()
+    assert "already queued" not in out.out
+    assert "failed" in out.err
+
+
+def test_add_of_a_real_duplicate_still_says_already_queued(capsys):
+    Q.main(["add", "--what", "gap A", "/p/e3"])
+    capsys.readouterr()
+    assert Q.main(["add", "--what", "gap A", "/p/e3"]) == 0
+    assert "not queued (already queued): gap A" in capsys.readouterr().out
+
+
+def test_add_contribution_best_effort_default_is_unchanged():
+    """Hooks rely on add_contribution never raising: a failure is False, never an exception."""
+    f = S.contrib_file("/p/e4")
+    f.mkdir(parents=True)
+    assert S.add_contribution("/p/e4", {"what": "x"}) is False
+
+
+# ---- queues with nothing open ------------------------------------------------------------------
+
+def test_queues_says_so_when_no_queue_exists(capsys):
+    assert Q.main(["queues"]) == 0
+    assert "no queue on this machine has an open contribution (0 queue file(s) seen)" \
+        in capsys.readouterr().out
+
+
+# ---- a cp1252 console does not crash after the write -------------------------------------------
+
+def test_a_cp1252_console_survives_a_what_it_cannot_encode(home):
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, Q.__file__, "add", "--what", "hook drops → arrow",
+                        "/p/c1"], env=env, capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert "queued" in r.stdout

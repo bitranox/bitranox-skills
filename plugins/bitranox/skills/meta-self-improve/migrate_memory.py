@@ -15,6 +15,10 @@ Usage:
     migrate_memory.py --dry-run [--slug <s> ...]   # report the full touch-list, write nothing
     migrate_memory.py --apply   [--slug <s> ...]   # back up + migrate (idempotent via receipts)
 
+Exit codes: 0 every entry placed (or would be); 1 something was not (a parked store, an entry the
+engine refused, an unreadable topic file, a failed backup or write); 2 usage error (--dry-run with
+--apply, a malformed --redirect or one naming a missing dir, a --slug with no native store).
+
 Pure standard library; ASCII output.
 """
 
@@ -183,8 +187,29 @@ def is_excluded(path):
 
 # ---- reading a native store --------------------------------------------------------------------
 
-def read_native_entries(memdir):
-    """[(name, title, hook, body, source_slug)] for each native topic `*.md` (excluding MEMORY.md)."""
+_TYPES = ("feedback", "project", "reference", "user")
+
+
+def _native_type(meta, raw, stem):
+    """The fact's kind: a declared `type:` or nested `metadata:\\n  type:` first, then the name's
+    prefix, then an inline `metadata:` value naming one. The nested form is what most native topic
+    files carry, and parse_frontmatter drops indented keys, so reading only `meta` stored those
+    facts untyped (as project)."""
+    declared = str(meta.get("type") or "") or ME._body_type(raw)  # noqa: SLF001 - engine's reader
+    if declared in _TYPES:
+        return declared
+    name = str(meta.get("name") or stem)
+    for t in _TYPES:
+        if name.startswith(t) or str(meta.get("metadata") or "").find(t) >= 0:
+            return t
+    return None
+
+
+def read_native_entries(memdir, unreadable=None):
+    """[{name, title, hook, body, source, type}] for each native topic `*.md` (not MEMORY.md).
+
+    A topic file that cannot be read or decoded is skipped, and named in `unreadable` when that is
+    a list: skipped in silence it read as migrated, while its fact was never placed anywhere."""
     out = []
     memdir = Path(memdir)
     try:
@@ -193,21 +218,35 @@ def read_native_entries(memdir):
         topics = []
     for p in topics:
         try:
-            meta, body = R.parse_frontmatter(p.read_text(encoding="utf-8"))
-        except OSError:
+            raw = p.read_text(encoding="utf-8-sig")        # -sig: a BOM hid the frontmatter
+        except (OSError, UnicodeDecodeError) as exc:
+            if unreadable is not None:
+                unreadable.append("%s (%s)" % (p, exc))
             continue
+        meta, body = R.parse_frontmatter(raw)
         title = R.derive_title(meta, body, p.name)
         hook = R.derive_hook(meta, body)
         src = meta.get("name") or p.stem
-        type_ = None
-        for t in ("feedback", "project", "reference", "user"):
-            if str(meta.get("name", p.stem)).startswith(t) or str(meta.get("type", "")) == t \
-               or str((meta.get("metadata") or "")).find(t) >= 0:
-                type_ = t
-                break
         out.append({"name": p.stem, "title": title, "hook": hook, "body": body.strip(),
-                    "source": src, "type": type_})
+                    "source": src, "type": _native_type(meta, raw, p.stem)})
     return out
+
+
+def _placement_slug(anchor, entry):
+    """The slug `entry` is placed under: its native NAME slugified, never its derived title.
+
+    Titles collide - two topic files both opening with "# Notes" derived the same slug, and the
+    second add silently UPDATED the first, losing its body. The native name is unique per store.
+    A slug already holding a different body is suffixed rather than overwritten; one already
+    holding this entry's body is the same fact (a resumed run) and is reused."""
+    slug = ME.slugify(entry["name"], entry["type"])
+    try:
+        stored = ME.us.body_path(anchor, slug).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return slug
+    if entry["body"] and entry["body"] in stored:
+        return slug
+    return ME._free_slug(anchor, slug)  # noqa: SLF001 - the engine's own collision suggestion
 
 
 # ---- receipts (idempotency + resume) -----------------------------------------------------------
@@ -291,10 +330,12 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
     records a receipt. Idempotent (receipt-skipped). Unresolved -> parked; an excluded target
     (`/tmp`, `$HOME`) -> skipped, not migrated. `redirect` forces the target for a renamed/moved slug."""
     memdir = _projects_dir() / slug / "memory"
-    entries = read_native_entries(memdir)
+    unreadable = []
+    entries = read_native_entries(memdir, unreadable=unreadable)
     proj = redirect or resolve_one(slug)
     rep = {"slug": slug, "resolved": proj, "in": len(entries), "placed": 0, "skipped": 0,
-           "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run}
+           "parked": False, "excluded": False, "redirected": bool(redirect), "dry_run": dry_run,
+           "failed": [], "unreadable": unreadable, "error": None}
     if proj and is_excluded(proj):
         rep["excluded"] = True
         return rep
@@ -315,36 +356,55 @@ def migrate_store(slug, dry_run=True, scope_default="", redirect=None):
         rep["skipped"] = len(entries) - rep["placed"]
         return rep
 
-    # apply: back up both the native store and any existing curated store, out of tree
-    key = sig.proj_key(proj)
-    stamp = _backups_dir() / ("%s-%d" % (key, int(time.time())))
+    # apply: back up both the native store and any existing curated store, out of tree. A backup
+    # that fails ABORTS the store: migrating anyway wrote with no way back while reporting success.
     try:
-        stamp.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(memdir, stamp / "native", dirs_exist_ok=True)
-        cur = sig.claude_memory_dir(proj)
-        if cur.exists():
-            shutil.copytree(cur, stamp / "curated", dirs_exist_ok=True)
-    except OSError:
-        pass
+        _backup(proj, memdir)
+    except OSError as exc:
+        rep["error"] = "backup failed, nothing written: %s" % exc
+        return rep
 
     rec = _load_receipt(proj)
     done = set(rec.get("sources", []))
+    rec["slugs"] = sorted(set(rec.get("slugs", []) + [slug]))
+    anchor = ME._anchor(proj)  # noqa: SLF001 - the engine's anchor resolution
     for e in entries:
         if e["source"] in done:
             rep["skipped"] += 1
             continue
-        # allow_over_cap_hook: migration carries pre-pivot text verbatim; a refusal here would strand
-        # a legacy fact in a store that is being retired.
-        ME.add_or_update_entry(proj, title=e["title"], hook=e["hook"], body=e["body"],
-                               type_=e["type"], scope_default=scope_default,
-                               allow_over_cap_hook=True)
+        try:
+            # allow_over_cap_hook: migration carries pre-pivot text verbatim; a refusal here would
+            # strand a legacy fact in a store that is being retired.
+            ME.add_or_update_entry(proj, title=e["title"], hook=e["hook"], body=e["body"],
+                                   type_=e["type"], scope_default=scope_default,
+                                   slug=_placement_slug(anchor, e), allow_over_cap_hook=True)
+        except ValueError as exc:
+            # one entry the engine refuses (an empty body, a slug another level owns) used to
+            # abort the whole run before the receipt, so every re-run died on it again
+            rep["failed"].append("%s: %s" % (e["name"], exc))
+            continue
+        except OSError as exc:
+            rep["error"] = "write failed at %s: %s" % (e["name"], exc)
+            break
         done.add(e["source"])
         rep["placed"] += 1
+        rec["sources"] = sorted(done)
+        _save_receipt(proj, rec)                   # per entry, so a crash resumes exactly
     rec["sources"] = sorted(done)
-    rec["slugs"] = sorted(set(rec.get("slugs", []) + [slug]))
     _save_receipt(proj, rec)
     rep["gitignore"] = ensure_gitignore(proj)   # keep the curated store out of git (R11)
     return rep
+
+
+def _backup(proj, memdir):
+    """Copy the native store and any legacy curated dir out of tree. Raises OSError on failure."""
+    key = sig.proj_key(proj)
+    stamp = _backups_dir() / ("%s-%d" % (key, int(time.time())))
+    stamp.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(memdir, stamp / "native", dirs_exist_ok=True)
+    cur = sig.claude_memory_dir(proj)
+    if cur.exists():
+        shutil.copytree(cur, stamp / "curated", dirs_exist_ok=True)
 
 
 def enumerate_slugs():
@@ -355,31 +415,77 @@ def enumerate_slugs():
 
 
 def _parse_redirects(items):
-    """Parse `--redirect SLUG=TARGET` items into {slug: target_path}. TARGET must be an existing dir."""
+    """Parse `--redirect SLUG=TARGET` items into {slug: target_path}.
+
+    Raises ValueError for an item without `=`, with an empty side, or whose TARGET is not an
+    existing directory. A malformed item used to be dropped in silence (the slug then parked) and
+    a missing target was created by the first write, planting a store in a directory nobody
+    meant to exist."""
     out = {}
     for it in (items or []):
-        if "=" not in it:
-            continue
-        slug, target = it.split("=", 1)
-        out[slug.strip()] = target.strip()
+        slug, sep, target = it.partition("=")
+        slug, target = slug.strip(), target.strip()
+        if not sep or not slug or not target:
+            raise ValueError("--redirect expects <slug>=<target-dir>, got %r" % it)
+        if not Path(target).is_dir():
+            raise ValueError("--redirect target is not an existing directory: %s" % target)
+        out[slug] = target
     return out
 
 
-def main(argv=None):
+def _parser():
     ap = argparse.ArgumentParser(description="Migrate native memory stores into the curated model.")
-    ap.add_argument("--apply", action="store_true", help="write (default is dry-run/report-only)")
-    ap.add_argument("--dry-run", action="store_true", help="report only; write nothing (default)")
+    mode = ap.add_mutually_exclusive_group()   # both at once used to WRITE
+    mode.add_argument("--apply", action="store_true", help="write (default is dry-run/report-only)")
+    mode.add_argument("--dry-run", action="store_true", help="report only; write nothing (default)")
     ap.add_argument("--slug", action="append", default=None,
                     help="limit to specific slug(s); slugs start with '-', so use the =form: --slug=-media-...")
     ap.add_argument("--redirect", action="append", default=None,
                     help="force a renamed/moved slug into a target dir: --redirect=<slug>=<target-path>")
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    return ap
+
+
+def _usage_problems(args):
+    """(redirects, [problem]) - the argument errors that must stop the run before it starts."""
+    problems = []
+    try:
+        redirects = _parse_redirects(args.redirect)
+    except ValueError as exc:
+        redirects = {}
+        problems.append(str(exc))
+    for slug in args.slug or []:
+        if not (_projects_dir() / slug / "memory").is_dir():
+            problems.append("no native store for slug %s (looked in %s)"
+                            % (slug, _projects_dir() / slug / "memory"))
+    return redirects, problems
+
+
+def _report_store_problems(rep):
+    """Print what one store did NOT migrate; True when there was anything."""
+    for why in rep["failed"]:
+        print("  ! NOT placed (%s): %s" % (rep["slug"], why))
+    for why in rep["unreadable"]:
+        print("  ! UNREADABLE topic file (%s): %s" % (rep["slug"], why))
+    if rep["error"]:
+        print("  ! FAILED (%s): %s" % (rep["slug"], rep["error"]))
+    return bool(rep["failed"] or rep["unreadable"] or rep["error"])
+
+
+def main(argv=None):
+    """Exit codes: 0 every entry placed (or would be); 1 something was not - a parked store, an
+    entry the engine refused, an unreadable topic file, a failed backup or write; 2 usage error."""
+    args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     dry = not args.apply
-    redirects = _parse_redirects(args.redirect)
+    redirects, problems = _usage_problems(args)
+    if problems:
+        for problem in problems:
+            print("migrate_memory: %s" % problem, file=sys.stderr)
+        return 2
 
     slugs = args.slug if args.slug else enumerate_slugs()
-    total_in = total_placed = total_parked = total_excluded = 0
+    total_in = total_placed = total_parked = total_excluded = total_failed = 0
     parked = []
+    incomplete = False
     print("%s %d store(s)%s" % ("DRY-RUN over" if dry else "MIGRATING", len(slugs),
                                 "" if dry else " (writing)"))
     for slug in slugs:
@@ -399,13 +505,28 @@ def main(argv=None):
             print("  %s%s -> %s : in=%d %s=%d skip=%d"
                   % ("[redirect] " if rep["redirected"] else "", slug, rep["resolved"], rep["in"],
                      "would-place" if dry else "placed", rep["placed"], rep["skipped"]))
-    print("TOTAL in=%d %s=%d parked=%d excluded=%d (in == placed+skipped+parked+excluded)"
-          % (total_in, "would-place" if dry else "placed", total_placed, total_parked, total_excluded))
+        incomplete |= _report_store_problems(rep)
+        total_failed += len(rep["failed"])
+    print("TOTAL in=%d %s=%d parked=%d excluded=%d failed=%d "
+          "(in == placed+skipped+parked+excluded+failed)"
+          % (total_in, "would-place" if dry else "placed", total_placed, total_parked,
+             total_excluded, total_failed))
     if parked:
         print("PARKED slugs (redirect with --redirect=<slug>=<path>, or resolve manually): %s"
               % ", ".join(parked))
-    return 0
+    return 1 if (parked or incomplete) else 0
+
+
+def _reconfigure_stdout():
+    """A cp1252 console (bare `python3` on Windows) crashed on a slug or path it could not
+    encode. Escape instead; guarded, since a replaced stream may not support reconfigure."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 if __name__ == "__main__":
+    _reconfigure_stdout()
     sys.exit(main())

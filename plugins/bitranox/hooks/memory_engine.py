@@ -211,13 +211,24 @@ def _warn_dropped_invalid_pointers(local, text):
               % (local, raw), file=sys.stderr)
 
 
+_FRONTMATTER_BLOCK_RX = re.compile(r"---[ \t]*\r?\n(.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.S)
+
+
+def _has_frontmatter(body):
+    """True when `body` opens with a closed frontmatter block that carries a `name:` key."""
+    m = _FRONTMATTER_BLOCK_RX.match((body or "").lstrip())
+    return bool(m) and re.search(r"(?m)^name:", m.group(1) or "") is not None
+
+
 def _framed_body(slug, hook, type_, body):
     """Wrap a bare body in the native memory-entry frame (frontmatter; the capturer adds **Why:**
     and **How to apply:** in the prose). Probe-verified: bodies matching the genuine entry shape
     get APPLIED mid-reasoning far more reliably than bare prose (the model discounts bodies that
     do not look like real memory entries). A body that already starts with frontmatter passes
-    through unchanged."""
-    if (body or "").lstrip().startswith("---"):
+    through unchanged - REAL frontmatter only (a closing `---` line and a `name:` key): a body
+    that merely opens with a markdown horizontal rule used to pass through as-is, and was stored
+    with no name, description or type."""
+    if _has_frontmatter(body):
         return body
     if not type_:
         head = (slug or "").split("-", 1)[0]

@@ -18,19 +18,27 @@ adjudication against the source transcript; `locate_prompt(row)` finds the promp
 was asked about there, from the transcript path and offset the hook recorded.
 
 A disagreement is not a Jev error: either side can be the wrong one, and deciding which is the
-point of adjudication. Standard library only; it reads a local file and calls no API.
+point of adjudication. `report` and `size` read local files only; `replay` and `controls` CALL the
+classifier API (paid, and they need a key) to ask the skill-router arms over recorded prompts.
+Standard library only.
 
 Usage:
-  classifier_eval.py report [--log PATH] [--threshold 0.5] [--top 2]
-                            [--exclude-session PREFIX ...] [--disagreements OUT.jsonl] [--json]
+  classifier_eval.py report   [--log PATH] [--threshold 0.5] [--top 2]
+                              [--exclude-session PREFIX ...] [--disagreements OUT.jsonl] [--json]
+  classifier_eval.py replay   [--arm ARM] [--roster shipped|installed] [--prompts LOG]
+                              [--description SKILL=FILE ...] [--limit N] [--out LOG] [--json]
+  classifier_eval.py size     [--limit N] [--json]          what a replay would cost, calls nothing
+  classifier_eval.py controls [--arm ARM] [--json]          ask only the planted controls
 
-Exit codes: 0 report produced, 1 the log holds no usable rows, 2 usage or IO error.
+Exit codes: 0 done; 1 nothing to report (no usable rows, no prompts); 2 usage or IO error, or no
+API key; 3 a planted control answered the wrong way, so no number from the run may be read.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
 import random
 import re
 import sys
@@ -93,10 +101,18 @@ def load_rows(path, exclude_sessions=()):
     oldest rows first. Rows whose session id starts with an excluded prefix are dropped. Raises
     OSError when a log cannot be read or the path does not exist."""
     path = Path(path)
-    files = cl.shadow_log_files(path) if path.is_dir() else [path]
+    if path.is_dir():
+        # shadow_log_files lists an unreadable dir as empty, which read as "no usable rows"
+        # (exit 1) - a permission fault reported as a quiet log. List it here so it raises.
+        os.listdir(path)
+        files = cl.shadow_log_files(path)
+    else:
+        files = [path]
     rows, bad = [], 0
     for f in files:
-        with open(f, encoding="utf-8") as fh:
+        # errors="replace": one byte a torn multibyte write left behind crashed the whole report;
+        # it now makes its line malformed and counted. utf-8-sig keeps a BOM off the first row.
+        with open(f, encoding="utf-8-sig", errors="replace") as fh:
             for line in fh:
                 row = _parse_row(line)
                 if row is None:
@@ -709,7 +725,9 @@ def prompts_from_log(path):
     makes this an A/B at all - the arm is the only thing that may differ between runs.
     """
     picked = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    # split("\n"), not splitlines(): the log is written with ensure_ascii=False, so a prompt may
+    # carry a raw U+2028, and splitlines() cut that row in two and failed the whole replay.
+    for line in Path(path).read_text(encoding="utf-8-sig").split("\n"):
         if not line.strip():
             continue
         row = json.loads(line)
@@ -1000,11 +1018,16 @@ def _replay_report(rows, threshold):
     return out
 
 
-def _run_replay(args):
+def _run_replay(args, clf=None, skills=None):
+    """(exit code, data, error) for replay / size / controls. Raises ControlFailed (exit 3).
+
+    `clf` and `skills` are the two external edges - the paid classifier and the installed skill
+    set - injectable so a test can drive this whole function with a fake transport. None means
+    the real ones."""
     import corpus_prompts  # noqa: PLC0415 - only the CLI walks a corpus
 
     router = _load_hook("skill-router")
-    skills = cl.load_skill_descriptions()
+    skills = cl.load_skill_descriptions() if skills is None else skills
     if not skills:
         return 2, None, "no skills found - is this running from inside the plugin?"
     bodies = load_skill_bodies()
@@ -1012,8 +1035,9 @@ def _run_replay(args):
     if args.command == "size":
         return 0, size_replay(skills, args.limit * 2, bodies=bodies,
                               router_text=router_text), None
-    clf = cl.get_classifier({"classifier_backend": "jev", "classifier_skill_router": "shadow"},
-                            "skill_router", deadline=args.deadline)
+    if clf is None:
+        clf = cl.get_classifier({"classifier_backend": "jev", "classifier_skill_router": "shadow"},
+                                "skill_router", deadline=args.deadline)
     if getattr(clf, "key", None) is None:
         return 2, None, "no api key: %s" % getattr(clf, "last_reason", "unknown")
     if args.command == "controls":
@@ -1038,8 +1062,12 @@ def _run_replay(args):
         if not picked:
             return 1, None, "no typed prompts under %s" % args.root
     ask = Asker(clf)
-    check_controls("choice_short_rerank", ask, skills, threshold=args.threshold,
-                   shortlist=args.shortlist, bodies=bodies)
+    # Every arm this run replays, with the text it will rank on. A fixed arm here vetted
+    # choice_short_rerank whatever was replayed, without router_text: a broken arm then passed the
+    # gate built to stop it, and a failure of the fixed arm aborted runs of healthy ones.
+    for arm in selected_arms(getattr(args, "arm", None)):
+        check_controls(arm, ask, skills, threshold=args.threshold, shortlist=args.shortlist,
+                       bodies=bodies, router_text=router_text)
     triggers = router.load_triggers()
     rows = []
     # Written as they come, not at the end: a run costs real money and several minutes, and a
@@ -1070,6 +1098,18 @@ def _run_replay(args):
     return 0, report, None
 
 
+def positive_int(value):
+    """argparse type for a count: an int of at least 1. `--top -1` sliced "all but the lowest"
+    and `--top 0` suggested nothing, both exiting 0 with numbers that meant something else."""
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected an integer, got %r" % value) from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1, got %d" % number)
+    return number
+
+
 def _parser():
     p = argparse.ArgumentParser(prog="classifier_eval.py",
                                 description="Compare regex and Jev verdicts from the shadow log.")
@@ -1095,11 +1135,11 @@ def _parser():
                            help="replay the exact prompts of an earlier run's JSONL log instead "
                                 "of sampling the corpus, so the run stays comparable to an "
                                 "adjudication that labelled those prompts")
-        q.add_argument("--limit", type=int, default=25,
+        q.add_argument("--limit", type=positive_int, default=25,
                        help="prompts PER CLASS, continuation and substantial (default 25)")
         q.add_argument("--threshold", type=float, default=SITE_THRESHOLDS["skill_router"])
-        q.add_argument("--top", type=int, default=DEFAULT_TOP)
-        q.add_argument("--shortlist", type=int, default=DEFAULT_SHORTLIST)
+        q.add_argument("--top", type=positive_int, default=DEFAULT_TOP)
+        q.add_argument("--shortlist", type=positive_int, default=DEFAULT_SHORTLIST)
         q.add_argument("--deadline", type=float, default=cl.SHADOW_DEADLINE)
         q.add_argument("--seed", type=int, default=0)
         q.add_argument("--out", type=Path, default=DEFAULT_REPLAY_LOG)
@@ -1111,7 +1151,7 @@ def _parser():
     r.add_argument("--threshold", type=float, default=None,
                    help="judge every site at this value; omitted, each uses its own default "
                         "(%s)" % ", ".join("%s %s" % kv for kv in sorted(SITE_THRESHOLDS.items())))
-    r.add_argument("--top", type=int, default=DEFAULT_TOP,
+    r.add_argument("--top", type=positive_int, default=DEFAULT_TOP,
                    help="how many skills the router would suggest (default 2)")
     r.add_argument("--exclude-session", action="append", default=None, metavar="PREFIX",
                    help="drop rows whose session id starts with PREFIX (default: probe-)")
@@ -1168,11 +1208,12 @@ def _emit(args, ok, data=None, error=None, skipped=None):
         print("classifier_eval: %s" % error, file=sys.stderr)
 
 
-def main(argv=None):
+def main(argv=None, *, clf=None, skills=None):
+    """`clf` and `skills` are forwarded to `_run_replay` (see there); None means the real ones."""
     args = _parser().parse_args(argv)
     if args.command in ("replay", "size", "controls"):
         try:
-            code, data, error = _run_replay(args)
+            code, data, error = _run_replay(args, clf=clf, skills=skills)
         except ControlFailed as exc:
             _emit(args, False, error=str(exc))
             return 3
@@ -1205,5 +1246,17 @@ def main(argv=None):
     return 0
 
 
+def _reconfigure_stdout():
+    """The envelope is printed with ensure_ascii=False, so a cp1252 console (bare `python3` on
+    Windows) crashed on any path or prompt it could not encode. Escape instead; guarded, since a
+    replaced stream may not support reconfigure."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == "__main__":
+    _reconfigure_stdout()
     sys.exit(main())

@@ -716,19 +716,20 @@ def test_the_sample_is_stratified_over_short_and_long_prompts():
 
 
 def test_a_failed_control_exits_3_so_a_gate_reading_the_code_cannot_read_the_numbers(
-        monkeypatch, capsys):
+        tmp_path, capsys):
     # The exception existing is not the guarantee; the EXIT CODE is, because that is what a
     # caller keys on. Exit 3 means the instrument is wrong, which is not the same as exit 1
     # (nothing to report) or exit 2 (bad usage), and collapsing it into either would let a run
-    # that measured nothing read as a run that found nothing.
-    def boom(_args):
-        raise ce.ControlFailed("planted negative named a skill")
+    # that measured nothing read as a run that found nothing. Driven through the real replay
+    # with a transport that answers every planted control the same way.
+    class _PicksEverything(FakeClassifier):
+        def ask(self, state, questions):
+            return super().ask({"user_prompt": "a real task"}, questions)
 
-    monkeypatch.setattr(ce, "_run_replay", boom)
-    rc = ce.main(["replay", "--json"])
+    rc = _replay(tmp_path, "--arm", "choice_full", clf=_PicksEverything())
     env = json.loads(capsys.readouterr().out)
     assert rc == 3
-    assert env["ok"] is False and "planted negative" in env["error"]
+    assert env["ok"] is False and "no number from this run may be read" in env["error"]
 
 
 def test_an_arm_records_the_scores_it_judged_not_only_its_verdict():
@@ -961,3 +962,203 @@ def test_the_replay_command_accepts_an_arm_and_a_roster():
     args = ce._parser().parse_args(["replay", "--arm", "choice_full", "--roster", "installed"])
     assert args.arm == "choice_full" and args.roster == "installed"
     assert ce._parser().parse_args(["replay"]).roster == "shipped"
+
+
+# ---- report: an undecodable byte or an unreadable dir is an IO fact, not "no rows" ------------
+
+def test_a_non_utf8_byte_is_counted_as_one_malformed_line(tmp_path, capsys):
+    log = tmp_path / "shadow.jsonl"
+    log.write_bytes(json.dumps(stop_row(False, {"correction": 0.1})).encode("utf-8")
+                    + b"\n\xff\xfe broken\n")
+    assert ce.main(["report", "--log", str(log), "--json"]) == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and env["skipped"]["malformed_lines"] == 1
+
+
+def test_a_bom_does_not_cost_the_first_row(tmp_path):
+    log = tmp_path / "shadow.jsonl"
+    log.write_bytes(b"\xef\xbb\xbf" + json.dumps(stop_row(False, {"correction": 0.1})).encode())
+    rows, bad = ce.load_rows(log)
+    assert len(rows) == 1 and bad == 0
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0,
+                    reason="needs a non-root POSIX user for chmod 000 to deny a read")
+def test_an_unreadable_audit_dir_is_an_io_error_not_an_empty_log(tmp_path, capsys):
+    audit = tmp_path / "audit"
+    audit.mkdir()
+    (audit / "classifier-shadow-2026-09-25.jsonl").write_text(
+        json.dumps(stop_row(False, {"correction": 0.1})) + "\n", encoding="utf-8")
+    audit.chmod(0)
+    try:
+        rc = ce.main(["report", "--log", str(audit), "--json"])
+    finally:
+        audit.chmod(0o755)
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and "cannot read" in env["error"]
+
+
+def test_a_disagreements_file_that_cannot_be_written_exits_2(tmp_path, capsys):
+    log = tmp_path / "shadow.jsonl"
+    log.write_text(json.dumps(stop_row(True, {"correction": 0.1})) + "\n", encoding="utf-8")
+    out = tmp_path / "is-a-dir"
+    out.mkdir()
+    assert ce.main(["report", "--log", str(log), "--json", "--disagreements", str(out)]) == 2
+    assert "cannot write" in json.loads(capsys.readouterr().out)["error"]
+
+
+# ---- counts must be at least 1 -----------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [["report", "--top", "-1"], ["report", "--top", "0"],
+                                  ["replay", "--top", "-1"], ["replay", "--limit", "0"],
+                                  ["size", "--limit", "-1"], ["controls", "--shortlist", "0"]])
+def test_a_count_below_one_is_refused(argv, capsys):
+    with pytest.raises(SystemExit) as exc:
+        ce._parser().parse_args(argv)
+    assert exc.value.code == 2
+    assert "must be at least 1" in capsys.readouterr().err
+
+
+def test_a_positive_count_is_accepted():
+    assert ce._parser().parse_args(["report", "--top", "2"]).top == 2
+    assert ce._parser().parse_args(["replay", "--limit", "1", "--shortlist", "3"]).limit == 1
+
+
+# ---- the module docstring names every command and exit code the CLI has ----------------------
+
+def test_the_docstring_documents_every_command_and_exit_3():
+    doc = ce.__doc__
+    for command in ("report", "replay", "size", "controls"):
+        assert "classifier_eval.py %s" % command in doc, command
+    assert "3 " in doc.split("Exit codes:")[1]
+    assert "calls no API" not in doc
+
+
+# ---- replay end to end, with a fake transport at the classifier seam --------------------------
+
+class FakeClassifier:
+    """The classifier seam `_run_replay` asks through: `.key`, `.ask(state, questions)`,
+    `.last_reason`. Answers the gate by the prompt text and always picks the table skill, so
+    single-request arms pass the planted controls and the two-request rerank arm, which needs a
+    close-pass score this fake never gives, fails them."""
+
+    def __init__(self, key="k", reasons=()):
+        self.key = key
+        self.last_reason = None
+        self.reasons = list(reasons)
+        self.asked = []
+
+    def ask(self, state, questions):
+        self.asked.append((state, questions))
+        if self.reasons:
+            self.last_reason = self.reasons.pop(0)
+            return None
+        gate = 0.1 if "go ahead" in state.get("user_prompt", "") else 0.9
+        answers = {ce.cl.NEW_TASK_ID: ce.cl.Answer("noul", gate),
+                   ce.cl.PICK_ID: ce.cl.Answer("choice", "docs-md-table-formatting")}
+        return ce.cl.Result(answers=answers, latency_ms=5, input_tokens=10, model="fake")
+
+
+def _pinned_log(tmp_path):
+    log = tmp_path / "earlier.jsonl"
+    log.write_text(_log_row("a", "reformat the markdown table", 3, project="p") + "\n",
+                   encoding="utf-8")
+    return log
+
+
+def _replay(tmp_path, *extra, clf=None, skills=None):
+    argv = ["replay", "--prompts", str(_pinned_log(tmp_path)), "--out",
+            str(tmp_path / "out.jsonl"), "--json", *extra]
+    return ce.main(argv, clf=clf or FakeClassifier(), skills=SKILLS if skills is None else skills)
+
+
+def test_replay_vets_the_arm_it_replays_not_a_fixed_one(tmp_path, capsys):
+    assert _replay(tmp_path, "--arm", "choice_full") == 0
+    env = json.loads(capsys.readouterr().out)
+    assert env["ok"] is True and list(env["data"]["arms"]) == ["choice_full"]
+    assert env["data"]["arms"]["choice_full"]["prompts_with_a_pick"] == 1
+
+
+def test_replay_of_an_arm_whose_controls_fail_exits_3(tmp_path, capsys):
+    """The control for the test above: the rerank arm really does fail these controls."""
+    assert _replay(tmp_path, "--arm", "choice_short_rerank") == 3
+    assert "choice_short_rerank" in json.loads(capsys.readouterr().out)["error"]
+    assert not (tmp_path / "out.jsonl").exists(), "no row may be bought after a failed control"
+
+
+def test_replay_passes_the_router_text_to_the_controls(tmp_path, capsys):
+    clf = FakeClassifier()
+    assert _replay(tmp_path, "--arm", "choice_router_text", clf=clf) == 0
+    control_request = clf.asked[0][1]
+    router = ce.cl.load_router_criteria(SKILLS)
+    assert router["compuse-bash"] != SKILLS["compuse-bash"], "fixture must carry router text"
+    offered = control_request[1].criteria
+    assert all(offered[name] == router[name] for name in SKILLS)
+
+
+def test_replay_without_an_api_key_exits_2(tmp_path, capsys):
+    assert _replay(tmp_path, "--arm", "choice_full", clf=FakeClassifier(key=None)) == 2
+    assert "no api key" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_replay_without_skills_exits_2(tmp_path, capsys):
+    assert _replay(tmp_path, "--arm", "choice_full", skills={}) == 2
+    assert "no skills" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_replay_of_an_empty_prompt_log_exits_1(tmp_path, capsys):
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    rc = ce.main(["replay", "--prompts", str(empty), "--out", str(tmp_path / "o.jsonl"), "--json"],
+                 clf=FakeClassifier(), skills=SKILLS)
+    assert rc == 1
+    assert "no prompts" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_a_pinned_prompt_carrying_a_line_separator_is_read_whole(tmp_path):
+    log = tmp_path / "run.jsonl"
+    row = {"uuid": "a", "state": {"user_prompt": "first second"}, "arms": {}}
+    log.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert [p["prompt"] for p in ce.prompts_from_log(log)] == ["first second"]
+
+
+# ---- Asker: a rate limit is retried, any other failure is not ----------------------------------
+
+def test_the_asker_retries_a_rate_limit_and_counts_every_attempt():
+    slept = []
+    clf = FakeClassifier(reasons=["http 429", "http 529"])
+    ask = ce.Asker(clf, sleep=slept.append)
+    answers = ask({"user_prompt": "p"}, [])
+    assert answers[ce.cl.NEW_TASK_ID]["value"] == 0.9
+    assert ask.calls == 3 and slept == [2, 4]
+    assert ask.reasons == {"http 429": 1, "http 529": 1}
+    assert ask.tokens == 10
+
+
+def test_the_asker_does_not_retry_a_non_rate_limit_failure():
+    slept = []
+    ask = ce.Asker(FakeClassifier(reasons=["http 401"]), sleep=slept.append)
+    assert ask({"user_prompt": "p"}, []) is None
+    assert ask.calls == 1 and slept == []
+
+
+def test_the_asker_gives_up_after_its_attempts():
+    ask = ce.Asker(FakeClassifier(reasons=["http 429"] * 5), attempts=3, sleep=lambda _s: None)
+    assert ask({"user_prompt": "p"}, []) is None
+    assert ask.calls == 3
+
+
+# ---- a cp1252 console does not crash on a path or text it cannot encode ------------------------
+
+def test_a_cp1252_console_survives_a_json_envelope_it_cannot_encode(tmp_path):
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(HOME=str(tmp_path), USERPROFILE=str(tmp_path), PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, ce.__file__, "report", "--json", "--log",
+                        str(tmp_path / "日本.jsonl")],
+                       env=env, capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 2, r.stderr
+    assert "UnicodeEncodeError" not in r.stderr
+    assert json.loads(r.stdout)["ok"] is False

@@ -7,9 +7,16 @@ left below. Both questions are about the same map; this tool answers them before
 import io
 import json
 
+import os
+import sys
+from pathlib import Path
+
 import pytest
 
 import ref_map
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
+import uuid_store as US  # noqa: E402
 
 
 def _tree(root, levels):
@@ -19,10 +26,10 @@ def _tree(root, levels):
     for rel, entries in levels.items():
         d = root / rel if rel else root
         d.mkdir(parents=True, exist_ok=True)
-        lines = ["<!-- BITRANOX-MEMORY-INDEX:BEGIN managed -->", "", "## Memory index"]
+        lines = [US.INDEX_BEGIN, "", "## Memory index"]
         for slug in entries:
             lines.append("- [%s](mem:%s) - When something, do something." % (slug, slug))
-        lines.append("<!-- BITRANOX-MEMORY-INDEX:END -->")
+        lines.append(US.INDEX_END)
         (d / "CLAUDE.local.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         for slug, body in entries.items():
             (facts / ("%s.md" % slug)).write_text(body, encoding="utf-8")
@@ -118,6 +125,88 @@ def test_warnings_go_to_stderr_so_json_stays_parseable(tmp_path):
     assert code == 2
     json.loads(out)
     assert err.strip()
+
+
+def _plain_tree(tmp_path):
+    return _tree(tmp_path / "t", {"": {"top-general": "A general rule.\n"},
+                                  "p": {"leaf": "No refs.\n"}})
+
+
+@pytest.mark.parametrize("ref", ["[[top-general|the general rule]]", "[[top general]]",
+                                 "[[reference:top-general]]", "[[Top_General]]"])
+def test_every_ref_spelling_the_engine_resolves_resolves_here_too(tmp_path, ref):
+    """ref_map and the engine must agree on what a ref names: the engine strips a `|label` and
+    folds whitespace, and ref_map reported both as DANGLING with no inbound edge."""
+    root = _tree(tmp_path / "t", {"": {"top-general": "A general rule.\n"},
+                                  "p": {"leaf": "Cites %s here.\n" % ref}})
+    code, out, _ = _run(["--root", str(root), "leaf", "top-general", "--json"])
+    entries = {e["slug"]: e for e in json.loads(out)["data"]["entries"]}
+    assert code == 0, out
+    assert entries["leaf"]["outbound"] == [{"slug": "top-general", "level": str(root)}]
+    assert [r["slug"] for r in entries["top-general"]["inbound"]] == ["leaf"]
+
+
+def test_a_ref_carried_only_by_the_pointer_hook_is_an_inbound_edge(tmp_path):
+    """The engine's move guard reads the hook AND the body; a hook-only ref (the body's copy
+    edited away) was invisible here, so the map said 'safe to move' where move refuses."""
+    root = _plain_tree(tmp_path)
+    level = root / "p" / "CLAUDE.local.md"
+    text = level.read_text(encoding="utf-8")
+    level.write_text(text.replace("- [leaf](mem:leaf) - When something, do something.",
+                                  "- [leaf](mem:leaf) - When something, see [[top-general]]."),
+                     encoding="utf-8")
+    code, out, _ = _run(["--root", str(root), "top-general", "--json"])
+    entry = json.loads(out)["data"]["entries"][0]
+    assert code == 0
+    assert [r["slug"] for r in entry["inbound"]] == ["leaf"]
+
+
+def test_a_level_copied_under_a_vendor_dir_does_not_override_the_real_one(tmp_path):
+    root = _plain_tree(tmp_path)
+    vendored = root / "venv" / "lib"
+    vendored.mkdir(parents=True)
+    (vendored / "CLAUDE.local.md").write_text(
+        (root / "p" / "CLAUDE.local.md").read_text(encoding="utf-8"), encoding="utf-8")
+    code, out, _ = _run(["--root", str(root), "leaf", "--json"])
+    assert code == 0
+    assert json.loads(out)["data"]["entries"][0]["level"] == str(root / "p")
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="needs a non-root POSIX user for chmod 000 to deny a read")
+def test_an_unreadable_body_is_an_error_not_a_missing_edge(tmp_path):
+    root = _tree(tmp_path / "t", {"": {"top-general": "A general rule.\n"},
+                                  "p": {"leaf": "Cites [[top-general]].\n"}})
+    body = root / ".claude-memory" / "facts" / "leaf.md"
+    body.chmod(0)
+    try:
+        code, out, err = _run(["--root", str(root), "top-general", "--json"])
+    finally:
+        body.chmod(0o644)
+    assert code == 2
+    assert json.loads(out)["ok"] is False
+    assert "leaf.md" in err
+
+
+def test_a_plain_dir_root_without_a_store_exits_2_with_a_json_envelope(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    code, out, err = _run(["--root", str(plain), "a", "--json"])
+    assert code == 2
+    payload = json.loads(out)
+    assert payload["ok"] is False and ".claude-memory/facts" in payload["error"]
+    assert "anchor" in err
+
+
+def test_a_cp1252_console_survives_a_path_it_cannot_encode(tmp_path):
+    import subprocess
+    root = _tree(tmp_path / "日本", {"": {"a": "No refs.\n"}})
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env["PYTHONIOENCODING"] = "cp1252"
+    r = subprocess.run([sys.executable, ref_map.__file__, "--root", str(root), "a"], env=env,
+                       capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert "UnicodeEncodeError" not in r.stderr
 
 
 def test_quoted_syntax_in_a_code_span_is_not_an_outbound_ref(tmp_path):

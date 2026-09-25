@@ -551,7 +551,14 @@ def contrib_file(proj):
     key is one-way (sha1 of the path), so a queue whose project directory was deleted or renamed is
     otherwise unreachable by every verb - it cannot be listed, shipped or dropped, and the operator
     cannot even see that it exists. `contrib_queue.py queues` prints these keys. The prefix is
-    queue-scoped by NAME because no other per-project state file honors it."""
+    queue-scoped by NAME because only the queue and its tombstones (`rejected_file`) honor it."""
+    return _audit_dir() / (_queue_file_key(proj) + ".contrib.jsonl")
+
+
+def _queue_file_key(proj):
+    """The file key of `proj`'s queue AND its tombstones: a `queue_key:` pseudo-path names it
+    directly, anything else is hashed. One resolver for both files, because a tombstone written
+    under a different key than its queue does not block the re-queue it exists to block."""
     if isinstance(proj, str) and proj.startswith(QUEUE_KEY_PREFIX):
         key = proj[len(QUEUE_KEY_PREFIX):]
         # REFUSED, not flattened, unlike a session id: this key is `proj_key` output and nothing
@@ -561,42 +568,65 @@ def contrib_file(proj):
         if not _QUEUE_KEY_RE.fullmatch(key):
             raise ValueError(
                 "not a queue key: %r - expected the 16 hex chars `contrib_queue.py queues` prints" % key)
-        return _audit_dir() / (key + ".contrib.jsonl")
-    return _audit_dir() / (proj_key(proj) + ".contrib.jsonl")
+        return key
+    return proj_key(proj)
+
+
+def _read_jsonl_records(path):
+    """The dict records of a JSONL file that carry a `what`, in order. Raises OSError (including
+    FileNotFoundError) when the file cannot be read; malformed lines are skipped.
+
+    Decoded leniently: one byte a hand edit left in another encoding used to fail the WHOLE read,
+    so the queue read as empty and the next add rewrote it with only the new entry. utf-8-sig
+    drops a BOM that would otherwise make the first line unparseable, and the split is on "\\n"
+    only - splitlines() also breaks on U+2028 and \\f, which can sit inside a JSON string."""
+    out = []
+    for ln in path.read_text(encoding="utf-8-sig", errors="replace").split("\n"):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("what"):
+            out.append(rec)
+    return out
+
+
+def _load_queue(f):
+    """The queue at `f` for a read-modify-write: [] only when the file does not exist. Any other
+    read failure raises, because answering [] there makes the writer replace the whole queue."""
+    try:
+        return _read_jsonl_records(f)
+    except FileNotFoundError:
+        return []
 
 
 def read_contributions(proj):
     """The pending contributions for `proj`, oldest first. [] when none. Never consumes."""
-    out = []
     try:
-        for ln in contrib_file(proj).read_text(encoding="utf-8").splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                rec = json.loads(ln)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and rec.get("what"):
-                out.append(rec)
+        return _read_jsonl_records(contrib_file(proj))
     except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
         return []
-    return out
 
 
-def add_contribution(proj, record, max_items=100):
+def add_contribution(proj, record, max_items=100, strict=False):
     """Queue one pending contribution: {'what' (required), 'target', 'why', 'source'}.
 
     Deduped on (what, target) - re-noticing the same gap is not a second TODO. Stamped with `ts`.
     The read-modify-write runs under `memory_lock` on the queue file: unguarded, a concurrent
-    close (drain) or add racing the same file loses whichever write lands second. Best-effort:
-    never raises."""
+    close (drain) or add racing the same file loses whichever write lands second.
+
+    Returns True when queued, False when not (a duplicate, a closed intent, no `what`). Best-effort
+    by default: a store error is also False and never raises. `strict=True` raises that OSError
+    instead, so an operator CLI does not report a failed write as "already queued"."""
     if not isinstance(record, dict) or not record.get("what"):
         return False
     try:
         f = contrib_file(proj)
         with memory_lock(f):
-            cur = read_contributions(proj)
+            cur = _load_queue(f)
             key = (str(record.get("what")), str(record.get("target") or ""))
             if any((str(r.get("what")), str(r.get("target") or "")) == key for r in cur):
                 return False
@@ -626,20 +656,40 @@ def add_contribution(proj, record, max_items=100):
             f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n",
                          encoding="utf-8")
         return True
-    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
-        return False                  # OSError also covers memory_lock's TimeoutError
+    except OSError:                   # also covers memory_lock's TimeoutError
+        if strict:
+            raise
+        return False
+    except ValueError:                # contrib_file refusing a malformed queue key
+        return False
 
 
-def drain_contributions(proj):
-    """Clear the queue - ONLY after the contributions actually shipped. Locked like
-    `add_contribution`, so a drain can never remove a record an in-flight add has not written
-    yet, nor race its read-modify-write. Best-effort."""
+def drain_contributions(proj, note="", strict=False, max_items=200):
+    """Close the WHOLE queue as SHIPPED - ONLY after the contributions actually shipped. Returns
+    the drained records ([] when the queue was empty or absent).
+
+    Every entry is tombstoned exactly like `ship_contribution` does for one: a drain that only
+    deleted the file let the next dream re-queue each drained intent as a new TODO, and `shipped`
+    never listed them. The tombstones are written BEFORE the queue is removed, so a failure between
+    the two leaves entries queued-and-closed (a retry finishes it), never gone with no record.
+
+    Locked like `add_contribution`, so a drain can never remove a record an in-flight add has not
+    written yet, nor race its read-modify-write. Best-effort by default; `strict=True` raises the
+    OSError of a failed close so an operator CLI does not report a drain that did not happen."""
     try:
         f = contrib_file(proj)
         with memory_lock(f):
-            f.unlink()
-    except (OSError, ValueError):     # ValueError: contrib_file refusing a malformed queue key
-        pass                          # OSError also covers a missing file and the lock timeout
+            cur = _load_queue(f)
+            if cur:
+                _append_tombstones(proj, [_tombstone(r, SHIPPED, note) for r in cur], max_items)
+            f.unlink(missing_ok=True)
+        return cur
+    except OSError:                   # also covers the lock timeout
+        if strict:
+            raise
+        return []
+    except ValueError:                # contrib_file refusing a malformed queue key
+        return []
 
 
 # ---- closed: an intent leaves the queue AND stays gone, by one of two OUTCOMES -----------------
@@ -657,8 +707,9 @@ REJECTED = "rejected"
 
 
 def rejected_file(proj):
-    """Tombstones for contributions that have left the queue, either outcome (never re-queued)."""
-    return _audit_dir() / (proj_key(proj) + ".contrib-rejected.jsonl")
+    """Tombstones for contributions that have left the queue, either outcome (never re-queued).
+    Keyed exactly like `contrib_file`, `queue_key:` included."""
+    return _audit_dir() / (_queue_file_key(proj) + ".contrib-rejected.jsonl")
 
 
 def read_closed(proj):
@@ -667,22 +718,33 @@ def read_closed(proj):
     This is the set the re-queue block must consult: a delivered intent and a disproven one are
     equally not-a-TODO. Records written before the outcome field existed were all drops, so a
     missing `outcome` reads as rejected."""
-    out = []
     try:
-        for ln in rejected_file(proj).read_text(encoding="utf-8").splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                rec = json.loads(ln)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and rec.get("what"):
-                rec.setdefault("outcome", REJECTED)
-                out.append(rec)
-    except OSError:
+        out = _read_jsonl_records(rejected_file(proj))
+    except (OSError, ValueError):     # ValueError: a malformed queue key names no file
         return []
+    for rec in out:
+        rec.setdefault("outcome", REJECTED)
     return out
+
+
+def _tombstone(rec, outcome, note=""):
+    """The closed-record form of queue entry `rec` under `outcome`."""
+    tomb = dict(rec)
+    tomb["outcome"] = outcome
+    tomb["note" if outcome == SHIPPED else "reason"] = str(note or "")
+    tomb["closed_ts"] = time.time()
+    return tomb
+
+
+def _append_tombstones(proj, tombs, max_items=200):
+    """Append `tombs` to `proj`'s closed set (capped). Raises OSError when it cannot be written."""
+    prev = read_closed(proj)
+    prev.extend(tombs)
+    if len(prev) > max_items:
+        prev = prev[-max_items:]
+    rf = rejected_file(proj)
+    rf.parent.mkdir(parents=True, exist_ok=True)
+    rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
 
 
 def read_rejected(proj):
@@ -738,17 +800,7 @@ def _close_contribution(proj, index, outcome, note="", max_items=200, match=None
     with memory_lock(f):
         cur = read_contributions(proj)
         rec = cur.pop(resolve_contribution(proj, index, match))
-        tomb = dict(rec)
-        tomb["outcome"] = outcome
-        tomb["note" if outcome == SHIPPED else "reason"] = str(note or "")
-        tomb["closed_ts"] = time.time()
-        prev = read_closed(proj)
-        prev.append(tomb)
-        if len(prev) > max_items:
-            prev = prev[-max_items:]
-        rf = rejected_file(proj)
-        rf.parent.mkdir(parents=True, exist_ok=True)
-        rf.write_text("\n".join(json.dumps(r, sort_keys=True) for r in prev) + "\n", encoding="utf-8")
+        _append_tombstones(proj, [_tombstone(rec, outcome, note)], max_items)
         if cur:
             f.write_text("\n".join(json.dumps(r, sort_keys=True) for r in cur) + "\n", encoding="utf-8")
         else:
@@ -913,7 +965,9 @@ def load_config():
     recommended defaults."""
     cfg = dict(DEFAULT_CONFIG)
     try:
-        raw = json.loads(_config_path().read_text(encoding="utf-8"))
+        # utf-8-sig: a file saved by a Windows editor carries a BOM, which json.loads refuses, so
+        # every knob the user set there silently read as its default.
+        raw = json.loads(_config_path().read_text(encoding="utf-8-sig"))
         if isinstance(raw, dict):
             cfg.update({k: raw[k] for k in raw if k in DEFAULT_CONFIG})
     except (OSError, ValueError):
@@ -921,9 +975,13 @@ def load_config():
     return cfg
 
 
-def save_config(updates):
+def save_config(updates, strict=False):
     """Merge known keys from `updates` into the config file (created if missing); return the
-    saved dict. Unknown keys are ignored so the file stays a clean, known schema."""
+    saved dict. Unknown keys are ignored so the file stays a clean, known schema.
+
+    Best-effort by default (hooks must never fail a turn over it). `strict=True` re-raises the
+    OSError of a failed write instead: an operator CLI that reports the new value after a write
+    that never happened tells the user a choice is recorded when it is not."""
     cfg = load_config()
     cfg.update({k: updates[k] for k in updates if k in DEFAULT_CONFIG})
     try:
@@ -931,7 +989,8 @@ def save_config(updates):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
-        pass
+        if strict:
+            raise
     return cfg
 
 

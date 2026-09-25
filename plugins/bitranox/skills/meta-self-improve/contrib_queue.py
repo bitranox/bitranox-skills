@@ -20,6 +20,10 @@ Usage (cwd defaults to the current directory):
   contrib_queue.py drop --match TEXT [--reason WHY] [cwd]  # this one is wrong or stale
   contrib_queue.py shipped | rejected [cwd]
   contrib_queue.py drain [cwd]      # ONLY after the contributions actually shipped
+  contrib_queue.py queues           # every queue on this machine, by key
+
+Exit codes: 0 done (a duplicate or already-closed add included); 1 the store could not be written
+(nothing was recorded); 2 usage error, an empty --what, or a selector / queue key that names nothing.
 
 `--target` names where it goes, e.g. `skill:meta-dream-tree` or `hook:reconcile`. Entries dedup on
 (what, target), so re-noticing the same gap is not a second TODO.
@@ -27,8 +31,9 @@ Usage (cwd defaults to the current directory):
 An intent leaves the queue by one of two OUTCOMES, and they are not interchangeable: `ship` for
 what was delivered, `drop` for what turned out wrong or stale. Both block a re-queue; only the
 outcome recorded differs, and recording a delivered contribution as rejected misleads every later
-reader about whether the work was done. `drain` closes the WHOLE queue at once and so fits only a
-sweep where every entry shipped - to close one entry, use `ship`.
+reader about whether the work was done. `drain` closes the WHOLE queue at once, recording every
+entry as shipped, and so fits only a sweep where every entry shipped - to close one entry, use
+`ship`.
 
 Select the entry with `--match TEXT` (unique text from its `what`/`target`) rather than `--index`:
 an index comes from a listing and SHIFTS under the previous close, so closing two entries by the
@@ -130,8 +135,19 @@ def main(argv=None):
             return 2
 
     if args.cmd == "add":
-        queued = sig.add_contribution(proj, {"what": args.what, "target": args.target,
-                                             "why": args.why, "source": args.source})
+        if not args.what.strip():
+            # an empty intent is not a contribution; add_contribution's False for it used to be
+            # reported as "already queued" with exit 0
+            print("! refused: --what must name the change (got an empty value)", file=sys.stderr)
+            return 2
+        try:
+            queued = sig.add_contribution(proj, {"what": args.what, "target": args.target,
+                                                 "why": args.why, "source": args.source},
+                                          strict=True)
+        except OSError as exc:
+            print("! failed: could not queue %r (%s) - nothing was recorded; fix the store and "
+                  "re-run" % (args.what, exc), file=sys.stderr)
+            return 1
         if not queued:
             # already queued, or CLOSED earlier - either way not a new TODO. Name the outcome that
             # closed it: "rejected" for work that was already DONE would send the reader to redo it.
@@ -230,10 +246,28 @@ def main(argv=None):
                                   " (%s)" % r[field] if r.get(field) else ""))
         return 0
 
-    sig.drain_contributions(proj)                       # drain
-    print("drained the pending-contribution queue for %s" % proj)
+    try:                                                # drain
+        drained = sig.drain_contributions(proj, note="drained", strict=True)
+    except OSError as exc:
+        print("! failed: could not record the drain (%s) - the queue is unchanged; fix the store "
+              "and re-run" % exc, file=sys.stderr)
+        return 1
+    print("drained the pending-contribution queue for %s: %d closed as shipped"
+          % (proj, len(drained)))
     return 0
 
 
+def _reconfigure_stdout():
+    """A cp1252 console (bare `python3` on Windows) cannot encode every intent text; the
+    UnicodeEncodeError came AFTER the store write, so a recorded add or ship exited 1. Escape
+    instead. Guarded: a replaced stream may not support reconfigure."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 if __name__ == "__main__":
+    _reconfigure_stdout()
     sys.exit(main())

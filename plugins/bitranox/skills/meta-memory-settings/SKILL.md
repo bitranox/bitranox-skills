@@ -20,6 +20,17 @@ then confirm. Do not edit the JSON by hand - the CLI validates the key AND the v
 refuses an unknown one (exit 2) naming the legal choices, so a typo like `dream_mode of`
 cannot reach the file.
 
+- **Bounds:** `context_handover_pct` 1..100, `context_handover_cap` >= 1, `context_window` 0 or
+  >= 1000; every `discovery_roots` entry must be an absolute or `~`-relative path. Anything else
+  is refused with exit 2.
+- **Arguments:** `view` and `reset` take none, `set` exactly two; a leftover (`reset --dry-run`) is
+  refused with exit 2 rather than ignored.
+- **A config that is not a JSON object** (a trailing comma, a hand edit gone wrong) is refused with
+  exit 2 by every verb and left untouched, so a `set` never writes defaults over the choices it
+  still holds. Fix the JSON by hand, or delete the file to start from the defaults.
+- **Exit 1** means the write failed (for example `~/.claude` is not a writable directory): nothing
+  was saved.
+
 ## The knobs (recommended default in brackets)
 
 | Key                        | Values                                | What it controls / consequence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |

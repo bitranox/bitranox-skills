@@ -538,3 +538,139 @@ def test_check_tree_still_flags_a_real_ref_beside_a_code_span(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1 and "orphan ref: [[missing-base]]" in out
     assert "a.b" not in out
+
+
+# ---- a failed archive keeps the pointer and says so --------------------------------------------
+
+def test_a_failed_body_move_keeps_the_pointer_and_exits_2(proj, capsys):
+    slug = ME.add_or_update_entry(proj, "Keep fact", "h", body="the body", scope_default="lvl")
+    archive = us.central_facts_dir(proj).parent / ".archive"
+    archive.write_text("a file where the archive dir must go", encoding="utf-8")
+    rc = R.main(["--archive", slug, proj])
+    out = capsys.readouterr()
+    assert rc == 2
+    assert "archived" not in out.out and "! failed" in out.err
+    assert slug in {e.slug for e in ME.read_store(proj)[1]}, "the pointer must survive"
+    assert us.body_path(proj, slug).is_file(), "the body must survive"
+
+
+def test_archive_entry_raises_when_the_body_cannot_be_moved(proj):
+    slug = ME.add_or_update_entry(proj, "Keep fact", "h", body="the body", scope_default="lvl")
+    (us.central_facts_dir(proj).parent / ".archive").write_text("x", encoding="utf-8")
+    with pytest.raises(OSError):
+        R.archive_entry(proj, slug)
+    assert slug in {e.slug for e in ME.read_store(proj)[1]}
+
+
+# ---- a directory that does not exist is an error, never a clean tree ---------------------------
+
+@pytest.mark.parametrize("mode", [["--check-tree"], ["--check"], [], ["--check-misplaced"],
+                                  ["--rehome", "--dry-run"]])
+def test_a_nonexistent_dir_exits_2_in_every_mode(tmp_path, capsys, mode):
+    missing = str(tmp_path / "no-such-dir")
+    rc = R.main(mode + [missing])
+    out = capsys.readouterr()
+    assert rc == 2
+    assert "no-such-dir" in out.err
+    assert "problems: 0" not in out.out
+
+
+# ---- a body that merely opens with a horizontal rule is not frame-only -------------------------
+
+def test_a_body_opening_with_a_rule_and_no_frontmatter_is_not_frame_only(tmp_path):
+    anchor, a, _b = _tree_two_projects(tmp_path)
+    slug = ME.add_or_update_entry(a, "Rule", "When x, do y.", body="placeholder", scope_default="a")
+    us.body_path(anchor, slug).write_text("---\nAlways do X because Y.\n", encoding="utf-8")
+    assert R.check_tree(anchor)["frame_only_bodies"] == []
+
+
+def test_a_frame_with_nothing_after_it_is_still_frame_only(tmp_path):
+    """Control: a real frontmatter block with no content after it keeps being reported."""
+    anchor, a, _b = _tree_two_projects(tmp_path)
+    slug = ME.add_or_update_entry(a, "Rule", "When x, do y.", body="placeholder", scope_default="a")
+    us.body_path(anchor, slug).write_text("---\nname: rule\ndescription: d\n---\n\n",
+                                          encoding="utf-8")
+    assert R.check_tree(anchor)["frame_only_bodies"] == [slug]
+
+
+# ---- default mode: orphan pointers are a failing exit, not a report at exit 0 ------------------
+
+def test_default_mode_exits_1_on_an_orphan_pointer(proj, capsys):
+    slug = ME.add_or_update_entry(proj, "Heavy", "h", body="x" * 40, scope_default="lvl")
+    us.body_path(proj, slug).unlink()
+    assert R.main([proj]) == 1
+    assert "TOTAL orphan pointers: 1" in capsys.readouterr().out
+
+
+def test_default_mode_exits_0_when_every_pointer_has_a_body(proj, capsys):
+    ME.add_or_update_entry(proj, "Tiny", "h", body="small", scope_default="lvl")
+    assert R.main([proj]) == 0
+    assert "TOTAL orphan pointers: 0" in capsys.readouterr().out
+
+
+# ---- --check: the exit-1 path, pinned on the exit code itself ----------------------------------
+
+def test_check_exits_1_on_an_orphan_ref(proj, capsys):
+    ME.add_or_update_entry(proj, "Only", "refers [[nowhere]]", body="b", scope_default="lvl")
+    assert R.main(["--check", proj]) == 1
+    assert "orphan ref: [[nowhere]]" in capsys.readouterr().out
+
+
+def test_check_exits_1_on_a_downward_ref(tmp_path, capsys):
+    anchor = tmp_path / "tree"
+    project = anchor / "projects" / "thing"
+    project.mkdir(parents=True)
+    ME.add_or_update_entry(str(project), "Narrow fact", "narrow", body="b", scope_default="proj")
+    ME.add_or_update_entry(str(anchor), "Broad rule", "points [[narrow-fact]] down", body="b",
+                           scope_default="anchor")
+    assert R.main(["--check", str(project), str(anchor)]) == 1
+    assert "downward ref" in capsys.readouterr().out
+
+
+def test_check_exits_0_on_a_clean_upward_chain(tmp_path, capsys):
+    anchor, project = _ancestor_chain(tmp_path)
+    assert R.main(["--check", project, anchor]) == 0
+
+
+# ---- an unreadable directory is never a silently unchecked one ---------------------------------
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0,
+                    reason="needs a non-root POSIX user for chmod 000 to deny a listing")
+def test_check_tree_reports_a_directory_it_could_not_read(tmp_path, capsys):
+    anchor, a, _b = _tree_two_projects(tmp_path)
+    ME.add_or_update_entry(a, "Only A", "h", body="B", scope_default="a")
+    locked = Path(anchor) / "locked"
+    (locked / us.STORE_DIRNAME).mkdir(parents=True)          # a decoy nobody could see
+    locked.chmod(0)
+    try:
+        rc = R.main(["--check-tree", anchor])
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "unreadable directory" in out and "locked" in out
+
+
+def test_parse_frontmatter_keeps_a_value_carrying_a_line_separator():
+    meta, _body = R.parse_frontmatter("---\nname: x\ndescription: a b\n---\nbody\n")
+    assert meta["description"] == "a b"
+
+
+def test_a_cp1252_console_survives_a_tree_path_it_cannot_encode(tmp_path):
+    import os
+    import subprocess
+    import sys
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    anchor, a, _b = _tree_two_projects(tmp_path / "日本")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, R.__file__, "--check-tree", anchor], env=env,
+                       capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 0, r.stderr
+    assert "TOTAL tree problems: 0" in r.stdout
+
+
+def test_parse_frontmatter_reads_through_a_bom():
+    meta, _body = R.parse_frontmatter("﻿---\nname: x\n---\nbody\n")
+    assert meta["name"] == "x"

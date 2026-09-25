@@ -105,10 +105,13 @@ def test_migrate_apply_writes_curated_store_and_receipt(env):
     # provenance is no longer persisted anywhere (5.300.0); the migration still PLACES both
     # facts, which is what this test is for
     assert {e.slug for e in entries} == {"project-a", "project-b"}
-    assert (sig.claude_memory_dir(str(proj)) / "facts").glob("*.md")   # heavy body placed
-    # receipt written; a backup exists out of tree
+    anchor = ME._anchor(str(proj))
+    assert "x" * 400 in ME.us.body_path(anchor, "project-b").read_text(encoding="utf-8")
+    assert "Body A." in ME.us.body_path(anchor, "project-a").read_text(encoding="utf-8")
+    # receipt written; a backup of the native store exists out of tree
     assert M._receipt_path(str(proj)).is_file()
-    assert any(M._backups_dir().glob("*/native")) if M._backups_dir().exists() else True
+    backups = list(M._backups_dir().glob("*/native/a.md"))
+    assert len(backups) == 1 and "Body A." in backups[0].read_text(encoding="utf-8")
 
 
 def test_migrate_apply_idempotent(env):
@@ -181,7 +184,9 @@ def test_migrate_redirect_forces_target(env):
     _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
     rep = M.migrate_store(slug, dry_run=False, redirect=str(target))
     assert rep["redirected"] and rep["placed"] == 1 and not rep["parked"]
-    _, entries, _ = ME.read_store(str(target))
+    _, entries, bodies = ME.read_store(str(target))
+    assert [e.slug for e in entries] == ["project-a"]
+    assert "Body A." in bodies["project-a"]
 
 
 def test_the_platform_temp_root_is_excluded_however_it_resolves():
@@ -264,3 +269,183 @@ def test_a_truncated_slug_is_reported_not_silently_mis_resolved():
     Decoding that as if it were complete would resolve to the wrong directory."""
     assert M.is_truncated_slug("-" + "a" * 199 + "-deadbeefcafe") is True
     assert M.is_truncated_slug("-home-bob-proj") is False
+
+
+# ---- placement: every native fact lands, none overwrites another ------------------------------
+
+def _raw_store(home, slug, files):
+    """A native store holding `files` ({filename: raw text or bytes}) verbatim."""
+    d = home / ".claude" / "projects" / slug / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "MEMORY.md").write_text("# Memory index\n", encoding="utf-8")
+    for name, text in files.items():
+        if isinstance(text, bytes):
+            (d / name).write_bytes(text)
+        else:
+            (d / name).write_text(text, encoding="utf-8")
+    return d
+
+
+def _project(env, name):
+    tmp_path, home = env
+    proj = tmp_path / name
+    proj.mkdir()
+    return proj, _encode_slug(proj), home
+
+
+def _placed_bodies(proj):
+    _scope, entries, bodies = ME.read_store(str(proj))
+    return {e.slug: bodies[e.slug] for e in entries}
+
+
+def test_two_facts_with_the_same_derived_title_both_survive(env):
+    proj, slug, home = _project(env, "repoCollide")
+    _raw_store(home, slug, {
+        "gitea_access.md": "---\nname: gitea_access\ndescription: gitea\n---\n# Notes\n\n"
+                           "Use the gitea key.\n",
+        "ssh_quirk.md": "---\nname: ssh_quirk\ndescription: ssh\n---\n# Notes\n\n"
+                        "Always pass -tt to ssh.\n"})
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["placed"] == 2
+    bodies = "\n".join(_placed_bodies(proj).values())
+    assert "Use the gitea key." in bodies and "Always pass -tt to ssh." in bodies
+
+
+def test_a_slug_taken_by_a_different_existing_fact_is_suffixed_not_overwritten(env):
+    proj, slug, home = _project(env, "repoTaken")
+    ME.add_or_update_entry(str(proj), "Notes", "an earlier fact", body="Earlier body.",
+                           slug="notes")
+    _raw_store(home, slug, {"notes.md": "---\nname: notes\ndescription: d\n---\nNew body.\n"})
+    M.migrate_store(slug, dry_run=False)
+    bodies = _placed_bodies(proj)
+    assert "Earlier body." in bodies["notes"]
+    assert any("New body." in b for s, b in bodies.items() if s != "notes")
+
+
+def test_a_nested_metadata_type_is_read():
+    raw = "---\nname: gitea_access\ndescription: d\nmetadata:\n  type: reference\n---\nBody.\n"
+    assert M._native_type(*M.R.parse_frontmatter(raw)[:1], raw, "gitea_access") == "reference"
+
+
+def test_read_native_entries_types_a_nested_metadata_fact(env):
+    _tmp, home = env
+    d = _raw_store(home, "-x-nested", {
+        "gitea_access.md": "---\nname: gitea_access\ndescription: d\nmetadata:\n"
+                           "  type: reference\n---\nBody.\n",
+        "reference_other.md": "---\nname: reference_other\ndescription: d\n---\nBody.\n"})
+    types = {e["name"]: e["type"] for e in M.read_native_entries(d)}
+    assert types == {"gitea_access": "reference", "reference_other": "reference"}
+
+
+def test_an_empty_topic_body_is_skipped_and_the_rest_placed_with_a_receipt(env, capsys):
+    proj, slug, home = _project(env, "repoEmpty")
+    _raw_store(home, slug, {"a.md": "---\nname: project-a\ndescription: d\n---\nBody A.\n",
+                            "b.md": "---\nname: project-b\ndescription: d\n---\n\n"})
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["placed"] == 1 and len(rep["failed"]) == 1 and "b" in rep["failed"][0]
+    assert list(_placed_bodies(proj)) == ["project-a"]
+    assert M._receipt_path(str(proj)).is_file()
+    assert M.main(["--apply", "--slug=" + slug]) == 1          # the failed entry is not "done"
+    assert "b" in capsys.readouterr().out
+
+
+def test_a_failed_backup_aborts_the_store_before_any_write(env, capsys):
+    proj, slug, home = _project(env, "repoNoBackup")
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    (home / ".claude" / "self-improve-audit").write_text("a file, not a dir", encoding="utf-8")
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["error"] and "backup" in rep["error"]
+    assert _placed_bodies(proj) == {}
+    assert M.main(["--apply", "--slug=" + slug]) == 1
+
+
+def test_a_backup_that_works_is_not_an_error(env):
+    """Control for the failed-backup test."""
+    proj, slug, home = _project(env, "repoBackupOk")
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    rep = M.migrate_store(slug, dry_run=False)
+    assert rep["error"] is None and rep["placed"] == 1
+
+
+# ---- exit codes: 0 all placed, 1 something was not, 2 usage ------------------------------------
+
+def test_a_parked_store_exits_1(env):
+    _tmp, home = env
+    slug = "-media-does-not-exist-anywhere-proj"
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    assert M.main(["--apply", "--slug=" + slug]) == 1
+
+
+def test_a_slug_with_no_native_store_exits_2(env, capsys):
+    assert M.main(["--dry-run", "--slug=-no-such-slug-typo"]) == 2
+    assert "-no-such-slug-typo" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("form", ["{slug}:{path}", "{slug}", "={path}"])
+def test_a_malformed_redirect_exits_2(env, capsys, form):
+    proj, slug, home = _project(env, "repoRedirMalformed")
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    rc = M.main(["--apply", "--slug=" + slug, "--redirect=" + form.format(slug=slug, path=proj)])
+    assert rc == 2
+    assert "--redirect" in capsys.readouterr().err
+    assert _placed_bodies(proj) == {}
+
+
+def test_a_redirect_to_a_missing_dir_exits_2_and_creates_nothing(env, capsys):
+    tmp_path, home = env
+    slug = "-media-old-removed-location-proj"
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    target = tmp_path / "does" / "not" / "exist"
+    assert M.main(["--apply", "--slug=" + slug, "--redirect=%s=%s" % (slug, target)]) == 2
+    assert not target.exists()
+
+
+def test_a_valid_redirect_places_and_exits_0(env):
+    tmp_path, home = env
+    slug = "-media-old-removed-location-proj"
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    target = tmp_path / "moved"
+    target.mkdir()
+    assert M.main(["--apply", "--slug=" + slug, "--redirect=%s=%s" % (slug, target)]) == 0
+    assert list(_placed_bodies(target)) == ["project-a"]
+
+
+def test_dry_run_and_apply_together_are_refused(env, capsys):
+    proj, slug, home = _project(env, "repoBoth")
+    _native_store(home, slug, [("a.md", "project-a", "fact a", "Body A.")])
+    with pytest.raises(SystemExit) as exc:
+        M.main(["--dry-run", "--apply", "--slug=" + slug])
+    assert exc.value.code == 2
+    assert _placed_bodies(proj) == {}
+
+
+# ---- reading: a BOM is not frontmatter-breaking, an undecodable file is reported ---------------
+
+def test_a_bom_topic_file_keeps_its_frontmatter(env):
+    _tmp, home = env
+    d = _raw_store(home, "-x-bom", {
+        "a.md": b"\xef\xbb\xbf---\nname: reference-a\ndescription: the hook\n---\nBody.\n"})
+    (entry,) = M.read_native_entries(d)
+    assert entry["hook"] == "the hook" and entry["type"] == "reference"
+
+
+def test_an_undecodable_topic_file_is_reported_and_exits_1(env, capsys):
+    proj, slug, home = _project(env, "repoBadBytes")
+    _raw_store(home, slug, {"a.md": "---\nname: project-a\ndescription: d\n---\nBody A.\n",
+                            "b.md": b"---\nname: project-b\ndescription: caf\xe9\n---\nB.\n"})
+    assert M.main(["--apply", "--slug=" + slug]) == 1
+    out = capsys.readouterr().out
+    assert "b.md" in out
+    assert list(_placed_bodies(proj)) == ["project-a"]
+
+
+def test_a_cp1252_console_survives_a_slug_it_cannot_encode(env):
+    import os
+    import subprocess
+    _tmp, home = env
+    child = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    child.update(HOME=str(home), USERPROFILE=str(home), PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, M.__file__, "--dry-run", "--slug=-data-日本"],
+                       env=child, capture_output=True, encoding="utf-8", errors="replace")
+    assert r.returncode == 2, r.stderr
+    assert "UnicodeEncodeError" not in r.stderr

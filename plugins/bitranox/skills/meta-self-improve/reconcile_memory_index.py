@@ -15,6 +15,10 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
 `parse_frontmatter`/`derive_title`/`derive_hook` are kept for the NATIVE `~/.claude` tier (its topic
 files still carry `name`/`description` frontmatter); `migrate_memory.py` imports them.
 
+Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
+unreadable dir, misplaced fact, unrehomable body) or `--archive` named no entry; 2 a dir argument
+does not exist, or `--archive` could not move the body (the pointer is then kept).
+
 Pure standard library; cross-platform; ASCII output only.
 """
 
@@ -42,7 +46,10 @@ _NON_ENTRY = {"claude.md", "claude.local.md"}
 def parse_frontmatter(text):
     """Return (meta, body). meta has 'name'/'description' when present (stdlib, no YAML dep)."""
     meta = {}
-    lines = text.splitlines()
+    # a BOM made the opening delimiter unrecognisable; "\n" only because splitlines() also breaks
+    # on U+2028 and \f, which can sit inside a value
+    text = text.lstrip("﻿")
+    lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
         return meta, text
     end = None
@@ -91,7 +98,7 @@ def _collapse(text):
 
 def derive_title(meta, body, filename):
     """A human-ish title: first body heading, else de-slugified name, else the filename stem."""
-    for line in body.splitlines():
+    for line in body.split("\n"):
         s = line.strip()
         if s.startswith("# "):
             return _collapse(s[2:])
@@ -324,7 +331,10 @@ def _names_invalid_pointer(level_dir, slug):
 def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
     <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
-    Returns True if an entry was (or, under dry_run, would be) removed."""
+    Returns True if an entry was (or, under dry_run, would be) removed.
+
+    Raises OSError when the body cannot be archived, and then leaves the pointer in place: dropping
+    it anyway turned the fact into a dangling body while the CLI printed "archived"."""
     d = Path(level_dir)
     scope, entries, bodies = ME.read_store(str(d))
     qcanon = _canon(slug)
@@ -347,12 +357,9 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
             others = _other_levels_pointing(anchor, d, e.slug)
             if src.is_file() and not others:
                 archive = us.central_facts_dir(anchor).parent / archive_subdir
-                try:
-                    archive.mkdir(parents=True, exist_ok=True)
-                    # an archive is the only copy of a retired fact: never move onto an earlier one
-                    shutil.move(str(src), str(us.free_archive_path(archive, src.name)))
-                except OSError:
-                    pass
+                archive.mkdir(parents=True, exist_ok=True)
+                # an archive is the only copy of a retired fact: never move onto an earlier one
+                shutil.move(str(src), str(us.free_archive_path(archive, src.name)))
     ME._commit_store(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})
     return True
 
@@ -450,7 +457,7 @@ def _existing_ancestor_anchor(path):
     return None
 
 
-def find_decoy_anchors(anchor):
+def find_decoy_anchors(anchor, unreadable=None):
     """Every `.claude-memory` store dir STRICTLY BELOW the tree top - a DECOY anchor. resolve_anchor
     always returns the TOPMOST ancestor carrying CLAUDE.md + a store, so any store dir deeper in the
     tree is dead to the engine, yet the `CLAUDE.local.md` walk-up retrieval text resolves a
@@ -462,13 +469,21 @@ def find_decoy_anchors(anchor):
     is INSIDE the `~/.claude` tree, so every snapshotted store there reads as a decoy (measured: 26
     of them). Prune it by RESOLVED PATH, never by dirname, so a project owning a `self-improve-audit/`
     dir of its own is still walked. Returns sorted absolute paths; empty is the healthy answer
-    (exactly one store per tree, at the top)."""
+    (exactly one store per tree, at the top).
+
+    `unreadable`, when a list, receives the path of every directory the walk could not list: a
+    plain os.walk skips one in silence, so a decoy (or a whole level) behind it reads as absent."""
     import os
     import self_improve_signals as sig
     anchor = Path(anchor).resolve()
     audit_root = sig._audit_dir().resolve()
     found = []
-    for root, dirs, _files in os.walk(str(anchor)):
+
+    def _note(exc):
+        if unreadable is not None:
+            unreadable.append(str(getattr(exc, "filename", None) or exc))
+
+    for root, dirs, _files in os.walk(str(anchor), onerror=_note):
         rootp = Path(root)
         for d in dirs:
             if d == us.STORE_DIRNAME and rootp.resolve() != anchor:
@@ -527,10 +542,12 @@ def check_tree(anchor):
         return False
     sideways_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources
                                if r in all_targets and not _reachable(r, lvl)))
+    unreadable = []
+    decoys = find_decoy_anchors(anchor, unreadable=unreadable)
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": find_dangling_bodies(anchor),
-            "decoy_anchors": find_decoy_anchors(anchor),
+            "decoy_anchors": decoys, "unreadable_dirs": sorted(set(unreadable)),
             "frame_only_bodies": find_frame_only_bodies(anchor)}
 
 
@@ -551,12 +568,22 @@ def find_frame_only_bodies(anchor):
             raw = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        # split on the CLOSING delimiter exactly once; a chained line-range strip would eat the
-        # payload it was meant to unwrap and report every body as frame-only
-        body = raw[4:].partition("\n---\n")[2] if raw.startswith("---\n") else raw
-        if not body.strip():
+        if not _content_after_frontmatter(raw).strip():
             out.append(p.stem)
     return out
+
+
+# A leading frontmatter block: an opening `---` line, any lines, then a CLOSING `---` line. Without
+# the closing delimiter the text is not frontmatter at all - a body that merely opens with a
+# horizontal rule used to be read as an unterminated frame and reported frame-only.
+_FRONTMATTER_RX = re.compile(r"---[ \t]*\n(?:.*?\n)?---[ \t]*(?:\n|\Z)", re.S)
+
+
+def _content_after_frontmatter(raw):
+    """`raw` with its leading frontmatter block removed; the whole text when there is none.
+    Matched to the FIRST closing delimiter, so a payload holding its own `---` rule survives."""
+    m = _FRONTMATTER_RX.match(raw)
+    return raw[m.end():] if m else raw
 
 
 def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
@@ -637,6 +664,13 @@ def main(argv=None):
     # examined 0 refs and printed success, while `--check-tree .` invented 33 problems and labelled
     # every level "[.]". Both agreed with the absolute form the moment the input was resolved.
     args.dirs = [str(Path(d).resolve()) for d in args.dirs]
+    # A typo'd path resolves to an empty tree, and every mode then printed its clean verdict
+    # ("TOTAL tree problems: 0") with exit 0 - so a gate pointed at the wrong dir passed.
+    missing = [d for d in args.dirs if not Path(d).is_dir()]
+    if missing:
+        for d in missing:
+            print("! no such directory: %s" % d, file=sys.stderr)
+        return 2
 
     if args.check_misplaced:
         anchor = ME._anchor(args.dirs[0])
@@ -658,7 +692,14 @@ def main(argv=None):
 
     if args.archive:
         level = args.dirs[0]
-        if archive_entry(level, args.archive, dry_run=args.dry_run):
+        try:
+            removed = archive_entry(level, args.archive, dry_run=args.dry_run)
+        except OSError as exc:
+            # exit 2, not 1: 1 already means "no such entry", and a failed write is not that
+            print("! failed: could not archive %s (%s) - its pointer and body are unchanged"
+                  % (args.archive, exc), file=sys.stderr)
+            return 2
+        if removed:
             if args.dry_run:
                 print("would archive %s (pointer would be dropped at %s) - dry run, nothing written"
                       % (args.archive, level))
@@ -694,6 +735,9 @@ def main(argv=None):
         for slug in rep["frame_only_bodies"]:
             print("    ! frame-only body (frontmatter and nothing else; the pointer promises a rule "
                   "and the reader gets an empty file): %s" % slug)
+            problems += 1
+        for path in rep["unreadable_dirs"]:
+            print("    ! unreadable directory (not checked - fix its permissions): %s" % path)
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)
@@ -750,8 +794,21 @@ def main(argv=None):
         _print_report(rep)
         total_orphans += len(rep["orphans"])
     print("TOTAL orphan pointers: %d" % total_orphans)
-    return 0
+    # exit 1 on an orphan, like every other mode that finds a hard problem: a pointer whose body
+    # is gone is the same fault --check-tree fails on, and exit 0 here let a gate read it as clean
+    return 1 if total_orphans else 0
+
+
+def _reconfigure_stdout():
+    """A cp1252 console (bare `python3` on Windows) crashed on a level path it could not encode,
+    mid-report. Escape instead; guarded, since a replaced stream may not support reconfigure."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 if __name__ == "__main__":
+    _reconfigure_stdout()
     sys.exit(main())
