@@ -222,6 +222,26 @@ def test_skip_reason_calls_out_installed_plugin_content(tmp_path):
     assert reason is not None and "plugins" in reason
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="needs POSIX permissions and a non-root user")
+def test_discover_reports_a_dir_it_cannot_list_when_asked(tmp_path):
+    """Without onerror, os.walk drops an unreadable subtree and it reads as holding nothing."""
+    home = tmp_path / "home"
+    locked = tmp_path / "work" / "locked"
+    _skills(locked / "p" / ".claude", "s")
+    locked.chmod(0)
+    try:
+        errors, shipped_errors = [], []
+        got = hc.discover_candidates([tmp_path / "work"], home=home, personal=False, errors=errors)
+        hc.discover_shipped([tmp_path / "work"], home=home, errors=shipped_errors)
+        quiet = hc.discover_candidates([tmp_path / "work"], home=home, personal=False)
+    finally:
+        locked.chmod(0o755)
+    assert got == [] and quiet == []
+    assert [p for p, _ in errors] == [str(locked)]
+    assert [p for p, _ in shipped_errors] == [str(locked)]
+
+
 def test_discover_returns_sorted_unique_paths(tmp_path):
     home = tmp_path / "home"
     for name in ("b-proj", "a-proj"):

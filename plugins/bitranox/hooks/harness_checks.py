@@ -259,18 +259,29 @@ def _holds_skill(skills_dir):
         return False
 
 
-def discover_shipped(roots, home=None):
+def _walk_error_sink(errors):
+    """An os.walk onerror that records (path, reason) into `errors`, or None when not asked.
+
+    Without one, os.walk skips a directory it cannot list and says nothing, so an unreadable
+    subtree reads exactly like one that holds no skills."""
+    if errors is None:
+        return None
+    return lambda err: errors.append((str(getattr(err, "filename", None) or "?"), str(err)))
+
+
+def discover_shipped(roots, home=None, errors=None):
     """Plugin-owned `<dir>/skills` dirs under `roots`. Reported as skipped, never audited.
 
     Selection would drop these anyway, but INVISIBLY: a tool repo's `skills/` is not
     `.claude/skills`-shaped, so it never becomes a candidate and the skipped list comes back empty.
     An ownership filter whose work leaves no trace reads exactly like one that never ran, and the
-    reader has no way to tell a correctly-scoped audit from a walk that missed half the tree."""
+    reader has no way to tell a correctly-scoped audit from a walk that missed half the tree.
+    Pass a list as `errors` to receive (path, reason) for every directory the walk could not list."""
     found = set()
     for root in [Path(r) for r in roots]:
         if not root.is_dir():
             continue
-        for dirpath, dirnames, _ in os.walk(root):
+        for dirpath, dirnames, _ in os.walk(root, onerror=_walk_error_sink(errors)):
             dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
             here = Path(dirpath)
             if here.name == "skills" and _holds_skill(here) and is_shipped(here, home):
@@ -279,18 +290,19 @@ def discover_shipped(roots, home=None):
     return sorted(found)
 
 
-def discover_candidates(roots, home=None, personal=True):
+def discover_candidates(roots, home=None, personal=True, errors=None):
     """Every `<dir>/.claude/skills` holding a SKILL.md under `roots`, plus `<home>/.claude/skills`.
 
     Shape only - ownership is `select_targets`' job. A plugin's own `skills/` dir is not a
-    candidate at all: Claude Code loads it through the plugin, never as a project skill."""
+    candidate at all: Claude Code loads it through the plugin, never as a project skill.
+    Pass a list as `errors` to receive (path, reason) for every directory the walk could not list."""
     home = Path(home) if home is not None else Path.home()
     extra = [home / ".claude"] if personal else []
     found = set()
     for root in [*[Path(r) for r in roots], *extra]:
         if not root.is_dir():
             continue
-        for dirpath, dirnames, _ in os.walk(root):
+        for dirpath, dirnames, _ in os.walk(root, onerror=_walk_error_sink(errors)):
             dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS]
             here = Path(dirpath)
             if here.name == ".claude":

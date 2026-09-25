@@ -10,6 +10,9 @@ re-copying what an ancestor already provides.
 Usage:
   gather_scan.py --topic "<text>" [--self <cwd>]
 
+Exit codes: 0 scanned (or marked), 1 "not gathered yet" (--seen only), 2 error. A file that cannot
+be read or decoded, and a directory that cannot be listed, is skipped with a warning on stderr.
+
 Imports the shared helpers from the plugin's hooks dir, like the meta-dream-tree cadence CLI. Pure stdlib.
 """
 
@@ -20,6 +23,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 # self_improve_signals lives in the plugin's hooks dir: skills/meta-collect-knowledge -> skills -> bitranox -> hooks
@@ -58,10 +62,23 @@ def _is_junk_token(tok):
     )
 
 
+# A word is a run of letters/digits in ANY script. The first character must be a letter or digit;
+# the rest may also hold "_" and "-" so hyphenated technical terms stay one token. An ASCII-only
+# class split "Schluessel" spelled with an umlaut into fragments that matched unrelated words.
+_TOKEN_RE = re.compile(r"[^\W_][\w-]{2,}")
+_WORD_CHAR = r"[^\W_]"                      # what a keyword may not touch on either side in scan()
+
+
+def _fold(text):
+    """The one normalisation topic and note text share: NFC (so a decomposed umlaut equals the
+    composed one) then casefold."""
+    return unicodedata.normalize("NFC", text or "").casefold()
+
+
 def extract_keywords(text, max_n=12, proj=None):
-    """Deterministic keyword set from a topic / descriptor: lowercased significant tokens (>=3 chars,
-    not stopwords / filler), de-duplicated in first-seen order, capped. No model. (Synonym recall is
-    traded for speed; a richer pass can run later.)
+    """Deterministic keyword set from a topic / descriptor: casefolded significant tokens (>=3 chars,
+    any script, not stopwords / filler), de-duplicated in first-seen order, capped. No model. (Synonym
+    recall is traded for speed; a richer pass can run later.)
 
     Filler words (generic/conversational tokens with no topical signal - the recall-precision bug) are
     dropped via `self_improve_signals.load_filler_words(proj)`: the GLOBAL shipped baseline UNION the
@@ -73,7 +90,7 @@ def extract_keywords(text, max_n=12, proj=None):
     except Exception:  # noqa: BLE001 - missing/corrupt list must never break extraction
         drop = _STOP
     out = []
-    for tok in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", (text or "").lower()):
+    for tok in _TOKEN_RE.findall(_fold(text)):
         if tok in drop or len(tok) < 3 or tok in out or _is_junk_token(tok):
             continue
         out.append(tok)
@@ -82,19 +99,45 @@ def extract_keywords(text, max_n=12, proj=None):
     return out
 
 
+def _own_memory_dirs(proj):
+    """The resolved native memory dirs that belong to `proj`, under every spelling Claude Code may
+    have keyed it by: the absolute path as given (trailing separator and "." normalised away) and
+    the symlink-free one. Empty for no project."""
+    if not proj:
+        return set()
+    out = set()
+    try:
+        spelled = os.path.abspath(os.fspath(proj))
+        for spelling in {spelled, os.path.realpath(spelled)}:
+            out.add(str(sig.memory_dir(spelling).resolve()))
+    except (OSError, TypeError, ValueError):
+        pass
+    return out
+
+
+def canonical(path, pathmod=os.path):
+    """A comparison key for a path: symlinks resolved and, on Windows, case folded. Two spellings
+    of one file compare equal, so one tree is never reported twice or filtered out of itself."""
+    return pathmod.normcase(pathmod.realpath(os.fspath(path)))
+
+
+def within_tree(files, anchor, pathmod=os.path):
+    """The subset of `files` that lives under `anchor`, compared on `canonical` keys, so a cwd
+    reached through a symlink or typed in another case still keeps its own tree's files."""
+    pre = canonical(anchor, pathmod).rstrip(pathmod.sep) + pathmod.sep
+    return [f for f in files if canonical(f, pathmod).startswith(pre)]
+
+
 def discover_files(exclude_proj=None):
     """Candidate scan targets: every `*.md` under other projects' Auto memory plus the global rules
     layer (recursive). The current project's own memory is excluded - you gather FROM elsewhere."""
     files = []
-    try:
-        exclude = str(sig.memory_dir(exclude_proj).resolve()) if exclude_proj else None
-    except OSError:
-        exclude = None
+    exclude = _own_memory_dirs(exclude_proj)
     projroot = Path.home() / ".claude" / "projects"
     try:
         for memdir in sorted(projroot.glob("*/memory")):
             try:
-                if exclude and str(memdir.resolve()) == exclude:
+                if str(memdir.resolve()) in exclude:
                     continue
             except OSError:
                 pass
@@ -141,11 +184,42 @@ def _workspace_root(cwd, max_up=8):
     return root
 
 
+# Directories a walk could not list since the last take_walk_errors(). An unlistable dir is a
+# silent undercount otherwise: the walk just returns fewer paths. Module-level because the walks
+# sit behind caches and several call layers; the CLI prints them, the recall hook logs them.
+_WALK_ERRORS = []
+
+
+def _note_walk_error(err):
+    _WALK_ERRORS.append((getattr(err, "filename", None) or "?", str(err)))
+
+
+def take_walk_errors():
+    """[(path, reason)] of every directory a walk could not list since the last call; clears it."""
+    out = list(_WALK_ERRORS)
+    del _WALK_ERRORS[:]
+    return out
+
+
+def _read_lines(path):
+    """The "\\n"-separated lines of a cache file, byte-exact. Not splitlines() and no newline
+    translation: \\r, \\f, \\x1c-\\x1e and U+2028 are all legal inside a path, and a POSIX name
+    that is not UTF-8 round-trips through surrogateescape. Raises OSError."""
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        return fh.read().split("\n")
+
+
+def _write_lines(path, lines):
+    """Write `lines` joined by "\\n" with no newline translation. Raises OSError."""
+    with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        fh.write("\n".join(lines))
+
+
 def _find_claude_md(root):
     """Every CLAUDE.md under `root`, pruning vendored/build/hidden dirs. os.walk so we can prune."""
     out = []
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_note_walk_error):
             dirnames[:] = [d for d in dirnames if d not in _VENDOR and not d.startswith(".")]
             if "CLAUDE.md" in filenames:
                 out.append(str(Path(dirpath) / "CLAUDE.md"))
@@ -174,21 +248,23 @@ def discover_claude_md(self_cwd, cache_ttl=3600):
             p = p.parent
     except OSError:
         pass
-    h = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+    h = hashlib.sha1(str(root).encode("utf-8", "surrogatepass")).hexdigest()[:12]
     cache = Path.home() / ".claude" / "self-improve-audit" / ("claude-md-paths.%s.txt" % h)
     paths = None
     try:
         if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
-            paths = [ln for ln in cache.read_text(encoding="utf-8").splitlines() if ln]
-    except OSError:
+            paths = [ln for ln in _read_lines(cache) if ln]
+    except (OSError, ValueError):
         paths = None
     if paths is None:
+        before = len(_WALK_ERRORS)
         paths = _find_claude_md(root)
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text("\n".join(paths), encoding="utf-8")
-        except OSError:
-            pass
+        if len(_WALK_ERRORS) == before:           # an incomplete walk is re-done, not cached
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                _write_lines(cache, paths)
+            except (OSError, ValueError):             # ValueError: an unencodable path
+                pass
     return [p for p in paths if p not in chain]
 
 
@@ -203,7 +279,7 @@ def _walk_store_dirs(root):
     cache - only the appearance of a brand-new store dir needs a refresh (TTL or generation bump)."""
     dirs = []
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_note_walk_error):
             base = os.path.basename(dirpath)
             if base == _STORE_DIRNAME:
                 dirs.append(dirpath)
@@ -223,22 +299,24 @@ def _curated_store_dirs(root, cache_ttl=3600):
     it is younger than `cache_ttl` AND stamped with the current stores-generation - so a newly created
     store dir (which bumps the generation) invalidates it immediately, while unchanged roots skip the
     walk entirely. Cache sits with the other recall caches; any IO error falls back to a live walk."""
-    key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8")).hexdigest()[:12]
+    key = hashlib.sha1(("dirs:" + str(root)).encode("utf-8", "surrogatepass")).hexdigest()[:12]
     cache = sig._audit_dir() / ("curated-dirs.%s.txt" % key)
     stamp = "gen:%d" % sig.stores_generation()
     try:
         if cache.is_file() and (time.time() - cache.stat().st_mtime) < cache_ttl:
-            lines = cache.read_text(encoding="utf-8").splitlines()
+            lines = _read_lines(cache)
             if lines and lines[0] == stamp:
                 return [ln for ln in lines[1:] if ln]
-    except OSError:
+    except (OSError, ValueError):
         pass
+    before = len(_WALK_ERRORS)
     dirs = _walk_store_dirs(root)
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(stamp + "\n" + "\n".join(dirs), encoding="utf-8")
-    except OSError:
-        pass
+    if len(_WALK_ERRORS) == before:               # an incomplete walk is re-done, not cached
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            _write_lines(cache, [stamp] + dirs)
+        except (OSError, ValueError):                 # ValueError: an unencodable path
+            pass
     return dirs
 
 
@@ -269,21 +347,27 @@ def discover_curated(self_cwd, exclude_proj=None, cache_ttl=3600):
     return _find_curated_stores(root, cache_ttl=cache_ttl)
 
 
-def scan(keywords, files):
+def scan(keywords, files, skipped=None):
     """Map each file that contains any keyword to the list of keywords it matched. Matching is
-    WORD-BOUNDARY (a-z0-9 are word chars; `-`/`_` and punctuation are separators), case-insensitive -
-    so `again` does NOT match `against` and `test` does NOT match `latest` (a substring match made
-    recall match half the store). Files that read-fail are skipped."""
+    WORD-BOUNDARY (letters and digits of any script are word chars; `-`/`_` and punctuation are
+    separators), case-insensitive - so `again` does NOT match `against` and `test` does NOT match
+    `latest` (a substring match made recall match half the store).
+
+    A file that cannot be read OR decoded as UTF-8 is skipped, never raised: one stray latin-1 note
+    must not end the scan for every other file. Pass a list as `skipped` to receive a
+    (path, reason) pair per skipped file."""
     pats = {}
     for k in keywords:
-        k = (k or "").lower()
+        k = _fold(k)
         if k and k not in pats:
-            pats[k] = re.compile(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")
+            pats[k] = re.compile("(?<!%s)%s(?!%s)" % (_WORD_CHAR, re.escape(k), _WORD_CHAR))
     out = {}
     for p in files:
         try:
-            text = Path(p).read_text(encoding="utf-8").lower()
-        except OSError:
+            text = _fold(Path(p).read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError) as exc:
+            if skipped is not None:
+                skipped.append((str(p), "%s: %s" % (type(exc).__name__, exc)))
             continue
         hits = [k for k, rx in pats.items() if rx.search(text)]
         if hits:
@@ -304,13 +388,14 @@ def _gathered_path():
     return sig._audit_dir() / GATHERED_FILE
 
 
-def _pair_key(proj, topic):
+def _pair_key(proj, topic, pathmod=os.path):
     """The comparison key for a (project, topic) pair.
 
     Topic is free text a caller retypes, so an exact match would debounce almost nothing: it is
     casefolded and its whitespace collapsed. Tabs go with that collapse, which also keeps a topic
-    from forging a second column in a TSV row."""
-    return (os.path.abspath(str(proj)), " ".join(str(topic).split()).casefold())
+    from forging a second column in a TSV row. The project path is case-normalised the way the
+    platform compares paths, so C:\\Work and c:\\work are one project on Windows."""
+    return (pathmod.normcase(pathmod.abspath(str(proj))), " ".join(str(topic).split()).casefold())
 
 
 def _read_pairs():
@@ -318,11 +403,11 @@ def _read_pairs():
     optimisation, and losing it costs a re-grep - it must not break a gather."""
     out = set()
     try:
-        text = _gathered_path().read_text(encoding="utf-8")
-    except OSError:
+        lines = _read_lines(_gathered_path())
+    except (OSError, ValueError):
         return out
-    for line in text.splitlines():
-        parts = line.split("\t")
+    for line in lines:
+        parts = line.rstrip("\r").split("\t")
         if len(parts) >= 2:
             out.add(_pair_key(parts[0], parts[1]))
     return out
@@ -334,22 +419,22 @@ def already_gathered(proj, topic):
 
 
 def mark_gathered(proj, topic, when=None):
-    """Record a (project, topic) pair as gathered. Idempotent - re-marking adds no row."""
+    """Record a (project, topic) pair as gathered. Idempotent - re-marking adds no row.
+
+    Returns True when a row was written, False when the pair was already recorded. A failed write
+    raises OSError: the caller asked for a record and must learn it was not made."""
     if already_gathered(proj, topic):
         return False
     path = _gathered_path()
     stamp = when or datetime.date.today().isoformat()
     row = "%s\t%s\t%s\n" % (os.path.abspath(str(proj)), " ".join(str(topic).split()), stamp)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(row)
-    except OSError:
-        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="") as fh:
+        fh.write(row)
     return True
 
 
-def main(argv=None):
+def _parse(argv):
     ap = argparse.ArgumentParser(description="Cross-tree gather stage-1: keyword grep for candidates.")
     ap.add_argument("--topic", required=True, help="topic / scope-descriptor text to gather for")
     ap.add_argument("--self", dest="self_proj", default=None,
@@ -359,46 +444,62 @@ def main(argv=None):
                          "cross_tree_search=false (import is always a labeled COPY)")
     ap.add_argument("--seen", action="store_true",
                     help="ask ONLY whether this (project, topic) pair was already gathered and "
-                         "exit: 0 yes, 1 no. Runs no scan - it is the cheap pre-check")
+                         "exit: 0 yes, 1 no, 2 error. Runs no scan - it is the cheap pre-check")
     ap.add_argument("--mark", action="store_true",
-                    help="record this (project, topic) pair as gathered and exit. Runs no scan")
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+                    help="record this (project, topic) pair as gathered and exit: 0 recorded "
+                         "(or already was), 2 the record could not be written. Runs no scan")
+    return ap.parse_args(sys.argv[1:] if argv is None else argv)
 
-    self_proj = args.self_proj or os.getcwd()
 
-    # Both answer from the debounce record alone. Deliberately BEFORE any discovery: --seen exists
-    # to avoid the walk, so a version that walked first would defeat its own purpose. And neither
-    # gates a plain scan - a scan explicitly asked for is a scan run, whatever the record says.
-    if args.seen:
-        return 0 if already_gathered(self_proj, args.topic) else 1
-    if args.mark:
-        mark_gathered(self_proj, args.topic)
-        return 0
-    keywords = extract_keywords(args.topic, proj=self_proj)   # per-project blacklist for the current proj
-    if not keywords:
-        print("no usable keywords from topic", file=sys.stderr)
-        return 0
-    files = discover_files(self_proj)
-    if self_proj:                                 # also other projects' curated stores across the tree
-        files += discover_curated(self_proj, self_proj)
-    cross_allowed = args.cross_tree or sig.load_config().get("cross_tree_search", True)
+def _tolerant_stdio():
+    """Make stdout/stderr replace what their encoding cannot carry rather than crash: a Windows
+    pipe is cp1252, and a CJK keyword or path would otherwise end the run mid-report."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _not_scanned(reason):
+    """The explicit empty result: the caller reads CANDIDATES either way, and learns why."""
+    print(reason, file=sys.stderr)
+    print("CANDIDATES: 0 (not scanned: %s)" % reason)
+    return 0
+
+
+def _candidate_files(self_proj, cross_allowed):
+    """(files, None) to scan, or (None, reason) when the walled scan has no tree to stay in.
+
+    Every path is symlink-resolved and de-duplicated, so a tree reached through two spellings is
+    one tree, and the walled filter compares resolved paths on both sides."""
+    files = [str(f) for f in discover_files(self_proj)]
+    files += discover_curated(self_proj, self_proj)   # other projects' curated stores in this tree
     if cross_allowed:
         # OTHER knowledge trees are invisible to the workspace walk - discover them via the
         # configured discovery_roots (the multi-tree knob) and scan their stores too.
         for r in sig.discovery_roots():
             files += _find_curated_stores(str(r))
-        files = sorted({str(f) for f in files})
-    if not cross_allowed:
-        # gather walled into the CURRENT tree: sources outside its anchor (incl. the
-        # path-unattributable native tier) are dropped; pass --cross-tree for a deliberate,
-        # labeled cross-tree gather.
-        anchor = sig.resolve_anchor(self_proj)
-        if anchor is None:
-            print("no tree anchor for %s and cross_tree_search=false" % self_proj, file=sys.stderr)
-            return 0
-        pre = str(anchor) + os.sep
-        files = [f for f in files if str(f).startswith(pre)]
-    hits = scan(keywords, files)
+    files = sorted({os.path.realpath(f) for f in files})
+    if cross_allowed:
+        return files, None
+    # gather walled into the CURRENT tree: sources outside its anchor (incl. the
+    # path-unattributable native tier) are dropped; pass --cross-tree for a deliberate,
+    # labeled cross-tree gather.
+    anchor = sig.resolve_anchor(self_proj)
+    if anchor is None:
+        return None, "no tree anchor for %s and cross_tree_search=false" % self_proj
+    return within_tree(files, anchor), None
+
+
+def _warn_skipped(skipped):
+    for path, reason in take_walk_errors():
+        print("warning: cannot list, skipping: %s: %s" % (path, reason), file=sys.stderr)
+    for path, reason in skipped:
+        print("warning: skipped unreadable file: %s (%s)" % (path, reason), file=sys.stderr)
+
+
+def _print_candidates(hits, keywords):
     by_tree = {}
     for path in hits:
         top = sig.resolve_anchor(str(Path(path).parent))
@@ -410,20 +511,60 @@ def main(argv=None):
             print("  %s\t%s" % (path, ",".join(hits[path])))
     print("CANDIDATES: %d in %d tree(s) (keywords: %s)"
           % (len(hits), len(by_tree), ", ".join(keywords)))
-    # Optional: when a memory MCP (basic-memory) is enabled and its index covers this tree, add its
-    # semantic/full-text hits as EXTRA candidates for the agent to read-note. Read-only; keyword scan
-    # above is always the base, so this is a pure augmentation (absent/misconfigured MCP -> nothing).
+
+
+def _print_mcp_candidates(self_proj, topic):
+    """Optional: when a memory MCP (basic-memory) is enabled and its index covers this tree, add
+    its semantic/full-text hits as EXTRA candidates for the agent to read-note. Read-only; the
+    keyword scan is always the base, so this is a pure augmentation (absent/misconfigured MCP ->
+    nothing)."""
     try:
         import mcp_search as _mx
         if _mx.enabled() and (self_proj is None or _mx.covers(self_proj)):
-            mhits = _mx.search(args.topic)
+            mhits = _mx.search(topic)
             if mhits:
                 for h in mhits:
                     print("MCP\t%s" % h)
                 print("MCP-CANDIDATES: %d (via basic-memory search)" % len(mhits))
     except Exception:  # noqa: BLE001 - the MCP path must never break the keyword gather
         pass
+
+
+def _run(args):
+    # abspath: a trailing separator or "." must name the same project as the plain spelling.
+    self_proj = os.path.abspath(args.self_proj or os.getcwd())
+
+    # Both answer from the debounce record alone. Deliberately BEFORE any discovery: --seen exists
+    # to avoid the walk, so a version that walked first would defeat its own purpose. And neither
+    # gates a plain scan - a scan explicitly asked for is a scan run, whatever the record says.
+    if args.seen:
+        return 0 if already_gathered(self_proj, args.topic) else 1
+    if args.mark:
+        mark_gathered(self_proj, args.topic)
+        return 0
+    keywords = extract_keywords(args.topic, proj=self_proj)   # per-project blacklist for the current proj
+    if not keywords:
+        return _not_scanned("no usable keywords from topic")
+    cross_allowed = args.cross_tree or sig.load_config().get("cross_tree_search", True)
+    files, reason = _candidate_files(self_proj, cross_allowed)
+    if files is None:
+        return _not_scanned(reason)
+    skipped = []
+    hits = scan(keywords, files, skipped=skipped)
+    _warn_skipped(skipped)
+    _print_candidates(hits, keywords)
+    _print_mcp_candidates(self_proj, args.topic)
     return 0
+
+
+def main(argv=None):
+    args = _parse(argv)
+    _tolerant_stdio()
+    try:
+        return _run(args)
+    except Exception as exc:  # noqa: BLE001 - exit 1 means "not gathered"; a crash must not say that
+        print("error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -50,14 +50,17 @@ silently drifts. Report it and stop.
 ... audit_local.py check --root <tree> --shipped <marketplace>/skills
 ```
 
-Anything a script can decide, a script decides: registrations that name a missing file, hook
+Anything a script can decide, a script decides: settings files Claude Code cannot load
+(`settings-unparseable` - every hook in one is dead), registrations that name a missing file, hook
 scripts nothing registers, malformed tombstones, test dirs that cannot collect, skills shipping a
 script with no test, front matter whose name disagrees with its directory or whose description is
 not trigger-first, a local skill duplicating a shipped one, a local hook or skill script the
-marketplace now ships too (`duplicate-of-shipped`), and graveyards.
+marketplace now ships too (`duplicate-of-shipped`), graveyards, and directories the walk could
+not list (`unlistable` - never read as clean).
 
 Pass `--shipped <marketplace>/skills` or the duplicate checks stay silent - the run has nothing to
-compare against and cannot tell you so.
+compare against and cannot tell you so. `check` exits 0 clean, 1 findings, 2 error, and refuses
+(exit 2) a `--root`, `--home` or `--shipped` that is not a directory rather than auditing nothing.
 
 Three of those repay a closer look, because the obvious version of each check is wrong:
 

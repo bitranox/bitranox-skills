@@ -365,3 +365,72 @@ def test_words_inside_a_path_do_not_recall_a_note(monkeypatch, capsys):
     # the same words as prose still reach the note, so the guard removed a path and not the signal
     rc, out = run(monkeypatch, capsys, "have a look at the frobnicator widgets", sid="t2")
     assert "frobnicator" in out
+
+
+# ---- one bad file must not silence recall for every other note ----------------------------------
+# gather_scan.scan() raised on the first non-UTF-8 file and main()'s blanket except turned that
+# into "no recall" on every prompt, machine-wide, with nothing logged.
+
+def _skip_log(home):
+    return home / ".claude" / "self-improve-audit" / R.SKIPPED_LOG
+
+
+def test_one_undecodable_note_does_not_silence_the_others(monkeypatch, capsys, home):
+    d = _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    (d / "latin1.md").write_bytes(b"make test caf\xe9 in latin-1")
+    rc, out = run(monkeypatch, capsys, "run make test")
+    assert rc == 0
+    assert "VIRTUAL_ENV" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    log = _skip_log(home).read_text(encoding="utf-8")
+    assert "latin1.md" in log and "UnicodeDecodeError" in log
+
+
+def test_an_undecodable_sibling_claude_md_does_not_silence_recall(monkeypatch, capsys, tmp_path):
+    ws = tmp_path / "ws"
+    for sub, body in (("cur", b"current"), ("bad", b"frobnicator caf\xe9"),
+                      ("sib", b"To drive the widget frobnicator, set FROB_LEVEL=9.")):
+        (ws / sub).mkdir(parents=True)
+        (ws / sub / "CLAUDE.md").write_bytes(body)
+    (ws / "CLAUDE.md").write_text("workspace root", encoding="utf-8")
+    rc, out = run(monkeypatch, capsys, "set the widget frobnicator level", cwd=str(ws / "cur"))
+    assert rc == 0 and "FROB_LEVEL=9" in out
+
+
+def test_a_clean_run_writes_no_skip_log(monkeypatch, capsys, home):
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    run(monkeypatch, capsys, "run make test")
+    assert not _skip_log(home).exists()
+
+
+def test_walled_recall_through_a_symlinked_cwd_keeps_its_own_tree(monkeypatch, capsys, home,
+                                                                    two_trees):
+    # The store sits BELOW the tree top, so only the (symlink-resolving) workspace walk finds it;
+    # the tree-top store is reached under the cwd's own spelling and would pass either way.
+    import os
+    sib = two_trees.top_a / "campaigns" / "proj2"
+    facts = sib / ".claude-memory" / "facts"
+    facts.mkdir(parents=True)
+    (sib / "CLAUDE.md").write_text("sib\n", encoding="utf-8")
+    (facts / "frob.md").write_text("set FROB_LEVEL=9 for the widget frobnicator", encoding="utf-8")
+    link = two_trees.root / "marketing-link"
+    try:
+        os.symlink(str(two_trees.top_a), str(link), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable here")
+    _cfg_write(home, cross_tree_search=False)
+    rc, out = run(monkeypatch, capsys, "how do I set the widget frobnicator frob level",
+                  cwd=str(link / "campaigns" / "proj1"))
+    assert rc == 0 and "FROB_LEVEL=9" in out
+
+
+def test_note_view_reads_frontmatter_behind_a_bom(tmp_path):
+    m = tmp_path / "bom.md"
+    m.write_bytes(b"\xef\xbb\xbf---\nname: bom-note\ndescription: carries a BOM\n---\nbody\n")
+    assert R._note_view(str(m), ["bom"], 600) == "bom-note: carries a BOM"
+
+
+def test_a_line_separator_char_does_not_start_a_fake_heading():
+    text = "# Real\n\nthe shim line # not a heading\nmore shim text\n"
+    heading, body = R._matched_section(text, ["shim"])
+    assert heading == "# Real"
+    assert "more shim text" in body

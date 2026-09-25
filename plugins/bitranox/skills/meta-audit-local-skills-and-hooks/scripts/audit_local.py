@@ -31,9 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "hooks"))
 import harness_checks as hc  # noqa: E402
 
 
-def gather(roots, home=None, personal=True):
-    """(selected, skipped) for `roots`, where each skipped entry carries the reason it was cut."""
-    candidates = hc.discover_candidates(roots, home=home, personal=personal)
+def gather(roots, home=None, personal=True, unlistable=None):
+    """(selected, skipped) for `roots`, where each skipped entry carries the reason it was cut.
+
+    A directory the walk could not list is a skipped entry too, and is also appended to
+    `unlistable` as (path, reason) when a list is passed: an unreadable subtree otherwise reads
+    exactly like one holding nothing."""
+    errors = []
+    candidates = hc.discover_candidates(roots, home=home, personal=personal, errors=errors)
     selected = hc.select_targets(candidates, home=home)
     chosen = set(selected)
     skipped = []
@@ -45,9 +50,17 @@ def gather(roots, home=None, personal=True):
     # Plugin-owned dirs are not `.claude/skills`-shaped, so they are never candidates and would
     # leave the skipped list empty - making a correctly-scoped run indistinguishable from a walk
     # that found nothing. Name them explicitly.
-    for owned in hc.discover_shipped(roots, home=home):
+    for owned in hc.discover_shipped(roots, home=home, errors=errors):
         skipped.append({"path": str(owned),
                         "reason": hc.skip_reason(owned, home=home) or "shipped by a plugin"})
+    seen = set()
+    for path, why in errors:                  # both walks meet the same dir; report it once
+        if path in seen:
+            continue
+        seen.add(path)
+        skipped.append({"path": path, "reason": "cannot list, not audited: %s" % why})
+        if unlistable is not None:
+            unlistable.append((path, why))
     skipped.sort(key=lambda entry: entry["path"])
     return selected, skipped
 
@@ -92,7 +105,11 @@ def cmd_targets(args, out=None, err=None):
     for root in roots:
         if not root.is_dir():
             print("warning: root does not exist, skipping: %s" % root, file=err)
-    selected, skipped = gather(roots, home=_home(args), personal=not args.no_personal)
+    unlistable = []
+    selected, skipped = gather(roots, home=_home(args), personal=not args.no_personal,
+                               unlistable=unlistable)
+    for path, why in unlistable:
+        print("warning: cannot list, not audited: %s: %s" % (path, why), file=err)
     if args.json:
         print(json.dumps(_envelope(selected, skipped), indent=2), file=out)
     else:
@@ -117,6 +134,82 @@ def check_skills(target, shipped=None):
                       "mirror gate covers the pair" % (name, twin, ratio * 100)))
     found += [("graveyard", "%s: %s" % (p, why)) for p, why in hc.graveyard_entries(target)]
     return found
+
+
+def _kind(value):
+    return {dict: "an object", list: "a list", str: "a string", type(None): "null"}.get(
+        type(value), type(value).__name__)
+
+
+def _group_shape_problem(event, groups):
+    """Why one event's matcher groups are not the shape Claude Code reads, or None."""
+    if not isinstance(groups, list):
+        return '"hooks.%s" is %s, not a list of matcher groups' % (event, _kind(groups))
+    for group in groups:
+        if not isinstance(group, dict):
+            return '"hooks.%s" holds %s, not a matcher group object' % (event, _kind(group))
+        inner = group.get("hooks")
+        if inner is not None and not isinstance(inner, list):
+            return '"hooks.%s[].hooks" is %s, not a list' % (event, _kind(inner))
+        for hook in inner or []:
+            if not isinstance(hook, dict):
+                return '"hooks.%s[].hooks" holds %s, not a hook object' % (event, _kind(hook))
+    return None
+
+
+def _hooks_shape_problem(data):
+    """Why parsed settings are not the shape Claude Code reads hooks from, or None."""
+    if not isinstance(data, dict):
+        return "the top level is %s, not a JSON object" % _kind(data)
+    hooks = data.get("hooks")
+    if hooks is None:
+        return None
+    if not isinstance(hooks, dict):
+        return '"hooks" is %s, not an object keyed by event' % _kind(hooks)
+    for event, groups in hooks.items():
+        problem = _group_shape_problem(event, groups)
+        if problem:
+            return problem
+    return None
+
+
+def settings_problem(path):
+    """Why a settings file cannot be read for its hooks, or None when it can.
+
+    A file Claude Code cannot load disables every hook it registers, and the registration check
+    reads such a file as registering nothing - so it has to be named here, or the harness it kills
+    is reported clean."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError as exc:
+        return "unreadable: %s" % exc
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "it starts with a UTF-8 byte-order mark, which JSON readers commonly refuse"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        return "not UTF-8: %s" % exc
+    except ValueError as exc:
+        return "not valid JSON: %s" % exc
+    return _hooks_shape_problem(data)
+
+
+def _settings_findings(settings, home):
+    """(findings, registered paths) for the settings files: an unloadable file is one finding and
+    contributes no registrations; a loadable one is checked for registrations naming missing files."""
+    found, loadable = [], []
+    for path in settings:
+        problem = settings_problem(path)
+        if problem:
+            found.append(("settings-unparseable", "%s: %s - every hook it registers is dead, and none of "
+                                                   "them could be checked" % (path, problem)))
+        else:
+            loadable.append(path)
+    for path in loadable:
+        for event, _command, missing in hc.registration_problems(path, home=home):
+            found.append(("registration", "%s (%s): command names %s, which does not exist - the "
+                                          "hook silently never fires" % (path.name, event, missing)))
+    return found, hc.registered_paths(loadable, home=home)
 
 
 def check_personal(home=None, shipped_root=None):
@@ -148,12 +241,8 @@ def check_personal(home=None, shipped_root=None):
                               "improvement away. If the shipped copy is ahead, retire the local one."
                               % (local, twin)))
     settings = [p for p in sorted(claude.glob("settings*.json")) if p.is_file()]
-    registered = hc.registered_paths(settings, home=home)
-    for path in settings:
-        for event, command, missing in hc.registration_problems(path, home=home):
-            found.append(("registration", "%s (%s): command names %s, which does not exist - the "
-                                          "hook silently never fires" % (path.name, event, missing)))
-            del command
+    settings_found, registered = _settings_findings(settings, home)
+    found += settings_found
     hooks_dir = claude / "hooks"
     found += [("orphan-hook", "%s is registered nowhere and is neither a library nor a tombstone"
                % p.name) for p in hc.orphan_scripts(hooks_dir, registered)]
@@ -177,15 +266,41 @@ def check_personal(home=None, shipped_root=None):
     return found
 
 
+def _missing_path_args(args):
+    """One line per path argument naming a directory that does not exist.
+
+    `check` must refuse these rather than skip them: a typo in --root audits nothing, one in
+    --home audits an empty harness, and one in --shipped turns the duplicate checks off - and all
+    three would otherwise print "clean" and exit 0."""
+    named = [("--root", r) for r in args.root]
+    named += [(flag, value) for flag, value in (("--home", args.home), ("--shipped", args.shipped))
+              if value]
+    return ["%s is not a directory: %s" % (flag, value) for flag, value in named
+            if not Path(value).is_dir()]
+
+
 def cmd_check(args, out=None, err=None):
     """Run every deterministic check over the selected targets and return an exit code."""
     out = out or sys.stdout
     err = err or sys.stderr
+    missing = _missing_path_args(args)
+    if missing:
+        for line in missing:
+            print("error: %s" % line, file=err)
+        return 2
     home = _home(args) or Path.home()
+    unlistable = []
     selected, skipped = gather([Path(r) for r in args.root], home=_home(args),
-                                personal=not args.no_personal)
-    shipped = hc.shipped_descriptions(Path(args.shipped)) if args.shipped else {}
+                                personal=not args.no_personal, unlistable=unlistable)
+    # resolve() first: "." has no parent of its own, and --shipped names a skills/ dir whose
+    # PARENT is the plugin root that also holds hooks/.
+    shipped_dir = Path(args.shipped).resolve() if args.shipped else None
+    shipped = hc.shipped_descriptions(shipped_dir) if shipped_dir else {}
     results, total = [], 0
+    for path, why in unlistable:
+        total += 1
+        results.append({"target": path, "findings": [
+            {"check": "unlistable", "message": "cannot list, not audited: %s" % why}]})
     for target in selected:
         findings = check_skills(target, shipped)
         total += len(findings)
@@ -196,8 +311,7 @@ def cmd_check(args, out=None, err=None):
     # no target at all, so the run printed "0 finding(s) across 0 target(s)" and exited 0 over
     # exactly the rot this check exists to find.
     if not args.no_personal:
-        # --shipped names a skills/ dir; its PARENT is the plugin root, which also holds hooks/.
-        findings = check_personal(home, shipped_root=Path(args.shipped).parent if args.shipped else None)
+        findings = check_personal(home, shipped_root=shipped_dir.parent if shipped_dir else None)
         total += len(findings)
         results.append({"target": str(home / ".claude"),
                         "findings": [{"check": c, "message": m} for c, m in findings]})
@@ -243,12 +357,23 @@ def build_parser():
     return parser
 
 
+def _tolerant_stdio():
+    """Replace what the console encoding cannot carry instead of crashing on it: a Windows pipe
+    is cp1252, and one CJK path would otherwise end the report with a traceback."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv=None):
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    _tolerant_stdio()
     try:
         return {"targets": cmd_targets, "check": cmd_check}[args.command](args)
-    except OSError as exc:
-        print("error: %s" % exc, file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - 1 means "findings"; a crash must never read as that
+        print("error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
         return 2
 
 

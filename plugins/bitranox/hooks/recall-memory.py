@@ -59,6 +59,29 @@ def holds_a_credential(body):
     return secret_patterns.holds_a_credential(body)
 
 
+# What the LAST recall could not read: a file that failed to open or decode, or a directory the
+# walk could not list. Recall must stay silent on stdout, so without this record one bad file is
+# invisible - and before the scan skipped such files, one latin-1 note silenced recall entirely.
+SKIPPED_LOG = "recall-skipped.txt"
+
+
+def _log_skipped(skipped):
+    """Record `skipped` [(path, reason)] in the audit dir, replacing the previous record; remove
+    the record when nothing was skipped, so it never outlives the file it names. Never raises."""
+    path = sig._audit_dir() / SKIPPED_LOG
+    try:
+        if not skipped:
+            if path.exists():
+                path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["%s\t%s" % (p, reason) for p, reason in sorted(set(skipped))]
+        with open(path, "w", encoding="utf-8", errors="backslashreplace", newline="") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
 def _state_file(cwd, sid):
     """Per-project, per-session recall state. Both keys are confined by their shared helper:
     `proj_key` hashes the project, `session_key` flattens the id to one filename component."""
@@ -90,7 +113,7 @@ def _snippet(path, keywords, maxlen):
     KB): a window CENTERED on the first matched keyword, so the relevant rule is shown, not just the
     file head (which often would not contain the match at all)."""
     try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ""
     if Path(path).name == sig.CURATED_INDEX:      # strip the scope descriptor (meta, not a fact) from a curated index
@@ -119,7 +142,7 @@ def _frontmatter(text):
     if end < 0:
         return {}
     out = {}
-    for line in text[3:end].splitlines():
+    for line in text[3:end].split("\n"):
         if not line or line[0] in " \t#" or ":" not in line:
             continue
         key, _, value = line.partition(":")
@@ -130,6 +153,13 @@ def _frontmatter(text):
     return out
 
 
+def _lines_keepends(text):
+    """Lines split on "\\n" only, each keeping its terminator. Not splitlines(): it also breaks on
+    \\f and U+2028, which would turn mid-line text into a fake "# heading" line."""
+    parts = text.split("\n")
+    return [p + "\n" for p in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+
+
 def _matched_section(text, keywords):
     """(heading line, section body) of the section holding the first keyword match, else None."""
     low = text.lower()
@@ -137,7 +167,7 @@ def _matched_section(text, keywords):
               default=-1)
     if pos < 0:
         return None
-    lines = text.splitlines(keepends=True)
+    lines = _lines_keepends(text)
     offset, heading, start = 0, None, 0
     for i, line in enumerate(lines):
         if offset > pos:
@@ -164,7 +194,7 @@ def _note_view(path, keywords, maxlen):
     many topics; with no match or no heading, the file head.
     """
     try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ""
     if Path(path).name == sig.CURATED_INDEX:
@@ -242,9 +272,12 @@ def main():
             anchor = sig.resolve_anchor(cwd)
             if anchor is None:
                 return 0
-            pre = str(anchor) + os.sep
-            files = [f for f in files if str(f).startswith(pre)]
-        hits = gs.scan(keywords, files)
+            # Compared on resolved paths: the workspace walk returns symlink-free paths while the
+            # anchor keeps the cwd's spelling, so a plain prefix test dropped the cwd's own tree.
+            files = gs.within_tree(files, anchor)
+        skipped = []
+        hits = gs.scan(keywords, files, skipped=skipped)
+        _log_skipped(skipped + gs.take_walk_errors())
     except Exception:  # noqa: BLE001 - scan must never wedge the session
         return 0
     if not hits:

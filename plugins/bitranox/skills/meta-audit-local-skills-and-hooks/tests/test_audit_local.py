@@ -2,6 +2,9 @@
 
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -360,3 +363,229 @@ def test_the_module_docstring_states_check_s_own_exit_codes(tmp_path):
     lowered = " ".join(doc.split()).lower()
     assert "check" in lowered and "0 = no findings" in lowered, (
         "the docstring never states check's own exit-code meaning")
+
+
+# ---- a settings file Claude Code cannot load kills every hook in it -----------------------------
+
+def _settings_home(tmp_path, raw):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_bytes(raw)
+    return home
+
+
+def _gone_hook(home):
+    return json.dumps({"hooks": {"Stop": [{"matcher": "*", "hooks": [
+        {"type": "command", "command": "bash %s/.claude/hooks/gone.sh" % home}]}]}})
+
+
+def test_an_unparseable_settings_file_is_a_finding_not_clean(tmp_path):
+    home = tmp_path / "home"
+    good = _gone_hook(home)
+    home = _settings_home(tmp_path, good[:-1].encode("utf-8"))      # the closing brace is gone
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1, out
+    assert "[settings-unparseable]" in out and "settings.json" in out
+
+
+def test_the_same_settings_file_parsed_reports_its_dead_registration(tmp_path):
+    """The control: with the brace back, the registration finding is what shows."""
+    home = tmp_path / "home"
+    home = _settings_home(tmp_path, _gone_hook(home).encode("utf-8"))
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1 and "[registration]" in out and "[settings-unparseable]" not in out
+
+
+@pytest.mark.parametrize("raw, why", [
+    (b"[]", "top level is a list"),
+    (b'{"hooks": []}', '"hooks" is a list'),
+    (b'{"hooks": {"Stop": {}}}', '"hooks.Stop" is an object'),
+    (b'{"hooks": {"Stop": null}}', '"hooks.Stop" is null'),
+    (b'{"hooks": {"Stop": ["bash x.sh"]}}', '"hooks.Stop" holds a string'),
+    (b'{"hooks": {"Stop": [{"hooks": "bash x.sh"}]}}', '"hooks.Stop[].hooks" is a string'),
+    (b'{"hooks": {"Stop": [{"hooks": ["bash x.sh"]}]}}', '"hooks.Stop[].hooks" holds a string'),
+    (b'{"x": "caf\xe9"}', "not UTF-8"),
+    (b'\xef\xbb\xbf{"hooks": {}}', "byte-order mark"),
+])
+def test_a_settings_file_of_the_wrong_shape_or_encoding_is_a_finding(tmp_path, raw, why):
+    home = _settings_home(tmp_path, raw)
+    code, out, err = _run_check(["check", "--home", str(home)])
+    assert code == 1, out + err
+    assert "[settings-unparseable]" in out and why in out, out
+
+
+@pytest.mark.parametrize("raw", [b'{"model": "x", "hooks": {}}', b'{"model": "x"}',
+                                 b'{"hooks": {"Stop": [{"matcher": "*"}]}}'])
+def test_a_well_formed_settings_file_without_hooks_is_clean(tmp_path, raw):
+    home = _settings_home(tmp_path, raw)
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 0 and "clean" in out, out
+
+
+# ---- a typo in a path argument must not read as a clean audit -----------------------------------
+
+def test_check_refuses_a_missing_shipped_dir(tree):
+    code, _, err = _run_check(["check", "--root", str(tree.work), "--no-personal",
+                               "--shipped", str(tree.work / "skilz")])
+    assert code == 2 and "skilz" in err
+
+
+def test_check_refuses_a_missing_root(tree):
+    code, out, err = _run_check(["check", "--root", str(tree.work / "does-not-exist"),
+                                 "--no-personal"])
+    assert code == 2 and "does-not-exist" in err
+    assert "finding(s)" not in out
+
+
+def test_check_refuses_a_missing_home(tmp_path):
+    code, _, err = _run_check(["check", "--home", str(tmp_path / "typo-home")])
+    assert code == 2 and "typo-home" in err
+
+
+def test_shipped_given_as_dot_still_finds_the_plugin_root(tmp_path, monkeypatch):
+    plug = _plugin_with(tmp_path, hooks=[("h.py", "a\nb\n")])
+    home = tmp_path / "home"
+    (home / ".claude" / "hooks").mkdir(parents=True)
+    (home / ".claude" / "hooks" / "h.py").write_text("a\nb\n", encoding="utf-8")
+    monkeypatch.chdir(plug / "skills")
+    code, out, _ = _run_check(["check", "--home", str(home), "--shipped", "."])
+    assert code == 1 and "[duplicate-of-shipped]" in out and "byte-identical" in out
+
+
+# ---- an unreadable subtree is reported, not dropped ---------------------------------------------
+
+_POSIX_NONROOT = pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs POSIX permissions, non-root")
+
+
+@_POSIX_NONROOT
+def test_an_unlistable_dir_is_named_by_targets(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    locked = tmp_path / "work" / "locked"
+    _skills(locked / "p" / ".claude")
+    locked.chmod(0)
+    try:
+        code, out, err = _run(["targets", "--root", str(tmp_path / "work"), "--no-personal"])
+    finally:
+        locked.chmod(0o755)
+    assert code == 1
+    assert str(locked) in out and "cannot list" in out
+    assert str(locked) in err
+
+
+@_POSIX_NONROOT
+def test_an_unlistable_dir_makes_check_report_a_finding_not_clean(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    locked = tmp_path / "work" / "locked"
+    _skills(locked / "p" / ".claude")
+    locked.chmod(0)
+    try:
+        code, out, _ = _run_check(["check", "--root", str(tmp_path / "work"), "--no-personal"])
+    finally:
+        locked.chmod(0o755)
+    assert code == 1, out
+    assert "[unlistable]" in out and str(locked) in out
+
+
+# ---- main(): the real entry point and its exit codes --------------------------------------------
+
+def _healthy_project(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    skill = tmp_path / "work" / "p" / ".claude" / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Use when building provmm images from source.\n---\n",
+        encoding="utf-8")
+    return home, skill
+
+
+def test_main_exits_zero_on_a_clean_tree(tmp_path, capsys):
+    home, _ = _healthy_project(tmp_path)
+    assert audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)]) == 0
+
+
+def test_main_exits_one_on_findings(tmp_path, capsys):
+    home, skill = _healthy_project(tmp_path)
+    (skill / "SKILL.md").write_text("---\nname: demo\ndescription: Builds things.\n---\n",
+                                    encoding="utf-8")
+    assert audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)]) == 1
+
+
+def test_main_exits_two_not_one_when_a_check_crashes(tmp_path, capsys):
+    """One means "findings"; a crash must never be read as that. An undecodable SKILL.md is a
+    real input that raises a non-OSError inside the front-matter check."""
+    home, skill = _healthy_project(tmp_path)
+    (skill / "SKILL.md").write_bytes(b"---\nname: demo\ndescription: caf\xe9\n---\n")
+    code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
+    assert code == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_main_targets_exit_codes(tmp_path, capsys):
+    home, _ = _healthy_project(tmp_path)
+    assert audit_local.main(["targets", "--root", str(tmp_path / "work"), "--home", str(home),
+                             "--no-personal"]) == 0
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert audit_local.main(["targets", "--root", str(empty), "--home", str(home),
+                             "--no-personal"]) == 1
+
+
+def test_cp1252_stdout_does_not_crash_on_a_cjk_path(tmp_path):
+    home, _ = _healthy_project(tmp_path)
+    cjk = tmp_path / "work" / "日本" / ".claude" / "skills" / "demo2"
+    cjk.mkdir(parents=True)
+    (cjk / "SKILL.md").write_text(
+        "---\nname: demo2\ndescription: Use when you need a second demo.\n---\n", encoding="utf-8")
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, audit_local.__file__, "targets", "--root",
+                        str(tmp_path / "work"), "--home", str(home), "--no-personal"],
+                       capture_output=True, env=env)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    assert b"targets (2)" in r.stdout
+
+
+# ---- branches the suite never reached -----------------------------------------------------------
+
+def test_a_candidate_inside_a_plugin_repo_is_skipped_with_its_reason(tree):
+    inner = _skills(tree.work / "igittigitt" / ".claude", "inner")
+    code, out, _ = _run(["targets", "--root", str(tree.work), "--no-personal", "--json"])
+    payload = json.loads(out)
+    assert str(inner) not in payload["data"]["targets"]
+    assert any(e["path"] == str(inner) and e["reason"] for e in payload["skipped"])
+
+
+def test_a_parked_bak_dir_is_reported_as_a_graveyard(tmp_path):
+    home = tmp_path / "home"
+    parked = home / ".claude" / "skills.bak" / "old"
+    parked.mkdir(parents=True)
+    (parked / "SKILL.md").write_text("---\nname: old\n---\n", encoding="utf-8")
+    found = audit_local.check_personal(home)
+    assert ("graveyard", "%s: parked dir holding 1 skill(s)" % (home / ".claude" / "skills.bak")) \
+        in found
+
+
+def test_an_uncollectable_hooks_test_dir_is_reported(tmp_path):
+    home = tmp_path / "home"
+    tests = home / ".claude" / "hooks" / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_broken.py").write_text("import no_such_module_xyz\n\ndef test_x():\n    pass\n",
+                                          encoding="utf-8")
+    found = audit_local.check_personal(home)
+    assert any(c.startswith("tests-u") and "test_broken.py" in m for c, m in found), found
+
+
+def test_an_uncollectable_skill_test_dir_is_reported(tmp_path):
+    skills = _skills(tmp_path / "p" / ".claude", "demo")
+    tests = skills / "demo" / "tests"
+    tests.mkdir()
+    (tests / "test_broken.py").write_text("import no_such_module_xyz\n\ndef test_x():\n    pass\n",
+                                          encoding="utf-8")
+    found = audit_local.check_skills(skills)
+    assert any(c.startswith("tests-u") and "test_broken.py" in m for c, m in found), found

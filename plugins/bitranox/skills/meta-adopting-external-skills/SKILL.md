@@ -82,6 +82,11 @@ internal cross-references to `bitranox:<name>`, scaffolds a `tests/` stub when t
 gate read-only, and prints a follow-up checklist. It never commits, never pushes, and never
 removes anything. Review every rewrite it reports.
 
+Its license gate reads EVERY declared id - the LICENSE file, every SPDX header, every manifest
+field - and one copyleft id anywhere rejects. A LICENSE file it does not recognise, or an id it can
+neither accept nor reject, stops it as NO LICENSE FOUND with the reason, for you to decide. Exit
+codes: 0 adopted, 1 the gate stopped it (nothing written), 2 error.
+
 ## Step 3 - Enhance to bitranox standards
 
 **REQUIRED: `bitranox:meta-skill-writer`.** Bring the adopted skill up to standard with it -

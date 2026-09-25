@@ -402,3 +402,271 @@ def test_a_plain_scan_still_ignores_the_debounce(tmp_path, monkeypatch):
     monkeypatch.setattr(G, "discover_curated", lambda *a, **k: [])
     G.main(["--topic", "zfs snapshots", "--self", "/p/alpha"])
     assert called == [1], "a marked topic suppressed an explicitly requested scan"
+
+
+# ---- one bad file must not end the gather -------------------------------------------------------
+
+def test_scan_skips_an_undecodable_file_and_keeps_its_siblings(tmp_path):
+    bad = tmp_path / "latin1.md"
+    bad.write_bytes(b"zorblax caf\xe9 in latin-1")
+    good = tmp_path / "good.md"
+    good.write_text("zorblax in utf-8", encoding="utf-8")
+    skipped = []
+    hits = G.scan(["zorblax"], [bad, good], skipped=skipped)
+    assert list(hits) == [str(good)]
+    assert [p for p, _ in skipped] == [str(bad)]
+
+
+def test_scan_without_a_skipped_list_still_skips_quietly(tmp_path):
+    bad = tmp_path / "latin1.md"
+    bad.write_bytes(b"zorblax caf\xe9")
+    assert G.scan(["zorblax"], [bad]) == {}
+
+
+def test_cli_warns_about_an_undecodable_note_and_still_reports_the_rest(home, capsys):
+    d = _mem("/p/other", "o.md", "fleet ssh in another tree")
+    (d / "latin1.md").write_bytes(b"fleet ssh caf\xe9")
+    rc = G.main(["--topic", "fleet ssh access", "--self", "/p/self"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert "CANDIDATES: 1 in 1 tree(s)" in cap.out
+    assert "latin1.md" in cap.err and "skipped" in cap.err
+
+
+def test_a_bom_prefixed_note_still_matches(tmp_path):
+    f = tmp_path / "bom.md"
+    f.write_bytes(b"\xef\xbb\xbfzorblax at the very start")
+    assert G.scan(["zorblax"], [f]) == {str(f): ["zorblax"]}
+
+
+# ---- --self spelling: symlink, trailing separator, "." ------------------------------------------
+
+def _symlinked_ws(tmp_path, monkeypatch):
+    """A workspace reached through a symlink, with a same-tree sibling store and a tree-top fact."""
+    h = tmp_path / "home"
+    (h / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))
+    real = h / "real" / "ws"
+    for sub in ("projA", "projB"):
+        (real / sub).mkdir(parents=True)
+        (real / sub / "CLAUDE.md").write_text(sub, encoding="utf-8")
+    (real / "CLAUDE.md").write_text("root", encoding="utf-8")
+    (real / ".claude-memory" / "facts").mkdir(parents=True)
+    (real / ".claude-memory" / "facts" / "zorblax.md").write_text("zorblax top", encoding="utf-8")
+    (real / "projB" / ".claude-memory" / "facts").mkdir(parents=True)
+    (real / "projB" / ".claude-memory" / "facts" / "sib.md").write_text("zorblax sib",
+                                                                         encoding="utf-8")
+    link = h / "link"
+    try:
+        os.symlink(str(h / "real"), str(link), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable here")
+    return h, real, link / "ws" / "projA"
+
+
+def _cfg(home_dir, **kv):
+    import json as _json
+    (home_dir / ".claude" / ".bitranox-memory.json").write_text(_json.dumps(kv), encoding="utf-8")
+
+
+def test_a_symlinked_self_reports_one_tree_once(tmp_path, monkeypatch, capsys):
+    h, real, via_link = _symlinked_ws(tmp_path, monkeypatch)
+    _cfg(h, discovery_roots=[str(real)])
+    assert G.main(["--topic", "zorblax", "--self", str(via_link)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("TREE: ") == 1, out
+    assert out.count("zorblax.md") == 1, out
+    assert "2 in 1 tree(s)" in out, out
+
+
+def test_a_symlinked_self_keeps_same_tree_stores_when_walled(tmp_path, monkeypatch, capsys):
+    h, real, via_link = _symlinked_ws(tmp_path, monkeypatch)
+    _cfg(h, cross_tree_search=False)
+    assert G.main(["--topic", "zorblax", "--self", str(via_link)]) == 0
+    out = capsys.readouterr().out
+    assert "sib.md" in out and "zorblax.md" in out, out
+    assert "2 in 1 tree(s)" in out, out
+
+
+def test_self_with_a_trailing_separator_still_excludes_own_memory(home, capsys, tmp_path):
+    me = tmp_path / "p" / "self"
+    me.mkdir(parents=True)
+    _mem(str(me), "s.md", "fleet ssh self")
+    _mem("/p/other", "o.md", "fleet ssh other")
+    assert G.main(["--topic", "fleet ssh", "--self", str(me) + os.sep]) == 0
+    out = fwd(capsys.readouterr().out)
+    assert "s.md" not in out and "o.md" in out, out
+    assert "CANDIDATES: 1 " in out
+
+
+def test_self_given_as_dot_still_excludes_own_memory(home, capsys, tmp_path, monkeypatch):
+    me = tmp_path / "p" / "self"
+    me.mkdir(parents=True)
+    _mem(str(me), "s.md", "fleet ssh self")
+    _mem("/p/other", "o.md", "fleet ssh other")
+    monkeypatch.chdir(me)
+    assert G.main(["--topic", "fleet ssh", "--self", "."]) == 0
+    out = fwd(capsys.readouterr().out)
+    assert "s.md" not in out and "o.md" in out, out
+
+
+# ---- non-ASCII topics ---------------------------------------------------------------------------
+
+def test_extract_keywords_keeps_a_non_ascii_word_whole():
+    assert G.extract_keywords("Schl\u00fcssel \u00dcbersetzung") == ["schl\u00fcssel",
+                                                                    "\u00fcbersetzung"]
+
+
+def test_extract_keywords_keeps_cyrillic_words():
+    kws = G.extract_keywords("\u0441\u043d\u0438\u043c\u043e\u043a zfs")
+    assert kws == ["\u0441\u043d\u0438\u043c\u043e\u043a", "zfs"]
+
+
+def test_a_non_ascii_keyword_does_not_match_an_unrelated_word(tmp_path):
+    key = tmp_path / "key.md"
+    key.write_text("Der Schl\u00fcssel liegt im Tresor", encoding="utf-8")
+    bowl = tmp_path / "bowl.md"
+    bowl.write_text("Die Sch\u00fcssel ist voll", encoding="utf-8")
+    kws = G.extract_keywords("Schl\u00fcssel")
+    assert G.scan(kws, [key, bowl]) == {str(key): ["schl\u00fcssel"]}
+
+
+def test_a_decomposed_spelling_in_a_note_still_matches(tmp_path):
+    f = tmp_path / "nfd.md"
+    f.write_text("Der Schlu\u0308ssel", encoding="utf-8")    # u + combining diaeresis
+    assert G.scan(G.extract_keywords("Schl\u00fcssel"), [f]) == {str(f): ["schl\u00fcssel"]}
+
+
+def test_ascii_boundaries_are_unchanged_by_unicode_matching(tmp_path):
+    f = tmp_path / "c.md"
+    f.write_text("fleet_ssh and fleet-ssh and fleetssh", encoding="utf-8")
+    assert G.scan(["ssh"], [f]) == {str(f): ["ssh"]}           # _ and - still separate words
+    g = tmp_path / "d.md"
+    g.write_text("fleetssh only", encoding="utf-8")
+    assert G.scan(["ssh"], [g]) == {}
+
+
+# ---- exit codes and explicit outcomes -----------------------------------------------------------
+
+def test_mark_exits_two_when_the_record_cannot_be_written(tmp_path, monkeypatch, capsys):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(sig, "_audit_dir", lambda: blocker / "audit")   # parent is a FILE
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_mark_of_an_already_marked_pair_still_exits_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(sig, "_audit_dir", lambda: tmp_path)
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
+    assert G.main(["--topic", "zfs snapshots", "--self", "/p/alpha", "--mark"]) == 0
+
+
+def test_no_usable_keywords_prints_an_explicit_zero_candidates_line(home, capsys):
+    assert G.main(["--topic", "the rules", "--self", "/p/self"]) == 0
+    out = capsys.readouterr().out
+    assert "CANDIDATES: 0 (not scanned: no usable keywords from topic)" in out
+
+
+def test_walled_without_an_anchor_prints_an_explicit_zero_candidates_line(home, capsys, tmp_path):
+    _cfg(home, cross_tree_search=False)
+    lonely = home / "nowhere"
+    lonely.mkdir()
+    assert G.main(["--topic", "zorblax", "--self", str(lonely)]) == 0
+    out = capsys.readouterr().out
+    assert "CANDIDATES: 0 (not scanned: no tree anchor" in out
+
+
+def test_an_unexpected_error_exits_two_not_one(home, capsys):
+    # One is "not gathered" for --seen and must never double as "crashed".
+    assert G.main(["--topic", "zorblax", "--self", "/p/a\x00b"]) == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_cp1252_stdout_does_not_crash_on_a_cjk_candidate(tmp_path):
+    import subprocess
+    import sys as _sys
+    h = tmp_path / "home"
+    d = h / ".claude" / "projects" / "-p-other" / "memory"
+    d.mkdir(parents=True)
+    (d / "n.md").write_text("\u65e5\u672c\u8a9e zorblax", encoding="utf-8")
+    env = dict(os.environ, HOME=str(h), USERPROFILE=str(h), PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([_sys.executable, str(Path(G.__file__)), "--topic",
+                        "\u65e5\u672c\u8a9e zorblax", "--self", "/p/self"],
+                       capture_output=True, env=env, cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    assert b"CANDIDATES: 1" in r.stdout
+
+
+# ---- Windows path case ---------------------------------------------------------------------------
+
+def test_the_debounce_key_ignores_windows_path_case():
+    import ntpath
+    a = G._pair_key("C:\\Work\\Proj", "zfs", pathmod=ntpath)
+    b = G._pair_key("c:\\work\\proj", "zfs", pathmod=ntpath)
+    assert a == b
+
+
+def test_the_tree_filter_ignores_windows_path_case():
+    import ntpath
+    files = ["c:\\work\\proj\\.claude-memory\\facts\\a.md", "c:\\other\\b.md"]
+    assert G.within_tree(files, "C:\\Work\\Proj", pathmod=ntpath) == files[:1]
+
+
+def test_the_tree_filter_does_not_take_a_sibling_sharing_a_prefix(tmp_path):
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "project2").mkdir()
+    files = [str(tmp_path / "proj" / "a.md"), str(tmp_path / "project2" / "b.md")]
+    assert G.within_tree(files, str(tmp_path / "proj")) == files[:1]
+
+
+# ---- line-oriented caches and unreadable dirs ---------------------------------------------------
+
+def test_a_cached_path_holding_a_line_separator_char_survives_the_cache(tmp_path, monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    odd = ws / "odd\x1cname"                      # \x1c is a str.splitlines() boundary
+    odd.mkdir()
+    (odd / "CLAUDE.md").write_text("odd", encoding="utf-8")
+    first = sorted(G.discover_claude_md(str(cur)))
+    second = sorted(G.discover_claude_md(str(cur)))    # served from the cache file
+    assert str(odd / "CLAUDE.md") in first
+    assert second == first
+
+
+@pytest.mark.skipif(os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="needs POSIX permissions and a non-root user")
+def test_an_unreadable_dir_is_reported_not_silently_dropped(tmp_path, monkeypatch, capsys):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    locked = ws / "locked"
+    (locked / "inner").mkdir(parents=True)
+    locked.chmod(0)
+    try:
+        assert G.main(["--topic", "zorblax", "--self", str(cur)]) == 0
+        err = capsys.readouterr().err
+        assert G.main(["--topic", "zorblax", "--self", str(cur)]) == 0
+        again = capsys.readouterr().err       # an incomplete walk is not cached as complete
+    finally:
+        locked.chmod(0o755)
+    assert "locked" in err and "cannot list" in err
+    assert "locked" in again and "cannot list" in again
+
+
+@pytest.mark.skipif(os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="needs POSIX permissions and a non-root user")
+def test_the_claude_md_walk_reports_an_unreadable_dir_every_time(tmp_path, monkeypatch):
+    ws, cur = _ws(tmp_path, monkeypatch)
+    locked = ws / "locked"
+    (locked / "inner").mkdir(parents=True)
+    locked.chmod(0)
+    G.take_walk_errors()
+    try:
+        G.discover_claude_md(str(cur))
+        first = G.take_walk_errors()
+        G.discover_claude_md(str(cur))          # not served from a cache of the incomplete walk
+        second = G.take_walk_errors()
+    finally:
+        locked.chmod(0o755)
+    assert [p for p, _ in first] == [str(locked)]
+    assert [p for p, _ in second] == [str(locked)]

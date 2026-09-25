@@ -34,9 +34,15 @@ Run:
   `uv run scripts/claudemd_variance.py --root ~/src --min-members 1`   # include single-copy headings
 
 Exit codes: 0 = at least one CLAUDE.md file was found and analysed, 1 = the walk completed but
-matched zero files (an empty or misspelled --root), 2 = usage/IO error (a --root path does not
-exist, or every matched file failed to decode). `--json` emits `{ok, command, skipped, data}`;
-warnings (an unreadable file, a bound hit) always go to stderr so stdout stays parseable.
+matched zero files (an empty or misspelled --root), 2 = error (a --root path does not exist,
+every matched file failed to decode, a variant's members share no directory, or any other
+failure). `--json` emits `{ok, command, skipped, data}`, plus `error` when ok is false;
+warnings (an unreadable file, a directory the walk cannot list, a bound hit) always go to stderr
+so stdout stays parseable.
+
+A `## ` line inside a fenced code block (CommonMark: 3+ backticks or tildes) is not a heading, and
+a heading's closing sequence is a run of `#` preceded by whitespace, so `## Using C#` keeps its `#`.
+A heading's file count is its number of DISTINCT files: one file repeating a heading is one file.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,7 +119,12 @@ def iter_claude_md(
             yield root
         return
     count = 0
-    for dirpath, dirnames, entries in os.walk(root, followlinks=False):
+
+    def unlistable(err: OSError) -> None:
+        # Without this, os.walk drops a directory it cannot list and the run reports ok.
+        warn(f"cannot list, skipping: {err.filename}: {err}")
+
+    for dirpath, dirnames, entries in os.walk(root, onerror=unlistable, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in VCS_DIRS]
         for entry in sorted(entries):
             if entry not in names:
@@ -135,7 +147,8 @@ def read_claude_md(path: Path, *, warn: Callable[[str], None]) -> str | None:
     either - it is reported as skipped instead, matching every sibling tool's convention.
     """
     try:
-        return path.read_text(encoding="utf-8")
+        # utf-8-sig: a byte-order mark is not text, and left in place it hides a first-line heading.
+        return path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         warn(f"cannot decode as utf-8, skipping: {path}: {exc}")
         return None
@@ -149,6 +162,49 @@ def read_claude_md(path: Path, *, warn: Callable[[str], None]) -> str | None:
 # --------------------------------------------------------------------------------------------
 
 
+# CommonMark fences: up to three spaces of indent, then 3+ backticks or tildes. A backtick
+# opener's info string may not hold a backtick; a closer is the same character, at least as
+# long, followed by nothing but whitespace.
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# A closing sequence is a run of # preceded by whitespace (or standing alone): "## Using C#"
+# keeps its #, "## Closed ##" loses the trailing run.
+_CLOSING_RE = re.compile(r"(?:^|[ \t]+)#+[ \t]*$")
+
+
+def _fence_opener(line: str) -> str | None:
+    """The fence run that opens a code block on this line, or None."""
+    match = _FENCE_RE.match(line)
+    if not match:
+        return None
+    run, info = match.group(1), match.group(2)
+    if run[0] == "`" and "`" in info:
+        return None
+    return run
+
+
+def _closes(line: str, opener: str) -> bool:
+    match = _FENCE_RE.match(line)
+    if not match:
+        return False
+    run, rest = match.group(1), match.group(2)
+    return run[0] == opener[0] and len(run) >= len(opener) and not rest.strip()
+
+
+def _heading_lines(lines: Sequence[str]) -> list[int]:
+    """Indices of the `## ` boundary lines, skipping every line inside a fenced code block."""
+    boundaries: list[int] = []
+    opener: str | None = None
+    for i, line in enumerate(lines):
+        if opener is not None:
+            if _closes(line, opener):
+                opener = None
+            continue
+        opener = _fence_opener(line)
+        if opener is None and line.startswith("## "):
+            boundaries.append(i)
+    return boundaries
+
+
 def split_sections(text: str) -> list[tuple[str, str, int]]:
     """Split `text` into (heading, raw_body, start_line) for each `## ` heading at column 0.
 
@@ -160,11 +216,11 @@ def split_sections(text: str) -> list[tuple[str, str, int]]:
     stays available for display.
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    boundaries = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    boundaries = _heading_lines(lines)
     sections: list[tuple[str, str, int]] = []
     for idx, start in enumerate(boundaries):
         end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(lines)
-        heading = lines[start][3:].rstrip().rstrip("#").strip()
+        heading = _CLOSING_RE.sub("", lines[start][3:]).strip()
         body = "\n".join(lines[start + 1 : end])
         sections.append((heading, body, start + 1))  # 1-based line number, for a reader's eye
     return sections
@@ -282,7 +338,9 @@ class HeadingGroup:
 
     @property
     def total_members(self) -> int:
-        return sum(v.size for v in self.variants)
+        """Distinct FILES carrying this heading. A file holding the heading twice is one file,
+        not two, so it can never pass --min-members 2 on its own."""
+        return len({member for v in self.variants for member in v.members})
 
     @property
     def largest_variant(self) -> Variant:
@@ -304,7 +362,10 @@ class HeadingGroup:
 
 
 def _group_variants(
-    sections: Sequence[SectionInstance], *, lift_threshold: int
+    sections: Sequence[SectionInstance],
+    *,
+    lift_threshold: int,
+    _commonpath: Callable[[list[str]], str] = os.path.commonpath,
 ) -> list[HeadingGroup]:
     by_heading: dict[str, dict[str, list[SectionInstance]]] = {}
     for section in sections:
@@ -320,7 +381,7 @@ def _group_variants(
                     heading=heading,
                     hash=digest,
                     members=members,
-                    common_ancestor=common_ancestor(members),
+                    common_ancestor=common_ancestor(members, _commonpath=_commonpath),
                     lift_candidate=len(members) >= lift_threshold,
                 )
             )
@@ -369,11 +430,14 @@ def analyze(
     min_members: int = DEFAULT_MIN_MEMBERS,
     lift_threshold: int = DEFAULT_LIFT_THRESHOLD,
     warn: Callable[[str], None] = lambda message: None,
+    _commonpath: Callable[[list[str]], str] = os.path.commonpath,
 ) -> Report:
     """Walk every root, split and hash every section, and group the duplicates.
 
     Multiple roots are walked independently, but a file reachable from more than one (nested
     --root arguments) is analysed exactly once, keyed by its resolved absolute path.
+    `_commonpath` is passed through to `common_ancestor` (see there). Raises ValueError when a
+    variant's members share no directory at all.
     """
     resolved_roots = tuple(Path(r).resolve() for r in roots) or (Path(".").resolve(),)
     seen: dict[Path, Path] = {}
@@ -401,7 +465,7 @@ def analyze(
                 )
             )
 
-    groups = _group_variants(sections, lift_threshold=lift_threshold)
+    groups = _group_variants(sections, lift_threshold=lift_threshold, _commonpath=_commonpath)
     groups = [g for g in groups if g.total_members >= min_members]
 
     return Report(
@@ -483,6 +547,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _shown(path: Path) -> str:
+    """A path for a human reader. A POSIX name that is not UTF-8 arrives as lone surrogates,
+    which no encoding can print; show its raw bytes as \\xNN escapes instead."""
+    try:
+        return os.fsencode(path.as_posix()).decode("utf-8", "backslashreplace")
+    except (UnicodeError, ValueError):
+        return path.as_posix()
+
+
 def _render(report: Report) -> list[str]:
     lines: list[str] = []
     for group in report.heading_groups:
@@ -494,10 +567,10 @@ def _render(report: Report) -> list[str]:
             marker = "  LIFT CANDIDATE" if variant.lift_candidate else ""
             lines.append(
                 f"  [{variant.hash[:12]}] {variant.size} file(s) -> common ancestor: "
-                f"{variant.common_ancestor.as_posix()}{marker}"
+                f"{_shown(variant.common_ancestor)}{marker}"
             )
             for member in variant.members:
-                lines.append(f"    - {member.as_posix()}")
+                lines.append(f"    - {_shown(member)}")
     if not lines:
         lines.append(
             f"no heading shared by {report.min_members}+ file(s) "
@@ -506,8 +579,56 @@ def _render(report: Report) -> list[str]:
     return lines
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _tolerant_stdio() -> None:
+    """Escape what the console encoding cannot carry instead of crashing on it: a Windows pipe is
+    cp1252 (a CJK heading), and a POSIX path that is not UTF-8 decodes to lone surrogates that no
+    encoding accepts. backslashreplace keeps the report readable and loses no information."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)   # absent on a replaced stream
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
+def _fail(message: str, *, as_json: bool, warnings: list[str], data: object = None) -> int:
+    """Report an error the way the caller asked for output, and return exit code 2."""
+    if as_json:
+        envelope = {"ok": False, "command": "claudemd_variance", "skipped": warnings,
+                    "data": data, "error": message}
+        print(json.dumps(envelope, indent=2))
+    else:
+        print(f"claudemd_variance: {message}", file=sys.stderr)
+    return 2
+
+
+def _emit(report: Report, *, as_json: bool, warnings: list[str]) -> None:
+    if as_json:
+        envelope = {"ok": report.files_matched > 0, "command": "claudemd_variance",
+                    "skipped": warnings, "data": report.as_dict()}
+        print(json.dumps(envelope, indent=2))
+        return
+    for line in _render(report):
+        print(line)
+    print(
+        f"claudemd_variance: {report.files_matched} file(s) matched under "
+        f"{', '.join(r.as_posix() for r in report.roots)}; {report.files_read} read, "
+        f"{report.files_skipped} skipped.",
+        file=sys.stderr,
+    )
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    _commonpath: Callable[[list[str]], str] = os.path.commonpath,
+) -> int:
+    """CLI entry point. `_commonpath` reaches `common_ancestor`, so the cross-drive error
+    path is testable without a second drive."""
     args = _build_parser().parse_args(argv)
+    _tolerant_stdio()
 
     warnings: list[str] = []
 
@@ -519,33 +640,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     roots = args.root or ["."]
     for root in roots:
         if not Path(root).exists():
-            message = f"--root path does not exist: {root}"
-            if args.json:
-                print(
-                    json.dumps(
-                        {
-                            "ok": False,
-                            "command": "claudemd_variance",
-                            "skipped": warnings,
-                            "data": None,
-                            "error": message,
-                        },
-                        indent=2,
-                    )
-                )
-            else:
-                print(f"claudemd_variance: {message}", file=sys.stderr)
-            return 2
+            return _fail(f"--root path does not exist: {root}", as_json=args.json,
+                         warnings=warnings)
 
     filenames = tuple(args.filename) if args.filename else DEFAULT_FILENAMES
-    report = analyze(
-        roots,
-        filenames=filenames,
-        max_files=args.max_files,
-        min_members=args.min_members,
-        lift_threshold=args.lift_threshold,
-        warn=warn,
-    )
+    try:
+        report = analyze(
+            roots,
+            filenames=filenames,
+            max_files=args.max_files,
+            min_members=args.min_members,
+            lift_threshold=args.lift_threshold,
+            warn=warn,
+            _commonpath=_commonpath,
+        )
+    except Exception as exc:  # noqa: BLE001 - exit 1 means "zero files"; a crash must not say that
+        return _fail(str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}",
+                     as_json=args.json, warnings=warnings)
 
     if report.files_matched and not report.files_read:
         message = (
@@ -554,42 +665,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         warn(message)
         if args.json:
-            print(
-                json.dumps(
-                    {
-                        "ok": False,
-                        "command": "claudemd_variance",
-                        "skipped": warnings,
-                        "data": report.as_dict(),
-                        "error": message,
-                    },
-                    indent=2,
-                )
-            )
+            return _fail(message, as_json=True, warnings=warnings, data=report.as_dict())
         return 2
 
-    if args.json:
-        print(
-            json.dumps(
-                {
-                    "ok": report.files_matched > 0,
-                    "command": "claudemd_variance",
-                    "skipped": warnings,
-                    "data": report.as_dict(),
-                },
-                indent=2,
-            )
-        )
-    else:
-        for line in _render(report):
-            print(line)
-        print(
-            f"claudemd_variance: {report.files_matched} file(s) matched under "
-            f"{', '.join(r.as_posix() for r in report.roots)}; {report.files_read} read, "
-            f"{report.files_skipped} skipped.",
-            file=sys.stderr,
-        )
-
+    _emit(report, as_json=args.json, warnings=warnings)
     return 0 if report.files_matched > 0 else 1
 
 

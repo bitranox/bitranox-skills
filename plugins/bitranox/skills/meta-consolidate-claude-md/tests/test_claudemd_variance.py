@@ -522,3 +522,161 @@ class TestCli:
         payload = json.loads(proc.stdout)
         member = payload["data"]["heading_groups"][0]["variants"][0]["members"][0]
         assert "\\" not in member
+
+
+# --------------------------------------------------------------------------------------------
+# Adjudicated defects: fences, repeated headings, closing sequences, exit codes, encodings
+# --------------------------------------------------------------------------------------------
+
+FENCED_1 = "## Setup\n\nRun it.\n\n```md\n## Example\none\n```\n"
+FENCED_2 = "## Setup\n\nRun it.\n\n```md\n## Example\ntwo\n```\n"
+
+
+class TestFencedHeadings:
+    def test_a_fenced_hash_hash_line_is_not_a_boundary(self):
+        assert [h for h, _, _ in CV.split_sections(FENCED_1)] == ["Setup"]
+
+    def test_bodies_differing_only_inside_a_fence_are_two_variants(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", FENCED_1)
+        write(tmp_path / "b" / "CLAUDE.md", FENCED_2)
+        groups = CV.analyze([tmp_path]).heading_groups
+        assert [g.heading for g in groups] == ["Setup"]
+        assert len(groups[0].variants) == 2
+
+    def test_a_tilde_fence_and_a_longer_closer_are_honoured(self):
+        text = "## A\n~~~\n## not\n~~~~\n## B\nx\n"
+        assert [h for h, _, _ in CV.split_sections(text)] == ["A", "B"]
+
+    def test_a_closer_with_an_info_string_does_not_close(self):
+        text = "## A\n```\n```py\n## still inside\n```\n## B\n"
+        assert [h for h, _, _ in CV.split_sections(text)] == ["A", "B"]
+
+    def test_a_shorter_or_other_char_line_does_not_close(self):
+        text = "## A\n````\n```\n~~~~\n## still inside\n````\n## B\n"
+        assert [h for h, _, _ in CV.split_sections(text)] == ["A", "B"]
+
+    def test_a_backtick_opener_whose_info_holds_a_backtick_is_not_a_fence(self):
+        text = "## A\n``` a`b\n## B\n"
+        assert [h for h, _, _ in CV.split_sections(text)] == ["A", "B"]
+
+    def test_an_unclosed_fence_runs_to_the_end(self):
+        text = "## A\n```\n## never\n"
+        assert [h for h, _, _ in CV.split_sections(text)] == ["A"]
+
+
+class TestRepeatedHeadingInOneFile:
+    def test_two_same_heading_sections_in_one_file_count_as_one_file(self, tmp_path):
+        write(tmp_path / "CLAUDE.md", "## Notes\nfirst\n\n## Notes\nsecond\n")
+        report = CV.analyze([tmp_path])
+        assert report.heading_groups == ()
+
+    def test_the_share_is_over_distinct_files(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "## Notes\nfirst\n\n## Notes\nsecond\n")
+        write(tmp_path / "b" / "CLAUDE.md", "## Notes\nfirst\n")
+        group = CV.analyze([tmp_path]).heading_groups[0]
+        assert group.total_members == 2
+        assert group.largest_variant_share == 1.0
+
+
+class TestClosingSequence:
+    @pytest.mark.parametrize("line, heading", [
+        ("## Using C#", "Using C#"),
+        ("## Using C", "Using C"),
+        ("## Closed ##", "Closed"),
+        ("## Closed ##   ", "Closed"),
+        ("## F# and C# ##", "F# and C#"),
+    ])
+    def test_only_a_space_preceded_hash_run_is_a_closing_sequence(self, line, heading):
+        assert CV.split_sections(line + "\nbody\n")[0][0] == heading
+
+    def test_c_sharp_and_c_are_different_groups(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "## Using C#\nx\n")
+        write(tmp_path / "b" / "CLAUDE.md", "## Using C\nx\n")
+        assert CV.analyze([tmp_path], min_members=1).heading_groups[0].total_members == 1
+
+
+class TestCliRobustness:
+    def test_a_bom_does_not_hide_the_first_heading(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "CLAUDE.md").write_bytes(b"\xef\xbb\xbf" + SECTION_A.encode("utf-8"))
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+        group = CV.analyze([tmp_path]).heading_groups[0]
+        assert group.total_members == 2 and len(group.variants) == 1
+
+    @pytest.mark.skipif(sys.platform in ("win32", "darwin"),
+                        reason="needs a filesystem that accepts non-UTF-8 byte names")
+    def test_a_non_utf8_dir_name_does_not_crash_text_mode(self, tmp_path):
+        odd = os.path.join(os.fsencode(str(tmp_path)), b"x\xff")
+        os.mkdir(odd)
+        with open(os.path.join(odd, b"CLAUDE.md"), "w", encoding="utf-8") as fh:
+            fh.write(SECTION_A)
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+        proc = run_cli("--root", str(tmp_path))
+        assert proc.returncode == 0, proc.stderr
+        assert "Common Make Targets" in proc.stdout and "x\\xff" in proc.stdout
+
+    def test_cp1252_stdout_does_not_crash_on_a_cjk_heading(self, tmp_path):
+        write(tmp_path / "a" / "CLAUDE.md", "## 日本語\nx\n")
+        write(tmp_path / "b" / "CLAUDE.md", "## 日本語\nx\n")
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        env.pop("PYTHONUTF8", None)
+        proc = subprocess.run([sys.executable, CLI, "--root", str(tmp_path)], capture_output=True,
+                              env=env, timeout=CLI_TIMEOUT, check=False)
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+        assert b"2 file(s)" in proc.stdout
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                        reason="needs POSIX permissions and a non-root user")
+    def test_an_unreadable_dir_is_reported_not_silently_skipped(self, tmp_path):
+        write(tmp_path / "ok" / "CLAUDE.md", SECTION_A)
+        locked = tmp_path / "locked"
+        write(locked / "CLAUDE.md", SECTION_A)
+        locked.chmod(0)
+        try:
+            proc = run_cli("--root", str(tmp_path), "--json")
+        finally:
+            locked.chmod(0o755)
+        payload = json.loads(proc.stdout)
+        assert any("locked" in s and "cannot list" in s for s in payload["skipped"]), payload
+        assert "locked" in proc.stderr
+
+    def test_no_common_ancestor_is_an_error_envelope_and_exit_2(self, tmp_path, capsys):
+        write(tmp_path / "a" / "CLAUDE.md", SECTION_A)
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+
+        def boom(_parts):
+            raise ValueError("Paths don't have the same drive")
+
+        code = CV.main(["--root", str(tmp_path), "--json"], _commonpath=boom)
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 2
+        assert payload["ok"] is False and "no common ancestor" in payload["error"]
+
+    def test_no_common_ancestor_in_text_mode_is_one_error_line_and_exit_2(self, tmp_path, capsys):
+        write(tmp_path / "a" / "CLAUDE.md", SECTION_A)
+        write(tmp_path / "b" / "CLAUDE.md", SECTION_A)
+
+        def boom(_parts):
+            raise ValueError("Paths don't have the same drive")
+
+        assert CV.main(["--root", str(tmp_path)], _commonpath=boom) == 2
+        assert "no common ancestor" in capsys.readouterr().err
+
+    def test_every_file_failing_to_decode_is_exit_2_with_an_error_envelope(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_bytes(b"## Setup\ncaf\xe9\n")
+        proc = run_cli("--root", str(tmp_path), "--json")
+        payload = json.loads(proc.stdout)
+        assert proc.returncode == 2
+        assert payload["ok"] is False and "every matched file failed to read" in payload["error"]
+
+    def test_root_naming_a_claude_md_file_analyses_that_file(self, tmp_path):
+        f = write(tmp_path / "CLAUDE.md", SECTION_A)
+        proc = run_cli("--root", str(f), "--json")
+        assert proc.returncode == 0
+        assert json.loads(proc.stdout)["data"]["files_matched"] == 1
+
+    def test_root_naming_another_file_matches_nothing(self, tmp_path):
+        f = write(tmp_path / "other.md", SECTION_A)
+        proc = run_cli("--root", str(f), "--json")
+        assert proc.returncode == 1
+        assert json.loads(proc.stdout)["data"]["files_matched"] == 0

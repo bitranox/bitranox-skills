@@ -35,7 +35,8 @@ unknown, defer - a blind gather pulls noise.
    labeled `native-tier (machine-local)` - that whole string is the label, so grep for it, not for
 `machine-local` alone). With `cross_tree_search=false` (the knob defaults to true) the scan stays inside the CURRENT tree;
    pass `--cross-tree` for a deliberate cross-tree gather. Nothing matched -> stop (the whole
-   gather cost one grep).
+   gather cost one grep); `CANDIDATES: 0 (not scanned: <reason>)` means the same, with the reason.
+   A note it cannot read or decode is skipped and named on stderr, never fatal.
    - Optional MCP boost: with the `mcp_search` knob `auto` and a covering `basic-memory` index,
      the same command prints `MCP-CANDIDATES` (read-only search, never the store; the keyword
      grep is always the base).
@@ -56,7 +57,8 @@ unknown, defer - a blind gather pulls noise.
    keep it.
 5. **Debounce.** Record the (project, topic) as gathered so the same topic is not re-grepped on
    every trigger: `gather_scan.py --topic "<topic>" --mark`. Ask before spending a scan with
-   `--seen` (exit 0 already gathered, 1 not), which answers from the record and walks nothing.
+   `--seen` (exit 0 already gathered, 1 not, 2 error), which answers from the record and walks
+   nothing. `--mark` exits 2 when it could not write the record.
    Neither GATES a scan - a scan you ask for still runs, whatever the record says, so `--seen`
    is advice to the caller rather than a lock. The record lives OUT of the curated store on
    purpose: written into it, it would be a fact, and the next dream would tidy, promote or
