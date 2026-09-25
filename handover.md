@@ -1,94 +1,82 @@
-# STALE - read 2026-09-25, work continued (ranks 7, 12, 14 dispatched to subagents)
+# Handover - 2026-09-25, ranks 7 and 14 closed (7.23.0-7.23.6 shipped), rank 12 blocked on data
 
 ## In flight
 
-Nothing running. All seven fix batches (A-G) are on origin/master and CI-green (7.22.9, `c1a357b`,
-plus a docs commit on top). They were coordinated from a session past 500k tokens of context, so
-the user wants them reviewed before anything else - that is rank 7 in `OPEN-WORK.md`.
+Nothing running. All seven releases 7.23.0-7.23.6 are on origin/master and CI-green on the last one.
+No agent, fixer or landing branch is outstanding.
 
 ## Committed, or not
 
-- **Pushed:** 7.22.1 (A) through 7.22.9 (G2 and its Windows test-helper fix), range
-  `4fb3348..c1a357b`. This handover plus OPEN-WORK.md go in one commit on top.
-- **Not in git, by design (gitignored, main checkout's `.plan/`):**
-  `.plan/rank10-review-2026-08-28/` (rescued old TRIAGE.md + 53 reports),
-  `.plan/rank10-hooklib-2026-09-25/` (TRIAGE.md with batches A-G, reports/, adjudication/g1..g5,
-  FOLLOWUPS.md with 12 open follow-ups). The adjudication files are what a reviewer checks each
-  batch diff against.
-- **Local only:** `EXECUTION-USER-REVIEW.md` in this worktree (this session's user decisions).
-  Copy it to the main checkout before `wtclean` removes this worktree.
+- **Pushed:** 7.23.0 (rank 14 sha-literal-nudge) through 7.23.6. This handover plus the OPEN-WORK.md
+  reconcile go in one commit on top.
+- **Not in git, by design (gitignored, main checkout):** `.plan/jev-choicev1-2026-09-25/` (rank 12
+  eligible-row counts and report). `EXECUTION-USER-REVIEW.md` from the jev-roster worktree is now
+  copied to the main checkout root (cmp identical), so the worktree can be removed.
+- **Scratch only, will be swept:** the eight reviewers' probes and the fixers' replay artifacts under
+  this session's scratchpad. Nothing in them is needed again; findings and numbers are in
+  OPEN-WORK.md rank 7's closed line and in CHANGELOG 7.23.0-7.23.6.
 
 ## Decided, and why - do not reopen
 
-- **User chose the never-reviewed-scripts sweep, slice 1 = 22 hook-libs; then /goal "all batches
-  in order A to G" and "use subagents to keep main agent clean".** Implementers ran in parallel
-  worktrees and landed strictly in order.
-- **Provisional version bump on every branch** (the commit gate refuses a plugins/ change at
-  origin's version), renumbered at landing.
-- **Secret redactor rule:** a secret word ANYWHERE in a name counts unless the LAST word is a
-  non-secret tail (ID, FILE, PATH, COUNT, ...). A last-word-only draft silently dropped
-  `SECRET_KEY_BASE=`; fixed before landing. A reviewer should re-check this rule hardest.
-- **Reviewer shadow rows are not excluded at the source**: filter choice-v1 rows whose
-  transcript_path contains `scratchpad-sweep` (turning the classifier off would drop every
-  concurrent session's rows).
+- **Review first, then fix, one fixer per module** (secret_patterns, memory store, shell_text+masking,
+  low batch). Every fixer had to turn each reviewer finding into a failing test before fixing, and
+  report NOT REPRODUCED otherwise, so the coordinator did not have to rebuild fixtures itself.
+- **Fixers use provisional versions; a landing agent renumbers at landing, strictly in order.**
+- **Cookie values are now always redacted** (7.23.2), including harmless ones - acceptable for egress.
+- **A fixed wall-clock ceiling in a perf test is a defect**; 7.23.4 asserts growth ratio (< 8 for 4x).
+- **Rank 12 is blocked on data, not dropped** - only 3 eligible rows existed.
 
 ## Decided against, and why
 
-- **Rewriting the two stale memory facts in this session**: rewriting an existing entry is
-  propose-first, so they are lessons below for the nap.
+- **Parens in the SEP/LIST_SEP regexes** (7.23.3): the replay showed it cut quoted `echo "(...)"`
+  labels; the subshell gap stays open as OPEN-WORK rank 172.
+- **Re-running the Windows CI flake until green**: it was a real lock defect, fixed in 7.23.5.
 
 ## Still open, untouched
 
 `OPEN-WORK.md` is the list; read it before this file.
 
-- Rank 7 (USER): review the 7.22.1-7.22.9 batch diffs.
 - Rank 10 (USER): next sweep slice, skill-script (79 targets).
-- Rank 12 (USER): Jev - judge the router only on choice-v1 rows from 7.22.5+ sessions.
-- Rank 14 (USER): the approved invented-identifier guard.
-- Rank 150 / 160 (FOUND): main-checkout TODO-JEV.md and fast-forward; wtclean 10 worktrees.
-- Rank 170 (FOUND): 12 follow-ups in FOLLOWUPS.md.
+- Rank 12 (USER): Jev router decision - wait for >= 40 eligible rows, then the blind panel.
+- Rank 150 / 160 (FOUND): main-checkout TODO-JEV.md + fast-forward; wtclean now 17 worktrees.
+- Rank 172-178 (FOUND): this session's leftovers (SEP subshell gap, commit-tell-sweep 0 blocks,
+  non-canonical SKILL.md tables, sha-nudge design points).
 
 ## Lessons for the next nap
 
+- When a subagent needs a test VM, it must check the host's free memory against the VM's size and ask before starting it: starting the 32 GB Windows test VM on a 62 GB cluster node with ~37 GB already committed wedged the node ~25 min until it rebooted, taking its guests down.
+- When a perf test guards against superlinear time, assert the growth ratio between two sizes, never a fixed wall-clock ceiling: 0.5 s passed locally at 0.11 s and failed CI at 0.515 s on two OSes.
+- When a subagent changes a secret redactor, require a replay listing every span the OLD code redacted and the new does not, adjudicated in full - it recurred: batch A shipped five new leaks (`*_PWD`, `$`-leading passwords, secret_id, long digit tokens, ALL_CAPS slugs) past its own tests.
+- When a concurrency fix is proven only on Linux, expect Windows to break it: an O_EXCL lock file that was just deleted fails PermissionError while delete-pending on Windows; a lock must treat that as contention.
+- When a reviewer's finding would need fixture trees to verify, hand the verification to the fixer as "write the failing test first, report NOT REPRODUCED otherwise" rather than rebuilding it in the coordinator.
 - When parallel implementers must commit under a gate that demands a version bump, give them one provisional bump and renumber each branch at landing, in order.
-- When a subagent changes a secret redactor, require a replay listing every span the OLD code redacted and the new does not, adjudicated in full - a narrowing rule dropped SECRET_KEY_BASE silently.
 - When a replay measures a guard that decides on the event's cwd, pass the recorded cwd - a command-only replay read block-partial-typecheck as 0 firings while it had blocked 88 real calls.
 - When a subagent's post-push `git rev-parse` is refused by the auto-mode classifier, the coordinator resolves the sha from origin/master and runs ci_wait itself.
-- When a coordinator session ships many subagent batches from a very full context, schedule an independent review of the landed diffs as the next session's first job.
+- When `git checkout --ours <file>` resolves a cherry-pick conflict, it replaces the WHOLE file, dropping the other side's auto-merged hunks; diff against the source commit afterwards.
 - The fact reference-the-skill-edit-guard-s-receipt-is-machine-global-for-8h-not-session-scoped is STALE since 7.22.4 (receipts are per skill and session) - rewrite it via the engine.
-- The fact reference-a-clobbered-audit-report-is-reported-clean-so-verify-every-clean-against-the-transcript is partly stale: audit_skills now flags a clobbered report REPORT-MISSING instead of clean (recovery from the transcript still applies).
+- The fact reference-a-clobbered-audit-report-is-reported-clean-so-verify-every-clean-against-the-transcript is partly stale: audit_skills now flags a clobbered report REPORT-MISSING instead of clean.
 - tooling: audit_skills reviewers inherit every user hook (the self-improve Stop gate clobbered a report; reviewers write Jev shadow rows) - queued in contrib_queue.
 - tooling: decision-review-nudge fired "a /goal objective was met" while the goal was unmet - queued.
 
 ## The exact next action
 
-Open the next session in the MAIN checkout (`/media/srv-main-softdev/projects/public/KI/bitranox-skills`),
-fast-forward it, then take rank 7: invoke `bitranox:process-review-requesting-code-review` over
-`4fb3348..c1a357b`, one reviewer per batch commit (`git log --oneline 4fb3348..c1a357b` lists
-them), each given its batch's adjudication file from
-`.plan/rank10-hooklib-2026-09-25/adjudication/` and told to demand a failing input per finding.
-Look hardest at `secret_patterns.py`, `shell_text.py`, `memory_engine.py` / `uuid_store.py` and
-`skill_receipt.py`. Verify each reviewer finding yourself before fixing; fix confirmed defects TDD.
+Rank 10 is the top open USER item that can move today (rank 12 is blocked on data). From the MAIN
+checkout (`/media/srv-main-softdev/projects/public/KI/bitranox-skills`), fast-forward it first
+(rank 150), then start the skill-script slice: `audit_skills.py --scripts --kind skill-script` with
+recall walled, adjudicate every claim with controls, then ask the user which batch goes first.
 
 ## Files that matter
 
-- `plugins/bitranox/hooks/secret_patterns.py`, `shell_text.py`, `memory_engine.py`,
-  `uuid_store.py`, `skill_receipt.py`, `skill_roster.py`, `skill_frontmatter.py`.
-- `.plan/rank10-hooklib-2026-09-25/TRIAGE.md`, `adjudication/g1..g5`, `FOLLOWUPS.md` (main checkout).
-- `CHANGELOG.md` entries 7.22.1-7.22.9 - each batch's own description of what it changed.
+- `plugins/bitranox/hooks/secret_patterns.py`, `shell_text.py`, `memory_engine.py`, `uuid_store.py`,
+  `self_improve_signals.py` (memory_lock), `ci_watch_state.py`, `sha-literal-nudge.py`, `hatch_build.py`.
+- `CHANGELOG.md` entries 7.23.0-7.23.6.
+- `.plan/jev-choicev1-2026-09-25/` (main checkout) for rank 12.
 
 ## How to verify this still stands
 
-```bash
-cd /media/srv-main-softdev/projects/public/KI/bitranox-skills
-git fetch origin && git log --oneline 4fb3348..origin/master
-uv run ~/.claude/plugins/cache/bitranox-skills/bitranox/7.22.0/skills/compuse-toolbox/scripts/ci_wait.py --sha "$(git rev-parse --verify origin/master)" --repo bitranox/bitranox-skills
-```
+- `git log --oneline origin/master -8` shows 7.23.0-7.23.6 plus this handover commit.
+- `uv run <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha $(git rev-parse --verify HEAD) --repo bitranox/bitranox-skills`
+- `env -u VIRTUAL_ENV uv run --with pytest --with PyYAML --with lxml --with defusedxml --with ruamel.yaml --with httpx2 python -m pytest plugins/bitranox/hooks/tests/ -q`
 
-The log lists the batch commits up to `c1a357b` (plus later docs commits), and ci_wait prints
-`workflow=success ci=success`.
-
----
-
-Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
-delete it - if this session ends badly it is the only record of where things stood.
+> Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
+> delete it - if this session ends badly it is the only record of where things stood.
