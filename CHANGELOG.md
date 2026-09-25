@@ -29,6 +29,46 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.1]
+
+### Fixed
+
+- memory_engine, reconcile_memory_index and ref_map exit 2 with one line naming the file when a
+  level file, fact body or store directory cannot be read or is not UTF-8, instead of a traceback
+  that exited 1 and read as "findings". One reader, `memory_engine.read_store_text`, now backs
+  every store read (absent reads as empty; unreadable or undecodable raises `TreeWalkError`);
+  `heal` reports such a level under `unreadable` instead of skipping it silently.
+- `reconcile_memory_index` reports a sharded legacy body that no pointer names as dangling, and
+  `--rehome` refuses to act on a sharded, invalid-slug or unreadable body, naming it.
+- A cross-tree `relocate` copies bodies byte for byte (CRLF kept), and `--hook-file`, `--body-file`
+  and `--scope-file` read through a BOM and refuse a file that is not UTF-8.
+- audit_local takes the settings shape rule from `harness_checks.hook_registrations` (one rule; a
+  non-string hook command is now a finding, not a crash) and reports a BOM as its own finding.
+- contrib_queue: a queue or closed set that exists but cannot be read is an error to every reader
+  (`add` refuses, `list` / `shipped` / `rejected` exit 1, `queues` marks the queue unreadable),
+  never an empty list that lets a closed intent back in.
+- self_improve_signals reads every JSON state file through one BOM-aware decoder, so a BOM'd
+  sightings store no longer reads as dwell 0 and a BOM'd word list is no longer erased by the next
+  add; the word-list writers raise `StateWriteError` on a failed write; `ensure_gitignored` keeps a
+  non-UTF-8 `.gitignore` byte for byte and returns whether the patterns are in place; `save_config`
+  never overwrites a config it could not read.
+- dream_state reads transcript parts through the shared `unreviewed_transcript_part`, so a
+  transcript it cannot read exits 2 and is never marked reviewed.
+- classifier_eval skips (and records) a prompt whose transcript prefix cannot be built instead of
+  judging it against an empty state.
+- mutation_arm's `--json` `ok` is false exactly when the exit code is 2, and a refusal still prints
+  an envelope.
+- review_package names a missing repository or an unrunnable git instead of blaming the base ref.
+- convert_with_ai and generate_schematic_ai send their errors to stderr; generate_schematic_ai
+  refuses an out-of-range `--iterations` with exit 2.
+- coding-python-performance-review: one interpreter rule for every step (the recorded interpreter,
+  quoted; a probed `python3` / `python` / `py -3` only to bootstrap), so no step calls a bare
+  `python`, and a block with no readable session exits 2 instead of writing under `/cache`.
+- meta-skill-writer: a hook registered through `run-python.sh` must pass `--hook` first to keep the
+  exit-0 hook contract.
+- Four SKILL.md files carry their tables in the formatter's canonical form, so the table hook no
+  longer rewrites them in every fresh checkout.
+
 ## [7.25.0]
 
 ### Changed

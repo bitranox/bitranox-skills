@@ -49,12 +49,12 @@ def _pointers(root: Path):
     """(level dir, [Pointer]) for every curated level under `root`, found by the ENGINE's walk.
 
     Its own rglob skipped only node_modules/.git, so a pointer block copied under a vendored dir
-    (venv, site-packages, build) could claim a fact for the wrong level. Raises OSError when a
-    level file the walk found cannot be read: skipping it made its facts read as DANGLING."""
+    (venv, site-packages, build) could claim a fact for the wrong level. Raises the engine's
+    TreeWalkError when a level file cannot be read or is not UTF-8: skipping it made its facts read
+    as DANGLING."""
     out = []
     for level in sorted(ME.curated_levels_under(root)):
-        path = Path(level) / "CLAUDE.local.md"
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = ME.read_store_text(Path(level) / "CLAUDE.local.md")
         out.append((level, [p for p in uuid_store.parse_pointer_index(text)[1] if not p.legacy]))
     return out
 
@@ -72,15 +72,16 @@ def read_hooks(root: Path) -> dict[str, str]:
 def read_refs(root: Path, hooks=None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """(outbound, inbound) maps over each fact's pointer HOOK plus its central body, both keyed by
     canonical slug - the same text the engine's inbound scan reads, so a ref that survives only in
-    the hook (the body's copy edited away) is still an edge. Raises OSError on an unreadable body:
-    dropping it reported a real inbound edge as absent, which is the answer that permits a move."""
+    the hook (the body's copy edited away) is still an edge. Raises the engine's TreeWalkError on
+    a body that cannot be read or is not UTF-8, the same rule the engine's own inbound scan applies:
+    dropping it reported a real inbound edge as absent, which is the answer that permits a move, and
+    replacing its bad bytes could cut a ref in half."""
     hooks = read_hooks(root) if hooks is None else hooks
     texts = dict(hooks)
     facts = root / ".claude-memory" / "facts"
     for body in sorted(facts.glob("*.md")):
         source = canon(body.stem)
-        texts[source] = "%s\n%s" % (texts.get(source, ""),
-                                    body.read_text(encoding="utf-8", errors="replace"))
+        texts[source] = "%s\n%s" % (texts.get(source, ""), ME.read_store_text(body))
     outbound: dict[str, list[str]] = {}
     inbound: dict[str, list[str]] = {}
     for source in sorted(texts):
@@ -96,7 +97,8 @@ def read_refs(root: Path, hooks=None) -> tuple[dict[str, list[str]], dict[str, l
 
 def build(root: Path, slugs):
     """[{slug, level, inbound, outbound, unknown}] plus a flag for whether anything is wrong.
-    Raises OSError when a level file or a fact body cannot be read."""
+    Raises the engine's TreeWalkError when a level file or a fact body cannot be read or is not
+    UTF-8, or a directory under the root cannot be listed."""
     levels = read_levels(root)
     outbound, inbound = read_refs(root)
     entries, problems = [], False
@@ -167,9 +169,12 @@ def main(argv=None, out=None, err=None) -> int:
                   file=out)
         return 2
 
+    # The one place a read failure becomes exit 2. TreeWalkError is not an OSError, so catching
+    # only OSError here let an undecodable level file escape as a traceback that exited 1 - the
+    # code for "a slug is unknown or has a dangling ref".
     try:
         entries, problems = build(root, args.slugs)
-    except OSError as exc:
+    except (OSError, ME.TreeWalkError) as exc:
         print("ref_map: cannot read %s - the map would be incomplete" % exc, file=err)
         if args.json:
             print(json.dumps({"ok": False, "command": "ref-map", "data": {"entries": []},

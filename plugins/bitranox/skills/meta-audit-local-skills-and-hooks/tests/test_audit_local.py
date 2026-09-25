@@ -396,16 +396,18 @@ def test_the_same_settings_file_parsed_reports_its_dead_registration(tmp_path):
     assert code == 1 and "[registration]" in out and "[settings-unparseable]" not in out
 
 
+# The wording is harness_checks.hook_registrations', which owns the one shape rule; this file only
+# asserts that each refusal surfaces as a finding naming the offending part.
 @pytest.mark.parametrize("raw, why", [
-    (b"[]", "top level is a list"),
-    (b'{"hooks": []}', '"hooks" is a list'),
-    (b'{"hooks": {"Stop": {}}}', '"hooks.Stop" is an object'),
-    (b'{"hooks": {"Stop": null}}', '"hooks.Stop" is null'),
-    (b'{"hooks": {"Stop": ["bash x.sh"]}}', '"hooks.Stop" holds a string'),
-    (b'{"hooks": {"Stop": [{"hooks": "bash x.sh"}]}}', '"hooks.Stop[].hooks" is a string'),
-    (b'{"hooks": {"Stop": [{"hooks": ["bash x.sh"]}]}}', '"hooks.Stop[].hooks" holds a string'),
+    (b"[]", "the top level is list"),
+    (b'{"hooks": []}', '"hooks" is list'),
+    (b'{"hooks": {"Stop": {}}}', '"hooks.Stop" is dict'),
+    (b'{"hooks": {"Stop": ["bash x.sh"]}}', 'a "hooks.Stop" group is str'),
+    (b'{"hooks": {"Stop": [{"hooks": "bash x.sh"}]}}', '"hooks.Stop[].hooks" is str'),
+    (b'{"hooks": {"Stop": [{"hooks": ["bash x.sh"]}]}}', 'a "hooks.Stop" hook is str'),
+    (b'{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 7}]}]}}',
+     'a "hooks.Stop" command is int'),
     (b'{"x": "caf\xe9"}', "not UTF-8"),
-    (b'\xef\xbb\xbf{"hooks": {}}', "byte-order mark"),
 ])
 def test_a_settings_file_of_the_wrong_shape_or_encoding_is_a_finding(tmp_path, raw, why):
     home = _settings_home(tmp_path, raw)
@@ -414,12 +416,34 @@ def test_a_settings_file_of_the_wrong_shape_or_encoding_is_a_finding(tmp_path, r
     assert "[settings-unparseable]" in out and why in out, out
 
 
+def test_a_settings_file_the_registration_reader_refuses_is_the_same_finding(tmp_path):
+    """One shape rule: whatever `hook_registrations` refuses, the unparseable screen reports, so
+    no settings file can pass the screen and then crash the registration check behind it."""
+    home = _settings_home(tmp_path, b'{"hooks": {"Stop": [{"hooks": [{"command": ["a"]}]}]}}')
+    assert audit_local.settings_problem(home / ".claude" / "settings.json") is not None
+
+
 @pytest.mark.parametrize("raw", [b'{"model": "x", "hooks": {}}', b'{"model": "x"}',
-                                 b'{"hooks": {"Stop": [{"matcher": "*"}]}}'])
+                                 b'{"hooks": {"Stop": [{"matcher": "*"}]}}',
+                                 b'{"hooks": {"Stop": null}}'])
 def test_a_well_formed_settings_file_without_hooks_is_clean(tmp_path, raw):
     home = _settings_home(tmp_path, raw)
     code, out, _ = _run_check(["check", "--home", str(home)])
     assert code == 0 and "clean" in out, out
+
+
+def test_a_settings_file_with_a_bom_is_named_for_what_it_is_and_still_checked(tmp_path):
+    """Whether Claude Code loads a settings file that opens with a BOM is not measured here, so
+    the finding states the fact about the file, and the registrations in it are still checked -
+    this audit's own reader decodes through the BOM."""
+    home = tmp_path / "home"
+    raw = b"\xef\xbb\xbf" + _gone_hook(home).encode("utf-8")
+    home = _settings_home(tmp_path, raw)
+    code, out, _ = _run_check(["check", "--home", str(home)])
+    assert code == 1, out
+    assert "[settings-bom]" in out and "byte-order mark" in out
+    assert "commonly refuse" not in out and "[settings-unparseable]" not in out
+    assert "[registration]" in out and "gone.sh" in out
 
 
 # ---- a typo in a path argument must not read as a clean audit -----------------------------------
@@ -516,16 +540,34 @@ def test_main_exits_one_on_findings(tmp_path, capsys):
     assert audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)]) == 1
 
 
-def test_main_exits_two_not_one_when_a_check_crashes(tmp_path, capsys):
-    """One means "findings"; a crash must never be read as that. A hook command that is not a
-    string passes `settings_problem`'s shape screen and is refused by `hook_registrations`, a
-    real input that raises a non-OSError inside the registration check."""
+class _BrokenConsole:
+    """A stdout whose every write fails: the console is the true external edge of this CLI."""
+
+    def write(self, _text):
+        raise RuntimeError("console went away")
+
+    def flush(self):
+        pass
+
+
+def test_main_exits_two_not_one_when_a_check_crashes(tmp_path, capsys, monkeypatch):
+    """One means "findings"; a crash must never be read as that. A non-string hook command used to
+    be the crash input here, and it is a settings finding now - so the crash comes from the one
+    thing this CLI does not own, its console."""
+    home, _ = _healthy_project(tmp_path)
+    monkeypatch.setattr(sys, "stdout", _BrokenConsole())
+    code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
+    assert code == 2
+    assert "console went away" in capsys.readouterr().err
+
+
+def test_main_reports_a_non_string_hook_command_as_a_finding_not_a_crash(tmp_path, capsys):
     home, _ = _healthy_project(tmp_path)
     (home / ".claude" / "settings.json").write_text(
         '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 7}]}]}}', encoding="utf-8")
     code = audit_local.main(["check", "--root", str(tmp_path / "work"), "--home", str(home)])
-    assert code == 2
-    assert "error" in capsys.readouterr().err
+    assert code == 1
+    assert "[settings-unparseable]" in capsys.readouterr().out
 
 
 def test_main_reports_an_undecodable_skill_md_as_a_finding(tmp_path, capsys):

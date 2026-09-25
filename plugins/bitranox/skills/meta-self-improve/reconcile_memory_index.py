@@ -16,8 +16,10 @@ A curated altitude is a level dir whose `CLAUDE.local.md` holds a managed pointe
 files still carry `name`/`description` frontmatter); `migrate_memory.py` imports them.
 
 Exit codes: 0 clean; 1 a problem was found (orphan pointer or ref, downward ref, duplicate, decoy,
-unreadable dir, misplaced fact, unrehomable body) or `--archive` named no entry; 2 a dir argument
-does not exist, or `--archive` could not move the body (the pointer is then kept).
+unreadable dir or file under `--check-tree`, misplaced fact, unrehomable body) or `--archive` named
+no entry; 2 a dir argument does not exist, `--archive` could not move the body (the pointer is then
+kept), or any other mode could not read a level file, fact body or store directory (not UTF-8, no
+permission) - it names the path and does not guess at an answer.
 
 Pure standard library; cross-platform; ASCII output only.
 """
@@ -134,12 +136,10 @@ def _ref_slug(token):
 
 
 def is_curated(d):
-    """A dir is CURATED when its `CLAUDE.local.md` holds a managed pointer block."""
-    try:
-        text = (Path(d) / "CLAUDE.local.md").read_text(encoding="utf-8")
-        return us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text
-    except OSError:
-        return False
+    """A dir is CURATED when its `CLAUDE.local.md` holds a managed pointer block. The engine's own
+    test, so this and the tree walk cannot disagree: absent is False, and a file that exists but
+    cannot be read or is not UTF-8 raises `TreeWalkError` rather than reading as "not a level"."""
+    return ME._carries_pointer_block(Path(d) / "CLAUDE.local.md")
 
 
 def altitude_targets(d):
@@ -265,10 +265,7 @@ def over_cap(level_dir, max_bytes=_WARN_BYTES):
     CLAUDE.local.md). NOT hard-capped: `within` is False only to raise an ADVISORY warning when the
     block grows large; the remedy is to let the dream lift/dedup/promote. Bodies are central (not in
     the block), so only the pointer lines count toward the always-loaded budget."""
-    try:
-        text = (Path(level_dir) / "CLAUDE.local.md").read_text(encoding="utf-8")
-    except OSError:
-        return True, 0, 0
+    text = ME.read_store_text(Path(level_dir) / "CLAUDE.local.md")
     b = text.find(us.INDEX_BEGIN)
     endm = us.INDEX_END
     if b < 0:
@@ -308,10 +305,9 @@ def _other_levels_pointing(anchor, level_dir, slug):
     for lvl in _all_curated_levels(anchor):
         if Path(lvl).resolve() == Path(level_dir).resolve():
             continue
-        try:
-            _s, ptrs = us.parse_pointer_index((Path(lvl) / "CLAUDE.local.md").read_text(encoding="utf-8"))
-        except OSError:
-            continue
+        # raises TreeWalkError rather than skip: "no other level points at it" is the answer
+        # that archives a body a level still needs
+        _s, ptrs = us.parse_pointer_index(ME.read_store_text(Path(lvl) / "CLAUDE.local.md"))
         if any(_canon(x.slug) == qcanon for x in ptrs):
             return True
     return False
@@ -320,10 +316,7 @@ def _other_levels_pointing(anchor, level_dir, slug):
 def _names_invalid_pointer(level_dir, slug):
     """True when `level_dir`'s pointer block carries a line for `slug` that the parser skips because
     the slug (or legacy uuid) is not a plain store name."""
-    try:
-        text = (Path(level_dir) / "CLAUDE.local.md").read_text(encoding="utf-8")
-    except OSError:
-        return False
+    text = ME.read_store_text(Path(level_dir) / "CLAUDE.local.md")
     needles = ("](mem:%s)" % slug, "](uuid:%s)" % slug, "bx:slug=%s " % slug)
     return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
 
@@ -374,19 +367,66 @@ def _all_curated_levels(anchor, unreadable=None):
     return ME.curated_levels_under(anchor, unreadable=unreadable)
 
 
-def find_dangling_bodies(anchor):
-    """Central bodies (`.../facts/<slug>.md`) that NO curated level in the tree points at - the invisible
-    orphans: loaded by nothing, yet the slug is 'taken' so a plain `add` used to refuse re-creating it.
-    Returns a sorted list of slugs."""
-    facts = us.central_facts_dir(Path(anchor))
+def _list_store_dir(d, unreadable):
+    """The entries of one directory of the body store; [] when it does not exist.
+
+    A directory that exists but cannot be listed raises `TreeWalkError`, or - for a caller that
+    reports rather than acts - is appended to `unreadable`: a body behind it is unknown, and an
+    empty answer would read as "no dangling bodies there"."""
     try:
-        body_slugs = {p.stem for p in facts.glob("*.md")}
-    except OSError:
+        return sorted(d.iterdir())
+    except FileNotFoundError:
         return []
-    pointed = set()
+    except OSError as exc:
+        if unreadable is None:
+            raise ME.TreeWalkError(d, "cannot list this directory, so the bodies in it are "
+                                      "unknown: %s" % exc) from exc
+        unreadable.append(str(d))
+        return []
+
+
+def _store_bodies(facts, unreadable=None):
+    """(flat slugs, {legacy uuid: "<shard>/<uuid>"}) for every body in a central store.
+
+    Both layouts the engine reads: `facts/<slug>.md`, and the pre-pivot sharded
+    `facts/<shard(uuid)>/<uuid>.md` (`uuid_store.legacy_body_path`). A file anywhere else under
+    `facts/` - including a uuid filed under the wrong shard - is not where the engine looks, so it
+    is not a body at all. The same rule as compuse-toolbox's `mem_levels.py`."""
+    entries = _list_store_dir(facts, unreadable)
+    flat = {e.stem for e in entries if e.suffix == ".md" and e.is_file()}
+    sharded = {}
+    for d in entries:
+        if not d.is_dir() or d.is_symlink():
+            continue
+        for f in _list_store_dir(d, unreadable):
+            if f.suffix == ".md" and f.is_file() and us.shard(f.stem) == d.name:
+                sharded[f.stem] = "%s/%s" % (d.name, f.stem)
+    return flat, sharded
+
+
+def find_dangling_bodies(anchor, unreadable=None):
+    """Central bodies that NO curated level in the tree points at - the invisible orphans: loaded
+    by nothing, yet the slug is 'taken' so a plain `add` used to refuse re-creating it.
+
+    Returns a sorted list: a flat body as its slug, then a pre-pivot sharded body as
+    `<shard>/<uuid>` - a legacy pointer names it by uuid, so it dangles when no pointer carries
+    that uuid. Listing only `facts/*.md` left every sharded body out, dangling or not.
+
+    A store directory that cannot be listed raises `TreeWalkError`, unless `unreadable` is a list,
+    which then receives its path instead."""
+    flat, sharded = _store_bodies(us.central_facts_dir(Path(anchor)), unreadable)
+    pointed, legacy = set(), set()
     for lvl in _all_curated_levels(anchor):
-        pointed |= {e.slug for e in ME.read_store(str(lvl))[1]}
-    return sorted(body_slugs - pointed)
+        entries = ME.read_store(str(lvl))[1]
+        pointed |= {e.slug for e in entries}
+        legacy |= {e.uuid for e in entries if e.legacy}
+    return sorted(flat - pointed) + sorted(rel for uuid, rel in sharded.items()
+                                           if uuid not in legacy)
+
+
+def _is_sharded_body_name(name):
+    """True for a `find_dangling_bodies` name that is a pre-pivot `<shard>/<uuid>` body."""
+    return "/" in name
 
 
 # An absolute path mentioned in a fact body. Deliberately conservative: a path is only evidence
@@ -514,7 +554,11 @@ def check_tree(anchor):
     all_targets = set()                         # every slug offered anywhere in the tree
     ref_sources = []                            # (level, source_slug, ref_slug)
     for lvl in levels:
-        _scope, entries, bodies = ME.read_store(lvl)
+        try:
+            _scope, entries, bodies = ME.read_store(lvl)
+        except ME.TreeWalkError as exc:             # a level file or one of its bodies
+            unreadable.append(exc.path)
+            continue
         for e in entries:
             cslug = _canon(e.slug)
             slug_levels.setdefault(cslug, []).append(lvl)
@@ -545,24 +589,30 @@ def check_tree(anchor):
     sideways_refs = sorted(set((lvl, s, r) for (lvl, s, r) in ref_sources
                                if r in all_targets and not _reachable(r, lvl)))
     decoys = find_decoy_anchors(anchor, unreadable=unreadable)
+    frame_only = find_frame_only_bodies(anchor, unreadable=unreadable)
     # A body pointed at only from a level that could not be read would list as dangling, and
     # --rehome would then re-attach a fact that still has a pointer - so with anything unreadable
     # the danglers are not assessed; the unreadable finding already fails the run.
-    danglers = [] if unreadable else find_dangling_bodies(anchor)
+    danglers = [] if unreadable else find_dangling_bodies(anchor, unreadable=unreadable)
+    if unreadable:
+        danglers = []                           # a store dir the listing itself could not read
     return {"anchor": str(anchor), "levels": len(levels), "duplicates": duplicates,
             "orphan_pointers": sorted(orphan_pointers), "orphan_refs": orphan_refs,
             "sideways_refs": sideways_refs, "danglers": danglers,
             "decoy_anchors": decoys, "unreadable_dirs": sorted(set(unreadable)),
-            "frame_only_bodies": find_frame_only_bodies(anchor)}
+            "frame_only_bodies": frame_only}
 
 
-def find_frame_only_bodies(anchor):
+def find_frame_only_bodies(anchor, unreadable=None):
     """Slugs whose central body is its frontmatter frame and nothing else.
 
     Every other tree check passes such a fact: the pointer resolves, the body FILE exists, the slug
     is unique and the frame is well formed. Only the content is absent - so the always-loaded hook
     promises a rule and the walk-up retrieval it advertises delivers an empty file. The engine now
-    refuses to create one, but stores written before that still carry them."""
+    refuses to create one, but stores written before that still carry them.
+
+    A body that cannot be read or is not UTF-8 raises `TreeWalkError`, unless `unreadable` is a
+    list, which then receives its path: skipping it in silence reported it as not frame-only."""
     anchor = Path(anchor)
     out = []
     facts = us.central_facts_dir(anchor)
@@ -570,8 +620,11 @@ def find_frame_only_bodies(anchor):
         return out
     for p in sorted(facts.glob("*.md")):
         try:
-            raw = p.read_text(encoding="utf-8")
-        except OSError:
+            raw = ME.read_store_text(p)
+        except ME.TreeWalkError as exc:
+            if unreadable is None:
+                raise
+            unreadable.append(exc.path)
             continue
         if not _content_after_frontmatter(raw).strip():
             out.append(p.stem)
@@ -596,18 +649,18 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
     visible + loadable again; a later dream re-levels it. The hook is read from the body frontmatter; the
     title is derived from the slug (a body stores no title). Returns the rehomed slugs.
 
-    A body whose filename is not a valid slug (`unrehomable_bodies`) is skipped: the engine refuses
-    that slug, and letting its refusal escape stopped the re-home of every body after it."""
+    Every body `unrehomable_bodies` names is skipped - the engine would refuse its name, it is a
+    sharded body with no slug to re-attach under, or it cannot be read - and the caller reports
+    each one. Skipping them here, rather than raising, keeps one such body from stopping the
+    re-home of every body after it."""
     anchor = Path(anchor)
     to_level = str(to_level or anchor)
+    blocked = {name for name, _why in unrehomable_bodies(anchor)}
     done = []
     for slug in find_dangling_bodies(anchor):
-        if not us.is_valid_slug(slug):
+        if slug in blocked:
             continue
-        try:
-            text = us.body_path(anchor, slug).read_text(encoding="utf-8")
-        except OSError:
-            continue
+        text = ME.read_store_text(us.body_path(anchor, slug))
         if not dry_run:
             # add with no body keeps the existing central body; Fix A re-adopts the dangling slug.
             # allow_over_cap_hook: a rehome MOVES a stored hook verbatim, so a legacy over-cap one
@@ -620,9 +673,41 @@ def rehome_dangling_bodies(anchor, to_level=None, dry_run=False):
 
 
 def unrehomable_bodies(anchor):
-    """Dangling bodies whose filename is not a valid slug, so no pointer can name them. They need a
-    rename to a valid slug (lowercase letters, digits, hyphens, dots) before a re-home can take them."""
-    return [slug for slug in find_dangling_bodies(Path(anchor)) if not us.is_valid_slug(slug)]
+    """[(name, why)] for each dangling body a re-home must not act on:
+
+    * a pre-pivot sharded body (`<shard>/<uuid>`): it carries no slug, and making one up would
+      mint a fact under a name nobody chose - it is reported for a person to read and re-capture;
+    * a filename that is not a valid slug, so no pointer can name it until it is renamed;
+    * a body that cannot be read or is not UTF-8: re-attaching it would put a pointer in the
+      always-loaded index whose hook was never read."""
+    anchor = Path(anchor)
+    out = []
+    for name in find_dangling_bodies(anchor):
+        if _is_sharded_body_name(name):
+            out.append((name, "a pre-pivot sharded body no pointer names; it carries no slug to "
+                              "re-attach under - read it, then re-capture it with memory_engine "
+                              "add, or move it to .claude-memory/.archive/"))
+        elif not us.is_valid_slug(name):
+            out.append((name, "its name is not a valid slug; rename the body file"))
+        else:
+            try:
+                ME.read_store_text(us.body_path(anchor, name))
+            except ME.TreeWalkError as exc:
+                out.append((name, exc.reason))
+    return out
+
+
+def _unreadable_line(path):
+    """The --check-tree line for one path the check could not read: a level file, a fact body, or
+    a directory. Only a FILE can be re-saved as UTF-8, so the advice follows what the path is."""
+    p = Path(path)
+    if p.name == "CLAUDE.local.md":
+        return ("unreadable level file (not checked - fix its permissions, or re-save it as "
+                "UTF-8): %s" % path)
+    if p.is_file():
+        return "unreadable fact body (not checked - fix its permissions, or re-save it as " \
+               "UTF-8): %s" % path
+    return "unreadable directory (not checked - fix its permissions): %s" % path
 
 
 def _print_report(rep):
@@ -633,6 +718,20 @@ def _print_report(rep):
 
 
 def main(argv=None):
+    """The CLI; exit codes are in the module docstring.
+
+    TreeWalkError is mapped to 2 HERE, once, rather than in each mode: any read of the store can
+    raise it, and a mode that forgot to catch it let a traceback exit 1 - the code for "problems
+    found", so a store that could not be read passed for one with findings. --check-tree differs
+    on purpose: it collects what it could not read and reports each path as a finding (exit 1)."""
+    try:
+        return _main(argv)
+    except ME.TreeWalkError as exc:
+        print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
+        return 2
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(description="Reference-check / reconcile a curated memory altitude.")
     ap.add_argument("dirs", nargs="+", help="level dir(s) to reconcile, or an altitude chain for --check")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
@@ -742,11 +841,7 @@ def main(argv=None):
                   "and the reader gets an empty file): %s" % slug)
             problems += 1
         for path in rep["unreadable_dirs"]:
-            if Path(path).name == "CLAUDE.local.md":
-                print("    ! unreadable level file (not checked - fix its permissions, or re-save "
-                      "it as UTF-8): %s" % path)
-            else:
-                print("    ! unreadable directory (not checked - fix its permissions): %s" % path)
+            print("    ! %s" % _unreadable_line(path))
             problems += 1
         for slug in rep["danglers"]:
             print("    ~ dangling body (no pointer at any level): %s" % slug)
@@ -763,8 +858,8 @@ def main(argv=None):
             print("%s: %s" % ("would re-home" if args.dry_run else "re-homed", slug))
         print("TOTAL re-homed: %d" % len(done))
         stuck = unrehomable_bodies(anchor)
-        for slug in stuck:
-            print("cannot re-home: %s.md - its name is not a valid slug; rename the body file" % slug)
+        for name, why in stuck:
+            print("cannot re-home: %s.md - %s" % (name, why))
         return 1 if stuck else 0
 
     if args.check:

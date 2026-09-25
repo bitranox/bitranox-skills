@@ -136,62 +136,35 @@ def check_skills(target, shipped=None):
     return found
 
 
-def _kind(value):
-    return {dict: "an object", list: "a list", str: "a string", type(None): "null"}.get(
-        type(value), type(value).__name__)
-
-
-def _group_shape_problem(event, groups):
-    """Why one event's matcher groups are not the shape Claude Code reads, or None."""
-    if not isinstance(groups, list):
-        return '"hooks.%s" is %s, not a list of matcher groups' % (event, _kind(groups))
-    for group in groups:
-        if not isinstance(group, dict):
-            return '"hooks.%s" holds %s, not a matcher group object' % (event, _kind(group))
-        inner = group.get("hooks")
-        if inner is not None and not isinstance(inner, list):
-            return '"hooks.%s[].hooks" is %s, not a list' % (event, _kind(inner))
-        for hook in inner or []:
-            if not isinstance(hook, dict):
-                return '"hooks.%s[].hooks" holds %s, not a hook object' % (event, _kind(hook))
-    return None
-
-
-def _hooks_shape_problem(data):
-    """Why parsed settings are not the shape Claude Code reads hooks from, or None."""
-    if not isinstance(data, dict):
-        return "the top level is %s, not a JSON object" % _kind(data)
-    hooks = data.get("hooks")
-    if hooks is None:
-        return None
-    if not isinstance(hooks, dict):
-        return '"hooks" is %s, not an object keyed by event' % _kind(hooks)
-    for event, groups in hooks.items():
-        problem = _group_shape_problem(event, groups)
-        if problem:
-            return problem
-    return None
+_BOM = b"\xef\xbb\xbf"
 
 
 def settings_problem(path):
     """Why a settings file cannot be read for its hooks, or None when it can.
 
-    A file Claude Code cannot load disables every hook it registers, and the registration check
-    reads such a file as registering nothing - so it has to be named here, or the harness it kills
-    is reported clean."""
+    The answer is `harness_checks.hook_registrations`' own refusal, so there is ONE shape rule: a
+    second copy here passed a non-string hook command that the registration check then refused,
+    and the audit crashed behind a screen that had called the file fine. A file that cannot be
+    read for its hooks has to be named, because the registration check alone would read it as
+    registering nothing and report the harness it breaks as clean."""
     try:
-        raw = Path(path).read_bytes()
-    except OSError as exc:
-        return "unreadable: %s" % exc
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return "it starts with a UTF-8 byte-order mark, which JSON readers commonly refuse"
+        hc.hook_registrations(path)
+    except hc.SettingsUnreadable as exc:
+        return exc.reason
+    return None
+
+
+def settings_bom(path):
+    """True when a settings file opens with a UTF-8 byte-order mark.
+
+    Stated as a fact about the file, not about Claude Code: whether Claude Code loads such a file
+    has not been measured here. This audit's reader decodes through the BOM, so the file's
+    registrations are still checked either way."""
     try:
-        data = json.loads(raw.decode("utf-8"))
-    except UnicodeDecodeError as exc:
-        return "not UTF-8: %s" % exc
-    except ValueError as exc:
-        return "not valid JSON: %s" % exc
-    return _hooks_shape_problem(data)
+        with open(path, "rb") as handle:
+            return handle.read(len(_BOM)) == _BOM
+    except OSError:
+        return False                              # settings_problem names an unreadable file
 
 
 def _settings_findings(settings, home):
@@ -199,6 +172,11 @@ def _settings_findings(settings, home):
     contributes no registrations; a loadable one is checked for registrations naming missing files."""
     found, loadable = [], []
     for path in settings:
+        if settings_bom(path):
+            found.append(("settings-bom", "%s starts with a UTF-8 byte-order mark. This audit reads "
+                                          "through it; whether Claude Code does is not measured "
+                                          "here, so re-save it without one rather than rely on "
+                                          "either" % path))
         problem = settings_problem(path)
         if problem:
             found.append(("settings-unparseable", "%s: %s - every hook it registers is dead, and none of "

@@ -161,20 +161,17 @@ _write_if_changed = us.write_if_changed
 
 def read_store(proj):
     """Return (scope, [Entry], {slug: body}) for a level's curated store: the pointer block in its
-    `CLAUDE.local.md` + each body from the anchor's central store. Missing/empty -> ("", [], {})."""
+    `CLAUDE.local.md` + each body from the anchor's central store. Missing/empty -> ("", [], {}); a
+    missing body reads as "". Raises TreeWalkError when the level file or a body exists but cannot
+    be read or is not UTF-8: every writer builds on this answer, and an entry read as bodiless or a
+    level read as empty is one it would then rewrite."""
     anchor = _anchor(proj)
-    try:
-        text = sig.claude_local_md_path(proj).read_text(encoding="utf-8")
-    except OSError:
-        text = ""
+    text = read_store_text(sig.claude_local_md_path(proj))
     scope, pointers = us.parse_pointer_index(text)
     entries, bodies = [], {}
     for p in pointers:
         path = us.legacy_body_path(anchor, p.uuid) if p.legacy else us.body_path(anchor, p.slug)
-        try:
-            body = path.read_text(encoding="utf-8").rstrip("\n")
-        except OSError:
-            body = ""
+        body = read_store_text(path).rstrip("\n")
         entries.append(Entry(slug=p.slug, title=p.title, hook=p.hook, body=body,
                              pin=p.pin, uuid=p.uuid, legacy=p.legacy))
         bodies[p.slug] = body
@@ -193,10 +190,7 @@ def _commit_store(proj, scope, entries, bodies):
         pointers.append(us.Pointer(slug=e.slug, title=e.title, hook=e.hook,
                                    pin=e.pin, uuid=e.uuid, legacy=e.legacy))
     local = sig.claude_local_md_path(proj)
-    try:
-        text = local.read_text(encoding="utf-8")
-    except OSError:
-        text = ""
+    text = read_store_text(local)
     _warn_dropped_invalid_pointers(local, text)
     changed |= us.write_if_changed(local, us.upsert_pointer_block(text, scope or "", pointers))
     return changed
@@ -379,9 +373,11 @@ def _slug_owned_elsewhere(anchor, proj, slug):
         try:
             if Path(lvl).resolve() == pnorm:
                 continue
-            _s, ptrs = us.parse_pointer_index(sig.claude_local_md_path(lvl).read_text(encoding="utf-8"))
         except OSError:
             continue
+        # A level that cannot be read raises TreeWalkError: whether it owns the slug is unknown,
+        # and "not owned" is the answer that lets add adopt a body another level still points at.
+        _s, ptrs = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
         if any(p.slug == slug for p in ptrs):
             return True
     return False
@@ -449,11 +445,9 @@ def _retype_body(slug, hook, type_, text):
 def _entry_from_body(anchor, slug):
     """Reconstruct an Entry from a dangling central body so `add` can re-adopt it. The hook comes from
     the body's `description:` frontmatter; title/level are not stored in a body, so the caller's update
-    supplies them. Returns None if the body is unreadable."""
-    try:
-        text = us.body_path(anchor, slug).read_text(encoding="utf-8").rstrip("\n")
-    except OSError:
-        return None
+    supplies them. Raises TreeWalkError if the body cannot be read or is not UTF-8: returning
+    nothing sent add on to call the slug a collision with a fact it had simply failed to read."""
+    text = read_store_text(us.body_path(anchor, slug)).rstrip("\n")
     return Entry(slug=slug, title=slug, hook=_body_description(text), body=text)
 
 
@@ -605,11 +599,7 @@ def _existing_slugs(anchor):
     """Every slug pointed at anywhere in the tree (pointer blocks only - cheap, no body reads)."""
     slugs = set()
     for lvl in curated_levels_under(anchor):
-        try:
-            text = sig.claude_local_md_path(lvl).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        _scope, pointers = us.parse_pointer_index(text)
+        _scope, pointers = us.parse_pointer_index(read_store_text(sig.claude_local_md_path(lvl)))
         slugs.update(p.slug for p in pointers)
     return slugs
 
@@ -653,10 +643,7 @@ def _drop_pointer(level, slug):
     """Remove one pointer line (by slug) from a level's block, under lock, mtime-neutral."""
     local = sig.claude_local_md_path(level)
     with sig.memory_lock(local):
-        try:
-            text = local.read_text(encoding="utf-8")
-        except OSError:
-            return False
+        text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         kept = [p for p in pointers if p.slug != slug]
         if len(kept) == len(pointers):
@@ -828,7 +815,7 @@ def move_entry(from_level, to_level, slug, force=False):
         try:
             us.add_pointer(str(dst), slug=s, title=title, hook=hook, pin=pin)
             _drop_pointer(str(src), s)
-        except OSError as exc:
+        except (OSError, TreeWalkError) as exc:        # the re-read inside the drop can fail too
             rep["refused"] = (
                 "write failed on %r after %d of %d pointer(s) moved: %s - each move is an idempotent "
                 "add-then-remove, so re-run the SAME command to complete the set"
@@ -857,18 +844,14 @@ def ensure_level(proj, scope_default="", _locked=False):
         raise ValueError("refused: %s is an excluded altitude (home/tempdir/root)" % proj)
     def _do():
         md_path = sig.claude_md_path(proj)
-        try:
-            md = md_path.read_text(encoding="utf-8")
-        except OSError:
-            md = ""
+        # Both reads raise TreeWalkError rather than read as empty: this function REWRITES both
+        # files, and text it could not decode is text it would write back wrong.
+        md = read_store_text(md_path)
         legacy_scope = sig.read_scope_block(md)             # a scope block left in CLAUDE.md (migration)
         if legacy_scope is not None:
             _write_if_changed(md_path, _strip_scope_block(md))
         local = sig.claude_local_md_path(proj)
-        try:
-            text = local.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         want_scope = scope or (legacy_scope or scope_default or "").strip()
         if us.INDEX_BEGIN not in text or want_scope != scope:
@@ -944,11 +927,7 @@ def _level_needs_heal(proj):
     every-session heal calls this first so a healthy chain costs no lock and no write."""
     if not sig.claude_md_path(proj).is_file():
         return True
-    local = sig.claude_local_md_path(proj)
-    try:
-        text = local.read_text(encoding="utf-8")
-    except OSError:
-        return True
+    text = read_store_text(sig.claude_local_md_path(proj))   # absent -> "" -> a block is due
     scope, pointers = us.parse_pointer_index(text)
     return us.upsert_pointer_block(text, scope, pointers) != text
 
@@ -963,10 +942,7 @@ def _heal_level(proj, report):
             report["healed"].append(made)
         ensure_level(proj, _locked=True)
         local = sig.claude_local_md_path(proj)
-        try:
-            text = local.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        text = read_store_text(local)
         scope, pointers = us.parse_pointer_index(text)
         canonical = us.upsert_pointer_block(text, scope, pointers)     # round-trip -> canonical grammar
         if canonical != text and _write_if_changed(local, canonical):
@@ -978,9 +954,11 @@ def heal(proj):
     `CLAUDE.local.md`, or managed pointer block, NORMALIZE a malformed SCOPE/pointer block to canonical.
     A pointer whose central body is missing is REPORTED (never fabricated). Idempotent, mtime-neutral,
     A pointer whose slug is not a plain filename is dropped by that normalisation and REPORTED.
+    A level whose files cannot be read or are not UTF-8 is left untouched and REPORTED under
+    'unreadable' - skipping it without a word read exactly like a healthy level.
     FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)],
-    'invalid_pointers': [(level, line)], 'levels': n}."""
-    report = {"healed": [], "orphans": [], "invalid_pointers": [], "levels": 0}
+    'invalid_pointers': [(level, line)], 'unreadable': [(level, reason)], 'levels': n}."""
+    report = {"healed": [], "orphans": [], "invalid_pointers": [], "unreadable": [], "levels": 0}
     try:
         levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except Exception:                                # noqa: BLE001 - self-heal must never raise
@@ -989,27 +967,29 @@ def heal(proj):
         report["levels"] += 1
         level = str(level)
         try:
-            try:
-                before = sig.claude_local_md_path(level).read_text(encoding="utf-8")
-            except OSError:
-                before = ""
-            report["invalid_pointers"].extend((level, raw) for raw in us.invalid_pointer_lines(before))
-            if _level_needs_heal(level):             # skip-fast: healthy level = no lock, no write
-                _heal_level(level, report)
-            anchor = _anchor(level)
-            # orphan check by pointer-parse + stat only - bodies are never opened here
-            try:
-                text = sig.claude_local_md_path(level).read_text(encoding="utf-8")
-            except OSError:
-                text = ""
-            for ptr in us.parse_pointer_index(text)[1]:
-                path = (us.legacy_body_path(anchor, ptr.uuid) if ptr.legacy
-                        else us.body_path(anchor, ptr.slug))
-                if not path.is_file():
-                    report["orphans"].append((level, ptr.slug))
+            _heal_one_level(level, report)
+        except TreeWalkError as exc:
+            report["unreadable"].append((level, str(exc)))
         except Exception:                            # noqa: BLE001 - one bad level never blocks the rest
             continue
     return report
+
+
+def _heal_one_level(level, report):
+    """heal's per-level pass: record invalid pointers, repair the level if it needs it, then list
+    pointers whose body is missing. Raises TreeWalkError before any write when the level's files
+    cannot be read."""
+    before = read_store_text(sig.claude_local_md_path(level))
+    report["invalid_pointers"].extend((level, raw) for raw in us.invalid_pointer_lines(before))
+    if _level_needs_heal(level):                     # skip-fast: healthy level = no lock, no write
+        _heal_level(level, report)
+    anchor = _anchor(level)
+    # orphan check by pointer-parse + stat only - bodies are never opened here
+    text = read_store_text(sig.claude_local_md_path(level))
+    for ptr in us.parse_pointer_index(text)[1]:
+        path = us.legacy_body_path(anchor, ptr.uuid) if ptr.legacy else us.body_path(anchor, ptr.slug)
+        if not path.is_file():
+            report["orphans"].append((level, ptr.slug))
 
 
 def scaffold(proj):
@@ -1116,9 +1096,10 @@ def relocate_entry(from_level, to_level, slug, force=False):
     # the residue of an interrupted relocate, which re-running completes.
     src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
     if dst_body.is_file():
+        # BYTES, not text: whether two files are one fact needs no decoding, and a text compare
+        # crashed on a target body that was not UTF-8 instead of refusing to land on it.
         try:
-            same = dst_body.read_text(encoding="utf-8") == (
-                src_body.read_text(encoding="utf-8") if src_body.is_file() else "")
+            same = dst_body.read_bytes() == (src_body.read_bytes() if src_body.is_file() else b"")
         except OSError as exc:
             rep["refused"] = "could not compare with the target tree's body %s: %s" % (dst_body, exc)
             return rep
@@ -1141,11 +1122,12 @@ def relocate_entry(from_level, to_level, slug, force=False):
 
     # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
     # visible duplicate, never a lost fact. The body file is copied VERBATIM - it is already framed,
-    # and re-writing it through add_or_update_entry would double-wrap the frontmatter.
+    # and re-writing it through add_or_update_entry would double-wrap the frontmatter. As BYTES: a
+    # text round-trip rewrote a CRLF body's line endings on the way across.
     try:
-        text = src_body.read_text(encoding="utf-8") if src_body.is_file() else ""
+        data = src_body.read_bytes() if src_body.is_file() else b""
         dst_body.parent.mkdir(parents=True, exist_ok=True)
-        dst_body.write_text(text, encoding="utf-8")
+        dst_body.write_bytes(data)
     except OSError as exc:
         rep["refused"] = "could not write the body into the target tree: %s" % exc
         return rep
@@ -1226,10 +1208,7 @@ def _rewrite_inbound_refs(anchor, old_slug, new_slug):
                                pin=e.pin)
                 touched.append((str(level), e.slug, "hook"))
             body = us.body_path(anchor, e.slug)
-            try:
-                text = body.read_text(encoding="utf-8") if body.is_file() else ""
-            except OSError:
-                continue
+            text = read_store_text(body)            # rename_entry's collision scan read it already
             if text:
                 retargeted = _retarget_refs(text, canon_old, new_slug)
                 if retargeted != text:
@@ -1303,7 +1282,7 @@ def rename_entry(level, slug, to_slug):
     try:
         if src_body.is_file():
             dst_body.parent.mkdir(parents=True, exist_ok=True)
-            dst_body.write_text(_retarget_body_name(src_body.read_text(encoding="utf-8"), to_slug),
+            dst_body.write_text(_retarget_body_name(read_store_text(src_body), to_slug),
                                 encoding="utf-8")
         else:
             rep["warnings"].append("no body file at the old slug; renaming the pointer only")
@@ -1460,14 +1439,39 @@ def _other_levels_pointing_in(anchor, slug):
 
 
 class TreeWalkError(RuntimeError):
-    """The level walk could not read part of the tree: a directory it cannot list, or a
-    `CLAUDE.local.md` it cannot read or decode. Raised, never skipped - a partial level list is an
-    undercount every caller would read as the whole tree (check-tree says clean, relocate sees no
-    inbound refs to protect)."""
+    """Part of the store could not be read: a directory the level walk cannot list, or a store
+    file - a level's `CLAUDE.md` / `CLAUDE.local.md`, or a fact body - that cannot be opened or is
+    not UTF-8 (`read_store_text`). Raised, never skipped - a partial level list is an undercount
+    every caller would read as the whole tree (check-tree says clean, relocate sees no inbound refs
+    to protect), and a file read as empty is a level with no facts. The CLI maps it to exit 2."""
 
     def __init__(self, path, reason):
         super().__init__("%s: %s" % (path, reason))
         self.path, self.reason = str(path), reason
+
+
+def read_store_text(path):
+    """The text of one store file, or "" when it does not exist.
+
+    THE reader for a level file or a fact body, so every read of the store fails the same named
+    way. Absent (including a path whose parent is a file, which can never exist) is a fact about
+    the tree and reads as empty. Anything else - a file that cannot be opened, or bytes that are not
+    UTF-8 - raises TreeWalkError naming the file: a `read_text` guarded by `except OSError` let a
+    UnicodeDecodeError past and read a permission error as an empty level. Otherwise the text is
+    what `read_text(encoding="utf-8")` returned before: a BOM decodes (it is UTF-8) and is kept,
+    and line endings are translated to "\\n" the way text mode reads them."""
+    try:
+        data = Path(path).read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return ""
+    except OSError as exc:
+        raise TreeWalkError(path, "unreadable: %s" % exc) from exc
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TreeWalkError(path, "not UTF-8 (byte 0x%02x at offset %d) - re-save it as UTF-8"
+                            % (data[exc.start], exc.start)) from exc
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _raise_walk_error(err):
@@ -1492,17 +1496,7 @@ def _carries_pointer_block(path):
     False when it has vanished or is a dangling link - absent is a fact about the tree. Any other
     read failure, and bytes that are not UTF-8, raise TreeWalkError: whether such a file holds a
     block cannot be known, so it is neither counted nor dropped."""
-    try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        return False
-    except OSError as exc:
-        raise TreeWalkError(path, "unreadable: %s" % exc) from exc
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise TreeWalkError(path, "not UTF-8 (byte 0x%02x at offset %d) - re-save it as UTF-8"
-                            % (data[exc.start], exc.start)) from exc
+    text = read_store_text(path)
     return us.INDEX_BEGIN in text or us.LEGACY_INDEX_BEGIN in text
 
 
@@ -1558,10 +1552,7 @@ def lint_tree(anchor):
     anchor = _anchor(str(anchor))
     over_cap, no_trigger, unframed, invalid = [], [], [], []
     for lvl in curated_levels_under(anchor):
-        try:
-            text = sig.claude_local_md_path(lvl).read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        text = read_store_text(sig.claude_local_md_path(lvl))
         invalid.extend((lvl, raw) for raw in us.invalid_pointer_lines(text))
         _scope, entries, bodies = read_store(lvl)
         for e in entries:
@@ -1620,11 +1611,20 @@ def ensure_all_trees(roots=None, apply=False):
 
 
 
-def _read_text(path):
+def _read_input_file(path):
+    """(text, error_message) for a file named on the command line (--hook-file, --body-file, ...).
+
+    Decoded as `utf-8-sig`: a BOM is what a Windows editor leaves, and kept it would ride into the
+    always-loaded pointer line as an invisible first character that `strip()` does not remove.
+    Bytes that are not UTF-8 are a refusal naming the file, like an unreadable one - they used to
+    escape as a UnicodeDecodeError traceback."""
     try:
-        return Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return ""
+        return Path(path).read_text(encoding="utf-8-sig"), None
+    except UnicodeDecodeError as exc:
+        return None, "! refused: %s is not UTF-8 (byte at offset %d) - re-save it as UTF-8" % (
+            path, exc.start)
+    except OSError as exc:
+        return None, "! refused: cannot read %s (%s)" % (path, exc.strerror or exc)
 
 
 def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
@@ -1636,10 +1636,7 @@ def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
     both are given, matching --body/--body-file.
     """
     if path:
-        try:
-            return Path(path).read_text(encoding="utf-8"), None
-        except OSError as exc:
-            return None, "! refused: cannot read %s (%s)" % (path, exc.strerror or exc)
+        return _read_input_file(path)
     if inline is None:
         return None, "! refused: pass %s or %s" % (inline_flag, file_flag)
     return inline, None
@@ -1648,6 +1645,20 @@ def _text_from_flag_or_file(inline, path, inline_flag, file_flag):
 # ---- CLI: the capture procedure invokes this (never hand-writes memory files) ------------------
 
 def main(argv=None):
+    """The CLI. Exit codes: 0 done, 1 refused (the message says why), 2 usage error or a store it
+    could not read.
+
+    TreeWalkError is mapped HERE, once, rather than at each verb: it can surface from any read of
+    the store, and a verb that forgets to catch it lets a traceback exit 1 - the code every verb
+    uses for "refused", so a store that could not even be read read as an ordinary refusal."""
+    try:
+        return _main(argv)
+    except TreeWalkError as exc:
+        print("! error: cannot read the memory store - %s" % exc, file=sys.stderr)
+        return 2
+
+
+def _main(argv=None):
     ap = argparse.ArgumentParser(description="Curated memory write engine (the single write path).")
     sub = ap.add_subparsers(dest="cmd")
     a = sub.add_parser("add", help="upsert one curated fact (pointer + central body)")
@@ -1863,7 +1874,7 @@ def main(argv=None):
             return 1
         ensure_level(args.proj)                       # make sure the pointer block exists first
         local = sig.claude_local_md_path(args.proj)
-        text = _read_text(local)
+        text = read_store_text(local)
         _scope, pointers = us.parse_pointer_index(text)
         changed = us.write_if_changed(local, us.upsert_pointer_block(text, scope.strip(), pointers))
         print("scope %s: %s" % ("updated" if changed else "unchanged", local))
@@ -1878,6 +1889,9 @@ def main(argv=None):
             print("    ! missing central body (not fabricated): %s [%s]" % (slug, level))
         for level, raw in rep["invalid_pointers"]:
             print("    ! dropped a pointer whose slug is not a plain filename: %s [%s]" % (raw, level))
+        for level, why in rep["unreadable"]:
+            print("    ! unreadable level, left untouched (fix its permissions, or re-save it as "
+                  "UTF-8): %s [%s]" % (why, level))
         return 0
 
     if args.cmd == "add":
@@ -1888,7 +1902,10 @@ def main(argv=None):
         hook = hook.strip()
         body = args.body
         if args.body_file:
-            body = Path(args.body_file).read_text(encoding="utf-8")
+            body, err = _read_input_file(args.body_file)
+            if err:
+                print(err)
+                return 1
         # Unlike --hook/--hook-file, a scope flag on `add` is OPTIONAL - essentially every capture
         # passes neither. So this is a GUARDED call: `_text_from_flag_or_file` only runs when
         # --scope-file was actually given (it reads the file, or refuses cleanly if it cannot);
@@ -1950,7 +1967,10 @@ def main(argv=None):
             hook = hook.strip()
         body = None
         if args.body_file:
-            body = Path(args.body_file).read_text(encoding="utf-8")
+            body, err = _read_input_file(args.body_file)
+            if err:
+                print(err)
+                return 1
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
                                       title=args.title, type_=args.type_)
