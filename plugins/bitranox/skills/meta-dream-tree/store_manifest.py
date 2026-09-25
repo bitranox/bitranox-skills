@@ -22,16 +22,24 @@ Enumeration is where this goes wrong, twice over, and both are pinned by tests:
   covers neither `.venv-win` nor `.venv-3.13` nor `venv-<user>`.
 
 A manifest of zero entries verifies clean against anything, so an empty scope is a REFUSAL
-rather than an empty file.
+rather than an empty file. So is a scope with a level or directory that could not be read: a
+manifest that silently leaves it out vouches for a tree it never saw.
 
-Run:
-  `uv run store_manifest.py backup --from . --scope tree --out .dream-backup`
-  `uv run store_manifest.py backup --from . --scope chain --out .nap-backup`
+The anchor is the ENGINE's (the topmost dir with a `CLAUDE.md` and a store, see tree_support),
+never merely the nearest store: a leftover store lower down the chain would otherwise be backed up
+in place of the one the dream is about to rewrite.
+
+Run (from the plugin root, via the launcher that forces UTF-8):
+  `bash hooks/run-python.sh skills/meta-dream-tree/store_manifest.py backup --from . --scope tree --out <dir>`
+  `bash hooks/run-python.sh skills/meta-dream-tree/store_manifest.py backup --from . --scope chain --out <dir>`
   ... do the pass ...
-  `uv run store_manifest.py verify --out .dream-backup`
+  `bash hooks/run-python.sh skills/meta-dream-tree/store_manifest.py verify --out <dir>`
+
+`--out` must be outside the store, and either new, empty, or an earlier backup (it holds a
+`manifest.json`): a re-backup clears the old copies first, so any other existing dir is refused.
 
 Exit codes: 0 = backed up / verified identical, 1 = the tree differs from the manifest,
-2 = refused (no store, empty scope, unreadable backup, bad arguments).
+2 = refused (no store, empty scope, unreadable level or backup, bad arguments).
 """
 from __future__ import annotations
 
@@ -43,14 +51,19 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The engine's pointer parser, from the plugin's hooks dir: skills/<skill> -> skills -> bitranox.
+# The engine's pointer parser and anchor resolver, from the plugin's hooks dir:
+# skills/<skill> -> skills -> bitranox.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import uuid_store  # noqa: E402
 
-__all__ = ["Entry", "Diff", "NoAnchor", "derive", "diff", "manifest_key", "main"]
+# tree_support is this script's sibling; a caller loading the script by path does not put this
+# dir on sys.path the way running it directly does.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tree_support import STORE_DIR, store_anchor, utf8_stdio  # noqa: E402
+
+__all__ = ["Entry", "Diff", "NoAnchor", "Unreadable", "derive", "diff", "manifest_key", "main"]
 
 LEVEL_FILE = "CLAUDE.local.md"
-STORE_DIR = ".claude-memory"
 
 # Dirs a curated memory tree never keeps levels in. The PREFIX set is not decoration: a venv is
 # routinely named for its python or its project, so `.venv-win`, `.venv-3.13`, `venv-<user>` and
@@ -69,6 +82,17 @@ class NoAnchor(StoreManifestError):
 
 class EmptyScope(StoreManifestError):
     """The scope holds no levels, so a manifest would assert nothing while looking like proof."""
+
+
+class Unreadable(StoreManifestError):
+    """A level file or a directory in scope could not be read, so the scope is not fully known.
+
+    `paths` names each one; the CLI reports them in the envelope's `skipped`."""
+
+    def __init__(self, paths: list[str]) -> None:
+        super().__init__(f"{len(paths)} path(s) in scope could not be read, so the manifest "
+                         "would omit them: " + "; ".join(paths))
+        self.paths = paths
 
 
 @dataclass(frozen=True, order=True)
@@ -130,22 +154,24 @@ def is_pruned_dir(name: str) -> bool:
 
 
 def anchor_dir(start: Path) -> Path:
-    """The tree anchor: the first ancestor holding a `.claude-memory/` store."""
-    cur = Path(start).resolve()
-    while True:
-        if (cur / STORE_DIR).is_dir():
-            return cur
-        if cur.parent == cur:
-            raise NoAnchor(f"no {STORE_DIR}/ store at or above {Path(start).resolve()}")
-        cur = cur.parent
+    """The tree anchor the ENGINE uses for `start` (see tree_support.store_anchor)."""
+    anchor = store_anchor(start, uuid_store.resolve_anchor)
+    if anchor is None:
+        raise NoAnchor(f"no {STORE_DIR}/ store at the memory anchor of {Path(start).resolve()} "
+                       "(the topmost dir holding a CLAUDE.md and a store)")
+    return anchor
 
 
-def levels_under(anchor: Path, exclude: tuple[Path, ...] = ()) -> list[Path]:
+def levels_under(anchor: Path, exclude: tuple[Path, ...] = (),
+                 unreadable: list[str] | None = None) -> list[Path]:
     """Every level dir under `anchor`, pruned. Filesystem walk, never grep - see the docstring.
 
     `exclude` exists for the backup dir itself. Writing the backup under the anchor puts COPIES
     of every level file inside the scope, so the next walk finds them and `verify` reports the
     whole tree as moved - the tool breaking precisely the check it exists to perform.
+
+    A directory that cannot be listed is appended to `unreadable` rather than skipped in silence:
+    it may hold a level, and a manifest that omits it looks exactly like one that had none.
     """
     skip = tuple(Path(p).resolve() for p in exclude)
     found: list[Path] = []
@@ -155,6 +181,8 @@ def levels_under(anchor: Path, exclude: tuple[Path, ...] = ()) -> list[Path]:
         try:
             entries = list(d.iterdir())
         except OSError:
+            if unreadable is not None:
+                unreadable.append(str(d))
             continue
         for e in entries:
             if e.is_dir() and not e.is_symlink() and not is_pruned_dir(e.name):
@@ -193,18 +221,29 @@ def parse_level(text: str, level: str) -> list[Entry]:
 
 def derive(root: Path, *, scope: str = "tree", start: Path | None = None,
            exclude: tuple[Path, ...] = ()) -> list[Entry]:
-    """The manifest entries for the live tree, sorted so the result is order-independent."""
+    """The manifest entries for the live tree, sorted so the result is order-independent.
+
+    Raises Unreadable when any in-scope directory or level file could not be read (a permission
+    error, or bytes that are not UTF-8): a partial manifest would verify as if the missing levels
+    had never existed.
+    """
     anchor = anchor_dir(root)
     begin = Path(start) if start is not None else Path(root)
-    levels = (levels_under(anchor, exclude) if scope == "tree"
+    unreadable: list[str] = []
+    levels = (levels_under(anchor, exclude, unreadable) if scope == "tree"
               else levels_on_chain(begin, anchor))
     entries: list[Entry] = []
     for lvl in levels:
         try:
-            text = (lvl / LEVEL_FILE).read_text(encoding="utf-8")
-        except OSError:
+            # utf-8-sig: a BOM left by a Windows editor would otherwise glue itself to the first
+            # line and hide a pointer written there.
+            text = (lvl / LEVEL_FILE).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as exc:
+            unreadable.append(f"{lvl / LEVEL_FILE} ({type(exc).__name__})")
             continue
         entries.extend(parse_level(text, str(lvl)))
+    if unreadable:
+        raise Unreadable(sorted(unreadable))
     return sorted(entries)
 
 
@@ -213,27 +252,56 @@ def manifest_key(entries: list[Entry]) -> tuple:
     return tuple(sorted((e.level, e.slug, e.title, e.pin) for e in entries))
 
 
+def _by_slug(entries: list[Entry]) -> dict[str, dict[str, Entry]]:
+    out: dict[str, dict[str, Entry]] = {}
+    for e in entries:
+        out.setdefault(e.slug, {})[e.level] = e
+    return out
+
+
+def _changed(slug: str, b: Entry, a: Entry) -> Change | None:
+    what = [name for name in ("title", "pin") if getattr(b, name) != getattr(a, name)]
+    return Change(slug, what, b, a) if what else None
+
+
+def _diff_slug(slug: str, before: dict[str, Entry], after: dict[str, Entry], out: Diff) -> None:
+    """Fold one slug's copies into `out`. Levels present on both sides are compared in place.
+
+    The rest is a MOVE only when the slug has as many copies after as before; otherwise the copies
+    that vanished are removed and the new ones added. Keying on the slug alone kept one copy per
+    slug, so removing one of two copies of a duplicated slug verified IDENTICAL.
+    """
+    for level in sorted(set(before) & set(after)):
+        change = _changed(slug, before[level], after[level])
+        if change:
+            out.changed.append(change)
+    gone = [before[lv] for lv in sorted(set(before) - set(after))]
+    new = [after[lv] for lv in sorted(set(after) - set(before))]
+    if len(before) != len(after):
+        out.removed.extend(gone)
+        out.added.extend(new)
+        return
+    for b, a in zip(gone, new):
+        out.moved.append(a)
+        change = _changed(slug, b, a)
+        if change:
+            out.changed.append(change)
+
+
 def diff(before: list[Entry], after: list[Entry]) -> Diff:
-    """What changed between two manifests, keyed by slug. PURE.
+    """What changed between two manifests, keyed by (level, slug). PURE.
 
     A MOVE is reported as a move rather than as an unrelated add plus remove, because a dream
     moves facts on purpose and an add/remove rendering makes the report unreadable exactly when
     it is being read.
     """
-    by_before = {e.slug: e for e in before}
-    by_after = {e.slug: e for e in after}
-    added = sorted(e for s, e in by_after.items() if s not in by_before)
-    removed = sorted(e for s, e in by_before.items() if s not in by_after)
-    changed: list[Change] = []
-    moved: list[Entry] = []
-    for slug in sorted(set(by_before) & set(by_after)):
-        b, a = by_before[slug], by_after[slug]
-        what = [name for name in ("title", "pin") if getattr(b, name) != getattr(a, name)]
-        if what:
-            changed.append(Change(slug, what, b, a))
-        if b.level != a.level:
-            moved.append(a)
-    return Diff(added=added, removed=removed, changed=changed, moved=moved)
+    by_before, by_after = _by_slug(before), _by_slug(after)
+    out = Diff()
+    for slug in sorted(set(by_before) | set(by_after)):
+        _diff_slug(slug, by_before.get(slug, {}), by_after.get(slug, {}), out)
+    out.added.sort()
+    out.removed.sort()
+    return out
 
 
 # ---- backup and verify ---------------------------------------------------------------------
@@ -252,44 +320,89 @@ def _write_manifest(out: Path, *, anchor: Path, scope: str, start: Path,
     return path
 
 
+def _check_out(out: Path, store: Path) -> None:
+    """Refuse an --out the backup would damage, or damage itself by writing into.
+
+    Inside the store, copytree recurses into its own output and fills the LIVE store with nested
+    copies. An existing dir that is not an earlier backup may hold someone's files, and a
+    re-backup clears `store/` and `levels/` before copying - so only a new, empty, or earlier
+    backup dir is accepted.
+    """
+    target = Path(out).resolve()
+    if target == store or store in target.parents:
+        raise StoreManifestError(f"--out {target} is inside the store {store}; the copy would "
+                                 "recurse into itself - write the backup outside the store")
+    if target.is_dir() and any(target.iterdir()) and not (target / "manifest.json").is_file():
+        raise StoreManifestError(f"--out {target} exists, is not empty and holds no "
+                                 "manifest.json, so it is not an earlier backup; a re-backup "
+                                 "clears its store/ and levels/ first - use a new dir")
+
+
 def backup(*, root: Path, scope: str, start: Path, out: Path) -> tuple[list[Entry], Path]:
     """Copy the store and every in-scope level file, then record the manifest."""
     anchor = anchor_dir(root)
+    store_src = anchor / STORE_DIR
+    _check_out(out, store_src.resolve())
     entries = derive(root, scope=scope, start=start, exclude=(Path(out).expanduser(),))
     if not entries:
         raise EmptyScope(f"no pointers found in scope {scope!r} under {anchor} - a manifest of "
                          "nothing verifies clean against anything, so this is a refusal")
     out.mkdir(parents=True, exist_ok=True)
-    store_src = anchor / STORE_DIR
-    store_dst = out / "store"
-    if store_dst.exists():
-        shutil.rmtree(store_dst)
-    shutil.copytree(store_src, store_dst)
+    for stale in (out / "store", out / "levels"):
+        # A level deleted since the last backup into this dir would otherwise survive in it.
+        if stale.exists():
+            shutil.rmtree(stale)
+    shutil.copytree(store_src, out / "store")
+    # Every in-scope level sits under the anchor: the tree walk starts there and the chain walk
+    # stops there, so relative_to cannot fail.
     for lvl in sorted({Path(e.level) for e in entries}):
-        try:
-            rel = lvl.relative_to(anchor)
-        except ValueError:                       # a chain level above the anchor: keep it flat
-            rel = Path(lvl.name)
-        dst = out / "levels" / rel
+        dst = out / "levels" / lvl.relative_to(anchor)
         dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(lvl / LEVEL_FILE, dst / LEVEL_FILE)
     return entries, _write_manifest(out, anchor=anchor, scope=scope, start=start, entries=entries)
 
 
+def _manifest_shape_error(data: object) -> str | None:
+    """Why `data` is not a manifest this tool wrote, or None when it is one. PURE."""
+    if not isinstance(data, dict):
+        return f"the top level is {type(data).__name__}, not an object"
+    if not isinstance(data.get("anchor"), str):
+        return "it has no 'anchor' string"
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return "it has no 'entries' list"
+    for key in ("scope", "start"):
+        if key in data and not isinstance(data[key], str):
+            return f"its '{key}' is not a string"
+    exclude = data.get("exclude", [])
+    if not (isinstance(exclude, list) and all(isinstance(p, str) for p in exclude)):
+        return "its 'exclude' is not a list of strings"
+    for i, e in enumerate(entries):
+        if not (isinstance(e, dict) and isinstance(e.get("level"), str)
+                and isinstance(e.get("slug"), str)):
+            return f"entry {i} is not an object with 'level' and 'slug' strings"
+    return None
+
+
 def load_manifest(out: Path) -> dict:
+    """The manifest in `out`, validated. A truncated or hand-edited one is a typed refusal."""
     path = Path(out) / "manifest.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise StoreManifestError(f"cannot read {path}: {exc}") from exc
-    except ValueError as exc:
+    except ValueError as exc:                    # includes UnicodeDecodeError
         raise StoreManifestError(f"{path} is not valid JSON: {exc}") from exc
+    why = _manifest_shape_error(data)
+    if why:
+        raise StoreManifestError(f"{path} is not a store manifest: {why}")
+    return data
 
 
 def verify(out: Path) -> Diff:
     """Re-derive the live tree with the manifest's own scope and diff it."""
     data = load_manifest(out)
-    before = [Entry.from_dict(d) for d in data.get("entries", [])]
+    before = [Entry.from_dict(d) for d in data["entries"]]
     anchor = Path(data["anchor"])
     after = derive(anchor, scope=data.get("scope", "tree"),
                    start=Path(data.get("start", str(anchor))),
@@ -299,9 +412,11 @@ def verify(out: Path) -> Diff:
 
 # ---- CLI ---------------------------------------------------------------------------------------
 
-def _emit(as_json: bool, ok: bool, command: str, data: dict, text: str) -> None:
+def _emit(as_json: bool, ok: bool, command: str, data: dict, text: str,
+          skipped: list[str] | None = None) -> None:
     if as_json:
-        print(json.dumps({"ok": ok, "command": command, "data": data, "skipped": []}, indent=2))
+        print(json.dumps({"ok": ok, "command": command, "data": data,
+                          "skipped": list(skipped or [])}, indent=2))
     else:
         print(text)
 
@@ -335,10 +450,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    utf8_stdio()
     args = build_parser().parse_args(argv)
     try:
         if args.cmd == "backup":
             start = Path(args.start).expanduser().resolve()
+            if not start.is_dir():
+                # A typo'd --from would otherwise climb to an ancestor and back up ITS chain.
+                raise StoreManifestError(f"--from {start} is not an existing directory")
             entries, path = backup(root=start, scope=args.scope, start=start,
                                    out=Path(args.out).expanduser())
             _emit(args.as_json, True, "backup",
@@ -348,9 +467,11 @@ def main(argv: list[str] | None = None) -> int:
         d = verify(Path(args.out).expanduser())
         _emit(args.as_json, d.identical, "verify", d.as_dict(), _render_diff(d))
         return 0 if d.identical else 1
-    except StoreManifestError as exc:
+    except (StoreManifestError, OSError) as exc:
+        # OSError: a copy or manifest write that failed part-way (full disk, read-only target).
+        skipped = exc.paths if isinstance(exc, Unreadable) else []
         _emit(getattr(args, "as_json", False), False, args.cmd, {"error": str(exc)},
-              f"error: {exc}")
+              f"error: {exc}", skipped)
         if not getattr(args, "as_json", False):
             print(f"error: {exc}", file=sys.stderr)
         return 2

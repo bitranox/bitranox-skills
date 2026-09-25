@@ -17,9 +17,12 @@ matter are the ones that stop it lying:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -34,7 +37,8 @@ CLEAN = "- [T3](mem:gamma) - When you parse a chain, walk up from the narrowest 
 
 
 def _tree(tmp_path: Path, *lines: str) -> Path:
-    """A directory carrying a CLAUDE.local.md and a .claude-memory store beside it."""
+    """A tree anchor (CLAUDE.md + .claude-memory store, as the engine requires) with its level."""
+    (tmp_path / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
     (tmp_path / ".claude-memory" / "facts").mkdir(parents=True, exist_ok=True)
     (tmp_path / "CLAUDE.local.md").write_text(
         "# Memory index\n\n## Memory index\n" + "\n".join(lines) + "\n", encoding="utf-8")
@@ -185,3 +189,100 @@ class TestAPartialAdjudicationIsRecordable:
         out = _run("clear", "--chain", str(root), "--json")
         assert out.returncode == 0
         assert json.loads(out.stdout)["data"]["recorded"] == 2
+
+
+def _nested(tmp_path: Path) -> Path:
+    """The anchor holds `s` as SHIPPED; the level below it holds the same slug with other text."""
+    root = _tree(tmp_path, SHIPPED.replace("alpha", "s"))
+    sub = root / "sub"
+    sub.mkdir()
+    (sub / "CLAUDE.local.md").write_text(
+        "# Memory index\n\n## Memory index\n" + OTHER.replace("beta", "s") + "\n",
+        encoding="utf-8")
+    return sub
+
+
+class TestASlugAtTwoLevels:
+    def test_editing_the_narrow_copy_is_reported(self, tmp_path: Path):
+        sub = _nested(tmp_path)
+        assert _run("clear", "--chain", str(sub)).returncode == 0
+        assert _scan_json(sub)["new_or_changed"] == [], "control: cleared copies stay cleared"
+        (sub / "CLAUDE.local.md").write_text(
+            "# Memory index\n\n## Memory index\n" + SHIPPED_EDITED.replace("alpha", "s") + "\n",
+            encoding="utf-8")
+        assert _scan_json(sub)["new_or_changed"] == ["s"]
+
+    def test_editing_the_ancestor_copy_is_reported(self, tmp_path: Path):
+        sub = _nested(tmp_path)
+        assert _run("clear", "--chain", str(sub)).returncode == 0
+        (tmp_path / "CLAUDE.local.md").write_text(
+            "# Memory index\n\n## Memory index\n" + SHIPPED_EDITED.replace("alpha", "s") + "\n",
+            encoding="utf-8")
+        assert _scan_json(sub)["new_or_changed"] == ["s"]
+
+
+class TestAMalformedBaseline:
+    @pytest.mark.parametrize("payload", ["[]", '{"cleared": {"alpha": "2026-01-01"}}',
+                                         '{"cleared": []}'])
+    def test_scan_over_a_wrong_shape_baseline_reads_it_as_empty(self, tmp_path: Path, payload):
+        root = _tree(tmp_path, SHIPPED)
+        (root / ".claude-memory" / "statusrot-baseline.json").write_text(payload, encoding="utf-8")
+        out = _run("scan", "--chain", str(root), "--json")
+        assert out.returncode == 0, out.stderr
+        assert json.loads(out.stdout)["data"]["new_or_changed"] == ["alpha"]
+
+    def test_load_baseline_drops_records_that_are_not_objects(self, tmp_path: Path):
+        path = tmp_path / "b.json"
+        path.write_text('{"cleared": {"a": "x", "b": {"hook_sha256": "h"}}}', encoding="utf-8")
+        assert statusrot.load_baseline(path) == {"b": {"hook_sha256": "h"}}
+
+    @pytest.mark.parametrize("payload", ["<<<<<<< HEAD\n{\"cleared\": {\"old1\": {}}}\n",
+                                         "[]", '{"cleared": {"old1": "2026-01-01"}}'])
+    def test_clear_refuses_to_overwrite_a_baseline_it_cannot_read(self, tmp_path: Path, payload):
+        """Rewriting an unparseable baseline from empty wipes every earlier verdict."""
+        root = _tree(tmp_path, SHIPPED)
+        bl = root / ".claude-memory" / "statusrot-baseline.json"
+        bl.write_text(payload, encoding="utf-8")
+        out = _run("clear", "--chain", str(root), "--slug", "alpha", "--json")
+        assert out.returncode == 2, out.stdout + out.stderr
+        assert json.loads(out.stdout)["ok"] is False
+        assert bl.read_text(encoding="utf-8") == payload
+
+    def test_clear_over_a_valid_baseline_keeps_the_earlier_verdicts(self, tmp_path: Path):
+        """Control for the refusal above: a readable baseline is merged, not replaced."""
+        root = _tree(tmp_path, SHIPPED)
+        bl = root / ".claude-memory" / "statusrot-baseline.json"
+        bl.write_text('{"version": 1, "cleared": {"old1": {"hook_sha256": "h"}}}',
+                      encoding="utf-8")
+        assert _run("clear", "--chain", str(root), "--slug", "alpha").returncode == 0
+        assert set(json.loads(bl.read_text(encoding="utf-8"))["cleared"]) == {"alpha", "old1"}
+
+
+NO_CHMOD = not hasattr(os, "geteuid") or os.geteuid() == 0
+
+
+class TestClearWriteFailure:
+    @pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
+    def test_a_failed_baseline_write_is_the_exit_2_envelope(self, tmp_path: Path):
+        root = _tree(tmp_path, SHIPPED)
+        store = root / ".claude-memory"
+        store.chmod(0o555)
+        try:
+            out = _run("clear", "--chain", str(root), "--json")
+        finally:
+            store.chmod(0o755)
+        assert out.returncode == 2, out.stdout + out.stderr
+        assert "Traceback" not in out.stderr
+        assert json.loads(out.stdout)["ok"] is False
+
+
+class TestTheAnchorIsTheEngines:
+    def test_a_decoy_store_does_not_receive_the_baseline(self, tmp_path: Path):
+        root = _tree(tmp_path, SHIPPED)
+        proj = root / "proj"
+        (proj / ".claude-memory").mkdir(parents=True)
+        (proj / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+        (proj / "CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+        assert _run("clear", "--chain", str(proj)).returncode == 0
+        assert (root / ".claude-memory" / "statusrot-baseline.json").is_file()
+        assert not (proj / ".claude-memory" / "statusrot-baseline.json").exists()

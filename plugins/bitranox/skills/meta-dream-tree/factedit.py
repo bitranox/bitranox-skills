@@ -31,17 +31,24 @@ hand-edit leaves behind.
 
 Not a locator: "which level holds this slug" and "what is where in the tree" are answered by
 `mem_levels.py` in the shipped `bitranox:compuse-toolbox` skill. This resolves the level only
-because it needs it to call the engine.
+because it needs it to call the engine. The body is read from the store the ENGINE uses - the
+engine's own `resolve_anchor`, see tree_support - never merely the nearest store, which a
+leftover mid-chain store would otherwise answer for.
 
-Run: `uv run tools/factedit.py show --slug feedback-no-em-dashes --from /path/in/tree`
-     `uv run tools/factedit.py check --hook-file draft.txt`
-     `uv run tools/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --dry-run`
-     `uv run tools/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --body-file b.md`
+The engine is this plugin's own (`hooks/memory_engine.py` beside this skill) unless --engine or
+$BITRANOX_MEMORY_ENGINE names another; only a copy of this file outside the plugin falls back to
+the newest installed engine.
+
+Run (from the plugin root, via the launcher that forces UTF-8):
+  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py show --slug <slug> --from <dir>`
+  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py check --hook-file draft.txt`
+  `bash hooks/run-python.sh skills/meta-dream-tree/factedit.py apply --slug <slug> --from <dir> --hook-file new.txt --dry-run`
 
 Exit codes: 0 = yes (found / would be accepted / applied), 1 = no (no such fact / the engine
-refuses this hook / the engine refused the write), 2 = error (no engine, unreadable tree, bad
-arguments). Advisories are PRODUCT, so they ride in the envelope's `data`; operational warnings
-go to stderr and never into stdout.
+refuses this hook / the engine refused the write with its own exit 1), 2 = error (no engine, an
+unreadable or non-UTF-8 tree or input file, an interpreter that cannot be launched, bad
+arguments, or the engine exiting with anything but 0 or 1). Advisories are PRODUCT, so they
+ride in the envelope's `data`; operational warnings go to stderr and never into stdout.
 """
 from __future__ import annotations
 
@@ -58,13 +65,22 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# tree_support is this script's sibling; a caller loading the script by path does not put this
+# dir on sys.path the way running it directly does.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tree_support import store_anchor, utf8_stdio  # noqa: E402
+
 LEVEL_FILE = "CLAUDE.local.md"
 STORE_DIRNAME = ".claude-memory"
 FACTS_SUBDIR = "facts"
 
-# Where a plugin-installed engine lives. The version segment is a glob on purpose: a hardcoded
-# version goes stale on the next plugin bump, and this tool must read the LIVE caps or it is
-# lying about them.
+# The engine this plugin ships, beside this skill: skills/<skill> -> skills -> bitranox/hooks.
+# It is the one whose caps match the running plugin, whatever else the machine has installed.
+OWN_ENGINE = Path(__file__).resolve().parents[2] / "hooks" / "memory_engine.py"
+
+# Where a plugin-installed engine lives, the fallback for a copy of this file run outside the
+# plugin. The version segment is a glob on purpose: a hardcoded version goes stale on the next
+# plugin bump, and this tool must read the LIVE caps or it is lying about them.
 _CACHE_GLOB = ".claude/plugins/cache/bitranox-skills/bitranox/*/hooks/memory_engine.py"
 _MARKETPLACE = ".claude/plugins/marketplaces/bitranox-skills/plugins/bitranox/hooks/memory_engine.py"
 
@@ -98,6 +114,17 @@ class BadInput(FactEditError):
     """The arguments cannot describe a recomposition (nothing to change, or two sources for one)."""
 
 
+class Unreadable(FactEditError):
+    """A level or a body exists but could not be read, or is not UTF-8.
+
+    Distinct from UnknownFact on purpose: "I could not look" must not read as "it is not there",
+    and an unreadable body must not read as an empty one."""
+
+
+class EngineLaunchFailed(FactEditError):
+    """The interpreter given to run the engine could not be started at all."""
+
+
 @dataclass(frozen=True)
 class EngineRules:
     """The engine's live lint surface, injected so the judging below is testable without a store."""
@@ -113,6 +140,9 @@ class EngineRules:
     parse_index: Callable[[str], tuple]
     types: tuple[str, ...] = ()
     engine_path: Path | None = None
+    # The engine's anchor resolver, bound like the parser so the body is read from the store THAT
+    # engine writes. None only for an engine too old to export it, which read_fact refuses.
+    resolve_anchor: Callable[[str], object] | None = None
 
 
 @dataclass(frozen=True)
@@ -223,15 +253,20 @@ def chain_levels(start: Path) -> list[Path]:
         cur = cur.parent
 
 
-def anchor_dir(start: Path) -> Path:
-    """The tree anchor: the first ancestor holding a `.claude-memory/` store."""
-    cur = Path(start).resolve()
-    while True:
-        if (cur / STORE_DIRNAME).is_dir():
-            return cur
-        if cur.parent == cur:
-            raise NoAnchor(f"no {STORE_DIRNAME}/ store at or above {Path(start).resolve()}")
-        cur = cur.parent
+def anchor_dir(start: Path, resolve: Callable[[str], object] | None) -> Path:
+    """The anchor whose store the engine reads for `start`, via the engine's own `resolve`.
+
+    The nearest store is NOT the answer: a leftover store lower down the chain would then supply
+    the body, type and drift verdict of a fact the engine keeps somewhere else.
+    """
+    if resolve is None:
+        raise EngineNotFound("the engine exports no resolve_anchor, so the store it writes "
+                             "cannot be located; pass a current engine with --engine")
+    anchor = store_anchor(start, resolve)
+    if anchor is None:
+        raise NoAnchor(f"no {STORE_DIRNAME}/ store at the memory anchor of "
+                       f"{Path(start).resolve()} (the topmost dir holding a CLAUDE.md and a store)")
+    return anchor
 
 
 def body_file(anchor: Path, slug: str) -> Path:
@@ -255,14 +290,25 @@ def engine_candidates(home: Path | None = None) -> list[Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def find_engine(explicit: str | None = None, home: Path | None = None) -> Path:
-    """The engine to read the rules from: --engine, then $BITRANOX_MEMORY_ENGINE, then newest."""
+def find_engine(explicit: str | None = None, home: Path | None = None,
+                own: Path | None = None) -> Path:
+    """The engine to read the rules from: --engine, then $BITRANOX_MEMORY_ENGINE, then this
+    plugin's OWN engine (`own`, default OWN_ENGINE), then the newest installed one.
+
+    The own engine comes before any search: it is the version this skill shipped with, while the
+    newest-by-mtime copy on the machine can be another version entirely (a marketplace clone, an
+    older cache dir touched last), and a search that finds nothing under a renamed marketplace
+    would refuse although the engine sits right beside this file.
+    """
     for raw in (explicit, os.environ.get("BITRANOX_MEMORY_ENGINE")):
         if raw:
             path = Path(raw).expanduser()
             if not path.is_file():
                 raise EngineNotFound(f"no memory_engine.py at {path}")
             return path
+    own = OWN_ENGINE if own is None else Path(own)
+    if own.is_file():
+        return own
     found = engine_candidates(home)
     if not found:
         raise EngineNotFound(
@@ -277,8 +323,9 @@ def load_rules(engine: Path) -> EngineRules:
     # Drop any previously-imported copy first. Both names are plain top-level modules, so a second
     # call with a DIFFERENT engine dir would otherwise get the cached first one and report that
     # engine's caps under this engine's path - the exact silent-wrong-answer this tool exists to
-    # stop. Nothing else in this process imports them, so evicting them is safe.
-    for name in ("uuid_store", "capture_constraints"):
+    # stop. Nothing else in this process imports them, so evicting them is safe. The anchor
+    # resolver lives in self_improve_signals (uuid_store re-exports it), so that goes too.
+    for name in ("uuid_store", "capture_constraints", "self_improve_signals"):
         sys.modules.pop(name, None)
     importlib.invalidate_caches()
     try:
@@ -298,6 +345,7 @@ def load_rules(engine: Path) -> EngineRules:
         parse_index=us.parse_pointer_index,
         types=tuple(us.TYPE_PREFIXES),
         engine_path=Path(engine).resolve(),
+        resolve_anchor=getattr(us, "resolve_anchor", None),
     )
 
 
@@ -314,27 +362,39 @@ def read_fact(slug: str, start: Path, rules: EngineRules, level: Path | None = N
     the plugin - reading one it has dropped raises on every fact in the store, and a fake pointer
     in a test cannot see that. `test_read_fact_only_uses_attributes_the_live_pointer_actually_carries`
     is what holds this to the installed engine.
+
+    A forced `level` also decides the anchor, since that is the level the engine will be called
+    with. A level or body that exists but cannot be read raises Unreadable (exit 2), never "no
+    such fact" or an empty body; a body that does not exist at all reads as empty, as it does in
+    the engine.
     """
-    anchor = anchor_dir(start)
+    anchor = anchor_dir(level if level else start, rules.resolve_anchor)
     levels = [Path(level).resolve()] if level else chain_levels(start)
     for lvl in levels:
-        try:
-            text = (lvl / LEVEL_FILE).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        _scope, pointers = rules.parse_index(text)
+        _scope, pointers = rules.parse_index(_read_text(lvl / LEVEL_FILE, missing_ok=False))
         for ptr in pointers:
             if ptr.slug != slug:
                 continue
             path = body_file(anchor, slug)
-            try:
-                body = path.read_text(encoding="utf-8")
-            except OSError:
-                body = ""
             return Fact(slug=slug, level=lvl, anchor=anchor, title=ptr.title,
                         hook=ptr.hook or "", pin=bool(ptr.pin),
-                        body=body, body_path=path)
+                        body=_read_text(path, missing_ok=True), body_path=path)
     raise UnknownFact(f"no pointer for {slug!r} at any level from {Path(start).resolve()}")
+
+
+def _read_text(path: Path, *, missing_ok: bool) -> str:
+    """A store file's text; utf-8-sig so a BOM from a Windows editor is not read as content.
+
+    Raises Unreadable on a permission error or bytes that are not UTF-8, and on a missing file
+    unless `missing_ok` (then it reads as '')."""
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except FileNotFoundError as exc:
+        if missing_ok:
+            return ""
+        raise Unreadable(f"{path} does not exist") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Unreadable(f"cannot read {path}: {exc}") from exc
 
 
 # ---- recomposition ------------------------------------------------------------------------------
@@ -358,7 +418,7 @@ def _in_a_venv(interpreter: Path) -> bool:
     return (Path(interpreter).parent.parent / "pyvenv.cfg").is_file()
 
 
-def default_python(path_env: str | None = None) -> str:
+def default_python(path_env: str | None = None, base_prefix: Path | None = None) -> str:
     """The interpreter to launch the engine with: the first NON-VENV python3 on PATH.
 
     Neither of the obvious answers works. `sys.executable` under `uv run` is an EPHEMERAL build
@@ -366,17 +426,24 @@ def default_python(path_env: str | None = None) -> str:
     is already gone; and a bare `shutil.which("python3")` finds that same venv, because uv puts it
     first on PATH. So venv interpreters are skipped explicitly. The engine is pure stdlib, so any
     real python3 runs it.
+
+    Windows names its interpreter `python.exe` (there is no python3.exe in a python.org install)
+    and keeps it at the ROOT of the base prefix, not under bin/, so both are tried before falling
+    back to sys.executable. A bare `python` is not tried on POSIX, where it may be Python 2.
     """
     raw = os.environ.get("PATH", "") if path_env is None else path_env
     for entry in raw.split(os.pathsep):
         if not entry:
             continue
-        for name in ("python3", "python3.exe"):
+        for name in ("python3", "python3.exe", "python.exe"):
             cand = Path(entry) / name
             if cand.is_file() and os.access(cand, os.X_OK) and not _in_a_venv(cand):
                 return str(cand)
-    base = Path(sys.base_prefix) / "bin" / "python3"
-    return str(base) if base.is_file() else sys.executable
+    base = Path(sys.base_prefix) if base_prefix is None else Path(base_prefix)
+    for cand in (base / "bin" / "python3", base / "python.exe"):
+        if cand.is_file():
+            return str(cand)
+    return sys.executable
 
 
 def engine_argv(fact: Fact, engine: Path, *, hook_path: Path | None, body_path: Path | None,
@@ -387,23 +454,28 @@ def engine_argv(fact: Fact, engine: Path, *, hook_path: Path | None, body_path: 
     The VERB comes from the stored pin flag, never from the caller: an ordinary `add` against a
     pinned fact raises before writing anything, and `amend-pinned` is the one deliberate way
     through. Getting that wrong costs a refusal, not damage, but it costs it every time.
+
+    Every value travels as ONE `--flag=value` item. As two items, a value starting with '-' (a
+    title such as "-draft") is read by the engine's argparse as another option and the call dies
+    with "expected one argument" - including on every later edit of a fact stored with that title,
+    since an unpinned edit re-sends the stored title.
     """
     argv = [python or default_python(), str(engine),
             "amend-pinned" if fact.pin else "add",
-            "--proj", str(fact.level), "--slug", fact.slug]
+            f"--proj={fact.level}", f"--slug={fact.slug}"]
     if fact.pin:
         if title:
-            argv += ["--title", title]
+            argv.append(f"--title={title}")
     else:
-        argv += ["--title", title or fact.title]
+        argv.append(f"--title={title or fact.title}")
     if hook_path:
-        argv += ["--hook-file", str(hook_path)]
+        argv.append(f"--hook-file={hook_path}")
     if body_path:
-        argv += ["--body-file", str(body_path)]
+        argv.append(f"--body-file={body_path}")
     if type_:
         # Only when the caller ASKED. A derived one would re-introduce the guess this closes: with
         # no --type the engine keeps the kind the stored body records.
-        argv += ["--type", type_]
+        argv.append(f"--type={type_}")
     return argv
 
 
@@ -475,8 +547,9 @@ def _resolve_text(inline: str | None, path: str | None, flag: str) -> str | None
         raise BadInput(f"pass {flag} or {flag}-file, not both")
     if path:
         try:
-            return Path(path).read_text(encoding="utf-8")
-        except OSError as exc:
+            # utf-8-sig: a BOM from a Windows editor would otherwise become the hook's first char.
+            return Path(path).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as exc:
             raise BadInput(f"cannot read {path}: {exc}") from exc
     return inline
 
@@ -529,8 +602,19 @@ def cmd_apply(args, rules: EngineRules) -> int:
         if args.type_ not in rules.types:
             raise BadInput(f"unknown type {args.type_!r}; the engine knows "
                            + ", ".join(rules.types))
+    # A pinned fact given no new hook goes through amend-pinned WITHOUT --hook-file, which keeps
+    # the stored hook untouched - so a stored hook over the cap (the movers can leave one) is no
+    # reason to refuse a body, title or type edit the engine itself would accept. An unpinned
+    # fact goes through `add`, which needs the hook re-sent and refuses it over the cap.
+    keep_stored_hook = fact.pin and hook is None
     hook = fact.hook if hook is None else hook.strip()
     verdict = judge_hook(hook, body if body is not None else fact.body, rules)
+    if keep_stored_hook and not verdict.accepted:
+        verdict = Verdict(length=verdict.length, accepted=True, refusals=[],
+                          advisories=verdict.advisories + [
+                              f"the STORED hook is over the cap ({line}); it is kept unchanged "
+                              "and not re-sent, so this edit is not blocked by it"
+                              for line in verdict.refusals])
     if not verdict.accepted:
         data = {"slug": fact.slug, "level": str(fact.level), "accepted": False,
                 "hook_chars": verdict.length, "refusals": verdict.refusals,
@@ -542,8 +626,12 @@ def cmd_apply(args, rules: EngineRules) -> int:
 
     stage = Path(args.stage_dir) if args.stage_dir else Path(
         tempfile.mkdtemp(prefix="factedit-"))
-    hook_path = stage_text(stage, f"{fact.slug}.hook.txt", hook)
     skipped: list[str] = []
+    hook_path = None
+    if keep_stored_hook:
+        skipped.append("hook unchanged (amend-pinned keeps the stored one; not re-sent)")
+    else:
+        hook_path = stage_text(stage, f"{fact.slug}.hook.txt", hook)
     body_path = None
     if body is None:
         skipped.append("body unchanged (the engine keeps the stored one and syncs its description)")
@@ -554,7 +642,7 @@ def cmd_apply(args, rules: EngineRules) -> int:
 
     data = {"slug": fact.slug, "level": str(fact.level), "pinned": fact.pin,
             "engine_verb": "amend-pinned" if fact.pin else "add",
-            "stage_dir": str(stage), "hook_file": str(hook_path),
+            "stage_dir": str(stage), "hook_file": str(hook_path) if hook_path else None,
             "body_file": str(body_path) if body_path else None,
             "hook_chars": verdict.length, "accepted": True,
             "advisories": verdict.advisories, "argv": argv,
@@ -563,13 +651,11 @@ def cmd_apply(args, rules: EngineRules) -> int:
         skipped.append("the engine was not invoked (--dry-run)")
         _emit(args.as_json, "apply", True, data, skipped,
               "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
-                        + [f"staged  {hook_path}"]
-                        + ([f"staged  {body_path}"] if body_path else [])
+                        + [f"staged  {p}" for p in (hook_path, body_path) if p]
                         + ["", shlex.join(argv)]))
         return 0
 
-    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", check=False)
+    proc = _run_engine(argv)
     data["engine_stdout"] = (proc.stdout or "").strip()
     data["engine_returncode"] = proc.returncode
     if proc.stderr:
@@ -580,13 +666,34 @@ def cmd_apply(args, rules: EngineRules) -> int:
     _emit(args.as_json, "apply", ok, data, skipped,
           "\n".join([f"~ advisory: {a}" for a in verdict.advisories]
                     + [data["engine_stdout"] or "(engine printed nothing)"]))
-    return 0 if ok else 1
+    return _exit_for_engine(proc.returncode)
+
+
+def _run_engine(argv: list[str]) -> subprocess.CompletedProcess:
+    """Run the engine; an interpreter that cannot even start is EngineLaunchFailed (exit 2)."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", check=False)
+    except OSError as exc:
+        raise EngineLaunchFailed(f"cannot launch {argv[0]}: {exc}") from exc
+
+
+def _exit_for_engine(returncode: int) -> int:
+    """0 applied; 1 the engine REFUSED the write (its own exit 1); 2 anything else.
+
+    The engine exits 2 on an argparse usage error and non-zero on a crash. Folding those into 1
+    would report "the engine said no" for a call it never got to judge.
+    """
+    if returncode in (0, 1):
+        return returncode
+    return 2
 
 
 # ---- CLI ----------------------------------------------------------------------------------------
 
 def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--engine", default=None, help="path to memory_engine.py (default: newest found)")
+    p.add_argument("--engine", default=None,
+                   help="path to memory_engine.py (default: this plugin's own engine)")
     p.add_argument("--json", action="store_true", dest="as_json", help="emit a JSON envelope")
 
 
@@ -638,6 +745,7 @@ _VERBS = {"show": cmd_show, "check": cmd_check, "apply": cmd_apply}
 
 
 def main(argv=None) -> int:
+    utf8_stdio()
     args = build_parser().parse_args(argv)
     try:
         rules = load_rules(find_engine(args.engine))

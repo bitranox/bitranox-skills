@@ -18,15 +18,21 @@ turns into a way of not looking.
 
 The output is CANDIDATES, never duplicates. This scores WORDS; whether two facts say the same
 thing is a judgement that needs both bodies read, and the tool's job ends at naming the pair and
-where each one lives.
+where each one lives. Only the words a fact SAYS are scored: the engine's frontmatter keys
+(`name:`, `metadata:`, `type:`) sit on every body and would lift every pair off zero, so the frame
+is stripped and only its `description:` value is kept.
 
-Run:
-  `uv run dedup_scan.py --from . --threshold 0.5`
-  `uv run dedup_scan.py --from . --threshold 0.4 --json`
-  `uv run dedup_scan.py --from . --top 20`      # the strongest pairs whatever the threshold
+A fact or level the scan could not read (a permission error, bytes that are not UTF-8) is named in
+`skipped` and the run exits 2: a scan that silently dropped one reads exactly like a clean one.
+
+Run (from the plugin root, via the launcher that forces UTF-8):
+  `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --threshold 0.5`
+  `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --threshold 0.4 --json`
+  `bash hooks/run-python.sh skills/meta-dream-tree/dedup_scan.py --from . --top 20`
 
 Exit codes: 0 = scanned, no candidates at or above the threshold (and the control fired),
-1 = candidates to read, 2 = refused or the control did NOT fire (the run proves nothing).
+1 = candidates to read, 2 = refused, something could not be read, or the control did NOT fire
+(the run proves nothing).
 """
 from __future__ import annotations
 
@@ -38,17 +44,25 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# The engine's pointer parser, from the plugin's hooks dir: skills/<skill> -> skills -> bitranox.
-# A private regex read loose pointer-shaped prose outside the managed block as facts at that level.
+# The engine's pointer parser and anchor resolver, from the plugin's hooks dir:
+# skills/<skill> -> skills -> bitranox. A private regex read loose pointer-shaped prose outside
+# the managed block as facts at that level.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks"))
 import uuid_store  # noqa: E402
 
+# tree_support is this script's sibling; a caller loading the script by path does not put this
+# dir on sys.path the way running it directly does.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tree_support import STORE_DIR, store_anchor, utf8_stdio  # noqa: E402
+
 __all__ = ["Fact", "Candidate", "Control", "Result", "similarity", "run", "load_facts", "main"]
 
-STORE_DIR = ".claude-memory"
 FACTS_SUBDIR = "facts"
 LEVEL_FILE = "CLAUDE.local.md"
 WORD_RX = re.compile(r"[a-z0-9]+")
+# The engine's body frame: a leading `---` line, the keys, a closing `---` line.
+_FRAME_RX = re.compile(r"\A\s*---[ \t]*\r?\n(.*?)^---[ \t]*\r?$", re.DOTALL | re.MULTILINE)
+_DESC_RX = re.compile(r"(?m)^description:[ \t]*(.*?)[ \t]*\r?$")
 CONTROL_PREFIX = "__control__"
 # The control asks "can this scorer see a paraphrase AT ALL", which is a property of the scorer
 # and not of the caller's threshold. Tying it to --threshold would make raising the threshold
@@ -120,6 +134,7 @@ class Result:
     distribution: dict[float, int] = field(default_factory=dict)
     compared_pairs: int = 0
     facts_scanned: int = 0
+    skipped: list[str] = field(default_factory=list)
 
     @property
     def instrument_failed(self) -> bool:
@@ -140,14 +155,37 @@ def tokens(text: str) -> set[str]:
     return {w for w in WORD_RX.findall((text or "").lower()) if w not in STOPWORDS and len(w) > 2}
 
 
+def body_content(text: str) -> str:
+    """What a fact SAYS: its body without the engine's frontmatter frame, keeping `description:`.
+
+    The frame's keys (`name`, `description`, `metadata`, `type` and the type value) are the same
+    on every engine-written body, so scoring them gave two facts with disjoint prose a Jaccard of
+    about 0.3 - measured - and squeezed the gap a threshold has to sit in. The description value
+    is kept because it is the hook, the fact's own summary. Text with no leading frame is
+    returned unchanged. PURE.
+    """
+    text = text or ""
+    m = _FRAME_RX.match(text)
+    if not m:
+        return text
+    desc = _DESC_RX.search(m.group(1))
+    return (desc.group(1) if desc else "") + "\n" + text[m.end():]
+
+
+def _scored(f: Fact) -> str:
+    """The text a fact is scored on: its title plus what it says."""
+    return f.title + " " + body_content(f.text)
+
+
 def similarity(a: str, b: str) -> float:
     """Jaccard overlap of content words: 1.0 identical, 0.0 disjoint. PURE and symmetric.
 
     Word-set overlap rather than sequence matching on purpose - the store's duplicates are
     re-statements in a different order, which a sequence measure scores low and a set measure
-    scores high. It cannot see meaning, which is why the output is candidates.
+    scores high. It cannot see meaning, which is why the output is candidates. A leading engine
+    frontmatter frame is stripped first (see body_content).
     """
-    ta, tb = tokens(a), tokens(b)
+    ta, tb = tokens(body_content(a)), tokens(body_content(b))
     if not ta and not tb:
         return 1.0
     if not ta or not tb:
@@ -165,20 +203,29 @@ def _paraphrase(text: str) -> str:
 
     So the plant DROPS about a quarter of the content words and ADDS words the source never had.
     That lands it where real duplicates live: high overlap, well under 1.0.
+
+    A source under eight words cannot lose a quarter and keep half: appending a fixed tail there
+    scored 0.42 on a store of one-sentence facts, so EVERY run reported an instrument failure. A
+    short source is instead kept whole plus ONE new word, a Jaccard of k/(k+1) - at least 0.5 for
+    any source with a content word, and still under 1.0.
     """
     words = [w for w in (text or "").split() if w]
     if len(words) < 8:
-        return f"{text} and separately some other unrelated wording entirely"
+        return f"{text} restated"
     kept = [w for i, w in enumerate(words) if i % 4 != 3]        # drop every fourth word
     head, tail = kept[: len(kept) // 2], kept[len(kept) // 2:]
     return " ".join(tail + ["moreover", "restated", "differently", "herein"] + head)
 
 
 def _plant_control(facts: list[Fact]) -> tuple[list[Fact], Fact, Fact]:
-    """Insert a paraphrase of the longest real fact, so the control runs the real code path."""
-    source = max(facts, key=lambda f: len(f.text))
+    """Insert a paraphrase of the longest real fact, so the control runs the real code path.
+
+    The plant paraphrases what the source SAYS (frame stripped) and keeps its title, so the only
+    differences from the source are the ones `_paraphrase` makes on purpose.
+    """
+    source = max(facts, key=lambda f: len(body_content(f.text)))
     planted = Fact(slug=f"{CONTROL_PREFIX}{source.slug}", level=source.level,
-                   title=f"control for {source.title}", text=_paraphrase(source.text))
+                   title=source.title, text=_paraphrase(body_content(source.text)))
     return facts + [planted], source, planted
 
 
@@ -194,7 +241,7 @@ def _candidate_pairs(facts: list[Fact]) -> list[tuple[int, int]]:
         return []
     postings: dict[str, list[int]] = defaultdict(list)
     for i, f in enumerate(facts):
-        for tok in tokens(f.title + " " + f.text):
+        for tok in tokens(_scored(f)):
             postings[tok].append(i)
     # A floor of 5 as well as a fraction: on a small corpus every shared word is also carried by
     # the planted control, so a pure fraction drops exactly the tokens that link the pair the
@@ -223,17 +270,19 @@ def run(facts: list[Fact], *, threshold: float = 0.5, scorer=similarity,
     candidates: list[Candidate] = []
     distribution: dict[float, int] = defaultdict(int)
     control_score = 0.0
-    pairs = _candidate_pairs(corpus)
-    for i, j in pairs:
+    real_pairs = 0
+    for i, j in _candidate_pairs(corpus):
         fa, fb = corpus[i], corpus[j]
-        score = scorer(fa.title + " " + fa.text, fb.title + " " + fb.text)
-        distribution[_bucket(score)] += 1
-        is_control = {fa.slug, fb.slug} == {planted.slug, source.slug}
-        if is_control:
-            control_score = max(control_score, score)
+        if {fa.slug, fb.slug} == {planted.slug, source.slug}:
+            control_score = max(control_score, scorer(_scored(fa), _scored(fb)))
             continue
         if fa.slug.startswith(CONTROL_PREFIX) or fb.slug.startswith(CONTROL_PREFIX):
+            # The plant against a third fact is not a pair anyone can merge. Counted, it put
+            # phantom near-misses in the very distribution a reader is told to inspect.
             continue
+        score = scorer(_scored(fa), _scored(fb))
+        real_pairs += 1
+        distribution[_bucket(score)] += 1
         if score >= threshold:
             candidates.append(Candidate(fa, fb, score))
     candidates.sort(key=lambda c: (-c.score, c.a.slug, c.b.slug))
@@ -241,7 +290,7 @@ def run(facts: list[Fact], *, threshold: float = 0.5, scorer=similarity,
         candidates = candidates[:top]
     return Result(candidates=candidates,
                   control=Control(control_score >= CONTROL_MIN, control_score, source.slug),
-                  distribution=dict(distribution), compared_pairs=len(pairs),
+                  distribution=dict(distribution), compared_pairs=real_pairs,
                   facts_scanned=len(facts))
 
 
@@ -252,22 +301,24 @@ def _is_pruned(name: str) -> bool:
 
 
 def anchor_dir(start: Path) -> Path:
-    cur = Path(start).resolve()
-    while True:
-        if (cur / STORE_DIR).is_dir():
-            return cur
-        if cur.parent == cur:
-            raise DedupScanError(f"no {STORE_DIR}/ store at or above {Path(start).resolve()}")
-        cur = cur.parent
+    """The tree anchor the ENGINE uses for `start` (see tree_support.store_anchor)."""
+    anchor = store_anchor(start, uuid_store.resolve_anchor)
+    if anchor is None:
+        raise DedupScanError(f"no {STORE_DIR}/ store at the memory anchor of "
+                             f"{Path(start).resolve()} (the topmost dir holding a CLAUDE.md and "
+                             "a store)")
+    return anchor
 
 
-def _levels(anchor: Path) -> list[Path]:
+def _levels(anchor: Path, skipped: list[str]) -> list[Path]:
+    """Every level dir under `anchor`; a directory that cannot be listed goes into `skipped`."""
     found, stack = [], [Path(anchor)]
     while stack:
         d = stack.pop()
         try:
             entries = list(d.iterdir())
-        except OSError:
+        except OSError as exc:
+            skipped.append(f"{d} ({type(exc).__name__})")
             continue
         for e in entries:
             if e.is_dir() and not e.is_symlink() and not _is_pruned(e.name):
@@ -277,27 +328,38 @@ def _levels(anchor: Path) -> list[Path]:
     return sorted(found)
 
 
-def load_facts(start: Path) -> list[Fact]:
-    """Every fact in the tree, each tagged with the level whose pointer block names it."""
+def _read(path: Path, skipped: list[str]) -> str | None:
+    """A text file's content, or None with the reason recorded in `skipped`.
+
+    utf-8-sig so a BOM left by a Windows editor is not read as part of the first word."""
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        skipped.append(f"{path} ({type(exc).__name__})")
+        return None
+
+
+def load_facts(start: Path, skipped: list[str] | None = None) -> list[Fact]:
+    """Every fact in the tree, each tagged with the level whose pointer block names it.
+
+    A level, directory or fact body that cannot be read is appended to `skipped` (when given)
+    and left out; the caller decides that an incomplete scan is not a clean one.
+    """
+    skipped = [] if skipped is None else skipped
     anchor = anchor_dir(start)
     level_of: dict[str, str] = {}
-    for lvl in _levels(anchor):
-        try:
-            text = (lvl / LEVEL_FILE).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for pointer in uuid_store.parse_pointer_index(text)[1]:
+    for lvl in _levels(anchor, skipped):
+        text = _read(lvl / LEVEL_FILE, skipped)
+        for pointer in uuid_store.parse_pointer_index(text or "")[1]:
             if not pointer.legacy:
                 level_of.setdefault(pointer.slug, str(lvl))
     out: list[Fact] = []
     for path in sorted((anchor / STORE_DIR / FACTS_SUBDIR).glob("*.md")):
-        slug = path.stem
-        try:
-            body = path.read_text(encoding="utf-8")
-        except OSError:
+        body = _read(path, skipped)
+        if body is None:
             continue
-        out.append(Fact(slug=slug, level=level_of.get(slug, str(anchor)),
-                        title=slug.replace("-", " "), text=body))
+        out.append(Fact(slug=path.stem, level=level_of.get(path.stem, str(anchor)),
+                        title=path.stem.replace("-", " "), text=body))
     if not out:
         raise DedupScanError(f"no fact bodies under {anchor / STORE_DIR / FACTS_SUBDIR}")
     return out
@@ -316,12 +378,28 @@ def _render(result: Result, threshold: float) -> str:
               for bucket, n in sorted(result.distribution.items()) if n]
     if not result.candidates:
         lines.append("no CANDIDATES at or above the threshold")
-        return "\n".join(lines)
-    lines.append(f"{len(result.candidates)} CANDIDATE pair(s) - read both bodies before merging:")
-    for c in result.candidates:
-        lines.append(f"  {c.score:.2f}  {c.a.slug}  ({c.a.level})")
-        lines.append(f"        {c.b.slug}  ({c.b.level})")
+    else:
+        lines.append(f"{len(result.candidates)} CANDIDATE pair(s) - read both bodies before "
+                     "merging:")
+        for c in result.candidates:
+            lines.append(f"  {c.score:.2f}  {c.a.slug}  ({c.a.level})")
+            lines.append(f"        {c.b.slug}  ({c.b.level})")
+    if result.skipped:
+        lines.append(f"INCOMPLETE: {len(result.skipped)} path(s) could not be read, so this scan "
+                     "proves nothing about them:")
+        lines += [f"  {s}" for s in result.skipped]
     return "\n".join(lines)
+
+
+def _positive_int(raw: str) -> int:
+    """argparse type for --top: N < 1 would silently drop every candidate and exit 0."""
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not an integer: {raw!r}") from exc
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, got {n}")
+    return n
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -329,30 +407,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="start", default=".", help="a dir inside the tree")
     p.add_argument("--threshold", type=float, default=0.5,
                    help="report pairs scoring at or above this (default 0.5)")
-    p.add_argument("--top", type=int, default=None, help="keep only the N strongest candidates")
+    p.add_argument("--top", type=_positive_int, default=None,
+                   help="keep only the N strongest candidates (N >= 1)")
     p.add_argument("--json", action="store_true", dest="as_json", help="emit a JSON envelope")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    utf8_stdio()
     args = build_parser().parse_args(argv)
+    skipped: list[str] = []
     try:
-        result = run(load_facts(Path(args.start).expanduser()), threshold=args.threshold,
-                     top=args.top)
+        result = run(load_facts(Path(args.start).expanduser(), skipped),
+                     threshold=args.threshold, top=args.top)
     except DedupScanError as exc:
         payload = {"ok": False, "command": "dedup_scan", "data": {"error": str(exc)},
-                   "skipped": []}
+                   "skipped": skipped}
         print(json.dumps(payload, indent=2) if args.as_json else f"error: {exc}")
         if not args.as_json:
             print(f"error: {exc}", file=sys.stderr)
         return 2
-    ok = not result.instrument_failed and not result.candidates
+    result.skipped = sorted(skipped)
+    ok = not result.instrument_failed and not result.candidates and not result.skipped
     if args.as_json:
         print(json.dumps({"ok": ok, "command": "dedup_scan", "data": result.as_dict(),
-                          "skipped": []}, indent=2))
+                          "skipped": result.skipped}, indent=2))
     else:
         print(_render(result, args.threshold))
-    if result.instrument_failed:
+    if result.instrument_failed or result.skipped:
         return 2
     return 1 if result.candidates else 0
 

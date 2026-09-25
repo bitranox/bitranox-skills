@@ -128,6 +128,14 @@ file, so the redirect avoids the problem instead of repairing it afterwards. Mea
 reported 1,590,075 unreviewed bytes in its banner and left 1,590,965 bytes on disk - banner plus
 content, the whole stretch, in one pass.
 
+**A stretch over 2 MB comes in PARTS, oldest first.** The banner then carries a `TRUNCATED` line
+naming the byte range shown and the range still to come. Capture from that part, run
+`session-reviewed` (it advances only to the end of the part shown and prints how many bytes
+remain), then run `session-review` again, until it prints `NOTHING NEW`. Stopping after the first
+part leaves the rest unreviewed, and the owed-nap gate keeps asking for it. `session-reviewed` and
+the other write verbs (`done`, `saw-promotable`, `promoted`) exit 2 with an error on stderr when
+their write did not land, so a success line means the state really changed.
+
 Rendered inline the same call is silently cut: the harness PERSISTS the result to its own file and
 shows a short preview, and that file is a VIEW of the stretch, not the stretch. Measured twice -
 a banner reporting 1,958,654 unreviewed bytes against a persisted 244,360, an eighth; and a

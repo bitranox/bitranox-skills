@@ -32,14 +32,20 @@ WRITTEN SINCE the sweep and NEVER CHECKED, and only the last is a backlog of unc
 read the count for that group, never the total; `clear` records an adjudication, which is what
 stops an entry being re-reported until its hook changes, and takes
 `--slug <s>` REPEATABLY - a bare `clear` certifies every candidate in scope, so name the ones you
-actually checked, and a slug that is not a flagged candidate is refused rather than recorded) and
+actually checked, and a slug that is not a flagged candidate is refused rather than recorded; a
+baseline it cannot parse, a merge conflict left in it for instance, is refused rather than
+rewritten, because rewriting it would drop every earlier verdict) and
 `factedit.py` (reword a fact's hook or body by recomposing it through `memory_engine.py`, since a
 Write or Edit on a pointer block or a body is denied by the store-edit guard; `show` reports the
 stored `type`, an amend PRESERVES it, and `--type` is the one deliberate way to re-classify, a
 PINNED fact included - `amend-pinned` carries `--type` and is the only route to a pinned fact's
 kind, since `add` refuses a pinned entry outright). The
 last two moved here from a personal toolbox; the PreToolUse nudge names them on the chores they
-answer, so they surface without this file being open.
+answer, so they surface without this file being open. Every one of these tools finds the store the
+way the engine does (the topmost dir holding a `CLAUDE.md` AND a `.claude-memory/`), so a leftover
+store lower down the chain is never backed up, scanned or recorded against in its place. A level,
+directory or fact any of them could not read is an error (exit 2) that names the path, never a
+silent omission.
 
 Use the Read tool to load a referenced file when running its passes.
 
@@ -127,6 +133,7 @@ the success line, abort-and-show on a miss).
    hand-roll the walk: a gitignore-aware `grep -r` SKIPS the pointer files, and an exact-match
    prune of `.venv` misses `.venv-win` and `venv-<user>`, so vendored copies read as real levels.
    An empty scope is a REFUSAL, because a manifest of nothing verifies clean against anything.
+   So is an `--out` inside the store, or an existing dir that is not an earlier backup.
    Then commit the store's git repo (Durability pass) so the pre-dream state is one `git diff`
    away.
 
@@ -150,9 +157,11 @@ the success line, abort-and-show on a miss).
 
    READ ITS CONTROL LINE FIRST. Every run plants a paraphrase of a real fact and scores it through
    the same path; if that did not fire, the run is an INSTRUMENT FAILURE and its empty candidate
-   list means nothing - a scorer that cannot fire and a clean tree both report zero. Read the
-   printed DISTRIBUTION too: a pair just under the threshold is the one most worth a look, and a
-   threshold is otherwise a way of not looking.
+   list means nothing - a scorer that cannot fire and a clean tree both report zero. An
+   `INCOMPLETE` line (exit 2) names facts it could not read, which the run says nothing about. Read
+   the printed DISTRIBUTION too: a pair just under the threshold is the one most worth a look, and a
+   threshold is otherwise a way of not looking. Only what a fact SAYS is scored: the engine's
+   frontmatter keys are stripped, its `description:` value kept.
 
    The output is CANDIDATES, not duplicates - it scores words, so read BOTH bodies before folding
    anything. Fold near-duplicates into one sharpened entry (engine `add`, same slug), comparing

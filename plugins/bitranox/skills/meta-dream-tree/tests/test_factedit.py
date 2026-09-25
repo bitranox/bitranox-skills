@@ -88,11 +88,25 @@ def make_engine_dir(tmp_path: Path) -> Path:
     return d / "memory_engine.py"
 
 
+def flag_value(argv: list[str], flag: str) -> str | None:
+    """The value of `flag` in an engine argv, which carries every value flag as ONE `flag=value`
+    item (a separate item starting with '-' would be read by argparse as another option)."""
+    assert flag not in argv, f"{flag} travelled as a separate argv item: {argv!r}"
+    for item in argv:
+        if item.startswith(flag + "="):
+            return item[len(flag) + 1:]
+    return None
+
+
 def make_tree(tmp_path: Path, *, pin: bool = False) -> Path:
-    """A minimal two-level tree with a store and one fact, so read_fact has something real."""
+    """A minimal two-level tree with a store and one fact, so read_fact has something real.
+
+    The anchor carries a CLAUDE.md as well as the store, because that pair is what the engine
+    anchors on; a store with no CLAUDE.md above it is not where the engine keeps bodies."""
     anchor = tmp_path / "tree"
     level = anchor / "proj"
     (anchor / ".claude-memory" / "facts").mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
     level.mkdir(parents=True)
     meta = "bx:src=session-x" + (" bx:pin" if pin else "")
     (level / "CLAUDE.local.md").write_text(
@@ -192,7 +206,7 @@ def test_chain_levels_finds_every_level_narrowest_first(tmp_path):
 def test_anchor_dir_refuses_a_tree_with_no_store(tmp_path):
     (tmp_path / "x").mkdir()
     try:
-        FE.anchor_dir(tmp_path / "x")
+        FE.anchor_dir(tmp_path / "x", _rules_for(tmp_path).resolve_anchor)
     except FE.NoAnchor as exc:
         assert ".claude-memory" in str(exc)
     else:
@@ -258,8 +272,8 @@ def test_an_unpinned_fact_uses_add_and_carries_the_stored_title():
     # This test was written in a toolbox that only ever ran on Linux; its first CI run reddened
     # windows-latest alone, which is the shape every Linux-only suite hits on its first Windows cell.
     assert argv[:3] == ["py", str(engine), "add"]
-    assert "--title" in argv and argv[argv.index("--title") + 1] == "A Title"
-    assert "--hook-file" in argv and "--body-file" not in argv
+    assert flag_value(argv, "--title") == "A Title"
+    assert flag_value(argv, "--hook-file") and flag_value(argv, "--body-file") is None
 
 
 def test_a_pinned_fact_uses_amend_pinned_because_add_refuses_before_writing():
@@ -267,7 +281,7 @@ def test_a_pinned_fact_uses_amend_pinned_because_add_refuses_before_writing():
                           body_path=Path("/s/b.md"), title=None, python="py")
     assert argv[2] == "amend-pinned"
     # amend-pinned keeps the stored title when none is given; passing one would be a retitle.
-    assert "--title" not in argv
+    assert flag_value(argv, "--title") is None
     # No provenance flag: the engine has no --source since 5.300.0, so emitting one would build a
     # call it rejects on the argument parser, before ever reaching the store.
     assert "--source" not in argv
@@ -303,7 +317,7 @@ def test_the_hook_always_travels_as_a_file_never_as_an_argument():
     """A real-length hook via --hook "$(cat f)" is a shell command substitution the guard denies."""
     argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
                           body_path=None, title=None, python="py")
-    assert "--hook" not in argv
+    assert flag_value(argv, "--hook") is None
 
 
 # ---- engine discovery ---------------------------------------------------------------------------
@@ -338,7 +352,7 @@ def test_find_engine_refuses_rather_than_guessing_when_the_machine_has_none(tmp_
     """
     monkeypatch.delenv("BITRANOX_MEMORY_ENGINE", raising=False)
     try:
-        FE.find_engine(None, home=tmp_path)
+        FE.find_engine(None, home=tmp_path, own=tmp_path / "no-sibling" / "memory_engine.py")
     except FE.EngineNotFound:
         pass
     else:
@@ -450,7 +464,7 @@ def test_apply_invokes_the_engine_with_the_staged_files(tmp_path):
                  "--from", str(level), "--hook-file", str(hookfile)], tmp_path)
     assert r.returncode == 0
     called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
-    assert "'add'" in called and "'--hook-file'" in called
+    assert "'add'" in called and "'--hook-file=" in called
     assert json.loads(r.stdout)["data"]["engine_stdout"] == "fake-engine-ok"
 
 
@@ -538,7 +552,7 @@ def test_body_description_matches_the_engine_on_a_real_stored_fact():
 def test_engine_argv_forwards_an_explicit_type_for_an_unpinned_fact():
     argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
                           body_path=None, title=None, type_="reference", python="py")
-    assert "--type" in argv and argv[argv.index("--type") + 1] == "reference"
+    assert flag_value(argv, "--type") == "reference"
 
 
 def test_engine_argv_carries_no_type_when_the_caller_asks_for_none():
@@ -546,7 +560,7 @@ def test_engine_argv_carries_no_type_when_the_caller_asks_for_none():
     # exists to avoid. No --type means "leave the stored kind alone", which the engine honours.
     argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
                           body_path=None, title=None, python="py")
-    assert "--type" not in argv
+    assert flag_value(argv, "--type") is None
 
 
 def test_show_reports_the_stored_type_so_an_amend_can_see_what_it_would_rewrite(tmp_path):
@@ -565,7 +579,7 @@ def test_apply_forwards_the_type_to_the_engine(tmp_path):
                  "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
     assert r.returncode == 0
     called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
-    assert "'--type', 'reference'" in called
+    assert "'--type=reference'" in called
 
 
 def test_apply_forwards_the_type_on_a_pinned_fact_too(tmp_path):
@@ -580,7 +594,7 @@ def test_apply_forwards_the_type_on_a_pinned_fact_too(tmp_path):
                  "--from", str(level), "--body-file", str(body), "--type", "reference"], tmp_path)
     assert r.returncode == 0
     called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
-    assert "'amend-pinned'" in called and "'--type', 'reference'" in called
+    assert "'amend-pinned'" in called and "'--type=reference'" in called
 
 
 def test_a_type_the_engine_does_not_know_is_refused_before_anything_is_staged(tmp_path):
@@ -589,3 +603,253 @@ def test_a_type_the_engine_does_not_know_is_refused_before_anything_is_staged(tm
                  "--type", "notatype"], tmp_path)
     assert r.returncode == 2
     assert json.loads(r.stdout)["error"].startswith("BadInput:")
+
+
+# ---- the anchor is the ENGINE's, never merely the nearest store ---------------------------------
+
+def test_a_decoy_store_lower_down_does_not_answer_for_the_real_body(tmp_path):
+    level = make_tree(tmp_path)
+    (level / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    (level / ".claude-memory" / "facts").mkdir(parents=True)
+    (level / ".claude-memory" / "facts" / "feedback-demo.md").write_text(
+        "---\nname: feedback-demo\ndescription: When something ELSE happens.\n"
+        "metadata:\n  type: project\n---\n\nDecoy.\n", encoding="utf-8")
+    fact = FE.read_fact("feedback-demo", level, _rules_for(tmp_path))
+    assert fact.anchor == (tmp_path / "tree").resolve()
+    assert fact.type_ == "feedback" and fact.hook_in_sync
+
+
+# ---- engine argv: a dash-leading value must not become an option -------------------------------
+
+def test_every_value_flag_is_one_argv_item_so_a_dash_leading_title_survives():
+    argv = FE.engine_argv(_fact(False), Path("/e/memory_engine.py"), hook_path=Path("/s/h.txt"),
+                          body_path=Path("/s/b.md"), title="-draft", type_="project", python="py")
+    assert flag_value(argv, "--title") == "-draft"
+    assert flag_value(argv, "--proj") and flag_value(argv, "--slug") == "feedback-demo"
+    assert flag_value(argv, "--body-file") and flag_value(argv, "--type") == "project"
+
+
+def _real_engine_env(tmp_path: Path) -> dict:
+    """The environment for a run against the REAL engine: every state dir inside tmp_path."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home),
+               XDG_STATE_HOME=str(home / "state"), XDG_CONFIG_HOME=str(home / "config"))
+    env.pop("BITRANOX_MEMORY_ENGINE", None)
+    return env
+
+
+def test_a_dash_leading_title_reaches_the_real_engine_as_a_value(tmp_path):
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When something happens, do the other thing.\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(TOOL), "apply", "--engine", str(FE.OWN_ENGINE),
+                        "--json", "--slug", "feedback-demo", "--from", str(level),
+                        "--hook-file", str(hookfile), "--title=-draft"],
+                       capture_output=True, text=True, encoding="utf-8", check=False,
+                       env=_real_engine_env(tmp_path), cwd=str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["data"]["engine_returncode"] == 0
+    assert "[-draft](mem:feedback-demo)" in (level / "CLAUDE.local.md").read_text(encoding="utf-8")
+
+
+# ---- a pinned fact whose STORED hook is over the cap --------------------------------------------
+
+def _pinned_over_cap(tmp_path: Path, eng: Path) -> Path:
+    level = make_tree(tmp_path, pin=True)
+    long_hook = over_hard_hook(eng)
+    (level / "CLAUDE.local.md").write_text(
+        f"# Memory index\n- [A Title](mem:feedback-demo) - {long_hook} <!-- bx:pin -->\n",
+        encoding="utf-8")
+    return level
+
+
+def test_a_body_only_edit_of_a_pinned_over_cap_fact_is_not_blocked_by_the_stored_hook(tmp_path):
+    eng = make_engine_dir(tmp_path)
+    level = _pinned_over_cap(tmp_path, eng)
+    body = tmp_path / "b.md"
+    body.write_text("new prose\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--body-file", str(body)], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    called = (eng.parent / "memory_engine.py.called").read_text(encoding="utf-8")
+    assert "'amend-pinned'" in called and "--hook-file" not in called
+
+
+def test_an_unpinned_over_cap_stored_hook_is_still_refused(tmp_path):
+    """Control: `add` needs the hook re-sent, and the engine refuses it over the cap."""
+    eng = make_engine_dir(tmp_path)
+    level = make_tree(tmp_path)
+    (level / "CLAUDE.local.md").write_text(
+        f"# Memory index\n- [A Title](mem:feedback-demo) - {over_hard_hook(eng)}\n",
+        encoding="utf-8")
+    body = tmp_path / "b.md"
+    body.write_text("new prose\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--body-file", str(body)], tmp_path)
+    assert r.returncode == 1
+    assert not (eng.parent / "memory_engine.py.called").exists()
+
+
+# ---- engine discovery prefers the plugin's own sibling engine -----------------------------------
+
+def test_the_plugins_own_engine_is_found_with_no_home_install(tmp_path, monkeypatch):
+    monkeypatch.delenv("BITRANOX_MEMORY_ENGINE", raising=False)
+    found = FE.find_engine(None, home=tmp_path)
+    assert found == FE.OWN_ENGINE and found.is_file()
+
+
+def test_the_own_engine_wins_over_a_newer_cache_copy(tmp_path, monkeypatch):
+    monkeypatch.delenv("BITRANOX_MEMORY_ENGINE", raising=False)
+    cached = tmp_path / ".claude/plugins/cache/bitranox-skills/bitranox/1.0.0/hooks"
+    cached.mkdir(parents=True)
+    (cached / "memory_engine.py").write_text("x", encoding="utf-8")
+    assert FE.find_engine(None, home=tmp_path) == FE.OWN_ENGINE
+
+
+# ---- errors are typed, exit 2, with the envelope ------------------------------------------------
+
+def test_a_non_utf8_level_is_exit_2_with_json(tmp_path):
+    level = make_tree(tmp_path)
+    (level / "CLAUDE.local.md").write_bytes(b"# Memory index\n- \xff\n")
+    r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(level)], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr and json.loads(r.stdout)["ok"] is False
+
+
+def test_a_non_utf8_hook_file_is_exit_2_with_json(tmp_path):
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_bytes(b"When \xff happens, do it.\n")
+    r = run_cli(["check", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert json.loads(r.stdout)["error"].startswith("BadInput:")
+
+
+def test_a_bom_in_a_hook_file_is_not_part_of_the_hook(tmp_path):
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_bytes(b"\xef\xbb\xbfWhen X, do Y.\n")
+    r = run_cli(["check", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["data"]["hook_chars"] == len("When X, do Y.")
+
+
+def test_an_interpreter_that_cannot_be_launched_is_exit_2_with_json(tmp_path):
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(level), "--hook-file", str(hookfile),
+                 "--python", str(tmp_path / "no-such-python")], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr and json.loads(r.stdout)["ok"] is False
+
+
+NO_CHMOD = not hasattr(os, "geteuid") or os.geteuid() == 0
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_level_is_an_error_not_no_such_fact(tmp_path):
+    level = make_tree(tmp_path)
+    (level / "CLAUDE.local.md").chmod(0)
+    try:
+        r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                     "--slug", "feedback-demo", "--from", str(level)], tmp_path)
+    finally:
+        (level / "CLAUDE.local.md").chmod(0o644)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_body_is_an_error_not_an_empty_body(tmp_path):
+    level = make_tree(tmp_path)
+    body = tmp_path / "tree" / ".claude-memory" / "facts" / "feedback-demo.md"
+    body.chmod(0)
+    try:
+        r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                     "--slug", "feedback-demo", "--from", str(level)], tmp_path)
+    finally:
+        body.chmod(0o644)
+    assert r.returncode == 2, r.stdout + r.stderr
+
+
+# ---- the engine's own exit code: refused is 1, an engine error is 2 -----------------------------
+
+@pytest.mark.parametrize(("code", "expected"), [(1, 1), (2, 2), (3, 2)])
+def test_the_engine_exit_code_maps_to_no_or_error(tmp_path, code, expected):
+    eng = make_engine_dir(tmp_path)
+    eng.write_text(f"import sys\nprint('engine says {code}')\nsys.exit({code})\n",
+                   encoding="utf-8")
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(eng), "--json", "--slug", "feedback-demo",
+                 "--from", str(level), "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == expected, r.stdout + r.stderr
+    data = json.loads(r.stdout)["data"]
+    assert data["engine_returncode"] == code and data["accepted"] is False
+
+
+def test_level_forces_the_owning_level(tmp_path):
+    level = make_tree(tmp_path)
+    r = run_cli(["show", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--slug", "feedback-demo", "--from", str(tmp_path), "--level", str(level)],
+                tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["data"]["level"] == str(level.resolve())
+
+
+def test_hook_and_hook_file_together_are_refused(tmp_path):
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["check", "--engine", str(make_engine_dir(tmp_path)), "--json",
+                 "--hook", "When A, do B.", "--hook-file", str(hookfile)], tmp_path)
+    assert r.returncode == 2
+    assert "not both" in json.loads(r.stdout)["error"]
+
+
+def test_the_python_flag_is_the_interpreter_in_the_engine_command(tmp_path):
+    level = make_tree(tmp_path)
+    hookfile = tmp_path / "h.txt"
+    hookfile.write_text("When X, do Y.\n", encoding="utf-8")
+    r = run_cli(["apply", "--engine", str(make_engine_dir(tmp_path)), "--json", "--dry-run",
+                 "--slug", "feedback-demo", "--from", str(level), "--hook-file", str(hookfile),
+                 "--python", sys.executable], tmp_path)
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["data"]["argv"][0] == sys.executable
+
+
+# ---- default_python on a Windows layout ---------------------------------------------------------
+
+def test_default_python_takes_a_python_exe_on_path(tmp_path):
+    d = tmp_path / "win"
+    d.mkdir()
+    exe = d / "python.exe"
+    exe.write_text("", encoding="utf-8")
+    exe.chmod(0o755)
+    assert FE.default_python(str(d), base_prefix=tmp_path / "nobase") == str(exe)
+
+
+def test_default_python_falls_back_to_the_windows_base_prefix_root(tmp_path):
+    base = tmp_path / "Python313"
+    base.mkdir()
+    (base / "python.exe").write_text("", encoding="utf-8")
+    assert FE.default_python("", base_prefix=base) == str(base / "python.exe")
+
+
+def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_hook(tmp_path):
+    level = make_tree(tmp_path)
+    (level / "CLAUDE.local.md").write_text(
+        "# Memory index\n- [A Title](mem:feedback-demo) - When 日本 happens, do it.\n",
+        encoding="utf-8")
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    env.pop("BITRANOX_MEMORY_ENGINE", None)
+    r = subprocess.run([sys.executable, str(TOOL), "show", "--engine",
+                        str(make_engine_dir(tmp_path)), "--slug", "feedback-demo",
+                        "--from", str(level)],
+                       capture_output=True, check=False, env=env, cwd=str(tmp_path))
+    assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 0

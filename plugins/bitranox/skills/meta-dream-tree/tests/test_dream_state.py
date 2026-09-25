@@ -1,4 +1,9 @@
 """Tests for dream_state.py (meta-dream cadence-marker CLI). ASCII only."""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 import dream_state as D
@@ -273,3 +278,168 @@ def test_session_review_omits_the_skill_line_when_none_ran(home, tmp_path, capsy
     _session(home, proj, tmp_path, '{"type":"user","message":{"content":"plain text"}}\n')
     assert D.main(["session-review", proj]) == 0
     assert "SKILLS INVOKED" not in capsys.readouterr().out
+
+
+# ---- a stretch over the review chunk is reviewed in parts, never silently cut ----------------
+
+def _big_transcript(home, tmp_path, size_bytes):
+    """EARLY on the first line, LATE on the last, filler lines between: `size_bytes` in all."""
+    filler = '{"type":"user","message":{"content":"' + "f" * 980 + '"}}\n'
+    early = '{"type":"user","message":{"content":"EARLY-MARKER"}}\n'
+    late = '{"type":"user","message":{"content":"LATE-MARKER"}}\n'
+    n = max(0, (size_bytes - len(early) - len(late)) // len(filler))
+    return _session(home, "/p/big", tmp_path, early + filler * n + late)
+
+
+def test_a_stretch_over_the_chunk_is_shown_oldest_first_and_says_it_is_truncated(
+        home, tmp_path, capsys):
+    tp = _big_transcript(home, tmp_path, 2 * D.REVIEW_CHUNK_BYTES)
+    size = tp.stat().st_size
+    assert D.main(["session-review", "/p/big"]) == 0
+    out = capsys.readouterr().out
+    assert "EARLY-MARKER" in out and "LATE-MARKER" not in out
+    assert "TRUNCATED" in out
+
+    assert D.main(["session-reviewed", "/p/big"]) == 0
+    mark = D.sig.get_watermark("/p/big", str(tp), "dream")
+    assert 0 < mark < size, "reviewed may only advance past what was SHOWN"
+    assert tp.read_bytes()[mark - 1:mark] == b"\n", "the cut lands on a line end"
+    capsys.readouterr()
+
+    # Keep going part by part: every byte is shown exactly once, and the end is reached.
+    shown = len(out.encode("utf-8"))
+    for _ in range(4):
+        assert D.main(["session-review", "/p/big"]) == 0
+        part = capsys.readouterr().out
+        shown += len(part.encode("utf-8"))
+        assert D.main(["session-reviewed", "/p/big"]) == 0
+        capsys.readouterr()
+        if "LATE-MARKER" in part:
+            break
+    assert "LATE-MARKER" in part
+    assert D.sig.get_watermark("/p/big", str(tp), "dream") == size
+    assert shown >= size, "no part was skipped"
+    D.main(["session-review", "/p/big"])
+    assert "NOTHING NEW" in capsys.readouterr().out.upper()
+
+
+def test_a_stretch_under_the_chunk_is_shown_whole_and_not_marked_truncated(
+        home, tmp_path, capsys):
+    """Control: the ordinary case is one pass, as before."""
+    _big_transcript(home, tmp_path, 40_000)
+    assert D.main(["session-review", "/p/big"]) == 0
+    out = capsys.readouterr().out
+    assert "EARLY-MARKER" in out and "LATE-MARKER" in out and "TRUNCATED" not in out
+
+
+# ---- a failed write is reported, never a success line -----------------------------------------
+
+NO_CHMOD = not hasattr(os, "geteuid") or os.geteuid() == 0
+
+
+@pytest.fixture
+def locked_audit(home):
+    audit = home / ".claude" / "self-improve-audit"
+    audit.mkdir(parents=True, exist_ok=True)
+    audit.chmod(0o555)
+    yield audit
+    audit.chmod(0o755)
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
+def test_done_reports_a_marker_it_could_not_write(home, locked_audit, capsys):
+    _mem("/p/y")
+    assert D.main(["done", "/p/y"]) == 2
+    captured = capsys.readouterr()
+    assert "marked done" not in captured.out and "error" in captured.err
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
+def test_session_reviewed_reports_a_watermark_it_could_not_write(home, tmp_path, capsys):
+    # The session meta is recorded BEFORE the dir is locked, so the transcript is found and only
+    # the watermark write can fail.
+    tp = _session(home, "/p/w", tmp_path, '{"type":"user","message":{"content":"x"}}\n')
+    audit = home / ".claude" / "self-improve-audit"
+    audit.chmod(0o555)
+    try:
+        assert D.main(["session-reviewed", "/p/w"]) == 2
+    finally:
+        audit.chmod(0o755)
+    assert "advanced" not in capsys.readouterr().out
+    assert D.sig.get_watermark("/p/w", str(tp), "dream") == 0
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only dir")
+def test_saw_promotable_reports_a_sighting_it_could_not_write(home, locked_audit, capsys):
+    assert D.main(["saw-promotable", "s4", "/p/a"]) == 2
+    assert D.sig.promotion_dwell("/p/a", "s4") == 0
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for a read-only file")
+def test_promoted_reports_a_clear_it_could_not_write(home, capsys):
+    D.main(["saw-promotable", "s3", "/p/a"])
+    D.main(["saw-promotable", "s3", "/p/b"])
+    store = D.sig.promotion_file()
+    store.chmod(0o444)
+    try:
+        assert D.main(["promoted", "s3"]) == 2
+    finally:
+        store.chmod(0o644)
+    capsys.readouterr()
+    D.main(["should-promote", "s3"])
+    assert capsys.readouterr().out.strip() == "promote", "the sightings really are still there"
+
+
+def test_promoted_with_a_writable_store_clears_the_gate(home, capsys):
+    """Control for the refusal above."""
+    D.main(["saw-promotable", "s3", "/p/a"])
+    D.main(["saw-promotable", "s3", "/p/b"])
+    assert D.main(["promoted", "s3"]) == 0
+    capsys.readouterr()
+    D.main(["should-promote", "s3"])
+    assert capsys.readouterr().out.strip() == "hold"
+
+
+def test_session_reviewed_with_no_known_transcript_marks_nothing(home, capsys):
+    assert D.main(["session-reviewed", "/unknown/proj"]) == 0
+    assert "nothing to mark" in capsys.readouterr().out
+
+
+# ---- arguments: an unknown flag is refused, never taken as the project path ------------------
+
+@pytest.mark.parametrize("argv", [["done", "--dry-run"], ["session-review", "--structured", "/p/y"],
+                                  ["due", "/p/x", "extra"], ["saw-promotable", "s", "/p", "x"],
+                                  ["should-promote"]])
+def test_a_bad_argument_is_a_usage_error_and_changes_nothing(home, argv, capsys):
+    assert D.main(argv) == 2
+    captured = capsys.readouterr()
+    assert "usage" in captured.err
+    assert not list((home / ".claude").rglob("*.dream"))
+
+
+def test_structured_only_is_still_accepted(home, tmp_path, capsys):
+    _session(home, "/p/x", tmp_path, '{"type":"user","message":{"content":"RAWLINE"}}\n')
+    assert D.main(["session-review", "--structured-only", "/p/x"]) == 0
+    assert "RAWLINE" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_help_lists_every_verb_and_exits_0(home, flag, capsys):
+    assert D.main([flag]) == 0
+    out = capsys.readouterr().out
+    for verb in ("due", "done", "mode", "saw-promotable", "should-promote", "promoted",
+                 "session-review", "session-reviewed", "--structured-only"):
+        assert verb in out
+
+
+def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_transcript(home, tmp_path):
+    tp = tmp_path / "u.jsonl"
+    tp.write_text('{"type":"user","message":{"content":"done ✅ → next"}}\n',
+                  encoding="utf-8")
+    D.sig.record_session_meta("/p/u", "sid-u", str(tp))
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, str(Path(D.__file__).resolve()), "session-review",
+                        "/p/u"], capture_output=True, check=False, env=env)
+    assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 0

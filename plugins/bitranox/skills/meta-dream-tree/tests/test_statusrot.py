@@ -10,9 +10,13 @@ owned elsewhere, so a ship-state claim rots silently. Two properties matter most
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -167,3 +171,87 @@ class TestSelfContradictionPrecision:
             "When you plan a DM hot-add test, know the ACPI-S4 blocker is SUPERSEDED: openvmm "
             "clears S4 itself, so it works on stock MSVM.fd.")
         assert statusrot.self_contradiction(ptr) is not None
+
+
+def _hook(text: str) -> set[str]:
+    return statusrot.classify(statusrot.Pointer("l", "s", "T", text))
+
+
+class TestIdRefAtTheEndOfASentence:
+    """A hook is a sentence, so an id usually sits right before its full stop."""
+
+    @pytest.mark.parametrize("hook", ["When X, do Y. Tracked as #34.", "When X, do Y. See #34.",
+                                      "When X, do Y. Issue #7", "When X, do Y (#34)."])
+    def test_a_sentence_final_id_is_found(self, hook):
+        assert "ID_REF" in _hook(hook)
+
+    @pytest.mark.parametrize("hook", ["When X, pin version 1.#34.5 exactly.",
+                                      "When X, colour #34ab is the accent.",
+                                      "When X, see #34.5 in the spec."])
+    def test_a_version_or_colour_is_not_an_id(self, hook):
+        assert "ID_REF" not in _hook(hook)
+
+
+class TestLegacyPointers:
+    def test_a_legacy_uuid_pointer_is_scanned(self):
+        line = ("- [T](uuid:0f3c9a4e-1111-4222-8333-944455556666) - When X, it is deployed and "
+                "shipped. <!-- bx:slug=legacy-fact -->")
+        ptrs = statusrot.parse_pointers(line)
+        assert [p.slug for p in ptrs] == ["legacy-fact"]
+        assert "SHIPPED" in statusrot.classify(ptrs[0])
+
+
+def _cli(*args: str, cwd: Path | None = None, env: dict | None = None):
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", cwd=cwd, env=env)
+
+
+class TestCliArguments:
+    def test_a_relative_level_and_a_chain_over_the_same_file_scan_it_once(self, tmp_path):
+        _level(tmp_path, "- [T](mem:thing-blocked-by-x) - When X, it is SUPERSEDED, it works.")
+        proc = _cli("scan", "--level", "CLAUDE.local.md", "--chain", ".", "--json", cwd=tmp_path)
+        assert proc.returncode == 1, proc.stderr
+        data = json.loads(proc.stdout)["data"]
+        assert data["total_pointers"] == 1 and len(data["contradictions"]) == 1
+
+    def test_a_mistyped_chain_is_refused(self, tmp_path):
+        _level(tmp_path, "- [T](mem:s) - When X, it is deployed.")
+        proc = _cli("scan", "--chain", str(tmp_path / "projj"), "--json")
+        assert proc.returncode == 2
+        assert json.loads(proc.stdout)["ok"] is False
+
+    def test_no_levels_is_exit_2_with_json(self, tmp_path):
+        proc = _cli("scan", "--json", cwd=tmp_path)
+        assert proc.returncode == 2
+        assert json.loads(proc.stdout)["ok"] is False
+
+    def test_a_missing_level_without_json_is_an_error_line_on_stderr(self, tmp_path):
+        proc = _cli("scan", "--level", str(tmp_path / "nope.md"))
+        assert proc.returncode == 2
+        assert proc.stderr.startswith("error:") and proc.stdout == ""
+
+
+class TestLevelEncoding:
+    def test_a_non_utf8_level_is_exit_2_with_json(self, tmp_path):
+        lvl = tmp_path / "CLAUDE.local.md"
+        lvl.write_bytes(b"# Memory index\n- [T](mem:s) - When X, caf\xe9 is deployed.\n")
+        proc = _cli("scan", "--level", str(lvl), "--json")
+        assert proc.returncode == 2, proc.stderr
+        assert "Traceback" not in proc.stderr
+        assert json.loads(proc.stdout)["ok"] is False
+
+    def test_a_bom_on_the_first_pointer_line_is_read(self, tmp_path):
+        lvl = tmp_path / "CLAUDE.local.md"
+        lvl.write_bytes(b"\xef\xbb\xbf- [T](mem:s) - When X, it is deployed.\n")
+        assert statusrot.scan([lvl]).total_pointers == 1
+
+    def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_level(self, tmp_path):
+        d = tmp_path / "l日本"
+        d.mkdir()
+        _level(d, "- [T](mem:s) - When X, it is deployed.")
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        env.pop("PYTHONUTF8", None)
+        proc = subprocess.run([sys.executable, str(TOOL), "scan", "--chain", str(d)],
+                              capture_output=True, check=False, env=env)
+        assert b"Traceback" not in proc.stderr, proc.stderr.decode("utf-8", "replace")
+        assert proc.returncode == 0

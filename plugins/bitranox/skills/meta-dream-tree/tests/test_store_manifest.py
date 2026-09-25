@@ -13,17 +13,23 @@ Those two are pinned here rather than left to each re-implementation.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import store_manifest as SM
 
 TOOL = Path(__file__).resolve().parents[1] / "store_manifest.py"
 
+# chmod cannot make a file unreadable on Windows, and root reads through mode 000.
+NO_CHMOD = not hasattr(os, "geteuid") or os.geteuid() == 0
+
 
 def make_tree(root: Path) -> Path:
-    """An anchor with a store and three levels at different depths."""
+    """An anchor (CLAUDE.md + store, as the engine requires) and three levels at different depths."""
+    (root / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
     (root / ".claude-memory" / "facts").mkdir(parents=True)
     (root / ".claude-memory" / "facts" / "a-slug.md").write_text("body a\n", encoding="utf-8")
     (root / "CLAUDE.local.md").write_text(
@@ -222,3 +228,186 @@ def test_a_backup_written_inside_the_tree_does_not_become_part_of_the_scope(tmp_
     copied = list((out / "levels").rglob("CLAUDE.local.md"))
     assert copied, "control: the backup must actually have copied level files inside the anchor"
     assert run_cli(["verify", "--out", str(out), "--json"], tmp_path).returncode == 0
+
+
+# ---- a slug held at two levels, and the read errors that used to pass silently -----------------
+
+def test_removing_one_copy_of_a_slug_held_at_two_levels_is_named(tmp_path):
+    """A slug-keyed diff kept one copy per slug, so dropping the first-sorted copy verified IDENTICAL."""
+    make_tree(tmp_path)
+    line = "- [Dup](mem:dup) - When dup, do dup.\n"
+    for lvl in ("elsewhere", "projects/app"):
+        with (tmp_path / lvl / "CLAUDE.local.md").open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    before = SM.derive(tmp_path, scope="tree", start=tmp_path)
+    first = sorted(e.level for e in before if e.slug == "dup")[0]
+    level_file = Path(first, "CLAUDE.local.md")
+    level_file.write_text(level_file.read_text(encoding="utf-8").replace(line, ""),
+                          encoding="utf-8")
+    d = SM.diff(before, SM.derive(tmp_path, scope="tree", start=tmp_path))
+    assert not d.identical
+    assert [(e.slug, e.level) for e in d.removed] == [("dup", first)]
+    assert d.moved == []
+
+
+def test_a_unique_slug_that_changed_level_is_still_a_move():
+    """Control for the (level, slug) key: one copy before and one after is a move, not add+remove."""
+    d = SM.diff([SM.Entry("/t/a", "s", "T", False)], [SM.Entry("/t/b", "s", "T", False)])
+    assert [e.level for e in d.moved] == ["/t/b"] and d.added == [] and d.removed == []
+
+
+def test_a_moved_and_retitled_fact_is_both_moved_and_changed():
+    d = SM.diff([SM.Entry("/t/a", "s", "T", False)], [SM.Entry("/t/b", "s", "U", False)])
+    assert [e.slug for e in d.moved] == ["s"] and [c.what for c in d.changed] == [["title"]]
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_level_file_refuses_instead_of_omitting_it(tmp_path):
+    make_tree(tmp_path)
+    locked = tmp_path / "elsewhere" / "CLAUDE.local.md"
+    locked.chmod(0)
+    try:
+        r = run_cli(["backup", "--from", str(tmp_path), "--out", str(tmp_path / "bk"), "--json"],
+                    tmp_path)
+    finally:
+        locked.chmod(0o644)
+    assert r.returncode == 2, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and str(locked) in " ".join(env["skipped"])
+    assert not (tmp_path / "bk" / "manifest.json").exists()
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_directory_under_the_anchor_refuses(tmp_path):
+    make_tree(tmp_path)
+    locked = tmp_path / "projects"
+    locked.chmod(0)
+    try:
+        r = run_cli(["backup", "--from", str(tmp_path), "--out", str(tmp_path / "bk"), "--json"],
+                    tmp_path)
+    finally:
+        locked.chmod(0o755)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert str(locked) in " ".join(json.loads(r.stdout)["skipped"])
+
+
+def test_a_non_utf8_level_is_a_typed_refusal_not_a_traceback(tmp_path):
+    make_tree(tmp_path)
+    (tmp_path / "elsewhere" / "CLAUDE.local.md").write_bytes(b"# Memory index\n- \xff\n")
+    r = run_cli(["backup", "--from", str(tmp_path), "--out", str(tmp_path / "bk"), "--json"],
+                tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+    assert json.loads(r.stdout)["ok"] is False
+
+
+def test_verify_over_a_non_utf8_level_exits_2(tmp_path):
+    make_tree(tmp_path)
+    out = tmp_path / "bk"
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    (tmp_path / "elsewhere" / "CLAUDE.local.md").write_bytes(b"# Memory index\n- \xff\n")
+    r = run_cli(["verify", "--out", str(out), "--json"], tmp_path)
+    assert r.returncode == 2 and "Traceback" not in r.stderr
+
+
+def test_a_bom_at_the_head_of_a_level_file_is_read(tmp_path):
+    make_tree(tmp_path)
+    lvl = tmp_path / "elsewhere" / "CLAUDE.local.md"
+    lvl.write_bytes(b"\xef\xbb\xbf" + b"- [Other](mem:c-slug) - When other, do other.\n")
+    slugs = {e.slug for e in SM.derive(tmp_path, scope="tree", start=tmp_path)}
+    assert "c-slug" in slugs
+
+
+# ---- --out and --from mistakes, and a damaged manifest ------------------------------------------
+
+def test_an_out_dir_inside_the_store_is_refused_and_writes_nothing(tmp_path):
+    make_tree(tmp_path)
+    before = sorted((tmp_path / ".claude-memory").rglob("*"))
+    r = run_cli(["backup", "--from", str(tmp_path),
+                 "--out", str(tmp_path / ".claude-memory" / "bk"), "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert sorted((tmp_path / ".claude-memory").rglob("*")) == before
+
+
+def test_an_existing_dir_that_is_not_a_backup_is_refused_as_out(tmp_path):
+    """A re-backup clears its old copies first, so it may only reuse a dir that IS a backup."""
+    make_tree(tmp_path)
+    out = tmp_path / "someone-elses"
+    (out / "levels").mkdir(parents=True)
+    (out / "levels" / "keep.txt").write_text("not ours\n", encoding="utf-8")
+    r = run_cli(["backup", "--from", str(tmp_path), "--out", str(out), "--json"], tmp_path)
+    assert r.returncode == 2
+    assert (out / "levels" / "keep.txt").is_file()
+
+
+def test_a_re_backup_into_the_same_out_leaves_no_stale_level_copy(tmp_path):
+    make_tree(tmp_path)
+    out = tmp_path / "bk"
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    assert (out / "levels" / "elsewhere" / "CLAUDE.local.md").is_file()
+    (tmp_path / "elsewhere" / "CLAUDE.local.md").unlink()
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    assert not (out / "levels" / "elsewhere" / "CLAUDE.local.md").exists()
+    assert (out / "levels" / "CLAUDE.local.md").is_file()          # control: the rest re-copied
+
+
+@pytest.mark.parametrize("payload", ['{"entries": []}', "[]", '{"anchor": "/x", "entries": [1]}',
+                                     '{"anchor": "/x", "entries": [{"slug": "s"}]}'])
+def test_a_wrong_shape_manifest_exits_2_with_the_envelope(tmp_path, payload):
+    out = tmp_path / "bk"
+    out.mkdir()
+    (out / "manifest.json").write_text(payload, encoding="utf-8")
+    r = run_cli(["verify", "--out", str(out), "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+    assert json.loads(r.stdout)["ok"] is False
+
+
+def test_a_nonexistent_from_is_refused_rather_than_climbing(tmp_path):
+    make_tree(tmp_path)
+    r = run_cli(["backup", "--from", str(tmp_path / "projects" / "appp"), "--scope", "chain",
+                 "--out", str(tmp_path / "bk"), "--json"], tmp_path)
+    assert r.returncode == 2
+    assert not (tmp_path / "bk").exists()
+
+
+def test_verify_text_output_says_identical_then_names_what_differs(tmp_path):
+    make_tree(tmp_path)
+    out = tmp_path / "bk"
+    assert run_cli(["backup", "--from", str(tmp_path), "--out", str(out)], tmp_path).returncode == 0
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 0 and r.stdout.startswith("IDENTICAL")
+    (tmp_path / "elsewhere" / "CLAUDE.local.md").write_text("# Memory index\n", encoding="utf-8")
+    r = run_cli(["verify", "--out", str(out)], tmp_path)
+    assert r.returncode == 1
+    assert "DIFFERS" in r.stdout and "removed  c-slug" in r.stdout
+
+
+# ---- the anchor is the engine's, and output survives a cp1252 console --------------------------
+
+def test_a_decoy_store_does_not_divert_the_backup(tmp_path):
+    """The backup must copy the store the ENGINE reads, not the nearest one below it."""
+    deep = make_tree(tmp_path)
+    (deep / ".claude-memory" / "facts").mkdir(parents=True)
+    (deep / ".claude-memory" / "facts" / "decoy.md").write_text("decoy\n", encoding="utf-8")
+    (deep / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    out = tmp_path / "bk"
+    r = run_cli(["backup", "--from", str(deep), "--scope", "chain", "--out", str(out), "--json"],
+                tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert Path(manifest["anchor"]) == tmp_path.resolve()
+    assert (out / "store" / "facts" / "a-slug.md").is_file()
+    assert not (out / "store" / "facts" / "decoy.md").exists()
+
+
+def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_path(tmp_path):
+    root = tmp_path / "t日本"
+    root.mkdir()
+    make_tree(root)
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, str(TOOL), "backup", "--from", str(root),
+                        "--out", str(root / "bk")], capture_output=True, check=False, env=env,
+                       cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")

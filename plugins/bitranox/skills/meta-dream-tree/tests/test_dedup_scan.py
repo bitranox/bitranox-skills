@@ -17,11 +17,13 @@ Three properties make the difference, and they are what most of this file pins:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import dedup_scan as DS
+import pytest
 
 TOOL = Path(__file__).resolve().parents[1] / "dedup_scan.py"
 
@@ -134,6 +136,7 @@ def test_the_distribution_is_reported_so_a_near_miss_under_the_threshold_is_visi
 # ---- reading a real tree ------------------------------------------------------------------------
 
 def make_tree(root: Path) -> None:
+    (root / "CLAUDE.md").write_text("anchor\n", encoding="utf-8")
     (root / ".claude-memory" / "facts").mkdir(parents=True)
     (root / "CLAUDE.local.md").write_text(
         "# Memory index\n"
@@ -178,3 +181,137 @@ def test_cli_exits_2_when_there_is_no_tree(tmp_path):
     assert r.returncode == 2
     assert "Traceback" not in r.stderr
     assert json.loads(r.stdout)["ok"] is False
+
+
+# ---- read errors: a fact the scan could not read is never a silent "clean" ----------------------
+
+NO_CHMOD = not hasattr(os, "geteuid") or os.geteuid() == 0
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_fact_is_reported_and_exits_2(tmp_path):
+    make_tree(tmp_path)
+    body = tmp_path / ".claude-memory" / "facts" / "second-slug.md"
+    body.chmod(0)
+    try:
+        r = run_cli(["--from", str(tmp_path), "--threshold", "0.5", "--json"], tmp_path)
+    finally:
+        body.chmod(0o644)
+    assert r.returncode == 2, r.stdout + r.stderr
+    env = json.loads(r.stdout)
+    assert env["ok"] is False and str(body) in " ".join(env["skipped"])
+
+
+@pytest.mark.skipif(NO_CHMOD, reason="needs a non-root POSIX user for chmod 000")
+def test_an_unreadable_level_is_reported_and_exits_2(tmp_path):
+    make_tree(tmp_path)
+    level = tmp_path / "CLAUDE.local.md"
+    level.chmod(0)
+    try:
+        r = run_cli(["--from", str(tmp_path), "--threshold", "0.5"], tmp_path)
+    finally:
+        level.chmod(0o644)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "could not be read" in r.stdout and str(level) in r.stdout
+
+
+def test_a_non_utf8_fact_is_reported_not_a_traceback(tmp_path):
+    make_tree(tmp_path)
+    (tmp_path / ".claude-memory" / "facts" / "fourth-slug.md").write_bytes(b"Gr\xf6\xdfe pr\xfcfen")
+    r = run_cli(["--from", str(tmp_path), "--threshold", "0.5", "--json"], tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+    env = json.loads(r.stdout)
+    assert "fourth-slug.md" in " ".join(env["skipped"])
+    assert env["data"]["candidates"], "the readable facts are still scanned and reported"
+
+
+def test_a_bom_fact_is_read(tmp_path):
+    make_tree(tmp_path)
+    (tmp_path / ".claude-memory" / "facts" / "bom-slug.md").write_bytes(
+        b"\xef\xbb\xbf" + FAR.encode("utf-8"))
+    loaded = {f.slug: f for f in DS.load_facts(tmp_path)}
+    assert not loaded["bom-slug"].text.startswith("﻿")
+
+
+# ---- --top, the control's place in the counts, and what gets scored ----------------------------
+
+@pytest.mark.parametrize("n", ["0", "-1"])
+def test_top_below_one_is_refused(tmp_path, n):
+    make_tree(tmp_path)
+    r = run_cli(["--from", str(tmp_path), "--threshold", "0.5", "--top", n], tmp_path)
+    assert r.returncode == 2
+    assert "--top" in r.stderr
+
+
+def test_top_one_keeps_the_strongest_candidate(tmp_path):
+    make_tree(tmp_path)
+    r = run_cli(["--from", str(tmp_path), "--threshold", "0.5", "--top", "1", "--json"], tmp_path)
+    assert r.returncode == 1
+    assert len(json.loads(r.stdout)["data"]["candidates"]) == 1
+
+
+def test_the_control_pair_is_not_counted_in_the_distribution_or_the_pair_count():
+    result = DS.run(facts(("a", NEAR_A), ("b", FAR)), threshold=0.99)
+    assert result.control.detected
+    assert result.distribution == {} and result.compared_pairs == 0
+
+
+def test_the_distribution_counts_only_real_pairs():
+    result = DS.run(facts(("a", NEAR_A), ("b2", NEAR_B), ("c", FAR)), threshold=0.99)
+    assert sum(result.distribution.values()) == result.compared_pairs == 1
+
+
+FRAME = "---\nname: {s}\ndescription: {d}\nmetadata:\n  type: feedback\n---\n\n{b}\n"
+
+
+def test_the_engine_frontmatter_keys_are_not_scored():
+    a = FRAME.format(s="x", d="When alpha, bravo.", b="charlie delta echo foxtrot")
+    b = FRAME.format(s="y", d="When golf, hotel.", b="india juliet kilo lima")
+    assert DS.similarity(a, b) == 0.0
+
+
+def test_the_description_value_is_still_scored():
+    a = FRAME.format(s="x", d="When alpha bravo charlie.", b="delta")
+    b = FRAME.format(s="y", d="When alpha bravo charlie.", b="echo")
+    assert DS.similarity(a, b) > 0.5
+
+
+def test_the_control_fires_when_every_fact_is_one_short_sentence():
+    short = facts(("a", "Keep the cache warm."), ("b", "Rotate logs weekly."),
+                  ("c", "Pin the floor version."))
+    result = DS.run(short, threshold=0.5)
+    assert result.control.detected, result.control
+    assert result.control.score < 1.0
+
+
+def test_text_output_shows_the_control_line_distribution_and_candidates(tmp_path):
+    make_tree(tmp_path)
+    r = run_cli(["--from", str(tmp_path), "--threshold", "0.5"], tmp_path)
+    assert r.returncode == 1
+    assert "FIRED" in r.stdout and "distribution" in r.stdout
+    assert "1 CANDIDATE pair(s)" in r.stdout and "first-slug" in r.stdout
+
+
+# ---- anchor, and a cp1252 console -------------------------------------------------------------
+
+def test_a_decoy_store_lower_down_does_not_replace_the_real_one(tmp_path):
+    make_tree(tmp_path)
+    proj = tmp_path / "proj"
+    (proj / ".claude-memory" / "facts").mkdir(parents=True)
+    (proj / "CLAUDE.md").write_text("proj\n", encoding="utf-8")
+    (proj / ".claude-memory" / "facts" / "decoy.md").write_text(FAR, encoding="utf-8")
+    assert {f.slug for f in DS.load_facts(proj)} == {"first-slug", "second-slug"}
+
+
+def test_a_cp1252_stdout_does_not_crash_on_a_non_ascii_level(tmp_path):
+    root = tmp_path / "dd_日本"
+    root.mkdir()
+    make_tree(root)
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, str(TOOL), "--from", str(root), "--threshold", "0.5"],
+                       capture_output=True, check=False, env=env, cwd=str(tmp_path))
+    # Exit 1 is ALSO what an uncaught exception gives, so the stream is the real assertion.
+    assert b"Traceback" not in r.stderr, r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 1 and b"CANDIDATE" in r.stdout
