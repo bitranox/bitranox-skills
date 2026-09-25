@@ -5,6 +5,10 @@ realistic secret and requires that its VALUE is gone from the output, not merely
 appeared somewhere.
 """
 
+import time
+
+import pytest
+
 import secret_patterns as sp
 
 # Assembled at runtime so this file never holds a literal that a secret scanner flags.
@@ -87,3 +91,233 @@ def test_holds_a_credential_agrees_with_redaction():
 def test_find_secrets_labels_each_known_shape():
     labels = {label for label in sp.find_secret_labels("a %s b %s" % (GHP, AKIA))}
     assert labels == {"GitHub token", "AWS access key id"}
+
+
+# --- token formats ------------------------------------------------------------------------------
+
+ALNUM = "Ab3dE5fG7h" * 20
+PGP = ("-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n" + PEM_BODY
+       + "\n-----END PGP PRIVATE KEY BLOCK-----")
+ELIDED_PEM = "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+# A BEGIN line and two key lines, as `head -3 id_rsa` or a capped tool output shows it.
+TRUNCATED = "-----BEGIN RSA PRIVATE KEY-----\n" + PEM_BODY[:64] + "\n" + PEM_BODY[64:128]
+
+
+@pytest.mark.parametrize("secret", [
+    "sk-" + "proj-" + ALNUM[:30] + "_-" + ALNUM[:60],   # current OpenAI project key
+    "sk-" + "svcacct-" + ALNUM[:30] + "-" + ALNUM[:40],  # service-account key
+    "gh" + "o_" + ALNUM[:36],                             # GitHub OAuth token
+    "gh" + "u_" + ALNUM[:36],                             # GitHub user-to-server token
+    "gh" + "r_" + ALNUM[:36],                             # GitHub refresh token
+    "glpat-" + ALNUM[:26],                                # GitLab token longer than 20
+    "sk-" + "proj-" + ALNUM[:80],                         # project key, alphanumeric body
+])
+def test_current_token_formats_are_found_and_redacted(secret):
+    assert sp.find_secret_labels("x " + secret + " y"), secret
+    text, n = sp.redact("x " + secret + " y")
+    assert secret not in text and n == 1, text
+
+
+def test_a_legacy_openai_key_is_labelled_once():
+    assert sp.find_secret_labels("sk-" + ALNUM[:48]) == ["OpenAI-style key"]
+
+
+def test_an_anthropic_key_is_labelled_once_not_also_as_openai():
+    assert sp.find_secret_labels(SK_ANT + "x" * 20) == ["Anthropic API key"]
+
+
+def test_a_long_kebab_identifier_starting_sk_is_not_a_key():
+    ident = "sk-" + "-".join(["learn"] * 12)
+    assert sp.find_secret_labels(ident) == []
+
+
+# --- private key blocks --------------------------------------------------------------------------
+
+
+def test_a_pgp_private_key_block_is_found_and_redacted():
+    assert len(list(sp.real_private_key_blocks(PGP))) == 1
+    assert sp.holds_a_credential(PGP)
+    text, n = sp.redact("gpg --export-secret-keys\n" + PGP + "\ndone")
+    assert PEM_BODY[:40] not in text and n == 1
+    assert text.endswith("\ndone")
+
+
+def test_an_elided_example_before_a_real_key_does_not_hide_the_real_key():
+    both = ELIDED_PEM + "\nthe real one:\n" + PEM
+    assert len(list(sp.real_private_key_blocks(both))) == 1
+    assert sp.holds_a_credential(both)
+
+
+def test_an_elided_example_alone_is_not_a_real_key():
+    assert list(sp.real_private_key_blocks(ELIDED_PEM)) == []
+    assert not sp.holds_a_credential(ELIDED_PEM)
+
+
+def test_a_key_body_longer_than_8000_chars_is_still_a_key():
+    big = "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 9000 + "\n-----END RSA PRIVATE KEY-----"
+    assert len(list(sp.real_private_key_blocks(big))) == 1
+    text, _ = sp.redact(big)
+    assert "A" * 100 not in text
+
+
+def test_a_truncated_key_with_no_end_line_is_redacted():
+    text, n = sp.redact("head -3 id_rsa\n" + TRUNCATED + "\n")
+    assert PEM_BODY[:40] not in text and PEM_BODY[64:100] not in text
+    assert text.startswith("head -3 id_rsa\n") and n == 1
+    assert sp.holds_a_credential(TRUNCATED)
+    assert len(list(sp.real_private_key_blocks(TRUNCATED))) == 1
+
+
+def test_a_truncated_encrypted_key_is_redacted_past_its_armour_headers():
+    head = ("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n"
+            "DEK-Info: AES-128-CBC,0123456789ABCDEF\n\n" + PEM_BODY[:64])
+    text, n = sp.redact(head)
+    assert PEM_BODY[:40] not in text and n == 1
+
+
+def test_a_truncated_key_inside_a_json_string_is_redacted():
+    line = '{"private_key": "-----BEGIN PRIVATE KEY-----\\n' + PEM_BODY[:64] + "\\n" + PEM_BODY[64:100]
+    text, n = sp.redact(line)
+    assert PEM_BODY[:40] not in text and PEM_BODY[64:100] not in text, text
+    assert n >= 1
+
+
+def test_a_bare_begin_line_in_prose_is_neither_redacted_nor_a_key():
+    prose = "A key file starts with -----BEGIN RSA PRIVATE KEY----- and nothing else here."
+    assert sp.redact(prose) == (prose, 0)
+    assert list(sp.real_private_key_blocks(prose)) == []
+
+
+def test_a_truncated_key_with_too_little_material_is_not_a_committed_key():
+    # Redaction takes any key line; the commit gate wants real material, as for a complete block.
+    short = "-----BEGIN RSA PRIVATE KEY-----\n" + PEM_BODY[:40]
+    assert list(sp.real_private_key_blocks(short)) == []
+    assert sp.redact(short) == ("[REDACTED]", 1)
+
+
+def test_a_complete_block_is_not_reported_twice_by_the_truncation_rule():
+    assert len(list(sp.real_private_key_blocks(PEM))) == 1
+    assert sp.redact(PEM)[1] == 1
+
+
+def test_a_truncated_key_before_a_complete_one_counts_both():
+    assert len(list(sp.real_private_key_blocks(TRUNCATED + "\n" + PEM))) == 2
+
+
+def test_an_elided_body_long_enough_to_pass_is_still_an_example():
+    # The "..." marker alone decides it: the body carries well over the minimum of base64.
+    elided = ("-----BEGIN RSA PRIVATE KEY-----\n" + PEM_BODY[:80] + "\n...\n" + PEM_BODY[:80]
+              + "\n-----END RSA PRIVATE KEY-----")
+    assert list(sp.real_private_key_blocks(elided)) == []
+
+
+# --- labelled values ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("line, value", [
+    ('{"password": "hunter2xyz"}', "hunter2xyz"),
+    ("{'password': 'hunter2xyz'}", "hunter2xyz"),
+    ('"SecretAccessKey": "wJalrXUtnFEMIK7MDENG"', "wJalrXUtnFEMIK7MDENG"),
+    ("  POSTGRES_PASSWORD: hunter2xyz", "hunter2xyz"),
+    ("docker run -e DB_PASSWORD=hunter2xyz img", "hunter2xyz"),
+    ("PASSWD=hunter2xyz", "hunter2xyz"),
+    ("PRIVATE_KEY=abcdef123456", "abcdef123456"),
+    ("PGPASSWORD=hunter2xyz psql", "hunter2xyz"),
+    ("SMTPPASS=hunter2xyz", "hunter2xyz"),
+    ("spring.datasource.password=hunter2xyz", "hunter2xyz"),
+    ("X-Api-Key: hunter2xyz", "hunter2xyz"),
+    ("api key = hunter2xyz", "hunter2xyz"),
+    ("GET /v1/items?token=hunter2xyz HTTP/1.1", "hunter2xyz"),
+    ('password: "two words"', "two words"),
+    ('"password": "cut off here', "cut off here"),
+])
+def test_structured_and_mid_line_secret_values_are_redacted(line, value):
+    text, n = sp.redact(line)
+    assert value not in text and n >= 1, text
+    assert sp.holds_a_credential(line), line
+
+
+def test_a_quoted_value_keeps_its_quotes_and_the_name():
+    assert sp.redact('{"password": "hunter2xyz", "user": "bob"}') == (
+        '{"password": "[REDACTED]", "user": "bob"}', 1)
+
+
+@pytest.mark.parametrize("line", [
+    '"input_tokens": 1234',
+    "max_tokens: 800",
+    "MAX_TOKENS=800",
+    "token_count: 800",
+    "max_token: 800",
+    "password_policy: strict",
+    "git -c credential.helper='!gh auth git-credential' push",
+    "user ALL=(ALL) NOPASSWD: ALL",
+    "the-token-usage-lives: here",
+    "TREE_DENSITY_TOKENS = (1, 2)",
+    "_BYPASS_ENV = 'X'",
+    "CHOICE_BYPASS = 3",
+    "compass: north",
+    "PWD=/home/x",
+    "OLDPWD=/tmp",
+    "export PWD=/home/x",
+    "the password policy is strict",
+    "bypass=1",
+    '"passed": 12',
+    "tokenizer: cl100k",
+    "sort_key: name",
+    '"password": ""',
+    "if password == other:",
+    "let t = Token::new(1);",
+])
+def test_counts_working_dirs_and_prose_are_not_secrets(line):
+    assert sp.redact(line) == (line, 0), line
+    assert not sp.holds_a_credential(line), line
+
+
+def test_a_token_name_with_a_non_numeric_value_is_still_a_secret():
+    # The count exemption is for numbers only; the same name with a token-like value is redacted.
+    assert sp.redact("max_token: abc123def")[1] == 1
+
+
+@pytest.mark.parametrize("line", [
+    'PGPASSWORD="$(sudo cat /etc/pg/root.pw)" psql',
+    "export DB_PASSWORD=$VAULT_DB_PASSWORD",
+    "token=${GH_TOKEN:-unset}",
+    "GH_TOKEN=<invalid>",
+    "while `DB_PASSWORD=<value>` is the secret itself",
+])
+def test_a_value_that_only_points_at_a_secret_is_not_one(line):
+    assert sp.redact(line) == (line, 0), line
+    assert not sp.holds_a_credential(line), line
+
+
+def test_a_literal_password_that_starts_with_a_dollar_is_still_redacted():
+    text, n = sp.redact("password=$ecret1x")
+    assert "$ecret1x" not in text and n == 1
+
+
+# --- detection and redaction agree ----------------------------------------------------------------
+
+
+def test_a_bearer_value_is_a_credential_for_detection_too():
+    line = 'curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9abc" https://x'
+    assert sp.redact(line)[1] == 1
+    assert sp.holds_a_credential(line)
+
+
+def test_every_redaction_pattern_is_also_a_detection_pattern():
+    # One shared list, so a pattern added to redaction cannot be missing from detection.
+    for line in ('"password": "x1y2z3"', "DB_TOKEN=abc123", "https://u:pw@h/x",
+                 "Authorization: Bearer abcdefgh12345", "PWD=/home/x", "max_tokens: 800"):
+        assert (sp.redact(line)[1] > 0) == sp.holds_a_credential(line), line
+
+
+def test_a_value_redacted_by_an_earlier_pass_is_counted_once():
+    assert sp.redact("API_TOKEN=" + GHP) == ("API_TOKEN=[REDACTED]", 1)
+
+
+def test_a_long_run_of_name_characters_is_scanned_in_linear_time():
+    start = time.monotonic()
+    for text in ("key" * 50000, "x_token" * 20000 + ":", "PASSWORD" * 20000):
+        sp.redact(text)
+        sp.holds_a_credential(text)
+    assert time.monotonic() - start < 5

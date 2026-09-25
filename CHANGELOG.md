@@ -29,6 +29,37 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.1]
+
+### Fixed
+
+- **Secret recognition covers the shapes it missed.** The one credential vocabulary shared by
+  repo-gate's commit check, recall's note withholding and the classifier's egress redaction now
+  recognises:
+  - GitHub OAuth, user-to-server and refresh tokens (`gho_`, `ghu_`, `ghr_`) beside `ghp_`;
+    OpenAI project, service-account and admin keys (`sk-proj-`, `sk-svcacct-`, `sk-admin-`),
+    while a kebab-case identifier that merely starts `sk-` is still not a key; GitLab `glpat-`
+    tokens of any length from 20 characters up.
+  - PGP private keys (`-----BEGIN PGP PRIVATE KEY BLOCK-----`), key bodies of any length, and a
+    real key that follows an elided example block (the two no longer merge into one match).
+  - A private key with a BEGIN line and no END (`head id_rsa`, a capped output, a key inside a
+    JSON string): its key lines are redacted, and it counts as a key once it carries real
+    material.
+  - Labelled values in JSON and YAML (`{"password": "x"}`, `POSTGRES_PASSWORD: x`,
+    `"SecretAccessKey": "x"`), mid-line assignments (`docker run -e DB_PASSWORD=x`,
+    `?token=x`), bare `PASSWD=` and `PRIVATE_KEY=`, and dotted or dashed names
+    (`spring.datasource.password`, `X-Api-Key`). A quoted value is redacted whole and keeps its
+    quotes.
+- **Fewer false alarms from labelled values.** The last word of a name decides whether it names a
+  secret, so `password_policy`, `token_count`, `credential.helper`, `TREE_DENSITY_TOKENS`,
+  `bypass=1`, `NOPASSWD:`, the shell's `PWD`/`OLDPWD`, token counts (`max_tokens: 800`), `==`
+  comparisons and `::` paths are left alone, and so is a value that only points at a secret
+  (`$DB_PASSWORD`, `$(cat keyfile)`, `<token>`). A value no longer spills onto the next line.
+- **Detection and redaction agree.** A `Bearer` header now makes a memory note count as holding a
+  credential, as it was already redacted on egress.
+- **No slowdown on long lines.** The environment-name rule backtracked quadratically on a long
+  line of name characters; matching is now linear.
+
 ## [7.22.0]
 
 ### Changed

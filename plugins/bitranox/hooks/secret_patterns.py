@@ -6,8 +6,8 @@ classifier REDACTS one before text leaves the machine. One definition keeps a pa
 one of them from being silently missing in the others.
 
 The test is always a VALUE, never a word: "never commit a password" names the concept and
-carries nothing, while `Password: <value>`, `DB_PASSWORD=<value>` and `scheme://user:pw@host`
-are the secret itself.
+carries nothing, while `Password: <value>`, `DB_PASSWORD=<value>`, `{"password": "<value>"}` and
+`scheme://user:pw@host` are the secret itself.
 
 Pure standard library.
 """
@@ -18,6 +18,7 @@ __all__ = [
     "PRIVATE_KEY_RX",
     "REDACTED",
     "TOKEN_PATTERNS",
+    "UNTERMINATED_PRIVATE_KEY_RX",
     "find_secret_labels",
     "holds_a_credential",
     "real_private_key_blocks",
@@ -28,72 +29,230 @@ REDACTED = "[REDACTED]"
 
 # High-signal token formats (gitleaks/trufflehog family), low false-positive by construction.
 TOKEN_PATTERNS = [
-    (re.compile(r"ghp_[A-Za-z0-9]{36,}"), "GitHub token"),
+    # Personal (ghp_), OAuth (gho_), user-to-server (ghu_) and refresh (ghr_) tokens share a
+    # shape: the prefix and 36+ alphanumerics.
+    (re.compile(r"gh[pour]_[A-Za-z0-9]{36,}"), "GitHub token"),
     # Installation tokens (ghs_) are long JWT-format strings (~520 chars) carrying dots, dashes
     # and underscores, so the body allows ".-_" and is open-ended on length.
     (re.compile(r"ghs_[A-Za-z0-9._-]{36,}"), "GitHub App installation token"),
     (re.compile(r"github_pat_[A-Za-z0-9_]{60,}"), "GitHub fine-grained PAT"),
     (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}"), "Anthropic API key"),
+    # Two OpenAI shapes: the legacy all-alphanumeric key, and the project / service-account /
+    # admin keys whose bodies carry "-" and "_". Only the NAMED prefixes admit those characters,
+    # so a long kebab-case identifier that happens to start "sk-" is not a key, and sk-ant- keys
+    # (matched above) never match here: "ant" is not one of the prefixes.
     (re.compile(r"\bsk-[A-Za-z0-9]{40,}\b"), "OpenAI-style key"),
+    (re.compile(r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,}"), "OpenAI-style key"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AWS access key id"),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "Google API key"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "Slack token"),
-    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20}\b"), "GitLab token"),
+    # Not a fixed 20 characters: the body is open-ended, like the other formats here.
+    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "GitLab token"),
 ]
 
-PRIVATE_KEY_RX = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----([\s\S]{20,8000}?)-----END [A-Z0-9 ]*PRIVATE KEY-----"
-)
+# PEM ("RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", ...) and PGP armour ("PGP PRIVATE KEY BLOCK").
+_KEY_BEGIN = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
+_KEY_END = r"-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
 
-# A labelled value as a human writes it in a runbook: `Password: x`, `api key = x`. Group 1 is
-# the label with its separator (kept), group 2 the value (redacted).
-_LABELLED_RX = re.compile(
-    r"(?im)(\b(?:pass(?:word|phrase)?|pwd|secret|api[ _-]?key|access[ _-]?key|token"
-    r"|credentials?)\b\s*[:=]\s*)(\S+)"
+# A complete block. The body may not cross another BEGIN line, so an elided example sitting
+# before a real key is its own (short) block instead of swallowing the real one up to its END.
+# That same rule bounds the scan, so the body needs no length cap.
+PRIVATE_KEY_RX = re.compile(_KEY_BEGIN + r"((?:(?!-----BEGIN )[\s\S])*?)" + _KEY_END)
+
+# A BEGIN line with no END: `head -5 id_rsa`, a capped tool output, a truncated paste. Group 1
+# is the run of lines that follows - base64 lines, `Name: value` armour headers (Proc-Type,
+# DEK-Info, Version) and blank lines - up to the first line that is none of those. A line break
+# may also be the two characters backslash-n, the shape a key takes inside a JSON string.
+_KEY_LINE_BREAK = r"(?:\r?\n|\\r?\\n)"
+_KEY_LINE = (
+    r"(?:[ \t]*[A-Za-z0-9+/=]+[ \t]*"
+    r"|[A-Za-z][A-Za-z0-9-]*:[^\r\n\\\"]*"
+    r"|[ \t]*)"
+    r"(?=[\r\n\\\"]|\Z)"
 )
-# An environment assignment whose NAME says secret. `\btoken\b` above cannot see `GITHUB_TOKEN`
-# because `_` is a word character, which is exactly the shape a `.env` file and tool output use.
-_ENV_RX = re.compile(
-    r"(?im)^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*"
-    r"(?:PASS|PASSWD|PASSWORD|SECRET|TOKEN|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?|PWD)"
-    r"[A-Za-z0-9_]*\s*=\s*)(\S+)"
+UNTERMINATED_PRIVATE_KEY_RX = re.compile(
+    _KEY_BEGIN + r"((?:" + _KEY_LINE_BREAK + _KEY_LINE + r")*)"
+)
+_BASE64_LINE_RX = re.compile(r"[ \t]*([A-Za-z0-9+/=]+)[ \t]*")
+_KEY_LINE_SPLIT_RX = re.compile(_KEY_LINE_BREAK)
+
+# The base64 characters a block must carry before detection calls it real key material.
+_MIN_KEY_MATERIAL = 64
+
+# A labelled value, in every shape a human, a config file or a tool writes one: `Password: x`,
+# `api key = x`, `DB_PASSWORD=x`, `export DB_PASSWORD='x'`, `docker run -e DB_PASSWORD=x`,
+# `{"password": "x"}`, `  POSTGRES_PASSWORD: x`, `"SecretAccessKey": "x"`. The regex only finds
+# CANDIDATES (a name holding a secret-ish keyword, a `:` or `=`, a value); `_names_a_secret` then
+# decides from the name's words whether it really names a secret, which keeps `max_tokens: 800`,
+# `bypass=1` and the shell's `PWD=/home/x` out. A quoted value is taken whole, up to its closing
+# quote; an unquoted one runs to the next whitespace.
+_NAMED_VALUE_RX = re.compile(
+    r"(?P<pre>(?<![A-Za-z0-9_.-])"
+    r"(?P<name>(?:[A-Za-z0-9_.-]+ )?"
+    # A lookahead, which never backtracks, so a long run of name characters costs one pass.
+    r"(?=[A-Za-z0-9_.-]*?(?:pass|pwd|secret|token|key|credential))[A-Za-z0-9_.-]+)"
+    # `==` and `::` are a comparison and a path (`Token::new`), not an assignment.
+    r"[\"']?[ \t]*[:=](?![:=])[ \t]*(?P<q>[\"'])?)"
+    r"(?P<val>(?(q)(?:(?!(?P=q))[^\r\n])+|(?![\"'])\S+))"
+    # A quote left open (a truncated line) takes the value to the end of the line.
+    r"(?P<post>(?(q)(?:(?P=q)|(?=[\r\n]|\Z))|))",
+    re.IGNORECASE,
 )
 _URL_USERINFO_RX = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)([^/\s@]+)(@)")
 _BEARER_RX = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})")
+
+# The LAST word of a name decides, as it does when a person reads one: `DB_PASSWORD`,
+# `smtpPassword`, `x-api-key` and `SecretAccessKey` name a secret, while `password_policy`,
+# `token_count`, `credential.helper` and `TREE_DENSITY_TOKENS` name something about one.
+_SECRET_WORDS = frozenset({
+    "pass", "passwd", "password", "passphrase", "pwd", "secret", "token", "credential",
+    "credentials", "apikey", "accesskey", "privatekey", "secretkey",
+})
+# The same, run together into one word (PGPASSWORD, clientsecret). A bare "pass" suffix counts
+# only in an all-capitals environment name (DBPASS, SMTPPASS), where BYPASS is the one exception;
+# in ordinary words it would take bypass and compass along.
+_SECRET_SUFFIXES = ("password", "passwd", "passphrase", "secret", "apikey", "accesskey",
+                    "privatekey", "secretkey")
+# `key` names a secret only after one of these (`api_key`, `access-key`, `Private key`).
+_KEY_QUALIFIERS = frozenset({"api", "access", "private", "secret"})
+# Names that end like a secret and are not one: the shell's working-directory variables hold a
+# path, and NOPASSWD is a sudoers tag.
+_NOT_SECRET_NAMES = frozenset({"PWD", "OLDPWD", "NOPASSWD"})
+_CAMEL_RX = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+# A value that only POINTS at a secret: a variable (`$DB_PASSWORD`, `${TOKEN}`), a command
+# substitution (`$(sudo cat keyfile)`) or a placeholder (`<token>`, also inside prose punctuation
+# such as a closing backtick). Lowercase after a bare `$` is left alone, since a password may well
+# start with one.
+_REFERENCE_VALUE_RX = re.compile(r"\$(?:\{|\(|[A-Z_][A-Z0-9_]*\b)|<[^<>\s]+>[`'\",;:.)\]}]*$")
+
+
+def _key_material(body):
+    """Count the base64 characters in the whole base64 lines of an unterminated block's body."""
+    total = 0
+    for line in _KEY_LINE_SPLIT_RX.split(body):
+        m = _BASE64_LINE_RX.fullmatch(line)
+        if m:
+            total += len(m.group(1))
+    return total
+
+
+def _is_real_body(body):
+    """A complete block's body is real key material unless it is elided ("...") or too short.
+
+    A body with a "..." truncation marker or too little base64 is an illustrative example (a
+    tutorial's elided key), which the commit gate must not block on.
+    """
+    return "..." not in body and len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) > _MIN_KEY_MATERIAL
+
+
+def _mask_complete_blocks(text):
+    """Overwrite every complete block with filler of the same length, keeping offsets valid."""
+    return PRIVATE_KEY_RX.sub(lambda m: "#" * len(m.group(0)), text)
 
 
 def real_private_key_blocks(text):
     """Yield each private key block that carries real key material.
 
-    A body with a "..." truncation marker or too little base64 is an illustrative example (a
-    tutorial's elided key), which the commit gate must not block on.
+    Complete blocks come first; a BEGIN line with no END (a truncated key) is then looked for in
+    what is left, so a complete block is never counted twice.
     """
     for m in PRIVATE_KEY_RX.finditer(text):
-        body = m.group(1)
-        if "..." not in body and len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) > 64:
+        if _is_real_body(m.group(1)):
+            yield m
+    if "-----BEGIN " not in text:
+        return
+    for m in UNTERMINATED_PRIVATE_KEY_RX.finditer(_mask_complete_blocks(text)):
+        if _key_material(m.group(1)) > _MIN_KEY_MATERIAL:
             yield m
 
 
 def find_secret_labels(text):
     """Return the label of every known token format present in `text` (a label per format)."""
-    return [label for rx, label in TOKEN_PATTERNS if rx.search(text)]
+    return list(dict.fromkeys(label for rx, label in TOKEN_PATTERNS if rx.search(text)))
+
+
+def _name_words(name):
+    """Split a variable or label name into lowercase words at separators and camelCase humps."""
+    words = []
+    for part in re.split(r"[ _.-]+", name):
+        if part.isupper() or not any(c.isalpha() for c in part):
+            words.append(part.lower())
+        else:
+            words.extend(w.lower() for w in _CAMEL_RX.findall(part))
+    return [w for w in words if w]
+
+
+def _names_a_secret(name):
+    """True when the last word of `name` (or its last two, for `api key`) names a secret."""
+    if name.split(" ")[-1] in _NOT_SECRET_NAMES:
+        return False
+    words = _name_words(name)
+    if not words:
+        return False
+    last = words[-1]
+    if last in _SECRET_WORDS or last.endswith(_SECRET_SUFFIXES):
+        return True
+    raw_last = re.split(r"[ _.-]+", name)[-1]
+    if raw_last.isupper() and raw_last.endswith("PASS") and raw_last != "BYPASS":
+        return True
+    return last == "key" and len(words) > 1 and words[-2] in _KEY_QUALIFIERS
+
+
+def _redact_named_value(m):
+    """Replace the value of a secret-named assignment; None to leave the match alone.
+
+    A number after a name ending in "token" is a count (`max_token: 800`), which an LLM tool's
+    output is full of; a reference to a secret carries none.
+    """
+    value = m.group("val")
+    if value.startswith(REDACTED) or _REFERENCE_VALUE_RX.match(value):
+        return None
+    name = m.group("name")
+    if not _names_a_secret(name):
+        return None
+    if value.isdigit() and _name_words(name)[-1] == "token":
+        return None
+    return m.group("pre") + REDACTED + m.group("post")
+
+
+def _redact_group_2(m):
+    """Keep group 1 (the label, name or scheme) and anything after group 2; drop group 2.
+
+    Returns None when group 2 already starts with the marker, so a value an earlier pass
+    redacted is neither marked nor counted twice.
+    """
+    if m.group(2).startswith(REDACTED):
+        return None
+    tail = m.group(3) if m.re.groups >= 3 else ""
+    return m.group(1) + REDACTED + tail
+
+
+# The value rules, in redaction order: each is a regex and a builder that returns the
+# replacement, or None to leave that match alone. redact() applies them and holds_a_credential()
+# asks the same builders, so a rule can never be in one and missing from the other.
+_VALUE_RULES = (
+    (_URL_USERINFO_RX, _redact_group_2),
+    (_BEARER_RX, _redact_group_2),
+    (_NAMED_VALUE_RX, _redact_named_value),
+)
 
 
 def holds_a_credential(text):
     """True when `text` carries a secret VALUE rather than merely discussing one."""
     if find_secret_labels(text) or next(real_private_key_blocks(text), None):
         return True
-    return any(rx.search(text) for rx in (_LABELLED_RX, _ENV_RX, _URL_USERINFO_RX))
+    return any(build(m) is not None for rx, build in _VALUE_RULES for m in rx.finditer(text))
 
 
 def redact(text, extra_literals=()):
     """Replace every secret value in `text` with `[REDACTED]`; return (text, count).
 
-    Everything around a secret is kept - the label, the variable name, the URL's host - because
-    that is the context a classifier needs to judge the text. Private key blocks are replaced
-    whole, markers included, since even an elided example has no value to a reader. Aggressive
-    by design: a false positive costs one word of context, a false negative sends a live
-    credential to a third party.
+    Everything around a secret is kept - the label, the variable name, the URL's host, a quoted
+    value's quotes - because that is the context a classifier needs to judge the text. Private key
+    blocks are replaced whole, markers included, since even an elided example has no value to a
+    reader; a BEGIN line with no END is replaced together with the key lines that follow it.
+    Aggressive by design: a false positive costs one word of context, a false negative sends a
+    live credential to a third party.
     """
     count = 0
 
@@ -114,22 +273,10 @@ def redact(text, extra_literals=()):
             count += text.count(literal)
             text = text.replace(literal, REDACTED)
     text = _sub(PRIVATE_KEY_RX, lambda m: REDACTED, text)
+    text = _sub(UNTERMINATED_PRIVATE_KEY_RX,
+                lambda m: REDACTED if _key_material(m.group(1)) else None, text)
     for rx, _label in TOKEN_PATTERNS:
         text = _sub(rx, lambda m: REDACTED, text)
-    text = _sub(_URL_USERINFO_RX, _redact_group_2, text)
-    text = _sub(_BEARER_RX, _redact_group_2, text)
-    for rx in (_ENV_RX, _LABELLED_RX):
-        text = _sub(rx, _redact_group_2, text)
+    for rx, build in _VALUE_RULES:
+        text = _sub(rx, build, text)
     return text, count
-
-
-def _redact_group_2(m):
-    """Keep group 1 (the label, name or scheme) and anything after group 2; drop group 2.
-
-    Returns None when group 2 already starts with the marker, so a value an earlier pass
-    redacted is neither marked nor counted twice.
-    """
-    if m.group(2).startswith(REDACTED):
-        return None
-    tail = m.group(3) if m.re.groups >= 3 else ""
-    return m.group(1) + REDACTED + tail
