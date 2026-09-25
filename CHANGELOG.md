@@ -29,6 +29,23 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.4]
+
+### Fixed
+
+- `test_adversarial_inputs_stay_linear` (secret redaction) no longer times a fixed wall-clock
+  ceiling against a shared CI runner's clock: it failed on `ubuntu-latest` and `windows-latest`
+  py3.13 at 0.51-0.52s against a 0.5s budget on the `Cookie: a=b; a=b; ...` case, which takes about
+  0.11s on a quiet machine - nothing in the code is quadratic there. Each adversarial shape is now
+  timed at two sizes (about 50,000 and 200,000 characters, the minimum of a few repeats) and the
+  test asserts the timing GROWS close to linearly (under 8x for a 4x input; quadratic growth would
+  be about 16x), plus a generous 5s absolute backstop. Profiling the `Cookie` case (the
+  consistently slowest shape) found it genuinely linear - the cost is 60,000 individual exemption
+  checks, one per cookie pair, not a regex re-scanning its input - so no code change was needed
+  there. Proved against a scratch copy carrying the pre-7.23.2 quadratic URL-userinfo regex: the
+  new assertion goes red on it (measured ratio about 14-15x for a 4x input) and stays green on the
+  shipped regex (measured ratio about 3.9-4.1x).
+
 ## [7.23.3]
 
 ### Fixed

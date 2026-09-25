@@ -561,24 +561,64 @@ def test_review_findings_non_secrets_are_left_alone(line):
     assert not sp.holds_a_credential(line), line
 
 
-def test_adversarial_inputs_stay_linear():
-    cases = (
-        '\\"password\\": \\"' + "\\\\" * 100000,
-        "--password " * 30000,
-        "sshpass " * 40000,
-        "mysql -p" * 40000,
-        "-----BEGIN RSA PRIVATE KEY----- " + (B64_RUN + " ") * 6000,
-        "Cookie: " + "a=b; " * 60000,
-        "Authorization: token " * 15000,
-        "password=$" + "A" * 300000,
-        'password: "' + "\\" * 300000,
-        # A long hyphenated run: a scheme regex starting at every word boundary rescans the rest
-        # of the run from each hyphen, quadratic in its length.
-        "a-" * 50000 + "://x",
-        "--api-key-" * 10000 + " x",
-    )
-    for text in cases:
+# Each case is (prefix, repeated unit, suffix): the unit is the part whose repeat count drives
+# the input size, so the same shape can be built at two sizes and compared for GROWTH rather than
+# timed once against a fixed ceiling - a shared CI runner is not a fixed clock, and a flat 0.5s
+# wall-clock budget failed on ubuntu-latest/windows-latest at 0.51s for a run that took 0.11s
+# locally, with nothing quadratic in the code.
+_ADVERSARIAL_CASE_SHAPES = {
+    "escaped_json_backslash_run": ('\\"password\\": \\"', "\\\\", ""),
+    "long_password_flag_run": ("", "--password ", ""),
+    "long_sshpass_run": ("", "sshpass ", ""),
+    "long_mysql_dash_p_run": ("", "mysql -p", ""),
+    "flattened_pem_run": ("-----BEGIN RSA PRIVATE KEY----- ", B64_RUN + " ", ""),
+    # The consistently slowest shape in profiling (cProfile: linear, ~660k calls for 60k pairs):
+    # each pair runs its own exemption checks (a placeholder, a cookie attribute, "cannot be a
+    # secret"), which is the real cost of getting every pair right, not a regex backtracking on
+    # this text - no cheaper equivalent pattern redacts the same spans.
+    "many_cookie_pairs": ("Cookie: ", "a=b; ", ""),
+    "long_authorization_token_run": ("", "Authorization: token ", ""),
+    "long_password_dollar_run": ("password=$", "A", ""),
+    "long_password_quote_backslash_run": ('password: "', "\\", ""),
+    # A long hyphenated run: the pre-7.23.2 scheme regex started at every \b, so it rescanned the
+    # rest of the run from each hyphen - quadratic in the run's length (see CHANGELOG 7.23.2).
+    "long_hyphenated_scheme_run": ("", "a-", "://x"),
+    "long_api_key_dashes_run": ("", "--api-key-", " x"),
+}
+
+
+def _sized_case(prefix, unit, suffix, target_len):
+    """Build `prefix + unit * n + suffix` with `n` chosen so the text is about `target_len` long."""
+    count = max(1, target_len // len(unit))
+    return prefix + unit * count + suffix
+
+
+def _fastest_of(text, repeats=3):
+    """The minimum of a few timed passes, which filters a transient scheduling stall without
+    hiding real quadratic growth - a slow pass recurs on every repeat, a stall does not."""
+    best = None
+    for _ in range(repeats):
         start = time.monotonic()
         sp.redact(text)
         sp.holds_a_credential(text)
-        assert time.monotonic() - start < 0.5, text[:40]
+        elapsed = time.monotonic() - start
+        best = elapsed if best is None else min(best, elapsed)
+    return best
+
+
+@pytest.mark.parametrize("shape", sorted(_ADVERSARIAL_CASE_SHAPES))
+def test_adversarial_inputs_stay_linear(shape):
+    prefix, unit, suffix = _ADVERSARIAL_CASE_SHAPES[shape]
+    text_n = _sized_case(prefix, unit, suffix, target_len=50_000)
+    text_4n = _sized_case(prefix, unit, suffix, target_len=200_000)
+    t_n = _fastest_of(text_n)
+    t_4n = _fastest_of(text_4n)
+    # A generous absolute backstop: on ANY runner this must never crawl, quadratic or not.
+    assert t_4n < 5.0, (shape, t_4n)
+    if t_n <= 0:
+        return
+    ratio = t_4n / t_n
+    # A 4x input costs a linear scan ~4x (measured 3.9-4.1x locally); a quadratic scan costs
+    # ~16x. 8 sits well clear of both, so it survives a noisy shared runner without going blind
+    # to the defect it exists to catch.
+    assert ratio < 8, (shape, t_n, t_4n, ratio)
