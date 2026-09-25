@@ -85,3 +85,16 @@ def test_control_a_clean_rehome_still_exits_zero(proj, capsys):
     _dangle(proj, "good-orphan")
     assert R.main(["--rehome", str(proj)]) == 0
     assert "re-homed: good-orphan" in capsys.readouterr().out
+
+
+def test_archiving_keeps_an_earlier_archived_body_of_the_same_slug(proj):
+    slug = E.add_or_update_entry(str(proj), "Real", "When real, do real.", body="LIVE",
+                                 type_="reference")
+    body = US.body_path(E._anchor(str(proj)), slug)
+    archive = body.parent.parent / ".archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    (archive / body.name).write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")
+    assert R.archive_entry(str(proj), slug) is True
+    assert (archive / body.name).read_text(encoding="utf-8") == "EARLIER ARCHIVED FACT\n"
+    assert any("LIVE" in p.read_text(encoding="utf-8") for p in archive.iterdir()
+               if p.name != body.name)

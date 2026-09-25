@@ -81,22 +81,11 @@ class SlugCollision(ValueError):
         self.slug, self.suggestion = slug, suggestion
 
 
-class InvalidSlug(ValueError):
-    """Raised when a caller-supplied slug is not a plain filename (`uuid_store.is_valid_slug`). The
-    slug becomes `facts/<slug>.md`, so an unchecked `../../CLAUDE` rewrites the tree's CLAUDE.md and
-    `../../../x` writes outside the tree altogether - through the one write path the store-edit guard
-    exists to funnel every change into. Raised BEFORE anything is written."""
-
-    def __init__(self, slug):
-        self.slug = slug
-        super().__init__("%r is not a valid slug - use lowercase letters, digits, hyphens and dots, "
-                         "starting and ending with a letter or digit (no path separators)" % (slug,))
-
-
-def _require_valid_slug(slug):
-    """Raise `InvalidSlug` unless `slug` is a plain filename the store can own."""
-    if not us.is_valid_slug(slug):
-        raise InvalidSlug(slug)
+# A slug that is not a plain filename (`uuid_store.is_valid_slug`). Defined by the store, whose path
+# builder raises it too, so the engine's up-front refusal and the store's last line of defence are
+# one exception type.
+InvalidSlug = us.InvalidSlug
+_require_valid_slug = us.require_valid_slug
 
 
 def _require_known_type(type_):
@@ -208,8 +197,18 @@ def _commit_store(proj, scope, entries, bodies):
         text = local.read_text(encoding="utf-8")
     except OSError:
         text = ""
+    _warn_dropped_invalid_pointers(local, text)
     changed |= us.write_if_changed(local, us.upsert_pointer_block(text, scope or "", pointers))
     return changed
+
+
+def _warn_dropped_invalid_pointers(local, text):
+    """Name, on stderr, each pointer line the canonical re-render about to happen will drop because
+    its slug or legacy uuid is not a plain store name. The parser already refuses to follow such a
+    line; this keeps its removal from being silent."""
+    for raw in us.invalid_pointer_lines(text):
+        print("memory_engine: dropping a pointer whose slug is not a plain filename (%s): %s"
+              % (local, raw), file=sys.stderr)
 
 
 def _framed_body(slug, hook, type_, body):
@@ -463,7 +462,7 @@ def _archive_legacy_body(anchor, entry):
         if old.is_file():
             dest = us.central_facts_dir(anchor).parent / ".archive"
             dest.mkdir(parents=True, exist_ok=True)
-            old.rename(dest / old.name)
+            old.rename(us.free_archive_path(dest, old.name))
     except OSError:
         pass
 
@@ -967,8 +966,10 @@ def heal(proj):
     """Self-heal the WHOLE altitude chain for `proj`: (re)create any missing `CLAUDE.md`,
     `CLAUDE.local.md`, or managed pointer block, NORMALIZE a malformed SCOPE/pointer block to canonical.
     A pointer whose central body is missing is REPORTED (never fabricated). Idempotent, mtime-neutral,
-    FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)], 'levels': n}."""
-    report = {"healed": [], "orphans": [], "levels": 0}
+    A pointer whose slug is not a plain filename is dropped by that normalisation and REPORTED.
+    FAIL-OPEN (never raises). Returns {'healed': [paths], 'orphans': [(level, slug)],
+    'invalid_pointers': [(level, line)], 'levels': n}."""
+    report = {"healed": [], "orphans": [], "invalid_pointers": [], "levels": 0}
     try:
         levels = sig.altitude_chain(proj)            # level dirs, narrowest -> the tree's anchor
     except Exception:                                # noqa: BLE001 - self-heal must never raise
@@ -977,6 +978,11 @@ def heal(proj):
         report["levels"] += 1
         level = str(level)
         try:
+            try:
+                before = sig.claude_local_md_path(level).read_text(encoding="utf-8")
+            except OSError:
+                before = ""
+            report["invalid_pointers"].extend((level, raw) for raw in us.invalid_pointer_lines(before))
             if _level_needs_heal(level):             # skip-fast: healthy level = no lock, no write
                 _heal_level(level, report)
             anchor = _anchor(level)
@@ -1044,6 +1050,9 @@ def relocate_entry(from_level, to_level, slug, force=False):
     REFUSES, before writing anything, when the target tree already holds a body under this slug that
     differs from the one being moved (whichever level owns it, or none): slugs are tree-unique, so
     that body is a different fact. An identical body is an interrupted relocate and is completed.
+    It also refuses when any level of the target tree OTHER than the target level already points at
+    the slug: that level owns it, whatever its body. The archived source body never replaces an
+    earlier archived body of the same slug.
     Returns {"slug","from","to","cross_tree","relocated","refused","warnings"}.
     """
     rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
@@ -1078,6 +1087,16 @@ def relocate_entry(from_level, to_level, slug, force=False):
     if dst_entry is not None and (dst_entry.title, dst_entry.hook) != (entry.title, entry.hook):
         rep["refused"] = ("target tree already has slug %r with a DIFFERENT hook - relocating would "
                           "overwrite that fact; dedup deliberately or rename one first" % slug)
+        return rep
+    # A pointer at ANY OTHER level of the target tree means the slug is already owned there - with
+    # an identical body the move would leave it pointed at from two levels, and with a missing body
+    # it would silently re-bind that level's pointer to a body it never had. An interrupted relocate
+    # leaves its pointer only at the target level itself, which the check above already admits.
+    owner = _other_level_pointing_in(a_to, dst, slug)
+    if owner is not None:
+        rep["refused"] = ("target tree already points at slug %r from %s - relocating would leave it "
+                          "owned twice or re-bind that pointer; dedup deliberately or rename one "
+                          "first" % (slug, owner))
         return rep
 
     # The body FILE is the tree-wide slug registry, so it is the check that sees an owner at ANY level
@@ -1129,7 +1148,7 @@ def relocate_entry(from_level, to_level, slug, force=False):
             archive = us.central_facts_dir(a_from).parent / ".archive"
             archive.mkdir(parents=True, exist_ok=True)
             if src_body.is_file():
-                src_body.replace(archive / (slug + ".md"))
+                src_body.rename(us.free_archive_path(archive, slug + ".md"))
         except OSError as exc:
             rep["warnings"].append("source body left in place (archive failed: %s)" % exc)
     else:
@@ -1311,7 +1330,7 @@ def rename_entry(level, slug, to_slug):
         if src_body.is_file():
             archive = us.central_facts_dir(anchor).parent / ".archive"
             archive.mkdir(parents=True, exist_ok=True)
-            src_body.replace(archive / (slug + ".md"))
+            src_body.rename(us.free_archive_path(archive, slug + ".md"))
     except OSError as exc:
         rep["warnings"].append("old body left in place (archive failed: %s)" % exc)
     rep["renamed"] = True
@@ -1407,6 +1426,19 @@ def retitle_entry(level, slug, to_title):
     return rep
 
 
+def _other_level_pointing_in(anchor, level, slug):
+    """The first curated level under `anchor`, other than `level`, carrying a pointer for `slug`; None
+    when there is none."""
+    here = Path(level).resolve()
+    for lvl in curated_levels_under(anchor):
+        if Path(lvl).resolve() == here:
+            continue
+        _s, entries, _b = read_store(lvl)
+        if any(e.slug == slug for e in entries):
+            return lvl
+    return None
+
+
 def _other_levels_pointing_in(anchor, slug):
     """True when any curated level under `anchor` still carries a pointer for `slug`."""
     for lvl in curated_levels_under(anchor):
@@ -1456,10 +1488,16 @@ def lint_tree(anchor):
     (the write path refuses one, so any that exist are hand-edited or legacy), hooks missing a
     trigger phrase (never fire during
     reasoning), and bodies missing the `**Why:**`/`**How to apply:**` frame. Advisory: a tracked
-    backlog number, never a failure. Returns a report dict."""
+    backlog number, never a failure. Also lists pointer lines whose slug is not a plain filename
+    (`invalid_pointers`): the parser skips them and the next write drops them. Returns a report dict."""
     anchor = _anchor(str(anchor))
-    over_cap, no_trigger, unframed = [], [], []
+    over_cap, no_trigger, unframed, invalid = [], [], [], []
     for lvl in curated_levels_under(anchor):
+        try:
+            text = sig.claude_local_md_path(lvl).read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        invalid.extend((lvl, raw) for raw in us.invalid_pointer_lines(text))
         _scope, entries, bodies = read_store(lvl)
         for e in entries:
             if len(e.hook or "") > us.HOOK_HARD_MAX:
@@ -1468,7 +1506,8 @@ def lint_tree(anchor):
                 no_trigger.append((lvl, e.slug))
             if _body_unframed(bodies.get(e.slug, "")):
                 unframed.append((lvl, e.slug))
-    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger, "unframed": unframed}
+    return {"anchor": str(anchor), "over_cap": over_cap, "no_trigger": no_trigger, "unframed": unframed,
+            "invalid_pointers": invalid}
 
 
 # ---- multi-tree: whole-machine discovery + scaffolding -------------------------------------------
@@ -1688,6 +1727,9 @@ def main(argv=None):
             print("    ~ hook missing trigger: %s [%s]" % (slug, lvl))
         for lvl, slug in rep["unframed"]:
             print("    ~ body missing **Why:**/**How to apply:** frame: %s [%s]" % (slug, lvl))
+        for lvl, raw in rep["invalid_pointers"]:
+            print("    ! pointer whose slug is not a plain filename (skipped, dropped on the next "
+                  "write): %s [%s]" % (raw, lvl))
         print("TOTAL over-cap hooks: %d | trigger-less hooks: %d | unframed bodies: %d (advisory)"
               % (len(rep["over_cap"]), len(rep["no_trigger"]), len(rep["unframed"])))
         return 0
@@ -1769,6 +1811,8 @@ def main(argv=None):
             print("    ~ repaired: %s" % p)
         for level, slug in rep["orphans"]:
             print("    ! missing central body (not fabricated): %s [%s]" % (slug, level))
+        for level, raw in rep["invalid_pointers"]:
+            print("    ! dropped a pointer whose slug is not a plain filename: %s [%s]" % (raw, level))
         return 0
 
     if args.cmd == "add":

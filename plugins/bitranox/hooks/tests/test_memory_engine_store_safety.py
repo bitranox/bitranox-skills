@@ -150,8 +150,11 @@ def test_cli_add_refuses_a_traversal_slug_with_exit_one(tmp_path, capsys):
 
 
 def _plant_pointer(level, slug):
-    """A pointer line with a hostile target, as an older engine could have written it."""
-    us.add_pointer(level, slug=slug, title="t", hook="When x, do y")
+    """A pointer line with a hostile target, as an older engine or a hand edit could have written it.
+    Planted as TEXT: the store's own writer now refuses such a slug."""
+    local = sig.claude_local_md_path(level)
+    local.write_text("%s\n## Memory index\n- [t](mem:%s) - When x, do y\n%s\n"
+                     % (us.INDEX_BEGIN, slug, us.INDEX_END), encoding="utf-8")
 
 
 def test_amend_pinned_refuses_a_traversal_slug_even_when_a_pointer_names_it(tmp_path):
@@ -312,3 +315,191 @@ def test_duplicate_slug_in_two_blocks_updates_the_copy_everyone_reads(tmp_path):
     assert [(r.slug, r.hook) for r in us.resolve(sub)][0] == ("feedback-x", "When NEW, do NEW")
     text = sig.claude_local_md_path(sub).read_text(encoding="utf-8")
     assert text.count("feedback-x") == 1
+
+
+# ---- a legacy copy that PRECEDES the migrated copy must not win ---------------------------------
+# One slug, two lines: an unmigrated `uuid:` line ahead of the migrated `mem:` line. Reading the
+# legacy one made a hook-only update rewrite facts/<slug>.md from the stale legacy body - or from
+# nothing at all once that body had been archived.
+
+_LEGACY_UUID = "11111111-2222-3333-4444-555555555555"
+
+
+def _legacy_first(sub, slug_title="Fact X"):
+    local = sig.claude_local_md_path(sub)
+    legacy = ("%s\n- [%s](uuid:%s) - When x, do x (old)\n%s\n\n"
+              % (us.LEGACY_INDEX_BEGIN, slug_title, _LEGACY_UUID, us.LEGACY_INDEX_END))
+    local.write_text(legacy + local.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def test_hook_only_update_keeps_the_migrated_body_when_the_legacy_body_is_gone(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Fact X", "When x, do x", body="MIGRATED BODY v2", slug="fact-x")
+    _legacy_first(sub)
+    E.add_or_update_entry(sub, "Fact X", "When x, do x NEW HOOK", slug="fact-x")
+    body = _body(top, "fact-x")
+    assert "MIGRATED BODY v2" in body, repr(body)
+    assert "description: When x, do x NEW HOOK" in body
+
+
+def test_hook_only_update_keeps_the_migrated_body_over_an_older_legacy_body(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Fact X", "When x, do x", body="MIGRATED NEWER", slug="fact-x")
+    lp = us.legacy_body_path(top, _LEGACY_UUID)
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    lp.write_text("LEGACY OLDER\n", encoding="utf-8")
+    _legacy_first(sub)
+    E.add_or_update_entry(sub, "Fact X", "When x, do x v3", slug="fact-x")
+    assert "MIGRATED NEWER" in _body(top, "fact-x")
+    assert "LEGACY OLDER" not in _body(top, "fact-x")
+
+
+def test_resolve_reads_the_migrated_copy_when_a_bodiless_legacy_copy_precedes_it(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Fact X", "When x, do x", body="MIGRATED BODY", slug="fact-x")
+    _legacy_first(sub)
+    got = [(r.slug, "MIGRATED BODY" in r.body) for r in us.resolve(sub)]
+    assert got == [("fact-x", True)]
+
+
+# ---- a pointer whose slug is not a plain filename is never followed by ANY write ---------------
+# 7fc9590 guarded relocate only. A planted `mem:../../../../evil` line made an UNRELATED add at the
+# same level write evil.md outside the tree, and `mem:../../notes` rewrote a sibling file.
+
+def _plant_line(level, line):
+    local = sig.claude_local_md_path(level)
+    text = local.read_text(encoding="utf-8")
+    assert text.count(us.INDEX_END) == 1
+    local.write_text(text.replace(us.INDEX_END, line + "\n" + us.INDEX_END), encoding="utf-8")
+
+
+def test_an_unrelated_add_never_writes_through_a_planted_traversal_pointer(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL")
+    _plant_line(sub, "- [Evil](mem:../../../evil) - When e, do e")
+    E.add_or_update_entry(sub, "Other", "When o, do o", body="OTHER")
+    assert not (tmp_path / "evil.md").exists() and not list(tmp_path.rglob("evil.md"))
+    assert sorted(_slugs(sub)) == ["other", "real"]
+
+
+def test_an_unrelated_add_never_rewrites_a_sibling_file_named_by_a_pointer(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    victim = Path(top) / "notes.md"
+    victim.write_bytes(b"precious caf\xe9 notes\n")
+    E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL")
+    _plant_line(sub, "- [N](mem:../../notes) - When n, do n")
+    E.add_or_update_entry(sub, "Other", "When o, do o", body="OTHER")
+    assert victim.read_bytes() == b"precious caf\xe9 notes\n"
+
+
+def test_a_legacy_pointer_with_a_traversal_slug_or_uuid_is_never_followed(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    outside = tmp_path / "outside.md"
+    outside.write_text("OUTSIDE\n", encoding="utf-8")
+    E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL")
+    _plant_line(sub, "- [L](uuid:%s) - When l, do l <!-- bx:slug=../../../outside -->" % _LEGACY_UUID)
+    _plant_line(sub, "- [M](uuid:../../outside) - When m, do m")
+    E.add_or_update_entry(sub, "Other", "When o, do o", body="OTHER")
+    E.add_or_update_entry(sub, "M", "When m, do m v2", slug="m", body="M BODY")
+    assert outside.read_text(encoding="utf-8") == "OUTSIDE\n"
+    assert not (Path(top) / us.STORE_DIRNAME / ".archive" / "outside.md").exists()
+
+
+def test_the_store_path_builders_refuse_what_is_not_a_plain_name(tmp_path):
+    with pytest.raises(E.InvalidSlug):
+        us.body_path(tmp_path, "../../evil")
+    with pytest.raises(ValueError):
+        us.legacy_body_path(tmp_path, "../../../../evil")
+    with pytest.raises(E.InvalidSlug):
+        us.put_body(tmp_path, "../x", "b")
+    with pytest.raises(E.InvalidSlug):
+        us.add_pointer(str(tmp_path), "../x", "t", "When x, do y")
+    assert not list(tmp_path.rglob("*.md"))
+
+
+def test_an_invalid_pointer_is_skipped_on_read_and_flagged(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL")
+    bad = "- [Evil](mem:../../../evil) - When e, do e"
+    _plant_line(sub, bad)
+    text = sig.claude_local_md_path(sub).read_text(encoding="utf-8")
+    assert [p.slug for p in us.parse_pointer_index(text)[1]] == ["real"]
+    assert us.invalid_pointer_lines(text) == [bad]
+    assert [e.slug for e in E.read_store(sub)[1]] == ["real"]
+    assert [r.slug for r in us.resolve(sub)] == ["real"]
+    assert E.lint_tree(top)["invalid_pointers"] == [(sub, bad)]
+    rep = E.heal(sub)
+    assert (sub, bad) in rep["invalid_pointers"]
+
+
+def test_control_valid_pointers_are_not_flagged(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    E.add_or_update_entry(sub, "Real", "When r, do r", body="REAL", slug="real-1.2")
+    text = sig.claude_local_md_path(sub).read_text(encoding="utf-8")
+    assert us.invalid_pointer_lines(text) == []
+    assert E.lint_tree(top)["invalid_pointers"] == []
+
+
+# ---- relocate: the target TREE must not already point at the slug from another level ------------
+
+def test_relocate_refuses_when_another_target_level_points_at_an_identical_body(tmp_path):
+    a, asub = _tree(tmp_path, "t3a")
+    b, bsub = _tree(tmp_path, "t3b")
+    E.add_or_update_entry(b, "Dup", "When B-root, do b", body="SAME", slug="dup")
+    E.add_or_update_entry(asub, "Dup", "When A, do a", body="SAME", slug="dup")
+    us.body_path(a, "dup").write_text(_body(b, "dup"), encoding="utf-8")   # byte-identical bodies
+    rep = E.relocate_entry(asub, bsub, "dup")
+    assert rep["relocated"] is False and rep["refused"], rep
+    assert _slugs(b) == ["dup"] and _slugs(bsub) == []
+    assert _slugs(asub) == ["dup"]
+
+
+def test_relocate_refuses_to_rebind_another_target_levels_bodiless_pointer(tmp_path):
+    a, asub = _tree(tmp_path, "t4a")
+    b, bsub = _tree(tmp_path, "t4b")
+    E.add_or_update_entry(b, "Ghost", "When ghost, B's own rule", body="B BODY", slug="ghost")
+    us.body_path(b, "ghost").unlink()
+    E.add_or_update_entry(asub, "Ghost", "When A, other rule", body="A BODY", slug="ghost")
+    rep = E.relocate_entry(asub, bsub, "ghost")
+    assert rep["relocated"] is False and rep["refused"], rep
+    assert not us.body_path(b, "ghost").exists()
+    assert _slugs(asub) == ["ghost"] and _slugs(bsub) == []
+
+
+# ---- archiving never overwrites an earlier archived body of the same slug -----------------------
+
+def _archive_dir(anchor):
+    return Path(anchor) / us.STORE_DIRNAME / ".archive"
+
+
+def test_relocate_archives_beside_an_earlier_archived_body_of_the_same_slug(tmp_path):
+    a, asub = _tree(tmp_path, "t5a")
+    b, bsub = _tree(tmp_path, "t5b")
+    arch = _archive_dir(a)
+    arch.mkdir(parents=True)
+    (arch / "keep.md").write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")
+    E.add_or_update_entry(asub, "Keep", "When k, do k", body="LIVE", slug="keep")
+    rep = E.relocate_entry(asub, bsub, "keep")
+    assert rep["relocated"] is True, rep
+    assert (arch / "keep.md").read_text(encoding="utf-8") == "EARLIER ARCHIVED FACT\n"
+    assert any("LIVE" in p.read_text(encoding="utf-8") for p in arch.iterdir() if p.name != "keep.md")
+
+
+def test_rename_archives_beside_an_earlier_archived_body_of_the_same_slug(tmp_path):
+    top, sub = _tree(tmp_path, "tree")
+    arch = _archive_dir(top)
+    arch.mkdir(parents=True)
+    (arch / "keep.md").write_text("EARLIER ARCHIVED FACT\n", encoding="utf-8")
+    E.add_or_update_entry(sub, "Keep", "When k, do k", body="LIVE", slug="keep")
+    rep = E.rename_entry(sub, "keep", "kept")
+    assert rep["renamed"] is True, rep
+    assert (arch / "keep.md").read_text(encoding="utf-8") == "EARLIER ARCHIVED FACT\n"
+    assert any("LIVE" in p.read_text(encoding="utf-8") for p in arch.iterdir() if p.name != "keep.md")
+
+
+def test_archive_to_a_free_name_picks_the_plain_name_when_free(tmp_path):
+    # CONTROL: the first archive of a slug keeps the plain `<slug>.md` name.
+    assert us.free_archive_path(tmp_path, "keep.md") == tmp_path / "keep.md"
+    (tmp_path / "keep.md").write_text("x", encoding="utf-8")
+    second = us.free_archive_path(tmp_path, "keep.md")
+    assert second != tmp_path / "keep.md" and not second.exists() and second.suffix == ".md"

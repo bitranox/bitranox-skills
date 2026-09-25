@@ -310,6 +310,17 @@ def _other_levels_pointing(anchor, level_dir, slug):
     return False
 
 
+def _names_invalid_pointer(level_dir, slug):
+    """True when `level_dir`'s pointer block carries a line for `slug` that the parser skips because
+    the slug (or legacy uuid) is not a plain store name."""
+    try:
+        text = (Path(level_dir) / "CLAUDE.local.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    needles = ("](mem:%s)" % slug, "](uuid:%s)" % slug, "bx:slug=%s " % slug)
+    return any(n in raw + " " for raw in us.invalid_pointer_lines(text) for n in needles)
+
+
 def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
     """Forget a fact: drop its pointer line and move its central body to `<anchor>/.claude-memory/
     <archive_subdir>/`. With `dry_run`, report whether an entry WOULD be removed but write nothing.
@@ -319,17 +330,18 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
     qcanon = _canon(slug)
     kept = [e for e in entries if _canon(e.slug) != qcanon]
     if len(kept) == len(entries):
-        return False
+        # A hand-damaged pointer (`mem:../../CLAUDE`) is never parsed into an entry, so it owns no
+        # body; forgetting it means dropping the line, which the canonical re-render below does.
+        if not _names_invalid_pointer(d, slug):
+            return False
+        if not dry_run:
+            ME._commit_store(str(d), scope, entries, bodies)
+        return True
     if dry_run:                                  # a dry run reports the outcome and writes NOTHING
         return True
     anchor = ME._anchor(str(d))
     for e in entries:
         if _canon(e.slug) == qcanon:
-            # The key comes from a POINTER line, which a hand edit can damage: `mem:../../CLAUDE`
-            # names the tree's CLAUDE.md, not a body. Such a pointer owns no body - it is dropped
-            # below and no file is touched.
-            if not us.is_valid_slug(e.uuid if e.legacy else e.slug):
-                continue
             src = us.legacy_body_path(anchor, e.uuid) if e.legacy else us.body_path(anchor, e.slug)
             # archive the body ONLY when no other level in the tree still points at this slug
             others = _other_levels_pointing(anchor, d, e.slug)
@@ -337,7 +349,8 @@ def archive_entry(level_dir, slug, archive_subdir=".archive", dry_run=False):
                 archive = us.central_facts_dir(anchor).parent / archive_subdir
                 try:
                     archive.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(src), str(archive / (src.name)))
+                    # an archive is the only copy of a retired fact: never move onto an earlier one
+                    shutil.move(str(src), str(us.free_archive_path(archive, src.name)))
                 except OSError:
                     pass
     ME._commit_store(str(d), scope, kept, {e.slug: bodies.get(e.slug, "") for e in kept})

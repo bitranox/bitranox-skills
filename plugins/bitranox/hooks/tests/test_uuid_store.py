@@ -559,3 +559,20 @@ def test_control_a_name_that_merely_contains_a_device_name_is_valid(slug):
 def test_slugify_never_produces_a_windows_device_name(title):
     assert us.is_valid_slug(us.slugify(title)), us.slugify(title)
     assert us.slugify(title, "feedback") == "feedback-" + title.lower()
+
+
+def test_parse_prefers_a_migrated_copy_that_follows_a_legacy_one():
+    legacy = ("%s\n- [X](uuid:1234) - When stale, do stale <!-- bx:pin bx:slug=feedback-x -->\n%s"
+              % (us.LEGACY_INDEX_BEGIN, us.LEGACY_INDEX_END))
+    new_block = "%s\n%s%s" % (us.INDEX_BEGIN, us.render_pointer_index(
+        "s", [us.Pointer(slug="feedback-x", title="X", hook="When new, do new")]), us.INDEX_END)
+    _s, ptrs = us.parse_pointer_index(legacy + "\n\n" + new_block + "\n")
+    assert [(p.slug, p.hook, p.legacy, p.pin) for p in ptrs] == [
+        ("feedback-x", "When new, do new", False, True)]       # the pin is carried over the swap
+
+
+def test_parse_keeps_the_first_of_two_legacy_copies():
+    # CONTROL: between copies of the same kind the first still wins.
+    text = ("- [X](uuid:1111) - When one <!-- bx:slug=x -->\n"
+            "- [X](uuid:2222) - When two <!-- bx:slug=x -->\n")
+    assert [(p.uuid, p.hook) for p in us.parse_pointer_index(text)[1]] == [("1111", "When one")]

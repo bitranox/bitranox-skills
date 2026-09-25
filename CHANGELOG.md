@@ -29,6 +29,27 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.23.1]
+
+### Fixed
+
+- A hook-only `add` no longer rewrites a migrated fact from a stale legacy copy. When one slug had
+  both an unmigrated `uuid:` line and its migrated `mem:` line, and the legacy line came first, the
+  update read the legacy body and wrote it over the migrated one, or wrote an empty body once the
+  legacy file had been archived; `resolve` also stopped returning that fact. The migrated copy now
+  wins over a legacy one wherever it sits; between two copies of the same kind the first still wins.
+- A pointer line whose slug or legacy uuid is not a plain filename can no longer make any write
+  leave the store. A planted `mem:../../../evil` line made an unrelated `add` at the same level
+  write `evil.md` outside the tree. The body path builders now refuse such a name, the pointer
+  writer refuses one, and the parser skips the line. `lint --tree` and `heal` list what was skipped,
+  and a write that drops such a line says so on stderr.
+- `relocate` refuses when another level of the target tree already points at the slug. With an
+  identical body it used to leave the slug pointed at from two levels. With a missing body it
+  quietly re-bound that level's pointer to the relocated body.
+- Archiving a body no longer overwrites an earlier archived body of the same slug. `relocate`,
+  `rename`, the legacy-flip on update and reconcile's `archive_entry` now archive to a free name
+  (`<slug>~2.md`, `<slug>~3.md`, ...).
+
 ## [7.23.0]
 
 ### Added

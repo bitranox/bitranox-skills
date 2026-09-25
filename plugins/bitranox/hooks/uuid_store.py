@@ -77,6 +77,31 @@ def is_valid_slug(slug):
     return (isinstance(slug, str) and _SLUG_RX.fullmatch(slug) is not None
             and _WINDOWS_DEVICE_RX.fullmatch(slug.split(".", 1)[0]) is None)
 
+
+class InvalidSlug(ValueError):
+    """Raised when a slug is not a plain filename (`is_valid_slug`). The slug becomes
+    `facts/<slug>.md`, so an unchecked `../../CLAUDE` rewrites the tree's CLAUDE.md and `../../../x`
+    writes outside the tree altogether. Raised by the path builder itself, so no write path - however
+    it came by the slug - can reach a file outside the store."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%r is not a valid slug - use lowercase letters, digits, hyphens and dots, "
+                         "starting and ending with a letter or digit (no path separators)" % (slug,))
+
+
+def require_valid_slug(slug):
+    """Raise `InvalidSlug` unless `slug` is a plain filename the store can own."""
+    if not is_valid_slug(slug):
+        raise InvalidSlug(slug)
+
+
+def is_valid_legacy_uuid(value):
+    """True when a pre-pivot pointer's target may build a body path. That target is normally
+    `str(uuid5(...))`; its first two characters name a shard DIRECTORY and the whole names the file,
+    so it must be a plain name by the same rule as a slug - a `..` or a path walks out of `facts/`."""
+    return is_valid_slug(value)
+
 INDEX_BEGIN = "<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
 INDEX_END = "<!-- BITRANOX-MEMORY-INDEX:END -->"
 # Pre-pivot fence names: still parsed (and replaced on upsert) until every live block is migrated.
@@ -199,14 +224,35 @@ def central_facts_dir(anchor_dir):
 
 
 def body_path(anchor_dir, slug):
-    """Absolute path of a fact body in the central store: `.../facts/<slug>.md` (flat, slug-keyed)."""
-    return central_facts_dir(anchor_dir) / (str(slug) + ".md")
+    """Absolute path of a fact body in the central store: `.../facts/<slug>.md` (flat, slug-keyed).
+    Raises `InvalidSlug` for a slug that is not a plain filename: every read and write of a body goes
+    through here, so this is the one place that can guarantee none of them leaves `facts/`."""
+    require_valid_slug(slug)
+    return central_facts_dir(anchor_dir) / (slug + ".md")
 
 
 def legacy_body_path(anchor_dir, fact_uuid_str):
     """Pre-pivot body location (`.../facts/<2-hex>/<uuid>.md`) - read-only during the transition;
-    `migrate_to_slug_store.py` moves these to the slug-named path."""
-    return central_facts_dir(anchor_dir) / shard(fact_uuid_str) / (str(fact_uuid_str) + ".md")
+    `migrate_to_slug_store.py` moves these to the slug-named path. Raises ValueError for a value that
+    is not a plain name (the mover would otherwise archive whatever file a `uuid:..` target names)."""
+    if not is_valid_legacy_uuid(fact_uuid_str):
+        raise ValueError("%r is not a plain legacy fact uuid" % (fact_uuid_str,))
+    return central_facts_dir(anchor_dir) / shard(fact_uuid_str) / (fact_uuid_str + ".md")
+
+
+def free_archive_path(archive_dir, name):
+    """The first path in `archive_dir` that holds no file: `name`, else `<stem>~2<suffix>`,
+    `<stem>~3<suffix>`, ... An archive is the only copy of a retired fact, so moving a second fact of
+    the same slug onto the first would destroy it; `~` is not a slug character, so these names can
+    never collide with another slug's plain archive name."""
+    archive_dir = Path(archive_dir)
+    candidate = archive_dir / name
+    stem, suffix = os.path.splitext(name)
+    n = 2
+    while candidate.exists():
+        candidate = archive_dir / ("%s~%d%s" % (stem, n, suffix))
+        n += 1
+    return candidate
 
 
 # ---- anchor resolution from cwd -----------------------------------------------------------------
@@ -332,31 +378,62 @@ def parse_pointer_index(text):
     it into the block on every write while the original stays behind, so the index grows by one line
     per write. Text with no managed block (a bare rendered block, a snippet) is read whole.
 
-    One slug yields ONE pointer: the FIRST occurrence wins, which is the one `resolve` reads. A
-    duplicate within one file (a migrated block beside a legacy ghost block) otherwise lets a writer
-    update the later copy while every reader keeps seeing the earlier, stale one."""
+    One slug yields ONE pointer, so a writer updates the copy every reader sees. A migrated `mem:`
+    copy beats a legacy `uuid:` copy wherever they sit: a legacy ghost block left AHEAD of the
+    migrated one would otherwise hand an update the stale (or already archived) legacy body, and it
+    would be written over the migrated fact. Between two copies of the same kind the FIRST wins.
+
+    A pointer whose slug is not a plain filename (`is_valid_slug`), or a legacy one whose target is
+    not a plain name, is SKIPPED: its body path would leave `facts/`, so no reader or writer may see it.
+    `invalid_pointer_lines` lists what was skipped, so the verbs that rewrite the block can say so."""
     text = text or ""
     scope = sig.read_scope_block(text) or ""
-    spans = _managed_spans(text)
-    region = "\n".join(text[b:e] for b, e in spans) if spans else text
-    pointers, seen = [], set()
-    for raw in region.splitlines():
-        m = _PTR_RX.match(raw)
-        if not m:
+    pointers, index = [], {}
+    for raw in _pointer_region(text).splitlines():
+        p = _pointer_from_line(raw)
+        if p is None:
             continue
-        pin, slug_tok = _parse_meta(m.group("meta"))
-        title = m.group("title")
-        hook = m.group("hook").strip()
-        if m.group("scheme") == "mem":
-            p = Pointer(slug=m.group("target"), title=title, hook=hook, pin=pin)
-        else:
-            p = Pointer(slug=slug_tok or _slug_from_title(title), title=title,
-                        hook=hook, pin=pin, uuid=m.group("target"), legacy=True)
-        if p.slug in seen:
-            continue
-        seen.add(p.slug)
-        pointers.append(p)
+        at = index.get(p.slug)
+        if at is None:
+            index[p.slug] = len(pointers)
+            pointers.append(p)
+        elif pointers[at].legacy and not p.legacy:
+            p.pin = p.pin or pointers[at].pin        # a pin is never lost to the swap
+            pointers[at] = p                         # the migrated copy replaces the legacy ghost
     return scope, pointers
+
+
+def invalid_pointer_lines(text):
+    """The pointer-shaped lines `parse_pointer_index` skips because their slug or legacy uuid would
+    build a path outside `facts/`, in file order. A canonical re-render drops them, so a caller that
+    rewrites the block reports these rather than letting them vanish unremarked."""
+    return [raw for raw in _pointer_region(text or "").splitlines()
+            if _PTR_RX.match(raw) and _pointer_from_line(raw) is None]
+
+
+def _pointer_region(text):
+    """The text pointers are read from: the managed block(s) when present, else the whole text."""
+    spans = _managed_spans(text)
+    return "\n".join(text[b:e] for b, e in spans) if spans else text
+
+
+def _pointer_from_line(raw):
+    """A Pointer for one pointer line, or None when the line is not a pointer or names a path that
+    is not a plain store file."""
+    m = _PTR_RX.match(raw)
+    if not m:
+        return None
+    pin, slug_tok = _parse_meta(m.group("meta"))
+    title = m.group("title")
+    hook = m.group("hook").strip()
+    if m.group("scheme") == "mem":
+        p = Pointer(slug=m.group("target"), title=title, hook=hook, pin=pin)
+    else:
+        p = Pointer(slug=slug_tok or _slug_from_title(title), title=title,
+                    hook=hook, pin=pin, uuid=m.group("target"), legacy=True)
+        if not is_valid_legacy_uuid(p.uuid):
+            return None
+    return p if is_valid_slug(p.slug) else None
 
 
 def _index_block(scope, pointers):
@@ -433,8 +510,9 @@ def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     (merging pin on update), under a lock, mtime-neutral. Sets the scope
     descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
     responsible for having written the slug-named body). Does NOT write the body - the caller does,
-    via `put_body`. Returns the slug."""
-    slug = str(slug)
+    via `put_body`. Returns the slug. Raises `InvalidSlug` before writing for a slug that is not a
+    plain filename."""
+    require_valid_slug(slug)
     local = sig.claude_local_md_path(altitude_dir)
     with sig.memory_lock(local):
         try:
