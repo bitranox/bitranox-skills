@@ -140,11 +140,15 @@ def test_empty_string():
 # ---- CLI behaviour: --check ------------------------------------------------
 
 def _run(args, stdin=None):
+    # The script's stdin and stdout are UTF-8 whatever the locale, so the test must encode and
+    # decode UTF-8 too: text=True alone uses the locale codec, cp1252 on a Windows runner.
     return subprocess.run(
         [sys.executable, SCRIPT_PATH] + args,
         input=stdin,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 

@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.9]
+
+### Fixed
+
+- The `strip_typographic_tells.py` stdin tests encode and decode UTF-8 explicitly, matching the
+  script's UTF-8 stdin; under a non-UTF-8 locale (the Windows runner's cp1252) they had sent the
+  input in the locale's codec.
+
 ## [7.22.8]
 
 ### Fixed
