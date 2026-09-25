@@ -1,5 +1,6 @@
 """Tests for jig_probe.py - the offline question 'would Jev have pointed at a jig here?'. ASCII."""
 import json
+import os
 
 import pytest
 
@@ -386,13 +387,20 @@ def test_an_empty_corpus_is_nothing_to_report_and_costs_nothing(tmp_path, fake_a
     assert asked == []
 
 
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="a mode-000 file is readable to root and not enforced on Windows")
 def test_an_unreadable_transcript_is_forwarded_as_skipped(tmp_path, capsys):
+    # A real unreadable FILE: guard_replay walks with os.walk, so a directory named like a
+    # transcript is a directory, not a transcript that failed to read.
     root = tmp_path / "projects"
     _transcript(root / "p" / "ok.jsonl", [("Bash", {"command": "ls"})])
     bad = root / "p" / "bad.jsonl"
-    bad.mkdir()  # a directory named like a transcript: reading it fails on every platform
-    (bad / "inner.txt").write_text("x", encoding="utf-8")
-    rc = jp.main(["size", "--root", str(root), "--json"])
+    bad.write_text("{}\n", encoding="utf-8")
+    bad.chmod(0)
+    try:
+        rc = jp.main(["size", "--root", str(root), "--json"])
+    finally:
+        bad.chmod(0o600)
     env = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert any("bad.jsonl" in item for item in env["skipped"])
