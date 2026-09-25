@@ -423,3 +423,336 @@ def test_a_field_override_reaches_the_replay(tmp_path):
     (tmp_path / "s.jsonl").write_text(_mk([_use_edit("t1", "body", cwd="/srv/p")]), encoding="utf-8")
     report = G.replay(str(tmp_path), lambda cmd: cmd.endswith(".md"), tool="Edit", field="file_path")
     assert report["fires"] == 1
+
+
+# ==== CLI contract, malformed records, predicate crashes (rank-10 skill-script audit) ============
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(G.__file__).resolve()
+
+
+def _module(tmp_path, body, name="g.py"):
+    mod = tmp_path / name
+    mod.write_text(body, encoding="utf-8")
+    return str(mod)
+
+
+FIRE_ON_FIRE = "def notice(command):\n    return 'fire' in command\n"
+
+
+def _corpus(tmp_path, recs, name="c.jsonl"):
+    p = tmp_path / name
+    p.write_text(_mk(recs), encoding="utf-8")
+    return str(p)
+
+
+def _run(args, env_extra=None):
+    """The script as a real process, so the exit code and stream encoding are the shipped ones."""
+    env = dict(os.environ)
+    env.pop("PYTHONIOENCODING", None)
+    env.pop("PYTHONUTF8", None)
+    env.update(env_extra or {})
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, env=env)
+
+
+# --- a record whose message or input is not an object is skipped, not fatal ----------------------
+
+def test_a_string_message_is_skipped_and_the_rest_of_the_file_still_counts(tmp_path):
+    root = _corpus(tmp_path, [{"type": "assistant", "cwd": "/r", "message": "oops"},
+                              _use("t1", "fire")])
+    report = G.replay(root, lambda cmd: "fire" in cmd)
+    assert report["commands"] == 1 and report["fires"] == 1
+
+
+def test_a_string_input_is_skipped_and_the_rest_of_the_file_still_counts(tmp_path):
+    bad = {"type": "assistant", "cwd": "/r",
+           "message": {"content": [{"type": "tool_use", "id": "x", "name": "Bash",
+                                    "input": "oops"}]}}
+    root = _corpus(tmp_path, [bad, _use("t1", "fire")])
+    report = G.replay(root, lambda cmd: "fire" in cmd)
+    assert report["commands"] == 1 and report["fires"] == 1
+
+
+# --- the guard module is registered while it executes --------------------------------------------
+
+def test_a_dataclass_module_with_future_annotations_loads(tmp_path):
+    """`dataclasses` resolves `sys.modules[cls.__module__]` for string annotations; an unregistered
+    module dies with 'NoneType' object has no attribute '__dict__' and the guard is refused."""
+    mod = _module(tmp_path, "from __future__ import annotations\n"
+                            "from dataclasses import dataclass\n\n"
+                            "@dataclass\nclass Rule:\n    name: str\n\n"
+                            "def notice(command):\n"
+                            "    return Rule(name='a') if 'fire' in command else None\n",
+                  name="dc-guard.py")
+    fn = G.load_predicate(mod, "notice")
+    assert fn("fire").name == "a"
+
+
+def test_a_failed_import_does_not_leave_a_half_module_registered(tmp_path):
+    mod = _module(tmp_path, "raise RuntimeError('boom')\n", name="half_mod.py")
+    with pytest.raises(G.UsageError):
+        G.load_predicate(mod, "notice")
+    assert not [name for name in sys.modules if name.endswith("half_mod")]
+
+
+def test_a_guard_named_like_a_stdlib_module_does_not_replace_it(tmp_path):
+    import json as real_json
+    G.load_predicate(_module(tmp_path, FIRE_ON_FIRE, name="json.py"), "notice")
+    assert sys.modules["json"] is real_json
+
+
+# --- SystemExit in a guard is a refusal or a predicate error, never a silent exit ----------------
+
+def test_a_module_that_exits_at_import_is_a_usage_error(tmp_path, capsys):
+    mod = _module(tmp_path, "import sys\nsys.exit(0)\n", name="exits.py")
+    rc = G.main(["--module", mod, "--root", _corpus(tmp_path, [_use("t1", "fire")])])
+    assert rc == 2
+    assert "exits.py" in capsys.readouterr().err
+
+
+def test_a_predicate_that_calls_sys_exit_is_counted_as_a_predicate_error():
+    def exiting(cmd):
+        sys.exit(0)
+
+    report = G.classify([{"id": "a", "command": "x", "cwd": "/r", "error": None}], exiting)
+    assert report["predicate_errors"] == 1
+
+
+def test_a_verdict_whose_truth_test_raises_is_a_predicate_error():
+    class Bad:
+        def __bool__(self):
+            raise ValueError("no truth")
+
+    report = G.classify([{"id": "a", "command": "x", "cwd": "/r", "error": None}],
+                        lambda cmd: Bad())
+    assert report["predicate_errors"] == 1 and report["fires"] == 0
+
+
+# --- predicate crashes decide the exit code and the rate's denominator ---------------------------
+
+def test_predicate_crashes_make_the_run_not_ok(tmp_path, capsys):
+    mod = _module(tmp_path, "def notice(command):\n"
+                            "    if command == 'fire':\n        return True\n"
+                            "    raise ValueError('bad')\n")
+    root = _corpus(tmp_path, [_use("t1", "fire")] + [_use("b%d" % i, "boom") for i in range(9)])
+    rc = G.main(["--module", mod, "--root", root, "--json"])
+    cap = capsys.readouterr()
+    env = json.loads(cap.out)
+    assert rc == G.EXIT_PREDICATE_ERRORS and rc not in (0, 1, 2, 3)
+    assert env["ok"] is False
+    assert env["data"]["predicate_errors"] == 9
+    assert "9" in cap.err
+
+
+def test_the_rate_is_computed_over_the_calls_actually_judged():
+    calls = [{"id": "a", "command": "fire", "cwd": "/r", "error": None},
+             {"id": "b", "command": "boom", "cwd": "/r", "error": None}]
+
+    def pred(cmd):
+        if cmd == "boom":
+            raise ValueError
+        return True
+
+    report = G.classify(calls, pred)
+    assert report["judged"] == 1
+    assert report["fire_rate_pct"] == 100.0
+
+
+def test_a_clean_run_has_no_predicate_errors_and_exits_0(tmp_path, capsys):
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE),
+                 "--root", _corpus(tmp_path, [_use("t1", "fire"), _use("t2", "quiet")])])
+    out = capsys.readouterr().out
+    assert rc == 0 and "fires:     1" in out
+
+
+# --- usage refusals exit 2 before any walk ----------------------------------------------------------
+
+def test_an_invalid_block_pattern_is_a_usage_error_even_with_nothing_to_match(tmp_path, capsys):
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE),
+                 "--root", _corpus(tmp_path, [_use("t1", "fire")]), "--block-pattern", "("])
+    assert rc == 2
+    assert "block-pattern" in capsys.readouterr().err
+
+
+def test_an_invalid_block_pattern_with_an_errored_call_is_not_a_traceback(tmp_path, capsys):
+    root = _corpus(tmp_path, [_use("t1", "fire"), _result("t1", "boom")])
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--root", root,
+                 "--block-pattern", "(", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 2 and json.loads(cap.out)["ok"] is False
+
+
+def test_a_valid_block_pattern_is_used(tmp_path, capsys):
+    root = _corpus(tmp_path, [_use("t1", "fire"), _result("t1", "PreToolUse:Bash denied")])
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--root", root,
+                 "--block-pattern", "PreTool", "--json"])
+    assert rc == 0 and json.loads(capsys.readouterr().out)["data"]["precision_pct"] == 100.0
+
+
+@pytest.mark.parametrize("root_kind", ["missing", "empty"])
+def test_an_unknown_tool_is_refused_whatever_the_corpus(tmp_path, capsys, root_kind):
+    root = tmp_path / "nope"
+    if root_kind == "empty":
+        root.mkdir()
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--tool", "Read",
+                 "--root", str(root)])
+    assert rc == 2
+    assert "Read" in capsys.readouterr().err
+
+
+def test_a_mistyped_field_is_refused_naming_the_field(tmp_path, capsys):
+    root = _corpus(tmp_path, [_use("t1", "fire")])
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--field", "comand", "--root", root])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "comand" in err and "no Bash calls" not in err
+
+
+def test_the_correct_field_is_not_refused(tmp_path, capsys):
+    root = _corpus(tmp_path, [_use("t1", "fire")])
+    assert G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--field", "command",
+                   "--root", root]) == 0
+
+
+def test_a_field_carried_by_only_some_calls_is_not_refused(tmp_path):
+    no_field = {"type": "assistant", "cwd": "/r",
+                "message": {"content": [{"type": "tool_use", "id": "n", "name": "Bash",
+                                         "input": {"description": "x"}}]}}
+    report = G.replay(_corpus(tmp_path, [no_field, _use("t1", "fire")]), lambda c: True)
+    assert report["commands"] == 1 and report["calls_without_field"] == 1
+
+
+# --- the exit-code contract end to end --------------------------------------------------------------
+
+def test_never_fired_exits_1_and_says_so(tmp_path, capsys):
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE),
+                 "--root", _corpus(tmp_path, [_use("t1", "quiet")])])
+    assert rc == 1 and "never fired" in capsys.readouterr().err
+
+
+def test_an_empty_corpus_exits_3_and_says_so(tmp_path, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--root", str(empty), "--json"])
+    cap = capsys.readouterr()
+    assert rc == 3 and "nothing was replayed" in cap.err
+    assert json.loads(cap.out)["ok"] is False
+
+
+def test_the_json_envelope_on_success(tmp_path, capsys):
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE), "--json", "--sample", "1",
+                 "--root", _corpus(tmp_path, [_use("t1", "fire")])])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert env["ok"] is True and env["command"] == "replay" and env["skipped"] == []
+    assert env["data"]["fires"] == 1 and env["data"]["samples"][0]["command"] == "fire"
+
+
+def test_the_json_envelope_on_a_usage_error(tmp_path, capsys):
+    rc = G.main(["--module", str(tmp_path / "missing.py"), "--json"])
+    env = json.loads(capsys.readouterr().out)
+    assert rc == 2 and env["ok"] is False and env["data"] is None and env["skipped"]
+
+
+def test_the_text_render_shows_samples_and_predicate_errors(tmp_path, capsys):
+    mod = _module(tmp_path, "def notice(command):\n"
+                            "    if command == 'boom':\n        raise ValueError\n"
+                            "    return True\n")
+    G.main(["--module", mod, "--sample", "1",
+            "--root", _corpus(tmp_path, [_use("t1", "fire"), _use("t2", "boom")])])
+    out = capsys.readouterr().out
+    assert "--- sample (cwd /repo)\nfire" in out
+    assert "predicate raised on 1 command(s)" in out
+
+
+def test_an_unexpected_crash_exits_2_not_1(tmp_path, capsys, monkeypatch):
+    """1 means 'never fired'. A crash must not read as that answer. stdout is the external edge."""
+    class Broken:
+        def write(self, _):
+            raise RuntimeError("stream gone")
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stdout", Broken())
+    rc = G.main(["--module", _module(tmp_path, FIRE_ON_FIRE),
+                 "--root", _corpus(tmp_path, [_use("t1", "fire")])])
+    assert rc == 2
+    assert "stream gone" in capsys.readouterr().err
+
+
+# --- a keyword-only cwd / tool_name is forwarded by keyword ---------------------------------------
+
+def test_a_keyword_only_cwd_is_forwarded():
+    seen = []
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+
+    def notice(command, *, cwd=None):
+        seen.append(cwd)
+        return True
+
+    report = G.classify(calls, notice)
+    assert seen == ["/srv/here"] and report["fires"] == 1
+    assert report["forwarded_second_arg"] == "cwd"
+
+
+def test_a_keyword_only_tool_name_is_forwarded():
+    seen = []
+    calls = [{"id": "a", "command": "git status", "cwd": "/srv/here", "error": None}]
+
+    def notice(command, *, tool_name=None):
+        seen.append(tool_name)
+        return False
+
+    G.classify(calls, notice, tool="Edit")
+    assert seen == ["Edit"]
+
+
+# --- encoding, BOM, line separators, unreadable directories ---------------------------------------
+
+def test_non_ascii_samples_survive_a_cp1252_stdout(tmp_path):
+    root = _corpus(tmp_path, [_use("t1", "fire café \U0001f600")])
+    mod = _module(tmp_path, FIRE_ON_FIRE)
+    for extra in ([], ["--json"]):
+        proc = _run(["--module", mod, "--root", root, "--sample", "1", *extra],
+                    {"PYTHONIOENCODING": "cp1252"})
+        assert proc.returncode == 0, proc.stderr
+        assert "café" in proc.stdout.decode("utf-8")
+    proc = _run(["--module", mod, "--root", root, "--sample", "1", "--json"],
+                {"PYTHONIOENCODING": "cp1252"})
+    assert json.loads(proc.stdout.decode("utf-8"))["ok"] is True
+
+
+def test_a_bom_does_not_cost_the_first_record(tmp_path):
+    p = tmp_path / "bom.jsonl"
+    p.write_bytes(b"\xef\xbb\xbf" + _mk([_use("t1", "fire")]).encode("utf-8"))
+    assert G.replay(str(p), lambda c: True)["commands"] == 1
+
+
+def test_a_line_separator_inside_a_command_does_not_split_the_record():
+    """JSONL records are split on newline only; U+2028 and form feed are legal raw in a string."""
+    text = json.dumps(_use("t1", "echo a b\fc"), ensure_ascii=False) + "\n"
+    calls = G.extract_calls(text)
+    assert [c["command"] for c in calls] == ["echo a b\fc"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a directory unreadable")
+def test_an_unreadable_subdirectory_is_listed_as_skipped(tmp_path):
+    (tmp_path / "ok.jsonl").write_text(_mk([_use("t1", "fire")]), encoding="utf-8")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "x.jsonl").write_text(_mk([_use("t2", "fire")]), encoding="utf-8")
+    locked.chmod(0)
+    try:
+        report = G.replay(str(tmp_path), lambda c: True)
+    finally:
+        locked.chmod(0o755)
+    assert report["files_read"] == 1
+    assert any("locked" in s for s in report["skipped"]), report["skipped"]

@@ -23,7 +23,8 @@ Each call is replayed with the cwd its record carries.
 
 A predicate's SECOND argument is filled by the NAME of its second parameter, never by arity: name
 it `cwd` to receive the call's directory, or `tool_name` to receive the tool being replayed. Any
-other name is left at its default. Arity alone once handed a CWD to a `notice(command, tool_name)`
+other name is left at its default. A KEYWORD-ONLY parameter with one of those names is filled by
+keyword, so `notice(command, *, cwd=None)` is measured on the reading production gives it. Arity alone once handed a CWD to a `notice(command, tool_name)`
 hook, which did not crash - it measured a reading production never uses and reported a rate for it.
 The report's `forwarded_second_arg` states which one a run actually used.
 
@@ -44,14 +45,18 @@ Run:
   `uv run scripts/guard_replay.py --module g.py --root ~/.claude/projects --tool Bash`
 
 Exit codes: 0 it fired at least once, 1 it never fired (loud on purpose - a guard that cannot
-speak and a corpus you never really read print the same otherwise), 2 usage error, 3 nothing was
-replayed (no files, or no calls of that tool).
+speak and a corpus you never really read print the same otherwise), 2 usage error or an internal
+crash (an unknown tool, a field no call carries, a bad --block-pattern, a module that will not
+import), 3 nothing was replayed (no files, or no calls of that tool), 4 the predicate raised on at
+least one command - the run is a defect report, not a measurement, whatever it fired on.
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import importlib.util
 import inspect
+import os
 import re
 import sys
 from pathlib import Path
@@ -76,6 +81,11 @@ except ModuleNotFoundError:                              # stdlib fallback so th
 
 class UsageError(Exception):
     """A caller mistake worth naming, rather than an AttributeError from three frames deep."""
+
+
+# Distinct from 1 ("never fired") and 2 (usage): a guard that crashed on real commands has not been
+# measured, and a caller gating on 0 must not read a run that was 99 percent crashes as a pass.
+EXIT_PREDICATE_ERRORS = 4
 
 
 # What Claude Code writes into a tool_result when a PreToolUse hook refuses the call. It is the
@@ -126,6 +136,61 @@ def payload_field(tool: str) -> str:
         ) from None
 
 
+class UnreadableField(ValueError):
+    """`--field` names a key that NO call of the tool carries.
+
+    The same trap as `UnsupportedTool` one level down: a mistyped `--field comand` dropped every
+    call and exited 3 saying "found no Bash calls", which blames the corpus for a typo.
+    """
+
+
+def _records(text: str):
+    """Each JSONL record's text. Split on newline ONLY: U+2028, U+2029, form feed and the other
+    separators `str.splitlines` honours are legal raw inside a JSON string, and splitting on them
+    cuts a real command in two and drops it as unparseable."""
+    return text.split("\n")
+
+
+def _extract(text: str, tool: str, field: str):
+    """`(calls, calls_without_field)` for one transcript - see `extract_calls`."""
+    calls, errors, without_field = [], {}, 0
+    for line in _records(text):
+        if not line.strip():
+            continue
+        try:
+            rec = _loads(line)
+        except Exception:                                # noqa: BLE001 - any parse failure is a skip
+            continue
+        if not isinstance(rec, dict):
+            continue
+        cwd = rec.get("cwd")
+        message = rec.get("message")
+        # A record whose message or input is not an object is malformed, not a crash: one such
+        # line used to abort the whole replay with an AttributeError that exited 1 ("never fired").
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == tool:
+                payload = block.get("input")
+                if not isinstance(payload, dict):
+                    continue
+                command = payload.get(field)
+                if isinstance(command, str):
+                    calls.append({"id": block.get("id"), "command": command,
+                                  "cwd": cwd, "error": None})
+                else:
+                    without_field += 1
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                body = block.get("content")
+                errors[block.get("tool_use_id")] = body if isinstance(body, str) else _dumps(body)
+    for call in calls:
+        call["error"] = errors.get(call["id"])
+    return calls, without_field
+
+
 def extract_calls(text: str, tool: str = "Bash", field: str = None):
     """Every call of `tool` in one transcript, each with the cwd it ran under and its error.
 
@@ -136,35 +201,7 @@ def extract_calls(text: str, tool: str = "Bash", field: str = None):
     A malformed line is skipped rather than fatal: a transcript being written while it is read
     routinely ends mid-line, and aborting there would silently truncate the corpus.
     """
-    field = field or payload_field(tool)
-    calls, errors = [], {}
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            rec = _loads(line)
-        except Exception:                                # noqa: BLE001 - any parse failure is a skip
-            continue
-        if not isinstance(rec, dict):
-            continue
-        cwd = rec.get("cwd")
-        content = (rec.get("message") or {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "tool_use" and block.get("name") == tool:
-                command = (block.get("input") or {}).get(field)
-                if isinstance(command, str):
-                    calls.append({"id": block.get("id"), "command": command,
-                                  "cwd": cwd, "error": None})
-            elif block.get("type") == "tool_result" and block.get("is_error"):
-                body = block.get("content")
-                errors[block.get("tool_use_id")] = body if isinstance(body, str) else _dumps(body)
-    for call in calls:
-        call["error"] = errors.get(call["id"])
-    return calls
+    return _extract(text, tool, field or payload_field(tool))[0]
 
 
 # What a predicate's SECOND positional parameter may be filled with, keyed by its NAME. Anything
@@ -206,6 +243,45 @@ def _second_param_name(predicate):
     return positional[1].name if len(positional) >= 2 else None
 
 
+def _keyword_only_kind(predicate):
+    """A KEYWORD-ONLY parameter named `cwd` or `tool_name`, or None.
+
+    `notice(command, *, cwd=None)` has no second positional slot, so the positional rule alone
+    left its cwd at the default and the replay measured a reading production never uses - with no
+    warning, since nothing looked unrecognised.
+    """
+    try:
+        params = inspect.signature(predicate).parameters
+    except (TypeError, ValueError):
+        return None
+    for p in params.values():
+        if p.kind is p.KEYWORD_ONLY and p.name in _SECOND_ARG_NAMES:
+            return p.name
+    return None
+
+
+def _forwarding(predicate):
+    """`(name, by_keyword)`: which extra argument to hand the predicate and how, or `(None, False)`."""
+    second = _second_arg_kind(predicate)
+    if second:
+        return second, False
+    keyword = _keyword_only_kind(predicate)
+    return (keyword, True) if keyword else (None, False)
+
+
+def _judge(predicate, command, second, by_keyword, value):
+    """One predicate call, reduced to a plain bool INSIDE the caller's guard.
+
+    The truth test is part of the call: a verdict whose `__bool__` raises is the guard crashing,
+    and evaluating it outside the try aborted the whole replay instead of counting it.
+    """
+    if not second:
+        return bool(predicate(command))
+    if by_keyword:
+        return bool(predicate(command, **{second: value}))
+    return bool(predicate(command, value))
+
+
 def _spread_sample(fires, n):
     """`n` firings drawn evenly across `fires`, in corpus order - never the first `n`.
 
@@ -238,25 +314,30 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
 
     `tool` is the tool whose calls are being replayed, and it is forwarded to a predicate that
     declares a `tool_name` parameter, so the guard is measured on the reading production gives it.
+
+    The rate's denominator is the calls actually JUDGED: a call the predicate crashed on has no
+    verdict, and counting it as quiet made a guard that crashed on 99 of 100 read as a 1% rate.
+    A `SystemExit` raised by the predicate is a crash too - a guard's `sys.exit` must not end the
+    replay with whatever code it chose.
     """
-    second = _second_arg_kind(predicate)
+    second, by_keyword = _forwarding(predicate)
     declared = _second_param_name(predicate)
-    if declared and not second:
+    if declared and declared not in _SECOND_ARG_NAMES:
         # Said ONCE, before the loop, and on stderr so it cannot corrupt the JSON on stdout. This
         # is a behaviour CHANGE for a caller upgrading: that parameter used to receive the cwd,
         # by arity and regardless of meaning. Announcing it is the whole lesson of the bug being
         # fixed here - a result that shifts without saying so is the expensive kind.
         print("warning: second parameter %r is not recognised (expected one of %s); "
-              "calling the predicate with the command alone"
+              "leaving it at its default"
               % (declared, ", ".join(_SECOND_ARG_NAMES)), file=sys.stderr)
     extra = {"cwd": None, "tool_name": tool}
     fires, blocked, errored, clean, predicate_errors = [], 0, 0, 0, 0
     for call in calls:
         extra["cwd"] = call["cwd"]
         try:
-            verdict = (predicate(call["command"], extra[second]) if second
-                       else predicate(call["command"]))
-        except Exception:                                # noqa: BLE001 - a crash is a finding, not a stop
+            verdict = _judge(predicate, call["command"], second, by_keyword,
+                             extra.get(second))
+        except (Exception, SystemExit):                  # noqa: BLE001 - a crash is a finding, not a stop
             predicate_errors += 1
             continue
         if not verdict:
@@ -271,10 +352,12 @@ def classify(calls, predicate, sample: int = 0, block_pattern: str = DEFAULT_BLO
     # Drawn AFTER the walk, so it can span the whole corpus rather than its first file.
     samples = _spread_sample(fires, sample)
     total = len(calls)
+    judged = total - predicate_errors
     return {
         "commands": total,
+        "judged": judged,
         "fires": len(fires),
-        "fire_rate_pct": round(100 * len(fires) / total, 3) if total else None,
+        "fire_rate_pct": round(100 * len(fires) / judged, 3) if judged else None,
         "blocked": blocked,
         "errored": errored,
         "completed_fine": clean,
@@ -293,6 +376,11 @@ def load_predicate(path: str, func_name: str):
 
     The module's own directory goes on `sys.path` first, because a hook routinely imports a
     sibling helper and would otherwise die on an import the real runtime resolves fine.
+
+    The module is registered in `sys.modules` BEFORE it executes, as a normal import would be:
+    `@dataclass` resolves string annotations through `sys.modules[cls.__module__]`, so an
+    unregistered module with `from __future__ import annotations` failed to import at all. A
+    `SystemExit` at import (a hook that runs its main unguarded) is a refusal, never an exit.
     """
     p = Path(path).expanduser()
     if not p.is_file():
@@ -300,14 +388,19 @@ def load_predicate(path: str, func_name: str):
     parent = str(p.resolve().parent)
     if parent not in sys.path:
         sys.path.insert(0, parent)
-    spec = importlib.util.spec_from_file_location(re.sub(r"\W", "_", p.stem), p)
+    # A private name, because the module is registered below: a guard file called `json.py` or
+    # `re.py` must not replace the real module for everything imported after it.
+    spec = importlib.util.spec_from_file_location("_guard_replay_" + re.sub(r"\W", "_", p.stem), p)
     if spec is None or spec.loader is None:
         raise UsageError("cannot load a module from %s" % p)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
-    except Exception as exc:                             # noqa: BLE001 - report which file, not a bare trace
-        raise UsageError("failed to import %s: %s" % (p, exc)) from exc
+    except (Exception, SystemExit) as exc:               # noqa: BLE001 - report which file, not a bare trace
+        sys.modules.pop(spec.name, None)
+        what = ("exited with %r" % exc.code) if isinstance(exc, SystemExit) else str(exc)
+        raise UsageError("failed to import %s: %s" % (p, what)) from exc
     fn = getattr(module, func_name, None)
     if not callable(fn):
         raise UsageError("%s defines no callable named %r" % (p, func_name))
@@ -322,35 +415,70 @@ def replay(root: str, predicate, tool: str = "Bash", sample: int = 0,
     so one real call sits in two .jsonl under the same tool_use id. Counting it twice inflates the
     denominator and deflates the rate, and it does it silently - the corpus merely looks bigger.
     A call with no id is never collapsed, since absent is not the same value twice.
+
+    The tool is checked BEFORE the walk, so an unknown `--tool` is refused whatever the corpus -
+    not only when a file happened to be read. A `field` that NONE of the tool's calls carry is
+    refused too (`UnreadableField`): a typo must not read as an empty corpus.
     """
+    field = field or payload_field(tool)
     base = Path(root).expanduser()
-    calls, files_read, skipped, seen, duplicates = [], 0, [], set(), 0
-    for f in sorted(base.rglob("*.jsonl")) if base.is_dir() else ([base] if base.is_file() else []):
+    calls, files_read, skipped, seen, duplicates, without_field = [], 0, [], set(), 0, 0
+    for f in _corpus_files(base, skipped):
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            # utf-8-sig: a BOM would otherwise make the first record unparseable and drop it.
+            text = f.read_text(encoding="utf-8-sig", errors="replace")
         except OSError as exc:
             skipped.append("%s: %s" % (f, exc))
             continue
         files_read += 1
-        for call in extract_calls(text, tool=tool, field=field):
+        file_calls, missing = _extract(text, tool, field)
+        without_field += missing
+        for call in file_calls:
             if call["id"] is not None:
                 if call["id"] in seen:
                     duplicates += 1
                     continue
                 seen.add(call["id"])
             calls.append(call)
+    if not calls and without_field:
+        raise UnreadableField(
+            "no %s call carries an input field %r (%d call(s) of that tool lack it) - check "
+            "--field" % (tool, field, without_field))
     report = classify(calls, predicate, sample=sample, block_pattern=block_pattern, tool=tool)
     report["files_read"] = files_read
     report["duplicates_skipped"] = duplicates
+    report["calls_without_field"] = without_field
     report["skipped"] = skipped
     report["root"] = str(base)
     return report
 
 
+def _corpus_files(base: Path, skipped: list):
+    """Every *.jsonl below `base` (or `base` itself), sorted; unreadable directories go to `skipped`.
+
+    `rglob` passes over a directory it cannot list without a word, so the corpus shrank while the
+    report said "0 skipped". `os.walk` with `onerror` names every one.
+    """
+    if base.is_file():
+        return [base]
+    if not base.is_dir():
+        return []
+    found = []
+
+    def unreadable(exc: OSError) -> None:
+        skipped.append("%s: %s" % (exc.filename, exc.strerror or exc))
+
+    for dirpath, _dirs, names in os.walk(base, onerror=unreadable):
+        found.extend(Path(dirpath) / n for n in names if fnmatch.fnmatch(n, "*.jsonl"))
+    return sorted(found)
+
+
 def exit_code(report) -> int:
-    """0 fired, 1 never fired, 3 nothing was replayed at all."""
+    """0 fired, 1 never fired, 3 nothing was replayed at all, 4 the predicate raised."""
     if not report.get("commands"):
         return 3
+    if report.get("predicate_errors"):
+        return EXIT_PREDICATE_ERRORS
     return 0 if report.get("fires") else 1
 
 
@@ -397,30 +525,37 @@ def _render(report) -> str:
     return "\n".join(lines)
 
 
-def main(argv=None) -> int:
-    """Load the predicate, replay the corpus, report. Warnings go to stderr, never into the data."""
-    args = _parse(sys.argv[1:] if argv is None else argv)
+def _refuse(args, message) -> int:
+    """A usage refusal: one readable line on stderr, the failure envelope in JSON mode, exit 2."""
+    print("guard_replay: %s" % message, file=sys.stderr)
+    if args.json:
+        print(_dumps({"ok": False, "command": "replay", "skipped": [str(message)], "data": None}))
+    return 2
+
+
+def _run(args) -> int:
+    try:
+        re.compile(args.block_pattern)
+    except re.error as exc:
+        # Checked up front: compiled lazily, a bad pattern crashed only when a firing call had an
+        # error to test, and was silently accepted (and printed in the report) when none did.
+        return _refuse(args, "invalid --block-pattern %r: %s" % (args.block_pattern, exc))
     try:
         predicate = load_predicate(args.module, args.func)
-    except UsageError as exc:
-        print("guard_replay: %s" % exc, file=sys.stderr)
-        if args.json:
-            print(_dumps({"ok": False, "command": "replay", "skipped": [str(exc)], "data": None}))
-        return 2
-    try:
         report = replay(args.root, predicate, tool=args.tool, sample=args.sample,
                         block_pattern=args.block_pattern, field=args.field)
-    except UnsupportedTool as exc:
+    except (UsageError, UnsupportedTool, UnreadableField) as exc:
         # A refusal the caller can read, not a traceback: the whole point of raising here is that
-        # an unreadable tool must not be reported as an empty corpus.
-        print("guard_replay: %s" % exc, file=sys.stderr)
-        if args.json:
-            print(_dumps({"ok": False, "command": "replay", "skipped": [str(exc)], "data": None}))
-        return 2
+        # an unreadable tool or field must not be reported as an empty corpus.
+        return _refuse(args, exc)
     rc = exit_code(report)
     if rc == 3:
         print("guard_replay: read %d file(s) and found no %s calls - nothing was replayed"
               % (report["files_read"], args.tool), file=sys.stderr)
+    elif rc == EXIT_PREDICATE_ERRORS:
+        print("guard_replay: the predicate raised on %d of %d command(s) - fix the guard before "
+              "reading its rate" % (report["predicate_errors"], report["commands"]),
+              file=sys.stderr)
     elif rc == 1:
         print("guard_replay: the predicate never fired over %d command(s)" % report["commands"],
               file=sys.stderr)
@@ -432,5 +567,31 @@ def main(argv=None) -> int:
     return rc
 
 
+def main(argv=None) -> int:
+    """Load the predicate, replay the corpus, report. Warnings go to stderr, never into the data.
+
+    An unexpected crash exits 2, never Python's default 1, which is this tool's "never fired".
+    """
+    args = _parse(sys.argv[1:] if argv is None else argv)
+    try:
+        return _run(args)
+    except Exception as exc:                             # noqa: BLE001 - a crash must not read as an answer
+        print("guard_replay: internal error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        return 2
+
+
+def _utf8_stdio() -> None:
+    """Emit UTF-8 whatever the console code page: a cp1252 stdout (Windows, redirected) crashed on
+    the first non-ASCII sample. Skipped for a stream that cannot be reconfigured."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
+
+
 if __name__ == "__main__":
+    _utf8_stdio()
     raise SystemExit(main())

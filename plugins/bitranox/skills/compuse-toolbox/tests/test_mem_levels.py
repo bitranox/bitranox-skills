@@ -165,3 +165,149 @@ def test_a_suffixed_venv_is_pruned_like_a_plain_one(tmp_path):
     assert [lvl for lvl in levels if "venv" in lvl] == [], f"vendored copies leaked in: {levels}"
     # Control: exactly one level survives, so a filter that pruned EVERYTHING cannot pass this.
     assert len(levels) == 1, levels
+
+
+# ==== rank-10 skill-script audit: legacy pointers, unreadable levels, the anchor check ==========
+
+import json
+import os
+import subprocess
+import sys
+
+LEGACY_UUID = "5f0e1c2a-0000-5000-8000-000000000001"
+
+
+def _legacy_row(slug, uuid=LEGACY_UUID):
+    return f"- [Old fact](uuid:{uuid}) - When old, do old. <!-- bx:slug={slug} -->"
+
+
+def _level(root: Path, rel: str, rows: list[str]) -> Path:
+    d = root / rel if rel != "." else root
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "CLAUDE.local.md").write_text(BLOCK.format(rows="\n".join(rows)), encoding="utf-8")
+    return d / "CLAUDE.local.md"
+
+
+def test_a_legacy_uuid_pointer_is_a_fact_at_its_level(tmp_path, capsys):
+    root = _tree(tmp_path / "t", {".": []}, bodies=[])
+    _level(root, ".", [_legacy_row("old-fact")])
+    shard = root / ".claude-memory" / "facts" / LEGACY_UUID[:2]
+    shard.mkdir(parents=True)
+    (shard / f"{LEGACY_UUID}.md").write_text("---\nname: old-fact\n---\nbody\n", encoding="utf-8")
+
+    rc = mem_levels.main(["--root", str(root), "--slug", "old-fact"])
+
+    assert rc == 0 and capsys.readouterr().out.split() == ["."]
+    assert mem_levels.scan(root).bodyless == []
+
+
+def test_a_legacy_pointer_without_its_sharded_body_is_bodyless(tmp_path):
+    root = _tree(tmp_path / "t", {".": ["kept"]})
+    _level(root, ".", [_row("kept"), _legacy_row("old-fact")])
+
+    assert mem_levels.scan(root).bodyless == ["old-fact"]
+
+
+def test_an_empty_store_still_reports_every_pointer_as_bodyless(tmp_path):
+    root = _tree(tmp_path / "t", {".": ["gone-fact"]}, bodies=[])
+
+    report = mem_levels.scan(root)
+
+    assert report.bodyless == ["gone-fact"]
+
+
+def test_a_root_without_a_store_is_refused(tmp_path, capsys):
+    """A sub-level passed as --root used to report clean, with the body check silently off."""
+    level = tmp_path / "sub"
+    _level(tmp_path, "sub", [_row("gone-fact")])
+
+    rc = mem_levels.main(["--root", str(level)])
+
+    assert rc == 2
+    assert ".claude-memory" in capsys.readouterr().err
+
+
+def test_a_root_without_a_store_is_refused_in_json_too(tmp_path, capsys):
+    _level(tmp_path, ".", [_row("gone-fact")])
+
+    rc = mem_levels.main(["--root", str(tmp_path), "--json", "--slug", "gone-fact"])
+
+    cap = capsys.readouterr()
+    assert rc == 2 and json.loads(cap.out)["ok"] is False
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a level unreadable")
+@pytest.mark.parametrize("what", ["file", "dir"])
+def test_an_unreadable_level_is_an_error_not_a_no(tmp_path, capsys, what):
+    root = _tree(tmp_path / "t", {".": ["top-fact"], "sub": ["hidden-fact"]})
+    target = root / "sub" / "CLAUDE.local.md" if what == "file" else root / "sub"
+    target.chmod(0)
+    try:
+        slug_rc = mem_levels.main(["--root", str(root), "--slug", "hidden-fact"])
+        slug_err = capsys.readouterr().err
+        list_rc = mem_levels.main(["--root", str(root)])
+        list_err = capsys.readouterr().err
+    finally:
+        target.chmod(0o755 if what == "dir" else 0o644)
+    assert slug_rc == 2 and list_rc == 2
+    assert "sub" in slug_err and "sub" in list_err
+
+
+def test_slug_json_found_and_absent(tmp_path, capsys):
+    root = _tree(tmp_path / "t", {"sub": ["sub-fact"]})
+
+    found_rc = mem_levels.main(["--root", str(root), "--slug", "sub-fact", "--json"])
+    found = capsys.readouterr()
+    absent_rc = mem_levels.main(["--root", str(root), "--slug", "nope-fact", "--json"])
+    absent = capsys.readouterr()
+
+    assert found_rc == 0 and json.loads(found.out) == {
+        "ok": True, "command": "mem_levels", "data": {"slug": "sub-fact", "levels": ["sub"]}}
+    assert found.err == ""
+    assert absent_rc == 1 and json.loads(absent.out)["data"]["levels"] == []
+    assert "no level points at nope-fact" in absent.err
+
+
+def test_slug_text_absent_names_the_slug_on_stderr(tmp_path, capsys):
+    root = _tree(tmp_path / "t", {".": ["top-fact"]})
+
+    rc = mem_levels.main(["--root", str(root), "--slug", "absent-fact"])
+
+    cap = capsys.readouterr()
+    assert rc == 1 and cap.out == "" and "no level points at absent-fact" in cap.err
+
+
+def test_a_non_ascii_level_survives_a_cp1252_stdout(tmp_path):
+    root = _tree(tmp_path / "t", {"Проект": ["ru-fact"]})
+    script = Path(mem_levels.__file__).resolve()
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    for extra in (["--slug", "ru-fact"], []):
+        proc = subprocess.run([sys.executable, str(script), "--root", str(root), *extra],
+                              capture_output=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        assert "Проект" in proc.stdout.decode("utf-8")
+
+
+def test_a_bom_does_not_hide_the_first_pointer(tmp_path):
+    """The pointer regex is anchored at ^, so a BOM glued to line 1 made its pointer invisible."""
+    root = _tree(tmp_path / "t", {".": []}, bodies=["a-fact"])
+    (root / "CLAUDE.local.md").write_bytes(
+        b"\xef\xbb\xbf" + (_row("a-fact") + "\n" + _row("b-fact") + "\n").encode("utf-8"))
+
+    assert mem_levels.scan(root).levels["."] == ["a-fact", "b-fact"]
+
+
+def test_an_unexpected_crash_exits_2_not_the_gate_answer_1(tmp_path, capsys, monkeypatch):
+    """1 is the gate's "no level holds it". stdout is the external edge that fails here."""
+    class Broken:
+        def write(self, _):
+            raise RuntimeError("stream gone")
+
+        def flush(self):
+            pass
+
+    root = _tree(tmp_path / "t", {".": ["top-fact"]})
+    monkeypatch.setattr(sys, "stdout", Broken())
+    rc = mem_levels.main(["--root", str(root), "--slug", "top-fact"])
+    assert rc == 2 and "stream gone" in capsys.readouterr().err

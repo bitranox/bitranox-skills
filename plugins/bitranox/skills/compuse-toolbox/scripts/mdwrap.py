@@ -13,43 +13,58 @@ two failure modes that both look fine in the output.
    into a 153-line diff nobody could review. The lines are individually correct, so only the diff
    SIZE reveals it. See the memory fact
    `feedback-build-a-bulk-action-s-target-list-from-the-work-you-did-not-from-a-state-query`.
-2. **The stray list marker.** `textwrap` knows nothing about markdown, so a wrap point falling just
-   before a " - " clause puts a dash at the start of a line, which CommonMark then renders as a
-   bullet - silently splitting the paragraph in two when the file is viewed. Hit in the same
-   session.
+2. **The stray block marker.** `textwrap` knows nothing about markdown, so a wrap point falling
+   just before a " - " clause puts a dash at the start of a line, which CommonMark then renders as
+   a bullet - silently splitting the paragraph in two when the file is viewed. A " # " or " > "
+   does the same as a heading or a blockquote. Hit in the same session.
 
 So this takes an ANCHOR (a substring that identifies the paragraph) rather than a rule, refuses
 when the anchor is missing or matches more than one paragraph, and reports the changed line range
 and the line delta so the caller can check the radius against the change they meant to make.
 
-Paragraph = the maximal run of non-blank lines around the anchor. A paragraph containing a table
-row, a fence, or a list marker is REFUSED rather than reflowed, because rewrapping those corrupts
-them. The paragraph's own leading indent is taken from its first line and preserved.
+Paragraph = the maximal run of non-blank lines around the anchor, stopping at an ATX heading or a
+thematic break (a heading directly above or below prose is its own block). It is REFUSED rather
+than reflowed when rewrapping would corrupt it: a table row, a fence line, a paragraph that sits
+inside a fenced code block, a heading (ATX or setext), a list (the first line is an item, two or
+more lines start one, or one follows a lead-in line ending in ':'), or a Markdown hard line break
+(a line ending in two spaces or a backslash). A SINGLE continuation line starting with '- ' is the
+damage a previous bad wrap leaves, and is repaired. The paragraph's own leading indent is taken
+from its first line and preserved.
 
 `--width` is the TOTAL line length including the paragraph's leading indent, matching how the
 file is read and how a linter counts it - not the prose width alone.
 
-It is a target, not a hard cap, in exactly one case: repairing a stray bullet pulls the ` - `
+It is a target, not a hard cap, in exactly one case: repairing a stray marker pulls the marker
 token up onto the previous line, which can leave that line a few characters over (measured 99
 against a requested 98). A paragraph that renders wrong is the worse failure and it is silent,
 so the overflow wins - and every over-width line is listed in `notes` so it is never hidden.
 If you need the width as an absolute guarantee, check `notes` and fix those lines by hand.
 
+The file's own line endings (LF, CRLF) and a leading BOM are kept, on every platform, and the
+write is atomic (a temp file beside it, then a rename), so a failed write leaves it untouched.
+
 Dry-run by DEFAULT: it prints what would change and writes nothing until `--apply`. That is the
 point of the tool, so the safe direction is the default one.
 
-Run: `uv run tools/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98`
-     `uv run tools/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98 --apply`
-     `uv run tools/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --json`
+Run: `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98`
+     `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --width 98 --apply`
+     `uv run scripts/mdwrap.py --file TODO.md --anchor "NEXT STEP:" --json`
 
 Exit codes: 0 = rewrapped (or would be), 1 = refused (anchor not found, ambiguous, or a paragraph
-that must not be reflowed), 2 = error (unreadable file, bad arguments).
+that must not be reflowed), 2 = error (unreadable or non-UTF-8 file, a failed write, bad
+arguments, an internal error).
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
 import json
+import os
+import re
+import shutil
 import sys
+import tempfile
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +75,14 @@ __all__ = ["Result", "rewrap", "main"]
 _TABLE = "|"
 _FENCES = ("```", "~~~")
 _LIST_MARKERS = ("- ", "* ", "+ ")
+_EOL = re.compile(r"\r\n|\r|\n")
+_BOM = "﻿"
+# Matched on the lstripped line: this tool's documents indent prose, and treating an indented
+# heading as a boundary is the safe error (a refusal or a smaller paragraph, never a merge).
+_ATX = re.compile(r"#{1,6}(?:[ \t]|$)")
+_THEMATIC = re.compile(r"(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_SETEXT = re.compile(r"(?:=+|-+)[ \t]*$")
+_FENCE_OPEN = re.compile(r"(`{3,}|~{3,})(.*)$")
 
 
 @dataclass
@@ -74,15 +97,66 @@ class Result:
     notes: list[str] = field(default_factory=list)
 
 
+def _split_lines(text: str) -> tuple[list[str], list[str]]:
+    """`(bodies, endings)`: each line's text and its own terminator ("" for an unterminated end).
+
+    Splitting on the terminator and keeping it is what lets a CRLF file come back CRLF: a plain
+    `split("\\n")` left the '\\r' on each body and the rewrapped lines without one.
+    """
+    bodies, endings, pos = [], [], 0
+    for m in _EOL.finditer(text):
+        bodies.append(text[pos:m.start()])
+        endings.append(m.group())
+        pos = m.end()
+    bodies.append(text[pos:])
+    endings.append("")
+    return bodies, endings
+
+
+def _is_heading(line: str) -> bool:
+    return bool(_ATX.match(line.lstrip()))
+
+
+def _is_boundary(line: str) -> bool:
+    """A line that ends a paragraph without being part of it: an ATX heading, a thematic break,
+    or a setext underline (a run of '=' or '-' alone on its line)."""
+    s = line.lstrip()
+    return bool(_ATX.match(s) or _THEMATIC.match(s) or _SETEXT.match(s))
+
+
 def _paragraph_bounds(lines: list[str], idx: int) -> tuple[int, int]:
-    """Maximal run of non-blank lines containing `idx`, as 0-based [lo, hi] inclusive."""
+    """Maximal run of non-blank, non-boundary lines containing `idx`, as 0-based [lo, hi]."""
+    if _is_boundary(lines[idx]):
+        return idx, idx
     lo = idx
-    while lo > 0 and lines[lo - 1].strip():
+    while lo > 0 and lines[lo - 1].strip() and not _is_boundary(lines[lo - 1]):
         lo -= 1
     hi = idx
-    while hi + 1 < len(lines) and lines[hi + 1].strip():
+    while hi + 1 < len(lines) and lines[hi + 1].strip() and not _is_boundary(lines[hi + 1]):
         hi += 1
     return lo, hi
+
+
+def _fenced_lines(lines: list[str]) -> set[int]:
+    """0-based indexes of the lines strictly INSIDE a fenced code block, over the whole file.
+
+    A paragraph between blank lines inside a fence has no fence line of its own, so a check over
+    the paragraph alone let it be reflowed. A backtick opener's info string may hold no backtick;
+    a closer is the same character, at least as long, and bare. An unclosed fence runs to the end.
+    """
+    inside, run = set(), ""
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if run:
+            if len(s) >= len(run) and set(s) == {run[0]}:
+                run = ""
+            else:
+                inside.add(i)
+            continue
+        m = _FENCE_OPEN.match(s)
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            run = m.group(1)
+    return inside
 
 
 def _starts_a_list(line: str) -> bool:
@@ -94,49 +168,79 @@ def _starts_a_list(line: str) -> bool:
     return head[:-1].isdigit() and head[-1:] in (".", ")") if head else False
 
 
-def _refusal(lines: list[str], lo: int, hi: int) -> str:
+def _starts_a_block(line: str) -> bool:
+    """A wrapped line CommonMark would read as a new block: a list item, heading or blockquote."""
+    s = line.lstrip()
+    return _starts_a_list(line) or bool(_ATX.match(s)) or s.startswith(">")
+
+
+def _list_refusal(block: list[str]) -> str:
+    # The FIRST line decides whether this block is a list item. A SINGLE continuation line
+    # starting with '- ' is damage left by a previous bad wrap (CommonMark renders it as a bullet
+    # and splits the paragraph), and it is exactly what this tool exists to repair - refusing it
+    # made the repair impossible. Two or more such lines, or one under a lead-in ending in ':', is
+    # a real list, and flattening it into prose destroys it.
+    if _starts_a_list(block[0]):
+        return "paragraph is a list item - refusing to reflow it"
+    items = [i for i in range(1, len(block)) if _starts_a_list(block[i])]
+    if len(items) >= 2 or (items and block[items[0] - 1].rstrip().endswith(":")):
+        return "paragraph holds a list under a lead-in line - refusing to reflow it"
+    return ""
+
+
+def _refusal(lines: list[str], lo: int, hi: int, fenced: set[int]) -> str:
     block = lines[lo : hi + 1]
     if any(_TABLE in l for l in block):
         return "paragraph contains a table row - refusing to reflow it"
     if any(l.lstrip().startswith(_FENCES) for l in block):
         return "paragraph contains a code fence - refusing to reflow it"
-    # Only the FIRST line decides whether this block is a list. A CONTINUATION line starting
-    # with '- ' is damage left by a previous bad wrap (CommonMark renders it as a bullet and
-    # splits the paragraph), and it is exactly what this tool exists to repair - refusing it
-    # here made the repair impossible and made a 'no stray bullet remains' check pass on the
-    # empty output of the refusal.
-    if _starts_a_list(block[0]):
-        return "paragraph is a list item - refusing to reflow it"
-    return ""
+    if any(i in fenced for i in range(lo, hi + 1)):
+        return "paragraph is inside a fenced code block - refusing to reflow it"
+    if _is_heading(block[0]) or _THEMATIC.match(block[0].lstrip()):
+        return "anchor is on a heading or thematic break - refusing to reflow it"
+    if hi + 1 < len(lines) and _SETEXT.match(lines[hi + 1].lstrip()):
+        return "paragraph is a setext heading - refusing to reflow it"
+    if any(l.endswith(("  ", "\\")) for l in block[:-1]):
+        # A hard break is meaningful only inside the paragraph; trailing spaces on its last line
+        # are ignored by CommonMark, so they are no reason to refuse.
+        return "paragraph contains a hard line break - refusing to reflow it"
+    return _list_refusal(block)
 
 
 def _protect_dash_clauses(wrapped: list[str], indent: str) -> list[str]:
-    """Never leave a line starting with a list marker.
+    """Never leave a line starting with a list, heading or blockquote marker.
 
-    A wrap point falling before a ' - ' clause makes CommonMark render the continuation as a
-    bullet, silently splitting the paragraph. Pull such a line's first token up onto the previous
-    line; the result is one char over the width at worst, which is strictly better than a
-    paragraph that renders wrong.
+    A wrap point falling before a ' - ', ' # ' or ' > ' clause makes CommonMark render the
+    continuation as a new block, silently splitting the paragraph. Pull such a line's first token
+    up onto the previous line; the result is a few chars over the width at worst, which is
+    strictly better than a paragraph that renders wrong. The repaired line is checked AGAIN,
+    because its new first token can be a marker too ('- -').
     """
     out = list(wrapped)
     i = 1
     while i < len(out):
-        if _starts_a_list(out[i]) and out[i - 1].strip():
+        if _starts_a_block(out[i]) and out[i - 1].strip():
             head, _, rest = out[i].lstrip().partition(" ")
             out[i - 1] = out[i - 1] + " " + head
-            out[i] = indent + rest if rest else ""
+            out[i] = indent + rest.lstrip() if rest.strip() else ""
             if not out[i].strip():
                 del out[i]
-                continue
+            continue
         i += 1
     return out
+
+
+def _paragraph_ending(endings: list[str], lo: int, hi: int) -> str:
+    """The terminator for lines inside the rewrapped paragraph: its own, else the file's, else LF."""
+    return (next((e for e in endings[lo:hi + 1] if e), "")
+            or next((e for e in endings if e), "") or "\n")
 
 
 def rewrap(text: str, anchor: str, width: int = 98) -> Result:
     """Rewrap only the paragraph containing `anchor`. Pure; does no I/O."""
     if not anchor.strip():
         return Result(False, reason="empty anchor")
-    lines = text.split("\n")
+    lines, endings = _split_lines(text)
     hits = [i for i, l in enumerate(lines) if anchor in l]
     if not hits:
         return Result(False, reason=f"anchor not found: {anchor!r}")
@@ -146,7 +250,7 @@ def rewrap(text: str, anchor: str, width: int = 98) -> Result:
         return Result(False, reason=f"anchor is ambiguous - matches {len(bounds)} paragraphs")
     lo, hi = bounds.pop()
 
-    if reason := _refusal(lines, lo, hi):
+    if reason := _refusal(lines, lo, hi, _fenced_lines(lines)):
         return Result(False, reason=reason, start_line=lo + 1, end_line=hi + 1)
 
     indent = lines[lo][: len(lines[lo]) - len(lines[lo].lstrip())]
@@ -157,57 +261,125 @@ def rewrap(text: str, anchor: str, width: int = 98) -> Result:
     ) or [indent + para.strip()]
     wrapped = _protect_dash_clauses(wrapped, indent)
 
-    old = lines[lo : hi + 1]
+    eol = _paragraph_ending(endings, lo, hi)
+    new_endings = [eol] * (len(wrapped) - 1) + [endings[hi]]
     notes = [f"line {i}: {len(l)} chars"
              for i, l in enumerate(wrapped, lo + 1) if len(l) > width]
-    out = lines[:lo] + wrapped + lines[hi + 1 :]
+    out = zip(lines[:lo] + wrapped + lines[hi + 1 :],
+              endings[:lo] + new_endings + endings[hi + 1 :])
+    changed = wrapped != lines[lo : hi + 1] or new_endings != endings[lo : hi + 1]
     return Result(
-        ok=True, text="\n".join(out), start_line=lo + 1, end_line=hi + 1,
-        line_delta=len(wrapped) - len(old), changed=wrapped != old, notes=notes,
+        ok=True, text="".join(b + e for b, e in out), start_line=lo + 1, end_line=hi + 1,
+        line_delta=len(wrapped) - (hi - lo + 1), changed=changed, notes=notes,
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def _positive_width(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {raw!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def _read(path: Path) -> tuple[str, bool]:
+    """`(text, had_bom)`, line endings untouched (`newline=""`), the BOM split off."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    return (text[1:], True) if text.startswith(_BOM) else (text, False)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace `path` with `text` exactly - no newline translation - or leave it untouched.
+
+    Written to a temp file beside the target and renamed over it, so a failure midway cannot
+    leave half a file. A read-only target is refused rather than silently replaced by the rename.
+    """
+    real = Path(os.path.realpath(path))
+    if not os.access(real, os.W_OK):
+        raise PermissionError(errno.EACCES, "file is not writable", str(real))
+    fd, tmp = tempfile.mkstemp(dir=str(real.parent), prefix="." + real.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        shutil.copymode(real, tmp)
+        os.replace(tmp, real)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _parse(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", required=True, type=Path)
     ap.add_argument("--anchor", required=True, help="substring identifying the ONE paragraph")
-    ap.add_argument("--width", type=int, default=98)
+    ap.add_argument("--width", type=_positive_width, default=98)
     ap.add_argument("--apply", action="store_true", help="write the file (default: dry run)")
     ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
+    return ap.parse_args(argv)
 
+
+def _payload(args, r: Result, applied: bool, error: str = "") -> dict:
+    reason = error or r.reason
+    return {
+        "ok": r.ok and not error, "command": "mdwrap",
+        "data": {
+            "file": str(args.file), "reason": reason,
+            "start_line": r.start_line, "end_line": r.end_line,
+            "line_delta": r.line_delta, "changed": r.changed,
+            "applied": applied, "notes": r.notes,
+        },
+        "skipped": [] if r.ok and not error else [reason],
+    }
+
+
+def _run(args) -> int:
     try:
-        src = args.file.read_text(encoding="utf-8")
-    except OSError as exc:
+        src, bom = _read(args.file)
+    except (OSError, UnicodeDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
     r = rewrap(src, args.anchor, args.width)
-    payload = {
-        "ok": r.ok, "command": "mdwrap",
-        "data": {
-            "file": str(args.file), "reason": r.reason,
-            "start_line": r.start_line, "end_line": r.end_line,
-            "line_delta": r.line_delta, "changed": r.changed,
-            "applied": bool(r.ok and r.changed and args.apply), "notes": r.notes,
-        },
-        "skipped": [] if r.ok else [r.reason],
-    }
+    applied, error = False, ""
     if r.ok and r.changed and args.apply:
-        args.file.write_text(r.text, encoding="utf-8")
+        try:
+            _write_atomic(args.file, (_BOM if bom else "") + r.text)
+            applied = True
+        except OSError as exc:
+            error = f"write failed: {exc}"
 
     if args.json:
-        print(json.dumps(payload, indent=2))
-    elif not r.ok:
+        print(json.dumps(_payload(args, r, applied, error), indent=2))
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    if args.json:
+        return 0 if r.ok else 1
+    if not r.ok:
         print(f"refused: {r.reason}", file=sys.stderr)
-    else:
-        verb = "rewrote" if payload["data"]["applied"] else ("would rewrite" if r.changed else "unchanged")
-        span = f"lines {r.start_line}-{r.end_line}"
-        print(f"{verb} {span} ({r.end_line - r.start_line + 1} -> "
-              f"{r.end_line - r.start_line + 1 + r.line_delta} lines, delta {r.line_delta:+d})")
-        for n in r.notes:
-            print(f"  note: {n}", file=sys.stderr)
-    return 0 if r.ok else 1
+        return 1
+    verb = "rewrote" if applied else ("would rewrite" if r.changed else "unchanged")
+    span = f"lines {r.start_line}-{r.end_line}"
+    print(f"{verb} {span} ({r.end_line - r.start_line + 1} -> "
+          f"{r.end_line - r.start_line + 1 + r.line_delta} lines, delta {r.line_delta:+d})")
+    for n in r.notes:
+        print(f"  note: {n}", file=sys.stderr)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Rewrap one paragraph. An unexpected crash exits 2, never Python's default 1, which is this
+    tool's "refused" answer."""
+    args = _parse(argv)
+    try:
+        return _run(args)
+    except Exception as exc:                             # noqa: BLE001 - a crash must not read as a refusal
+        print(f"mdwrap: internal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

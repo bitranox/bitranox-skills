@@ -17,18 +17,28 @@ real work - one session built three designs for a value the corpus could have na
 A NEGATIVE is the dangerous result here, because "the field holds nothing" and "I never really
 looked" print the same. So the scan reports how many files it READ (on stderr, never in the parsed
 stream) and exits 3 when it read none, which turns a mistyped path from a silent all-clear into a
-loud one. Unreadable files are listed as skipped rather than dropped.
+loud one. Unreadable files and directories are listed as skipped rather than dropped, a named path
+that does not exist fails the run even beside a good one, and unparseable lines are counted in
+every mode.
+
+A value is printed as itself when it is a plain string, and as JSON otherwise. A string that would
+itself READ as JSON (`"1"`, `"true"`, `"null"`) is printed quoted, so the string "1" and the
+number 1 never share a row, and a JSON `null` is a value (`null`), never mistaken for a missing key.
 
 Run:
   `uv run scripts/jsonl_grep.py <file> [--type assistant] [--role user] [--field message.model]
                                      [--pattern REGEX]`
   `uv run scripts/jsonl_grep.py ~/.claude/projects --field message.model --count`
+  `... | uv run scripts/jsonl_grep.py --field message.model [--count]`     (stdin)
 
-Exit codes: 0 read something, 2 usage error, 3 empty corpus (nothing was read).
+Exit codes: 0 read something, 2 usage error or a named path that does not exist, 3 empty corpus
+(nothing was read).
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import os
 import re
 import sys
 from collections import Counter
@@ -61,13 +71,40 @@ _BAD = object()                                          # a line no parse could
 
 
 def _get(obj, dotted: str):
+    """The value at `dotted`, or `_MISS` when a key is absent - never None, which is JSON null.
+
+    Returning None for both made a field that is `null` on every record read as a field no record
+    has: the tally came back empty over real data and looked like a confident "no values".
+    """
     cur = obj
     for key in dotted.split("."):
         if isinstance(cur, dict) and key in cur:
             cur = cur[key]
         else:
-            return None
+            return _MISS
     return cur
+
+
+def render(value) -> str:
+    """One value as printed and tallied: a plain string bare, anything else as JSON.
+
+    A string that would itself parse as JSON is quoted, so `"1"` and `1` (or `"true"` and `true`)
+    never land on one row - bare strings alone made them indistinguishable in the output and
+    merged them in the tally.
+    """
+    if not isinstance(value, str):
+        return _dumps(value)
+    try:
+        _loads(value)
+    except (ValueError, RecursionError):
+        return value
+    return _dumps(value)
+
+
+def _records(text: str):
+    """JSONL records split on newline ONLY: U+2028, form feed and the other separators
+    `str.splitlines` honours are legal raw inside a JSON string and must not cut a record."""
+    return text.split("\n")
 
 
 def _match(raw, *, rx=None, type_=None, role=None, field=None):
@@ -89,8 +126,7 @@ def _match(raw, *, rx=None, type_=None, role=None, field=None):
         return _MISS
     if not field:
         return obj
-    val = _get(obj, field)
-    return _MISS if val is None else val
+    return _get(obj, field)
 
 
 def filter_records(text: str, *, type_=None, role=None, field=None, pattern=None):
@@ -100,34 +136,59 @@ def filter_records(text: str, *, type_=None, role=None, field=None, pattern=None
     top-level `type`; `role` matches `message.role`. Malformed lines are skipped.
     """
     rx = re.compile(pattern) if pattern else None
-    hits = (_match(raw, rx=rx, type_=type_, role=role, field=field) for raw in text.splitlines())
+    hits = (_match(raw, rx=rx, type_=type_, role=role, field=field) for raw in _records(text))
     return [hit for hit in hits if hit is not _MISS and hit is not _BAD]
 
 
 class ScanResult:
-    """What a corpus scan found AND what it read, so an empty tally cannot pass for an answer."""
+    """What a corpus scan found AND what it read, so an empty tally cannot pass for an answer.
 
-    def __init__(self, counts, files_read: int, files_skipped, lines_skipped: int = 0):
+    `files_skipped` holds files and directories that exist but could not be read; `missing` holds
+    named paths that do not exist at all, which fail the run even when something else was read.
+    """
+
+    def __init__(self, counts, files_read: int, files_skipped, lines_skipped: int = 0,
+                 missing=None):
         self.counts = counts
         self.files_read = files_read
         self.files_skipped = files_skipped
         self.lines_skipped = lines_skipped
+        self.missing = list(missing or [])
 
 
-def expand_paths(paths):
-    """Every file named by `paths`: a directory contributes the *.jsonl below it, sorted.
+def _walk_jsonl(path: Path, skipped: list):
+    """The *.jsonl below `path`, sorted; a directory it cannot list goes to `skipped`.
 
-    A path that does not exist contributes nothing rather than raising - the caller learns about
-    it from `files_read`, which is the number that decides whether an answer was earned.
+    `rglob` passes over an unreadable directory without a word, so the corpus shrank while the
+    report said "0 skipped". `os.walk` with `onerror` names every one.
     """
     found = []
+    for dirpath, _dirs, names in os.walk(path, onerror=lambda exc: skipped.append(str(exc.filename))):
+        found.extend(Path(dirpath) / n for n in names if fnmatch.fnmatch(n, "*.jsonl"))
+    return sorted(found)
+
+
+def collect_paths(paths):
+    """`(files, missing, unreadable_dirs)` for `paths`: a directory contributes its *.jsonl.
+
+    A path that does not exist is returned in `missing` rather than dropped: beside a good path it
+    used to vanish, so a typo cost its whole share of the corpus while the run exited 0.
+    """
+    found, missing, unreadable = [], [], []
     for raw in paths:
         path = Path(raw)
         if path.is_dir():
-            found.extend(sorted(path.rglob("*.jsonl")))
+            found.extend(_walk_jsonl(path, unreadable))
         elif path.is_file():
             found.append(path)
-    return found
+        else:
+            missing.append(str(path))
+    return found, missing, unreadable
+
+
+def expand_paths(paths):
+    """Every file named by `paths`: a directory contributes the *.jsonl below it, sorted."""
+    return collect_paths(paths)[0]
 
 
 def iter_file_matches(path, *, rx=None, type_=None, role=None, field=None):
@@ -135,68 +196,129 @@ def iter_file_matches(path, *, rx=None, type_=None, role=None, field=None):
 
     A live session's last line can be a partial write, so an unusable line is a normal event; the
     caller counts them rather than dropping them, because a silently shrinking denominator is how a
-    scan reports less than it should while looking complete.
+    scan reports less than it should while looking complete. `utf-8-sig`, because a BOM would
+    otherwise make the first record unparseable.
     """
-    with open(path, encoding="utf-8", errors="replace") as handle:
+    with open(path, encoding="utf-8-sig", errors="replace", newline="\n") as handle:
         for raw in handle:
             hit = _match(raw, rx=rx, type_=type_, role=role, field=field)
             if hit is not _MISS:
                 yield hit
 
 
+def _tally(hits, counts: Counter) -> int:
+    """Add each hit to `counts`; return how many were unparseable."""
+    bad = 0
+    for hit in hits:
+        if hit is _BAD:
+            bad += 1
+        else:
+            counts[render(hit)] += 1
+    return bad
+
+
 def scan_corpus(paths, *, field=None, type_=None, role=None, pattern=None) -> ScanResult:
     """Tally `field`'s values across every file under `paths`, reporting what was read."""
     rx = re.compile(pattern) if pattern else None
     counts: Counter = Counter()
-    read, skipped, bad_lines = 0, [], 0
-    for path in expand_paths(paths):
+    files, missing, skipped = collect_paths(paths)
+    read, bad_lines = 0, 0
+    for path in files:
         try:
-            for hit in iter_file_matches(path, rx=rx, type_=type_, role=role, field=field):
-                if hit is _BAD:
-                    bad_lines += 1
-                else:
-                    counts[hit if isinstance(hit, str) else _dumps(hit)] += 1
+            bad_lines += _tally(iter_file_matches(path, rx=rx, type_=type_, role=role, field=field),
+                                counts)
         except OSError:
             skipped.append(str(path))
             continue
         read += 1
-    return ScanResult(counts, read, skipped, bad_lines)
+    return ScanResult(counts, read, skipped, bad_lines, missing)
+
+
+def scan_text(text: str, *, field=None, type_=None, role=None, pattern=None) -> ScanResult:
+    """`scan_corpus` over one already-read text (stdin), counted as one source read."""
+    rx = re.compile(pattern) if pattern else None
+    counts: Counter = Counter()
+    hits = (_match(raw, rx=rx, type_=type_, role=role, field=field) for raw in _records(text))
+    bad = _tally((h for h in hits if h is not _MISS), counts)
+    return ScanResult(counts, 1, [], bad)
+
+
+def _read_stdin() -> str:
+    """stdin as UTF-8 whatever the console code page, BOM dropped, undecodable bytes replaced.
+
+    Read through the byte buffer: a cp1252 text stdin raised UnicodeDecodeError on the first byte
+    that code page leaves undefined (0x81), killing the read mid-stream.
+    """
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin.read()
+    return buffer.read().decode("utf-8-sig", errors="replace")
 
 
 def _report_reach(res: ScanResult) -> None:
     """Say what was reached, on stderr - a count in the parsed stream would be read as data."""
-    print(f"files: {res.files_read} read, {len(res.files_skipped)} skipped", file=sys.stderr)
+    skipped = len(res.files_skipped) + len(res.missing)
+    print(f"files: {res.files_read} read, {skipped} skipped", file=sys.stderr)
+    _report_problems(res)
+
+
+def _report_problems(res: ScanResult) -> None:
     if res.lines_skipped:
         print(f"lines: {res.lines_skipped} unparseable line(s) skipped", file=sys.stderr)
     for path in res.files_skipped:
         print(f"skipped: {path}", file=sys.stderr)
+    for path in res.missing:
+        print(f"skipped: {path} (no such file or directory)", file=sys.stderr)
+
+
+def _exit_code(res: ScanResult) -> int:
+    if not res.files_read:
+        return 3
+    return 2 if res.missing else 0
 
 
 def _run_count(args) -> int:
-    res = scan_corpus(args.paths, field=args.field, type_=args.type_, role=args.role, pattern=args.pattern)
+    kwargs = dict(field=args.field, type_=args.type_, role=args.role, pattern=args.pattern)
+    res = scan_corpus(args.paths, **kwargs) if args.paths else scan_text(_read_stdin(), **kwargs)
     _report_reach(res)
     if not res.files_read:
         return 3
     for value, times in res.counts.most_common():
         print(f"{times}\t{value}")
-    return 0
+    return _exit_code(res)
+
+
+def _print_hits(hits) -> int:
+    """Print every usable hit; return how many lines were unparseable."""
+    bad = 0
+    for hit in hits:
+        if hit is _BAD:
+            bad += 1
+        else:
+            print(render(hit))
+    return bad
 
 
 def _run_list(args) -> int:
     rx = re.compile(args.pattern) if args.pattern else None
     kwargs = dict(rx=rx, type_=args.type_, role=args.role, field=args.field)
     if not args.paths:
-        for rec in filter_records(sys.stdin.read(), type_=args.type_, role=args.role,
-                                  field=args.field, pattern=args.pattern):
-            print(rec if isinstance(rec, str) else _dumps(rec))
+        hits = (_match(raw, **kwargs) for raw in _records(_read_stdin()))
+        res = ScanResult(Counter(), 1, [], _print_hits(h for h in hits if h is not _MISS))
+        _report_problems(res)
         return 0
-    files = expand_paths(args.paths)
+    files, missing, skipped = collect_paths(args.paths)
+    read, bad = 0, 0
     for path in files:
-        for rec in iter_file_matches(path, **kwargs):
-            if rec is _BAD:
-                continue
-            print(rec if isinstance(rec, str) else _dumps(rec))
-    return 0 if files else 3
+        try:
+            bad += _print_hits(iter_file_matches(path, **kwargs))
+        except OSError:
+            skipped.append(str(path))
+            continue
+        read += 1
+    res = ScanResult(Counter(), read, skipped, bad, missing)
+    _report_problems(res)
+    return _exit_code(res)
 
 
 def main(argv=None) -> int:
@@ -207,13 +329,31 @@ def main(argv=None) -> int:
     ap.add_argument("--field", help="dotted path to extract (e.g. message.model)")
     ap.add_argument("--pattern", help="regex over the raw line")
     ap.add_argument("--count", action="store_true",
-                    help="tally --field's values across every file, most common first")
+                    help="tally --field's values across every file (or stdin), most common first")
     args = ap.parse_args(argv)
     if args.count and not args.field:
         print("jsonl_grep: --count needs --field (there is nothing to tally without one)", file=sys.stderr)
         return 2
+    if args.pattern:
+        try:
+            re.compile(args.pattern)
+        except re.error as exc:
+            print(f"jsonl_grep: invalid --pattern {args.pattern!r}: {exc}", file=sys.stderr)
+            return 2
     return _run_count(args) if args.count else _run_list(args)
 
 
+def _utf8_stdout() -> None:
+    """Emit UTF-8 whatever the console code page: a cp1252 stdout (Windows, redirected) crashed
+    mid-output on the first em dash or emoji. Skipped for a stream that cannot be reconfigured."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            pass
+
+
 if __name__ == "__main__":
+    _utf8_stdout()
     sys.exit(main())

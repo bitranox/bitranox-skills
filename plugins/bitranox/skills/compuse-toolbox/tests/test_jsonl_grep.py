@@ -171,3 +171,192 @@ def test_scan_survives_a_json_line_that_is_not_an_object(tmp_path):
     p.write_text('[1,2,3]\n{"type":"assistant","message":{"model":"opus"}}\n', encoding="utf-8")
     res = J.scan_corpus([tmp_path], field="message.model")
     assert res.counts == {"opus": 1} and res.lines_skipped == 1
+
+
+# ==== rank-10 skill-script audit: nothing read may vanish, nothing absent may pass as read ======
+
+import os
+import subprocess
+from pathlib import Path
+
+SCRIPT = Path(J.__file__).resolve()
+TYPES = [{"v": "1"}, {"v": 1}, {"v": "true"}, {"v": True}, {"v": None}, {"other": 1}]
+
+
+def _run(args, stdin=b"", env_extra=None):
+    """The script as a real process: real stdin bytes, real stream encoding, real exit code."""
+    env = dict(os.environ)
+    env.pop("PYTHONIOENCODING", None)
+    env.pop("PYTHONUTF8", None)
+    env.update(env_extra or {})
+    return subprocess.run([sys.executable, str(SCRIPT), *args], input=stdin,
+                          capture_output=True, env=env)
+
+
+# --- a named path that does not exist is reported and fails the run ------------------------------
+
+def test_count_reports_a_missing_path_beside_a_good_one(tmp_path, capsys):
+    good = _write(tmp_path, "ab.jsonl", [{"v": "a"}, {"v": "b"}])
+    rc = J.main([str(good), str(tmp_path / "typo.jsonl"), "--field", "v", "--count"])
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert "typo.jsonl" in cap.err and "1 skipped" in cap.err
+    assert "a" in cap.out and "b" in cap.out
+
+
+def test_list_reports_a_missing_path_beside_a_good_one(tmp_path, capsys):
+    good = _write(tmp_path, "ab.jsonl", [{"v": "a"}, {"v": "b"}])
+    rc = J.main([str(good), str(tmp_path / "typo.jsonl"), "--field", "v"])
+    cap = capsys.readouterr()
+    assert rc == 2 and cap.out.split() == ["a", "b"]
+    assert "typo.jsonl" in cap.err
+
+
+def test_list_mode_on_only_a_missing_path_exits_3(tmp_path, capsys):
+    assert J.main([str(tmp_path / "nope.jsonl"), "--field", "v"]) == 3
+    assert "nope.jsonl" in capsys.readouterr().err
+
+
+# --- unparseable lines are counted in list mode and on stdin too ---------------------------------
+
+PRETTY = '{\n  "message": {\n    "model": "opus"\n  }\n}\n'
+
+
+def test_list_mode_reports_unparseable_lines(tmp_path, capsys):
+    p = tmp_path / "pretty.json"
+    p.write_text(PRETTY, encoding="utf-8")
+    rc = J.main([str(p), "--field", "message.model"])
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out == ""
+    assert "5 unparseable line(s)" in cap.err
+
+
+def test_stdin_list_mode_reports_unparseable_lines():
+    proc = _run(["--field", "message.model"], stdin=PRETTY.encode("utf-8"))
+    assert proc.returncode == 0 and proc.stdout == b""
+    assert b"5 unparseable line(s)" in proc.stderr
+
+
+def test_stdin_list_mode_reads_records():
+    proc = _run(["--field", "message.model"],
+                stdin=_mk([{"message": {"model": "opus"}}]).encode("utf-8"))
+    assert proc.returncode == 0 and proc.stdout.decode().split() == ["opus"]
+
+
+# --- an unreadable directory is a skip, never a silent undercount --------------------------------
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a directory unreadable")
+def test_an_unreadable_subdirectory_is_listed_as_skipped(tmp_path):
+    _write(tmp_path, "a.jsonl", [{"m": "opus"}])
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    _write(locked, "b.jsonl", [{"m": "haiku"}])
+    locked.chmod(0)
+    try:
+        res = J.scan_corpus([tmp_path], field="m")
+    finally:
+        locked.chmod(0o755)
+    assert res.counts == {"opus": 1}
+    assert [Path(p).name for p in res.files_skipped] == ["locked"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX mode bits and a non-root user to make a file unreadable")
+def test_list_mode_skips_an_unreadable_file_instead_of_crashing(tmp_path, capsys):
+    _write(tmp_path, "a.jsonl", [{"m": "opus"}])
+    bad = _write(tmp_path, "b.jsonl", [{"m": "haiku"}])
+    bad.chmod(0)
+    try:
+        rc = J.main([str(tmp_path), "--field", "m"])
+    finally:
+        bad.chmod(0o644)
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out.split() == ["opus"] and "b.jsonl" in cap.err
+
+
+# --- values keep their JSON type, and null is a value --------------------------------------------
+
+def test_count_keeps_strings_and_scalars_apart(tmp_path):
+    _write(tmp_path, "t.jsonl", TYPES)
+    res = J.scan_corpus([tmp_path], field="v")
+    assert res.counts == {'"1"': 1, "1": 1, '"true"': 1, "true": 1, "null": 1}
+
+
+def test_an_ordinary_string_is_still_printed_bare(tmp_path):
+    _write(tmp_path, "t.jsonl", [{"v": "opus"}])
+    assert J.scan_corpus([tmp_path], field="v").counts == {"opus": 1}
+
+
+def test_json_null_is_tallied_and_a_missing_key_is_not(tmp_path, capsys):
+    _write(tmp_path, "t.jsonl", [{"stop": None}, {"stop": None}, {"stop": "end_turn"}, {}])
+    rc = J.main([str(tmp_path), "--field", "stop", "--count"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.splitlines() == ["2\tnull", "1\tend_turn"]
+
+
+def test_list_mode_without_a_field_prints_each_record_as_json(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", [{"type": "user", "n": 1}])
+    J.main([str(p), "--type", "user"])
+    assert json.loads(capsys.readouterr().out) == {"type": "user", "n": 1}
+
+
+def test_list_mode_prints_a_null_value(tmp_path, capsys):
+    p = _write(tmp_path, "t.jsonl", [{"stop": None}, {}])
+    J.main([str(p), "--field", "stop"])
+    assert capsys.readouterr().out.splitlines() == ["null"]
+
+
+# --- encoding: cp1252 stdout, undecodable stdin, BOM, line separators -----------------------------
+
+def test_non_ascii_values_survive_a_cp1252_stdout(tmp_path):
+    p = _write(tmp_path, "u.jsonl", [{"m": "café — \U0001f600"}])
+    for args in (["--count"], []):
+        proc = _run([str(p), "--field", "m", *args], env_extra={"PYTHONIOENCODING": "cp1252"})
+        assert proc.returncode == 0, proc.stderr
+        assert "café — \U0001f600" in proc.stdout.decode("utf-8")
+
+
+def test_undecodable_stdin_bytes_do_not_crash_the_read():
+    proc = _run(["--field", "m"], stdin=b'{"m": "a\x81b"}\n{"m": "ok"}\n',
+                env_extra={"PYTHONIOENCODING": "cp1252"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.decode("utf-8").split()[-1] == "ok"
+
+
+def test_a_bom_does_not_cost_the_first_record(tmp_path, capsys):
+    p = tmp_path / "bom.jsonl"
+    p.write_bytes(b"\xef\xbb\xbf" + _mk([{"message": {"model": "opus"}}]).encode("utf-8"))
+    rc = J.main([str(p), "--field", "message.model"])
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out.split() == ["opus"] and "unparseable" not in cap.err
+
+
+def test_a_bom_on_stdin_does_not_cost_the_first_record():
+    proc = _run(["--field", "m"], stdin=b"\xef\xbb\xbf" + _mk([{"m": "opus"}]).encode("utf-8"))
+    assert proc.stdout.decode().split() == ["opus"]
+
+
+def test_a_line_separator_inside_a_value_does_not_split_the_record():
+    text = json.dumps({"m": "a b\fc"}, ensure_ascii=False) + "\n"
+    assert J.filter_records(text, field="m") == ["a b\fc"]
+
+
+# --- --count reads stdin like every other mode ----------------------------------------------------
+
+def test_count_tallies_stdin_when_no_path_is_given():
+    proc = _run(["--field", "v", "--count"], stdin=_mk(TYPES).encode("utf-8"))
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(proc.stdout.decode().splitlines()) == ['1\t"1"', '1\t"true"', "1\t1",
+                                                          "1\tnull", "1\ttrue"]
+
+
+# --- an invalid --pattern is a usage error ---------------------------------------------------------
+
+@pytest.mark.parametrize("extra", [[], ["--count", "--field", "v"]])
+def test_an_invalid_pattern_is_a_usage_error(tmp_path, capsys, extra):
+    p = _write(tmp_path, "t.jsonl", TYPES)
+    rc = J.main([str(p), "--pattern", "(", *extra])
+    assert rc == 2
+    assert "--pattern" in capsys.readouterr().err
