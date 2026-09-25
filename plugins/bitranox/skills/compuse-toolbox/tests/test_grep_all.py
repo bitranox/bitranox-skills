@@ -6,8 +6,12 @@ carrying a dead reference. Both times the miss looked exactly like success.
 """
 import io
 import json
+import os
 from pathlib import PurePath
 import subprocess
+import sys
+
+import pytest
 
 import grep_all
 
@@ -113,3 +117,141 @@ def test_dot_git_internals_are_never_searched(tmp_path):
     (root / ".git" / "planted.md").write_text("NEEDLE\n", encoding="utf-8")
     _, out, _ = _run(["NEEDLE", str(root)])
     assert "planted.md" not in out
+
+
+# ---- review fixes (rank-10 slice 2, group T3) ---------------------------------------------------
+
+
+def _anchored_repo(tmp_path):
+    """A repo whose ignore rule is ANCHORED to the root, so only a correct path resolution
+    can match it: `/sub/secret.md` against a cwd-relative `secret.md` matches nothing."""
+    root = tmp_path / "r"
+    (root / "sub").mkdir(parents=True)
+    (root / ".gitignore").write_text("/sub/secret.md\n", encoding="utf-8")
+    (root / "sub" / "secret.md").write_text("hidden NEEDLE here\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, timeout=60)
+    return root
+
+
+def test_the_ignored_count_is_right_from_a_subdirectory(tmp_path, monkeypatch):
+    root = _anchored_repo(tmp_path)
+    monkeypatch.chdir(root / "sub")
+    code, _, err = _run(["NEEDLE", "--json"])
+    assert code == 0, err
+    assert "1 of them are gitignored" in err
+
+
+def test_a_relative_path_leaving_the_subdirectory_still_counts(tmp_path, monkeypatch):
+    root = _anchored_repo(tmp_path)
+    monkeypatch.chdir(root / "sub")
+    code, _, err = _run(["NEEDLE", ".."])
+    assert code == 0, err
+    assert "1 of them are gitignored" in err
+
+
+def test_git_missing_makes_the_ignored_count_unknown_not_zero(tmp_path, monkeypatch):
+    root = _anchored_repo(tmp_path)
+    empty = tmp_path / "nobin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    code, out, err = _run(["NEEDLE", str(root), "--json"])
+    assert code == 2
+    assert "0 of them" not in err and "unknown" in err.lower()
+    assert json.loads(out)["data"]["ignored_matches"] is None
+
+
+def test_a_failing_check_ignore_makes_the_count_unknown(tmp_path):
+    """check-ignore reads the index; a corrupt one fails it (128) while rev-parse still works,
+    and that exit status was never looked at."""
+    root = _anchored_repo(tmp_path)
+    (root / ".git" / "index").write_bytes(b"garbage-not-an-index")
+    code, out, err = _run(["NEEDLE", str(root), "--json"])
+    assert code == 2
+    assert "unknown" in err.lower() and "0 of them" not in err
+    assert json.loads(out)["data"]["ignored_matches"] is None
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows has no POSIX mode bits: chmod(0o000) leaves the path readable")
+def test_unreadable_files_and_dirs_are_reported_not_dropped(tmp_path):
+    p = tmp_path / "p"
+    (p / "locked").mkdir(parents=True)
+    (p / "locked" / "inner.txt").write_text("NEEDLE\n", encoding="utf-8")
+    (p / "unreadable.txt").write_text("NEEDLE\n", encoding="utf-8")
+    (p / "unreadable.txt").chmod(0o000)
+    (p / "locked").chmod(0o000)
+    try:
+        if os.access(p / "locked", os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 path (root)")
+        code, out, err = _run(["NEEDLE", str(p), "--json"])
+    finally:
+        (p / "locked").chmod(0o755)
+        (p / "unreadable.txt").chmod(0o644)
+    assert code == 2, "zero matches with paths unread is not 'no match'"
+    payload = json.loads(out)
+    skipped = " ".join(payload["skipped"])
+    assert "unreadable.txt" in skipped and "locked" in skipped
+    assert payload["data"]["files_scanned"] == 0
+    assert "unreadable.txt" in err
+
+
+def test_binary_files_are_listed_as_skipped_and_not_counted_as_scanned(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.txt").write_text("NEEDLE\n", encoding="utf-8")
+    (d / "blob.bin").write_bytes(b"\0\0NEEDLE")
+    code, out, _ = _run(["NEEDLE", str(d), "--json"])
+    payload = json.loads(out)
+    assert code == 0
+    assert payload["data"]["files_scanned"] == 1
+    assert any("blob.bin" in s and "binary" in s for s in payload["skipped"])
+
+
+def test_a_form_feed_does_not_shift_line_numbers(tmp_path):
+    (tmp_path / "ff.txt").write_bytes(b"a\x0cb\nNEEDLE\n")
+    _, out, _ = _run(["NEEDLE", str(tmp_path)])
+    assert "ff.txt:2:NEEDLE" in out
+
+
+def test_a_bom_does_not_hide_a_match_at_the_start(tmp_path):
+    (tmp_path / "bom.txt").write_bytes(b"\xef\xbb\xbfNEEDLE first\n")
+    code, out, _ = _run(["^NEEDLE", str(tmp_path)])
+    assert code == 0 and "bom.txt:1:NEEDLE first" in out
+
+
+def test_ignore_case(tmp_path):
+    (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
+    assert _run(["NEEDLE", str(tmp_path)])[0] == 1
+    assert _run(["NEEDLE", str(tmp_path), "-i"])[0] == 0
+
+
+def test_a_bad_regex_still_emits_json(tmp_path):
+    code, out, _ = _run(["NEEDLE(", str(tmp_path), "--json"])
+    assert code == 2
+    assert json.loads(out)["ok"] is False
+
+
+def _run_script(args, **env_extra):
+    env = {**os.environ, **env_extra}
+    env.pop("PYTHONUTF8", None)
+    return subprocess.run([sys.executable, grep_all.__file__, *args], env=env,
+                          capture_output=True, timeout=60)
+
+
+def test_a_cp1252_stdout_does_not_crash_on_a_match(tmp_path):
+    (tmp_path / "a.md").write_text("arrow \u2192 NEEDLE\n", encoding="utf-8")
+    done = _run_script(["NEEDLE", str(tmp_path)], PYTHONIOENCODING="cp1252")
+    assert b"Traceback" not in done.stderr, done.stderr
+    assert done.returncode == 0
+
+
+@pytest.mark.skipif(sys.platform in ("win32", "darwin"),
+                    reason="Windows and macOS (APFS) refuse a filename that is not valid UTF-8")
+def test_a_non_utf8_filename_does_not_crash_the_print(tmp_path):
+    with open(os.path.join(os.fsencode(tmp_path), b"\xff.txt"), "wb") as fh:
+        fh.write(b"NEEDLE\n")
+    # An explicit utf-8 stdout is strict whatever the locale, as under a UTF-8 desktop locale;
+    # only the C/C.UTF-8 locale gets surrogateescape by default.
+    done = _run_script(["NEEDLE", str(tmp_path)], PYTHONIOENCODING="utf-8")
+    assert b"Traceback" not in done.stderr, done.stderr
+    assert done.returncode == 0

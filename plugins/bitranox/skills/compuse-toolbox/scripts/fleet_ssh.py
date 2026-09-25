@@ -21,7 +21,11 @@ on every call, and three traps sit in that one-liner.
 Host-key checking is left at ssh's own strict default. `--trust-changing-host-keys` is for a fleet
 you reimage, where a changed key is expected rather than an attack: it turns strict checking off,
 keeps that churn in a SEPARATE known-hosts file instead of polluting your real one, and heals a
-changed key by dropping the stale entry and retrying exactly once. Pointing a known-hosts file at
+changed key by dropping the stale entry. It retries - exactly once - ONLY when ssh itself refused
+the key before running anything (exit 255 plus ssh's own "Host key verification failed"). Under
+strict checking off a changed key is only a warning: ssh logs in with the key and RUNS the command,
+so a non-zero exit after the banner is the remote command's own, and re-running it would apply a
+mutating command twice. Pointing a known-hosts file at
 /dev/null is refused, because ssh then records every key "permanently" into the bit bucket, making
 every connect a first connect - that is the cause of a "Permanently added ..." warning that repeats
 forever and lands in the output of any helper that merges stderr into stdout.
@@ -38,8 +42,14 @@ An unstated user is never written into the argv, because `user@host` on a comman
 config-driven `User root` host in as the wrong one. The key is still resolved for the right
 identity, by asking ssh itself (`ssh -G <host>`, which reads the config without connecting).
 
-Key resolution: the first READABLE of FLEET_SSH_KEY_CANDIDATES (os.pathsep-separated templates
-taking {user} and {home}), else `--key`, else none - in which case ssh uses its own identities.
+Key resolution: `--key` when given, else the first READABLE of FLEET_SSH_KEY_CANDIDATES
+(os.pathsep-separated templates taking {user} and {home}), else none - in which case ssh uses its
+own identities.
+
+scp takes exactly one SRC and one DST. More paths are refused rather than guessed at: scp reads the
+LAST path as the destination, so silently keeping the first two would turn `f1 f2 host:/dir/` into
+a local copy that overwrites f2. A bracketed IPv6 literal (`[fe80::1]:/p`, `root@[::1]:/p`) names
+that address, and a Windows drive path (`C:\\dir\\f`, `C:/dir/f`) is local, not a host called C.
 
 Exit status is ssh's or scp's own, so the caller keeps the remote command's exit code; 255 is
 ssh itself failing (unreachable, auth, host key), and 2 is a usage error from this script.
@@ -67,6 +77,19 @@ DEFAULT_FLEET_KNOWN_HOSTS = "{home}/.ssh/known_hosts_fleet"
 HOST_KEY_CHANGED = re.compile(
     r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.I
 )
+# ssh's FATAL line: it aborted before authenticating, so no remote command can have run. The banner
+# alone does not say that - under StrictHostKeyChecking=no ssh prints it and then runs the command.
+HOST_KEY_REFUSED = re.compile(r"^Host key verification failed\.?\s*$", re.M)
+# ssh's own failure status; a remote command can exit 255 too, hence the fatal line as well.
+SSH_FAILED = 255
+# `user@[v6addr]:path` - the address holds colons, so it cannot be split off at the first one.
+_BRACKETED_REMOTE = re.compile(r"^((?:[^@/\[\]:]+@)?\[[^\]/]+\]):")
+# `C:\dir` is a Windows drive path on every platform: no remote scp path starts with a backslash.
+_DRIVE_BACKSLASH = re.compile(r"^[A-Za-z]:\\")
+# `C:/dir` is one ONLY on Windows, where scp itself reads it as local; elsewhere `h:/p` is the
+# ordinary spelling of host h, and scp reads it that way too.
+_DRIVE_SLASH = re.compile(r"^[A-Za-z]:/")
+_ON_WINDOWS = os.name == "nt"
 # Pure noise once the key is on file, and the line that leaks into merged-output parses.
 _ADDED_NOISE = re.compile(r"^Warning: Permanently added .*to the list of known hosts\.?\s*$")
 
@@ -96,9 +119,21 @@ def resolve_key(user: str, candidates=None, home: str | None = None) -> str | No
         # since both ssh and Path accept it, but it is what the tool then PRINTS and returns,
         # so every caller comparing it against a native path sees two different strings.
         path = os.path.normpath(template.format(user=user, home=home))
-        if os.access(path, os.R_OK) and Path(path).is_file():
+        # os.path.isfile, not Path.is_file: before Python 3.12 the latter RAISES PermissionError
+        # for a candidate inside a root-only directory - the very case this function skips.
+        if os.path.isfile(path) and _can_open(path):
             return path
     return None
+
+
+def _can_open(path: str) -> bool:
+    """Readable means it OPENS. os.access(R_OK) on Windows checks only the read-only attribute and
+    answers True for a file whose ACL refuses this user, so it cannot make the selection there."""
+    try:
+        with open(path, "rb"):
+            return True
+    except OSError:
+        return False
 
 
 def build_options(*, key: str | None, timeout: int, trust_changing_host_keys: bool,
@@ -141,28 +176,48 @@ def build_scp_argv(src: str, dst: str, *, key: str | None = None, options=()) ->
     return argv
 
 
-def is_remote_side(side: str) -> bool:
-    """Does this half of an scp pair name a host?
+def remote_prefix(side: str, *, windows: bool = _ON_WINDOWS) -> str | None:
+    """The `[user@]host` text before the path colon of an scp side, or None for a local path.
 
-    A bare local path has no colon before any slash, and a path whose colon comes AFTER a slash
-    (`/mnt/c:/weird`) is local too.
+    A bare local path has no colon before any slash, a path whose colon comes AFTER a slash
+    (`/mnt/c:/weird`) is local too, and so is a Windows drive path: `C:\\dir` everywhere, `C:/dir`
+    on Windows (`windows` is a parameter so both platforms' reading is testable on either). A
+    bracketed IPv6 literal keeps its brackets here; scp_host strips them.
     """
+    bracketed = _BRACKETED_REMOTE.match(side)
+    if bracketed:
+        return bracketed.group(1)
+    if _DRIVE_BACKSLASH.match(side) or (windows and _DRIVE_SLASH.match(side)):
+        return None
     head = side.split(":", 1)[0]
-    return ":" in side and "/" not in head and bool(head)
+    return head if ":" in side and "/" not in head and head else None
+
+
+def is_remote_side(side: str) -> bool:
+    """Does this half of an scp pair name a host?"""
+    return remote_prefix(side) is not None
 
 
 def scp_remote(src: str, dst: str) -> str | None:
     """The `[user@]host` part of whichever side is remote, or None for a local-to-local copy."""
     for side in (dst, src):
-        if is_remote_side(side):
-            return side.split(":", 1)[0]
+        prefix = remote_prefix(side)
+        if prefix is not None:
+            return prefix
     return None
 
 
 def scp_host(src: str, dst: str) -> str | None:
-    """Just the host, so a changed host key can be healed in scp mode too."""
+    """Just the host, so a changed host key can be healed in scp mode too.
+
+    An IPv6 literal comes back without its brackets, the spelling `ssh-keygen -R` and `ssh -G`
+    take for port 22.
+    """
     remote = scp_remote(src, dst)
-    return remote.split("@", 1)[-1] if remote else None
+    if not remote:
+        return None
+    host = remote.split("@", 1)[-1]
+    return host[1:-1] if host.startswith("[") and host.endswith("]") else host
 
 
 def scp_user(src: str, dst: str) -> str | None:
@@ -173,7 +228,8 @@ def scp_user(src: str, dst: str) -> str | None:
 
 def with_scp_user(side: str, user: str) -> str:
     """Name the login user on a remote scp path that does not already carry one (trap 1)."""
-    if not is_remote_side(side) or "@" in side.split(":", 1)[0]:
+    prefix = remote_prefix(side)
+    if prefix is None or "@" in prefix:
         return side
     return f"{user}@{side}"
 
@@ -187,27 +243,39 @@ def forward_stderr(text: str, stream=sys.stderr) -> None:
 
 def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts: str | None,
                               heal: bool, run=subprocess.run) -> int:
-    """Run `argv`; on a host-key mismatch drop the stale entry and retry EXACTLY once.
+    """Run `argv`; on a host-key mismatch drop the stale entry, and retry at most once.
 
     stdout is inherited so large command output still streams; only stderr is captured, and only
-    so the mismatch can be detected and the noise line filtered.
+    so the mismatch can be detected and the noise line filtered. It is decoded as UTF-8 with
+    replacement, because what arrives there is partly the REMOTE command's stderr, in whatever
+    encoding the remote wrote, and a strict locale decode would crash after the command ran.
 
-    The retry guard is deliberately four-part - healing enabled, a non-zero exit, a known host, and
-    stderr that really is a mismatch - because `argv` can be a MUTATING remote command and a
-    spurious second run would apply it twice. `run` is injected so that is testable without a live
-    host and a real changed key.
+    Healing (dropping the stale entry) needs healing enabled, a non-zero exit, a known host and
+    stderr that really is a mismatch. The RETRY needs more: ssh's own failure status AND its fatal
+    "Host key verification failed" line, which together say it stopped before authenticating.
+    Anything less can be a command that ran under the banner - StrictHostKeyChecking=no makes a
+    changed key a warning - and `argv` can be MUTATING, so a second run would apply it twice. `run`
+    is injected so that is testable without a live host and a real changed key.
     """
-    proc = run(argv, stderr=subprocess.PIPE, text=True)
+    proc = _run_capturing_stderr(argv, run)
     err = proc.stderr or ""
     if heal and proc.returncode != 0 and host and known_hosts and HOST_KEY_CHANGED.search(err):
         run(["ssh-keygen", "-R", host, "-f", known_hosts],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        print(f"fleet_ssh: host key for {host} changed; dropped the stale entry and retried",
-              file=sys.stderr)
-        proc = run(argv, stderr=subprocess.PIPE, text=True)
-        err = proc.stderr or ""
+        if proc.returncode == SSH_FAILED and HOST_KEY_REFUSED.search(err):
+            print(f"fleet_ssh: host key for {host} changed; dropped the stale entry and retried",
+                  file=sys.stderr)
+            proc = _run_capturing_stderr(argv, run)
+            err = proc.stderr or ""
+        else:
+            print(f"fleet_ssh: host key for {host} changed; dropped the stale entry (not retried: "
+                  "the command may already have run)", file=sys.stderr)
     forward_stderr(err)
     return proc.returncode
+
+
+def _run_capturing_stderr(argv: list[str], run):
+    return run(argv, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -237,7 +305,8 @@ def ssh_config_user(host: str, run=subprocess.run) -> str | None:
     into the argv, which is the part that would override the config.
     """
     try:
-        done = run(["ssh", "-G", host], capture_output=True, text=True, timeout=10)
+        done = run(["ssh", "-G", host], capture_output=True, text=True, encoding="utf-8",
+                   errors="replace", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode != 0:
@@ -278,8 +347,11 @@ def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str
         return resolve_key(user, home=home) if user else None
 
     if args.scp:
-        if len(args.rest) < 2:
-            raise UsageError("--scp needs <src> <dst>")
+        if len(args.rest) != 2:
+            # Never keep the first two of three: scp reads the LAST path as the destination, so
+            # `f1 f2 host:/dir/` cut to `f1 f2` is a local copy that overwrites f2.
+            raise UsageError(f"--scp needs <src> <dst>: exactly 2 paths, got {len(args.rest)} "
+                             "(copy several files with one call each, or a directory with scp -r)")
         src_in, dst_in = args.rest[0], args.rest[1]
         # A user named in the path wins: someone who wrote root@host meant root. --user only fills
         # in a side that names nobody.
@@ -302,7 +374,20 @@ def plan(args: argparse.Namespace, *, home: str | None = None, default_user: str
     return build_ssh_argv(host, cmd, user=args.user, key=key, options=options), host, known_hosts
 
 
+def tolerate_unencodable_stdout(stream=None) -> None:
+    """A Windows pipe is cp1252; a path it cannot encode must print as '?', not crash the run."""
+    stream = stream if stream is not None else sys.stdout
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None, *, run=subprocess.run) -> int:
+    tolerate_unencodable_stdout()
     args = parse_args(argv)
     try:
         import getpass

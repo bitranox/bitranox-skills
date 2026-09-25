@@ -16,12 +16,14 @@ fails a run. Both were reached by grepping the identifier and reading the HIT CO
 reading what the hits DO.
 
 So this classifies every hit rather than counting them. Two buckets ENFORCE: DECISION (something
-is compared to it, or control flow branches on it - enforcement by refusal) and CLAMP (min()/max()
+is compared to it, or control flow branches on it - an if/while/assert test, a conditional
+expression, a `match` subject or a `case` guard - enforcement by refusal) and CLAMP (min()/max()
 caps a value with it - enforcement by truncation, which bounds without ever branching). The rest do
 not: DECLARATION, CONFIG, TEST, DOCSTRING, COMMENT and plain REFERENCE. Both empty is the answer.
 
-It follows ONE alias hop inside a function: `ceiling = self.policy.tokens_per_row.get(row)` then a
-decision on `ceiling` counts, reported as "via local `ceiling`". One hop and one scope on purpose -
+It follows ONE alias hop inside a function: `ceiling = self.policy.tokens_per_row.get(row)` (or the
+annotated `ceiling: int = ...`) then a decision on `ceiling` counts, reported as "via local
+`ceiling`". One hop and one scope on purpose -
 further would need real dataflow, and guessing across scopes would manufacture a decision from any
 common local name, which is the worse error because it reads as safety.
 
@@ -35,17 +37,29 @@ that one exists. And it never reports a non-Python file as enforcement: a YAML o
 where a value is declared, never where it is enforced, which is exactly the confusion that makes
 a shipped config line look like a mechanism.
 
+What counts as a TEST hit: anything under a `test`/`tests` directory BELOW --root, and any
+`test_*.py`, `*_test.py` or `conftest.py`. The walk skips VCS, cache and vendored trees below
+--root (`.git`, `__pycache__`, `venv`, any `.venv*`, `.tox`, `site-packages`, `node_modules`),
+reads a `.env` / `.env.*` file as config, and matches comments, docstrings and config lines as
+whole words, taking comments from the tokenizer so a `#` inside a string is not one. A directory
+it cannot enter is listed as UNREAD like an unparsable file.
+
 Run: `uv run scripts/enforced.py planner_kinds --root src/`
      `uv run scripts/enforced.py on_auth_failure --root . --json`
-Exit 0 = enforced (a decision exists), 1 = parsed but never enforced, 2 = not found or unreadable.
+Exit 0 = enforced (a decision exists), 1 = parsed but never enforced, 2 = not found, or incomplete
+(a file or directory could not be read and no decision was found elsewhere).
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import io
 import json
+import os
+import re
 import sys
+import tokenize
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -58,7 +72,20 @@ _CLAMP_CALLS = frozenset({"min", "max"})
 """Builtins that BOUND a value. Only these - treating any call as enforcement would make every
 argument of every function a bound."""
 
-_SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".ruff_cache"})
+_SKIP_DIRS = frozenset({
+    ".git", "__pycache__", "venv", "node_modules", ".mypy_cache", ".ruff_cache", ".tox",
+    "site-packages",
+})
+"""Directory names never scanned, matched only BELOW --root: a project that itself lives under a
+folder called venv or test is still the project."""
+_SKIP_DIR_PREFIXES = (".venv",)
+"""Prefix, not name: .venv-win, .venv-3.12 and .venv-bmk are venvs too, and a third-party
+site-packages decision under one read as this project's enforcer."""
+
+_TEST_DIRS = frozenset({"tests", "test"})
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+"""The line breaks Python's tokenizer and YAML/TOML count - NOT str.splitlines(), which also
+breaks on a form feed, U+2028 and friends and so shifts every later line number off the AST's."""
 
 
 class HitKind(str, Enum):
@@ -104,8 +131,27 @@ class Verdict:
 
 
 def _is_test_path(path: Path) -> bool:
-    parts = {p.lower() for p in path.parts}
-    return bool(parts & {"tests", "test"}) or path.name.startswith("test_")
+    """A test DIRECTORY anywhere in `path`, or a module pytest collects or loads as test code.
+
+    Callers pass the path RELATIVE to the scan root, so a folder called test above --root does not
+    turn the whole project into tests."""
+    parts = {p.lower() for p in path.parts[:-1]}
+    name = path.name.lower()
+    return (bool(parts & _TEST_DIRS) or name.startswith("test_") or name.endswith("_test.py")
+            or name == "conftest.py")
+
+
+def _skipped_dir(name: str) -> bool:
+    return name in _SKIP_DIRS or name.startswith(_SKIP_DIR_PREFIXES)
+
+
+def _word(identifier: str) -> re.Pattern[str]:
+    """The identifier as a whole word, so `limit` is not found inside `rate_limit`."""
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(identifier) + r"(?![A-Za-z0-9_])")
+
+
+def _lines(text: str) -> list[str]:
+    return _LINE_BREAK.split(text)
 
 
 def _parents(tree: ast.AST) -> dict[int, tuple[ast.AST, str]]:
@@ -146,9 +192,18 @@ def _decides(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> bool:
             return True
         if isinstance(parent, (ast.If, ast.While, ast.IfExp, ast.Assert)) and field == "test":
             return True
+        if _branches_as_match(parent, field):
+            return True
         if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
             return False
         current = parent
+
+
+def _branches_as_match(parent: ast.AST, field: str) -> bool:
+    """A `match` SUBJECT and a `case ... if` GUARD choose a branch exactly as an if-test does."""
+    if isinstance(parent, ast.Match) and field == "subject":
+        return True
+    return isinstance(parent, ast.match_case) and field == "guard"
 
 
 def _clamps(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> bool:
@@ -185,24 +240,32 @@ def _named_nodes(tree: ast.AST, identifier: str) -> list[ast.AST]:
 
 
 def _docstring_hits(tree: ast.AST, identifier: str, path: Path, lines: list[str]) -> list[Hit]:
+    word = _word(identifier)
     hits: list[Hit] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         doc = ast.get_docstring(node, clean=False)
-        if doc and identifier in doc:
+        if doc and word.search(doc):
             body = node.body[0] if node.body else None
             line = getattr(body, "lineno", 1)
             hits.append(Hit(HitKind.DOCSTRING, line, str(path), _line_text(lines, line)))
     return hits
 
 
-def _comment_hits(identifier: str, path: Path, lines: list[str]) -> list[Hit]:
+def _comment_hits(source: str, identifier: str, path: Path, lines: list[str]) -> list[Hit]:
+    """Real COMMENT tokens only: a `#` inside a string literal is not a comment."""
+    word = _word(identifier)
     hits: list[Hit] = []
-    for number, raw in enumerate(lines, start=1):
-        comment = raw.split("#", 1)[1] if "#" in raw else ""
-        if identifier in comment:
-            hits.append(Hit(HitKind.COMMENT, number, str(path), raw.strip()))
+    try:
+        # newline=None: a CR-only or CRLF file keeps the tokenizer's line numbers equal to the AST's
+        tokens = list(tokenize.generate_tokens(io.StringIO(source, newline=None).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return hits
+    for token in tokens:
+        if token.type == tokenize.COMMENT and word.search(token.string):
+            line = token.start[0]
+            hits.append(Hit(HitKind.COMMENT, line, str(path), _line_text(lines, line)))
     return hits
 
 
@@ -224,7 +287,8 @@ def _enclosing_scope(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> as
 
 
 def _alias_of(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> tuple[str, int] | None:
-    """If this mention is the VALUE of `name = <...node...>`, return that local name and its line."""
+    """If this mention is the VALUE of `name = <...node...>` or `name: T = <...node...>`, return
+    that local name and its line."""
     current: ast.AST = node
     while True:
         parent_field = table.get(id(current))
@@ -235,6 +299,10 @@ def _alias_of(node: ast.AST, table: dict[int, tuple[ast.AST, str]]) -> tuple[str
             targets = parent.targets
             if len(targets) == 1 and isinstance(targets[0], ast.Name):
                 return (targets[0].id, parent.lineno)
+            return None
+        if isinstance(parent, ast.AnnAssign) and field == "value":
+            if isinstance(parent.target, ast.Name):
+                return (parent.target.id, parent.lineno)
             return None
         if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
             return None
@@ -274,13 +342,15 @@ def _alias_decisions(
     return hits
 
 
-def classify_source(source: str, identifier: str, *, path: Path) -> list[Hit]:
+def classify_source(source: str, identifier: str, *, path: Path, root: Path | None = None) -> list[Hit]:
     """Classify every mention of ``identifier`` in one Python source string.
 
     Args:
         source: The file's text.
         identifier: The exact name to look for; substrings of longer names never match.
         path: Where it came from, used for the text of each hit and to spot a test path.
+        root: The scan root. When given, only the part of ``path`` BELOW it decides whether this
+            is a test file, so a project under a folder called ``test`` is not all tests.
 
     Returns:
         One :class:`Hit` per mention, in line order.
@@ -298,9 +368,9 @@ def classify_source(source: str, identifier: str, *, path: Path) -> list[Hit]:
         []
     """
     tree = ast.parse(source)
-    lines = source.splitlines()
+    lines = _lines(source)
     table = _parents(tree)
-    in_test = _is_test_path(path)
+    in_test = _is_test_path(_below(path, root))
     hits: list[Hit] = []
     for node in _named_nodes(tree, identifier):
         line = getattr(node, "lineno", 1)
@@ -317,43 +387,74 @@ def classify_source(source: str, identifier: str, *, path: Path) -> list[Hit]:
         hits.append(Hit(kind, line, str(path), _line_text(lines, line)))
         if kind is HitKind.REFERENCE:
             hits.extend(_alias_decisions(node, line, table, path, lines))
-    doc_and_comment = _docstring_hits(tree, identifier, path, lines) + _comment_hits(identifier, path, lines)
+    doc_and_comment = (_docstring_hits(tree, identifier, path, lines)
+                       + _comment_hits(source, identifier, path, lines))
     if in_test:
         doc_and_comment = [Hit(HitKind.TEST, h.line, h.path, h.text) for h in doc_and_comment]
     hits.extend(doc_and_comment)
     return sorted(hits, key=lambda h: (h.line, h.kind.value))
 
 
+def _below(path: Path, root: Path | None) -> Path:
+    """`path` relative to the scan root when it lies under it, else `path` unchanged."""
+    if root is None:
+        return path
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
+def _is_config(path: Path) -> bool:
+    """A `.env` has suffix '' and `.env.production` has suffix '.production', so name them too."""
+    return path.suffix in _CONFIG_SUFFIXES or path.name == ".env" or path.name.startswith(".env.")
+
+
+def _walk_files(root: Path, unreadable: list[str]) -> list[Path]:
+    """Every file under `root`, pruning skipped directories BELOW it; an unreadable directory is
+    recorded in `unreadable`, because the only enforcer could sit inside it."""
+    def record(exc: OSError) -> None:
+        unreadable.append(f"{exc.filename}: {type(exc).__name__} (directory not read)")
+
+    found: list[Path] = []
+    for dirpath, dirs, files in os.walk(root, onerror=record):
+        dirs[:] = sorted(d for d in dirs if not _skipped_dir(d))
+        found.extend(Path(dirpath) / name for name in files)
+    return sorted(found)
+
+
 def classify_tree(root: Path, identifier: str) -> tuple[list[Hit], list[str]]:
-    """Classify every mention under ``root``. Returns the hits and the files that could not be read."""
+    """Classify every mention under ``root``. Returns the hits and what could not be read - files
+    that would not decode or parse, and directories the walk could not enter."""
     hits: list[Hit] = []
     unreadable: list[str] = []
-    targets = [root] if root.is_file() else sorted(root.rglob("*"))
+    scan_root = root.parent if root.is_file() else root
+    targets = [root] if root.is_file() else _walk_files(root, unreadable)
     for path in targets:
-        if not path.is_file() or _SKIP_DIRS & set(path.parts):
-            continue
-        if path.suffix in _CONFIG_SUFFIXES:
+        if _is_config(path):
             hits.extend(_config_hits(path, identifier))
             continue
         if path.suffix not in _PY_SUFFIXES:
             continue
         try:
-            hits.extend(classify_source(path.read_text(encoding="utf-8"), identifier, path=path))
+            source = path.read_text(encoding="utf-8-sig")
+            hits.extend(classify_source(source, identifier, path=path, root=scan_root))
         except (SyntaxError, UnicodeDecodeError, OSError) as exc:
             unreadable.append(f"{path}: {type(exc).__name__}")
     return hits, unreadable
 
 
 def _config_hits(path: Path, identifier: str) -> list[Hit]:
-    """Mentions in a config file, always CONFIG - a value's home, never its enforcer."""
+    """Whole-word mentions in a config file, always CONFIG - a value's home, never its enforcer."""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _lines(path.read_text(encoding="utf-8-sig"))
     except (UnicodeDecodeError, OSError):
         return []
+    word = _word(identifier)
     return [
         Hit(HitKind.CONFIG, number, str(path), raw.strip())
         for number, raw in enumerate(lines, start=1)
-        if identifier in raw
+        if word.search(raw)
     ]
 
 
@@ -421,7 +522,19 @@ def _render(identifier: str, hits: list[Hit], verdict: Verdict, unreadable: list
     return "\n".join(lines)
 
 
+def _tolerate_unencodable_stdout() -> None:
+    """A Windows pipe is cp1252; a hit line it cannot encode must print as '?', not crash."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerate_unencodable_stdout()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("identifier", help="the exact name to classify (a config key, a field, a flag)")
     parser.add_argument("--root", default=".", help="file or directory to scan [.]")
@@ -461,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_render(args.identifier, hits, verdict, unreadable))
     if unreadable and not verdict.enforced:
         # An unread file could hold the only enforcer, so "never enforced" is not safe to assert.
-        print(f"\nincomplete: {len(unreadable)} file(s) unread; treat the verdict as unproven", file=sys.stderr)
+        print(f"\nincomplete: {len(unreadable)} path(s) unread; treat the verdict as unproven", file=sys.stderr)
         return 2
     if not verdict.found:
         return 2

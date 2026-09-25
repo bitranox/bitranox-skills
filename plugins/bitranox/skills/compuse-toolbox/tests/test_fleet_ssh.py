@@ -2,6 +2,7 @@
 import sys
 import io
 import os
+import subprocess
 
 import pytest
 
@@ -27,18 +28,18 @@ def test_user_flag_reaches_an_scp_destination_not_only_the_key():
     Both halves were right on their own - key resolution read the user, argv building copied the
     paths through - so only a test that goes through the WIRING can catch it.
     """
-    line, _host, _kh = plan(["--scp", "--user", "root", "--key", "/k", "./f", "h:/tmp/f"])
-    assert line.endswith("./f root@h:/tmp/f")
+    line, _host, _kh = plan(["--scp", "--user", "root", "--key", "/k", "./f", "hst:/tmp/f"])
+    assert line.endswith("./f root@hst:/tmp/f")
 
 
 def test_user_flag_reaches_a_remote_scp_source_too():
-    line, _host, _kh = plan(["--scp", "--user", "root", "--key", "/k", "h:/tmp/f", "./f"])
-    assert line.endswith("root@h:/tmp/f ./f")
+    line, _host, _kh = plan(["--scp", "--user", "root", "--key", "/k", "hst:/tmp/f", "./f"])
+    assert line.endswith("root@hst:/tmp/f ./f")
 
 
 def test_a_user_named_in_the_path_wins_over_the_flag():
-    line, _host, _kh = plan(["--scp", "--user", "someone", "--key", "/k", "./f", "root@h:/tmp/f"])
-    assert line.endswith("./f root@h:/tmp/f")
+    line, _host, _kh = plan(["--scp", "--user", "someone", "--key", "/k", "./f", "root@hst:/tmp/f"])
+    assert line.endswith("./f root@hst:/tmp/f")
 
 
 def test_a_local_to_local_copy_gains_no_user():
@@ -67,20 +68,20 @@ def test_the_key_and_the_login_are_the_same_identity(tmp_path):
     (home / ".ssh").mkdir(parents=True)
     key = home / ".ssh" / "root@anyhost_nopass.key"
     key.write_text("k")
-    line, _host, _kh = plan(["--scp", "--user", "root", "./f", "h:/tmp/f"], home=str(home))
-    assert f"-i {key}" in line and "root@h:/tmp/f" in line
+    line, _host, _kh = plan(["--scp", "--user", "root", "./f", "hst:/tmp/f"], home=str(home))
+    assert f"-i {key}" in line and "root@hst:/tmp/f" in line
 
 
 def test_with_scp_user_only_touches_a_remote_side_naming_no_user():
-    assert F.with_scp_user("h:/p", "root") == "root@h:/p"
-    assert F.with_scp_user("root@h:/p", "other") == "root@h:/p"
+    assert F.with_scp_user("hst:/p", "root") == "root@hst:/p"
+    assert F.with_scp_user("root@hst:/p", "other") == "root@hst:/p"
     assert F.with_scp_user("/local/f", "root") == "/local/f"
     assert F.with_scp_user("/mnt/c:/weird", "root") == "/mnt/c:/weird"    # a path, not a host
 
 
 def test_scp_host_finds_the_remote_side():
-    assert F.scp_host("./f", "h:/p") == "h"
-    assert F.scp_host("root@h:/p", "./f") == "h"
+    assert F.scp_host("./f", "hst:/p") == "hst"
+    assert F.scp_host("root@hst:/p", "./f") == "hst"
     assert F.scp_host("/a", "/b") is None
     assert F.scp_host("/a", "/mnt/c:/weird") is None
 
@@ -100,8 +101,8 @@ def test_an_unstated_user_is_never_written_into_the_argv():
 
 
 def test_an_unstated_user_is_not_written_into_an_scp_path_either():
-    line, _host, _kh = plan(["--scp", "--key", "/k", "./f", "h:/p"])
-    assert line.endswith("./f h:/p")
+    line, _host, _kh = plan(["--scp", "--key", "/k", "./f", "hst:/p"])
+    assert line.endswith("./f hst:/p")
     assert "localuser@" not in line
 
 
@@ -151,7 +152,7 @@ def test_ssh_config_user_is_none_when_ssh_cannot_answer():
 
 def test_batchmode_is_always_on_in_both_modes():
     """With only -i, a rejected key falls back to a password prompt and hangs an unattended run."""
-    for argv in (["--key", "/k", "h", "uptime"], ["--scp", "--key", "/k", "./f", "h:/p"]):
+    for argv in (["--key", "/k", "h", "uptime"], ["--scp", "--key", "/k", "./f", "hst:/p"]):
         assert "BatchMode=yes" in plan(argv)[0]
 
 
@@ -267,7 +268,8 @@ def test_a_clean_run_is_executed_exactly_once():
 
 
 def test_a_changed_host_key_drops_the_entry_and_retries_once():
-    r = _Runner(_FakeProc(255, _CHANGED), _FakeProc(0, ""), _FakeProc(0, ""))
+    """Retried only when ssh itself refused the key (255 plus its fatal line): nothing ran."""
+    r = _Runner(_FakeProc(255, _VERIFY_FAILED), _FakeProc(0, ""), _FakeProc(0, ""))
     assert _heal(r) == 0
     assert r.calls[1] == ["ssh-keygen", "-R", "h", "-f", "/kh"]
     assert r.calls[0] == r.calls[2] == ["ssh", "h", "uptime"]     # the command twice, no more
@@ -302,7 +304,7 @@ def test_no_host_means_no_retry():
 
 
 def test_the_retry_happens_at_most_once():
-    r = _Runner(_FakeProc(255, _CHANGED), _FakeProc(0, ""), _FakeProc(255, _CHANGED))
+    r = _Runner(_FakeProc(255, _VERIFY_FAILED), _FakeProc(0, ""), _FakeProc(255, _VERIFY_FAILED))
     assert _heal(r) == 255
     assert len([c for c in r.calls if c[0] == "ssh"]) == 2
 
@@ -327,3 +329,195 @@ def test_a_usage_error_exits_2_without_connecting(capsys):
     assert F.main(["--scp", "./only-one-path"], run=r) == 2
     assert r.calls == []
     assert "scp needs" in capsys.readouterr().err
+
+
+# ---- a remote command that already ran must never run again ------------------------------------
+
+_VERIFY_FAILED = (_CHANGED + "Host key for h has changed and you have requested strict checking.\n"
+                  "Host key verification failed.\n")
+
+
+def test_a_command_that_ran_under_the_banner_is_never_rerun():
+    """With StrictHostKeyChecking=no a changed key is a WARNING: ssh prints the banner, logs in with
+    the key and RUNS the command. Its non-zero exit is then the remote command's, so a retry would
+    apply a mutating command twice. The stale entry is still dropped so the next call is quiet."""
+    r = _Runner(_FakeProc(3, _CHANGED))
+    assert _heal(r, argv=("ssh", "h", "apt-get -y upgrade && false")) == 3
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"], "healed, but the command ran ONCE"
+
+
+def test_a_255_with_only_the_banner_is_not_retried_either():
+    """255 is also what a remote command can exit with, and the banner alone does not say ssh
+    stopped before running anything - only its fatal "verification failed" line says that."""
+    r = _Runner(_FakeProc(255, _CHANGED))
+    assert _heal(r) == 255
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"]
+
+
+def test_a_verification_failure_that_is_not_ssh_s_own_exit_is_not_retried():
+    """ssh aborting on the host key exits 255; any other status means the phrase came from the
+    remote side, so the command ran."""
+    r = _Runner(_FakeProc(1, _VERIFY_FAILED))
+    assert _heal(r) == 1
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen"]
+
+
+def _stub_ssh_bin(tmp_path, exit_code):
+    """A fake `ssh` and `ssh-keygen` on a private PATH, so no test can reach a real host.
+
+    The fake ssh prints the changed-key banner, records that the remote command RAN, and exits with
+    the remote command's status - exactly what real ssh does under StrictHostKeyChecking=no. It
+    also writes a byte that is not UTF-8, which the captured stderr must survive."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "calls.log"
+    (bindir / "ssh").write_text(
+        "#!/bin/sh\n"
+        f"echo ssh >> '{log}'\n"
+        "echo '@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@' >&2\n"
+        f"echo REMOTE-COMMAND-EXECUTED >> '{log}'\n"
+        "printf 'bad byte \\377\\n' >&2\n"
+        f"exit {exit_code}\n", encoding="utf-8")
+    (bindir / "ssh-keygen").write_text(f"#!/bin/sh\necho ssh-keygen >> '{log}'\n",
+                                       encoding="utf-8")
+    for stub in bindir.iterdir():
+        stub.chmod(0o755)
+    return bindir, log
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the stub ssh is a #!/bin/sh script, which CreateProcess cannot launch by "
+                           "bare name; the retry rule itself is covered by the injected-run tests")
+def test_end_to_end_a_remote_command_runs_once_under_the_banner(tmp_path):
+    bindir, log = _stub_ssh_bin(tmp_path, 3)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+           "HOME": str(home), "USERPROFILE": str(home)}
+    done = subprocess.run([sys.executable, F.__file__, "--key", "/k", "--trust-changing-host-keys",
+                           "h", "apt-get -y upgrade && false"],
+                          env=env, capture_output=True, timeout=60)
+    assert b"Traceback" not in done.stderr, "an undecodable byte on ssh's stderr must not crash"
+    assert done.returncode == 3, done.stderr
+    assert log.read_text(encoding="utf-8").split() == ["ssh", "REMOTE-COMMAND-EXECUTED",
+                                                        "ssh-keygen"]
+
+
+# ---- scp argument shapes -----------------------------------------------------------------------
+
+def test_scp_with_more_than_two_paths_is_refused_not_truncated(capsys):
+    """`--scp f1 f2 host:/dir/` used to run `scp f1 f2`, a LOCAL copy overwriting f2."""
+    r = _Runner()
+    assert F.main(["--scp", "--key", "/k", "f1", "f2", "hst:/dir/"], run=r) == 2
+    assert r.calls == []
+    assert "exactly" in capsys.readouterr().err
+
+
+def test_a_bracketed_ipv6_target_resolves_to_the_address():
+    assert F.scp_host("./f", "[fe80::1]:/p") == "fe80::1"
+    assert F.scp_host("./f", "root@[::1]:/p") == "::1"
+    assert F.scp_user("./f", "root@[::1]:/p") == "root"
+    assert F.with_scp_user("[::1]:/p", "root") == "root@[::1]:/p"
+    assert F.scp_host("./f", "root@host:/p") == "host"
+
+
+def test_a_windows_drive_path_is_local():
+    for side in ("C:\\Users\\me\\f", "d:\\x"):
+        assert not F.is_remote_side(side), side
+        assert F.with_scp_user(side, "root") == side
+    # The forward-slash spelling is a drive only where scp itself reads it as one.
+    assert F.remote_prefix("C:/Users/me/f", windows=True) is None
+    assert F.remote_prefix("h:/p", windows=False) == "h"
+    line, host, _kh = plan(["--scp", "--user", "root", "--key", "/k", "C:\\Users\\me\\f",
+                            "hst:/tmp/f"])
+    assert line.endswith("C:\\Users\\me\\f root@hst:/tmp/f")
+    assert host == "hst"
+
+
+# ---- key readability is probed by opening, not by os.access -------------------------------------
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no POSIX mode bits: chmod(0o000) leaves the file readable, so an unreadable candidate cannot be created')
+def test_resolve_key_does_not_trust_os_access(tmp_path, monkeypatch):
+    """On Windows os.access(R_OK) is True for any existing file whatever its ACL. Simulate that and
+    the unreadable candidate must still be skipped, because the probe is a real open()."""
+    unreadable = tmp_path / "shared" / "u@anyhost_nopass.key"
+    unreadable.parent.mkdir()
+    unreadable.write_text("k")
+    unreadable.chmod(0o000)
+    try:
+        with open(unreadable, "rb"):
+            pytest.skip("running with privileges that read a mode-000 file (root)")
+    except OSError:
+        pass
+    readable = tmp_path / "ok.key"
+    readable.write_text("k")
+    monkeypatch.setattr(os, "access", lambda *a, **k: True)
+    assert F.resolve_key("u", (str(unreadable), str(readable)), home=str(tmp_path)) == str(readable)
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason='Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable')
+def test_a_candidate_inside_an_unreadable_directory_is_skipped_not_a_crash(tmp_path):
+    """A root-only key DIRECTORY: Path.is_file raised PermissionError there before 3.12."""
+    locked = tmp_path / "rootonly"
+    locked.mkdir()
+    (locked / "u.key").write_text("k")
+    readable = tmp_path / "ok.key"
+    readable.write_text("k")
+    locked.chmod(0o000)
+    try:
+        if os.access(locked, os.R_OK | os.X_OK):
+            pytest.skip("running with privileges that read a mode-000 dir (root)")
+        found = F.resolve_key("u", (str(locked / "u.key"), str(readable)), home=str(tmp_path))
+    finally:
+        locked.chmod(0o755)
+    assert found == str(readable)
+
+
+# ---- main() wiring, not only plan() -------------------------------------------------------------
+
+def _home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_main_passes_the_trust_flag_through_as_healing(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    r = _Runner(_FakeProc(255, _VERIFY_FAILED), _FakeProc(0), _FakeProc(0))
+    assert F.main(["--key", "/k", "--trust-changing-host-keys", "h", "uptime"], run=r) == 0
+    assert [c[0] for c in r.calls] == ["ssh", "ssh-keygen", "ssh"]
+    assert (home / ".ssh").is_dir(), "the fleet known-hosts directory is created before ssh runs"
+
+
+def test_main_without_the_trust_flag_never_heals(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    r = _Runner(_FakeProc(255, _VERIFY_FAILED))
+    assert F.main(["--key", "/k", "h", "uptime"], run=r) == 255
+    assert [c[0] for c in r.calls] == ["ssh"]
+
+
+def test_main_passes_the_remote_exit_code_through(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    r = _Runner(_FakeProc(7))
+    assert F.main(["--key", "/k", "h", "exit 7"], run=r) == 7
+
+
+def test_main_with_no_host_is_a_usage_error(capsys):
+    r = _Runner()
+    assert F.main(["--key", "/k"], run=r) == 2
+    assert r.calls == []
+    assert "need a <host>" in capsys.readouterr().err
+
+
+def test_dry_run_survives_a_cp1252_stdout():
+    """A Windows pipe is cp1252; a path it cannot encode must not crash the print."""
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    done = subprocess.run([sys.executable, F.__file__, "--dry-run", "--key", "/k", "--scp",
+                           "./arrow\u2192f", "hst:/tmp/"], env=env, capture_output=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert b"hst:/tmp/" in done.stdout

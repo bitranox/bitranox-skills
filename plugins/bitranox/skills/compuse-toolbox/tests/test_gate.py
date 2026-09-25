@@ -1,6 +1,7 @@
 """A gate runner must report the REAL exit status, never the status of a pipe element."""
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -688,3 +689,128 @@ class TestNonTestGatesKeepPassing:
         lint run into a gate failure."""
         rep = gate.run_gates([("lint", emit("Found 0 errors."))], tmp_path / "g.log")
         assert rep.ok is True
+
+
+# ---- review fixes (rank-10 slice 2, group T3) ---------------------------------------------------
+
+
+class TestANameAfterAPositionalGate:
+    def test_a_name_written_after_a_positional_is_refused_when_a_gate_option_exists(self, tmp_path, capsys):
+        """`--gate A <B> --name x` pinned x on A, the gate written BEFORE the positional."""
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), "--gate", FAIL, OK, "--name", "unit tests"])
+        assert exc.value.code == 2
+        assert "positional" in capsys.readouterr().err
+
+    def test_an_abbreviated_name_option_after_the_positional_is_refused_too(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), "--gate", FAIL, OK, "--nam", "unit tests"])
+        assert exc.value.code == 2
+
+    def test_a_name_after_its_own_gate_option_still_works_beside_a_positional(self, tmp_path, capsys):
+        rc = gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK, "--name", "first", OK])
+        assert rc == 0
+        assert "[PASS] first" in capsys.readouterr().out
+
+    def test_the_value_taking_option_list_matches_the_parser(self, capsys):
+        """The raw-argv walk skips each value-taking option's value; an option added to the
+        parser but not to that list would make its value read as the positional gate."""
+        with pytest.raises(SystemExit):
+            gate.main(["--help"])
+        declared = set(re.findall(r"(--[a-z-]+) [A-Z]+", capsys.readouterr().out))
+        assert declared == set(gate._VALUED_OPTIONS)
+
+    def test_a_name_after_a_lone_positional_labels_it(self, tmp_path, capsys):
+        rc = gate.main(["--log", str(tmp_path / "g.log"), OK, "--name", "unit tests"])
+        assert rc == 0
+        assert "[PASS] unit tests" in capsys.readouterr().out
+
+
+class TestMalformedInputIsAUsageError:
+    @pytest.mark.parametrize("argv", [
+        ["--gate", ""],
+        pytest.param(["--gate", "pytest -k 'foo"], marks=pytest.mark.skipif(
+            os.name == "nt", reason="CommandLineToArgvW accepts an unclosed quote; only shlex "
+                                    "refuses one")),
+        ["--summary", "(", "--gate", OK],
+        [""],
+    ])
+    def test_exit_2_with_a_message_not_a_traceback(self, tmp_path, capsys, argv):
+        with pytest.raises(SystemExit) as exc:
+            gate.main(["--log", str(tmp_path / "g.log"), *argv])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert ": error:" in err and "Traceback" not in err
+
+
+class TestMoreZeroTestShapes:
+    def test_a_go_run_whose_every_package_ran_nothing_is_refused(self, tmp_path):
+        text = ("testing: warning: no tests to run\nPASS\n"
+                "ok  \texample.com/x\t0.002s [no tests to run]")
+        rep = gate.run_gates([("go", emit(text))], tmp_path / "g.log")
+        assert rep.results[0].test_count == 0 and rep.ok is False
+
+    def test_a_go_run_where_one_package_ran_tests_is_not_refused(self):
+        text = ("ok  \texample.com/a\t0.010s\n"
+                "ok  \texample.com/b\t0.002s [no tests to run]\n")
+        assert gate.observed_test_count(text) is None
+
+    def test_a_bare_go_test_binary_with_nothing_to_run_is_refused(self):
+        assert gate.observed_test_count("testing: warning: no tests to run\nPASS\n") == 0
+
+    def test_unittest_ran_zero_is_refused(self, tmp_path):
+        text = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK"
+        rep = gate.run_gates([("unit", emit(text))], tmp_path / "g.log")
+        assert rep.results[0].test_count == 0 and rep.ok is False
+
+    def test_unittest_counts_are_read(self):
+        assert gate.observed_test_count("Ran 3 tests in 0.004s\n\nOK\n") == 3
+
+
+class TestTheReportAndTheFollowUp:
+    def test_the_follow_ups_own_status_is_the_runners_exit_code(self, tmp_path):
+        assert gate.main(["--log", str(tmp_path / "g.log"), "--gate", OK, "--then", "exit 7"]) == 7
+
+    def test_a_summary_line_holding_a_form_feed_is_kept_whole(self, tmp_path):
+        rep = gate.run_gates([("u", emit("head\x0c3 passed"))], tmp_path / "g.log", "passed")
+        assert rep.results[0].summary_lines == ["head\x0c3 passed"]
+
+    def test_the_report_survives_a_cp1252_stdout(self, tmp_path):
+        """`plain python3` on Windows leaves a piped stdout at cp1252; the crash blocked --then."""
+        marker = tmp_path / "pushed"
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        env.pop("PYTHONUTF8", None)
+        follow = quoted(sys.executable, "-c", f"open({str(marker)!r}, 'w').close()")
+        # The gate writes UTF-8 bytes itself: it inherits the cp1252 setting, and a print() there
+        # would crash the GATE rather than the report under test.
+        check = quoted(sys.executable, "-c",
+                       "import sys; sys.stdout.buffer.write('\\u2713 3 passed\\n'.encode('utf-8'))")
+        done = subprocess.run([sys.executable, gate.__file__, "--log", str(tmp_path / "g.log"),
+                               "--summary", "passed", "--gate", check, "--then", follow],
+                              env=env, capture_output=True, timeout=120)
+        assert b"Traceback" not in done.stderr, done.stderr
+        assert done.returncode == 0
+        assert marker.exists()
+
+
+class TestBareCommandNamesOnWindows:
+    def test_argv0_is_resolved_through_pathext_on_windows(self):
+        """CreateProcess appends only .exe, so a bare `npm` (npm.cmd) failed rc=127 there."""
+        assert gate.resolve_argv0(["npm", "test"], windows=True,
+                                  which=lambda name: "C:\\node\\npm.cmd") == ["C:\\node\\npm.cmd", "test"]
+
+    def test_an_unresolvable_name_is_left_for_the_127(self):
+        assert gate.resolve_argv0(["nope", "x"], windows=True, which=lambda name: None) == ["nope", "x"]
+
+    def test_posix_argv_is_untouched(self):
+        assert gate.resolve_argv0(["npm", "test"], windows=False,
+                                  which=lambda name: "/elsewhere/npm") == ["npm", "test"]
+
+    @pytest.mark.skipif(os.name != "nt", reason="a .cmd shim only exists as a concept on Windows")
+    def test_a_bare_cmd_shim_on_path_runs(self, tmp_path, monkeypatch):
+        shim_dir = tmp_path / "bin"
+        shim_dir.mkdir()
+        (shim_dir / "gateshim.cmd").write_text("@exit /b 0\r\n", encoding="utf-8")
+        monkeypatch.setenv("PATH", str(shim_dir) + os.pathsep + os.environ.get("PATH", ""))
+        rep = gate.run_gates([("shim", ["gateshim"])], tmp_path / "g.log")
+        assert rep.results[0].returncode == 0

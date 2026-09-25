@@ -3,6 +3,9 @@ and the error / None-branch behaviour. ASCII only."""
 import json
 import os
 import subprocess
+import sys
+
+import pytest
 
 import git_state as G
 
@@ -283,8 +286,8 @@ def test_find_repos_discovers_git_dirs_and_skips_nested_git(tmp_path):
 
 
 def test_main_error_path_exits_nonzero_and_does_not_crash(tmp_path, capsys):
-    rc = G.main([str(tmp_path)])       # not a git repo -> error path -> rc 1, no crash
-    assert rc == 1
+    rc = G.main([str(tmp_path)])       # not a git repo -> error path -> rc 2, no crash
+    assert rc == 2
     assert "ERROR" in capsys.readouterr().out
 
 
@@ -297,3 +300,185 @@ def test_main_survives_none_branch(monkeypatch, capsys):
     rc = G.main(["somerepo"])
     assert rc == 1                     # no-upstream -> out of sync
     assert "None" in capsys.readouterr().out   # printed, did not raise
+
+
+# --- review fixes (rank-10 slice 2, group T3) ---------------------------------------------------
+
+
+def _origin_and_clone(tmp_path):
+    """A bare origin plus a clone tracking origin/feat, with one commit on both."""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    (clone / "a.md").write_text("a\n", encoding="utf-8")
+    _commit(clone, "a.md")
+    _git(clone, "checkout", "-q", "-b", "feat")
+    _git(clone, "push", "-q", "-u", "origin", "feat")
+    return origin, clone
+
+
+def test_an_upstream_deleted_on_the_remote_is_not_in_sync(tmp_path, capsys):
+    """`fetch --prune` after the remote branch is deleted leaves branch.upstream but NO branch.ab
+    line; reading the absent line as +0 -0 called a branch with nowhere to push "OK"."""
+    _origin, clone = _origin_and_clone(tmp_path)
+    _git(clone, "push", "-q", "origin", "--delete", "feat")
+    _git(clone, "fetch", "-q", "--prune")
+    s = G.git_state(clone)
+    assert s["upstream"] == "origin/feat" and s["gone"] is True
+    assert s["in_sync"] is False
+    assert G.main([str(clone)]) == 1
+    assert "gone" in capsys.readouterr().out
+
+
+def test_parse_an_upstream_with_no_ab_line_is_gone():
+    s = G.parse_branch_status("# branch.head feat\n# branch.upstream origin/feat\n")
+    assert s["gone"] is True and s["in_sync"] is False
+    ok = G.parse_branch_status("# branch.head feat\n# branch.upstream origin/feat\n"
+                               "# branch.ab +0 -0\n")
+    assert ok["gone"] is False and ok["in_sync"] is True
+
+
+def test_repo_mode_with_a_missing_root_is_an_error(tmp_path, capsys):
+    assert G.main(["--root", str(tmp_path / "nope")]) == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_repo_mode_with_a_root_holding_no_repo_is_not_a_pass(tmp_path, capsys):
+    """A pre-push guard that checked nothing must not exit 0."""
+    (tmp_path / "empty").mkdir()
+    assert G.main(["--root", str(tmp_path / "empty")]) == 2
+    assert "no git repo" in capsys.readouterr().err
+
+
+def test_repo_mode_root_finds_real_repos(tmp_path, capsys):
+    _origin, clone = _origin_and_clone(tmp_path)
+    rc = G.main(["--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert str(clone) in out and "OK" in out
+
+
+def test_find_repos_accepts_a_git_file(tmp_path):
+    """A linked worktree and a submodule have a .git FILE, not a directory."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git(outer, "init", "-q")
+    (outer / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (outer / ".gitignore").write_text(".wt/\n", encoding="utf-8")
+    _commit(outer, "CLAUDE.md", ".gitignore")
+    _git(outer, "worktree", "add", "-q", str(outer / ".wt" / "feat"))
+    wt = outer / ".wt" / "feat"
+    assert (wt / ".git").is_file()
+    assert str(wt) in G.find_repos(outer)
+    (wt / "CLAUDE.md").write_text("changed\n", encoding="utf-8")
+    states = {f["path"]: f["state"] for f in G.classify_files("CLAUDE.md", root=outer)["files"]}
+    assert states[str(wt / "CLAUDE.md")] == "tracked-modified", states
+    assert states[str(outer / "CLAUDE.md")] == "tracked-clean"
+
+
+def test_staged_paths_keep_their_spaces():
+    out = ("# branch.head m\n"
+           "1 A. N... 000000 100644 100644 0000 aaaa my file.md\n"
+           "2 R. N... 100644 100644 100644 aaaa aaaa R100 new draft.md\told draft.md\n"
+           "1 A. N... 000000 100644 100644 0000 bbbb plain2.md\n")
+    assert G.parse_branch_status(out)["staged"] == ["my file.md", "new draft.md", "plain2.md"]
+
+
+def test_parse_does_not_split_a_path_on_a_form_feed_or_line_separator():
+    out = ("# branch.head m\n"
+           "1 A. N... 000000 100644 100644 0000 aaaa odd\u2028name.md\n"
+           "1 A. N... 000000 100644 100644 0000 aaaa feed\x0cname.md\n")
+    s = G.parse_branch_status(out)
+    assert s["staged"] == ["odd\u2028name.md", "feed\x0cname.md"] and s["dirty"] == 2
+
+
+def test_repo_mode_prints_the_staged_files(tmp_path, capsys):
+    repo = tmp_path / "sp"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "my file.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "--", "my file.md")
+    G.main([str(repo)])
+    assert "my file.md" in capsys.readouterr().out
+
+
+def test_repo_mode_honours_json(tmp_path, capsys):
+    _origin, clone = _origin_and_clone(tmp_path)
+    (clone / "b.md").write_text("b\n", encoding="utf-8")
+    _commit(clone, "b.md", message="ahead")
+    rc = G.main([str(clone), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["command"] == "git-state" and payload["ok"] is False
+    [repo] = payload["data"]["repos"]
+    assert repo["ahead"] == 1 and repo["in_sync"] is False
+
+
+def test_a_repo_error_is_exit_2_not_the_out_of_sync_1(tmp_path, capsys):
+    """1 means "checked, and out of sync"; a repo git could not read was not checked at all."""
+    assert G.main([str(tmp_path)]) == 2
+    assert "ERROR" in capsys.readouterr().out
+
+
+def test_files_mode_tracked_file_in_a_subdirectory(tmp_path):
+    """git prints "/" separators; a native Windows "docs\\CLAUDE.md" never matched them, so a
+    tracked file below the repo root fell through to "untracked"."""
+    repo = tmp_path / "r"
+    (repo / "docs").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    (repo / "docs" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    _commit(repo, "docs/CLAUDE.md")
+    [f] = G.classify_files("CLAUDE.md", root=repo)["files"]
+    assert f["state"] == "tracked-clean"
+    assert G.repo_relative(repo / "docs" / "CLAUDE.md", repo) == "docs/CLAUDE.md"
+    # The Windows spelling, checkable on any platform through the pure path flavour.
+    from pathlib import PureWindowsPath
+    assert G.repo_relative(PureWindowsPath("C:/r/docs/CLAUDE.md"),
+                           PureWindowsPath("C:/r")) == "docs/CLAUDE.md"
+
+
+def test_files_mode_an_unreadable_root_is_exit_2_not_no_match(tmp_path, capsys):
+    if sys.platform == "win32":
+        pytest.skip("Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable")
+    locked = tmp_path / "locked"
+    (locked / "sub").mkdir(parents=True)
+    (locked / "sub" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 dir (root)")
+        rc = G.main(["--files", "CLAUDE.md", "--root", str(locked)])
+    finally:
+        locked.chmod(0o755)
+    assert rc == 2
+    assert "unreadable" in capsys.readouterr().err
+
+
+def test_repo_mode_an_unreadable_subdir_is_reported_not_skipped(tmp_path, capsys):
+    if sys.platform == "win32":
+        pytest.skip("Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable")
+    _origin, _clone = _origin_and_clone(tmp_path)
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o000)
+    try:
+        if os.access(locked, os.R_OK):
+            pytest.skip("running with privileges that read a mode-000 dir (root)")
+        rc = G.main(["--root", str(tmp_path)])
+    finally:
+        locked.chmod(0o755)
+    assert rc == 2
+    assert "unreadable" in capsys.readouterr().err
+
+
+def test_repo_mode_survives_a_cp1252_stdout(tmp_path):
+    repo = tmp_path / "arrow\u2192repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONUTF8", None)
+    done = subprocess.run([sys.executable, G.__file__, str(repo)], env=env, capture_output=True,
+                          timeout=60)
+    assert b"Traceback" not in done.stderr, done.stderr
+    assert done.returncode == 1          # no upstream: checked and out of sync

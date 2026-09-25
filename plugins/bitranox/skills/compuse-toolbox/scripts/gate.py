@@ -38,8 +38,15 @@ Two ways a correct exit status still proves nothing, both closed here:
   * A filter that matched NOTHING. `pytest -k <typo>` and `cargo test <prefix no test starts
     with>` run zero tests and exit 0, so the status says green about work that never happened.
     Each gate's output is now read for the count the runner itself reports, that count is
-    printed, and a recognised count of ZERO fails the gate whatever it exited. A gate that is
-    not a test runner reports no count and is judged on its status alone.
+    printed, and a recognised count of ZERO fails the gate whatever it exited. Recognised:
+    pytest, cargo/libtest, unittest (`Ran 0 tests`) and go test (every package line
+    `[no tests to run]`). A gate that is not one of those reports no count and is judged on its
+    status alone - so a zero run of any OTHER runner still passes.
+
+A malformed invocation - an empty gate, an unclosed quote, a bad --summary regex, or a --name
+written after a positional gate beside a --gate (which gate it labels is ambiguous) - is a usage
+error, exit 2, never a traceback. On Windows a bare `npm`/`yarn`/`pnpm` (a `.cmd` shim) that
+CreateProcess cannot find is retried through PATHEXT instead of reading as rc=127.
 
 Run (plain python3, NOT uv run: this jig declares no dependencies, and uv run puts its own
 ephemeral interpreter on the environment the CHILD gates inherit - measured, a gate shelling
@@ -56,6 +63,7 @@ import argparse
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -99,6 +107,10 @@ _CARGO_RUNNING = re.compile(r"^\s*running (\d+) tests?\b", re.MULTILINE)
 _PYTEST_SELECTED = re.compile(r"^.*?\b(\d+) selected\b", re.MULTILINE)
 _PYTEST_COLLECTED = re.compile(r"^.*?\bcollected (\d+) items?\b", re.MULTILINE)
 _PYTEST_NO_TESTS = re.compile(r"^.*\bno tests ran\b", re.MULTILINE)
+_UNITTEST_RAN = re.compile(r"^Ran (\d+) tests? in\b", re.MULTILINE)
+_GO_OK_LINE = re.compile(r"^ok\s+\S+.*$", re.MULTILINE)
+_GO_NOTHING_RUN = "[no tests to run]"
+_GO_WARNING = re.compile(r"^testing: warning: no tests to run\b", re.MULTILINE)
 
 
 def observed_test_count(text: str) -> int | None:
@@ -127,6 +139,15 @@ def observed_test_count(text: str) -> int | None:
     is not matched here, so it reports None and is judged on its status. That is the safe
     direction - the dangerous state (zero) is still caught by `no tests ran`, and widening the
     match to the summary line is what would produce the false red described above.
+
+    unittest (and Django's runner) print `Ran N tests in ...`, which SUMS like cargo; before
+    Python 3.12 a zero run exited 0, so `Ran 0 tests` is the only evidence of it.
+
+    `go test` prints no count at all in its default mode, only one `ok <pkg> <time>` line per
+    package, suffixed `[no tests to run]` when the -run filter matched nothing THERE. So it is a
+    zero only when EVERY package line carries that suffix: one package that ran tests beside one
+    that matched nothing has still run tests, and its count is simply unknown (None). A bare test
+    binary prints just `testing: warning: no tests to run`, which is a zero.
     """
     cargo = [int(n) for n in _CARGO_RUNNING.findall(text)]
     if cargo:
@@ -139,7 +160,18 @@ def observed_test_count(text: str) -> int | None:
         return sum(int(n) for n in collected)
     if _PYTEST_NO_TESTS.search(text):
         return 0
-    return None
+    ran = _UNITTEST_RAN.findall(text)
+    if ran:
+        return sum(int(n) for n in ran)
+    return _go_count(text)
+
+
+def _go_count(text: str) -> int | None:
+    """0 when go test demonstrably ran nothing anywhere, else None (see observed_test_count)."""
+    packages = _GO_OK_LINE.findall(text)
+    if packages:
+        return 0 if all(_GO_NOTHING_RUN in line for line in packages) else None
+    return 0 if _GO_WARNING.search(text) else None
 
 
 def _windows_argv(command):
@@ -334,6 +366,43 @@ class GateReport:
         return all(r.ok for r in self.results)
 
 
+def resolve_argv0(argv: list[str], *, windows: bool = os.name == "nt", which=shutil.which) -> list[str]:
+    """On Windows, argv[0] resolved through PATH and PATHEXT; elsewhere argv unchanged.
+
+    CreateProcess appends only `.exe` and never consults PATHEXT, so a bare `npm`, `yarn` or
+    `pnpm` - each a `.cmd` shim - cannot start without a shell and reads as a false red rc=127.
+    A name that does not resolve is left as written, so the missing-binary 127 still happens.
+    `windows` and `which` are parameters so both platforms' behaviour is testable on either.
+    Used only as the retry in _run_one.
+    """
+    if not windows or not argv:
+        return list(argv)
+    found = which(argv[0])
+    return [found, *argv[1:]] if found else list(argv)
+
+
+def _run_one(argv: list[str]) -> tuple[str, int]:
+    """Run one gate; (combined output, exit status). Raises OSError when it cannot start.
+
+    The PATHEXT lookup is a RETRY after CreateProcess could not find the name, never the first
+    attempt: CreateProcess searches the parent's own directory and the system directories BEFORE
+    PATH, so resolving every name up front could pick a different `python` than it would.
+    """
+    try:
+        proc = _spawn(argv)
+    except FileNotFoundError:
+        resolved = resolve_argv0(argv)
+        if resolved == list(argv):
+            raise
+        proc = _spawn(resolved)
+    return (proc.stdout or "") + (proc.stderr or ""), proc.returncode
+
+
+def _spawn(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=False)
+
+
 def run_gates(gates, log_path, summary: str = "") -> GateReport:
     """Run `gates` in order, appending all output to `log_path`; return the real statuses.
 
@@ -351,19 +420,16 @@ def run_gates(gates, log_path, summary: str = "") -> GateReport:
             log.write(f"\n=== gate: {name} :: {' '.join(argv)} ===\n")
             log.flush()
             try:
-                proc = subprocess.run(
-                    argv, capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", check=False,
-                )
-                out = (proc.stdout or "") + (proc.stderr or "")
-                rc = proc.returncode
+                out, rc = _run_one(argv)
             except OSError as e:
                 # A missing/unrunnable binary is a FAILED gate, not a crash of the runner:
                 # the caller's follow-up must still be blocked.
                 out, rc = f"could not run {argv!r}: {e}\n", 127
             log.write(out)
             log.flush()
-            lines = [ln for ln in out.splitlines() if pattern.search(ln)] if pattern else []
+            # "\n" only: splitlines() also breaks on a form feed or U+2028 inside one output line
+            lines = ([ln.rstrip("\r") for ln in out.split("\n") if pattern.search(ln)]
+                     if pattern else [])
             # Counted from the gate's OWN combined output, not from the log file: the log is
             # opened in append mode and may already hold earlier gates, so reading it back
             # would attribute a previous gate's tests to this one.
@@ -415,7 +481,60 @@ def red_status(report: GateReport) -> int:
     return 1
 
 
+def _usage_checked(parser: argparse.ArgumentParser, parse, value):
+    """`parse(value)`, with a malformed value turned into a usage error (exit 2) instead of a
+    traceback and exit 1 - which a background caller reading only the status takes for a gate
+    that ran and failed. Covers an empty gate, an unclosed quote and a bad --summary regex."""
+    try:
+        return parse(value)
+    except (ValueError, re.error) as exc:
+        text = str(exc)
+        parser.error(text if repr(value) in text else f"{text}: {value!r}")
+        raise                                                   # unreachable: error() exits
+
+
+_VALUED_OPTIONS = ("--gate", "--name", "--log", "--summary", "--then")
+"""Every option main() declares that takes a value - _name_follows_positional must skip it."""
+
+
+def _name_follows_positional(raw: list[str]) -> bool:
+    """Whether a --name (or an abbreviation argparse would accept) is written AFTER the first
+    positional token. Walks `raw` the way argparse did: an option taking a value skips the next
+    token unless it carries `=value`, and everything after `--` is the positional's own argv."""
+    valued = _VALUED_OPTIONS
+    seen_positional = False
+    skip = False
+    for token in raw:
+        if skip:
+            skip = False
+            continue
+        if token == "--":
+            return False
+        if token.startswith("--"):
+            flag = token.split("=", 1)[0]
+            matches = [opt for opt in valued if opt.startswith(flag)]
+            if seen_positional and matches == ["--name"]:
+                return True
+            skip = "=" not in token and len(matches) == 1
+            continue
+        seen_positional = True
+    return False
+
+
+def _tolerate_unencodable_stdout() -> None:
+    """`plain python3` on Windows leaves a piped stdout at cp1252, so a summary line holding a
+    character outside it crashed the report - and with it the --then the gates had earned."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv=None) -> int:
+    _tolerate_unencodable_stdout()
     raw = list(sys.argv[1:] if argv is None else argv)
     p = argparse.ArgumentParser(description="run gates, keep their real exit status")
     p.add_argument("--gate", action=_WrittenOrder, default=None,
@@ -464,11 +583,17 @@ def main(argv=None) -> int:
             # A lone positional written WITHOUT `--` is the whole gate as one quoted
             # string, so it goes through split_command and can carry a name= prefix, exactly
             # like --gate.
-            positional = gate_spec(args.rest[0])
+            positional = _usage_checked(p, gate_spec, args.rest[0])
 
     written = getattr(args, "written", None) or []
     if not any(option == "gate" for option, _ in written) and positional is None:
         p.error('no gate given: use --gate "<cmd>" or -- <cmd ...>')
+    if positional is not None and any(option == "gate" for option, _ in written) \
+            and _name_follows_positional(raw):
+        # Written order pairs a --name with the --gate before it, but a reader of
+        # `--gate A <B> --name x` means B. Neither reading is safe to guess.
+        p.error("a --name written after the positional gate is ambiguous beside --gate: write "
+                "that gate as --gate too, or put its --name before the positional")
     try:
         pairs, leading = pair_names_with_gates(written, positional is not None)
     except ValueError as exc:
@@ -476,10 +601,11 @@ def main(argv=None) -> int:
         # red gate would be the misattribution this tool exists to prevent.
         p.error(str(exc))
         raise                                                   # unreachable: p.error exits
+    _usage_checked(p, re.compile, args.summary)
 
     gates = []
     for explicit, spec in pairs:
-        derived, gate_argv = gate_spec(spec)
+        derived, gate_argv = _usage_checked(p, gate_spec, spec)
         gates.append((explicit or derived, gate_argv))
     if positional is not None:
         name, gate_argv = positional

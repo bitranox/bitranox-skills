@@ -9,11 +9,16 @@ parse, a docstring mention and a test fixture must all stay OUT of it, or the to
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from enforced import Hit, HitKind, classify_source, verdict_of
+import enforced
+from enforced import Hit, HitKind, classify_source, main, verdict_of
 
 
 def kinds(hits: list[Hit]) -> set[HitKind]:
@@ -252,3 +257,175 @@ def dispatch(self, spec):
         hits = classify_source(src, "deadline_ceiling_s", path=Path("a.py"))
         assert HitKind.CLAMP not in kinds(hits)
         assert verdict_of(hits).enforced is False
+
+
+# ---- review fixes (rank-10 slice 2, group T3): the tree walk and the CLI ------------------------
+
+POLICY = "class Limits:\n    planner_kinds: list[str]\n"
+GUARD = "def admit(spec, limits):\n    if spec.kind not in limits.planner_kinds:\n        raise E()\n"
+TEST_ASSERT = "def check(limits):\n    assert limits.planner_kinds == ['work']\n"
+
+
+def write(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def run(root: Path, identifier: str = "planner_kinds", *extra: str) -> int:
+    return main([identifier, "--root", str(root), *extra])
+
+
+class TestWhatCountsAsATestFile:
+    @pytest.mark.parametrize("name", ["admit_test.py", "conftest.py"])
+    def test_a_test_module_named_by_suffix_or_conftest_is_test(self, tmp_path: Path, name: str) -> None:
+        """pytest collects `*_test.py` and runs conftest.py; an assert there is not an enforcer."""
+        write(tmp_path / "colo" / "policy.py", POLICY)
+        write(tmp_path / "colo" / name, TEST_ASSERT)
+        assert run(tmp_path / "colo") == 1
+
+    def test_a_test_directory_above_the_root_does_not_make_everything_test(self, tmp_path: Path) -> None:
+        write(tmp_path / "test" / "app" / "admit.py", GUARD)
+        assert run(tmp_path / "test" / "app") == 0
+
+    def test_a_tests_directory_below_the_root_still_is_test(self, tmp_path: Path) -> None:
+        write(tmp_path / "app" / "policy.py", POLICY)
+        write(tmp_path / "app" / "tests" / "helpers.py", GUARD)
+        assert run(tmp_path / "app") == 1
+
+
+class TestWhatTheWalkSkips:
+    def test_a_skip_dir_above_the_root_does_not_skip_the_project(self, tmp_path: Path) -> None:
+        write(tmp_path / "venv" / "app" / "admit.py", GUARD)
+        assert run(tmp_path / "venv" / "app") == 0
+
+    @pytest.mark.parametrize("vendored", [".venv-win", ".venv-3.12", ".tox", "site-packages"])
+    def test_vendored_trees_are_skipped(self, tmp_path: Path, vendored: str) -> None:
+        """A third-party decision under a suffixed venv read as this project's enforcer."""
+        write(tmp_path / "nv" / "src" / "policy.py", POLICY)
+        write(tmp_path / "nv" / vendored / "lib" / "lib3p" / "core.py", GUARD)
+        assert run(tmp_path / "nv") == 1
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows has no POSIX mode bits: chmod(0o000) leaves the dir readable")
+    def test_an_unreadable_directory_makes_the_answer_incomplete(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "p" / "policy.py", POLICY)
+        locked = tmp_path / "p" / "locked"
+        write(locked / "admit.py", GUARD)
+        locked.chmod(0o000)
+        try:
+            if os.access(locked, os.R_OK):
+                pytest.skip("running with privileges that read a mode-000 dir (root)")
+            rc = run(tmp_path / "p")
+        finally:
+            locked.chmod(0o755)
+        assert rc == 2
+        assert "UNREAD" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("name", [".env", ".env.production"])
+    def test_a_dotenv_file_is_config(self, tmp_path: Path, name: str, capsys) -> None:
+        write(tmp_path / name, "on_auth_failure=fail_run\n")
+        assert run(tmp_path, "on_auth_failure") == 1
+        assert "config (1)" in capsys.readouterr().out
+
+
+class TestMoreDecisionShapes:
+    def test_a_match_subject_is_a_decision(self) -> None:
+        src = ("def run(policy):\n    match policy.on_auth_failure:\n        case 'fail_run':\n"
+               "            raise Stop()\n")
+        assert decisions(classify_source(src, "on_auth_failure", path=Path("run.py")))
+
+    def test_a_case_guard_is_a_decision(self) -> None:
+        src = ("def run(x, policy):\n    match x:\n        case 1 if policy.strict:\n"
+               "            raise Stop()\n")
+        assert decisions(classify_source(src, "strict", path=Path("run.py")))
+
+    def test_a_case_body_is_not_a_decision(self) -> None:
+        src = ("def run(x, policy):\n    match x:\n        case 1:\n"
+               "            log(policy.strict)\n")
+        assert decisions(classify_source(src, "strict", path=Path("run.py"))) == []
+
+    def test_an_annotated_alias_carries_the_decision_back(self) -> None:
+        src = """
+def refuse(self, row):
+    ceiling: int = self.policy.tokens_per_row.get(row)
+    if row.tokens > ceiling:
+        raise BudgetExceeded()
+"""
+        hit = decisions(classify_source(src, "tokens_per_row", path=Path("ctx.py")))[0]
+        assert hit.via == "ceiling"
+
+
+class TestProseMatchesWholeWords:
+    @pytest.mark.parametrize("src", [
+        "# rate_limit is read elsewhere\nrate_limit = 5\n",
+        'x = "a # limit"\n',
+        'def f():\n    """rate_limit doc"""\n',
+    ])
+    def test_a_longer_name_or_a_string_is_not_a_prose_hit(self, src: str) -> None:
+        hits = classify_source(src, "limit", path=Path("a.py"))
+        assert not [h for h in hits if h.kind in (HitKind.COMMENT, HitKind.DOCSTRING)]
+
+    def test_a_whole_word_comment_still_counts(self) -> None:
+        hits = classify_source("x = 1  # limit applies here\n", "limit", path=Path("a.py"))
+        assert HitKind.COMMENT in kinds(hits)
+
+    def test_a_longer_config_key_is_not_a_hit(self, tmp_path: Path) -> None:
+        write(tmp_path / "c.yaml", "rate_limit: 5\n")
+        assert run(tmp_path, "limit") == 2
+
+
+class TestReadingTheSource:
+    def test_a_bom_file_is_read_not_unread(self, tmp_path: Path) -> None:
+        (tmp_path / "admit.py").write_bytes(b"\xef\xbb\xbf" + GUARD.encode("utf-8"))
+        assert run(tmp_path) == 0
+
+    def test_a_form_feed_does_not_shift_the_line_text(self) -> None:
+        src = "x = 1\x0c\nif s.kind in l.planner_kinds:\n    pass\n"
+        [hit] = decisions(classify_source(src, "planner_kinds", path=Path("a.py")))
+        assert hit.line == 2 and hit.text.startswith("if s.kind")
+
+
+class TestTheCli:
+    def test_exit_0_when_enforced(self, tmp_path: Path) -> None:
+        write(tmp_path / "admit.py", GUARD)
+        assert run(tmp_path) == 0
+
+    def test_exit_1_when_parsed_but_never_enforced(self, tmp_path: Path) -> None:
+        write(tmp_path / "policy.py", POLICY)
+        assert run(tmp_path) == 1
+
+    def test_exit_2_when_not_found(self, tmp_path: Path) -> None:
+        write(tmp_path / "other.py", "x = 1\n")
+        assert run(tmp_path) == 2
+
+    def test_exit_2_for_a_missing_root_with_json(self, tmp_path: Path, capsys) -> None:
+        assert run(tmp_path / "nope", "planner_kinds", "--json") == 2
+        assert json.loads(capsys.readouterr().out)["ok"] is False
+
+    def test_an_unparsable_file_without_a_decision_is_exit_2(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "policy.py", POLICY)
+        write(tmp_path / "broken.py", "def (:\n")
+        assert run(tmp_path) == 2
+        assert "UNREAD" in capsys.readouterr().out
+
+    def test_json_envelope(self, tmp_path: Path, capsys) -> None:
+        write(tmp_path / "admit.py", GUARD)
+        assert run(tmp_path, "planner_kinds", "--json") == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is True and payload["command"] == "enforced"
+        assert payload["data"]["verdict"]["enforced"] is True
+        assert [h["kind"] for h in payload["data"]["hits"]] == ["decision"]
+
+    def test_a_single_file_root(self, tmp_path: Path) -> None:
+        assert run(write(tmp_path / "admit.py", GUARD)) == 0
+
+    def test_survives_a_cp1252_stdout(self, tmp_path: Path) -> None:
+        write(tmp_path / "admit.py", GUARD.replace("raise E()", "raise E('\u2192')")
+              .replace("if spec", "if '\u2192' and spec"))
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        env.pop("PYTHONUTF8", None)
+        done = subprocess.run([sys.executable, enforced.__file__, "planner_kinds", "--root",
+                               str(tmp_path)], env=env, capture_output=True, timeout=60)
+        assert b"Traceback" not in done.stderr, done.stderr
+        assert done.returncode == 0

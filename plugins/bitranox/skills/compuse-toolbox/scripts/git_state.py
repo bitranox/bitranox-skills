@@ -1,8 +1,9 @@
 # /// script
 # requires-python = ">=3.10"
 # ///
-"""Report git state for one or more repos: branch, HEAD vs origin (ahead/behind/diverged), dirty
-count, and this-session's staged files. Also answers the per-FILE question `--files` mode cannot:
+"""Report git state for one or more repos: branch, HEAD vs origin (ahead/behind/diverged, or an
+upstream that is GONE on the remote), dirty count, and the staged files, one indented `staged`
+line each. Also answers the per-FILE question `--files` mode cannot:
 across a tree, which copies of a named file are tracked-and-modified, gitignored, or outside any
 repo at all - `git status --porcelain -- <path>` is EMPTY for a gitignored file and for a
 tracked-clean file ALIKE, so a naive check silently conflates them and only the tracked one is
@@ -14,16 +15,21 @@ preceded by the same hand-typed branch / HEAD==origin / dirty check. This does i
 Run:
   uv run scripts/git_state.py                 # the current directory
   uv run scripts/git_state.py repoA repoB     # named repos
-  uv run scripts/git_state.py --root ~/src    # every .git repo found under a directory
+  uv run scripts/git_state.py --root ~/src    # every repo found under a directory (a .git
+                                              # directory, or the .git FILE of a linked
+                                              # worktree or submodule)
   uv run scripts/git_state.py --files CLAUDE.md --root ~/src [--json]
       # every CLAUDE.md under ~/src, classified tracked-clean / tracked-modified / ignored /
       # untracked / no-repo - never via `git status`, see classify_files() for why.
+  add --json in either mode for an envelope {ok, command, data, skipped}
 
-Exit status (repo mode) is 1 if any repo is out of sync (behind/ahead/diverged or has no
-upstream), so this doubles as a pre-push guard. Exit status (`--files` mode) is
+Exit status (repo mode) is 0 when every repo is in sync, 1 if any is out of sync (behind/ahead/
+diverged, no upstream, or an upstream gone on the remote), so this doubles as a pre-push guard,
+and 2 when the check itself is incomplete: a repo git could not read, a --root that does not
+exist, holds no repo, or has a directory the walk could not read. Exit status (`--files` mode) is
 format-independent: 0 at least one file matched the glob, 1 none matched, 2 the walk or every
-matched repo's git calls failed outright - because "nothing matched" and "could not classify
-anything" must not look alike.
+matched repo's git calls failed outright, or the walk hit an unreadable directory and matched
+nothing - because "nothing matched" and "could not classify anything" must not look alike.
 """
 from __future__ import annotations
 
@@ -36,16 +42,28 @@ from pathlib import Path
 
 
 def parse_branch_status(text: str) -> dict:
-    """Parse `git status --porcelain=v2 --branch` output into a state dict (pure; unit-testable)."""
+    """Parse `git status --porcelain=v2 --branch` output into a state dict (pure; unit-testable).
+
+    `gone` is an upstream git still names but can no longer compare against: after the branch is
+    deleted on the remote and pruned, porcelain keeps `# branch.upstream` and drops
+    `# branch.ab`. Reading that absent line as +0 -0 would call a branch with nowhere to push "in
+    sync", so a missing ab line with an upstream is never in sync.
+
+    Split on "\\n" only: a path can hold a form feed or U+2028, which str.splitlines() would break
+    into a second, bogus record.
+    """
     branch = upstream = None
     ahead = behind = dirty = 0
+    saw_ab = False
     staged: list[str] = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
         if line.startswith("# branch.head "):
             branch = line.split(" ", 2)[2].strip()
         elif line.startswith("# branch.upstream "):
             upstream = line.split(" ", 2)[2].strip()
         elif line.startswith("# branch.ab "):
+            saw_ab = True
             for tok in line.split()[2:]:
                 if tok.startswith("+"):
                     ahead = int(tok[1:])
@@ -53,21 +71,35 @@ def parse_branch_status(text: str) -> dict:
                     behind = int(tok[1:])
         elif line[:2] in ("1 ", "2 "):                       # a tracked change (ordinary / renamed)
             dirty += 1
-            fields = line.split(" ")
-            if fields[1][0] != ".":                          # index (staged) status is not "."
-                staged.append(fields[8] if line[0] == "1" else fields[9].split("\t")[0])
+            if line[2] != ".":                               # index (staged) status is not "."
+                staged.append(_changed_path(line))
         elif line[:2] in ("u ", "? "):                       # unmerged or untracked
             dirty += 1
-    in_sync = upstream is not None and ahead == 0 and behind == 0
-    return {"branch": branch, "upstream": upstream, "ahead": ahead, "behind": behind,
-            "dirty": dirty, "staged": staged, "in_sync": in_sync}
+    gone = upstream is not None and not saw_ab
+    in_sync = upstream is not None and not gone and ahead == 0 and behind == 0
+    return {"branch": branch, "upstream": upstream, "gone": gone, "ahead": ahead,
+            "behind": behind, "dirty": dirty, "staged": staged, "in_sync": in_sync}
+
+
+def _changed_path(line: str) -> str:
+    """The path of a porcelain v2 "1" / "2" record, spaces and all.
+
+    The path is the LAST field and may itself contain spaces, so split a fixed number of times:
+    8 leading fields for an ordinary change, 9 for a rename (whose tail is "new<TAB>old").
+    """
+    if line[0] == "1":
+        return line.split(" ", 8)[8]
+    return line.split(" ", 9)[9].split("\t")[0]
 
 
 def git_state(repo) -> dict:
     """Run git in `repo` and return its parsed state (adds "repo" + "error")."""
     try:
-        out = subprocess.run(["git", "-C", str(repo), "status", "--porcelain=v2", "--branch"],
-                             capture_output=True, text=True, timeout=30)
+        # quotePath off so a staged non-ASCII name prints as itself rather than as octal escapes;
+        # decoded as UTF-8 with replacement so an undecodable name cannot crash the check.
+        out = subprocess.run(["git", "-c", "core.quotePath=false", "-C", str(repo), "status",
+                              "--porcelain=v2", "--branch"],
+                             capture_output=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"repo": str(repo), "error": str(exc)}
     if out.returncode != 0:
@@ -77,14 +109,32 @@ def git_state(repo) -> dict:
     return state
 
 
-def find_repos(root) -> list[str]:
-    """Walk `root` and return every directory that contains a .git (does not descend into .git)."""
+def find_repos(root, errors: list[str] | None = None) -> list[str]:
+    """Walk `root` and return every directory holding a `.git` - a directory, or the `.git` FILE
+    of a linked worktree or submodule, whose gitdir lives elsewhere. Never descends into a .git
+    directory. A directory the walk cannot read is appended to `errors` (when given) instead of
+    being skipped in silence, since a repo under it would otherwise just be missing."""
     repos = []
-    for dirpath, dirs, _files in os.walk(str(root)):
-        if ".git" in dirs:
+    for dirpath, dirs, files in os.walk(str(root), onerror=_walk_error_sink(errors)):
+        if ".git" in dirs or ".git" in files:
             repos.append(dirpath)
-            dirs[:] = [d for d in dirs if d != ".git"]       # don't descend into the repo's own .git
+        dirs[:] = [d for d in dirs if d != ".git"]           # don't descend into the repo's own .git
     return sorted(repos)
+
+
+def _walk_error_sink(errors: list[str] | None):
+    """An os.walk onerror that records "unreadable <path>: <reason>" rather than dropping it."""
+    def record(exc: OSError) -> None:
+        if errors is not None:
+            errors.append("unreadable %s: %s" % (exc.filename, exc.strerror or exc))
+    return record
+
+
+def repo_relative(path, repo_root) -> str:
+    """`path` relative to `repo_root`, spelled with "/" - the separator git prints on every
+    platform. A native Windows "docs\\CLAUDE.md" never equals git's "docs/CLAUDE.md", so a
+    tracked file below the repo root would read as untracked."""
+    return path.relative_to(repo_root).as_posix()
 
 
 # --- --files mode: per-file tracked/ignored/untracked/no-repo classification ------------------
@@ -113,15 +163,16 @@ def _run_git(repo_root, *args):
         raise _GitBatchError(str(exc)) from exc
 
 
-def find_files(root, pattern) -> list[Path]:
+def find_files(root, pattern, errors: list[str] | None = None) -> list[Path]:
     """Every file under `root` whose path matches `pattern` (Path.match semantics: a plain name
     like "CLAUDE.md" matches by exact basename anywhere; "*.md" matches by suffix anywhere).
-    Never descends into a repo's own .git, matching find_repos()."""
+    Never descends into a repo's own .git, matching find_repos(). Unreadable directories go to
+    `errors`, as in find_repos()."""
     root = Path(root)
     if root.is_file():
         return [root] if root.match(pattern) else []
     out = []
-    for dirpath, dirs, filenames in os.walk(root):
+    for dirpath, dirs, filenames in os.walk(root, onerror=_walk_error_sink(errors)):
         dirs[:] = [d for d in dirs if d != ".git"]
         for name in filenames:
             p = Path(dirpath) / name
@@ -135,7 +186,9 @@ def _ancestor_repo_root(start: Path):
     only the filesystem - no subprocess. Seeds the enclosing repo for the common case where
     `--root` is itself a subdirectory of a repo rather than a repo (or many repos') parent."""
     for p in (start, *start.parents):
-        if (p / ".git").exists():
+        # os.path.exists, not Path.exists: before Python 3.12 the latter RAISES PermissionError
+        # for a path under an unreadable directory instead of answering False.
+        if os.path.exists(p / ".git"):
             return p
     return None
 
@@ -145,7 +198,7 @@ def _repo_roots_for(root: Path) -> list[Path]:
     `root` (find_repos - covers `root` holding many nested repos), plus `root`'s own enclosing
     repo if it has one (covers `root` being a subdirectory INSIDE a repo). A repo whose .git
     lives outside both of those is out of scope, matching find_repos()'s own reach."""
-    roots = {Path(r) for r in find_repos(root)}
+    roots = {Path(r) for r in find_repos(root, errors=[])}   # find_files already reports them
     ancestor = _ancestor_repo_root(root if root.is_dir() else root.parent)
     if ancestor is not None:
         roots.add(ancestor)
@@ -232,10 +285,12 @@ def classify_files(pattern, root=".") -> dict:
     remainder) no matter how many candidate files that repo contributes - never 2 per file.
 
     Returns {"pattern", "root", "candidates" (files matched before classification), "files"
-    ([{"path", "repo", "state"}, ...]), "skipped" (repo-level failures, as strings)}.
+    ([{"path", "repo", "state"}, ...]), "skipped" (repo-level failures and unreadable
+    directories, as strings), "walk_errors" (how many of those are unreadable directories)}.
     """
     root_path = Path(root).absolute()
-    files = find_files(root_path, pattern)
+    walk_errors: list[str] = []
+    files = find_files(root_path, pattern, errors=walk_errors)
     repo_roots = _repo_roots_for(root_path)
 
     by_repo: dict = {}
@@ -243,12 +298,12 @@ def classify_files(pattern, root=".") -> dict:
         by_repo.setdefault(_owning_repo(f, repo_roots), []).append(f)
 
     results = []
-    skipped = []
+    skipped = list(walk_errors)
     for repo_root, group in by_repo.items():
         if repo_root is None:
             results.extend({"path": str(f), "repo": None, "state": "no-repo"} for f in group)
             continue
-        rel = {f: str(f.relative_to(repo_root)) for f in group}
+        rel = {f: repo_relative(f, repo_root) for f in group}
         try:
             tracked = _batch_tracked(repo_root, list(rel.values()))
             remainder = [rel[f] for f in group if rel[f] not in tracked]
@@ -270,7 +325,7 @@ def classify_files(pattern, root=".") -> dict:
 
     results.sort(key=lambda d: d["path"])
     return {"pattern": pattern, "root": str(root_path), "candidates": len(files),
-            "files": results, "skipped": skipped}
+            "files": results, "skipped": skipped, "walk_errors": len(walk_errors)}
 
 
 def _print_files_result(pattern, root, data, as_json) -> None:
@@ -300,7 +355,8 @@ def _main_files(pattern, root, as_json) -> int:
     data = classify_files(pattern, root)
     _print_files_result(pattern, root, data, as_json)
     if data["candidates"] == 0:
-        return 1
+        # "none matched" is only an answer if the walk could see everything it was asked to.
+        return 2 if data["walk_errors"] else 1
     if not data["files"]:                    # matched something, classified nothing
         return 2
     return 0
@@ -319,24 +375,81 @@ def main(argv=None) -> int:
                          "(e.g. 'CLAUDE.md' or '*.md') instead of reporting repo state")
     ap.add_argument("--json", action="store_true", help="machine-readable envelope")
     args = ap.parse_args(argv)
+    tolerate_unencodable_stdout()
     if args.files:
         return _main_files(args.files, args.root, args.json)
-    targets = find_repos(args.root) if args.root else args.repos
-    rc = 0
+    return _main_repos(args.repos, args.root, args.json)
+
+
+def tolerate_unencodable_stdout(stream=None) -> None:
+    """A Windows pipe is cp1252; a path it cannot encode must print as '?', not crash the check."""
+    stream = stream if stream is not None else sys.stdout
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
+def _repo_targets(repos, root) -> tuple[list[str], list[str]]:
+    """(repos to check, problems that make the check incomplete) - see _main_repos."""
+    if not root:
+        return list(repos), []
+    if not Path(root).is_dir():
+        return [], ["--root path does not exist: %s" % root]
+    walk_errors: list[str] = []
+    found = find_repos(root, errors=walk_errors)
+    if not found and not walk_errors:
+        walk_errors.append("no git repo found under --root %s" % root)
+    return found, walk_errors
+
+
+def _sync_flag(s: dict) -> str | None:
+    if s["in_sync"]:
+        return None
+    if not s["upstream"]:
+        return "no-upstream"
+    if s.get("gone"):
+        return "upstream %s gone" % s["upstream"]
+    return f"ahead {s['ahead']}/behind {s['behind']}"
+
+
+def _main_repos(repos, root, as_json) -> int:
+    """Repo mode. 0 all in sync, 1 any out of sync, 2 the check is incomplete: a repo git could
+    not read, or a --root that is missing, holds no repo, or has an unreadable directory - a
+    pre-push guard that looked at nothing must not read as a pass."""
+    targets, problems = _repo_targets(repos, root)
+    rc = 2 if problems else 0
+    states = []
     for repo in targets:
         s = git_state(repo)
+        states.append(s)
         if "error" in s:
-            print(f"{s['repo']:40} ERROR: {s['error']}")
-            rc = 1
+            rc = 2
             continue
-        flags = []
         if not s["in_sync"]:
-            flags.append(f"ahead {s['ahead']}/behind {s['behind']}" if s["upstream"] else "no-upstream")
-            rc = 1
-        if s["dirty"]:
-            flags.append(f"dirty {s['dirty']}")
-        print(f"{s['repo']:40} {str(s['branch']):20} {'OK' if not flags else ' '.join(flags)}")
+            rc = max(rc, 1)
+    if as_json:
+        print(json.dumps({"ok": rc == 0, "command": "git-state",
+                          "data": {"root": root, "repos": states}, "skipped": problems}, indent=2))
+    else:
+        for s in states:
+            _print_repo_state(s)
+    for problem in problems:
+        print("git_state: %s" % problem, file=sys.stderr)
     return rc
+
+
+def _print_repo_state(s: dict) -> None:
+    if "error" in s:
+        print(f"{s['repo']:40} ERROR: {s['error']}")
+        return
+    flags = [f for f in (_sync_flag(s), f"dirty {s['dirty']}" if s["dirty"] else None) if f]
+    print(f"{s['repo']:40} {str(s['branch']):20} {'OK' if not flags else ' '.join(flags)}")
+    for path in s.get("staged", ()):
+        print(f"    staged  {path}")
 
 
 if __name__ == "__main__":
