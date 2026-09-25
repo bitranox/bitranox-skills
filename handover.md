@@ -1,4 +1,4 @@
-# Handover - 2026-09-26 early, rank 8 review of the 16 fix groups done; its findings are next
+# STALE - read 2026-09-26, work continued
 
 ## In flight
 

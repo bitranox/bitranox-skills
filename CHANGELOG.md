@@ -29,6 +29,26 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.3]
+
+### Fixed
+
+- winlog sets a trailing run of NUL bytes (the zeroed tail a crash or power cut leaves) aside
+  instead of decoding it. Fed to the segmenter, that padding made the narrow lines before it read
+  as UTF-16, so the completion marker of every such log was lost. The run's first NUL is kept only
+  when it closes a UTF-16 code unit, and the encoding line names how many bytes were set aside.
+- fleet_ssh `--trust-changing-host-keys` never re-runs the remote command, and drops the stale
+  entry only when ssh's own "Offending ... key in <file>" line names the known-hosts file it was
+  handed. Under StrictHostKeyChecking=no, which that flag sets, ssh does not refuse a changed key
+  (OpenSSH 10.2 prints the banner and runs the command), so the retry could fire only on a remote
+  command whose own inner ssh or rsync printed "Host key verification failed." and exited 255 -
+  re-running it and dropping a good key. compuse-ssh's guidance says the same.
+- web-frontend-responsive-ux `detectors.js` measures page height from what the PAGE scrolls to:
+  it no longer counts content inside an element that scrolls or clips vertically, so an app shell
+  whose pane scrolls inside a 100dvh grid no longer fails vertical-fit on a phone that never
+  scrolls. A real-browser test (`tests/test_detectors_browser.py`) runs where Playwright is
+  installed.
+
 ## [7.25.2]
 
 ### Fixed

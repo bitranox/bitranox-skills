@@ -14,6 +14,10 @@ is no BOM, the bytes are valid, and every layer reports success. So decode PER S
 out loud when a file turned out to be mixed - otherwise the next person fixes it in the reader
 again instead of in the writer.
 
+A log whose writer died mid-file (a crash, a power cut) often ends in a run of NUL bytes - zeroed
+clusters, not text. That run is set aside rather than decoded, and the encoding line names how
+many bytes it held, since a zeroed tail is itself evidence of how the writer ended.
+
     winlog.py read D:/lcu/install.log --grep DONE-OK
     winlog.py read install.log --tail 20 --json
 
@@ -27,6 +31,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 __all__ = ["decode_windows_text", "describe_encoding", "read_windows_log", "main"]
 
@@ -150,6 +155,50 @@ class _Segmenter:
         return out
 
 
+def _reads_as_narrow_text(chunk: bytes) -> bool:
+    """Is this clean narrow log text - UTF-8 or cp1252 with no control byte but tab, CR and LF?
+
+    UTF-16LE of Cyrillic, Greek or Arabic carries a control byte in every code unit (U+04xx is
+    xx 04), and ASCII in UTF-16 carries NULs, so neither passes. Only a short run of CJK whose
+    bytes all happen to be printable can, which is why this settles nothing on its own.
+    """
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            text = chunk.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        return all(ch.isprintable() or ch in "\t\r\n" for ch in text)
+    return False
+
+
+def _segment(body: bytes) -> tuple[list[tuple[bytes, bool]], int]:
+    """(chunks, padding) - cut the text into lines, with its trailing NUL run set aside.
+
+    A crash or power cut leaves a log ending in zeroed clusters. That run is text in neither
+    encoding, and fed to the segmenter it made the narrow lines before it read as UTF-16, which
+    hid the completion marker of every such log. Only the run's FIRST NUL can be content: the
+    high byte of a last UTF-16LE code unit (`\\n` is 0A 00). It is kept when it closes a wide
+    chunk at an odd offset, unless that chunk also reads as clean narrow text in a file with no
+    other wide chunk - there the zeroed tail after a narrow log is far the likelier story.
+    """
+    content_end = len(body.rstrip(b"\x00"))
+    if content_end == len(body):
+        return _Segmenter(body).chunks(), 0
+    kept = _Segmenter(body[:content_end + 1]).chunks()
+    last, wide = kept[-1]
+    high_byte = wide and len(last) % 2 == 0
+    if high_byte and (any(w for _, w in kept[:-1]) or not _reads_as_narrow_text(last[:-1])):
+        return kept, len(body) - content_end - 1
+    return (_Segmenter(body[:content_end]).chunks() if content_end else []), len(body) - content_end
+
+
+def _strip_wide_padding(body: bytes) -> tuple[bytes, int]:
+    """A whole-file UTF-16 body minus its trailing NUL run, keeping a NUL that ends a code unit."""
+    content_end = len(body.rstrip(b"\x00"))
+    keep = content_end + content_end % 2
+    return body[:keep], len(body) - keep
+
+
 def _decode_wide(chunk: bytes, encoding: str) -> str:
     """Decode an aligned UTF-16 chunk; a truncated final byte is dropped, not guessed."""
     body = chunk[:-1] if len(chunk) % 2 else chunk
@@ -165,22 +214,32 @@ def _decode_narrow(chunk: bytes) -> str:
         return chunk.decode("cp1252", errors="replace")
 
 
-def _analyze(data: bytes) -> tuple[list[tuple[bytes, bool]], str | None, bool, bool]:
-    """(chunks, bom_encoding, saw_wide, saw_narrow) - the shared front half of decode/describe."""
+class _Analysis(NamedTuple):
+    """The shared front half of decode/describe."""
+    chunks: list[tuple[bytes, bool]]
+    bom: str | None
+    saw_wide: bool
+    saw_narrow: bool
+    padding: int  # trailing NUL bytes set aside as not-text
+
+
+def _analyze(data: bytes) -> _Analysis:
     body, bom = _strip_bom(data)
     if bom in ("utf-16-le", "utf-16-be"):
-        return [(body, True)], bom, True, False
-    chunks = _Segmenter(body).chunks()
+        text, padding = _strip_wide_padding(body)
+        return _Analysis([(text, True)], bom, True, False, padding)
+    chunks, padding = _segment(body)
     saw_wide = any(wide for _, wide in chunks)
     saw_narrow = any(c.strip(b"\r\n") and not wide for c, wide in chunks)
-    return chunks, bom, saw_wide, saw_narrow
+    return _Analysis(chunks, bom, saw_wide, saw_narrow, padding)
 
 
 def decode_windows_text(data: bytes) -> str:
     """Decode bytes written by any Windows tool, segment by segment. PURE."""
-    chunks, bom, _, _ = _analyze(data)
-    wide_encoding = bom if bom in ("utf-16-le", "utf-16-be") else "utf-16-le"
-    parts = [_decode_wide(c, wide_encoding) if wide else _decode_narrow(c) for c, wide in chunks]
+    found = _analyze(data)
+    wide_encoding = found.bom if found.bom in ("utf-16-le", "utf-16-be") else "utf-16-le"
+    parts = [_decode_wide(c, wide_encoding) if wide else _decode_narrow(c)
+             for c, wide in found.chunks]
     return "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -188,18 +247,28 @@ def describe_encoding(data: bytes) -> str:
     """Name what was actually found, so a MIXED file gets fixed at the writer."""
     if not data:
         return "empty"
-    _, bom, saw_wide, saw_narrow = _analyze(data)
-    if bom in ("utf-16-le", "utf-16-be"):
-        return f"{bom} (BOM)"
-    if saw_wide and saw_narrow:
+    found = _analyze(data)
+    base = _name_encoding(data, found)
+    if not found.padding:
+        return base
+    # Said, not silently dropped: a zeroed tail is the mark of a writer that died mid-file.
+    return f"{base} + {found.padding} trailing NUL bytes (padding, not text)"
+
+
+def _name_encoding(data: bytes, found: _Analysis) -> str:
+    if found.bom in ("utf-16-le", "utf-16-be"):
+        return f"{found.bom} (BOM)"
+    if found.saw_wide and found.saw_narrow:
         return ("MIXED: utf-8/ansi and utf-16-le segments in one file - the writer used more "
                 "than one encoding (Set-Content then Tee-Object is the usual cause)")
-    if saw_wide:
+    if found.saw_wide:
         return "utf-16-le (no BOM)"
-    if bom == "utf-8":
+    if found.bom == "utf-8":
         return "utf-8 (BOM)"
+    if not any(c for c, _ in found.chunks):
+        return "empty"
     try:
-        data.decode("utf-8")
+        b"".join(c for c, _ in found.chunks).decode("utf-8")
     except UnicodeDecodeError:
         return "cp1252/ansi"
     return "utf-8"

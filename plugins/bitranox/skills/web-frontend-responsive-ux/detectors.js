@@ -59,23 +59,36 @@
 
   // How far the page's CONTENT reaches, in document px. documentElement.scrollHeight is
   // clamped to the viewport from below (a 100px page reports 900 in a 900px window), so it
-  // can never show an under-filled large screen. Take the bottom of the body's contents (text
-  // included, via a Range) and of every descendant element (absolutely positioned ones too).
+  // can never show an under-filled large screen. Take the bottom of every element and text
+  // node the PAGE scrolls to (absolutely positioned ones too), walking down from the body.
+  //
+  // The walk stops at an element that scrolls or clips vertically (overflow-y other than
+  // visible): its own box counts, what it holds does not. getBoundingClientRect reports a
+  // child's full box however far it reaches past such a container, so counting it made an app
+  // shell - a 100dvh grid whose pane scrolls inside itself - measure as thousands of px of
+  // page on a phone that never scrolls. A Range over the whole body spans those clipped boxes
+  // too, which is why text is measured one node at a time.
   function contentExtent() {
     const body = document.body;
     if (!body) return doc.scrollHeight;
+    const range = document.createRange ? document.createRange() : null;
     let bottom = 0;
-    if (document.createRange) {
-      const range = document.createRange();
-      range.selectNodeContents(body);
-      bottom = range.getBoundingClientRect().bottom + window.scrollY;
-    }
-    for (const el of body.querySelectorAll("*")) {
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
-      bottom = Math.max(bottom, r.bottom + window.scrollY);
+    const pending = Array.from(body.childNodes);
+    while (pending.length) {
+      const node = pending.pop();
+      const r = boxOf(node, range);
+      if (r && (r.width !== 0 || r.height !== 0)) bottom = Math.max(bottom, r.bottom + window.scrollY);
+      if (node.nodeType !== 1 || getComputedStyle(node).overflowY !== "visible") continue;
+      for (const child of node.childNodes) pending.push(child);
     }
     return Math.round(bottom);
+  }
+
+  function boxOf(node, range) {
+    if (node.nodeType === 1) return node.getBoundingClientRect();
+    if (node.nodeType !== 3 || !range || !node.textContent.trim()) return null;
+    range.selectNodeContents(node);
+    return range.getBoundingClientRect();
   }
 
   function isVisible(el) {

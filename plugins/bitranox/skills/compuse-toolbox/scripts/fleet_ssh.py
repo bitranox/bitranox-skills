@@ -21,13 +21,13 @@ on every call, and three traps sit in that one-liner.
 Host-key checking is left at ssh's own strict default. `--trust-changing-host-keys` is for a fleet
 you reimage, where a changed key is expected rather than an attack: it turns strict checking off,
 keeps that churn in a SEPARATE known-hosts file instead of polluting your real one, and heals a
-changed key by dropping the stale entry - also when the command SUCCEEDED under ssh's warning
-banner, since ssh never replaces that entry itself and the banner would otherwise repeat on every
-call. It retries - exactly once - ONLY when ssh itself refused
-the key before running anything (exit 255 plus ssh's own "Host key verification failed"). Under
-strict checking off a changed key is only a warning: ssh logs in with the key and RUNS the command,
-so a non-zero exit after the banner is the remote command's own, and re-running it would apply a
-mutating command twice. Pointing a known-hosts file at
+changed key by dropping the stale entry, whatever the exit status, since ssh never replaces that
+entry itself and the banner would otherwise repeat on every call. It heals only when ssh names an
+offending entry in THAT file: a remote command that itself runs ssh or rsync relays its inner
+ssh's banner and "Host key verification failed." too, about some other host. It never re-runs the
+command: with strict checking off a changed key is only a warning, ssh logs in and RUNS the
+command, so a non-zero exit after the banner is the remote command's own, and a second run would
+apply a mutating command twice. Pointing a known-hosts file at
 /dev/null is refused, because ssh then records every key "permanently" into the bit bucket, making
 every connect a first connect - that is the cause of a "Permanently added ..." warning that repeats
 forever and lands in the output of any helper that merges stderr into stdout.
@@ -75,21 +75,12 @@ DEFAULT_KEY_CANDIDATES = ("{home}/.ssh/{user}@anyhost_nopass.key",)
 # pollute the file you rely on for everything else.
 DEFAULT_FLEET_KNOWN_HOSTS = "{home}/.ssh/known_hosts_fleet"
 
-# ssh's two ways of saying "the key on file is not the key I was offered".
-HOST_KEY_CHANGED = re.compile(
-    r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.I
-)
-# ssh's framed WARNING line, printed before authenticating whether or not it then proceeds:
-# `@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @`. Anchored to the frame so a
-# command that merely prints the phrase is not read as ssh saying it.
-HOST_KEY_BANNER = re.compile(
-    r"^@+\s+(?:WARNING:\s+)?REMOTE HOST IDENTIFICATION HAS CHANGED!\s+@+\s*$", re.MULTILINE
-)
-# ssh's FATAL line: it aborted before authenticating, so no remote command can have run. The banner
-# alone does not say that - under StrictHostKeyChecking=no ssh prints it and then runs the command.
-HOST_KEY_REFUSED = re.compile(r"^Host key verification failed\.?\s*$", re.M)
-# ssh's own failure status; a remote command can exit 255 too, hence the fatal line as well.
-SSH_FAILED = 255
+# ssh's line naming the stale entry in its changed-key banner: `Offending ED25519 key in
+# /home/u/.ssh/known_hosts_fleet:3`. Captured stderr also carries the REMOTE command's stderr, and
+# a command that itself runs ssh or rsync relays that inner ssh's banner and its "Host key
+# verification failed." with them - phrase, frame and exit 255 alike. Only the FILE tells the two
+# apart: ours is the known-hosts file this run handed ssh, the inner one is the peer's.
+OFFENDING_KEY = re.compile(r"^Offending \S+ key in (?P<path>.+):\d+\s*$", re.MULTILINE)
 # `user@[v6addr]:path` - the address holds colons, so it cannot be split off at the first one.
 _BRACKETED_REMOTE = re.compile(r"^((?:[^@/\[\]:]+@)?\[[^\]/]+\]):")
 # `C:\dir` is a Windows drive path on every platform: no remote scp path starts with a backslash.
@@ -242,63 +233,67 @@ def with_scp_user(side: str, user: str) -> str:
     return f"{user}@{side}"
 
 
-def forward_stderr(text: str, stream=sys.stderr) -> None:
-    """Pass ssh's stderr through, minus the once-per-host known-hosts noise."""
+def forward_stderr(text: str, stream=None) -> None:
+    """Pass ssh's stderr through, minus the once-per-host known-hosts noise.
+
+    The default stream is looked up per call, not bound at import, so a replaced sys.stderr (a
+    test's capture, a caller's redirect) receives it."""
     kept = [ln for ln in text.splitlines(True) if not _ADDED_NOISE.match(ln.strip("\n"))]
     if kept:
-        stream.write("".join(kept))
+        (stream if stream is not None else sys.stderr).write("".join(kept))
 
 
 def run_with_host_key_healing(argv: list[str], *, host: str | None, known_hosts: str | None,
                               heal: bool, run=subprocess.run) -> int:
-    """Run `argv`; on a host-key mismatch drop the stale entry, and retry at most once.
+    """Run `argv` exactly once; on a changed host key, drop the stale entry afterwards.
 
     stdout is inherited so large command output still streams; only stderr is captured, and only
     so the mismatch can be detected and the noise line filtered. It is decoded as UTF-8 with
     replacement, because what arrives there is partly the REMOTE command's stderr, in whatever
     encoding the remote wrote, and a strict locale decode would crash after the command ran.
 
-    Healing (dropping the stale entry) needs healing enabled, a known host and stderr that really
-    is a mismatch - whatever the exit status. Under StrictHostKeyChecking=no a changed key is only
-    a warning: ssh runs the command, often successfully, and never replaces the entry on file, so
-    healing only on a non-zero exit left the stale key there for good and every later call printed
-    the banner again. Dropping the entry runs nothing remote, so it is safe on any status.
+    Healing needs healing enabled, a known host, and ssh's own "Offending ... key in <file>" line
+    naming `known_hosts` - whatever the exit status. Healing runs with StrictHostKeyChecking=no,
+    under which a changed key is only a warning: ssh runs the command and never replaces the entry
+    on file, so the banner would repeat on every later call until the entry is dropped. Dropping it
+    runs nothing remote, so it is safe on any status.
 
-    The RETRY needs more: ssh's own failure status AND its fatal "Host key verification failed"
-    line, which together say it stopped before authenticating. Anything less can be a command that
-    ran under the banner, and `argv` can be MUTATING, so a second run would apply it twice. `run`
-    is injected so that is testable without a live host and a real changed key.
+    The command is never re-run. Under StrictHostKeyChecking=no ssh does not refuse a changed key
+    (measured on OpenSSH 10.2: banner, no "Host key verification failed"), so a failing status
+    after the banner is the command's own, and `argv` can be MUTATING. The one fatal refusal left
+    there is a key marked @revoked, which no re-run should talk past. `run` is injected so this is
+    testable without a live host and a real changed key.
     """
     proc = _run_capturing_stderr(argv, run)
     err = proc.stderr or ""
-    if heal and host and known_hosts and _key_mismatch(proc.returncode, err):
+    if heal and host and known_hosts and offends_known_hosts(err, known_hosts):
         run(["ssh-keygen", "-R", host, "-f", known_hosts],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         print(f"fleet_ssh: host key for {host} changed; dropped the stale entry "
-              f"{_after_the_drop(proc.returncode, err)}", file=sys.stderr)
-        if proc.returncode == SSH_FAILED and HOST_KEY_REFUSED.search(err):
-            proc = _run_capturing_stderr(argv, run)
-            err = proc.stderr or ""
+              f"{_after_the_drop(proc.returncode)}", file=sys.stderr)
     forward_stderr(err)
     return proc.returncode
 
 
-def _key_mismatch(returncode: int, err: str) -> bool:
-    """Did ssh report a changed host key? On success only its framed WARNING banner counts: the
-    fatal "verification failed" line cannot come from ssh when the command ran, so there it is the
-    remote command's own output and says nothing about the key."""
-    if returncode == 0:
-        return bool(HOST_KEY_BANNER.search(err))
-    return bool(HOST_KEY_CHANGED.search(err))
+def offends_known_hosts(err: str, known_hosts: str) -> bool:
+    """Does ssh's stderr name an offending entry in THIS known-hosts file?
+
+    Compared as paths, since ssh prints the file after expanding it and the caller may have
+    spelled it with `~` or a `./`."""
+    ours = _comparable_path(known_hosts)
+    return any(_comparable_path(m.group("path")) == ours for m in OFFENDING_KEY.finditer(err))
 
 
-def _after_the_drop(returncode: int, err: str) -> str:
-    """What happens to the command once the stale entry is gone - said, because it differs."""
-    if returncode == SSH_FAILED and HOST_KEY_REFUSED.search(err):
-        return "and retried (ssh refused before running anything)"
+def _comparable_path(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.expanduser(path.strip())))
+
+
+def _after_the_drop(returncode: int) -> str:
+    """What became of the command - said, because a caller may need to run it again by hand."""
     if returncode == 0:
         return "(the command ran under the warning; the next connect records the new key)"
-    return "(not retried: the command may already have run)"
+    return ("(the command was not re-run: ssh runs it under the warning, so it may already have "
+            "had its effect)")
 
 
 def _run_capturing_stderr(argv: list[str], run):

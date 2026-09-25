@@ -230,6 +230,76 @@ class TestWideSegmentation:
         assert out.endswith("line of narrow text\ntail\n")
 
 
+# A crash or power cut leaves a log ending in zeroed clusters. Those NUL bytes are not text in
+# either encoding, and read as UTF-16 they turned the narrow lines before them into CJK.
+NARROW_LOGS = [
+    b"abc\nstep 2\nDONE-OK\n",
+    b"DONE-OK!\n",
+    b"abc\nDONE-OK",
+    b"abc\nDONE-OK\r\n",
+    b"Starting install\nDONE-OK\n",
+    b"OK",
+]
+PADDING = [1, 2, 3, 16, 4096]
+
+
+class TestTrailingNulPadding:
+    @pytest.mark.parametrize("pad", PADDING)
+    @pytest.mark.parametrize("text", NARROW_LOGS)
+    def test_a_padded_narrow_log_reads_as_its_text(self, text, pad):
+        out = winlog.decode_windows_text(text + b"\x00" * pad)
+        assert out == text.decode().replace("\r\n", "\n")
+
+    @pytest.mark.parametrize("text", NARROW_LOGS)
+    def test_control_the_same_log_unpadded(self, text):
+        assert winlog.decode_windows_text(text) == text.decode().replace("\r\n", "\n")
+
+    @pytest.mark.parametrize("pad", PADDING)
+    @pytest.mark.parametrize("text", ["Ошибка\nDONE-OK\n", "DONE-OK\n", "DONE", "上 DONE-OK\n",
+                                      "11:50:39 Ошибка установки\n"])
+    def test_a_padded_wide_log_keeps_its_last_character(self, text, pad):
+        """The first NUL of the run can be the high byte of the last UTF-16 code unit."""
+        assert winlog.decode_windows_text(text.encode("utf-16-le") + b"\x00" * pad) == text
+
+    @pytest.mark.parametrize("pad", PADDING)
+    def test_a_wide_last_line_whose_bytes_look_narrow_after_other_wide_lines(self, pad):
+        """U+6F22 U+5B57 is the bytes 22 6F 57 5B - printable ASCII - so only the UTF-16 lines
+        before it say the tail's first NUL is the high byte of the last LF."""
+        text = "x\n漢字\n"
+        assert winlog.decode_windows_text(text.encode("utf-16-le") + b"\x00" * pad) == text
+
+    @pytest.mark.parametrize("pad", PADDING)
+    def test_a_padded_mixed_log(self, pad):
+        raw = b"=== KB install ===\n" + "11:50:39  DONE-OK\n".encode("utf-16-le") + b"\x00" * pad
+        assert winlog.decode_windows_text(raw) == "=== KB install ===\n11:50:39  DONE-OK\n"
+
+    @pytest.mark.parametrize("pad", PADDING)
+    @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+    def test_a_padded_bom_file(self, encoding, pad):
+        text = "DONE-OK 一\n一"
+        raw = "﻿".encode(encoding) + text.encode(encoding) + b"\x00" * pad
+        assert winlog.decode_windows_text(raw) == text
+
+    def test_padding_is_named_and_does_not_make_a_narrow_file_mixed(self):
+        described = winlog.describe_encoding(b"abc\nstep 2\nDONE-OK\n" + b"\x00" * 512)
+        assert described.startswith("utf-8")
+        assert "512 trailing NUL" in described
+
+    def test_control_an_unpadded_file_names_no_padding(self):
+        assert "NUL" not in winlog.describe_encoding(b"abc\nDONE-OK\n")
+
+    def test_a_file_of_only_nul_bytes(self):
+        assert winlog.decode_windows_text(b"\x00" * 64) == ""
+
+    def test_cli_finds_the_marker_in_a_padded_log(self, tmp_path):
+        f = tmp_path / "install.log"
+        f.write_bytes(b"abc\nstep 2\nDONE-OK\n" + b"\x00" * 4096)
+        p = run("read", str(f), "--grep", "^DONE-OK$", "--json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert json.loads(p.stdout)["data"]["lines"] == ["DONE-OK"]
+        assert "mixed" not in p.stderr.lower()
+
+
 class TestTailAndPattern:
     def test_tail_zero_prints_nothing(self, tmp_path):
         f = tmp_path / "t.log"
