@@ -54,6 +54,21 @@ def slugify(title, type_=None):
         base = "%s-%s" % (type_, base)
     return base
 
+
+# A slug names a FILE (`facts/<slug>.md`), so it may carry no path: lowercase letters, digits,
+# hyphens and dots, starting and ending with a letter or digit. Dots are allowed because real stores
+# carry version numbers in slugs (`starlette-1.2-httpx2-testclient`); a leading dot would hide the
+# file and a trailing one is stripped by Windows, so both ends must be alphanumeric. `slugify` output
+# always matches.
+_SLUG_RX = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
+
+
+def is_valid_slug(slug):
+    """True when `slug` is a plain filename the store can own. THE slug check every write path that
+    takes a caller-supplied slug applies before building a body path from it: without it `../..`
+    reaches outside `facts/`, and the engine becomes an arbitrary `.md` writer."""
+    return isinstance(slug, str) and _SLUG_RX.fullmatch(slug) is not None
+
 INDEX_BEGIN = "<!-- BITRANOX-MEMORY-INDEX:BEGIN managed by bitranox self-improve; do not hand-edit. -->"
 INDEX_END = "<!-- BITRANOX-MEMORY-INDEX:END -->"
 # Pre-pivot fence names: still parsed (and replaced on upsert) until every live block is migrated.
@@ -232,19 +247,34 @@ class Pointer:
         return "- [%s](mem:%s) - %s%s" % (title, self.slug, hook, self.meta_comment())
 
 
+def _one_line(s):
+    """`s` with every line boundary collapsed to one space; a string with none comes back unchanged.
+
+    The parser reads one pointer per LINE, splitting exactly where `str.splitlines` does (`\\n`,
+    `\\r`, and the rarer separators such as U+2028), so a break inside a field splits the pointer: a
+    wrapped `--hook-file` hook loses its tail on the next re-render, a multi-line title drops the
+    fact, and a hook whose second line looks like a pointer is read as a second fact. Only line
+    boundaries are touched, so every existing single-line pointer re-renders byte for byte."""
+    s = s or ""
+    parts = s.splitlines()
+    if "".join(parts) == s:                          # no line boundary anywhere
+        return s
+    return " ".join(p.strip() for p in parts if p.strip())
+
+
 def _ptr_safe_title(s):
     """Neutralize characters that break a pointer line's markdown link title `[Title](mem:slug)`:
     a `]` (or `[`) in the title makes the whole line unparseable, so it is silently dropped on the
     next block round-trip - orphaning the body. The body keeps the true title's information; the
-    always-loaded pointer just shows `(dev)` for `[dev]`."""
-    return (s or "").replace("[", "(").replace("]", ")")
+    always-loaded pointer just shows `(dev)` for `[dev]`. A line break is collapsed (`_one_line`)."""
+    return _one_line(s).replace("[", "(").replace("]", ")")
 
 
 def _ptr_safe_hook(s):
     """The hook runs to the FIRST `<!--` (the meta comment); a literal `<!--`/`-->` inside a hook would
     truncate or corrupt the line, so neutralize it. Brackets in a hook are fine (the hook group is a
-    tempered scan, not a `[^\\]]` class)."""
-    return (s or "").replace("<!--", "< !--").replace("-->", "-- >")
+    tempered scan, not a `[^\\]]` class). A line break is collapsed (`_one_line`)."""
+    return _one_line(s).replace("<!--", "< !--").replace("-->", "-- >")
 
 
 def _slug_from_title(title):
@@ -287,10 +317,22 @@ def parse_pointer_index(text):
     """Parse pointer-index text (a whole `CLAUDE.local.md`, or just the block) -> (scope, [Pointer]).
     Accepts BOTH the current `mem:<slug>` lines and pre-pivot `uuid:<uuid>` lines (returned with
     `legacy=True`); trailing garbage after the first meta comment is ignored (dropped on the next
-    canonical re-render). Headings and prose are ignored."""
-    scope = sig.read_scope_block(text or "") or ""
-    pointers = []
-    for raw in (text or "").splitlines():
+    canonical re-render). Headings and prose are ignored.
+
+    When the text holds a managed block, pointers are read from INSIDE the block(s) only. A
+    pointer-shaped line in the surrounding prose is not part of the index, and reading it would copy
+    it into the block on every write while the original stays behind, so the index grows by one line
+    per write. Text with no managed block (a bare rendered block, a snippet) is read whole.
+
+    One slug yields ONE pointer: the FIRST occurrence wins, which is the one `resolve` reads. A
+    duplicate within one file (a migrated block beside a legacy ghost block) otherwise lets a writer
+    update the later copy while every reader keeps seeing the earlier, stale one."""
+    text = text or ""
+    scope = sig.read_scope_block(text) or ""
+    spans = _managed_spans(text)
+    region = "\n".join(text[b:e] for b, e in spans) if spans else text
+    pointers, seen = [], set()
+    for raw in region.splitlines():
         m = _PTR_RX.match(raw)
         if not m:
             continue
@@ -298,11 +340,14 @@ def parse_pointer_index(text):
         title = m.group("title")
         hook = m.group("hook").strip()
         if m.group("scheme") == "mem":
-            pointers.append(Pointer(slug=m.group("target"), title=title, hook=hook, pin=pin))
+            p = Pointer(slug=m.group("target"), title=title, hook=hook, pin=pin)
         else:
-            pointers.append(Pointer(slug=slug_tok or _slug_from_title(title), title=title,
-                                    hook=hook, pin=pin,
-                                    uuid=m.group("target"), legacy=True))
+            p = Pointer(slug=slug_tok or _slug_from_title(title), title=title,
+                        hook=hook, pin=pin, uuid=m.group("target"), legacy=True)
+        if p.slug in seen:
+            continue
+        seen.add(p.slug)
+        pointers.append(p)
     return scope, pointers
 
 
@@ -377,7 +422,7 @@ def put_body(anchor_dir, slug, body):
 
 def add_pointer(altitude_dir, slug, title, hook, pin=False, scope_default=""):
     """Upsert one pointer line (keyed by SLUG) into `<altitude_dir>/CLAUDE.local.md`'s managed block
-    (merging the provenance set + pin on update), under a lock, mtime-neutral. Sets the scope
+    (merging pin on update), under a lock, mtime-neutral. Sets the scope
     descriptor if absent. Updating a LEGACY pointer flips it to the current format (the caller is
     responsible for having written the slug-named body). Does NOT write the body - the caller does,
     via `put_body`. Returns the slug."""

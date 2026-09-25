@@ -134,22 +134,22 @@ All writes go through `hooks/memory_engine.py`, launched cross-platform via `hoo
 Never hand-edit a pointer block or a body - a PreToolUse guard denies it (bypass only via a
 `BITRANOX_MEMORY_ENGINE=1` session for deliberate hand-repair).
 
-| Command                                                                                                                                                                                                                                                 | Success line to REQUIRE               |
-|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
-| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]`                                                                                               | the printed slug                      |
-| `amend-pinned --proj D --slug S [--title T] [--hook H\|--hook-file F] [--body-file F]` (the deliberate way through - an ordinary `add` REFUSES a pinned slug, and so does `retitle`; human use only, no autonomous pass invokes this verb) | the printed slug                      |
-| `heal --proj D`                                                                                                                                                                                                                                         | `healed N file(s) across M level(s)`  |
-| `set-scope --proj D --scope TEXT\|--scope-file F`                                                                                                                                                                                                       | `scope updated:` / `scope unchanged:` |
-| `move --from-level A --to-level B --slug S [--slug S2 ...] [--force]` (several slugs move as ONE set; see below)                                                                                                                                        | `moved <slug>: A -> B (up\|down)`     |
-| `relocate --from-level A --to-level B --slug S [--force]`                                                                                                                                                                                               | `relocated <slug>: A -> B (...)`      |
-| `rename --level D --slug S --to-slug S2` (fix a WRONG NAME: `move`/`relocate` change a fact's level, never its name; this repoints every inbound `[[ref]]` so nothing is orphaned)                                                                      | `renamed <slug> -> <slug2> at D`      |
-| `retitle --level D --slug S --to-title T` (fix a STALE TITLE - the pointer's link text - leaving slug, hook and body untouched; refuses a pinned fact, which goes through `amend-pinned --title`)                                                       | `retitled <slug> -> '<title>' at D`   |
-| `lint --tree D`                                                                                                                                                                                                                                         | `TOTAL over-cap hooks: N \| ...`      |
-| `tree-top --proj D [--json]`                                                                                                                                                                                                                            | the printed top/store lines           |
-| `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                                                                                              | the `DRY-RUN:`/`APPLIED:` report      |
-| `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch)                                                                  | `TOTAL problems: 0`                   |
-| `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers, orphans, sideways/downward refs, dangling that `--check`/`heal` miss)                                                                 | `TOTAL tree problems: 0`              |
-| `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                                                                                                | `archived <slug> ...`                 |
+| Command                                                                                                                                                                                                                                                                                | Success line to REQUIRE               |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|
+| `add --proj D --title T --hook H\|--hook-file F --body-file F [--type feedback\|project\|reference\|user] [--pin] [--scope TEXT] [--slug S]`                                                                                                                                           | the printed slug                      |
+| `amend-pinned --proj D --slug S [--title T] [--hook H\|--hook-file F] [--body-file F] [--type feedback\|project\|reference\|user]` (the deliberate way through - an ordinary `add` REFUSES a pinned slug, and so does `retitle`; human use only, no autonomous pass invokes this verb) | the printed slug                      |
+| `heal --proj D`                                                                                                                                                                                                                                                                        | `healed N file(s) across M level(s)`  |
+| `set-scope --proj D --scope TEXT\|--scope-file F`                                                                                                                                                                                                                                      | `scope updated:` / `scope unchanged:` |
+| `move --from-level A --to-level B --slug S [--slug S2 ...] [--force]` (several slugs move as ONE set; see below)                                                                                                                                                                       | `moved <slug>: A -> B (up\|down)`     |
+| `relocate --from-level A --to-level B --slug S [--force]`                                                                                                                                                                                                                              | `relocated <slug>: A -> B (...)`      |
+| `rename --level D --slug S --to-slug S2` (fix a WRONG NAME: `move`/`relocate` change a fact's level, never its name; this repoints every inbound `[[ref]]` so nothing is orphaned)                                                                                                     | `renamed <slug> -> <slug2> at D`      |
+| `retitle --level D --slug S --to-title T` (fix a STALE TITLE - the pointer's link text - leaving slug, hook and body untouched; refuses a pinned fact, which goes through `amend-pinned --title`)                                                                                      | `retitled <slug> -> '<title>' at D`   |
+| `lint --tree D`                                                                                                                                                                                                                                                                        | `TOTAL over-cap hooks: N \| ...`      |
+| `tree-top --proj D [--json]`                                                                                                                                                                                                                                                           | the printed top/store lines           |
+| `ensure-all-trees [--roots ...] [--apply]`                                                                                                                                                                                                                                             | the `DRY-RUN:`/`APPLIED:` report      |
+| `skills/meta-self-improve/reconcile_memory_index.py --check <chain narrow->broad>` (a SEPARATE script, NOT an engine verb - it lives in this skill's dir, same `run-python.sh` launch)                                                                                                 | `TOTAL problems: 0`                   |
+| `skills/meta-self-improve/reconcile_memory_index.py --check-tree D` (TREE-WIDE: cross-sibling duplicate pointers, orphans, sideways/downward refs, dangling that `--check`/`heal` miss)                                                                                                | `TOTAL tree problems: 0`              |
+| `skills/meta-self-improve/reconcile_memory_index.py --archive S D` (forget a fact: drop its pointer at D + move its body to `.archive/`)                                                                                                                                               | `archived <slug> ...`                 |
 
 **Fail-loud contract:** run engine calls with `BITRANOX_RUN_PYTHON_STRICT=1`, require the command's
 success line in the output, and ABORT-AND-SHOW on any miss (a refused move prints `! refused:` and
@@ -169,7 +169,13 @@ scaffolds the level, so a rejected call leaves nothing behind.
 `add` semantics: upserts by slug (title-derived unless `--slug` targets an existing identity),
 keeps the pin, keeps the existing body when `--body` is empty, frames a bare
 body, enforces tree-unique slugs, refuses a pinned target (`PinnedEntry` - `amend-pinned` is the
-deliberate way through). `move` relocates only a pointer LINE (the body never moves); if the
+deliberate way through). A slug names the body FILE, so `add`, `amend-pinned`, `rename --to-slug`
+and `relocate` refuse one that is not a plain filename (lowercase letters, digits, hyphens and
+dots, starting and ending with a letter or digit) before anything is written. On an update,
+`--type` with no body re-types the stored body in place; an unknown `--type` is refused. A hook or
+title that spans several lines (a wrapped `--hook-file`) is joined onto one pointer line, since a
+line break would split it. `--proj .` means the cwd; HOME, the temp dir and the filesystem root are
+refused, a symlink to one of them included. `move` relocates only a pointer LINE (the body never moves); if the
 target ALREADY points at the slug with a different hook it REFUSES (a duplicate, not a relocation -
 picking by direction would silently discard the richer hook), and `--force` dedups by keeping the
 LONGER hook and dropping the other.
@@ -191,9 +197,12 @@ leaves a visible duplicate pointer, never a lost fact - re-run the SAME command 
 `relocate` is the CROSS-TREE move `move` cannot do: it copies
 the central body into the TARGET tree's store, points at it there, drops the source pointer and
 ARCHIVES the source body - one live copy, old one recoverable. Same-tree it just delegates to
-`move` (the body already sits at the right anchor). It refuses a divergent slug in the target tree
-(slugs are tree-unique, so landing on one would destroy a different fact) and refuses when the
-fact leaving the tree would dangle any inbound `[[ref]]` left behind (`--force` warns instead).
+`move` (the body already sits at the right anchor). It refuses when the target tree already holds
+a DIFFERENT body under that slug, whichever level points at it or none (slugs are tree-unique and
+the body file is the registry, so landing on one would destroy a different fact); an IDENTICAL body
+there is an interrupted relocate, and re-running the same command completes it. It also refuses
+when the fact leaving the tree would dangle any inbound `[[ref]]` left behind (`--force` warns
+instead).
 
 **`move` is CHAIN-ONLY, and it guards only INBOUND refs - promoting a fact strands its OWN outbound
 refs.** It walks the altitude chain, so it accepts ancestor <-> descendant only and REFUSES a

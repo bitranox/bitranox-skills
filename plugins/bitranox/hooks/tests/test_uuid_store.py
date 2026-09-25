@@ -415,3 +415,124 @@ def test_upsert_unions_pointers_from_both_blocks(tmp_path):
     out = us.upsert_pointer_block(text, scope, ptrs)
     assert out.count("INDEX:BEGIN") == 1
     assert "(mem:a)" in out and "(mem:b)" in out
+
+
+# ---- a line break inside a hook or title must never split the pointer line ----------------------
+# The parser reads one pointer per LINE (str.splitlines), so a break inside a field truncates the
+# hook, drops the fact, or lets the tail be read as a second, injected pointer.
+
+def _round_trip(pointers):
+    return us.parse_pointer_index(us.upsert_pointer_block("", "sc", pointers))[1]
+
+
+def test_a_wrapped_hook_renders_as_one_line_and_keeps_its_tail():
+    got = _round_trip([us.Pointer(slug="f", title="F", hook="When a long hook wraps,\ndo the thing.")])
+    assert [(p.slug, p.hook) for p in got] == [("f", "When a long hook wraps, do the thing.")]
+
+
+def test_a_hook_cannot_inject_a_second_pointer_line():
+    hook = "When a, do b.\n- [Injected](mem:feedback-injected) - When c, do d."
+    got = _round_trip([us.Pointer(slug="feedback-real-fact", title="Real", hook=hook)])
+    assert [p.slug for p in got] == ["feedback-real-fact"]
+
+
+@pytest.mark.parametrize("brk", ["\n", "\r\n", "\r", "\u2028", "\x0b", "\x1c", "\x85"])
+def test_every_line_boundary_splitlines_honours_is_collapsed(brk):
+    got = _round_trip([us.Pointer(slug="f", title="A%sB" % brk, hook="When x,%sdo y." % brk)])
+    assert [(p.slug, p.title, p.hook) for p in got] == [("f", "A B", "When x, do y.")]
+
+
+def test_a_multi_line_title_no_longer_drops_the_fact(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    us.add_pointer(str(tmp_path), slug="feedback-nl", title="Line one\nline two", hook="When x, do y")
+    _s, ptrs = us.parse_pointer_index((tmp_path / "CLAUDE.local.md").read_text(encoding="utf-8"))
+    assert [(p.slug, p.title) for p in ptrs] == [("feedback-nl", "Line one line two")]
+
+
+def test_a_single_line_hook_renders_byte_for_byte():
+    # CONTROL: only line breaks are touched; a hook with inner double spaces or a tab is unchanged,
+    # so every existing pointer line re-renders identically and heal writes nothing.
+    hook = "When  x\there, do y  <placeholder> [tag]"
+    line = us.Pointer(slug="f", title="T  t", hook=hook).index_line()
+    assert line == "- [T  t](mem:f) - %s" % hook
+
+
+# ---- pointer lines are read from the managed block only ----------------------------------------
+
+def test_a_pointer_shaped_line_outside_the_block_is_not_parsed():
+    text = ("notes:\n- [Loose](mem:loose) - When x, do y\n\n"
+            + us.upsert_pointer_block("", "sc", [us.Pointer(slug="kept", title="K", hook="h")]))
+    _s, ptrs = us.parse_pointer_index(text)
+    assert [p.slug for p in ptrs] == ["kept"]
+
+
+def test_a_loose_line_is_not_copied_into_the_block_on_every_write(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    local = tmp_path / "CLAUDE.local.md"
+    block = us.upsert_pointer_block("", "sc", [us.Pointer(slug="kept", title="K", hook="h")])
+    local.write_text("notes:\n- [Loose](mem:loose) - When x, do y\n\n" + block, encoding="utf-8")
+    counts = []
+    for i in range(3):
+        us.add_pointer(str(tmp_path), slug="t%d" % i, title="T", hook="h")
+        counts.append(local.read_text(encoding="utf-8").count("(mem:loose)"))
+    assert counts == [1, 1, 1]
+
+
+def test_text_without_a_managed_block_is_parsed_whole():
+    # CONTROL: a bare rendered block (no fences) and a hand-built snippet still parse.
+    body = us.render_pointer_index("sc", [us.Pointer(slug="a", title="A", hook="h")])
+    assert [p.slug for p in us.parse_pointer_index(body)[1]] == ["a"]
+    assert [p.slug for p in us.parse_pointer_index("- [B](mem:b) - h\n")[1]] == ["b"]
+
+
+# ---- one slug, one pointer: the copy that is updated is the copy that is read -------------------
+
+def _dup_blocks():
+    new_block = "%s\n%s%s" % (us.INDEX_BEGIN, us.render_pointer_index(
+        "s", [us.Pointer(slug="feedback-x", title="X", hook="When old, do old")]), us.INDEX_END)
+    legacy = ("%s\n- [X](uuid:1234) - When stale, do stale <!-- bx:slug=feedback-x -->\n%s"
+              % (us.LEGACY_INDEX_BEGIN, us.LEGACY_INDEX_END))
+    return new_block + "\n\n" + legacy + "\n"
+
+
+def test_parse_keeps_the_first_copy_of_a_duplicated_slug():
+    _s, ptrs = us.parse_pointer_index(_dup_blocks())
+    assert [(p.slug, p.hook, p.legacy) for p in ptrs] == [("feedback-x", "When old, do old", False)]
+
+
+def test_add_pointer_on_a_duplicated_slug_updates_what_resolve_reads(tmp_path):
+    anchor = tmp_path / "tree"; proj = anchor / "proj"
+    proj.mkdir(parents=True)
+    (anchor / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    us.put_body(str(anchor), "feedback-x", "body")
+    (proj / "CLAUDE.local.md").write_text(_dup_blocks(), encoding="utf-8")
+    us.add_pointer(str(proj), "feedback-x", "X", "When NEW, do NEW")
+    assert [(r.slug, r.hook) for r in us.resolve(str(proj))] == [("feedback-x", "When NEW, do NEW")]
+    assert (proj / "CLAUDE.local.md").read_text(encoding="utf-8").count("feedback-x") == 1
+
+
+def test_distinct_slugs_across_two_blocks_all_survive():
+    # CONTROL: dedup keys on the slug, so two blocks with different facts still union.
+    text = ("%s\n- [A](mem:a) - ha\n%s\n\n%s\n- [B](mem:b) - hb\n%s\n") % (
+        us.INDEX_BEGIN, us.INDEX_END, us.LEGACY_INDEX_BEGIN, us.LEGACY_INDEX_END)
+    assert [p.slug for p in us.parse_pointer_index(text)[1]] == ["a", "b"]
+
+
+# ---- slug validation: a slug is a plain filename ------------------------------------------------
+
+@pytest.mark.parametrize("slug", ["plain", "feedback-no-em-dashes", "starlette-1.2-httpx2-testclient",
+                                  "a", "setup-notes-2"])
+def test_is_valid_slug_accepts_real_store_shapes(slug):
+    assert us.is_valid_slug(slug)
+
+
+@pytest.mark.parametrize("slug", ["", "..", "../x", "a/b", "a\\b", ".x", "x.", "-x", "x-", "A",
+                                  "a b", "a_b", "a\nb", None, "c:x"])
+def test_is_valid_slug_rejects_anything_that_is_not_a_plain_filename(slug):
+    assert not us.is_valid_slug(slug)
+
+
+def test_slugify_output_is_always_a_valid_slug():
+    for title in ("No em dashes", "", "  ---  ", "C:\\path\\to", "../../etc", "ps7.6 hosting"):
+        assert us.is_valid_slug(us.slugify(title)), title
+        assert us.is_valid_slug(us.slugify(title, "feedback")), title

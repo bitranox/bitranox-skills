@@ -29,6 +29,35 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.22.3]
+
+### Fixed
+
+- **`relocate` no longer overwrites a fact the target tree already owns.** It refuses whenever the
+  target tree holds a different body under the same slug, whether another level points at it, the
+  target level does with the same title and hook, or nothing does. Before, it checked only the
+  target level's pointers, overwrote the other fact's body and exited 0. An identical body there
+  is an interrupted relocate, and re-running the command completes it.
+- **A slug must be a plain filename.** `add --slug`, `amend-pinned --slug`, `rename --to-slug` and
+  `relocate` refuse a slug that is not lowercase letters, digits, hyphens and dots, starting and
+  ending with a letter or digit, before anything is written. A slug such as `../../CLAUDE` used to
+  overwrite the tree's `CLAUDE.md` or write outside the tree.
+- **A hook or title that spans lines stays one pointer line.** A wrapped `--hook-file` hook is
+  joined with single spaces instead of losing its second line on the next re-render, a multi-line
+  title no longer drops the fact, and a hook's second line can no longer be read as an extra
+  pointer. Single-line pointers are unchanged.
+- **Pointer lines outside the managed block are ignored.** A pointer-shaped line in the prose
+  around the block was copied into it on every write, growing the always-loaded index each time.
+- **One slug, one pointer per file.** When a file holds the same slug twice (a migrated block next
+  to a leftover legacy block), the first copy is the one read and updated. Before, an update went
+  to the copy nothing reads.
+- **`--type` with no body re-types the stored fact.** `amend-pinned --type` and `add --type` on an
+  existing fact used to print the slug and change nothing. `amend-pinned --type` now accepts only
+  `feedback`, `project`, `reference` and `user`, like `add`.
+- **`--proj .` means the current directory.** It was refused as the filesystem root. A symlink to
+  HOME is now refused like HOME itself instead of getting a memory store written into it.
+
+
 ## [7.22.2]
 
 ### Fixed

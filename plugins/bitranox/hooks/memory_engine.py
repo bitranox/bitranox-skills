@@ -81,6 +81,31 @@ class SlugCollision(ValueError):
         self.slug, self.suggestion = slug, suggestion
 
 
+class InvalidSlug(ValueError):
+    """Raised when a caller-supplied slug is not a plain filename (`uuid_store.is_valid_slug`). The
+    slug becomes `facts/<slug>.md`, so an unchecked `../../CLAUDE` rewrites the tree's CLAUDE.md and
+    `../../../x` writes outside the tree altogether - through the one write path the store-edit guard
+    exists to funnel every change into. Raised BEFORE anything is written."""
+
+    def __init__(self, slug):
+        self.slug = slug
+        super().__init__("%r is not a valid slug - use lowercase letters, digits, hyphens and dots, "
+                         "starting and ending with a letter or digit (no path separators)" % (slug,))
+
+
+def _require_valid_slug(slug):
+    """Raise `InvalidSlug` unless `slug` is a plain filename the store can own."""
+    if not us.is_valid_slug(slug):
+        raise InvalidSlug(slug)
+
+
+def _require_known_type(type_):
+    """Raise ValueError for a kind outside `TYPE_PREFIXES`; None/empty means 'not given'. The kind is
+    written into the body's frontmatter, so an unchecked string would be stored as a fact's type."""
+    if type_ and type_ not in _TYPE_PREFIXES:
+        raise ValueError("unknown type %r - use one of %s" % (type_, ", ".join(_TYPE_PREFIXES)))
+
+
 class EmptyBody(ValueError):
     """Raised when a NEW fact is given no body. The frame alone would ship an always-loaded pointer
     promising a rule with nothing behind it, and no integrity check reports an absent body - so it is
@@ -217,8 +242,15 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
     Updating a target already marked `pin` raises `PinnedEntry` BEFORE any write UNLESS
     `allow_pinned_overwrite` is set - the escape hatch `amend_pinned_entry` uses deliberately, and
     nothing else should. Passing `pin=True` to newly PIN an unpinned (or new) entry is unaffected;
-    the gate only fires when the entry found at `slug` is ALREADY pinned."""
+    the gate only fires when the entry found at `slug` is ALREADY pinned.
+
+    A slug that is not a plain filename raises `InvalidSlug`, and a `type_` outside the four kinds
+    raises ValueError, both BEFORE any write. On an UPDATE, a `type_` with no body re-types the
+    stored body in place (its prose untouched). A relative `proj` is taken relative to the cwd."""
+    proj = os.path.abspath(str(proj))
+    _require_known_type(type_)
     slug = slug or slugify(title, type_)
+    _require_valid_slug(slug)
     hook = (hook or "").strip()
     if not allow_over_cap_hook and us.hook_over_hard_cap(hook):
         raise HookTooLong(len(hook))
@@ -263,8 +295,13 @@ def add_or_update_entry(proj, title, hook, body="", type_=None, pin=False,
                 # the slug discards what the stored body already records, and for a prefix-less slug
                 # that always lands on "project".
                 e.body = _framed_body(slug, e.hook, type_ or _body_type(e.body), body)
-            elif e.hook != old_hook:
-                e.body = _reframe_description(e.body, e.hook)   # keep body description in sync with the pointer
+            else:
+                if e.hook != old_hook:
+                    e.body = _reframe_description(e.body, e.hook)   # keep body description in sync
+                if type_ and _body_type(e.body) != type_:
+                    # An explicit kind with no new body is a re-type: without this the call printed
+                    # the slug and exited 0 while the stored body kept its old kind.
+                    e.body = _retype_body(slug, e.hook, type_, e.body)
             e.pin = e.pin or pin
             if e.legacy:                             # first update flips a legacy entry: the body
                 _archive_legacy_body(anchor, e)      # moves to the slug path, the old file archives
@@ -302,7 +339,13 @@ def amend_pinned_entry(proj, slug, hook=None, body=None, title=None, type_=None)
     unreachable would freeze a fact captured under the wrong kind for good. Re-typing never
     unpins.
 
-    There is no `source` parameter: provenance was removed in 5.300.0 and is not stored."""
+    There is no `source` parameter: provenance was removed in 5.300.0 and is not stored.
+
+    `type_` alone (no body) re-types the stored body in place; an unknown kind raises ValueError and a
+    slug that is not a plain filename raises `InvalidSlug`, both before anything is read or written."""
+    proj = os.path.abspath(str(proj))
+    _require_valid_slug(slug)
+    _require_known_type(type_)
     _scope, entries, _bodies = read_store(proj)
     by_slug = {e.slug: e for e in entries}
     if slug not in by_slug:
@@ -368,6 +411,29 @@ def _reframe_description(text, hook):
     desc = " ".join((hook or "").split())
     return re.sub(r"(?m)^(description:)[ \t]*.*$",
                   lambda m: "%s %s" % (m.group(1), desc), text, count=1)
+
+
+def _retype_body(slug, hook, type_, text):
+    """Return `text` with its frontmatter `metadata: type:` set to `type_`, prose untouched.
+
+    Rewrites the same line `_body_type` reads (the first indented `type:` in the leading frontmatter),
+    so the kind read back is the kind written. Frontmatter with no `type:` line gains one; an unframed
+    body is framed with the new kind. The replacement is a lambda for the same reason as
+    `_reframe_description`."""
+    head = (text or "").lstrip()
+    if not head.startswith("---"):
+        return _framed_body(slug, hook, type_, text)
+    end = head.find("\n---", 3)
+    front, rest = (head[:end], head[end:]) if end > 0 else (head, "")
+    new_front, n = re.subn(r"(?m)^([ \t]+type:)[ \t]*\S*[ \t]*$",
+                           lambda m: "%s %s" % (m.group(1), type_), front, count=1)
+    if n == 0:
+        if re.search(r"(?m)^metadata:[ \t]*$", front):
+            new_front = re.sub(r"(?m)^(metadata:)[ \t]*$",
+                               lambda m: "%s\n  type: %s" % (m.group(1), type_), front, count=1)
+        else:
+            new_front = front + "\nmetadata:\n  type: %s" % type_
+    return new_front + rest
 
 
 def _entry_from_body(anchor, slug):
@@ -776,8 +842,8 @@ def ensure_level(proj, scope_default="", _locked=False):
     REFUSES an excluded altitude (home, the system temp dir, the filesystem root): those dirs are
     never a memory level, and scaffolding them turns e.g. all of /tmp into a fake knowledge tree
     that pollutes recall (bitten twice on 2026-07-05)."""
-    _lvl = Path(proj)
-    if _lvl == Path(_lvl.anchor) or _lvl in sig._excluded_anchor_dirs():
+    proj = os.path.abspath(str(proj))
+    if _is_excluded_level(proj):
         raise ValueError("refused: %s is an excluded altitude (home/tempdir/root)" % proj)
     def _do():
         md_path = sig.claude_md_path(proj)
@@ -806,6 +872,26 @@ def ensure_level(proj, scope_default="", _locked=False):
     else:
         with sig.memory_lock(sig.claude_local_md_path(proj)):
             _do()
+
+
+def _is_excluded_level(proj):
+    """True when `proj` is the filesystem root, HOME or the temp dir. Compared on RESOLVED paths, so
+    `.` means the cwd (unresolved, `Path('.')` equals its own empty anchor and read as the root) and
+    a symlink to HOME is refused like HOME itself instead of scaffolding a store into it."""
+    try:
+        real = Path(proj).resolve()
+    except (OSError, RuntimeError):
+        return True
+    if real == Path(real.anchor):
+        return True
+    excluded = set()
+    for d in sig._excluded_anchor_dirs():
+        excluded.add(Path(d))
+        try:
+            excluded.add(Path(d).resolve())
+        except (OSError, RuntimeError):
+            pass
+    return real in excluded or Path(proj) in excluded
 
 
 def _strip_scope_block(text):
@@ -954,6 +1040,10 @@ def relocate_entry(from_level, to_level, slug, force=False):
 
     Same-tree calls delegate to `move_entry` (the body already sits at the right anchor, so it is a
     pointer move and nothing should touch the body).
+
+    REFUSES, before writing anything, when the target tree already holds a body under this slug that
+    differs from the one being moved (whichever level owns it, or none): slugs are tree-unique, so
+    that body is a different fact. An identical body is an interrupted relocate and is completed.
     Returns {"slug","from","to","cross_tree","relocated","refused","warnings"}.
     """
     rep = {"slug": slug, "from": str(from_level), "to": str(to_level),
@@ -968,6 +1058,9 @@ def relocate_entry(from_level, to_level, slug, force=False):
         rep.update(relocated=m["moved"], refused=m["refused"], warnings=m["warnings"])
         return rep
     rep["cross_tree"] = True
+    if not us.is_valid_slug(slug):
+        rep["refused"] = str(InvalidSlug(slug))
+        return rep
 
     _scope, entries, _bodies = read_store(str(src))
     entry = next((e for e in entries if e.slug == slug), None)
@@ -987,6 +1080,24 @@ def relocate_entry(from_level, to_level, slug, force=False):
                           "overwrite that fact; dedup deliberately or rename one first" % slug)
         return rep
 
+    # The body FILE is the tree-wide slug registry, so it is the check that sees an owner at ANY level
+    # of the target tree - and a dangling body with no pointer at all - where the pointer check above
+    # sees only the target level. A different body there is a different fact; an identical one is
+    # the residue of an interrupted relocate, which re-running completes.
+    src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
+    if dst_body.is_file():
+        try:
+            same = dst_body.read_text(encoding="utf-8") == (
+                src_body.read_text(encoding="utf-8") if src_body.is_file() else "")
+        except OSError as exc:
+            rep["refused"] = "could not compare with the target tree's body %s: %s" % (dst_body, exc)
+            return rep
+        if not same:
+            rep["refused"] = ("target tree already holds a DIFFERENT body for slug %r (%s) - "
+                              "relocating would overwrite that fact; dedup deliberately or rename "
+                              "one first" % (slug, dst_body))
+            return rep
+
     # The fact LEAVES this tree entirely, so EVERY inbound [[ref]] in the source tree dangles -
     # including one at the source level itself. A cross-tree ref is never an allowed substitute.
     dangling = inbound_ref_sources(curated_levels_under(a_from), slug)
@@ -1001,7 +1112,6 @@ def relocate_entry(from_level, to_level, slug, force=False):
     # COPY-THEN-DROP (same crash-safety direction as move_entry): a crash between the two leaves a
     # visible duplicate, never a lost fact. The body file is copied VERBATIM - it is already framed,
     # and re-writing it through add_or_update_entry would double-wrap the frontmatter.
-    src_body, dst_body = us.body_path(a_from, slug), us.body_path(a_to, slug)
     try:
         text = src_body.read_text(encoding="utf-8") if src_body.is_file() else ""
         dst_body.parent.mkdir(parents=True, exist_ok=True)
@@ -1129,6 +1239,9 @@ def rename_entry(level, slug, to_slug):
         rep["warnings"].append("new slug normalised to %r" % canon_new)
         to_slug = canon_new
         rep["to_slug"] = to_slug
+    if not us.is_valid_slug(to_slug):
+        rep["refused"] = str(InvalidSlug(to_slug))
+        return rep
     if _canon_slug(slug) == canon_new:
         rep["refused"] = "the new slug is the same as the old one"
         return rep
@@ -1472,9 +1585,10 @@ def main(argv=None):
                           "--hook \"$(cat f)\" is a shell command substitution the guard denies")
     ap_.add_argument("--body-file", default=None)
     ap_.add_argument("--type", dest="type_", default=None,
+                     choices=[None, "feedback", "project", "reference", "user"],
                      help="re-classify the fact (feedback/project/reference/user) - the only route "
-                          "to a PINNED fact's kind, since add refuses a pinned entry; omit it to "
-                          "keep the stored kind")
+                          "to a PINNED fact's kind, since add refuses a pinned entry; given alone "
+                          "it re-types the stored body; omit it to keep the stored kind")
     h = sub.add_parser("heal", help="self-heal missing/malformed pointer blocks/markers across the chain")
     h.add_argument("--proj", required=True, help="project cwd (heals its whole altitude chain)")
     s = sub.add_parser("set-scope", help="upsert (overwrite) a level's pointer-block scope descriptor")
@@ -1537,6 +1651,10 @@ def main(argv=None):
     rt.add_argument("--to-title", required=True, dest="to_title",
                     help="the new title (whitespace collapsed to one line)")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    if getattr(args, "proj", None):
+        # `--proj .` names the cwd; made absolute here so every verb (not only the write path)
+        # walks the real altitude chain instead of a relative path with no parents.
+        args.proj = os.path.abspath(args.proj)
 
     if args.cmd == "tree-top":
         info = tree_top(args.proj)
@@ -1680,7 +1798,7 @@ def main(argv=None):
             slug = add_or_update_entry(args.proj, title=args.title, hook=hook, body=body,
                                        type_=args.type_, pin=args.pin,
                                        scope_default=scope_default, slug=args.slug)
-        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry) as c:
+        except (SlugCollision, HookTooLong, EmptyBody, PinnedEntry, InvalidSlug) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
@@ -1727,7 +1845,7 @@ def main(argv=None):
         try:
             slug = amend_pinned_entry(args.proj, slug=args.slug, hook=hook, body=body,
                                       title=args.title, type_=args.type_)
-        except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug) as c:
+        except (SlugCollision, HookTooLong, EmptyBody, UnknownSlug, InvalidSlug) as c:
             print("! refused: %s" % c)
             return 1
         print(slug)
