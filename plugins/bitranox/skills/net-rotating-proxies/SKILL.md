@@ -7,7 +7,7 @@ description: Use when a download, scrape, or API pull is blocked or rate-limited
 
 When the local IP is rate-limited or blocked (HTTP 429, ban, geoblock) and you must keep
 fetching, route requests through a rotating pool of proxies. Free proxies are flaky and
-short-lived, so the method is: keep a persistent pool, re-test it every run, fetch in parallel
+short-lived, so the method is: keep a persistent pool, never trust it as-is, fetch in parallel
 (most proxies are slow), prefer proxies that have actually worked, and keep refreshing the pool
 in the background while downloading.
 
@@ -62,8 +62,10 @@ in the background while downloading.
      candidate is faster than the slowest **idle** in-pool proxy (never one mid-request), it swaps
      the slow one out for the fast one (`--bench-interval` controls the cadence);
    - per-proxy success/failure is tracked, and a proxy that fails intermittently past
-     `--flaky-fail-ratio` is evicted and replaced just like a hard-dead one - so steady state is the
-     N fastest, still-functioning proxies.
+     `--flaky-fail-ratio` is evicted from this run's working set and replaced - so steady state is
+     the N fastest, still-functioning proxies. Unlike a hard-dead proxy it is NOT written to
+     `bad.txt`: those failures (429, timeouts) are often the target throttling, and `bad.txt` is
+     permanent.
 7. **Resumable.** Make the worklist skip items already done, so a killed run resumes cheaply.
 
 ## Tool
@@ -86,10 +88,17 @@ header) is fetched into an isolated env. Subcommands:
         --success-glob 'out/{item}*.vtt' \
         --cmd 'yt-dlp --proxy http://{proxy} --skip-download --write-auto-subs --sub-langs en.*,en --sub-format vtt -o out/{item}.%(ext)s https://www.youtube.com/watch?v={item}'
 
-`{proxy}` (host:port) and `{item}` are substituted per attempt. The `--cmd` is parsed once with
-`shlex.split` and run as an argv list with NO shell (OS-independent, injection-safe), so it must
-be a single command: no pipes, `||`, `$?`, redirects, or `case`. It runs once per proxy until one
-succeeds.
+`{proxy}` (host:port) and `{item}` are substituted per attempt. The `--cmd` is parsed once and
+run as an argv list with NO shell (OS-independent, injection-safe), so it must be a single
+command: no pipes, `||`, `$?`, redirects, or `case`. It is split by the host's own rules: POSIX
+`shlex` quoting, or on Windows the `CommandLineToArgvW` rules, where a backslash in a path is
+literal and only double quotes group (single quotes are ordinary characters there). It runs once
+per proxy until one succeeds.
+
+Exit codes: `run` gives 0 when every item succeeded, 1 when any did not, and 2 when it cannot do
+the work at all - the `--cmd` binary is not found (the run stops at the first attempt), or the
+store holds no usable proxy (run `discover` and `validate` first). `discover` gives 2 when no
+source answered.
 
 `run` holds a self-optimizing working set of the `--need` fastest healthy proxies - pass it, or
 `--need` defaults to None and the working set is not right-sized at all: it rotates the
@@ -107,7 +116,8 @@ The tool classifies each attempt itself, portably:
 - **dead proxy** = the command's combined stdout+stderr matches `--dead-regex` (connection
   refused, reset, timeout, unreachable, proxy/tunnel errors) -> proxy goes in `bad.txt`, excluded
   next time.
-- **otherwise** (incl. timeout, 429, transient) -> rotate to the next proxy, do not ban it.
+- **otherwise** (incl. timeout, 429, transient) -> rotate to the next proxy, do not ban it (one
+  that keeps failing this way leaves this run's working set, but never goes in `bad.txt`).
 
 Pick `--test-url` and `--success-glob` to match the host and tool you are unblocking; widen
 `--dead-regex` if your tool words connection failures differently.

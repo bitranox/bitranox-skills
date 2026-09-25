@@ -65,7 +65,6 @@ from urllib.parse import urlparse
 
 SNORT_TABLE = "snort2c"
 MAGICDNS = "100.100.100.100"          # Tailscale's fixed MagicDNS address, the same on every tailnet
-CONFIG_FILE = Path(os.environ.get("PFSENSE_JIG_CONFIG", "~/.config/bitranox/pfsense.ini")).expanduser()
 UPGRADE_LOCK = "/var/run/pfSense-upgrade.lock"
 
 # `snort -c <path>/snort.conf -i <if>`: the conf path is the only reliable pointer to the
@@ -144,16 +143,28 @@ class Finding:
 
 
 # ---- target resolution --------------------------------------------------------------------------
-def load_named_target(name: str, *, path: Path = CONFIG_FILE) -> Target:
+def config_file() -> Path:
+    """The named-target ini, read from the environment when asked rather than at import."""
+    return Path(os.environ.get("PFSENSE_JIG_CONFIG", "~/.config/bitranox/pfsense.ini")).expanduser()
+
+
+def load_named_target(name: str, *, path: Path | None = None) -> Target:
     """Resolve `--fw <name>` from the user's own ini file.
 
     Named targets live in the USER's config, never in this repo: the tool ships publicly and must
     carry no host names. An ini file rather than toml so this works on 3.10, where tomllib is absent.
+
+    Interpolation is off: an ssh prefix legitimately carries `%` (ControlPath=~/.ssh/cm-%r@%h:%p),
+    and ConfigParser's default would turn that into a traceback instead of passing it through.
     """
+    path = path or config_file()
     if not path.exists():
         raise PfsenseError(f"no target file at {path}; use --host, or create a [{name}] section there")
-    parser = configparser.ConfigParser()
-    parser.read(path, encoding="utf-8")
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(path, encoding="utf-8-sig")
+    except configparser.Error as exc:
+        raise PfsenseError(f"cannot parse {path}: {exc}") from exc
     if name not in parser:
         known = ", ".join(s for s in parser.sections()) or "none"
         raise PfsenseError(f"no [{name}] section in {path} (defined: {known})")
@@ -169,13 +180,65 @@ def load_named_target(name: str, *, path: Path = CONFIG_FILE) -> Target:
     )
 
 
+def _split_windows(text: str) -> list[str]:
+    """Split a command line the way the Microsoft C runtime (CommandLineToArgvW) does.
+
+    A backslash is literal unless a run of them ends in a double quote: 2n backslashes then a quote
+    give n backslashes and toggle quoting, 2n+1 give n backslashes and a literal quote. There is no
+    single-quoting. Pure Python rather than ctypes so the same rules are testable on every OS.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_quotes = in_arg = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\":
+            run_end = i
+            while run_end < len(text) and text[run_end] == "\\":
+                run_end += 1
+            count = run_end - i
+            if run_end < len(text) and text[run_end] == '"':
+                current.append("\\" * (count // 2))
+                if count % 2:
+                    current.append('"')
+                    run_end += 1
+            else:
+                current.append("\\" * count)
+            in_arg, i = True, run_end
+            continue
+        if char == '"':
+            in_quotes, in_arg = not in_quotes, True
+        elif char in " \t" and not in_quotes:
+            if in_arg:
+                args.append("".join(current))
+                current, in_arg = [], False
+        else:
+            current.append(char)
+            in_arg = True
+        i += 1
+    if in_arg:
+        args.append("".join(current))
+    return args
+
+
+def split_command(text: str, *, windows: bool = os.name == "nt") -> list[str]:
+    """Split a caller-supplied command prefix by the rules of the platform it runs on.
+
+    POSIX shlex reads a backslash as an escape, so on Windows it eats the separators out of a key
+    path (`-i C:\\Users\\me\\.ssh\\id` becomes `-i C:Usersme.sshid`) and the login fails as an auth
+    error far from the cause.
+    """
+    return _split_windows(text) if windows else shlex.split(text)
+
+
 def build_ssh_argv(target: Target, command: str) -> list[str]:
     """The argv for one remote command.
 
     BatchMode is forced on when the caller did not set it: with only `-i <key>`, ssh falls back to
     a password PROMPT when the key is rejected, which hangs an unattended run instead of failing.
     """
-    argv = shlex.split(target.ssh)
+    argv = split_command(target.ssh)
     if not any("BatchMode" in part for part in argv):
         argv += ["-o", "BatchMode=yes"]
     argv += [f"{target.user}@{target.host}", command]
@@ -223,8 +286,12 @@ def run_php(target: Target, php_body: str, *, run=_run, timeout: int | None = No
 
 # ---- pure parsers -------------------------------------------------------------------------------
 def parse_table(text: str) -> set[str]:
-    """The IPs in a `pfctl -t <table> -T show` dump (it indents every entry)."""
-    return {line.strip() for line in text.splitlines() if line.strip()}
+    """The IPs in a `pfctl -t <table> -T show` dump (it indents every entry).
+
+    Split on newline only: str.splitlines also breaks on form feed and U+2028, which would turn
+    one garbled line into a phantom entry. Every remote listing here is split the same way.
+    """
+    return {line.strip() for line in text.split("\n") if line.strip()}
 
 
 def blocked_among(table_text: str, ips: list[str]) -> list[str]:
@@ -302,7 +369,7 @@ def parse_arp(text: str) -> list[dict]:
     the fault that answers for a device on an interface that is down.
     """
     entries = []
-    for line in text.splitlines():
+    for line in text.split("\n"):
         match = _ARP_RX.search(line)
         if not match:
             continue
@@ -668,7 +735,7 @@ def _target_from_args(args) -> Target:
     if getattr(args, "fw", None):
         return load_named_target(args.fw)
     if not getattr(args, "host", None):
-        raise PfsenseError("no target: pass --host, or --fw <name> with a section in " + str(CONFIG_FILE))
+        raise PfsenseError("no target: pass --host, or --fw <name> with a section in " + str(config_file()))
     return Target(host=args.host, user=args.user, ssh=args.ssh, timeout=args.timeout)
 
 
@@ -716,18 +783,38 @@ def inside_git_worktree(directory: Path, *, run=_run) -> bool:
     return rc == 0 and (out or "").strip() == "true"
 
 
+def nearest_existing(directory: Path) -> Path:
+    """`directory` itself, or its closest ancestor that exists."""
+    probe = directory.absolute()
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return probe
+
+
 def prepare_snapshot_dir(directory: Path, *, allow_repo: bool = False, run=_run) -> Path:
-    """Create `directory` private to the user, refusing a git work tree unless told otherwise."""
+    """Create `directory` private to the user, refusing a git work tree unless told otherwise.
+
+    The work-tree probe runs on the nearest EXISTING ancestor: git cannot answer for a directory
+    that is not there yet, so probing only an existing one let a new dir inside a checkout through.
+    Only a directory this call creates is made 0700; an existing one keeps its mode (it may be
+    shared or served), with a warning when others can read it.
+    """
     directory = Path(directory).expanduser()
-    if not allow_repo and directory.exists() and inside_git_worktree(directory, run=run):
+    if not allow_repo and inside_git_worktree(nearest_existing(directory), run=run):
         raise PfsenseError(
             f"{directory} is inside a git work tree, and a snapshot is a live config.xml with "
             f"password hashes and private keys in it. Pass --snapshot-dir to send it somewhere "
             f"private (default {default_snapshot_dir()}), or --allow-repo-snapshot to override."
         )
+    created = not directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
-    if os.name == "posix":
+    if os.name != "posix":
+        return directory
+    if created:
         os.chmod(directory, 0o700)
+    elif directory.stat().st_mode & 0o077:
+        print(f"pfsense: warning: {directory} is readable by others; a snapshot holds password "
+              f"hashes and private keys", file=sys.stderr)
     return directory
 
 
@@ -772,7 +859,9 @@ def cmd_info(args) -> int:
 
 def cmd_snapshot(args) -> int:
     target = _target_from_args(args)
-    path = do_snapshot(target, Path(args.dir or default_snapshot_dir()), run=args.run)
+    directory = args.dir or getattr(args, "snapshot_dir", None) or default_snapshot_dir()
+    path = do_snapshot(target, Path(directory), run=args.run,
+                       allow_repo=getattr(args, "allow_repo_snapshot", False))
     _emit(envelope(command="snapshot", data={"path": str(path), "bytes": path.stat().st_size}, ok=True),
           args.json, f"  saved {path} ({path.stat().st_size} bytes)")
     return 0
@@ -855,6 +944,12 @@ def cmd_dns_add(args) -> int:
                        ok=True, skipped=["--apply not given"]),
               args.json, f"  DRY RUN: would add {host}.{domain} -> {args.ip}.  Re-run with --apply.")
         return 0
+    # The PHP duplicate check compares host and domain separately, so it cannot see an override
+    # stored with an EMPTY host whose domain is this whole name. Compare full names here, with the
+    # same rule the listing uses, before anything is snapshotted or written.
+    existing = run_php(target, php_list_overrides(), run=args.run)
+    if any(override_name(o).lower() == f"{host}.{domain}" for o in existing):
+        raise PfsenseError(f"an override for {host}.{domain} already exists")
     _guard_mutation(args, target, f"adding {host}.{domain}")
     result = run_php(target, php_add_override(host, domain, args.ip, args.descr), run=args.run)
     if result.get("error"):
@@ -874,7 +969,11 @@ def cmd_dns_rm(args) -> int:
               args.json, f"  DRY RUN: would remove {entry['fqdn']} -> {entry['ip']}.  Re-run with --apply.")
         return 0
     _guard_mutation(args, target, f"removing {host}.{domain}")
-    result = run_php(target, php_rm_override(host, domain), run=args.run)
+    # Target the fields as STORED, not a re-split of the name: an override with an empty host keeps
+    # the whole name in its domain, and host 'bare' + domain 'example.com' would match nothing.
+    stored_host = (entry.get("host") or "").lower()
+    stored_domain = (entry.get("domain") or "").lower()
+    result = run_php(target, php_rm_override(stored_host, stored_domain), run=args.run)
     removed = result.get("removed") or []
     _emit(envelope(command="dns rm", data=result, ok=bool(removed)), args.json,
           f"  removed {len(removed)} override(s) for {host}.{domain}")
@@ -896,13 +995,28 @@ def cmd_arp(args) -> int:
     return 0
 
 
+def _require_table_operands(args) -> None:
+    """Refuse a missing table or address as a usage error.
+
+    An empty shell variable in a script otherwise reaches pfctl as `-t ''` and comes back as a
+    verdict ("not in", "deleted 0 of 0") with exit 0 or 1, indistinguishable from a real answer.
+    """
+    if args.action == "list":
+        return
+    if not (args.table or "").strip():
+        raise PfsenseError(f"table {args.action} needs a table name")
+    if args.action in ("test", "del") and not [ip for ip in args.ips if ip.strip()]:
+        raise PfsenseError(f"table {args.action} needs at least one address")
+
+
 def cmd_table(args) -> int:
+    _require_table_operands(args)
     target = _target_from_args(args)
     if args.action == "list":
         rc, out, err = run_remote(target, "pfctl -sT", run=args.run)
         if rc != 0:
             raise PfsenseError(f"could not list pf tables: {err.strip()[:200]}")
-        names = [line.strip() for line in out.splitlines() if line.strip()]
+        names = [line.strip() for line in out.split("\n") if line.strip()]
         _emit(envelope(command="table list", data=names, ok=True), args.json,
               "\n".join(f"  {n}" for n in names) + f"\n  ({len(names)} tables)")
         return 0
@@ -951,7 +1065,7 @@ def cmd_rules(args) -> int:
     rc, out, err = run_remote(target, command, run=args.run, timeout=max(target.timeout, 60))
     if rc != 0:
         raise PfsenseError(f"could not read the ruleset: {err.strip()[:200]}")
-    rules = [line.rstrip() for line in out.splitlines() if line.strip()]
+    rules = [line.rstrip() for line in out.split("\n") if line.strip()]
     _emit(envelope(command="rules", data=rules, ok=True), args.json, "\n".join(rules))
     return 0
 
@@ -1001,8 +1115,12 @@ def cmd_snort_why(args) -> int:
             lines.append(f"  {ip}: no alert names this IP (the block may come from a reputation feed)")
             continue
         sids = sorted({a["sid"] for a in alerts})
+        # The glob reads the current file BEFORE the rotated ones, so the last line is the oldest.
+        # Snort's MM/DD-HH:MM:SS stamp sorts as text in time order (it carries no year, so a
+        # December alert still outranks a January one across a year boundary).
+        latest = max(alerts, key=lambda a: a["timestamp"])
         lines.append(f"  {ip}: {len(alerts)} alert(s), SID(s) {', '.join(sids)}")
-        lines.append(f"      latest: {alerts[-1]['timestamp']}  {alerts[-1]['message']}")
+        lines.append(f"      latest: {latest['timestamp']}  {latest['message']}")
     any_found = any(found.values())
     _emit(envelope(command="snort why", data=found, ok=any_found), args.json, "\n".join(lines))
     return 0 if any_found else 1
@@ -1041,13 +1159,16 @@ def cmd_snort_verify(args) -> int:
     checks: dict[str, object] = {"instance_dir": instance}
     # The SUPPRESSION file carries the SID.
     _, supp, _ = run_remote(target, f"cat {instance}/supp* 2>/dev/null", run=args.run)
-    checks["sid_suppressed"] = bool(re.search(rf"sig_id\s+{re.escape(args.sid)}\b", supp))
+    # Anchored per line to a live `suppress` statement: a commented-out line, or a SID named only in
+    # a trailing comment, suppresses nothing and must not read as the fix being in place.
+    live_rule = rf"(?m)^[ \t]*suppress\b[^#\n]*\bsig_id\s+{re.escape(args.sid)}\b"
+    checks["sid_suppressed"] = bool(re.search(live_rule, supp))
 
     if args.cidr:
         # The GENERATED PASS LIST only. Never grep the suppression file for this: its comments
         # name the same addresses, so the match would be vacuous and always "pass".
         _, passlist, _ = run_remote(target, f"cat {instance}/*Whitelist* 2>/dev/null", run=args.run)
-        entries = {line.strip() for line in passlist.splitlines() if line.strip()}
+        entries = {line.strip() for line in passlist.split("\n") if line.strip()}
         checks["cidr_passlisted"] = args.cidr in entries
         checks["passlist_entries"] = len(entries)
 
@@ -1082,7 +1203,7 @@ def fix_steps(*, sid: str, cidr: str | None = None) -> str:
         "     and then writes the literal alias NAME into the generated list.",
         "",
         "  3. Clear what is already blocked - suppressing does not flush the table:",
-        f"     pfsense.py snort unblock <ip> ... --apply",
+        "     pfsense.py snort unblock <ip> ... --apply",
         "",
         "Then resync Snort so the files are regenerated, and verify with:",
         f"  pfsense.py snort verify --sid {sid}" + (f" --cidr {cidr}" if cidr else ""),
@@ -1096,6 +1217,18 @@ def cmd_snort_fixsteps(args) -> int:
     return 0
 
 
+def _read_or_raise(target: Target, command: str, *, run) -> str:
+    """Stdout of a read the audit depends on, or a typed error.
+
+    An empty read after an ssh drop is indistinguishable from a healthy empty answer, so an
+    unchecked rc turns a dropped connection into a clean bill of health.
+    """
+    rc, out, err = run_remote(target, command, run=run)
+    if rc != 0:
+        raise PfsenseError(f"`{command}` failed on {target.host} (exit {rc}): {err.strip()[:200]}")
+    return out
+
+
 def cmd_doctor(args) -> int:
     if args.config:
         text = Path(args.config).read_text(encoding="utf-8")
@@ -1106,9 +1239,12 @@ def cmd_doctor(args) -> int:
         target = _target_from_args(args)
         reservations = run_php(target, php_list_reservations(), run=args.run)
         overrides = run_php(target, php_list_overrides(), run=args.run)
-        _, arp_out, _ = run_remote(target, "arp -an", run=args.run)
-        _, resolv, _ = run_remote(target, "cat /etc/resolv.conf", run=args.run)
-        rc_lock, _, _ = run_remote(target, f"test -f {UPGRADE_LOCK}", run=args.run)
+        arp_out = _read_or_raise(target, "arp -an", run=args.run)
+        resolv = _read_or_raise(target, "cat /etc/resolv.conf", run=args.run)
+        rc_lock, _, lock_err = run_remote(target, f"test -f {UPGRADE_LOCK}", run=args.run)
+        if rc_lock not in (0, 1):
+            raise PfsenseError(f"could not test for {UPGRADE_LOCK} on {target.host} "
+                               f"(exit {rc_lock}): {lock_err.strip()[:200]}")
         findings = doctor_findings(reservations=reservations, overrides=overrides,
                                    arp=parse_arp(arp_out), resolv_conf=resolv,
                                    upgrade_lock=(rc_lock == 0))
@@ -1149,7 +1285,7 @@ def build_parser() -> argparse.ArgumentParser:
     mut = _mutation_flags()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", help="firewall host or address (no default: name the box you mean)")
-    ap.add_argument("--fw", help=f"named target from {CONFIG_FILE}")
+    ap.add_argument("--fw", help=f"named target from {config_file()}")
     ap.add_argument("--user", default="admin", help="ssh user (default admin)")
     ap.add_argument("--ssh", default="ssh", help='ssh command, e.g. "ssh -i /key -o BatchMode=yes"')
     ap.add_argument("--timeout", type=int, default=30, help="per-command ssh timeout in seconds")
@@ -1231,7 +1367,23 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _tolerate_unencodable_output() -> None:
+    """Replace, rather than crash on, a character the console cannot encode.
+
+    A Windows pipe defaults to cp1252, so a hostname or a snort message outside it raised
+    UnicodeEncodeError in the middle of the report, with exit 1 - which here means "findings".
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None, *, run=_run) -> int:
+    _tolerate_unencodable_output()
     args = build_parser().parse_args(argv)
     args.run = run
     command = " ".join(part for part in [args.cmd, getattr(args, "action", None)] if part)

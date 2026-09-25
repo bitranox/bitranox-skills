@@ -7,6 +7,7 @@ rather than patching internals.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -639,3 +640,188 @@ def test_cascade_help_names_the_files_it_reads() -> None:
     squashed = "".join(proc.stdout.split())
     for expected in ("--corpus-cascade", "CLAUDE.local.md", ".claude-memory/facts/"):
         assert "".join(expected.split()) in squashed, f"--help never names {expected}"
+
+
+# --- a document reached by two flags is counted once --------------------------------------------
+
+
+def _twenty_doc_dir(root: Path) -> Path:
+    """20 docs, the lesson only in CLAUDE.md - the size where one extra copy moves the rarity cut."""
+    root.mkdir()
+    (root / "CLAUDE.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    for i in range(19):
+        (root / f"note-{i}.md").write_text(UNRELATED_DOC[1], encoding="utf-8")
+    return root
+
+
+def test_a_doc_read_by_both_corpus_and_cascade_is_counted_once(tmp_path: Path) -> None:
+    """Read twice, the lesson's terms sit in 2 of 21 docs, over the rarity cut: a hit read clean."""
+    docs = _twenty_doc_dir(tmp_path / "d")
+    s = tmp_path / "s.txt"
+    s.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--corpus", str(docs), "--corpus-cascade", str(docs),
+                 "--corpus-cascade-top", str(docs), "--json"])
+    payload = json.loads(proc.stdout)
+    assert proc.returncode == 1, payload
+    assert payload["data"]["corpus_documents"] == 20
+
+
+def test_the_same_corpus_dir_named_twice_is_read_once(tmp_path: Path) -> None:
+    docs = _twenty_doc_dir(tmp_path / "d")
+    s = tmp_path / "s.txt"
+    s.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--corpus", str(docs), "--corpus", str(docs), "--json"])
+    assert json.loads(proc.stdout)["data"]["corpus_documents"] == 20
+
+
+# --- telegraph markers survive contractions and typographic apostrophes -------------------------
+
+RSQUO = chr(0x2019)
+
+
+@pytest.mark.parametrize("text, marker", [
+    ("It emptied the tree - that's exactly what happened last time.", "exactly"),
+    ("It emptied the tree - that" + RSQUO + "s exactly what happened last time.", "exactly"),
+    ("The flag doesn't actually help here.", "does-not-actually"),
+    ("The flag doesn" + RSQUO + "t actually help here.", "does-not-actually"),
+    ("The flag didn't actually help here.", "does-not-actually"),
+    ("It's the same failure as the one on Monday.", "same-as"),
+])
+def test_a_contracted_telegraph_is_still_flagged(text: str, marker: str) -> None:
+    assert marker in [t.marker for t in R.audit(text, corpus=[]).telegraphs]
+
+
+def test_the_uncontracted_forms_still_flag() -> None:
+    result = R.audit("that is exactly what happened; it does not actually help", corpus=[])
+    assert {"exactly", "does-not-actually"} <= {t.marker for t in result.telegraphs}
+
+
+def test_an_ordinary_contraction_is_not_a_telegraph() -> None:
+    assert not R.audit("That's the export job. It doesn't run on Sundays.", corpus=[]).telegraphs
+
+
+# --- --rarity-max-fraction is validated -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "0", "-0.5", "1.5", "abc"])
+def test_an_out_of_range_rarity_fraction_is_a_usage_error(tmp_path: Path, value: str) -> None:
+    s = tmp_path / "s.txt"
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--corpus", str(tmp_path), "--rarity-max-fraction", value,
+                 "--json"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_the_rarity_fraction_flag_reaches_the_audit(tmp_path: Path) -> None:
+    """Wiring: at 1.0 nothing is filtered, so boilerplate collides and the verdict flips."""
+    corpus_dir = tmp_path / "c"
+    corpus_dir.mkdir()
+    for label, text in _big_corpus(40):
+        (corpus_dir / label.replace("/", "_")).write_text(text, encoding="utf-8")
+    s = tmp_path / "s.txt"
+    s.write_text("the failing window: lead the region reconciliation, results staged before it "
+                 "closes", encoding="utf-8")
+    default = _run(["--scenario", str(s), "--corpus", str(corpus_dir), "--json"])
+    wide = _run(["--scenario", str(s), "--corpus", str(corpus_dir), "--rarity-max-fraction", "1",
+                 "--json"])
+    assert (default.returncode, wide.returncode) == (0, 1), default.stdout + wide.stdout
+
+
+def test_the_min_shared_flag_reaches_the_audit(tmp_path: Path) -> None:
+    corpus_dir = tmp_path / "c"
+    corpus_dir.mkdir()
+    (corpus_dir / "SKILL.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    s = tmp_path / "s.txt"
+    s.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    default = _run(["--scenario", str(s), "--corpus", str(corpus_dir), "--json"])
+    strict = _run(["--scenario", str(s), "--corpus", str(corpus_dir), "--min-shared", "999", "--json"])
+    assert (default.returncode, strict.returncode) == (1, 0)
+
+
+# --- --answer that cannot be checked --------------------------------------------------------------
+
+
+def test_an_answer_that_yields_no_terms_is_unchecked_not_clean(tmp_path: Path) -> None:
+    s = tmp_path / "s.txt"
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    a = tmp_path / "a.txt"
+    a.write_text("", encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--answer", str(a), "--json"])
+    payload = json.loads(proc.stdout)
+    assert proc.returncode == 3, payload
+    assert "unchecked" in payload["data"]["verdict"]
+    assert any("answer" in w for w in payload["skipped"])
+
+
+def test_answer_wiring_detects_a_leak_from_a_file(tmp_path: Path) -> None:
+    s = tmp_path / "s.txt"
+    s.write_text(TELEGRAPHED_SCENARIO, encoding="utf-8")
+    a = tmp_path / "a.txt"
+    a.write_text(ANSWER, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--answer", str(a), "--json"])
+    assert proc.returncode == 1
+    assert json.loads(proc.stdout)["data"]["answer_leak"]["overlap"] >= 0.5
+
+
+def test_scenario_and_answer_both_on_stdin_is_a_usage_error() -> None:
+    proc = _run(["--scenario", "-", "--answer", "-", "--json"], stdin=TELEGRAPHED_SCENARIO)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+# --- text-mode rendering ----------------------------------------------------------------------------
+
+
+def test_text_mode_names_the_inherited_document(tmp_path: Path) -> None:
+    corpus_dir = tmp_path / "c"
+    corpus_dir.mkdir()
+    (corpus_dir / "SKILL.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    s = tmp_path / "s.txt"
+    s.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    proc = _run(["--scenario", str(s), "--corpus", str(corpus_dir)])
+    assert proc.returncode == 1
+    assert "INHERITED COVERAGE" in proc.stdout and "SKILL.md" in proc.stdout
+
+
+def test_text_mode_reports_telegraphs_and_clean(tmp_path: Path) -> None:
+    s = tmp_path / "s.txt"
+    s.write_text(TELEGRAPHED_SCENARIO, encoding="utf-8")
+    assert "TELEGRAPHED PROSE" in _run(["--scenario", str(s)]).stdout
+    s.write_text(CLEAN_SCENARIO, encoding="utf-8")
+    assert "clean - no inherited coverage" in _run(["--scenario", str(s)]).stdout
+
+
+def test_text_mode_survives_a_label_a_cp1252_console_cannot_encode(tmp_path: Path) -> None:
+    """A Windows pipe is cp1252; a corpus path outside it crashed the report with exit 1."""
+    corpus_dir = tmp_path / ("L" + chr(0x0141) + "ukasz")
+    corpus_dir.mkdir()
+    (corpus_dir / "SKILL.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    s = tmp_path / "s.txt"
+    s.write_text(CONTAMINATED_SCENARIO, encoding="utf-8")
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    env.pop("PYTHONUTF8", None)
+    proc = subprocess.run([sys.executable, str(TOOL), "--scenario", str(s), "--corpus", str(corpus_dir)],
+                          capture_output=True, env=env, timeout=120)
+    assert proc.returncode == 1, proc.stderr.decode("utf-8", "replace")
+    assert b"INHERITED COVERAGE" in proc.stdout
+
+
+# --- an unreadable corpus subdirectory is reported, not silently skipped ------------------------
+
+
+@pytest.mark.skipif(os.name != "posix" or getattr(os, "geteuid", lambda: 1)() == 0,
+                    reason="needs POSIX permissions and a non-root user")
+def test_an_unreadable_corpus_subdir_is_warned_about(tmp_path: Path) -> None:
+    corpus_dir = tmp_path / "c"
+    locked = corpus_dir / "locked"
+    locked.mkdir(parents=True)
+    (corpus_dir / "SKILL.md").write_text(UNRELATED_DOC[1], encoding="utf-8")
+    (locked / "hidden.md").write_text(SKILL_ALREADY_TEACHING[1], encoding="utf-8")
+    locked.chmod(0)
+    try:
+        warnings: list[str] = []
+        docs = R.load_corpus([corpus_dir], warn=warnings.append)
+    finally:
+        locked.chmod(0o755)
+    assert len(docs) == 1
+    assert any("locked" in w for w in warnings), warnings

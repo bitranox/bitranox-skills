@@ -48,8 +48,9 @@ Run:
 Exit codes: 0 = clean (neither leak found - this does NOT prove the RED can fail, only that
 these two specific reasons it might not have been ruled out), 1 = a leak was found, 2 =
 usage/IO error, 3 = unchecked (a corpus flag was given and assembled nothing, so the
-inherited-coverage check never ran; passing no corpus flag at all stays 0). `--json` emits the
-machine-readable envelope.
+inherited-coverage check never ran - passing no corpus flag at all stays 0 - or an --answer was
+given that yields no distinctive terms, so the answer-leak check never ran). `--json` emits the
+machine-readable envelope. A document reached by several flags is read once.
 
 Installed plugin/marketplace skills are deliberately NOT assembled: their on-disk location is a
 function of the reader's plugin cache and installed versions, so any built-in path would be a
@@ -61,6 +62,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import re
 import sys
 from collections import Counter
@@ -137,19 +140,31 @@ ANSWER_LEAK_THRESHOLD = 0.5
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{2,}|--?[A-Za-z][A-Za-z0-9-]+|/[A-Z]{2,}")
 
 # Prose that hands over the answer. Each pattern matches a phrase that has, on its own,
-# been enough to make a scenario carry its own conclusion.
+# been enough to make a scenario carry its own conclusion. Every "X is" / "does not" form also
+# matches its contraction ("that's", "doesn't"): scenarios are written in natural prose, and the
+# contracted phrase hands over the answer just as well. Typographic apostrophes are folded to
+# ASCII before matching (see _fold_apostrophes).
 _TELEGRAPH_MARKERS: tuple[tuple[str, str], ...] = (
-    ("exactly", r"\b(that is|thats|which is) exactly\b|\bexactly the (thing|problem|issue|trap)\b"),
-    ("the-trap", r"\bthe (trap|catch|gotcha) (here|is)\b"),
+    ("exactly", r"\b(that is|that'?s|which is|which'?s) exactly\b"
+                r"|\bexactly the (thing|problem|issue|trap)\b"),
+    ("the-trap", r"\bthe (trap|catch|gotcha)( here|'s| is)\b"),
     ("as-we-know", r"\bas (we|you) (know|saw|found)\b|\bwe already know\b"),
     ("bit-us", r"\b(bit|burned|caught) (us|you|me)\b"),
     ("notorious", r"\b(notoriously|famously|well[- ]known to)\b"),
     ("beware", r"\b(beware|careful|watch out)\b"),
-    ("root-caused", r"\bthe root cause is\b|\balready root[- ]caused\b"),
-    ("which-is-why", r"\bwhich is why\b"),
-    ("same-as", r"\b(this|it) is the same (as|thing|failure|bug)\b"),
-    ("does-not-actually", r"\b(does|do|did) not actually\b"),
+    ("root-caused", r"\bthe root cause(?: is|'s)\b|\balready root[- ]caused\b"),
+    ("which-is-why", r"\b(which is|which'?s) why\b"),
+    ("same-as", r"\b(this is|this'?s|it is|it'?s) the same (as|thing|failure|bug)\b"),
+    ("does-not-actually", r"\b(does|do|did) not actually\b|\b(doesn|don|didn)'?t actually\b"),
 )
+
+# Right and left single quotation marks, the prime and the modifier apostrophe, all read as '.
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u2032": "'", "\u02bc": "'"})
+
+
+def _fold_apostrophes(text: str) -> str:
+    """Typographic apostrophes as ASCII, so "that\N{RIGHT SINGLE QUOTATION MARK}s exactly" matches like "that's exactly"."""
+    return text.translate(_APOSTROPHES)
 
 _STOP = frozenset(
     """
@@ -202,6 +217,12 @@ class Audit:
     answer_leak: AnswerLeak | None = None
     corpus_documents: int = 0
     corpus_empty: bool = False
+    answer_unchecked: bool = False
+
+    @property
+    def unchecked(self) -> bool:
+        """A check the caller asked for could not run, so "clean" would overstate the result."""
+        return self.corpus_empty or self.answer_unchecked
 
     @property
     def has_leak(self) -> bool:
@@ -222,6 +243,7 @@ class Audit:
             "verdict": self.verdict,
             "corpus_documents": self.corpus_documents,
             "corpus_empty": self.corpus_empty,
+            "answer_unchecked": self.answer_unchecked,
             # Travels with the machine-readable result, so a caller parsing JSON cannot end up
             # with a bare "clean" and no idea how far that goes.
             "inherited_evidence": {
@@ -299,7 +321,8 @@ def audit(
             and is ignored. Corpus-shape dependent - see RARITY_MAX_FRACTION.
         require_corpus: the caller promised a corpus. If it turns out empty, the verdict is
             "unchecked" rather than "clean" - zero documents make EVERY scenario look clean,
-            which is the one failure of this tool a reader would never notice.
+            which is the one failure of this tool a reader would never notice. The same holds
+            for an `answer` that is given (not None) but yields no distinctive terms.
 
     Returns:
         An Audit whose verdict is "clean" only when no leak was found and the corpus was real.
@@ -319,16 +342,21 @@ def audit(
             inherited.append(InheritedHit(label, tuple(sorted(shared)), score))
     inherited.sort(key=lambda h: h.score, reverse=True)
 
+    folded = _fold_apostrophes(scenario)
     telegraphs = [
         Telegraph(name, match.group(0))
         for name, pattern in _TELEGRAPH_MARKERS
-        for match in [re.search(pattern, scenario, re.I)]
+        for match in [re.search(pattern, folded, re.I)]
         if match
     ]
 
     answer_leak = None
-    if answer:
+    answer_unchecked = False
+    if answer is not None:
         answer_terms = distinctive_terms(answer)
+        # An answer was promised but carries nothing comparable (an empty file, stdin already
+        # consumed): the leak check never ran, which must not read as "no leak".
+        answer_unchecked = not answer_terms
         if answer_terms:
             shared = scenario_terms & answer_terms
             overlap = len(shared) / len(answer_terms)
@@ -338,7 +366,7 @@ def audit(
     corpus_empty = require_corpus and not documents
 
     reasons = []
-    if corpus_empty:
+    if corpus_empty or answer_unchecked:
         reasons.append("unchecked")
     if inherited:
         reasons.append("inherited")
@@ -351,17 +379,58 @@ def audit(
         answer_leak=answer_leak,
         corpus_documents=len(documents),
         corpus_empty=corpus_empty,
+        answer_unchecked=answer_unchecked,
     )
 
 
-def load_corpus(dirs: Sequence[Path], *, warn=lambda m: None) -> list[tuple[str, str]]:
-    """Read every markdown document under each directory."""
+def _markdown_files(root: Path, warn) -> list[Path]:
+    """Every *.md under `root`, sorted, with an unreadable directory reported.
+
+    os.walk with onerror rather than Path.rglob: rglob skips a directory it cannot list without a
+    word, and a document missing from the corpus is a hole in a "clean" verdict nobody would see.
+    """
+    def report(exc: OSError) -> None:
+        warn(f"unreadable directory, skipping: {exc.filename}: {exc.strerror}")
+
+    found: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=report):
+        found.extend(Path(dirpath) / name for name in filenames if name.endswith(".md"))
+    return sorted(found)
+
+
+def _first_sighting(path: Path, seen: set[Path]) -> bool:
+    """True the first time a file is met; a document reached twice would skew rarity."""
+    try:
+        key = path.resolve()
+    except OSError:
+        key = path
+    if key in seen:
+        return False
+    seen.add(key)
+    return True
+
+
+def load_corpus(
+    dirs: Sequence[Path],
+    *,
+    warn=lambda m: None,
+    seen: set[Path] | None = None,
+) -> list[tuple[str, str]]:
+    """Read every markdown document under each directory, each file at most once.
+
+    Pass the same `seen` set to load_cascade_corpus: a file reached by both --corpus and
+    --corpus-cascade would otherwise count twice, and in a corpus of 20-39 documents that one
+    extra copy pushes the lesson's terms over the rarity cut and turns a hit into "clean".
+    """
+    seen = set() if seen is None else seen
     out: list[tuple[str, str]] = []
     for d in dirs:
         if not d.is_dir():
             warn(f"corpus directory not found, skipping: {d}")
             continue
-        for path in sorted(d.rglob("*.md")):
+        for path in _markdown_files(d, warn):
+            if not _first_sighting(path, seen):
+                continue
             try:
                 out.append((str(path), path.read_text(encoding="utf-8", errors="replace")))
             except OSError as exc:
@@ -406,13 +475,9 @@ def _add_document(
     """
     if not path.is_file():
         return
-    try:
-        key = path.resolve()
-    except OSError:
-        key = path
-    if key in seen:  # overlapping start dirs share ancestors; a double read would skew rarity
+    # Overlapping start dirs share ancestors, and --corpus can name a cascade dir too.
+    if not _first_sighting(path, seen):
         return
-    seen.add(key)
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
@@ -429,6 +494,7 @@ def load_cascade_corpus(
     *,
     top: Path | str | None = None,
     warn=lambda m: None,
+    seen: set[Path] | None = None,
 ) -> list[tuple[str, str]]:
     """Assemble the always-loaded context an agent dispatched from each `starts` dir inherits.
 
@@ -442,7 +508,7 @@ def load_cascade_corpus(
     corpus comes back small, everything looks clean, and nothing says why.
     """
     documents: list[tuple[str, str]] = []
-    seen: set[Path] = set()
+    seen = set() if seen is None else seen
     for start in starts:
         directory = Path(start)
         if not directory.is_dir():
@@ -453,7 +519,7 @@ def load_cascade_corpus(
                 _add_document(level / name, documents, seen, warn)
             facts = level / MEMORY_STORE_DIRNAME / MEMORY_FACTS_SUBDIR
             if facts.is_dir():
-                for body in sorted(facts.rglob("*.md")):
+                for body in _markdown_files(facts, warn):
                     _add_document(body, documents, seen, warn)
     return documents
 
@@ -470,7 +536,10 @@ def _render(result: Audit) -> str:
         lines.append("UNCHECKED - 0 documents assembled, so the inherited-coverage check")
         lines.append("  never ran. An empty corpus makes EVERY scenario look clean; fix the")
         lines.append("  start directory before reading anything here as a result.")
-    if not result.has_leak and not result.corpus_empty:
+    if result.answer_unchecked:
+        lines.append("UNCHECKED - the --answer yielded no distinctive terms, so the answer-leak")
+        lines.append("  check never ran. Give the conclusion in words the scenario could leak.")
+    if not result.has_leak and not result.unchecked:
         lines.append("clean - no inherited coverage, no telegraphing found.")
         lines.append("This does not prove the RED can fail; it rules out the two leaks it checks.")
     if result.inherited:
@@ -493,7 +562,37 @@ def _render(result: Audit) -> str:
     return "\n".join(lines)
 
 
+def _fraction(text: str) -> float:
+    """argparse type for --rarity-max-fraction: a share of the corpus, 0 < F <= 1.
+
+    inf used to escape as an OverflowError traceback with exit 1, which reads as "leak found".
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not math.isfinite(value) or not 0 < value <= 1:
+        raise argparse.ArgumentTypeError(f"must be a share of the corpus, 0 < F <= 1: {text!r}")
+    return value
+
+
+def _tolerate_unencodable_output() -> None:
+    """Escape, rather than crash on, a character the console cannot encode.
+
+    A Windows pipe defaults to cp1252, so a corpus path outside it raised UnicodeEncodeError
+    from the text report with exit 1 - the "leak found" code.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _tolerate_unencodable_output()
     parser = argparse.ArgumentParser(
         prog="redcheck",
         description="Check whether a RED/baseline scenario is able to fail at all.",
@@ -533,7 +632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--min-shared", type=int, default=MIN_SHARED_TERMS)
     parser.add_argument(
         "--rarity-max-fraction",
-        type=float,
+        type=_fraction,
         default=RARITY_MAX_FRACTION,
         metavar="F",
         help=(
@@ -553,9 +652,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(message, file=sys.stderr)
 
     try:
+        if args.scenario == "-" and args.answer == "-":
+            raise ValueError("--scenario and --answer cannot both read stdin: the scenario "
+                             "consumes it and the answer would silently be empty")
         scenario = _read(args.scenario)
         answer = _read(args.answer) if args.answer else None
-        corpus = load_corpus([Path(d) for d in args.corpus], warn=warn)
+        if answer is not None and not distinctive_terms(answer):
+            warn("the --answer yielded no distinctive terms: the answer-leak check did not run.")
+        seen: set[Path] = set()
+        corpus = load_corpus([Path(d) for d in args.corpus], warn=warn, seen=seen)
         cascade_requested = bool(args.corpus_cascade)
         # EITHER flag is the caller promising a corpus, so either one arms the unchecked verdict.
         # --corpus is the mistype-prone form - a path typed by hand rather than a directory walked
@@ -567,6 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.corpus_cascade,
                 top=args.corpus_cascade_top,
                 warn=warn,
+                seen=seen,
             )
         if not corpus and cascade_requested:
             warn("the cascade assembled 0 documents: the inherited-coverage check did not run.")
@@ -602,7 +708,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_render(result))
     if result.has_leak:
         return EXIT_LEAK
-    if result.corpus_empty:
+    if result.unchecked:
         return EXIT_UNCHECKED
     return EXIT_CLEAN
 

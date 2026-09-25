@@ -14,6 +14,9 @@ Addresses are RFC 5737 documentation ranges throughout.
 import os
 import pathlib
 import json
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -511,11 +514,6 @@ def test_snort_check_reports_an_unreadable_table_rather_than_calling_it_clear():
     assert P.main(["--host", "192.0.2.1", "snort", "check", "192.0.2.5"], run=fake) == 2
 
 
-def test_arp_permanent_filters_to_the_entries_that_matter():
-    fake = FakeRun([("arp -an", (0, ARP_TEXT, BANNER))])
-    assert P.main(["--host", "192.0.2.1", "--json", "arp", "--permanent"], run=fake) == 0
-
-
 def test_fix_steps_names_all_three_parts():
     steps = P.fix_steps(sid="2071408", cidr="198.51.100.0/22")
     assert "2071408" in steps and "198.51.100.0/22" in steps
@@ -633,3 +631,387 @@ def test_inside_git_worktree_is_false_when_git_cannot_answer(tmp_path):
         raise OSError("no git")
     assert P.inside_git_worktree(tmp_path, run=boom) is False
     assert P.inside_git_worktree(tmp_path, run=_git_says("", 128)) is False
+
+
+# ---- the git guard must see a directory that does not exist yet ---------------------------------
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="needs a real git to answer")
+
+
+class GitPassingFake(FakeRun):
+    """The ssh seam is faked; git calls go to the REAL process seam.
+
+    The work-tree guard shells out to git through the same `run` the ssh verbs use. A fake that
+    answered git too would decide the guard's verdict itself, so it could never show the guard
+    failing on a real repository.
+    """
+
+    def __call__(self, argv, *, stdin_text=None, timeout=30):
+        if argv[0] == "git":
+            return P._run(argv, stdin_text=stdin_text, timeout=timeout)
+        return super().__call__(argv, stdin_text=stdin_text, timeout=timeout)
+
+
+def _git_repo(path):
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True, capture_output=True)
+    return path
+
+
+@needs_git
+def test_prepare_refuses_a_not_yet_existing_dir_inside_a_git_work_tree(tmp_path):
+    """The guard used to run only on an existing dir, so a NEW dir inside a repo slipped through."""
+    repo = _git_repo(tmp_path / "repo")
+    with pytest.raises(P.PfsenseError, match="git work tree"):
+        P.prepare_snapshot_dir(repo / "snaps" / "deeper")
+    assert not (repo / "snaps").exists(), "a refused snapshot dir must not be created"
+
+
+@needs_git
+def test_prepare_still_allows_a_new_dir_outside_any_work_tree(tmp_path):
+    """The control: the ancestor walk must not turn every new directory into a refusal."""
+    target = tmp_path / "plain" / "snaps"
+    assert P.prepare_snapshot_dir(target) == target
+    assert target.is_dir()
+
+
+@needs_git
+def test_apply_with_a_new_snapshot_dir_inside_a_repo_writes_nothing_there(tmp_path):
+    """End to end: a live config.xml must never land in a checkout because its dir was new."""
+    repo = _git_repo(tmp_path / "repo")
+    fake = GitPassingFake(_fake_for_mutation().responses)
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(repo / "snaps2"),
+                 "dhcp", "rm", "--mac", "00:11:22:33:44:30"], run=fake)
+    assert rc == 2
+    assert not (repo / "snaps2").exists()
+    assert not any("write_config" in body for body in fake.php_bodies())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes only")
+def test_prepare_leaves_an_existing_directory_mode_alone(tmp_path, capsys):
+    """Only a directory this call created is tightened; a shared one must keep its mode."""
+    target = tmp_path / "shared"
+    target.mkdir()
+    os.chmod(target, 0o755)
+    P.prepare_snapshot_dir(target, run=_git_says("false"))
+    assert oct(target.stat().st_mode & 0o777) == "0o755"
+    assert "readable by others" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes only")
+def test_prepare_says_nothing_about_an_existing_private_directory(tmp_path, capsys):
+    target = tmp_path / "private"
+    target.mkdir()
+    os.chmod(target, 0o700)
+    P.prepare_snapshot_dir(target, run=_git_says("false"))
+    assert capsys.readouterr().err == ""
+
+
+# ---- the snapshot verb honours the flags its refusal names --------------------------------------
+def test_snapshot_verb_writes_to_the_top_level_snapshot_dir(tmp_path):
+    fake = FakeRun([("cat /conf/config.xml", (0, CONFIG_XML, BANNER))])
+    dest = tmp_path / "chosen"
+    assert P.main(["--host", "192.0.2.1", "--snapshot-dir", str(dest), "snapshot"], run=fake) == 0
+    assert list(dest.glob("config-192.0.2.1-*.xml"))
+    assert not (tmp_path / "xdg-state").exists(), "the default dir must not be used when one is named"
+
+
+def test_snapshot_verb_dir_flag_wins_over_the_top_level_one(tmp_path):
+    fake = FakeRun([("cat /conf/config.xml", (0, CONFIG_XML, BANNER))])
+    assert P.main(["--host", "192.0.2.1", "--snapshot-dir", str(tmp_path / "top"),
+                   "snapshot", "--dir", str(tmp_path / "verb")], run=fake) == 0
+    assert list((tmp_path / "verb").glob("config-*.xml"))
+    assert not (tmp_path / "top").exists()
+
+
+def test_snapshot_verb_honours_allow_repo_snapshot(tmp_path):
+    fake = FakeRun([("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
+                    ("rev-parse", (0, "true", ""))])
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    refused = P.main(["--host", "192.0.2.1", "snapshot", "--dir", str(repo)], run=_ssh_and_git(fake))
+    allowed = P.main(["--host", "192.0.2.1", "--allow-repo-snapshot", "snapshot", "--dir", str(repo)],
+                     run=_ssh_and_git(fake))
+    assert (refused, allowed) == (2, 0)
+    assert len(list(repo.glob("config-*.xml"))) == 1
+
+
+def _ssh_and_git(fake):
+    """Answer git's work-tree probe with "inside" and everything else from `fake`."""
+    def run(argv, *, stdin_text=None, timeout=30):
+        if argv[0] == "git":
+            return 0, "true\n", ""
+        return fake(argv, stdin_text=stdin_text, timeout=timeout)
+    return run
+
+
+# ---- named targets ------------------------------------------------------------------------------
+def test_a_percent_in_the_ini_ssh_line_is_taken_literally(tmp_path):
+    """ssh's own ControlPath tokens use %; interpolation turned them into a traceback."""
+    ini = tmp_path / "home" / "pfsense.ini"
+    ini.parent.mkdir(parents=True)
+    ini.write_text("[home]\nhost = 192.0.2.1\nssh = ssh -o ControlPath=~/.ssh/cm-%r@%h:%p\n",
+                   encoding="utf-8")
+    fake = FakeRun([('config_get_path("dhcpd"', (0, "[]", ""))])
+    assert P.main(["--fw", "home", "--json", "dhcp", "list"], run=fake) == 0
+    assert "ControlPath=~/.ssh/cm-%r@%h:%p" in fake.calls[0]["argv"]
+
+
+def test_a_malformed_ini_is_a_typed_error_not_a_traceback(tmp_path, capsys):
+    ini = tmp_path / "home" / "pfsense.ini"
+    ini.parent.mkdir(parents=True)
+    ini.write_text("host = 192.0.2.1\n", encoding="utf-8")
+    assert P.main(["--fw", "home", "--json", "dhcp", "list"], run=FakeRun()) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_the_named_target_file_is_read_from_the_environment_at_call_time(tmp_path, monkeypatch):
+    other = tmp_path / "other.ini"
+    other.write_text("[box]\nhost = 192.0.2.7\n", encoding="utf-8")
+    monkeypatch.setenv("PFSENSE_JIG_CONFIG", str(other))
+    assert P.load_named_target("box").host == "192.0.2.7"
+
+
+# ---- Windows command lines ----------------------------------------------------------------------
+def test_a_windows_key_path_keeps_its_backslashes():
+    argv = P.split_command(r"ssh -i C:\Users\me\.ssh\id_ed25519", windows=True)
+    assert argv == ["ssh", "-i", r"C:\Users\me\.ssh\id_ed25519"]
+
+
+def test_windows_splitting_honours_double_quotes_around_a_path_with_spaces():
+    argv = P.split_command(r'"C:\Program Files\OpenSSH\ssh.exe" -i "C:\my keys\id" -p 22', windows=True)
+    assert argv == [r"C:\Program Files\OpenSSH\ssh.exe", "-i", r"C:\my keys\id", "-p", "22"]
+
+
+def test_windows_splitting_follows_the_backslash_before_quote_rules():
+    """2n backslashes then a quote give n backslashes and a delimiter; 2n+1 give a literal quote."""
+    assert P.split_command(r'a\\"b c"', windows=True) == ["a\\b c"]
+    assert P.split_command(r'a\"b', windows=True) == ['a"b']
+
+
+def test_posix_splitting_is_unchanged():
+    assert P.split_command("ssh -i '/a key/id' -F /cfg", windows=False) == ["ssh", "-i", "/a key/id", "-F", "/cfg"]
+
+
+# ---- dns ----------------------------------------------------------------------------------------
+BARE_OVERRIDES = json.dumps([
+    {"host": "", "domain": "bare.example.com", "ip": "192.0.2.40", "descr": ""},
+    {"host": "nas", "domain": "example.com", "ip": "192.0.2.31", "descr": ""},
+])
+
+
+def _dns_fake():
+    return FakeRun([
+        ("$removed", (0, '{"removed":[{"host":"","domain":"bare.example.com","ip":"192.0.2.40"}]}', "")),
+        ("$hosts[] =", (0, '{"added":{"host":"x","domain":"example.com","ip":"192.0.2.9"}}', "")),
+        ('config_get_path("unbound/hosts"', (0, BARE_OVERRIDES, BANNER)),
+        ("cat /conf/config.xml", (0, CONFIG_XML, BANNER)),
+    ])
+
+
+def _rm_body(fake):
+    return next(b for b in fake.php_bodies() if "write_config" in b)
+
+
+def test_dns_rm_of_an_override_with_no_host_part_targets_the_stored_fields(tmp_path):
+    """Re-splitting bare.example.com gives host 'bare', which matches no stored entry on --apply."""
+    fake = _dns_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"),
+                 "dns", "rm", "--name", "bare.example.com"], run=fake)
+    body = _rm_body(fake)
+    assert rc == 0
+    assert "=== ''" in body and "=== 'bare.example.com'" in body
+    assert "=== 'bare'" not in body
+
+
+def test_dns_rm_of_an_ordinary_override_still_targets_host_and_domain(tmp_path):
+    fake = _dns_fake()
+    P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"),
+            "dns", "rm", "--name", "NAS.example.com"], run=fake)
+    body = _rm_body(fake)
+    assert "=== 'nas'" in body and "=== 'example.com'" in body
+
+
+def test_dns_add_refuses_a_name_an_empty_host_override_already_answers(tmp_path):
+    """bare.example.com exists with an empty host; adding host 'bare' would shadow it silently."""
+    fake = _dns_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"),
+                 "dns", "add", "--name", "bare.example.com", "--ip", "192.0.2.41"], run=fake)
+    assert rc == 2
+    assert not any("write_config" in body for body in fake.php_bodies())
+
+
+def test_dns_add_of_a_new_name_is_sent(tmp_path):
+    fake = _dns_fake()
+    rc = P.main(["--host", "192.0.2.1", "--apply", "--snapshot-dir", str(tmp_path / "s"),
+                 "dns", "add", "--name", "new.example.com", "--ip", "192.0.2.41"], run=fake)
+    assert rc == 0
+    assert any("write_config" in body and "'new'" in body for body in fake.php_bodies())
+
+
+def test_dns_add_without_apply_sends_nothing():
+    fake = _dns_fake()
+    assert P.main(["--host", "192.0.2.1", "dns", "add", "--name", "new.example.com",
+                   "--ip", "192.0.2.41"], run=fake) == 0
+    assert fake.calls == []
+
+
+# ---- table: missing operands are usage errors, not verdicts -------------------------------------
+@pytest.mark.parametrize("argv", [
+    ["table", "show"],
+    ["table", "test"],
+    ["table", "test", "snort2c"],
+    ["table", "del"],
+    ["table", "del", "snort2c"],
+    ["table", "del", "snort2c", "--apply"],
+])
+def test_table_without_its_operands_is_exit_2_and_runs_nothing(argv):
+    fake = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
+    assert P.main(["--host", "192.0.2.1", *argv], run=fake) == 2
+    assert fake.calls == []
+
+
+def test_table_del_apply_deletes_and_confirms():
+    fake = FakeRun([("-T show", (0, "  192.0.2.6\n", ""))])
+    rc = P.main(["--host", "192.0.2.1", "table", "del", "snort2c", "192.0.2.5", "--apply"], run=fake)
+    assert rc == 0
+    assert any("-T delete 192.0.2.5" in c["remote"] for c in fake.calls)
+
+
+def test_table_del_apply_exits_1_when_an_entry_survives():
+    fake = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "table", "del", "snort2c", "192.0.2.5", "--apply"], run=fake) == 1
+
+
+# ---- snort --------------------------------------------------------------------------------------
+PS_SNORT = "root 1 snort -R 1 -c /usr/local/etc/snort/snort_1_igb0/snort.conf -i igb0\n"
+
+
+def _verify(supp, *extra):
+    fake = FakeRun([("ps auxww", (0, PS_SNORT, "")), ("/supp*", (0, supp, ""))])
+    return P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", "2071408", *extra], run=fake)
+
+
+def test_snort_verify_counts_a_live_suppression():
+    assert _verify("suppress gen_id 1, sig_id 2071408\n") == 0
+
+
+def test_snort_verify_does_not_count_a_commented_out_suppression():
+    assert _verify("#suppress gen_id 1, sig_id 2071408\n") == 1
+    assert _verify("  # suppress gen_id 1, sig_id 2071408\n") == 1
+
+
+def test_snort_verify_does_not_count_a_sid_named_only_in_a_trailing_comment():
+    assert _verify("suppress gen_id 1, sig_id 999 # was sig_id 2071408\n") == 1
+
+
+def test_snort_verify_without_the_sid_is_no():
+    assert _verify("suppress gen_id 1, sig_id 999\n") == 1
+
+
+def test_snort_verify_is_an_error_when_snort_is_not_running():
+    fake = FakeRun([("ps auxww", (0, "root 1 /sbin/init\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "verify", "--sid", "1"], run=fake) == 2
+
+
+ALERT_OLD = '08/01-10:00:00.000000,1,2071408,1,"OLD alert",TCP,192.0.2.7,443,198.51.100.9,80\n'
+ALERT_NEW = '08/02-10:00:00.000000,1,2071408,1,"NEW alert",TCP,192.0.2.7,443,198.51.100.9,80\n'
+
+
+def test_snort_why_labels_the_newest_alert_latest_whatever_the_file_order(capsys):
+    """The current file is read before the rotated ones, so the last line is the OLDEST."""
+    fake = FakeRun([("/var/log/snort", (0, ALERT_NEW + ALERT_OLD, ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "why", "198.51.100.9"], run=fake) == 0
+    assert "latest: 08/02-10:00:00.000000  NEW alert" in capsys.readouterr().out
+
+
+def test_snort_why_with_no_alert_for_the_ip_is_no():
+    fake = FakeRun([("/var/log/snort", (0, ALERT_OLD, ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "why", "203.0.113.1"], run=fake) == 1
+
+
+def test_snort_unblock_dry_run_sends_nothing():
+    fake = FakeRun()
+    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5"], run=fake) == 0
+    assert fake.calls == []
+
+
+def test_snort_unblock_apply_confirms_by_rereading_the_table():
+    cleared = FakeRun([("-T show", (0, "", ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "--apply"], run=cleared) == 0
+    stuck = FakeRun([("-T show", (0, "  192.0.2.5\n", ""))])
+    assert P.main(["--host", "192.0.2.1", "snort", "unblock", "192.0.2.5", "--apply"], run=stuck) == 1
+
+
+# ---- live doctor --------------------------------------------------------------------------------
+def _doctor_fake(arp=(0, "", ""), resolv=(0, "nameserver 127.0.0.1\n", ""), lock=(1, "", "")):
+    return FakeRun([
+        ('config_get_path("dhcpd"', (0, "[]", "")),
+        ('config_get_path("unbound/hosts"', (0, "[]", "")),
+        ("arp -an", arp),
+        ("cat /etc/resolv.conf", resolv),
+        ("test -f", lock),
+    ])
+
+
+def test_live_doctor_on_a_healthy_box_is_clean():
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=_doctor_fake()) == 0
+
+
+def test_live_doctor_reports_findings_from_the_live_reads():
+    assert P.main(["--host", "192.0.2.1", "doctor"],
+                  run=_doctor_fake(resolv=(0, "nameserver 100.100.100.100\n", ""))) == 1
+
+
+@pytest.mark.parametrize("which", ["arp", "resolv", "lock"])
+def test_live_doctor_is_an_error_when_a_read_fails_not_a_clean_bill(which):
+    """An ssh drop after the PHP reads used to leave every later check empty, which reads as clean."""
+    dropped = (255, "", "Connection closed by 192.0.2.1")
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=_doctor_fake(**{which: dropped})) == 2
+
+
+def test_live_doctor_reads_a_present_lock_as_a_finding():
+    assert P.main(["--host", "192.0.2.1", "doctor"], run=_doctor_fake(lock=(0, "", ""))) == 1
+
+
+# ---- arp --permanent really filters -------------------------------------------------------------
+def test_arp_permanent_returns_only_the_permanent_entries(capsys):
+    fake = FakeRun([("arp -an", (0, ARP_TEXT, BANNER))])
+    assert P.main(["--host", "192.0.2.1", "--json", "arp", "--permanent"], run=fake) == 0
+    data = json.loads(capsys.readouterr().out)["data"]
+    assert [e["ip"] for e in data] == ["192.0.2.30"]
+
+
+# ---- cross-platform text handling ---------------------------------------------------------------
+SCRIPT = pathlib.Path(P.__file__)
+
+
+def test_a_non_cp1252_character_on_a_cp1252_stdout_does_not_crash(tmp_path):
+    """A Windows pipe is cp1252; an unencodable character used to raise mid-report with exit 1."""
+    env = dict(os.environ, PYTHONIOENCODING="cp1252", XDG_STATE_HOME=str(tmp_path))
+    env.pop("PYTHONUTF8", None)
+    proc = subprocess.run([sys.executable, str(SCRIPT), "snort", "fixsteps", "--sid", chr(0x0141)],
+                          capture_output=True, env=env, check=False)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    assert b"sig_id ?" in proc.stdout
+
+
+def test_a_target_file_saved_with_a_bom_still_has_its_first_section(tmp_path):
+    """Notepad writes a BOM; configparser then reads '\\ufeff[home]' as no section header."""
+    ini = tmp_path / "pfsense.ini"
+    ini.write_bytes(b"\xef\xbb\xbf[home]\r\nhost = 192.0.2.1\r\n")
+    assert P.load_named_target("home", path=ini).host == "192.0.2.1"
+
+
+def test_a_form_feed_inside_a_table_line_is_not_a_second_entry():
+    assert "192.0.2.6" not in P.parse_table("  192.0.2.5\x0c192.0.2.6\n")
+    assert P.parse_table("  192.0.2.5\n  192.0.2.6\n") == {"192.0.2.5", "192.0.2.6"}
+
+
+# ---- process-level failures are exit 2 with an envelope -----------------------------------------
+@pytest.mark.parametrize("exc", [OSError("ssh: not found"),
+                                 subprocess.TimeoutExpired(cmd="ssh", timeout=30)])
+def test_a_process_failure_is_exit_2_with_a_json_envelope(exc, capsys):
+    def boom(*_a, **_k):
+        raise exc
+    assert P.main(["--host", "192.0.2.1", "--json", "arp"], run=boom) == 2
+    assert json.loads(capsys.readouterr().out)["ok"] is False

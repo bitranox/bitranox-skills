@@ -131,9 +131,9 @@ def test_task_brief_default_outfile_in_workspace(repo, capsys, monkeypatch):
     plan = r / "plan.md"
     plan.write_text(PLAN, encoding="utf-8")
     assert TB.main([str(plan), "2"]) == 0
-    expected = r / ".bitranox" / "sdd" / "task-2-brief.md"
-    assert expected.is_file()
-    assert "body two, line 1" in expected.read_text(encoding="utf-8")
+    written = list((r / ".bitranox" / "sdd").glob("task-2-*-brief.md"))
+    assert len(written) == 1
+    assert "body two, line 1" in written[0].read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------ review_package

@@ -230,17 +230,19 @@ it is in. A clean result is WEAK: the check compares distinctive terms, so it ca
 paraphrase, and "no hit" means NOT CAUGHT rather than absent. Do not read a clean run as a sealed
 fixture.
 
-| Exit | Meaning                                                                                                                                                                                                                           |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail                                                                                                                                          |
-| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it                                                                                                                                |
-| 2    | usage or IO error                                                                                                                                                                                                                 |
-| 3    | unchecked - a corpus was asked for and assembled 0 documents, so the inherited check never ran. EITHER flag arms it: a mistyped or empty `--corpus-cascade` start directory, or a `--corpus` dir that is missing or holds nothing |
+| Exit | Meaning                                                                                                                                                                                                                                                                                                                                    |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0    | clean - neither leak found. Rules out these two reasons; does not prove the RED CAN fail                                                                                                                                                                                                                                                   |
+| 1    | a leak was found - the report names the document that teaches it, or the phrase that telegraphs it                                                                                                                                                                                                                                         |
+| 2    | usage or IO error                                                                                                                                                                                                                                                                                                                          |
+| 3    | unchecked - a corpus was asked for and assembled 0 documents, so the inherited check never ran. EITHER flag arms it: a mistyped or empty `--corpus-cascade` start directory, or a `--corpus` dir that is missing or holds nothing. Also an `--answer` that yields no distinctive terms (an empty file), so the answer-leak check never ran |
 
 Exit 3 is its own outcome for a reason: an empty corpus makes every scenario look clean, so a
 mistyped start directory would otherwise read as a pass - and a gate reads the exit code, not the
 stderr warning. Naming either flag is the caller promising a corpus, so both arm it. Passing
-neither is not a promise and stays exit 0. The run always prints how many documents it read.
+neither is not a promise and stays exit 0. The run always prints how many documents it read, and
+a file reached by more than one flag (`--corpus` naming a directory the cascade also walks) is
+read once, so it cannot dilute the rarity weighting.
 
 If a hit comes back, rewrite the scenario (a different domain, de-telegraphed prose) and re-check
 before dispatching the real baseline run. If your corpus reuses one vocabulary throughout and

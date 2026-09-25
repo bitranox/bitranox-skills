@@ -8,11 +8,14 @@
 Run with `uv run proxy_pool.py ...` so uv fetches httpx2 into an isolated env.
 HTTP uses httpx2 (HTTP/2, sync + async, clean proxy support); everything else is
 stdlib, portable across Linux/macOS/Windows. The proxy pool is a persistent
-store that is RE-TESTED every run, because free proxies constantly die, recover,
-and appear. These files live under --store (default ./.proxies):
+store that is never trusted as-is, because free proxies constantly die, recover,
+and appear: validate tests only candidates not yet in live.txt or bad.txt, so
+live.txt accumulates, and freshness comes from the ban path (a proxy that fails at
+the connection level during a job goes to bad.txt, and every reader uses
+live - bad). These files live under --store (default ./.proxies):
 
   pool.txt    all discovered candidate IP:PORT (grow-only, deduped)
-  live.txt    candidates that passed reachability validation this/last run
+  live.txt    candidates that passed reachability validation on some run (accumulates)
   good.txt    proxies that actually completed a real download (weighted up)
   bad.txt     proxies that failed at the connection level (excluded)
   speeds.tsv  measured validation latency per proxy (proxy<TAB>seconds); selection
@@ -26,6 +29,9 @@ Subcommands:
 
 OS-independent by design: --cmd is parsed into an argv list and run WITHOUT a shell
 (no shell=True), so it behaves the same on Linux/macOS/Windows and is injection-safe.
+It is split by the host's own command-line rules: POSIX shlex, or on Windows the
+CommandLineToArgvW rules, where a backslash in a path is literal and only double
+quotes group.
 Do not put shell operators (|, ||, $?, redirects) in --cmd; success is decided by the
 tool here, not by shell glue:
   - success  = return code 0 AND, if --success-glob is given, a matching output file exists
@@ -34,6 +40,11 @@ tool here, not by shell glue:
   - dead     = the proxy failed at the connection level (return code matched the tool's
                combined stdout+stderr against --dead-regex) -> record in bad.txt, skip next time
   - otherwise (incl. timeout / 429 / transient) -> rotate to the next proxy, do not ban
+    (a proxy that keeps failing this way is dropped from THIS run's working set only)
+
+Exit codes: 0 = every item succeeded (discover: at least one source answered),
+1 = some items did not succeed, 2 = error (the --cmd binary was not found, no usable
+proxy in the store, every discovery source failed).
 
 The --cmd template may contain {proxy} (host:port) and {item}. Example:
   uv run proxy_pool.py run --worklist ids.txt --workers 16 --success-glob 'out/{item}*.vtt'
@@ -41,7 +52,7 @@ The --cmd template may contain {proxy} (host:port) and {item}. Example:
             --sub-langs en.*,en --sub-format vtt -o out/{item}.%(ext)s
             https://www.youtube.com/watch?v={item}'
 """
-import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, threading, time
+import argparse, concurrent.futures as cf, glob, os, random, re, shlex, subprocess, sys, threading, time
 import httpx2
 
 DEAD_DEFAULT = r"connection refused|connection reset|timed out|cannot connect|unreachable|EOF occurred|proxy|tunnel|ProxyError"
@@ -57,13 +68,23 @@ DEFAULT_SOURCES = [
 _lock = threading.Lock()
 
 
+class CommandNotFound(Exception):
+    """The --cmd binary does not exist, so no proxy can ever make an item succeed."""
+
+
+class NoProxies(Exception):
+    """The store holds no usable proxy, so every item would fail without being attempted."""
+
+
 def _p(store, name):
     return os.path.join(store, name)
 
 
 def _read(path):
+    # utf-8-sig: a list saved by a Windows editor starts with a BOM, which would otherwise glue
+    # itself onto the first entry and make it match nothing.
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             return {l.strip() for l in f if l.strip()}
     except FileNotFoundError:
         return set()
@@ -87,18 +108,27 @@ def _append(path, line):
 
 
 def discover(store, sources):
+    """Merge every source's IP:PORT entries into pool.txt; return how many sources answered.
+
+    A caller must be able to tell "every list was unreachable" from "the lists were fetched",
+    because both leave a pool that looks the same.
+    """
     found = set()
+    answered = 0
     for url in sources:
         try:
             r = httpx2.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+            r.raise_for_status()
             hits = set(IPPORT.findall(r.text))
             found |= hits
+            answered += 1
             print(f"  {len(hits):5d} from {url[:60]}")
         except Exception as e:
             print(f"  ERR  {url[:60]}: {e}")
     found.discard("0.0.0.0:80")
     _grow(_p(store, "pool.txt"), found)
     print(f"pool now: {len(_read(_p(store, 'pool.txt')))} candidates")
+    return answered
 
 
 def _read_speeds(path):
@@ -364,7 +394,13 @@ class ProxyPool:
             self._in_use.add(proxy)
 
     def record(self, proxy, ok):
-        """Record an attempt's outcome; evict + backfill if the proxy has turned flaky."""
+        """Record an attempt's outcome; evict + backfill if the proxy has turned flaky.
+
+        The eviction is for THIS run only and is never written to bad.txt. These failures are
+        the non-dead kind (429, timeouts, a blocked item) - often the target throttling rather
+        than the proxy failing - and bad.txt is permanent: validate and every later pick would
+        skip the proxy forever.
+        """
         with self._lock:
             self._in_use.discard(proxy)
             counter = self._ok if ok else self._fail
@@ -372,7 +408,6 @@ class ProxyPool:
             if _is_flaky(self._ok.get(proxy, 0), self._fail.get(proxy, 0),
                          self.flaky_min_samples, self.flaky_max_fail_ratio):
                 self._ban_locked(proxy)
-                _append(_p(self.store, "bad.txt"), proxy)
                 self._refill_active_locked()
 
     def ban(self, proxy):
@@ -419,16 +454,18 @@ class ProxyPool:
                 print(f"benchmark error: {e}")
 
 
-def _bg_refresh(store, test_url, workers, timeout, stop, need=None):
+def _bg_refresh(store, test_url, workers, timeout, stop, need=None, interval=600, sources=None):
     """Keep live.txt healthy while a job runs. Proxies that die get banned to bad.txt by the worker,
     which shrinks the effective pool (live - bad); this loop refills it. With ``need`` set it tops up
     ONLY to the target (validating just the deficit), so it replaces proxies that went away without
-    re-over-provisioning; with ``need=None`` it re-validates the whole pool (exhaustive)."""
+    re-over-provisioning; with ``need=None`` it re-validates the whole pool (exhaustive).
+    ``interval`` (default 10 min) and ``sources`` (default the public lists) exist so the loop can
+    be driven against a local source in tests."""
     while not stop.is_set():
-        if stop.wait(600):              # every 10 min
+        if stop.wait(interval):
             break
         try:
-            discover(store, DEFAULT_SOURCES)
+            discover(store, sources or DEFAULT_SOURCES)
             if need is None:
                 validate(store, test_url, workers, timeout)
                 continue
@@ -450,16 +487,20 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
         # argv list, NO shell: identical behaviour on Linux/macOS/Windows, injection-safe.
         argv = [tok.replace("{proxy}", proxy).replace("{item}", item) for tok in argv_tpl]
         try:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=item_timeout)
+            # Explicit UTF-8 with replacement: the locale codec raises UnicodeDecodeError on POSIX
+            # (past every handler here) and loses stdout on Windows when the tool prints bytes it
+            # cannot decode.
+            r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=item_timeout)
             rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
             rc, out = 124, ""
-        except FileNotFoundError:
-            print(f"cmd not found: {argv[0]!r}")
-            return (item, None)
+        except FileNotFoundError as exc:
+            raise CommandNotFound(f"cmd not found: {argv[0]!r}") from exc
         ok = rc == 0
         if ok and success_glob:
-            ok = bool(glob.glob(success_glob.replace("{item}", item)))
+            # The item is data, not a pattern: an id like "a[1]" would otherwise be a character class.
+            ok = bool(glob.glob(success_glob.replace("{item}", glob.escape(item))))
         if ok:
             _append(_p(store, "good.txt"), proxy)
             if pool is not None:
@@ -475,15 +516,74 @@ def _run_item(store, item, argv_tpl, per_item, item_timeout, success_glob, dead_
     return (item, None)
 
 
+def _split_windows(text):
+    """Split a command line the way the Microsoft C runtime (CommandLineToArgvW) does.
+
+    A backslash is literal unless a run of them ends in a double quote: 2n backslashes then a quote
+    give n backslashes and toggle quoting, 2n+1 give n backslashes and a literal quote. There is no
+    single-quoting. Pure Python rather than ctypes so the same rules are testable on every OS.
+    """
+    args, current = [], []
+    in_quotes = in_arg = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\":
+            end = i
+            while end < len(text) and text[end] == "\\":
+                end += 1
+            count = end - i
+            if end < len(text) and text[end] == '"':
+                current.append("\\" * (count // 2))
+                if count % 2:
+                    current.append('"')
+                    end += 1
+            else:
+                current.append("\\" * count)
+            in_arg, i = True, end
+            continue
+        if char == '"':
+            in_quotes, in_arg = not in_quotes, True
+        elif char in " \t" and not in_quotes:
+            if in_arg:
+                args.append("".join(current))
+                current, in_arg = [], False
+        else:
+            current.append(char)
+            in_arg = True
+        i += 1
+    if in_arg:
+        args.append("".join(current))
+    return args
+
+
+def split_command(text, windows=os.name == "nt"):
+    """Split --cmd by the rules of the platform it runs on.
+
+    POSIX shlex reads a backslash as an escape, so on Windows it eats the separators out of every
+    path (`C:\\tools\\yt-dlp.exe` becomes `C:toolsyt-dlp.exe`) and the tool is "not found".
+    """
+    return _split_windows(text) if windows else shlex.split(text)
+
+
 def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vworkers, vtimeout,
         success_glob, dead_regex, need=None, cooldown=5.0, bench_interval=120, flaky_fail_ratio=0.5):
-    argv_tpl = shlex.split(cmd)          # parse template once; substituted per attempt, no shell
+    """Run the worklist; return (succeeded, total).
+
+    Raises CommandNotFound when the --cmd binary does not exist, and NoProxies when the store
+    holds no usable proxy - both make every item fail, so running them would only print noise.
+    """
+    argv_tpl = split_command(cmd)        # parse template once; substituted per attempt, no shell
     dead_re = re.compile(dead_regex, re.I)
-    items = [l.strip() for l in open(worklist, encoding="utf-8") if l.strip()]
+    with open(worklist, encoding="utf-8-sig") as f:
+        items = [l.strip() for l in f if l.strip()]
     # Self-optimizing working set: rotates the pick (no hammering), tracks flaky proxies,
     # and (with --background-discovery) benchmarks + swaps fresh fast proxies in for slow ones.
     pool = ProxyPool(store, need, test_url=test_url, vtimeout=vtimeout, cooldown=cooldown,
                      flaky_max_fail_ratio=flaky_fail_ratio)
+    if items and not pool.active():
+        raise NoProxies(f"no usable proxies in {store} (live + good - bad is empty); "
+                        f"run discover and validate first")
     stop = threading.Event()
     if bg:
         refresh_t = threading.Thread(target=_bg_refresh, args=(store, test_url, vworkers, vtimeout, stop, need), daemon=True)
@@ -495,17 +595,40 @@ def run(store, worklist, cmd, workers, per_item, item_timeout, bg, test_url, vwo
     try:
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_run_item, store, it, argv_tpl, per_item, item_timeout, success_glob, dead_re, pool) for it in items]
-            for fut in cf.as_completed(futs):
-                item, proxy = fut.result()
-                if proxy:
-                    ok += 1
-                    print(f"OK {item} via {proxy}  ({ok}/{len(items)})")
+            try:
+                for fut in cf.as_completed(futs):
+                    item, proxy = fut.result()
+                    if proxy:
+                        ok += 1
+                        print(f"OK {item} via {proxy}  ({ok}/{len(items)})")
+            except CommandNotFound:
+                for pending in futs:  # it can never succeed; do not start the rest
+                    pending.cancel()
+                raise
     finally:
         stop.set()
     print(f"done: {ok}/{len(items)} succeeded; good={len(_read(_p(store,'good.txt')))} bad={len(_read(_p(store,'bad.txt')))}")
+    return ok, len(items)
 
 
-def main():
+def _tolerate_unencodable_output():
+    """Replace, rather than crash on, a character the console cannot encode.
+
+    A Windows pipe defaults to cp1252, so an item name outside it raised UnicodeEncodeError from
+    the report line and killed the run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+def main(argv=None):
+    """CLI entry. Returns the exit code: 0 all good, 1 some items failed, 2 error."""
+    _tolerate_unencodable_output()
     ap = argparse.ArgumentParser(description="Rotating free-proxy pool harness.")
     ap.add_argument("--store", default="./.proxies")
     sub = ap.add_subparsers(dest="action", required=True)
@@ -534,17 +657,29 @@ def main():
                    help="seconds between background re-benchmark + swap-up passes (needs --background-discovery)")
     r.add_argument("--flaky-fail-ratio", type=float, default=0.5,
                    help="evict a proxy once its failure fraction exceeds this (after a few attempts)")
-    a = ap.parse_args()
-    os.makedirs(a.store, exist_ok=True)
+    a = ap.parse_args(argv)
+    try:
+        os.makedirs(a.store, exist_ok=True)
+        return _dispatch(a)
+    except (CommandNotFound, NoProxies, OSError) as e:
+        print(f"proxy_pool: {e}", file=sys.stderr)
+        return 2
+
+
+def _dispatch(a):
     if a.action == "discover":
-        discover(a.store, a.sources)
-    elif a.action == "validate":
+        if discover(a.store, a.sources) == 0 and a.sources:
+            print("proxy_pool: no discovery source answered", file=sys.stderr)
+            return 2
+        return 0
+    if a.action == "validate":
         validate(a.store, a.test_url, a.workers, a.timeout, a.need)
-    elif a.action == "run":
-        run(a.store, a.worklist, a.cmd, a.workers, a.per_item_proxies, a.item_timeout,
-            a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob, a.dead_regex,
-            a.need, a.cooldown, a.bench_interval, a.flaky_fail_ratio)
+        return 0
+    succeeded, total = run(a.store, a.worklist, a.cmd, a.workers, a.per_item_proxies, a.item_timeout,
+                           a.background_discovery, a.test_url, a.vworkers, a.vtimeout, a.success_glob,
+                           a.dead_regex, a.need, a.cooldown, a.bench_interval, a.flaky_fail_ratio)
+    return 0 if succeeded == total else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

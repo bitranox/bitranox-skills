@@ -9,6 +9,8 @@ import os
 import random
 import sys
 
+import pytest
+
 import proxy_pool as pp
 
 
@@ -306,12 +308,13 @@ def test_run_item_no_candidates_returns_none(store):
     assert (item, proxy) == ("JOB", None)
 
 
-def test_run_item_cmd_not_found_returns_none(store):
+def test_run_item_cmd_not_found_raises(store):
+    """A missing binary can never succeed on any proxy, so it aborts the run instead of rotating."""
     _seed_store(store, live=["px:1"], speeds={"px:1": 1.0})
     dead_re = pp.re.compile(pp.DEAD_DEFAULT, pp.re.I)
     argv_tpl = ["this-binary-does-not-exist-xyz", "{proxy}", "{item}"]
-    item, proxy = pp._run_item(store, "JOB", argv_tpl, 4, 30, None, dead_re)
-    assert (item, proxy) == ("JOB", None)
+    with pytest.raises(pp.CommandNotFound):
+        pp._run_item(store, "JOB", argv_tpl, 4, 30, None, dead_re)
     assert pp._read(pp._p(store, "good.txt")) == set()
 
 
@@ -428,15 +431,17 @@ def test_pool_acquire_rotates_and_rests(store):
     assert first[0] != second[0]
 
 
-def test_pool_record_evicts_flaky_and_persists(store):
+def test_pool_record_evicts_flaky_for_this_run_only(store):
     _seed_store(store, live=["flaky:1", "spare:1"], speeds={"flaky:1": 0.1, "spare:1": 0.2})
     pool = pp.ProxyPool(store, need=1, flaky_min_samples=4, flaky_max_fail_ratio=0.5)
-    # 3 failures + 1 success = 0.75 fail ratio -> evicted, banned to bad.txt, backfilled.
+    # 3 failures + 1 success = 0.75 fail ratio -> evicted from this run's working set and
+    # backfilled. NOT written to bad.txt: those failures are the target throttling (429), which a
+    # later run may not see, and bad.txt is permanent.
     for _ in range(3):
         pool.record("flaky:1", False)
     pool.record("flaky:1", True)
     assert "flaky:1" not in pool.active()
-    assert "flaky:1" in pp._read(pp._p(store, "bad.txt"))
+    assert pp._read(pp._p(store, "bad.txt")) == set()
     # a spare fast proxy backfills the freed slot.
     assert "spare:1" in pool.active()
 
