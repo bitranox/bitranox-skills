@@ -177,12 +177,27 @@ def summarize_axe(violations: list[dict]) -> dict:
     return {"counts": counts, "findings": findings}
 
 
+def not_measured_finding(check: str, severity: str, error: str) -> dict:
+    """A check that was requested but could not run.
+
+    It carries the WORST severity that check could have reported, so a failed measurement
+    fails the verdict instead of reading exactly like a clean pass.
+    """
+    return {
+        "check": f"{check}-not-measured",
+        "severity": severity,
+        "detail": f"{check} check did not run, so it was not measured: {error}",
+        "fix": "make the check runnable (for axe: reachable --axe-url, no CSP blocking it) and re-run",
+    }
+
+
 def build_device_report(profile: dict, raw: dict) -> dict:
     """Assemble one device profile's findings from its raw measurements.
 
     ``raw`` keys (all optional): ``scroll_width``, ``client_width``, ``content_height``,
     ``viewport_height``, ``targets`` (list), ``overflow_offenders`` (list),
-    ``axe_violations`` (list), ``text_expansion_overflow`` (bool).
+    ``axe_violations`` (list), ``text_expansion_overflow`` (bool), and ``axe_error`` /
+    ``i18n_error`` (str) when that pass was requested but failed to run.
     """
     kind = profile.get("kind", "desktop")
     orientation = profile.get("orientation", "portrait")
@@ -215,8 +230,14 @@ def build_device_report(profile: dict, raw: dict) -> dict:
     axe = summarize_axe(raw.get("axe_violations") or [])
     findings.extend(axe["findings"])
 
+    # axe can report SEVERE, the i18n slice at most MEDIUM.
+    errors = {"axe_error": ("a11y", "SEVERE"), "i18n_error": ("i18n-layout", "MEDIUM")}
+    for key, (check, severity) in errors.items():
+        if raw.get(key):
+            findings.append(not_measured_finding(check, severity, str(raw[key])))
+
     findings.sort(key=lambda f: severity_rank(f.get("severity", "MINOR")))
-    return {
+    report = {
         "profile": profile.get("name", "?"),
         "kind": kind,
         "orientation": orientation,
@@ -224,6 +245,10 @@ def build_device_report(profile: dict, raw: dict) -> dict:
         "findings": findings,
         "axe_counts": axe["counts"],
     }
+    for key in errors:
+        if raw.get(key):
+            report[key] = str(raw[key])
+    return report
 
 
 def aggregate_report(device_reports: list[dict], *, url: str = "") -> dict:

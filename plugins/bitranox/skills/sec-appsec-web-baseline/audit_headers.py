@@ -27,7 +27,9 @@ import json
 import re
 import socket
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
 
@@ -36,7 +38,11 @@ SEVERITIES = ("SEVERE", "MEDIUM", "MINOR", "OK")
 _SUBRESOURCE_TAG = re.compile(
     r"<(?:img|script|iframe|video|audio|source|track|embed|object|link)\b[^>]*>", re.I
 )
-_SUBRESOURCE_ATTR = re.compile(r"""(?:src|data|srcset|href)\s*=\s*["']([^"']+)["']""", re.I)
+# Minifiers routinely drop attribute quotes, so the unquoted form (<script src=http://x/a.js>)
+# must count as well: one alternative per quoting style, exactly one group matches.
+_SUBRESOURCE_ATTR = re.compile(
+    r"""(?:src|data|srcset|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))""", re.I
+)
 
 # <link> is the one tag above that does NOT always load: rel decides. `canonical`, `alternate`,
 # `dns-prefetch` and friends are metadata or connection hints, so an http:// href there is not
@@ -79,7 +85,7 @@ def _hsts(value: str | None, *, https: bool) -> Finding:
     if not value:
         return Finding("hsts", "SEVERE", "no Strict-Transport-Security header",
                        'set "max-age=31536000; includeSubDomains" (stage a short max-age first)')
-    age = re.search(r"max-age\s*=\s*(\d+)", value, re.I)
+    age = re.search(r'max-age\s*=\s*"?(\d+)', value, re.I)  # RFC 6797 allows a quoted value
     seconds = int(age.group(1)) if age else 0
     if seconds < 15552000:  # 180 days
         return Finding("hsts", "MEDIUM", f"max-age={seconds} is below 6 months",
@@ -87,6 +93,25 @@ def _hsts(value: str | None, *, https: bool) -> Finding:
     if "includesubdomains" not in value.lower():
         return Finding("hsts", "MINOR", "no includeSubDomains", "add includeSubDomains if all subdomains are HTTPS")
     return Finding("hsts", "OK", value)
+
+
+def _csp_directives(value: str) -> dict[str, str]:
+    """Split a policy into ``{directive-name: source list}``, both lowercased.
+
+    Directives are matched by NAME: a prefix search for ``script-src`` would find
+    ``script-src-elem`` first. A repeated directive keeps its FIRST occurrence, as browsers do.
+    """
+    directives: dict[str, str] = {}
+    for part in value.lower().split(";"):
+        tokens = part.split(None, 1)
+        if tokens and tokens[0] not in directives:
+            directives[tokens[0]] = tokens[1].strip() if len(tokens) > 1 else ""
+    return directives
+
+
+def _has_nonce_or_hash(sources: str) -> bool:
+    """A nonce or hash source makes browsers IGNORE 'unsafe-inline' in the same list."""
+    return bool(re.search(r"'(?:nonce-|sha256-|sha384-|sha512-)", sources))
 
 
 def _csp(value: str | None, *, enforced: bool = True) -> Finding:
@@ -98,42 +123,80 @@ def _csp(value: str | None, *, enforced: bool = True) -> Finding:
     if not enforced:
         return Finding("csp", "MINOR", "CSP is report-only (a rollout phase, not enforced - it protects nothing yet)",
                        "promote to an enforced Content-Security-Policy once violations are clear")
-    low = value.lower()
-    script = re.search(r"script-src([^;]*)", low)
-    script_val = script.group(1) if script else (re.search(r"default-src([^;]*)", low) or [None, ""])[1]
-    if script_val and "'unsafe-inline'" in script_val:
+    directives = _csp_directives(value)
+    script_val = directives.get("script-src", directives.get("default-src", ""))
+    if "'unsafe-inline'" in script_val and not _has_nonce_or_hash(script_val):
         return Finding("csp", "MEDIUM", "script-src allows 'unsafe-inline' (XSS not mitigated)",
                        "drop 'unsafe-inline'; use nonces or hashes for any inline script")
-    if script_val and "'unsafe-eval'" in script_val:
+    if "'unsafe-eval'" in script_val:
         return Finding("csp", "MEDIUM", "script-src allows 'unsafe-eval'", "remove 'unsafe-eval'")
-    if "object-src" not in low and "default-src" not in low:
+    if "object-src" not in directives and "default-src" not in directives:
         return Finding("csp", "MINOR", "no object-src/default-src fallback", "add default-src 'self'; object-src 'none'")
     return Finding("csp", "OK", "present, no unsafe-inline/eval in scripts")
 
 
+def _header_tokens(value: str | None) -> list[str]:
+    """A header value split into its comma-separated tokens, trimmed and lowercased.
+
+    A header sent twice (app plus proxy) reaches us joined as ``"a, a"``, so an exact
+    comparison against the whole value reads a correct header as missing."""
+    if not value:
+        return []
+    return [token.strip().lower() for token in value.split(",") if token.strip()]
+
+
 def _nosniff(value: str | None) -> Finding:
-    if value and value.strip().lower() == "nosniff":
+    tokens = _header_tokens(value)
+    if tokens and tokens[0] == "nosniff":  # Fetch: only the FIRST value is consulted
         return Finding("x-content-type-options", "OK", "nosniff")
     return Finding("x-content-type-options", "MEDIUM", "missing or not 'nosniff'", 'set X-Content-Type-Options: nosniff')
 
 
+# A frame-ancestors source that lets ANY site (or any site on a scheme) frame the page.
+_PERMISSIVE_FRAME_SOURCE = re.compile(r"^(?:\*|[a-z][a-z0-9+.-]*:)$")
+
+
+def _frame_ancestors_finding(sources: str) -> Finding:
+    """Grade an enforced frame-ancestors source list: 'none', 'self' and explicit origins
+    restrict framing; ``*`` or a scheme-only source (``https:``) allows any site to frame it."""
+    permissive = [s for s in sources.split() if _PERMISSIVE_FRAME_SOURCE.match(s)]
+    if permissive:
+        return Finding("clickjacking", "MEDIUM",
+                       f"CSP frame-ancestors allows any site to frame the page ({' '.join(permissive)})",
+                       "restrict frame-ancestors to 'none', 'self' or explicit origins")
+    # An empty source list means 'none' in CSP.
+    return Finding("clickjacking", "OK", "CSP frame-ancestors " + (sources or "(empty list = 'none')"))
+
+
 def _clickjacking(xfo: str | None, csp_enforced: str | None) -> Finding:
     """Clickjacking is covered by an ENFORCED CSP frame-ancestors OR X-Frame-Options. A
-    report-only CSP does not count - it enforces nothing."""
-    if csp_enforced and "frame-ancestors" in csp_enforced.lower():
-        return Finding("clickjacking", "OK", "CSP frame-ancestors present")
-    if xfo and xfo.strip().lower() in ("deny", "sameorigin"):
-        return Finding("clickjacking", "OK", f"X-Frame-Options: {xfo.strip()}")
+    report-only CSP does not count - it enforces nothing. When frame-ancestors is present
+    browsers ignore X-Frame-Options, so a permissive frame-ancestors is not rescued by it."""
+    directives = _csp_directives(csp_enforced) if csp_enforced else {}
+    if "frame-ancestors" in directives:
+        return _frame_ancestors_finding(directives["frame-ancestors"])
+    tokens = _header_tokens(xfo)
+    # HTML: a repeated X-Frame-Options applies only when every value agrees.
+    if tokens and len(set(tokens)) == 1 and tokens[0] in ("deny", "sameorigin"):
+        return Finding("clickjacking", "OK", f"X-Frame-Options: {tokens[0].upper()}")
     return Finding("clickjacking", "MEDIUM", "no enforced frame-ancestors and no X-Frame-Options",
                    "add CSP frame-ancestors 'none' (and X-Frame-Options: DENY for old browsers)")
+
+
+_REFERRER_POLICIES = frozenset({
+    "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+    "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url",
+})
 
 
 def _referrer_policy(value: str | None) -> Finding:
     # no-referrer-when-downgrade is NOT safe: it sends the full URL (with query) to third-party
     # HTTPS destinations. A baseline wants strict-origin(-when-cross-origin) or stricter.
     safe = {"no-referrer", "strict-origin", "strict-origin-when-cross-origin", "same-origin", "origin"}
-    if value and value.strip().lower() in safe:
-        return Finding("referrer-policy", "OK", value)
+    # The header is a comma list and the LAST recognised token wins (Referrer Policy spec).
+    known = [t for t in _header_tokens(value) if t in _REFERRER_POLICIES]
+    if known and known[-1] in safe:
+        return Finding("referrer-policy", "OK", value or "")
     return Finding("referrer-policy", "MINOR", "missing or weak", 'set Referrer-Policy: strict-origin-when-cross-origin')
 
 
@@ -160,24 +223,56 @@ def _xss_auditor(value: str | None) -> Finding:
     return Finding("x-xss-protection", "OK", "off or absent")
 
 
-def _server_token(value: str | None) -> Finding:
+def _leaks_version(value: str | None) -> bool:
     # A version looks like 1.2 / 2.4.7 / v3 - a bare product name with a digit (AmazonS3) is not.
-    if value and re.search(r"v?\d+\.\d+", value):
+    return bool(value and re.search(r"v?\d+\.\d+", value))
+
+
+def _server_token(value: str | None) -> Finding:
+    if _leaks_version(value):
         return Finding("server-token", "MINOR", f"Server header leaks version: {value}",
                        "nginx: server_tokens off; strip upstream X-Powered-By")
     return Finding("server-token", "OK", value or "absent")
+
+
+# Framework headers that name the stack behind the server, graded only when present.
+_FRAMEWORK_VERSION_HEADERS = ("x-powered-by", "x-aspnet-version")
+
+
+def _framework_tokens(h: dict[str, str]) -> list[Finding]:
+    """One finding per framework header that is present: MINOR when it carries a version."""
+    out: list[Finding] = []
+    for header in _FRAMEWORK_VERSION_HEADERS:
+        value = h.get(header)
+        if value is None:
+            continue
+        if _leaks_version(value):
+            out.append(Finding(f"{header}-token", "MINOR", f"{header} header leaks version: {value}",
+                               f"strip or blank the {header} header at the proxy/app"))
+        else:
+            out.append(Finding(f"{header}-token", "OK", value))
+    return out
+
+
+def _cookie_attribute_names(raw: str) -> set[str]:
+    """The attribute NAMES of one Set-Cookie line, lowercased; the name=value pair is skipped.
+
+    A substring test on the whole line would read ``secure_session=...``, ``Path=/secure`` or
+    a value of ``httponly`` as the flag itself."""
+    parts = raw.split(";")[1:]
+    return {part.split("=", 1)[0].strip().lower() for part in parts if part.strip()}
 
 
 def _cookies(set_cookies: list[str], *, https: bool) -> list[Finding]:
     out: list[Finding] = []
     for raw in set_cookies:
         name = raw.split("=", 1)[0].strip()
-        low = raw.lower()
-        if https and "secure" not in low:
+        attrs = _cookie_attribute_names(raw)
+        if https and "secure" not in attrs:
             out.append(Finding(f"cookie:{name}", "SEVERE", "Set-Cookie without Secure on HTTPS", "add the Secure attribute"))
-        if "httponly" not in low:
+        if "httponly" not in attrs:
             out.append(Finding(f"cookie:{name}", "MEDIUM", "Set-Cookie without HttpOnly", "add HttpOnly (unless JS must read it)"))
-        if "samesite" not in low:
+        if "samesite" not in attrs:
             out.append(Finding(f"cookie:{name}", "MINOR", "Set-Cookie without SameSite", "add SameSite=Lax (or Strict)"))
     return out
 
@@ -206,7 +301,8 @@ def _mixed_content(html: str, *, https: bool) -> list[Finding]:
     for tag in _SUBRESOURCE_TAG.findall(html):
         if _LINK_TAG.match(tag) and not _link_loads_a_subresource(tag):
             continue
-        for attr_val in _SUBRESOURCE_ATTR.findall(tag):
+        for groups in _SUBRESOURCE_ATTR.findall(tag):
+            attr_val = "".join(groups)
             for piece in re.split(r"[,\s]+", attr_val.strip()):
                 if piece.lower().startswith("http://") and piece not in seen:
                     seen.append(piece)
@@ -240,29 +336,53 @@ def grade(headers: dict[str, str], set_cookies: list[str], *, https: bool,
         _server_token(h.get("server")),
         _redirect(http_status, http_location),
     ]
+    findings += _framework_tokens(h)
     findings += _cookies(set_cookies, https=https)
     findings += _mixed_content(html, https=https)
     return findings
 
 
-def fetch(url: str, *, proxy: str | None = None) -> list[Finding]:  # pragma: no cover - network boundary
+def plain_http_probe_url(url: str) -> str:
+    """The plain-HTTP URL whose redirect is graded.
+
+    An explicit port on an https:// URL belongs to TLS, so the probe goes to the default
+    port 80 instead of speaking plain HTTP to the TLS port. An http:// URL keeps its port:
+    that is the plain-HTTP endpoint the caller named.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:  # IPv6 literal
+        host = f"[{host}]"
+    keep_port = parts.scheme.lower() == "http" and parts.port is not None
+    netloc = f"{host}:{parts.port}" if keep_port else host
+    return urlunsplit(("http", netloc, parts.path, parts.query, ""))
+
+
+def fetch(url: str, *, proxy: str | None = None, transport: object | None = None) -> list[Finding]:
     """I/O boundary: GET the URL (following redirects) + a plain-HTTP HEAD, then grade().
 
     Pass ``proxy`` (e.g. ``http://host:port``) to egress outside the internal network so a
     PUBLIC site is measured at the edge, not the internal origin. See net-rotating-proxies.
+    ``transport`` replaces the network with an httpx transport (tests use a MockTransport).
     """
     import httpx2 as httpx
 
-    https = url.lower().startswith("https://")
     ua = {"User-Agent": "sec-appsec-web-baseline/1.0"}
-    with httpx.Client(follow_redirects=True, timeout=15.0, proxy=proxy, headers=ua) as c:
+    client_opts: dict[str, object] = {"follow_redirects": True, "timeout": 15.0, "headers": ua}
+    if transport is not None:
+        client_opts["transport"] = transport
+    else:
+        client_opts["proxy"] = proxy
+    with httpx.Client(**client_opts) as c:
         resp = c.get(url)
+        # Grade the page that was actually served: an http:// URL that redirects to https://
+        # must get the HTTPS checks (HSTS, Secure cookies, mixed content).
+        https = resp.url.scheme == "https"
         html = resp.text if "text/html" in resp.headers.get("content-type", "") else ""
         set_cookies = resp.headers.get_list("set-cookie")
         http_status = http_location = None
-        host = re.sub(r"^https?://", "", url)
         try:
-            r2 = httpx.head("http://" + host, follow_redirects=False, timeout=10.0, proxy=proxy)
+            r2 = c.head(plain_http_probe_url(url), follow_redirects=False, timeout=10.0)
             http_status, http_location = r2.status_code, r2.headers.get("location")
         except httpx.HTTPError:
             pass
@@ -277,6 +397,9 @@ def summarize(findings: list[Finding]) -> dict[str, int]:
     return counts
 
 
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _is_internal_ip(ip: str) -> bool:
     """True if ip is private / loopback / link-local (RFC1918 etc.) - an INTERNAL address, not a
     public edge. Used to detect a same-subnet/internal target."""
@@ -284,10 +407,12 @@ def _is_internal_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return addr.is_private or addr.is_loopback or addr.is_link_local
+    # 100.64.0.0/10 (CGNAT, Tailscale) is not "private" to ipaddress but is not a public edge either.
+    in_cgnat = addr.version == 4 and addr in _CGNAT
+    return addr.is_private or addr.is_loopback or addr.is_link_local or in_cgnat
 
 
-def internal_target_warning(url: str, proxy: str | None) -> str | None:  # pragma: no cover - DNS I/O
+def internal_target_warning(url: str, proxy: str | None) -> str | None:
     """Warn when a public-site audit is actually hitting an INTERNAL address with no proxy.
 
     For a site in your own subnet (split-horizon DNS resolving to an RFC1918 IP), a direct scan
@@ -309,7 +434,27 @@ def internal_target_warning(url: str, proxy: str | None) -> str | None:  # pragm
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def _make_console_safe() -> None:
+    """Escape characters the console cannot encode instead of crashing mid-report.
+
+    A cp1252 Windows console (or a redirected stdout) cannot print a URL or IRI holding, say, a
+    Greek letter; without this the summary line is lost to a UnicodeEncodeError."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            pass  # a detached or non-reconfigurable stream keeps its own error handling
+
+
+def main(argv: list[str] | None = None, *, fetcher: Callable[..., list[Finding]] | None = None) -> int:
+    """CLI entry: exit 0 when the gate (0 SEVERE / 0 MEDIUM) is met, 1 when it is not, 2 when
+    the URL could not be fetched at all. ``fetcher`` replaces :func:`fetch` (tests inject a
+    network-free one)."""
+    _make_console_safe()
+    fetcher = fetcher or fetch
     parser = argparse.ArgumentParser(description="Audit a URL's HTTP web-security baseline.")
     parser.add_argument("url")
     parser.add_argument("--json", action="store_true", help="emit findings as JSON")
@@ -318,7 +463,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     warning = internal_target_warning(args.url, args.proxy)
-    findings = fetch(args.url, proxy=args.proxy)
+    try:
+        findings = fetcher(args.url, proxy=args.proxy)
+    except Exception as exc:  # noqa: BLE001 - any fetch failure is "not measured", never a gate verdict
+        sys.stderr.write(f"could not fetch {args.url}: {type(exc).__name__}: {exc}\n")
+        return 2
     counts = summarize(findings)
     if args.json:
         out: dict[str, object] = {"url": args.url, "counts": counts, "findings": [asdict(f) for f in findings]}

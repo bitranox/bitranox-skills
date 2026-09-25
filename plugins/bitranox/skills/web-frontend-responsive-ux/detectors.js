@@ -51,11 +51,32 @@
   return {
     scroll_width: doc.scrollWidth,
     client_width: vw,
-    content_height: doc.scrollHeight,
+    content_height: contentExtent(),
     viewport_height: vh,
     overflow_offenders: offenders,
     targets: targets,
   };
+
+  // How far the page's CONTENT reaches, in document px. documentElement.scrollHeight is
+  // clamped to the viewport from below (a 100px page reports 900 in a 900px window), so it
+  // can never show an under-filled large screen. Take the bottom of the body's contents (text
+  // included, via a Range) and of every descendant element (absolutely positioned ones too).
+  function contentExtent() {
+    const body = document.body;
+    if (!body) return doc.scrollHeight;
+    let bottom = 0;
+    if (document.createRange) {
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      bottom = range.getBoundingClientRect().bottom + window.scrollY;
+    }
+    for (const el of body.querySelectorAll("*")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      bottom = Math.max(bottom, r.bottom + window.scrollY);
+    }
+    return Math.round(bottom);
+  }
 
   function isVisible(el) {
     const r = el.getBoundingClientRect();

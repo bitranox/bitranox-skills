@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 # Pinned axe-core from a CDN; injected at runtime so nothing is vendored (and no
@@ -85,24 +87,41 @@ def guess_content_type(path) -> str:
     return _CONTENT_TYPES.get(Path(path).suffix.lower(), "application/octet-stream")
 
 
+def _is_readable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.R_OK)
+
+
+def _split_route_spec(spec: str) -> tuple[str, Path]:
+    """Split one ``GLOB=LOCALPATH`` spec where the right-hand side is a readable file.
+
+    Either side may contain ``=`` (``**/app.css?v=*``, ``a=b/app.css``), so every ``=`` is
+    tried from the last one back and the first split naming an existing file wins. A spec
+    whose LOCALPATH does not exist is refused: a silent fallback would audit the live remote
+    asset while the report reads as if the local edit was tested.
+    """
+    malformed = ValueError(f"route spec must be 'GLOB=LOCALPATH', got: {spec!r}")
+    positions = [i for i, char in enumerate(spec) if char == "="]
+    if not positions:
+        raise malformed
+    for i in reversed(positions):
+        glob, local = spec[:i].strip(), spec[i + 1:].strip()
+        if glob and local and _is_readable_file(Path(local)):
+            return glob, Path(local)
+    glob, local = (part.strip() for part in spec.split("=", 1))
+    if not glob or not local:
+        raise malformed
+    raise ValueError(f"route LOCALPATH is not a readable file: {local!r} (in {spec!r})")
+
+
 def parse_route_specs(specs):
     """Parse ``--route 'GLOB=LOCALPATH'`` strings into ``(glob, Path)`` overlay rules.
 
     Lets you audit the LIVE remote URL (real images/data stream from the real host) while
     the browser fulfills matching requests - your edited CSS/JS - from local files, so you
-    iterate on the layout WITHOUT deploying anything to the server. The split is on the
-    first ``=`` so a path may contain ``=``. Raises ValueError on a malformed spec.
+    iterate on the layout WITHOUT deploying anything to the server. Raises ValueError on a
+    malformed spec or a LOCALPATH that is not a readable file.
     """
-    rules = []
-    for spec in specs or []:
-        if "=" not in spec:
-            raise ValueError(f"route spec must be 'GLOB=LOCALPATH', got: {spec!r}")
-        glob, local = spec.split("=", 1)
-        glob, local = glob.strip(), local.strip()
-        if not glob or not local:
-            raise ValueError(f"route spec must be 'GLOB=LOCALPATH', got: {spec!r}")
-        rules.append((glob, Path(local)))
-    return rules
+    return [_split_route_spec(spec) for spec in specs or []]
 
 
 def _make_route_handler(local_path):
@@ -115,7 +134,9 @@ def _make_route_handler(local_path):
     def handler(route):
         try:
             route.fulfill(path=str(local_path), content_type=guess_content_type(local_path))
-        except Exception:  # noqa: BLE001 - if the local file is unreadable, let the real one load
+        except Exception as exc:  # noqa: BLE001 - the page must still load; say which asset is live
+            print(f"--route: could not serve {local_path} ({exc}); the live asset loaded instead",
+                  file=sys.stderr)
             route.continue_()
 
     return handler
@@ -150,13 +171,13 @@ def audit_one_profile(browser, profile: dict, url: str, *, storage_state, axe_ur
             try:
                 page.add_script_tag(url=axe_url)
                 raw["axe_violations"] = page.evaluate("async () => (await axe.run()).violations")
-            except Exception as exc:  # noqa: BLE001 - axe is best-effort, never fail the run
+            except Exception as exc:  # noqa: BLE001 - keep sweeping; analysis grades it "not measured"
                 raw["axe_error"] = str(exc)
         if do_i18n:
             try:
                 raw["text_expansion_overflow"] = page.evaluate(PSEUDO_LOCALIZE_JS)
-            except Exception:  # noqa: BLE001
-                raw["text_expansion_overflow"] = False
+            except Exception as exc:  # noqa: BLE001 - reported as not measured, never as a pass
+                raw["i18n_error"] = str(exc)
     finally:
         context.close()
     report = build_device_report(profile, raw)
@@ -164,31 +185,44 @@ def audit_one_profile(browser, profile: dict, url: str, *, storage_state, axe_ur
     return report
 
 
-def run_audit(url, profiles, *, storage_state_path=None, axe_url=DEFAULT_AXE_URL, do_axe=True, do_i18n=False, out_dir=Path("audit-out"), route_rules=()):
-    """Drive the whole sweep and return the aggregated report dict."""
+@contextmanager
+def launch_chromium(*, headless=True):
+    """Start Playwright's Chromium and yield the browser; closed on exit.
+
+    This is the one place the scripts touch Playwright. Each entry point takes a ``launch``
+    callable that defaults to this, so tests substitute a scripted browser at this seam.
+    """
     from playwright.sync_api import sync_playwright
 
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=headless)
+        try:
+            yield browser
+        finally:
+            browser.close()
+
+
+def run_audit(url, profiles, *, storage_state_path=None, axe_url=DEFAULT_AXE_URL, do_axe=True, do_i18n=False,
+              out_dir=Path("audit-out"), route_rules=(), launch=None):
+    """Drive the whole sweep and return the aggregated report dict."""
     from analysis import aggregate_report
 
+    launch = launch or launch_chromium
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     storage_state = str(storage_state_path) if storage_state_path else None
 
     device_reports = []
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        try:
-            for profile in profiles:
-                device_reports.append(
-                    audit_one_profile(
-                        browser, profile, url,
-                        storage_state=storage_state, axe_url=axe_url,
-                        do_axe=do_axe, do_i18n=do_i18n, out_dir=out_dir,
-                        route_rules=route_rules,
-                    )
+    with launch() as browser:
+        for profile in profiles:
+            device_reports.append(
+                audit_one_profile(
+                    browser, profile, url,
+                    storage_state=storage_state, axe_url=axe_url,
+                    do_axe=do_axe, do_i18n=do_i18n, out_dir=out_dir,
+                    route_rules=route_rules,
                 )
-        finally:
-            browser.close()
+            )
     return aggregate_report(device_reports, url=url)
 
 
@@ -210,17 +244,57 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
-def main(argv=None):
-    from device_profiles import default_profiles, profile_by_name
+def make_console_safe():
+    """Escape characters the console cannot encode instead of crashing mid-report.
 
+    A cp1252 Windows console (or a redirected stdout) cannot print an output path or error
+    text holding, say, a Greek letter. Streams without ``reconfigure`` are left alone."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):
+            pass  # a detached or non-reconfigurable stream keeps its own error handling
+
+
+def launch_failure(exc):
+    """``(exit_code, message)`` for a browser that cannot start at all, else None.
+
+    The two causes need different fixes: a missing browser download, and missing host
+    libraries (Playwright's own message then names ``install-deps``)."""
+    msg = str(exc)
+    if "Executable doesn't exist" in msg:
+        return 3, "Chromium not installed. Run: uv run --with playwright playwright install chromium"
+    if "install-deps" in msg or "missing dependencies" in msg:
+        return 3, ("Chromium's host libraries are missing. Install them as root: "
+                   "uv run --with playwright playwright install-deps chromium")
+    return None
+
+
+def select_profiles(names, *, include_landscape=True):
+    """The profiles to sweep, or None (after printing why) when any name is unknown."""
+    from device_profiles import default_profiles, resolve_profiles, unknown_profiles_message
+
+    if not names:
+        return default_profiles(include_landscape=include_landscape)
+    profiles, unknown = resolve_profiles(names)
+    if unknown:
+        print(unknown_profiles_message(unknown), file=sys.stderr)
+        return None
+    return profiles
+
+
+def main(argv=None, *, launch=None):
+    """CLI entry: 0 passed, 4 findings, 2 bad arguments, 3 browser cannot start, 1 other failure.
+
+    ``launch`` replaces :func:`launch_chromium` (tests inject a scripted browser)."""
+    make_console_safe()
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.profiles:
-        profiles = [p for p in (profile_by_name(n) for n in args.profiles) if p]
-        if not profiles:
-            print("No matching profiles; run without --profiles to see the full matrix.", file=sys.stderr)
-            return 2
-    else:
-        profiles = default_profiles(include_landscape=not args.no_landscape)
+    profiles = select_profiles(args.profiles, include_landscape=not args.no_landscape)
+    if profiles is None:
+        return 2
 
     try:
         route_rules = parse_route_specs(args.route)
@@ -233,13 +307,13 @@ def main(argv=None):
             args.url, profiles,
             storage_state_path=args.storage_state, axe_url=args.axe_url,
             do_axe=not args.no_axe, do_i18n=args.i18n, out_dir=Path(args.out),
-            route_rules=route_rules,
+            route_rules=route_rules, launch=launch,
         )
     except Exception as exc:  # noqa: BLE001
-        msg = str(exc)
-        if "Executable doesn't exist" in msg or "playwright install" in msg:
-            print("Chromium not installed. Run: uv run --with playwright playwright install chromium", file=sys.stderr)
-            return 3
+        failure = launch_failure(exc)
+        if failure:
+            print(failure[1], file=sys.stderr)
+            return failure[0]
         print(f"Audit failed: {exc}", file=sys.stderr)
         return 1
 

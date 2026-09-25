@@ -59,6 +59,12 @@ uv run audit_responsive.py "$URL" --profiles "iPhone SE (landscape)" "iPad mini 
 
 `report.json` is `{ url, totals:{SEVERE,MEDIUM,MINOR}, passed, devices:[...] }`; exit code is
 0 only when `passed` (no SEVERE/MEDIUM anywhere) - the "100%" bar for the owned dimensions.
+Other exits: 4 findings, 2 bad arguments (an unknown `--profiles` name, a `--route` whose
+LOCALPATH is not a readable file), 3 Chromium cannot start (not downloaded, or host libraries
+missing - the message names the fix), 1 any other failure. A requested pass that could not run
+is a finding, not a silent pass: axe failing to load (a wrong `--axe-url`, offline, a page CSP
+blocking it) is SEVERE `a11y-not-measured`, a throwing `--i18n` pass is MEDIUM
+`i18n-layout-not-measured`, and the device carries `axe_error` / `i18n_error`.
 
 ## User-gated (login) pages
 
@@ -121,8 +127,10 @@ uv run open_viewports.py https://app.example.com/view/ABC123 \
   --route "**/static/js/app.js=src/.../app.js"
 ```
 
-It opens a headed window per profile and stays up until you close them all. Prefer this for
-manual interaction; keep the headless `audit_responsive.py` run as the pass/fail gate.
+It opens a headed window per profile and stays up until you close them all (or quit the browser,
+or press Ctrl-C). Windows that failed to load are counted separately; if none loaded it exits 1
+at once. Prefer this for manual interaction; keep the headless `audit_responsive.py` run as the
+pass/fail gate.
 
 **C. Capture representative fixtures for fast offline iteration.** Drawing sample content from
 the existing page is good - just cover the layout-stressing cases, not one happy SKU. Save a

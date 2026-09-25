@@ -7,7 +7,7 @@ defects that portrait-only testing misses. Widths/heights are CSS px (the layout
 ``dpr`` is the device pixel ratio used to emulate retina rendering.
 
 Kinds drive severity (see analysis.py): ``phone`` and ``tablet`` get SEVERE for horizontal
-overflow and are checked for vertical fit; ``desktop`` is checked for over-sparse layouts.
+overflow; ``phone`` is checked for vertical fit; ``desktop`` is checked for over-sparse layouts.
 """
 
 from __future__ import annotations
@@ -38,7 +38,12 @@ def _profile(name: str, width: int, height: int, dpr: float, kind: str, touch: b
 
 
 def landscape_of(profile: dict) -> dict:
-    """Return the landscape twin of a portrait profile (width/height swapped)."""
+    """Return the landscape twin of a portrait profile (width/height swapped).
+
+    A profile that is already landscape is returned unchanged: swapping it again would label
+    portrait dimensions "landscape"."""
+    if profile["orientation"] == "landscape":
+        return profile
     return _profile(
         profile["base_name"],
         profile["height"],
@@ -71,3 +76,26 @@ def profile_by_name(name: str) -> dict | None:
         if p["name"] == name:
             return p
     return None
+
+
+def resolve_profiles(names: list[str]) -> tuple[list[dict], list[str]]:
+    """Resolve display names to profiles, returning ``(profiles, unknown_names)``.
+
+    Callers must refuse when ``unknown_names`` is non-empty: silently dropping a mistyped
+    name (or the base name "iPhone SE" without its orientation) sweeps fewer devices than
+    asked while still reporting a verdict."""
+    profiles: list[dict] = []
+    unknown: list[str] = []
+    for name in names:
+        profile = profile_by_name(name)
+        if profile is None:
+            unknown.append(name)
+        else:
+            profiles.append(profile)
+    return profiles, unknown
+
+
+def unknown_profiles_message(unknown: list[str]) -> str:
+    """The refusal text for unknown profile names, listing every valid display name."""
+    valid = ", ".join(repr(p["name"]) for p in default_profiles(include_landscape=True))
+    return f"Unknown profile name(s): {', '.join(repr(n) for n in unknown)}. Valid names: {valid}"

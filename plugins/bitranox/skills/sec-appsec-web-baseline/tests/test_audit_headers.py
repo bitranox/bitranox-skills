@@ -259,3 +259,150 @@ def test_other_subresource_tags_are_unaffected():
     assert _mixed('<img src="http://example.com/a.png">')
     assert _mixed('<script src="http://example.com/a.js"></script>')
     assert _mixed('<a href="http://example.com/page">x</a>') == []      # navigation, not a load
+
+
+# ---- mixed content: unquoted attribute values (minified HTML) ----
+def test_mixed_content_flags_unquoted_http_src():
+    assert _mixed('<script src=http://cdn.example.com/app.js></script>')
+    assert _mixed('<img src=http://cdn.example.com/a.png>')
+
+
+def test_mixed_content_unquoted_https_src_is_clean():
+    assert _mixed('<script src=https://cdn.example.com/app.js></script>') == []
+
+
+# ---- cookies: attributes are compared by NAME, never as substrings of the line ----
+def test_cookie_name_containing_secure_is_not_the_secure_attribute():
+    findings = a._cookies(["secure_session=abc; HttpOnly; SameSite=Lax"], https=True)
+    assert [f.severity for f in findings] == ["SEVERE"]
+
+
+def test_cookie_path_or_domain_containing_secure_is_not_the_secure_attribute():
+    for raw in ("sid=abc; Path=/secure; HttpOnly; SameSite=Lax",
+                "sid=abc; Domain=secure.example.com; HttpOnly; SameSite=Lax"):
+        assert [f.severity for f in a._cookies([raw], https=True)] == ["SEVERE"], raw
+
+
+def test_cookie_value_containing_httponly_is_not_the_httponly_attribute():
+    findings = a._cookies(["pref=httponly; Secure; SameSite=Lax"], https=True)
+    assert [f.severity for f in findings] == ["MEDIUM"]
+
+
+def test_cookie_attribute_names_are_case_and_space_insensitive():
+    assert a._cookies(["sid=abc;secure ;  HTTPONLY; samesite=Strict"], https=True) == []
+
+
+# ---- clickjacking: frame-ancestors must actually restrict framing ----
+def test_clickjacking_frame_ancestors_wildcard_is_medium():
+    assert sev(a._clickjacking(None, "default-src 'self'; frame-ancestors *")) == "MEDIUM"
+
+
+def test_clickjacking_frame_ancestors_scheme_only_source_is_medium():
+    assert sev(a._clickjacking(None, "frame-ancestors https:")) == "MEDIUM"
+    assert sev(a._clickjacking(None, "frame-ancestors 'self' https:")) == "MEDIUM"
+
+
+def test_clickjacking_frame_ancestors_wildcard_is_not_rescued_by_xfo():
+    # browsers ignore X-Frame-Options when an enforced frame-ancestors is present
+    assert sev(a._clickjacking("DENY", "frame-ancestors *")) == "MEDIUM"
+
+
+def test_clickjacking_frame_ancestors_self_and_explicit_origins_ok():
+    assert sev(a._clickjacking(None, "frame-ancestors 'self'")) == "OK"
+    assert sev(a._clickjacking(None, "frame-ancestors 'self' https://partner.example.com")) == "OK"
+    assert sev(a._clickjacking(None, "FRAME-ANCESTORS 'NONE'")) == "OK"
+
+
+def test_clickjacking_directive_named_like_frame_ancestors_does_not_count():
+    # only a directive whose NAME is frame-ancestors counts, not a substring elsewhere
+    assert sev(a._clickjacking(None, "default-src 'self'; report-uri /frame-ancestors")) == "MEDIUM"
+
+
+# ---- CSP: directives are matched by name, not by prefix ----
+def test_csp_script_src_elem_before_script_src_does_not_hide_unsafe_inline():
+    policy = "script-src-elem 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'"
+    assert sev(a._csp(policy)) == "MEDIUM"
+
+
+def test_csp_default_src_fallback_is_graded():
+    assert sev(a._csp("default-src 'self' 'unsafe-inline'")) == "MEDIUM"
+
+
+def test_csp_without_object_or_default_src_is_minor():
+    assert sev(a._csp("script-src 'self'")) == "MINOR"
+
+
+def test_csp_nonce_or_hash_makes_fallback_unsafe_inline_ignored():
+    strict = "script-src 'nonce-r4nd0m' 'strict-dynamic' 'unsafe-inline' https:; object-src 'none'; base-uri 'none'"
+    assert sev(a._csp(strict)) == "OK"
+    hashed = "script-src 'sha256-abc=' 'unsafe-inline'; object-src 'none'"
+    assert sev(a._csp(hashed)) == "OK"
+
+
+def test_csp_unsafe_inline_without_nonce_or_hash_still_medium():
+    assert sev(a._csp("script-src 'self' 'unsafe-inline'; object-src 'none'")) == "MEDIUM"
+
+
+# ---- HSTS: the quoted max-age form is legal (RFC 6797) ----
+def test_hsts_quoted_max_age_is_read():
+    assert sev(a._hsts('max-age="31536000"; includeSubDomains', https=True)) == "OK"
+
+
+# ---- repeated headers arrive joined with ", " ----
+def test_nosniff_repeated_header_is_ok():
+    assert sev(a._nosniff("nosniff, nosniff")) == "OK"
+    assert sev(a._nosniff("nosniff, garbage")) == "OK"  # Fetch: the FIRST value decides
+
+
+def test_nosniff_first_value_not_nosniff_is_medium():
+    assert sev(a._nosniff("garbage, nosniff")) == "MEDIUM"
+
+
+def test_xfo_repeated_identical_values_ok_conflicting_medium():
+    assert sev(a._clickjacking("DENY, DENY", None)) == "OK"
+    assert sev(a._clickjacking("DENY, SAMEORIGIN", None)) == "MEDIUM"
+
+
+def test_referrer_policy_repeated_header_uses_last_recognised_token():
+    assert sev(a._referrer_policy("strict-origin-when-cross-origin, strict-origin-when-cross-origin")) == "OK"
+    assert sev(a._referrer_policy("no-referrer, unsafe-url")) == "MINOR"
+    assert sev(a._referrer_policy("unsafe-url, no-referrer")) == "OK"
+
+
+def test_grade_repeated_nosniff_and_xfo_headers_do_not_read_as_missing():
+    headers = {"X-Content-Type-Options": "nosniff, nosniff", "X-Frame-Options": "DENY, DENY"}
+    by = {f.check: f.severity for f in a.grade(headers, [], https=True, http_status=301,
+                                                   http_location="https://x/", html="")}
+    assert by["x-content-type-options"] == "OK"
+    assert by["clickjacking"] == "OK"
+
+
+# ---- information leakage: framework version headers ----
+def test_grade_flags_x_powered_by_version():
+    findings = a.grade({"X-Powered-By": "PHP/8.1.2", "Server": "nginx"}, [], https=True,
+                       http_status=301, http_location="https://x/")
+    by = {f.check: f for f in findings}
+    assert by["server-token"].severity == "OK"
+    assert by["x-powered-by-token"].severity == "MINOR"
+    assert "8.1.2" in by["x-powered-by-token"].detail
+
+
+def test_grade_flags_x_aspnet_version():
+    findings = a.grade({"X-AspNet-Version": "4.0.30319"}, [], https=True,
+                       http_status=301, http_location="https://x/")
+    assert {f.check: f.severity for f in findings}["x-aspnet-version-token"] == "MINOR"
+
+
+def test_grade_x_powered_by_without_version_is_ok_and_absent_adds_nothing():
+    by = {f.check: f.severity for f in a.grade({"X-Powered-By": "Express"}, [], https=True,
+                                               http_status=301, http_location="https://x/")}
+    assert by["x-powered-by-token"] == "OK"
+    absent = {f.check for f in a.grade({}, [], https=True, http_status=301, http_location="https://x/")}
+    assert "x-powered-by-token" not in absent
+
+
+# ---- internal-target detection: CGNAT / Tailscale ----
+def test_is_internal_ip_cgnat():
+    assert a._is_internal_ip("100.101.102.103")
+    assert a._is_internal_ip("100.64.0.1")
+    assert not a._is_internal_ip("100.128.0.1")  # just outside 100.64.0.0/10

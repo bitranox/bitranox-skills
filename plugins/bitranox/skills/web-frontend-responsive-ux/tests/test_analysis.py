@@ -143,3 +143,47 @@ def test_aggregate_report_fails_on_severe():
     agg = analysis.aggregate_report([bad], url="http://example.com")
     assert agg["passed"] is False
     assert agg["totals"]["SEVERE"] == 1
+
+
+def _clean_phone_raw(**extra):
+    raw = {"scroll_width": 375, "client_width": 375, "content_height": 600, "viewport_height": 667}
+    raw.update(extra)
+    return raw
+
+
+def test_tiny_and_cramped_target_stays_severe():
+    findings = analysis.touch_target_findings([{"selector": ".t", "width": 18, "height": 18, "min_gap": 2}])
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "SEVERE"
+    assert "gap" in findings[0]["detail"] and "18x18" in findings[0]["detail"]
+
+
+def test_device_report_carries_i18n_finding_and_fails():
+    report = analysis.build_device_report(_phone_profile(), _clean_phone_raw(text_expansion_overflow=True))
+    assert [(f["check"], f["severity"]) for f in report["findings"]] == [("i18n-layout", "MEDIUM")]
+    assert analysis.aggregate_report([report])["passed"] is False
+
+
+def test_axe_error_is_a_not_measured_finding_and_fails_the_report():
+    report = analysis.build_device_report(_phone_profile(), _clean_phone_raw(axe_error="axe is not defined"))
+    checks = {f["check"]: f for f in report["findings"]}
+    assert checks["a11y-not-measured"]["severity"] == "SEVERE"
+    assert "axe is not defined" in checks["a11y-not-measured"]["detail"]
+    assert report["axe_error"] == "axe is not defined"
+    agg = analysis.aggregate_report([report])
+    assert agg["passed"] is False
+
+
+def test_clean_axe_run_is_distinguishable_from_a_failed_one():
+    clean = analysis.build_device_report(_phone_profile(), _clean_phone_raw(axe_violations=[]))
+    failed = analysis.build_device_report(_phone_profile(), _clean_phone_raw(axe_error="404"))
+    assert clean["findings"] == [] and "axe_error" not in clean
+    assert clean != failed
+
+
+def test_i18n_error_is_a_not_measured_finding_and_fails_the_report():
+    report = analysis.build_device_report(_phone_profile(), _clean_phone_raw(i18n_error="NodeFilter is not defined"))
+    checks = {f["check"]: f for f in report["findings"]}
+    assert checks["i18n-layout-not-measured"]["severity"] == "MEDIUM"
+    assert report["i18n_error"] == "NodeFilter is not defined"
+    assert analysis.aggregate_report([report])["passed"] is False
