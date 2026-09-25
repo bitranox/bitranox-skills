@@ -50,8 +50,13 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
 
 ## Procedure
 
+Launch every script below through the plugin's shim with strict mode on:
+`BITRANOX_RUN_PYTHON_STRICT=1 bash hooks/run-python.sh <script> [args]`. The shim finds a working
+Python on every platform, but it fails OPEN for hooks - without that variable a mistyped script
+path prints one stderr line and exits 0, which reads as a clean run.
+
 1. **Wall recall and record the old value.** Use the shipped front door - `settings.py` (home:
-   `skills/meta-memory-settings/`, launch via `hooks/run-python.sh`), which validates the value and
+   `skills/meta-memory-settings/`), which validates the value and
    refuses an unknown one. `self_improve_signals.save_config` is a library function with no CLI, so
    it is not something you can run.
 
@@ -60,10 +65,21 @@ one second of `ast.parse` over the catalogue, against several minutes of reviewe
    settings.py set cross_tree_search false
    ```
 2. **Run the sweep.** `scripts/audit_skills.py --plugin <plugin dir> --room <dir outside the tree>`
-   (home: `skills/meta-skill-audit/`, launch via `hooks/run-python.sh`). It copies the plugin into
+   (home: `skills/meta-skill-audit/`). It copies the plugin into
    the room, runs one reviewer per skill at `--jobs` at a time, and writes
    `<room>/reports/<skill>.audit.txt`. Reviewers are slow because they verify - budget minutes per
-   skill, not seconds.
+   skill, not seconds. `--skills-dir <dir>` audits a loose skills dir instead of a plugin.
+   - **Reviewers run with every hook disabled** (`claude -p --settings '{"disableAllHooks":true}'`).
+     Otherwise each inherits your hooks and every installed plugin's: Stop hooks replace the final
+     message, which is the report; SessionStart hooks write `CLAUDE.md` into the shared room; the
+     recall hook is the contamination step 1 walls off. Keep step 1 anyway - it also covers a
+     reviewer you start by hand to re-check a finding.
+   - **A target with no report is a finding, never a clean zero.** Its report file starts
+     `REPORT MISSING:` and says why: the CLI failed, timed out or was not found, or the reply
+     carried no report block.
+   - **Exit codes:** 0 every target has a report; 1 at least one has none; 2 refused or crashed
+     before a verdict - a source inside the room, an unknown `--kind`, or a selection that matches
+     nothing.
 3. **Restore the setting and VERIFY the restored value**, before you start editing anything. Do not
    leave it until the end of the triage.
 4. **Verify every finding against the real files before acting on one.** A reviewer's quote is a
@@ -94,14 +110,17 @@ scripts/audit_skills.py --plugin <plugin dir> --room <dir outside the tree> --sc
     --kind hook --skip-existing
 ```
 
-Run `--help` for the full flag list; these are the three choices it cannot make for you.
+Run `--help` for the full flag list; these are the three choices it cannot make for you. The
+script sweep needs `--plugin`; `--skills-dir` is refused there.
 
 - **`--kind` is how a 134-target run becomes survivable.** Slice by `hook`, `hook-lib`, `shim`,
-  `skill-script` or `js` and triage each slice before spending the next. `--list` prints the corpus
-  and exits without spending a reviewer, which is what to run first.
-- **`--skip-existing` is the resume switch**, and it pairs with `--reuse-room`: a target whose
-  report already exists and is non-empty is skipped. Without both, an interrupted run restarts from
-  zero against a freshly-copied room.
+  `skill-script` or `js` and triage each slice before spending the next. `--list` prints what a
+  run with the same arguments would review and exits without spending a reviewer, which is what to
+  run first. It previews the source a fresh run copies; the old room copy only with `--reuse-room`.
+- **`--skip-existing` is the resume switch**: a target that already has a complete report (a
+  `FINDING:` line or `NO FINDINGS`) is skipped, and one marked `REPORT MISSING:` is reviewed again.
+  It works alone, because the reports survive a re-copied room; add `--reuse-room` when the
+  remaining reviewers must read the same copy the earlier ones did.
 - **`--include-vendored` is off, and should usually stay off.** Upstream sample code (`demos/`,
   `examples/`) ships as a copy of someone else's repository, so fixing a defect there diverges our
   copy from its source and the next sync silently reverts it. Those files still get `ast.parse` from
@@ -109,10 +128,11 @@ Run `--help` for the full flag list; these are the three choices it cannot make 
 
 ### The pre-pass runs first, and its two kinds of hit are not the same
 
-`script_prepass.py` (home: `skills/meta-skill-audit/scripts/`, launch via `hooks/run-python.sh`)
+`script_prepass.py` (home: `skills/meta-skill-audit/scripts/`)
 scans the whole corpus deterministically before any reviewer starts, and `--scripts` runs it for you
 - it is not a separate step. Run it alone with `--room <plugin dir>` to see the corpus summary, or
-`--json` for the per-file map.
+`--json` for the per-file map. A room that is missing or has neither `hooks/` nor `skills/` exits 2
+rather than printing a clean zero.
 
 What it finds splits in two, and a reviewer is told the OPPOSITE thing about each:
 

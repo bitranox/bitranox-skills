@@ -27,11 +27,66 @@ import argparse
 import concurrent.futures as cf
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
+from typing import NamedTuple
+
+
+class RoomError(ValueError):
+    """The room cannot be staged as asked, most often because doing so would delete its input."""
+
+
+class NothingSelected(ValueError):
+    """The selection matched no target, so the run would spend nothing and report a clean zero."""
+
+
+def _shown(selection):
+    """A selection for a message: the non-empty parts, or `(everything)`."""
+    parts = [str(s) for s in selection if str(s).strip()]
+    return ", ".join(parts) if parts else "(everything)"
+
+
+class RunnerOutcome(NamedTuple):
+    """What one reviewer run returned: its text, and why the run failed ("" when it did not).
+
+    The text alone cannot carry the failure. A reviewer that never started and one that ended on
+    prose both leave text with no report block in it, and only the second is about the reviewer."""
+
+    text: str
+    failure: str = ""
+
+
+def _as_outcome(value):
+    """Accept a bare string from an injected runner as a run that did not fail."""
+    if isinstance(value, RunnerOutcome):
+        return value
+    return RunnerOutcome(value or "", "")
+
+
+_LINE_BREAK_RX = re.compile(r"\r\n|\r|\n")
+
+
+def physical_lines(text):
+    """Lines as Python and an editor number them: split on CR, LF and CRLF only.
+
+    `str.splitlines()` also splits on form feed, vertical tab, U+2028 and friends, so every line
+    after one of those is numbered one too high and a verbatim exhibit reads as a mismatch."""
+    if not text:
+        return []
+    parts = _LINE_BREAK_RX.split(text)
+    if parts[-1] == "":
+        parts.pop()
+    return parts
+
+
+def _read_text(path):
+    """A file's text, BOM stripped, undecodable bytes replaced. Raises OSError."""
+    return Path(path).read_text(encoding="utf-8-sig", errors="replace")
 
 PROMPT = """You are auditing ONE Claude Code skill for defects: `skills/{name}/`.
 
@@ -280,7 +335,12 @@ def build_script_prompt(rel, kind, anchors=(), mentions="", registration=None, t
 
 def skill_names(plugin_dir, only=()):
     """Every skill in `plugin_dir/skills` that ships a SKILL.md, sorted. `only` filters by name."""
-    skills = Path(plugin_dir) / "skills"
+    return skills_in(Path(plugin_dir) / "skills", only)
+
+
+def skills_in(skills, only=()):
+    """Every skill directly under the `skills` dir that ships a SKILL.md, sorted."""
+    skills = Path(skills)
     wanted = {s for s in only if s}
     if not skills.is_dir():
         return []
@@ -349,25 +409,40 @@ def script_targets(room, only=(), include_vendored=False, kinds=(), log=None):
     wanted = {s.strip() for s in only if str(s).strip()}
     kinds = {k.strip() for k in kinds if str(k).strip()}
     found = []
-    for base, patterns in (("hooks", ("*.py", "*.sh")), ("skills", ("*.py", "*.js"))):
+    for base, suffixes in (("hooks", (".py", ".sh")), ("skills", (".py", ".js"))):
         root = room / base
         if not root.is_dir():
             continue
-        for pattern in patterns:
-            for path in root.rglob(pattern):
-                rel = path.relative_to(room).as_posix()
-                parts = rel.split("/")
-                if any(p in ex_dirs for p in parts[:-1]) or parts[-1] in ex_files:
-                    continue
-                kind = classify_script(rel)
-                if kind == KIND_VENDORED and not include_vendored:
-                    continue
-                if kinds and kind not in kinds:
-                    continue
-                if wanted and not any(w in rel for w in wanted):
-                    continue
-                found.append((rel, kind))
+        for path in _walk_files(root, suffixes):
+            rel = path.relative_to(room).as_posix()
+            parts = rel.split("/")
+            if any(p in ex_dirs for p in parts[:-1]) or parts[-1] in ex_files:
+                continue
+            kind = classify_script(rel)
+            if kind == KIND_VENDORED and not include_vendored:
+                continue
+            if kinds and kind not in kinds:
+                continue
+            if wanted and not any(w in rel for w in wanted):
+                continue
+            found.append((rel, kind))
     return sorted(set(found))
+
+
+def _raise(exc):
+    raise exc
+
+
+def _walk_files(root, suffixes):
+    """Every file under `root` whose name ends in one of `suffixes`.
+
+    os.walk with an onerror that raises, never rglob: rglob skips a directory it cannot list, so
+    the corpus silently shrinks and the run reports fewer targets as if that were all there is."""
+    for base, dirs, files in os.walk(root, onerror=_raise):
+        dirs.sort()
+        for name in sorted(files):
+            if name.endswith(suffixes):
+                yield Path(base) / name
 
 
 def doc_anchors(room, rel, kind, limit=6):
@@ -387,13 +462,17 @@ def doc_anchors(room, rel, kind, limit=6):
 
 
 def hook_registration(room, rel):
-    """The hooks.json entries that invoke `rel`, as [(event, matcher, command)], or None."""
+    """The hooks.json entries that invoke `rel`, as [(event, matcher, command)], or None.
+
+    The file name must stand as a whole path component: a substring test credits `tell-sweep.py`
+    with every entry for `commit-tell-sweep.py` and hands its reviewer the wrong event contract."""
     path = Path(room) / "hooks" / "hooks.json"
     name = str(rel).replace("\\", "/").split("/")[-1]
+    whole = re.compile(r"(?:^|[/\\\"'\s])" + re.escape(name) + r"(?=[\"'\s]|$)")
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return None
     out = []
@@ -405,7 +484,7 @@ def hook_registration(room, rel):
                 continue
             for entry in group.get("hooks") or []:
                 command = str(entry.get("command", ""))
-                if name in command:
+                if whole.search(command):
                     out.append((event, str(group.get("matcher", "*")), command))
     return out or None
 
@@ -420,10 +499,10 @@ def mention_block(room, rel, anchors, limit=40):
     lines = []
     for anchor in anchors:
         try:
-            text = (room / anchor).read_text(encoding="utf-8", errors="replace")
+            text = _read_text(room / anchor)
         except OSError:
             continue
-        for n, line in enumerate(text.splitlines(), 1):
+        for n, line in enumerate(physical_lines(text), 1):
             if name in line:
                 lines.append("  %s:%d: %s" % (anchor, n, line.strip()[:200]))
                 if len(lines) >= limit:
@@ -454,12 +533,15 @@ def sibling_tests(room, rel, limit=3):
 
 
 _FINDING_RX = re.compile(r"^FINDING:\s*([A-Z-]+)\s*\|\s*([^|]+?)\s*\|", re.M)
+# A finding is a LINE that starts with the label. A substring count also counted the label quoted
+# inside a claim, and the missing-report marker's own sentence, which said "no FINDING: line".
+_FINDING_LINE_RX = re.compile(r"^[ \t]*FINDING:", re.M)
 _EXHIBIT_LINE_RX = re.compile(r"^\s+(\d+):\s?(.*)$")
 
 
 def count_findings(text):
     """How many findings a report claims. `NO FINDINGS` and an empty report both count 0."""
-    return (text or "").count("FINDING:")
+    return len(_FINDING_LINE_RX.findall(text or ""))
 
 
 # Written as the first line of a stored report whose reviewer never produced one, so the file is
@@ -467,40 +549,58 @@ def count_findings(text):
 REPORT_MISSING_MARKER = "REPORT MISSING:"
 
 
+def report_missing(text):
+    """Is this stored report the missing-report marker rather than a reviewer's report?"""
+    return (text or "").startswith(REPORT_MISSING_MARKER)
+
+
 def report_is_complete(text):
     """Does this stored text carry a reviewer REPORT, rather than whatever else was said last?
 
-    A report is `NO FINDINGS` or at least one `FINDING:` line. Nothing else counts, and the
-    marker below explicitly does not: a clobbered report is non-empty, which is the only thing
+    A report is `NO FINDINGS` or at least one line starting `FINDING:`. Nothing else counts, and
+    the marker below explicitly does not: a clobbered report is non-empty, which is the only thing
     `--skip-existing` used to ask, so a resume skipped exactly the targets that were never
     reviewed.
     """
     body = text or ""
-    if body.startswith(REPORT_MISSING_MARKER):
+    if report_missing(body):
         return False
-    return "FINDING:" in body or "NO FINDINGS" in body
+    return bool(_FINDING_LINE_RX.search(body)) or "NO FINDINGS" in body
+
+
+def _missing_reason(outcome):
+    """Why a run left no report, as (marker sentence, one-line finding claim), or None if it did."""
+    if outcome.failure:
+        return ("the reviewer run failed (%s), so nothing it printed can stand as a report"
+                % outcome.failure,
+                "the reviewer run failed (%s); re-run this target" % outcome.failure)
+    if not report_is_complete(outcome.text):
+        return ("the reviewer's final message carried no report block (neither a finding line "
+                "nor NO FINDINGS); it ended on prose or on a hook's reply instead",
+                "the reviewer produced no report; re-run this target")
+    return None
 
 
 def store_report(path, name, out):
     """Write a reviewer's output as the report for `name`, and say so when it is not one.
 
-    The decision-review Stop hook fires on each reviewer subagent, so its final stdout can be a
-    decision review instead of the report. Stored wholesale that text counts 0 findings and reads
-    exactly like a clean skill. Measured over one 47-target sweep: 6 clobbered, one of them a
-    target whose transcript carried 9 findings.
+    `out` is a RunnerOutcome or, from an injected runner, a bare string. Two different causes leave
+    no report, and the marker names which one it was so triage starts in the right place: the run
+    itself failed (the CLI exited non-zero, timed out, or was not found), or it succeeded and ended
+    on something other than the report. The second is how a Stop hook's decision review once
+    replaced 6 of 47 reports, one of them a target whose transcript carried 9 findings; reviewers
+    now run with hooks disabled, but a reviewer can still end on prose.
 
-    A missing report is itself a defect, so it is recorded as a finding: the run summary then
+    A missing report is itself a defect, so it is recorded as ONE finding: the run summary then
     cannot call the target clean, and the raw reply is kept underneath because it is the only copy
     outside the reviewer's transcript.
     """
-    body = out or ""
-    if not report_is_complete(body):
-        body = (
-            "%s the reviewer's final message carried no report block (no FINDING: line, no "
-            "NO FINDINGS). A Stop-hook decision review replaces it. Raw reply kept below.\n"
-            "FINDING: REPORT-MISSING | %s | the reviewer produced no report; re-run this target\n\n"
-            % (REPORT_MISSING_MARKER, name)
-        ) + body
+    outcome = _as_outcome(out)
+    body = outcome.text
+    reason = _missing_reason(outcome)
+    if reason:
+        body = ("%s %s. Raw output kept below.\nFINDING: REPORT-MISSING | %s | %s\n\n"
+                % (REPORT_MISSING_MARKER, reason[0], name, reason[1])) + body
     Path(path).write_text(body, encoding="utf-8")
     return body
 
@@ -522,7 +622,7 @@ def evidence_problems(text, room):
     unverifiable findings is itself the signal for whether the prompt is working."""
     room = Path(room)
     problems, current, cache = [], None, {}
-    for raw in (text or "").splitlines():
+    for raw in physical_lines(text):
         head = _FINDING_RX.match(raw)
         if head:
             current = head.group(2).rsplit(":", 1)[0] if ":" in head.group(2) else head.group(2)
@@ -535,7 +635,7 @@ def evidence_problems(text, room):
         if current not in cache:
             path = room / current
             try:
-                cache[current] = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                cache[current] = physical_lines(_read_text(path))
             except OSError:
                 cache[current] = None
         lines = cache[current]
@@ -548,6 +648,24 @@ def evidence_problems(text, room):
     return problems
 
 
+def _refuse_input_inside(room, sources):
+    """Raise RoomError when a source is the room copy or lies inside it.
+
+    A fresh run deletes `<room_root>/plugin` before copying into it, so a source there - most often
+    an earlier room copy handed back as `--plugin` - was destroyed and the copy then failed on a
+    path that no longer existed. Compared as resolved paths, never as strings, so a sibling named
+    `plugin-src` is not mistaken for a child."""
+    target = Path(room).resolve()
+    for src in sources:
+        if not src:
+            continue
+        resolved = Path(src).resolve()
+        if resolved == target or target in resolved.parents:
+            raise RoomError(
+                "%s lies inside the room copy %s, which a fresh run deletes before copying - pass a "
+                "source outside the room, or --reuse-room to review the existing copy" % (src, target))
+
+
 def prepare_room(plugin_src, room_root, reuse=False):
     """Copy the plugin into `<room_root>/plugin` and make `<room_root>/reports`. Returns the copy.
 
@@ -555,6 +673,8 @@ def prepare_room(plugin_src, room_root, reuse=False):
     the tree's CLAUDE.md cascade, which is a second contamination route on top of recall."""
     room_root = Path(room_root)
     room = room_root / "plugin"
+    if room.exists() and not reuse:
+        _refuse_input_inside(room, (plugin_src,))
     (room_root / "reports").mkdir(parents=True, exist_ok=True)
     if room.exists() and not reuse:
         shutil.rmtree(room)
@@ -592,18 +712,46 @@ def manifest_drift(before, after):
     return out
 
 
-def _subprocess_runner(prompt, cwd, model, timeout):
-    """Default reviewer: a headless `claude -p` whose cwd is the clean room.
+# Loaded on top of the user's settings for every reviewer. Without it each reviewer inherits every
+# hook the user has - their own and every installed plugin's: measured on CLI 2.1.282, one headless
+# `claude -p` ran 16 of them (5 SessionStart, 4 UserPromptSubmit, 7 Stop). The Stop hooks replaced
+# the final message, which is the report (6 of 79 in one sweep); the SessionStart hooks wrote
+# CLAUDE.md, CLAUDE.local.md and .remember/ into the room every reviewer shares; and the
+# UserPromptSubmit recall hook is the memory contamination the room exists to keep out. With this
+# setting the same probe ran none and the room stayed empty.
+REVIEWER_SETTINGS = '{"disableAllHooks":true}'
 
-    `encoding` is explicit: `text=True` alone decodes with the machine's locale codec, which on a
-    non-UTF-8 Windows returns stdout=None from a reader thread and raises on POSIX."""
+
+def reviewer_command(exe, model):
+    """argv for one headless reviewer: print mode, the model, and every hook switched off."""
+    return [exe, "-p", "--model", model, "--settings", REVIEWER_SETTINGS]
+
+
+def _subprocess_runner(prompt, cwd, model, timeout):
+    """Default reviewer: a headless `claude -p` whose cwd is the clean room. Returns RunnerOutcome.
+
+    The executable is resolved with shutil.which, because on Windows CreateProcess finds only an
+    `.exe` and an npm install of the CLI is `claude.cmd`. `encoding` is explicit: `text=True` alone
+    decodes with the machine's locale codec, which on a non-UTF-8 Windows returns stdout=None from a
+    reader thread and raises on POSIX."""
+    exe = shutil.which("claude")
+    if not exe:
+        return RunnerOutcome("", "the claude CLI was not found on PATH")
     try:
-        proc = subprocess.run(["claude", "-p", "--model", model], cwd=str(cwd), input=prompt,
+        proc = subprocess.run(reviewer_command(exe, model), cwd=str(cwd), input=prompt,
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=timeout)
-        return (proc.stdout or "").strip() or ("(no stdout) " + (proc.stderr or "").strip()[:400])
     except subprocess.TimeoutExpired:
-        return "(TIMEOUT after %ss)" % timeout
+        return RunnerOutcome("(TIMEOUT after %ss)" % timeout, "timed out after %ss" % timeout)
+    except OSError as exc:
+        return RunnerOutcome("", "claude could not be launched: %s" % exc)
+    stdout, stderr = (proc.stdout or "").strip(), (proc.stderr or "").strip()
+    text = stdout or ("(no stdout) " + stderr[:400])
+    if proc.returncode == 0:
+        return RunnerOutcome(text, "")
+    if stdout and stderr:
+        text += "\n(stderr) " + stderr[:400]
+    return RunnerOutcome(text, "claude exited %d" % proc.returncode)
 
 
 def audit_one(name, room, reports_dir, model="sonnet", timeout=900, prefix="bitranox",
@@ -630,10 +778,11 @@ def audit_one_script(target, room, reports_dir, model="opus", timeout=1500, pref
         leads=(leads or {}).get(rel, ()),
         prefix=prefix,
     )
-    out = runner(prompt, room, model, timeout)
-    problems = evidence_problems(out, room)
+    out = _as_outcome(runner(prompt, room, model, timeout))
+    problems = evidence_problems(out.text, room)
     if problems:
-        out = out + "\n\nUNVERIFIABLE EVIDENCE:\n" + "\n".join("  " + p for p in problems) + "\n"
+        out = out._replace(text=out.text + "\n\nUNVERIFIABLE EVIDENCE:\n"
+                           + "\n".join("  " + p for p in problems) + "\n")
     stored = store_report(Path(reports_dir) / ("%s.audit.txt" % report_stem(rel)), rel, out)
     return rel, count_findings(stored)
 
@@ -646,6 +795,8 @@ def prepare_room_from_skills(skills_dir, room_root, hooks_dir=None, reuse=False)
     transcripts, caches and installed plugins. Stage only what a reviewer reads."""
     room_root = Path(room_root)
     room = room_root / "plugin"
+    if room.exists() and not reuse:
+        _refuse_input_inside(room, (skills_dir, hooks_dir))
     (room_root / "reports").mkdir(parents=True, exist_ok=True)
     if room.exists() and not reuse:
         shutil.rmtree(room)
@@ -680,6 +831,8 @@ def audit_all(plugin_src, room_root, model="sonnet", jobs=6, timeout=900, only=(
         room = prepare_room(plugin_src, room_root, reuse=reuse)
     reports = Path(room_root) / "reports"
     names = skill_names(room, only)
+    if not names:
+        raise NothingSelected("no skill in %s matches the selection %s" % (room, _shown(only)))
     log("auditing %d skill(s) in %s with %d job(s)" % (len(names), room, jobs))
     results = _run_pool(jobs, names,
                         lambda n: audit_one(n, room, reports, model, timeout, prefix, runner), log)
@@ -740,6 +893,9 @@ def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, onl
     room = prepare_room(plugin_src, room_root, reuse=reuse)
     reports = Path(room_root) / "reports"
     targets = script_targets(room, only, include_vendored, kinds, log)
+    if not targets:
+        raise NothingSelected("no script in %s matches the selection %s"
+                              % (room, _shown(tuple(only) + tuple(kinds))))
     if skip_existing:
         keep = []
         for rel, kind in targets:
@@ -767,13 +923,29 @@ def audit_scripts(plugin_src, room_root, model="opus", jobs=4, timeout=1500, onl
     return results
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description="Audit shipped skills or scripts in a clean room.")
+def _tolerant_stdio():
+    """Replace, rather than crash on, a character the console cannot encode.
+
+    A cp1252 Windows console cannot print most skill or path names outside Latin-1, and the crash
+    lands after the reviewers have been paid for. A stream that cannot be reconfigured is left as
+    it is."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _parser():
+    ap = argparse.ArgumentParser(
+        description="Audit shipped skills or scripts in a clean room.",
+        epilog="Exit codes: 0 every target has a report; 1 at least one target has no report (its "
+               "report file says why); 2 refused or crashed before a verdict.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--plugin", help="the plugin dir to audit (holds skills/, hooks/)")
     src.add_argument("--skills-dir", dest="skills_dir",
-                     help="a loose skills/ dir to audit - staged into the room on its own, so a "
-                          "huge parent like ~/.claude is never copied")
+                     help="a loose skills/ dir to audit (skill sweep only) - staged into the room "
+                          "on its own, so a huge parent like ~/.claude is never copied")
     ap.add_argument("--hooks-dir", dest="hooks_dir", default="",
                     help="with --skills-dir: a hooks dir to stage alongside, so a skill's "
                          "reference to a sibling hook still resolves in the room")
@@ -788,44 +960,106 @@ def main(argv=None):
     ap.add_argument("--scripts", action="store_true",
                     help="review shipped scripts instead of skills")
     ap.add_argument("--kind", action="append", default=[],
-                    help="with --scripts: restrict to hook/hook-lib/shim/skill-script/js "
-                         "(repeatable) - this is how a 134-target run becomes survivable slices")
+                    choices=(KIND_HOOK, KIND_HOOK_LIB, KIND_SHIM, KIND_SKILL_SCRIPT, KIND_JS),
+                    help="with --scripts: restrict to one kind (repeatable) - this is how a "
+                         "134-target run becomes survivable slices")
     ap.add_argument("--include-vendored", action="store_true",
                     help="with --scripts: also review demos/ and examples/ (upstream sample code, "
                          "excluded by default because a fix there diverges from upstream)")
     ap.add_argument("--skip-existing", action="store_true",
-                    help="with --scripts: skip a target whose report already exists and is "
-                         "non-empty - the resume switch; pairs with --reuse-room")
+                    help="with --scripts: skip a target that already has a complete report (a "
+                         "FINDING: line or NO FINDINGS); a missing report, or one marked REPORT "
+                         "MISSING, is reviewed again. The resume switch. Works alone; add "
+                         "--reuse-room to review the same room copy the earlier reports read")
     ap.add_argument("--list", action="store_true",
-                    help="print the enumerated corpus and exit without spending a reviewer")
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
-    only = tuple(s.strip() for s in args.only.split(","))
+                    help="print what a run with the same arguments would review, and exit "
+                         "without spending a reviewer")
+    return ap
 
-    if args.list:
-        room = Path(args.room) / "plugin"
-        room = room if room.is_dir() else Path(args.plugin or args.skills_dir or ".")
-        if args.scripts:
-            targets = script_targets(room, only, args.include_vendored, tuple(args.kind))
-            for rel, kind in targets:
-                print("%-12s %-58s -> %s" % (kind, rel, report_stem(rel)))
-            print("TOTAL: %d script(s)" % len(targets))
-        else:
-            names = skill_names(room, only)
-            for name in names:
-                print(name)
-            print("TOTAL: %d skill(s)" % len(names))
-        return 0
 
+def _list(args, only):
+    """Print what a run with these arguments would review. Returns the exit code.
+
+    The room copy is what a run reviews only under --reuse-room; otherwise a run deletes it and
+    copies the source afresh, so previewing the old copy undercounts every file added since."""
+    room = Path(args.room) / "plugin"
+    reuse = args.reuse_room and room.is_dir()
     if args.scripts:
-        audit_scripts(args.plugin, args.room, args.model or "opus", args.jobs or 4,
-                      args.timeout or 1500, only, args.prefix, args.reuse_room,
-                      kinds=tuple(args.kind), include_vendored=args.include_vendored,
-                      skip_existing=args.skip_existing)
-        return 0
-    audit_all(args.plugin, args.room, args.model or "sonnet", args.jobs or 6, args.timeout or 900,
-              only, args.prefix, args.reuse_room,
-              skills_dir=args.skills_dir, hooks_dir=args.hooks_dir)
+        targets = script_targets(room if reuse else Path(args.plugin), only, args.include_vendored,
+                                 tuple(args.kind))
+        for rel, kind in targets:
+            print("%-12s %-58s -> %s" % (kind, rel, report_stem(rel)))
+        print("TOTAL: %d script(s)" % len(targets))
+        count = len(targets)
+    else:
+        if reuse:
+            names = skill_names(room, only)
+        elif args.skills_dir:
+            names = skills_in(args.skills_dir, only)
+        else:
+            names = skill_names(args.plugin, only)
+        for name in names:
+            print(name)
+        print("TOTAL: %d skill(s)" % len(names))
+        count = len(names)
+    if not count:
+        print("audit_skills: nothing matches the selection", file=sys.stderr)
+        return 2
     return 0
+
+
+def missing_reports(reports_dir, stems):
+    """The report stems whose stored report is absent or carries the missing-report marker."""
+    out = []
+    for stem in stems:
+        try:
+            text = (Path(reports_dir) / ("%s.audit.txt" % stem)).read_text(encoding="utf-8")
+        except OSError:
+            out.append(stem)
+            continue
+        if report_missing(text):
+            out.append(stem)
+    return sorted(out)
+
+
+def _sweep(args, only):
+    """Run the selected sweep. Returns 0 when every target has a report, else 1."""
+    if args.scripts:
+        results = audit_scripts(args.plugin, args.room, args.model or "opus", args.jobs or 4,
+                                args.timeout or 1500, only, args.prefix, args.reuse_room,
+                                kinds=tuple(args.kind), include_vendored=args.include_vendored,
+                                skip_existing=args.skip_existing)
+        stems = [report_stem(rel) for rel in results]
+    else:
+        results = audit_all(args.plugin, args.room, args.model or "sonnet", args.jobs or 6,
+                            args.timeout or 900, only, args.prefix, args.reuse_room,
+                            skills_dir=args.skills_dir, hooks_dir=args.hooks_dir)
+        stems = list(results)
+    missing = missing_reports(Path(args.room) / "reports", stems)
+    if missing:
+        print("audit_skills: %d target(s) have no report; each report file says why: %s"
+              % (len(missing), ", ".join(missing)), file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv=None):
+    _tolerant_stdio()
+    ap = _parser()
+    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.scripts and args.skills_dir:
+        ap.error("--scripts needs --plugin: a loose --skills-dir is staged for the skill sweep only")
+    only = tuple(s.strip() for s in args.only.split(","))
+    try:
+        return _list(args, only) if args.list else _sweep(args, only)
+    except (RoomError, NothingSelected) as exc:
+        print("audit_skills: %s" % exc, file=sys.stderr)
+        return 2
+    except Exception:
+        # 1 is the verdict "a target has no report"; a crash must not read as that verdict.
+        traceback.print_exc()
+        print("audit_skills: crashed before a verdict (exit 2)", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

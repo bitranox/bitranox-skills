@@ -255,13 +255,22 @@ def test_group_by_file_shapes_hits_for_a_prompt():
 def test_no_prepass_check_duplicates_a_repo_gate_check():
     """The only automatic defence against this module quietly re-implementing the real gate.
 
-    If this fails, the check belongs in repo-gate.py or is already there - not in both."""
+    If this fails, the check belongs in repo-gate.py or is already there - not in both.
+
+    parents[3] is the plugin dir (tests -> meta-skill-audit -> skills -> plugin). It once read
+    parents[4], found no gate there, and returned - so it passed while checking nothing. In a full
+    plugin checkout a missing gate is now a failure; only a room staged without hooks/ skips."""
     import importlib.util
     from pathlib import Path
 
-    gate = Path(__file__).resolve().parents[4] / "hooks" / "repo-gate.py"
-    if not gate.is_file():                       # a room staged without hooks/ cannot check this
-        return
+    import pytest
+
+    plugin = Path(__file__).resolve().parents[3]
+    gate = plugin / "hooks" / "repo-gate.py"
+    if not gate.is_file():
+        assert not (plugin / ".claude-plugin" / "plugin.json").is_file(), (
+            "a full plugin checkout has no %s - the guard would check nothing" % gate)
+        pytest.skip("a room staged without hooks/ has no gate to compare against")
     spec = importlib.util.spec_from_file_location("repo_gate_for_test", gate)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -274,7 +283,8 @@ def test_run_prepass_never_hands_a_js_file_to_the_python_parser(tmp_path):
     room = tmp_path / "plugin"
     (room / "skills" / "s").mkdir(parents=True)
     (room / "skills" / "s" / "d.js").write_text("export const x = `a${1}b`;\n", encoding="utf-8")
-    facts, leads, _summary = P.run_prepass(room, [("skills/s/d.js", "js")])
+    facts, leads, _summary = P.run_prepass(room, [("skills/s/d.js", "js")],
+                                           run=lambda *_a, **_k: _Proc(0))
     assert facts == {} and leads == {}
 
 

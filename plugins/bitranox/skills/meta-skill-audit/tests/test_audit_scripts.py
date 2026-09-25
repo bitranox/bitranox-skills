@@ -3,7 +3,9 @@
 The reviewer is injected at the `runner` seam, so these exercise the real module end to end with a
 substitute reviewer rather than patching internals. Nothing here spawns `claude -p`."""
 
+import os
 import re
+import sys
 
 import pytest
 
@@ -141,6 +143,29 @@ def test_kinds_restricts_the_slice(tmp_path):
 
 def test_a_missing_room_enumerates_nothing(tmp_path):
     assert A.script_targets(tmp_path / "nope") == []
+
+
+_CANNOT_LOCK_A_DIR = sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0)
+
+
+@pytest.mark.skipif(_CANNOT_LOCK_A_DIR, reason="chmod 000 does not stop Windows or root reading a dir")
+def test_an_unreadable_directory_is_an_error_not_a_silent_undercount(tmp_path):
+    """rglob skips a directory it cannot list, so the corpus shrinks and nothing says so."""
+    root = _plugin(tmp_path)
+    locked = root / "skills" / "alpha" / "scripts"
+    locked.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            A.script_targets(root)
+    finally:
+        locked.chmod(0o755)
+
+
+def test_a_readable_tree_enumerates_the_same_files_as_before(tmp_path):
+    """The control for the test above: the walker finds every file rglob found."""
+    targets = _rels(A.script_targets(_plugin(tmp_path)))
+    assert targets == ["hooks/my-guard.py", "hooks/run-python.sh", "hooks/shared_lib.py",
+                       "skills/alpha/scripts/gate.py", "skills/alpha/widget.js"]
 
 
 def test_exclusion_fallback_announces_itself(tmp_path):
