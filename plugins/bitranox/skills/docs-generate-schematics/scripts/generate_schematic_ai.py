@@ -706,12 +706,10 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 results["early_stop_reason"] = f"Quality score {score} meets threshold {threshold} for {doc_type}"
                 break
 
-            # If this is the last iteration, we're done regardless
+            # If this is the last iteration, we're done regardless. The image kept is chosen
+            # below from every reviewed one: a retry can score WORSE than what it replaced.
             if i == iterations:
                 print(f"\n[WARN] Maximum iterations reached")
-                results["final_image"] = str(iter_path)
-                results["final_score"] = score
-                results["success"] = True
                 break
 
             # Quality below threshold - improve prompt for next iteration
@@ -720,12 +718,18 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
             current_prompt = self.improve_prompt(user_prompt, critique, i + 1)
 
         if not results["success"] and best is not None:
-            print(f"\n[WARN] The last generation failed; keeping v{best['iteration']} "
+            # No image met the threshold (or the last generation failed): every reviewed image
+            # was paid for, so the one delivered is the best-scoring, never simply the last.
+            last_failed = not results["iterations"][-1].get("success")
+            reason = "The last generation failed" if last_failed else "No image met the threshold"
+            print(f"\n[WARN] {reason}; keeping v{best['iteration']}, the best-scoring "
                   f"(score {best['score']}/10, below the {threshold}/10 threshold)")
             results["final_image"] = best["image_path"]
             results["final_score"] = best["score"]
             results["success"] = True
-            results["fallback_iteration"] = best["iteration"]
+            results["kept_iteration"] = best["iteration"]
+            if last_failed:
+                results["fallback_iteration"] = best["iteration"]
 
         # Copy final version to output path
         if results["success"] and results["final_image"]:

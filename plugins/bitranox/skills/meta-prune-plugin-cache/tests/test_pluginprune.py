@@ -350,10 +350,27 @@ def test_a_project_path_that_no_longer_exists_yields_no_settings_paths(tmp_path:
     assert found
 
 
-def test_an_unreadable_claude_json_is_not_fatal(cache: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("text", ["{not json", '{"projects": ["a"]}', "[]"])
+def test_a_claude_json_that_cannot_be_parsed_refuses_rather_than_losing_every_project(
+    cache: Path, tmp_path: Path, text: str
+) -> None:
+    """A broken project index hides EVERY project's settings, and with them every plugin enabled
+    only in a project - read as "no projects", each such sole version was planned for deletion."""
     broken = tmp_path / "broken.json"
-    broken.write_text("{not json", encoding="utf-8")
+    broken.write_text(text, encoding="utf-8")
     plan = plan_for(cache, claude_json=broken)
+    assert str(cache / "own-marketplace" / "own-plugin" / "1.0.0") not in paths(plan.prune)
+    assert any(str(broken) in problem for problem in plan.settings_problems)
+
+
+def test_a_claude_json_without_a_projects_map_is_an_ordinary_index(
+    cache: Path, tmp_path: Path
+) -> None:
+    """The control: an index that lists no projects is valid, not a problem."""
+    index = tmp_path / "claude.json"
+    index.write_text(json.dumps({"numStartups": 3}), encoding="utf-8")
+    plan = plan_for(cache, claude_json=index)
+    assert plan.settings_problems == ()
     assert str(cache / "own-marketplace" / "own-plugin" / "1.0.0") in paths(plan.prune)
 
 
@@ -888,6 +905,124 @@ def test_a_bom_in_claude_json_still_discovers_project_settings(
         b"\xef\xbb\xbf" + json.dumps({"projects": {str(project): {}}}).encode("utf-8")
     )
     assert P.project_settings_files(claude_json)
+
+
+# A settings source that cannot be read is refused, never read as "nothing pinned or enabled":
+# the pin or enabledPlugins entry it holds is exactly what keeps a version off the delete list.
+
+ENABLE_ORPHAN = json.dumps({"enabledPlugins": {"orphan-plugin@other-marketplace": True}})
+
+
+def orphan_of(cache: Path) -> Path:
+    return cache / "other-marketplace" / "orphan-plugin" / "3.0.0"
+
+
+def write_user_settings(cache: Path, text: str, name: str = "settings.json") -> Path:
+    """A settings file where discovery looks for it: `~/.claude/<name>`, from the cache path."""
+    path = cache.parent.parent / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ('{"enabledPlugins": {"orphan-plugin@other-marketplace": true},}', "not valid JSON"),
+        ("[1, 2]", "not a JSON object"),
+        ('{"enabledPlugins": ["orphan-plugin@other-marketplace"]}', "enabledPlugins"),
+    ],
+)
+def test_a_malformed_settings_file_refuses_the_version_it_could_have_kept(
+    cache: Path, text: str, reason: str
+) -> None:
+    settings = write_user_settings(cache, text)
+    plan = plan_for(cache)
+    assert str(orphan_of(cache)) not in paths(plan.prune)
+    refusal = {str(entry.path): entry.refusal for entry in plan.refused}[str(orphan_of(cache))]
+    assert refusal is not None
+    assert str(settings) in refusal
+    assert reason in refusal
+
+
+def test_the_same_settings_file_well_formed_keeps_the_version_and_is_no_problem(
+    cache: Path,
+) -> None:
+    """The control for the malformed arm: one character apart, the opposite verdict."""
+    write_user_settings(cache, ENABLE_ORPHAN)
+    plan = plan_for(cache)
+    assert plan.settings_problems == ()
+    assert kept_reasons(plan)[str(orphan_of(cache))] == "only version, enabled in settings.json"
+
+
+def test_a_whitespace_only_settings_file_holds_nothing_and_is_no_problem(cache: Path) -> None:
+    """Nothing is lost by reading an empty file as empty, so it is not a reason to refuse."""
+    write_user_settings(cache, "  \n", name="settings.local.json")
+    plan = plan_for(cache)
+    assert plan.settings_problems == ()
+    assert str(orphan_of(cache)) in paths(plan.prune)
+
+
+def test_a_settings_file_that_is_not_utf8_is_a_problem(cache: Path) -> None:
+    settings = cache.parent.parent / "settings.json"
+    settings.write_bytes(
+        b'{"enabledPlugins": {"orphan-plugin@other-marketplace": true}, "x": "\xff"}'
+    )
+    plan = plan_for(cache)
+    assert str(orphan_of(cache)) not in paths(plan.prune)
+    assert any(str(settings) in problem for problem in plan.settings_problems)
+
+
+@needs_posix_perms
+def test_an_unreadable_settings_file_refuses_rather_than_dropping_its_pin(cache: Path) -> None:
+    pinned = cache / "own-marketplace" / "own-plugin" / "1.0.0"
+    settings = write_user_settings(
+        cache, json.dumps({"hooks": {"Stop": [{"command": f"bash {pinned}/x.sh"}]}})
+    )
+    settings.chmod(0)
+    try:
+        plan = plan_for(cache)
+    finally:
+        settings.chmod(0o600)
+    assert str(pinned) not in paths(plan.prune)
+    assert any(
+        str(settings) in problem and "cannot be read" in problem
+        for problem in plan.settings_problems
+    )
+
+
+def test_a_malformed_project_settings_file_refuses(cache: Path, tmp_path: Path) -> None:
+    project = tmp_path / "some-project"
+    (project / ".claude").mkdir(parents=True)
+    broken = project / ".claude" / "settings.local.json"
+    broken.write_text("{bad", encoding="utf-8")
+    plan = plan_for(cache, claude_json=write_claude_json(tmp_path, [project]))
+    assert str(orphan_of(cache)) not in paths(plan.prune)
+    assert any(str(broken) in problem for problem in plan.settings_problems)
+
+
+def test_a_malformed_settings_file_exits_two_before_removing_anything(
+    cache: Path, capsys
+) -> None:
+    settings = write_user_settings(cache, "{bad")
+    rc = P.main(["--cache-dir", str(cache), "--apply"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert str(settings) in err
+    assert "not valid JSON" in err
+    assert orphan_of(cache).exists()
+    assert (cache / "own-marketplace" / "own-plugin" / "1.0.0").exists()
+    assert (cache / "temp_git_2_def").exists()
+
+
+@pytest.mark.parametrize("flag", ["--settings", "--claude-json"])
+def test_an_explicit_settings_source_that_does_not_exist_exits_two(
+    cache: Path, tmp_path: Path, capsys, flag: str
+) -> None:
+    """A named source that is not there is a typo, not "nothing is pinned"."""
+    rc = P.main(["--cache-dir", str(cache), flag, str(tmp_path / "typo.json"), "--apply"])
+    assert rc == 2
+    assert "typo.json" in capsys.readouterr().err
+    assert orphan_of(cache).exists()
 
 
 def test_the_readonly_retry_makes_a_file_writable_and_retries(tmp_path: Path) -> None:

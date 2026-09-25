@@ -44,7 +44,7 @@ removed is reported as removed; a directory that failed to delete is reported FA
 ```bash
 uv run scripts/pluginprune.py             # the plan, with sizes and a reason per kept directory
 uv run scripts/pluginprune.py --apply     # re-plan, then remove that plan
-uv run scripts/pluginprune.py --json      # {ok, command, data, skipped}; 0 fine, 1 refused, 2 usage
+uv run scripts/pluginprune.py --json      # {ok, command, data, skipped}; 0 fine, 1 refused, 2 usage or unusable settings
 ```
 
 Run `--help` for the rest (`--marketplace`, `--keep`, `--min-age`, `--settings`).
@@ -63,6 +63,14 @@ needed. It refuses symlinks, anything reached THROUGH a symlinked marketplace or
 When `installed_plugins.json` is missing, unreadable or malformed, it refuses every version
 nothing else keeps and exits 1, because the installed one can no longer be told apart. An
 explicit `--installed-plugins` that cannot be read is a usage error (exit 2).
+
+A settings file or `~/.claude.json` that exists but cannot be read, is not UTF-8, is not valid
+JSON or has the wrong shape stops the run with exit 2 before anything is planned or removed,
+naming the file and the reason; so does a `--settings` or `--claude-json` naming a missing file.
+Skipping it would lose the pin or `enabledPlugins` entry it holds and plan that version for
+deletion. Repair the file, or choose the files yourself with `--settings` or
+`--no-project-settings`. A discovered file that is simply absent, or holds only whitespace, is
+ordinary.
 
 A plugin nothing references at all is planned even as the only version: that is what an
 uninstalled plugin leaves behind, and nothing else reclaims it. `enabledPlugins` is the guard

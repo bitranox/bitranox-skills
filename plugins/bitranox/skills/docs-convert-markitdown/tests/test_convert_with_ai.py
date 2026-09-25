@@ -141,7 +141,60 @@ def test_missing_api_key_exits_1(script_runner, tmp_path, fakes):
     run = script_runner("convert_with_ai", ["pic.png", "out.md"], cwd=tmp_path, pythonpath=fakes)
 
     assert run.returncode == 1, run.output
-    assert "OPENROUTER_API_KEY" in run.output
+    assert "OPENROUTER_API_KEY" in run.stderr
+    # The one remedy it names must be one that works: there is no key flag to point at.
+    assert "--api-key" not in run.output
+
+
+SECRET = "sk-or-v1-ARGV-SECRET-MUST-NOT-BE-USED"
+
+
+@pytest.mark.parametrize(
+    "key_args",
+    [["--api-key", SECRET], ["-k", SECRET], [f"--api-key={SECRET}"], ["--api", SECRET]],
+    ids=["long", "short", "equals", "abbreviated"],
+)
+@pytest.mark.parametrize("env_key", [False, True], ids=["no-env-key", "env-key-set"])
+def test_an_api_key_on_the_command_line_is_refused(
+    script_runner, tmp_path, fakes, key_args, env_key
+):
+    """A key in argv sits in the process list, shell history and CI logs for the whole run.
+
+    Refused loudly rather than ignored, and refused even when the environment ALSO holds a key,
+    so a caller learns the flag is gone instead of believing the argv key was the one used.
+    """
+    (tmp_path / "pic.png").write_text("PNG", encoding="utf-8")
+    env = dict(FAKE_KEY) if env_key else {}
+    env["FAKE_OPENAI_LOG"] = str(tmp_path / "calls.log")
+
+    run = script_runner(
+        "convert_with_ai", ["pic.png", "out.md", *key_args], cwd=tmp_path, pythonpath=fakes, env=env
+    )
+
+    assert run.returncode == 2, run.output
+    assert "OPENROUTER_API_KEY" in run.stderr
+    assert SECRET not in run.output
+    assert _calls(tmp_path) == 0
+    assert not (tmp_path / "out.md").exists()
+
+
+def test_the_environment_key_alone_still_converts(script_runner, tmp_path, fakes):
+    """The control for the refusal: the same run with the key where it belongs succeeds."""
+    (tmp_path / "pic.png").write_text("PNG", encoding="utf-8")
+
+    run = _ai(script_runner, tmp_path, fakes, ["pic.png", "out.md"])
+
+    assert run.returncode == 0, run.output
+    assert _calls(tmp_path) == 1
+
+
+def test_help_offers_no_key_flag(script_runner, tmp_path):
+    run = script_runner("convert_with_ai", ["--help"], cwd=tmp_path)
+
+    assert run.returncode == 0, run.output
+    assert "--api-key" not in run.stdout
+    assert "-k," not in run.stdout
+    assert "OPENROUTER_API_KEY" in run.stdout
 
 
 def _png():

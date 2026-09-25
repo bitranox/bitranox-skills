@@ -29,6 +29,89 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.0]
+
+### Changed
+
+- `hooks/run-python.sh` is strict by default: when it cannot run the script it was given (the
+  script is missing, no Python 3 is found, or the shell is not Git Bash on Windows) it exits 3 with
+  a stderr line labelled `run-python.sh:`. Every `hooks.json` registration passes `--hook` first,
+  which keeps the hook contract (exit 0 on a shim failure, never 2). `BITRANOX_RUN_PYTHON_STRICT=1`
+  still forces exit 3 in both modes, and `BITRANOX_HOOKS_OFF` now skips only `--hook` launches. A
+  settings.json registration that calls the shim without `--hook` gets a non-blocking hook error on
+  a shim failure instead of a silent pass.
+- `pluginprune` stops with exit 2, before planning or removing anything, when a settings file or
+  `~/.claude.json` exists but cannot be read, is not UTF-8, is not valid JSON or has the wrong
+  shape, and when an explicit `--settings` / `--claude-json` names a missing file. The plan also
+  refuses every version nothing else keeps, so a library caller cannot delete either.
+- `convert_with_ai.py` refuses `--api-key` / `-k` (exit 2, value never echoed); the key comes from
+  `OPENROUTER_API_KEY` only, and the missing-key message goes to stderr.
+- `diffbehave`: a side that did not run (not found, exit 126/127, a missing script operand) is
+  ERROR, exit 2, naming the side, so a typo can no longer satisfy `--expect-differ`.
+- `backstop` refuses a `--repo` that is not the repository root, and reports LOST when a nested
+  checkout's `.git` disappears mid-run instead of reading the enclosing repository's HEAD.
+- `corpus_prompts` refuses `--count` together with `--module` (exit 2).
+- `audit_skills` refuses `--kind`, `--skip-existing` and `--include-vendored` without `--scripts`,
+  `--hooks-dir` without `--skills-dir`, and a `--room` inside the audited source (exit 2).
+- `adopt_skill` renames the upstream name only where it identifies the skill (front matter `name:`,
+  an H1 that is exactly the name, a `<namespace>:<name>` reference, a path segment under
+  `skills/`); plain-word mentions are counted as "left for review" instead of rewritten.
+- `mdwrap` refuses a blockquote paragraph and never leaves a line Markdown would read as a new
+  block (a setext underline, a thematic break, a fence, an HTML tag).
+- `migrate_memory` backs up everything a run writes (the anchor's `.claude-memory` store, each
+  level's `CLAUDE.local.md` and `CLAUDE.md`, the repo `.gitignore`) with a manifest, and
+  `--restore DIR` puts the tree back byte for byte.
+- `generate_schematic_ai` keeps the best-scoring image when the iterations run out below the
+  threshold, not the last one.
+
+### Added
+
+- `contrib_queue.py rehome-tombstones [--apply]` finds tombstones that `queue_key:` closes wrote
+  under a hash no reader consults, and merges them into their home queue's closed set (the old
+  file is kept as `.rehomed`); `queues` points at it while any exist.
+- `self_improve_signals.StateWriteError`: `set_watermark`, the sightings writer and
+  `clear_promotion_candidate` raise it on a failed write (written through a temp file and
+  `os.replace`), and `dream_state` exits 2 saying the write did not land.
+- toolbox-nudge reads a tool's own `LAUNCH_WITH` declaration; `mutation_arm` declares
+  `project-python`, so its nudge names the project interpreter rather than `uv run`.
+
+### Fixed
+
+- `harness_checks.hook_registrations` reads settings with a BOM, and raises `SettingsUnreadable`
+  for a settings file that cannot be read or parsed instead of reporting "no hooks";
+  `frontmatter_problems` reports a SKILL.md that is not UTF-8 instead of raising.
+- `memory_engine.curated_levels_under` raises `TreeWalkError` for a directory it cannot list or a
+  `CLAUDE.local.md` that is not UTF-8, instead of undercounting or crashing without a path;
+  `reconcile_memory_index --check-tree` reports both as findings and skips the dangling-body
+  verdict while anything was unreadable.
+- `self_improve_signals.unreviewed_transcript_text` returns the OLDEST unreviewed part and an offset
+  that covers only what it returned, so marking that offset can no longer discharge unread text; a
+  single unreviewed line over the cap is no longer returned as "nothing new".
+- `audit_headers` parses attributes with `html.parser`, so `data-src` is not graded as `src` and
+  text inside comments or `<script>` is not scanned; `unsafe-inline` is graded on the effective
+  `script-src-elem` and `script-src-attr` lists, and `<video poster>` is checked.
+- `tablekit.render_table` pads by display width (wide and combining characters), sharing the width
+  rule with `reformat_tables`.
+- coding-python-performance-review: the discovery steps pass file lists as a bash array, so a path
+  with a space is scanned; `setup_env` checks the version of the recorded interpreter (minimum
+  3.10) before creating anything; its tests no longer leave `bx-perf-*` dirs in the temp dir.
+- `fleet_ssh` drops a stale host-key entry when the command succeeded under ssh's changed-host-key
+  banner.
+- `mutation_arm` no longer says "refused before mutating" after the arm ran; bytecode that survives
+  removal is reported (exit 2) with the sources restored.
+- `mem_levels` reports a sharded legacy body that no pointer names as dangling, and an unreadable
+  facts or shard directory as unreadable.
+- `conflict_scan` does not flag the overline of an RST title.
+- `task_brief.py` and `review_package.py` exit 2 with one line outside a repository, on a blocked
+  workspace, or on an unwritable output file, instead of a traceback.
+- `claudemd_variance --json` emits strict UTF-8: a path that is not valid UTF-8 is shown with `\xNN`
+  escapes and listed with its raw bytes under `data.undecodable_paths`.
+- `corpus_prompts` and `classifier_eval` split a transcript on `\n` through one shared reader, so a
+  replay prefix and a prompt's line number always agree.
+- `transcript_index` declares `project`, `path` and `role` UNINDEXED, so a word in a transcript's
+  path no longer matches every message in it; an index built with the old schema is migrated in
+  place in one transaction.
+
 ## [7.24.1]
 
 ### Fixed

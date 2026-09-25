@@ -16,6 +16,10 @@ A deck whose picture descriptions fail is reported as a failure: markitdown
 itself swallows those errors and would otherwise write a Markdown file with no
 descriptions under an "AI Model" header.
 
+The OpenRouter API key comes from the OPENROUTER_API_KEY environment variable
+only. A key on the command line (--api-key/-k) is refused with exit 2: argv is
+visible in the process list, shell history and CI logs for the whole run.
+
 Exit status: 0 converted, 1 an error, 2 a usage error.
 """
 
@@ -220,12 +224,13 @@ Examples:
   # Use custom prompt with advanced vision model
   python convert_with_ai.py diagram.png diagram.md --model anthropic/claude-opus-4.5 --custom-prompt "Describe this technical diagram"
 
-  # Set API key via environment variable
+  # The API key comes from the environment only
   export OPENROUTER_API_KEY="sk-or-v1-..."
   python convert_with_ai.py image.jpg image.md
 
 Environment Variables:
-  OPENROUTER_API_KEY    OpenRouter API key (required if not passed via --api-key)
+  OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key - a key on
+                        the command line would be visible in the process list)
 
 Popular Models (use with --model):
   anthropic/claude-opus-4.5 - Recommended for scientific vision
@@ -237,10 +242,9 @@ Exit status: 0 converted, 1 an error (including a failed image description), 2 a
 
     parser.add_argument('input', type=Path, nargs='?', help='Input file (.png, .jpg, .jpeg or .pptx)')
     parser.add_argument('output', type=Path, nargs='?', help='Output Markdown file')
-    parser.add_argument(
-        '--api-key', '-k',
-        help='OpenRouter API key (or set OPENROUTER_API_KEY env var)'
-    )
+    # Refused in main(), never used: the key comes from OPENROUTER_API_KEY only. Registered
+    # (hidden) so that passing it is refused with the remedy named, not a bare "unrecognized".
+    parser.add_argument('--api-key', '-k', dest='api_key', help=argparse.SUPPRESS)
     parser.add_argument(
         '--model', '-m',
         default='anthropic/claude-sonnet-4.5',
@@ -268,6 +272,12 @@ def main(argv: list[str] | None = None) -> int:
     _configure_console()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.api_key is not None:
+        # Exit 2 before anything runs. A key on the command line sits in the process list, shell
+        # history and CI logs for the whole run; ignoring it silently would let a caller believe
+        # the argv key was the one used.
+        parser.error("--api-key/-k is not accepted: a key on the command line is visible in the "
+                     "process list for the whole run. Set OPENROUTER_API_KEY in the environment.")
 
     # List prompts and exit
     if args.list_prompts:
@@ -282,11 +292,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.input is None or args.output is None:
         parser.error("the following arguments are required: input, output")
 
-    # Get API key
-    api_key = args.api_key or os.environ.get('OPENROUTER_API_KEY')
+    api_key = os.environ.get('OPENROUTER_API_KEY')
     if not api_key:
-        print("Error: OpenRouter API key required. Set OPENROUTER_API_KEY environment variable or use --api-key")
-        print("Get your API key at: https://openrouter.ai/keys")
+        print("Error: OpenRouter API key required. Set the OPENROUTER_API_KEY environment variable "
+              "(the only way to pass the key).", file=sys.stderr)
+        print("Get your API key at: https://openrouter.ai/keys", file=sys.stderr)
         return 1
 
     # Validate input file

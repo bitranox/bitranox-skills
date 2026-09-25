@@ -119,7 +119,10 @@ def test_marked_up_score_is_parsed_and_stops_early(gen_ai, scripted, monkeypatch
     assert log["final_score"] == 9.5
 
 
-def test_below_threshold_twice_keeps_the_last_image(gen_ai, scripted, monkeypatch, tmp_path):
+def test_below_threshold_twice_keeps_the_second_image_when_it_scores_higher(
+    gen_ai, scripted, monkeypatch, tmp_path
+):
+    """The control for the arm below: the last image IS the best one here."""
     calls = scripted(image("V1"), review("SCORE: 6.0"), image("V2"), review("SCORE: 7.0"))
 
     rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
@@ -127,6 +130,43 @@ def test_below_threshold_twice_keeps_the_last_image(gen_ai, scripted, monkeypatc
     assert rc == 0
     assert len(calls) == 4
     assert _out(tmp_path).read_bytes() == b"V2"
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["final_score"] == 7.0
+
+
+def test_below_threshold_twice_keeps_the_best_scoring_image_not_the_last(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path
+):
+    """A retry can come back WORSE. Both images are paid for and reviewed, so the output is the
+    better one, and the log and report name which iteration was kept and its score."""
+    scripted(image("V1"), review("SCORE: 7.0"), image("V2"), review("SCORE: 6.0"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    stdout = capsys.readouterr().out
+    assert rc == 0
+    assert _out(tmp_path).read_bytes() == b"V1"
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["final_score"] == 7.0
+    assert log["final_image"].endswith("out_v1.png")
+    assert "v1" in stdout
+    assert "Final Score: 7.0/10" in stdout
+
+
+def test_a_failed_first_generation_keeps_the_only_reviewed_image(
+    gen_ai, scripted, monkeypatch, capsys, tmp_path
+):
+    scripted(failure(429), image("V2"), review("SCORE: 6.0"))
+
+    rc = run_main(gen_ai, monkeypatch, "diagram", "-o", str(_out(tmp_path)), "--doc-type", "journal")
+
+    stdout = capsys.readouterr().out
+    assert rc == 0
+    assert _out(tmp_path).read_bytes() == b"V2"
+    assert "last generation failed" not in stdout
+    log = json.loads((tmp_path / "out_review_log.json").read_text(encoding="utf-8"))
+    assert log["kept_iteration"] == 2
+    assert "fallback_iteration" not in log
 
 
 def test_failed_retry_falls_back_to_the_reviewed_first_image(gen_ai, scripted, monkeypatch, capsys, tmp_path):

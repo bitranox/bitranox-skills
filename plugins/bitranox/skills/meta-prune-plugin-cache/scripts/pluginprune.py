@@ -71,7 +71,14 @@ that names no scanned version directory is a usage error, never silently ignored
 Exit codes: 0 = nothing blocked (a dry-run plan that can be carried out as-is, or an `--apply`
 that removed everything it listed), 1 = something was refused or could not be removed, 2 = usage
 error (including a `--keep` that matches nothing and an explicit `--installed-plugins` that
-cannot be read) or an unexpected crash. `--json` emits the machine-readable envelope; warnings
+cannot be read), a settings source it must consult that cannot be used, or an unexpected crash.
+
+A settings source that cannot be used - a settings file or `~/.claude.json` that exists but
+cannot be read, is not UTF-8, is not valid JSON or has the wrong shape, or a `--settings` /
+`--claude-json` that names a missing file - stops the run with exit 2 before anything is planned
+or removed, naming the file and the reason. Skipping it would lose the pin or `enabledPlugins`
+entry it holds and plan that version for deletion. A discovered file that is simply absent, or
+one holding only whitespace, is ordinary and holds nothing. `--json` emits the machine-readable envelope; warnings
 always go to stderr so stdout stays parseable.
 """
 
@@ -95,13 +102,18 @@ __all__ = [
     "Entry",
     "InstallRecord",
     "Plan",
+    "SettingsError",
+    "SettingsFile",
+    "SettingsSources",
     "apply_plan",
     "build_plan",
     "live_lock_holder",
+    "load_settings",
     "main",
     "pid_alive",
     "process_start_ticks",
     "read_install_record",
+    "read_settings",
 ]
 
 DEFAULT_MIN_AGE_SECONDS = 3600
@@ -269,6 +281,7 @@ class Plan:
     saw_live_lock: bool
     saw_lock_dir: bool = True
     settings_files: tuple[Path, ...] = ()
+    settings_problems: tuple[str, ...] = ()
     install_record: Path | None = None
     install_problem: str | None = None
     unmatched_keep: tuple[str, ...] = ()
@@ -305,6 +318,7 @@ class Plan:
             "saw_live_lock": self.saw_live_lock,
             "saw_lock_dir": self.saw_lock_dir,
             "settings_files": [str(path) for path in self.settings_files],
+            "settings_problems": list(self.settings_problems),
             "install_record": None if self.install_record is None else str(self.install_record),
             "install_problem": self.install_problem,
         }
@@ -457,42 +471,94 @@ def _renderings(native: str, posix: str) -> set[str]:
     return {native, posix, json.dumps(native)[1:-1]}
 
 
+class SettingsError(ValueError):
+    """A settings source that exists but cannot be read or understood.
+
+    Never read as "names nothing": the pin or `enabledPlugins` entry such a file holds is exactly
+    what keeps a version off the delete list, so losing it silently plans that version for
+    deletion.
+    """
+
+
+@dataclass(frozen=True)
+class SettingsFile:
+    """One settings file, read once: its raw text (searched for pins) and the plugins it enables."""
+
+    path: Path
+    text: str
+    enabled: frozenset[str]
+
+
+def read_settings(path: Path) -> SettingsFile:
+    """Read and check one settings file. Raises SettingsError when it cannot be relied on.
+
+    A file holding only whitespace is read as empty, because nothing in it can be lost.
+    """
+    text = _read_source(path)
+    if not text.strip():
+        return SettingsFile(path, "", frozenset())
+    payload = _parse_source(path, text)
+    if not isinstance(payload, dict):
+        raise SettingsError(f"{path} is not a JSON object")
+    enabled = payload.get("enabledPlugins", {})
+    if not isinstance(enabled, dict):
+        raise SettingsError(f"{path} has an 'enabledPlugins' entry that is not an object")
+    return SettingsFile(path, text, frozenset(enabled))
+
+
+def _read_source(path: Path) -> str:
+    try:
+        return path.read_bytes().decode("utf-8-sig")
+    except OSError as exc:
+        raise SettingsError(f"{path} cannot be read: {exc.strerror or exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise SettingsError(f"{path} is not UTF-8 text: {exc.reason} at byte {exc.start}") from exc
+
+
+def _parse_source(path: Path, text: str) -> object:
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise SettingsError(f"{path} is not valid JSON: {exc}") from exc
+
+
+def _loaded(item: Path | SettingsFile) -> SettingsFile:
+    return item if isinstance(item, SettingsFile) else read_settings(item)
+
+
 def pinning_settings(
     path: Path,
-    settings_files: Iterable[Path],
+    settings_files: Iterable[Path | SettingsFile],
     *,
     spellings: Iterable[Path] = (),
     homes: Iterable[Path] = (),
 ) -> str | None:
     """The settings file that names this exact directory, or None when nothing pins it.
 
-    See `pin_needles` for the spellings searched.
+    See `pin_needles` for the spellings searched. A file that cannot be read raises
+    SettingsError rather than being skipped, since skipping it deletes whatever it pins.
     """
     needles = pin_needles(path, spellings=spellings, homes=homes)
-    for settings in settings_files:
-        try:
-            text = settings.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if any(needle in text for needle in needles):
-            return settings.name
+    for item in settings_files:
+        settings = _loaded(item)
+        if any(needle in settings.text for needle in needles):
+            return settings.path.name
     return None
 
 
-def enabling_settings(marketplace: str, plugin: str, settings_files: Iterable[Path]) -> str | None:
+def enabling_settings(
+    marketplace: str, plugin: str, settings_files: Iterable[Path | SettingsFile]
+) -> str | None:
     """The settings file whose `enabledPlugins` names this plugin, however it is set.
 
-    A `false` entry means disabled, not uninstalled, so its cache is still wanted.
+    A `false` entry means disabled, not uninstalled, so its cache is still wanted. A file that
+    cannot be read or parsed raises SettingsError, as in `pinning_settings`.
     """
     key = f"{plugin}@{marketplace}"
-    for settings in settings_files:
-        try:
-            payload = json.loads(settings.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            continue
-        enabled = payload.get("enabledPlugins") if isinstance(payload, dict) else None
-        if isinstance(enabled, dict) and key in enabled:
-            return settings.name
+    for item in settings_files:
+        settings = _loaded(item)
+        if key in settings.enabled:
+            return settings.path.name
     return None
 
 
@@ -515,35 +581,98 @@ def project_settings_files(claude_json: Path) -> list[Path]:
 
     A plugin can be enabled per project, and such a plugin may have no `installPath` record, so
     without this a project-scope plugin reads as an uninstalled leftover. Stale project entries
-    are ordinary - the directory is simply gone - so a missing path is skipped, not reported.
+    are ordinary - the directory is simply gone - so a missing path is skipped, not reported, and
+    so is a missing index. An index that exists but cannot be read or parsed raises
+    SettingsError: read as "no projects", it would hide every project's settings at once.
     """
-    try:
-        payload = json.loads(claude_json.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
+    if not _present(claude_json):
         return []
-    projects = payload.get("projects") if isinstance(payload, dict) else None
+    text = _read_source(claude_json)
+    payload = _parse_source(claude_json, text) if text.strip() else {}
+    if not isinstance(payload, dict):
+        raise SettingsError(f"{claude_json} is not a JSON object")
+    projects = payload.get("projects", {})
     if not isinstance(projects, dict):
-        return []
+        raise SettingsError(f"{claude_json} has a 'projects' entry that is not an object")
     found: list[Path] = []
     for raw in projects:
         project = Path(raw)
-        if not project.is_dir():
+        if not _is_dir(project, listed_in=claude_json):
             continue
         found.extend((project / ".claude" / name) for name in SETTINGS_NAMES)
     return found
 
 
-def _readable(paths: Iterable[Path]) -> list[Path]:
-    """The files that exist, each once, in the order first seen."""
-    seen: dict[str, Path] = {}
-    for path in paths:
+# errno says "this path cannot exist" (not "could not look"): ENOENT, ENOTDIR, and on Windows
+# ERROR_INVALID_NAME for a string that is no valid path at all.
+_WINERROR_INVALID_NAME = 123
+
+
+def _absent(exc: OSError) -> bool:
+    return isinstance(exc, (FileNotFoundError, NotADirectoryError)) or (
+        getattr(exc, "winerror", None) == _WINERROR_INVALID_NAME
+    )
+
+
+def _present(path: Path) -> bool:
+    """Whether anything sits at this path. A lookup that FAILS raises SettingsError, because
+    "could not look" is not "nothing there". A dangling symlink is present, and its read fails."""
+    try:
+        os.lstat(path)
+    except ValueError:
+        return False  # an embedded NUL: no such path can exist
+    except OSError as exc:
+        if _absent(exc):
+            return False
+        raise SettingsError(f"{path} cannot be checked: {exc.strerror or exc}") from exc
+    return True
+
+
+def _is_dir(project: Path, *, listed_in: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.stat(project).st_mode)
+    except ValueError:
+        return False
+    except OSError as exc:
+        if _absent(exc):
+            return False
+        raise SettingsError(
+            f"project {project} listed in {listed_in} cannot be checked: {exc.strerror or exc}"
+        ) from exc
+
+
+@dataclass(frozen=True)
+class SettingsSources:
+    """Every settings file read, each once, and every source that could not be relied on."""
+
+    files: tuple[SettingsFile, ...]
+    problems: tuple[str, ...]
+
+
+def load_settings(candidates: Iterable[tuple[Path, bool]]) -> SettingsSources:
+    """Read each `(path, required)` candidate once, in the order first seen.
+
+    A missing file is skipped unless it is REQUIRED (named on the command line), when it is a
+    problem: a typo there would otherwise read as "nothing pinned". Every other failure is a
+    problem whatever the source.
+    """
+    files: list[SettingsFile] = []
+    problems: list[str] = []
+    seen: set[str] = set()
+    for path, required in candidates:
         try:
-            key = str(path.resolve())
-        except OSError:
-            continue
-        if key not in seen and path.is_file():
-            seen[key] = path
-    return list(seen.values())
+            if not _present(path):
+                if required:
+                    problems.append(f"{path} does not exist")
+                continue
+            key = canonical(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(read_settings(path))
+        except SettingsError as exc:
+            problems.append(str(exc))
+    return SettingsSources(tuple(files), tuple(problems))
 
 
 def _version_dirs(cache_dir: Path, marketplaces: Sequence[str] | None) -> list[Path]:
@@ -594,17 +723,18 @@ def build_plan(
         if installed_plugins is not None
         else given.parent / INSTALLED_PLUGINS
     )
-    settings = _readable(
-        [Path(item).expanduser() for item in settings_files]
-        if settings_files is not None
-        else _discovered_settings(given, claude_json=claude_json, project_settings=project_settings)
+    sources = _gather_settings(
+        given,
+        settings_files=settings_files,
+        claude_json=claude_json,
+        project_settings=project_settings,
     )
     context = _KeepContext(
         root=root,
         given=given,
         installed=record.install_paths,
         explicit=tuple(canonical(item) for item in keep),
-        settings=tuple(settings),
+        settings=sources.files,
         homes=_homes(given),
     )
     moment = time.time() if now is None else now
@@ -621,6 +751,8 @@ def build_plan(
         entries = [_without_the_lock_mechanism(entry) for entry in entries]
     if record.problem is not None:
         entries = [_without_the_install_record(entry, record.problem) for entry in entries]
+    if sources.problems:
+        entries = [_without_readable_settings(entry, sources.problems) for entry in entries]
     if marketplaces is None:
         entries.extend(_temp_entries(root, min_age_seconds=min_age_seconds, now=moment))
     return Plan(
@@ -628,7 +760,8 @@ def build_plan(
         entries=tuple(entries),
         saw_live_lock=saw_live_lock,
         saw_lock_dir=saw_lock_dir,
-        settings_files=tuple(settings),
+        settings_files=tuple(settings.path for settings in sources.files),
+        settings_problems=sources.problems,
         install_record=record.path,
         install_problem=record.problem,
         unmatched_keep=_unmatched_keep(keep, context.explicit, entries),
@@ -643,7 +776,7 @@ class _KeepContext:
     given: Path
     installed: frozenset[str]
     explicit: tuple[str, ...]
-    settings: tuple[Path, ...]
+    settings: tuple[SettingsFile, ...]
     homes: tuple[Path, ...]
 
 
@@ -700,14 +833,55 @@ def _without_the_install_record(entry: Entry, problem: str) -> Entry:
     )
 
 
-def _discovered_settings(
-    root: Path, *, claude_json: str | Path | None, project_settings: bool
-) -> list[Path]:
-    files = default_settings_files(root)
-    if not project_settings:
-        return files
-    index = Path(claude_json).expanduser() if claude_json is not None else default_claude_json(root)
-    return files + project_settings_files(index)
+def _without_readable_settings(entry: Entry, problems: Sequence[str]) -> Entry:
+    """Refuse a version directory nothing else keeps, because a settings source is unreadable.
+
+    The pin or `enabledPlugins` entry that source holds could be the one keeping this version,
+    and reading the file as "names nothing" would plan it for deletion.
+    """
+    if entry.kind != KIND_VERSION or entry.refusal is not None or entry.keep_reason is not None:
+        return entry
+    return Entry(
+        **{
+            **entry.__dict__,
+            "refusal": "a settings source that may pin or enable it cannot be used: "
+            + "; ".join(problems)
+            + " (repair it, or choose the files with --settings or --no-project-settings)",
+        }
+    )
+
+
+def _gather_settings(
+    given: Path,
+    *,
+    settings_files: Sequence[str | Path] | None,
+    claude_json: str | Path | None,
+    project_settings: bool,
+) -> SettingsSources:
+    """The settings files to consult: the ones named, or the discovered user and project pairs.
+
+    A NAMED source (`--settings`, `--claude-json`) must exist; a discovered one may be absent.
+    """
+    if settings_files is not None:
+        return load_settings((Path(item).expanduser(), True) for item in settings_files)
+    candidates = [(path, False) for path in default_settings_files(given)]
+    problems: list[str] = []
+    if project_settings:
+        try:
+            candidates += [(path, False) for path in _project_candidates(given, claude_json)]
+        except SettingsError as exc:
+            problems.append(str(exc))
+    loaded = load_settings(candidates)
+    return SettingsSources(loaded.files, (*problems, *loaded.problems))
+
+
+def _project_candidates(given: Path, claude_json: str | Path | None) -> list[Path]:
+    if claude_json is None:
+        return project_settings_files(default_claude_json(given))
+    index = Path(claude_json).expanduser()
+    if not _present(index):
+        raise SettingsError(f"{index} does not exist")
+    return project_settings_files(index)
 
 
 def _without_the_lock_mechanism(entry: Entry) -> Entry:
@@ -926,8 +1100,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "only version of a plugin a settings file's enabledPlugins names. A temp_* "
             "directory is kept while it is younger than --min-age. Symlinks, paths reached "
             "through a symlink and paths outside the cache are refused, and so is every "
-            "otherwise unkept version when installed_plugins.json cannot be read. --apply "
-            "re-plans and removes that plan."
+            "otherwise unkept version when installed_plugins.json cannot be read. A settings "
+            "file or ~/.claude.json that exists but cannot be read or parsed stops the run with "
+            "exit 2, naming it. --apply re-plans and removes that plan."
         ),
     )
     parser.add_argument(
@@ -1040,6 +1215,19 @@ def _usage_problem(plan: Plan, args: argparse.Namespace) -> str | None:
     return None
 
 
+def _report_settings_problems(problems: Sequence[str]) -> None:
+    """Name every settings source that could not be used, and why nothing was planned."""
+    for problem in problems:
+        print(f"pluginprune: settings: {problem}", file=sys.stderr)
+    print(
+        "pluginprune: nothing planned or removed - a pin or enabledPlugins entry in a file it"
+        " cannot use may be what keeps a version, and reading that file as empty would delete"
+        " it. Repair the file, or choose the files yourself with --settings or"
+        " --no-project-settings.",
+        file=sys.stderr,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command line. An unexpected crash exits 2, never 1 ("refused or not removed")."""
     _tolerant_streams()
@@ -1072,6 +1260,9 @@ def _run(args: argparse.Namespace) -> int:
     problem = _usage_problem(plan, args)
     if problem is not None:
         print(f"pluginprune: {problem}", file=sys.stderr)
+        return 2
+    if plan.settings_problems:
+        _report_settings_problems(plan.settings_problems)
         return 2
 
     if plan.saw_lock_dir and not plan.saw_live_lock and plan.prune:
