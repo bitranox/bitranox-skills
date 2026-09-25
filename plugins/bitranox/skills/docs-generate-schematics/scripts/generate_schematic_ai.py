@@ -13,8 +13,12 @@ This script uses a smart iterative refinement approach:
 4. Repeat until quality meets standards (max iterations)
 
 Requirements:
-    - OPENROUTER_API_KEY environment variable
+    - OPENROUTER_API_KEY environment variable (the only key source: a key on the command
+      line would sit in the process list for the whole run)
     - httpx2 library
+
+Exit status: 0 an image was written and reviewed, 1 a failure - no image, or an image whose
+review failed so its quality was NOT verified (the image is still written), 2 a usage error.
 
 Usage:
     python generate_schematic_ai.py "Create a flowchart showing CONSORT participant flow" -o flowchart.png
@@ -26,6 +30,8 @@ import argparse
 import base64
 import json
 import os
+import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -37,20 +43,28 @@ except ImportError:
     print("Error: httpx2 library not found. Run via: uv run --with httpx2 generate_schematic_ai.py")
     sys.exit(1)
 
-# Try to load .env file from multiple potential locations
-def _load_env_file():
-    """Load .env file from current directory or script directory only."""
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return False
+def _configure_console() -> None:
+    """Replace unencodable characters instead of crashing on a narrow console (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
 
-    for candidate in [Path.cwd() / ".env", Path(__file__).resolve().parent / ".env"]:
-        if candidate.exists():
-            load_dotenv(dotenv_path=candidate, override=False)
-            return True
 
-    return False
+def _parse_score(content: str) -> Optional[float]:
+    """The review's total score, or None when the review states none.
+
+    Markup is allowed between the label and the number ("**SCORE:** 9.5", "Score - 9.5"),
+    because a reviewer that bolds the label is still answering the question.
+    """
+    match = re.search(r'SCORE\W*(\d+(?:\.\d+)?)', content, re.IGNORECASE)
+    if match is None:
+        match = re.search(r'(?:rating|quality)[:\s]+(\d+(?:\.\d+)?)\s*(?:/\s*10)?', content, re.IGNORECASE)
+    return float(match.group(1)) if match else None
 
 
 class ScientificSchematicGenerator:
@@ -125,23 +139,14 @@ IMPORTANT - NO FIGURE NUMBERS:
         Initialize the generator.
         
         Args:
-            api_key: OpenRouter API key (or use OPENROUTER_API_KEY env var)
+            api_key: OpenRouter API key (default: the OPENROUTER_API_KEY env var)
             verbose: Print detailed progress information
         """
-        # Priority: 1) explicit api_key param, 2) environment variable, 3) .env file
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        
-        # If not found in environment, try loading from .env file
-        if not self.api_key:
-            _load_env_file()
-            self.api_key = os.getenv("OPENROUTER_API_KEY")
-        
         if not self.api_key:
             raise ValueError(
-                "OPENROUTER_API_KEY not found. Please either:\n"
-                "  1. Set the OPENROUTER_API_KEY environment variable\n"
-                "  2. Add OPENROUTER_API_KEY to your .env file\n"
-                "  3. Pass api_key parameter to the constructor\n"
+                "OPENROUTER_API_KEY not found. Set the OPENROUTER_API_KEY environment variable "
+                "(or pass api_key to the constructor).\n"
                 "Get your API key from: https://openrouter.ai/keys"
             )
         
@@ -422,7 +427,10 @@ IMPORTANT - NO FIGURE NUMBERS:
             max_iterations: Maximum iterations allowed
             
         Returns:
-            Tuple of (critique text, quality score 0-10, needs_improvement bool)
+            Tuple of (critique text, quality score 0-10, needs_improvement bool). The score
+            is None when no score could be established - the request failed, the response
+            had no choices, or the review stated no score. The critique then says why, and
+            needs_improvement is False: there is no critique to regenerate from.
         """
         # Use Gemini 3.1 Pro Preview for review - excellent vision and analysis
         image_data_url = self._image_to_base64(image_path)
@@ -509,7 +517,7 @@ If score < {threshold}, mark as NEEDS_IMPROVEMENT with specific suggestions."""
             # Extract text response
             choices = response.get("choices", [])
             if not choices:
-                return "Image generated successfully", 8.0
+                return "Review skipped: the review response had no choices", None, False
             
             message = choices[0].get("message", {})
             content = message.get("content", "")
@@ -527,26 +535,12 @@ If score < {threshold}, mark as NEEDS_IMPROVEMENT with specific suggestions."""
                         text_parts.append(block.get("text", ""))
                 content = "\n".join(text_parts)
             
-            # Try to extract score
-            score = 7.5  # Default score if extraction fails
-            import re
-            
-            # Look for SCORE: X or SCORE: X/10 format
-            score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', content, re.IGNORECASE)
-            if score_match:
-                score = float(score_match.group(1))
-            else:
-                # Fallback: look for any score pattern
-                score_match = re.search(r'(?:score|rating|quality)[:\s]+(\d+(?:\.\d+)?)\s*(?:/\s*10)?', content, re.IGNORECASE)
-                if score_match:
-                    score = float(score_match.group(1))
+            score = _parse_score(content or "")
+            if score is None:
+                return "Review skipped: the review stated no score\n" + (content or ""), None, False
             
             # Determine if improvement is needed based on verdict or score
-            needs_improvement = False
-            if "NEEDS_IMPROVEMENT" in content.upper():
-                needs_improvement = True
-            elif score < threshold:
-                needs_improvement = True
+            needs_improvement = "NEEDS_IMPROVEMENT" in content.upper() or score < threshold
             
             self._log(f"[OK] Review complete (Score: {score}/10, Threshold: {threshold}/10)")
             self._log(f"  Verdict: {'Needs improvement' if needs_improvement else 'Acceptable'}")
@@ -556,8 +550,8 @@ If score < {threshold}, mark as NEEDS_IMPROVEMENT with specific suggestions."""
                     needs_improvement)
         except Exception as e:
             self._log(f"Review skipped: {str(e)}")
-            # Don't fail the whole process if review fails - assume acceptable
-            return "Image generated successfully (review skipped)", 7.5, False
+            # A failed review does not fail the run, but it proves nothing about quality.
+            return f"Review skipped: {str(e)}", None, False
     
     def improve_prompt(self, original_prompt: str, critique: str, 
                       iteration: int) -> str:
@@ -622,7 +616,8 @@ Generate an improved version that addresses all the critique points while mainta
             "final_score": 0.0,
             "success": False,
             "early_stop": False,
-            "early_stop_reason": None
+            "early_stop_reason": None,
+            "review_skipped": False
         }
         
         current_prompt = f"""{self.SCIENTIFIC_DIAGRAM_GUIDELINES}
@@ -641,16 +636,19 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
         print(f"Output: {output_path}")
         print(f"{'='*60}\n")
         
+        # The highest-scoring reviewed image so far: kept when a later generation fails,
+        # so a paid, reviewed image is never thrown away for a retry that produced nothing.
+        best = None
         for i in range(1, iterations + 1):
             print(f"\n[Iteration {i}/{iterations}]")
             print("-" * 40)
-            
+
             # Generate image
             print(f"Generating image...")
             image_data = self.generate_image(current_prompt)
-            
+
             if not image_data:
-                error_msg = getattr(self, '_last_error', 'Image generation failed - no image data returned')
+                error_msg = self._last_error or 'Image generation failed - no image data returned'
                 print(f"[FAIL] Generation failed: {error_msg}")
                 results["iterations"].append({
                     "iteration": i,
@@ -658,20 +656,19 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                     "error": error_msg
                 })
                 continue
-            
+
             # Save iteration image
             iter_path = output_dir / f"{base_name}_v{i}{extension}"
             with open(iter_path, "wb") as f:
                 f.write(image_data)
             print(f"[OK] Saved: {iter_path}")
-            
+
             # Review image using Gemini 3.1 Pro Preview
             print(f"Reviewing image with Gemini 3.1 Pro Preview...")
             critique, score, needs_improvement = self.review_image(
                 str(iter_path), user_prompt, i, doc_type, iterations
             )
-            print(f"[OK] Score: {score}/10 (threshold: {threshold}/10)")
-            
+
             # Save iteration results
             iteration_result = {
                 "iteration": i,
@@ -683,7 +680,21 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 "success": True
             }
             results["iterations"].append(iteration_result)
-            
+
+            if score is None:
+                # No score means no critique to improve on and no threshold check: keep the
+                # image, but say plainly that its quality is unknown.
+                print(f"[WARN] {critique.splitlines()[0]}")
+                print(f"[WARN] Quality NOT verified against the {doc_type} threshold ({threshold}/10)")
+                results["final_image"] = str(iter_path)
+                results["final_score"] = None
+                results["success"] = True
+                results["review_skipped"] = True
+                break
+            print(f"[OK] Score: {score}/10 (threshold: {threshold}/10)")
+            if best is None or score > best["score"]:
+                best = iteration_result
+
             # Check if quality is acceptable - STOP EARLY if so
             if not needs_improvement:
                 print(f"\n[OK] Quality meets {doc_type} threshold ({score} >= {threshold})")
@@ -694,7 +705,7 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 results["early_stop"] = True
                 results["early_stop_reason"] = f"Quality score {score} meets threshold {threshold} for {doc_type}"
                 break
-            
+
             # If this is the last iteration, we're done regardless
             if i == iterations:
                 print(f"\n[WARN] Maximum iterations reached")
@@ -702,38 +713,46 @@ Generate a publication-quality scientific diagram that meets all the guidelines 
                 results["final_score"] = score
                 results["success"] = True
                 break
-            
+
             # Quality below threshold - improve prompt for next iteration
             print(f"\n[WARN] Quality below threshold ({score} < {threshold})")
             print(f"Improving prompt based on feedback...")
             current_prompt = self.improve_prompt(user_prompt, critique, i + 1)
-        
+
+        if not results["success"] and best is not None:
+            print(f"\n[WARN] The last generation failed; keeping v{best['iteration']} "
+                  f"(score {best['score']}/10, below the {threshold}/10 threshold)")
+            results["final_image"] = best["image_path"]
+            results["final_score"] = best["score"]
+            results["success"] = True
+            results["fallback_iteration"] = best["iteration"]
+
         # Copy final version to output path
         if results["success"] and results["final_image"]:
             final_iter_path = Path(results["final_image"])
             if final_iter_path != output_path:
-                import shutil
                 shutil.copy(final_iter_path, output_path)
                 print(f"\n[OK] Final image: {output_path}")
-        
+
         # Save review log
         log_path = output_dir / f"{base_name}_review_log.json"
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"[OK] Review log: {log_path}")
-        
+
         print(f"\n{'='*60}")
         print(f"Generation Complete!")
-        print(f"Final Score: {results['final_score']}/10")
+        final_score = results["final_score"]
+        print(f"Final Score: {'not reviewed' if final_score is None else f'{final_score}/10'}")
         if results["early_stop"]:
             print(f"Iterations Used: {len([r for r in results['iterations'] if r.get('success')])}/{iterations} (early stop)")
         print(f"{'='*60}\n")
-        
+
         return results
 
 
-def main():
-    """Command-line interface."""
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line parser (the wrapper script's tests parse its child argv with it)."""
     parser = argparse.ArgumentParser(
         description="Generate scientific schematics using AI with smart iterative refinement",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -766,7 +785,10 @@ Note: Multiple iterations only occur if quality is BELOW the threshold.
       If the first generation meets the threshold, no extra API calls are made.
 
 Environment:
-  OPENROUTER_API_KEY    OpenRouter API key (required)
+  OPENROUTER_API_KEY    OpenRouter API key (required; the only way to pass the key)
+
+Exit status: 0 image written and reviewed, 1 failure or review unavailable
+(the image may still be written), 2 usage error.
         """
     )
     
@@ -779,26 +801,36 @@ Environment:
                        choices=["journal", "conference", "poster", "presentation", 
                                "report", "grant", "thesis", "preprint", "default"],
                        help="Document type for quality threshold (default: default)")
-    parser.add_argument("--api-key", help="OpenRouter API key (or set OPENROUTER_API_KEY)")
+    # Refused in main(), never used: the key comes from OPENROUTER_API_KEY only.
+    parser.add_argument("--api-key", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbose", action="store_true",
                        help="Verbose output")
-    
-    args = parser.parse_args()
-    
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Command-line interface."""
+    _configure_console()
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.api_key is not None:
+        # Accepted by the parser only to refuse it with a reason; the value is never echoed.
+        parser.error("--api-key is not accepted: a key on the command line is visible in the "
+                     "process list for the whole run. Set OPENROUTER_API_KEY in the environment.")
+
     # Check for API key
-    api_key = args.api_key or os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("Error: OPENROUTER_API_KEY environment variable not set")
         print("\nSet it with:")
         print("  export OPENROUTER_API_KEY='your_api_key'")
-        print("\nOr provide via --api-key flag")
-        sys.exit(1)
-    
+        return 1
+
     # Validate iterations - enforce max of 2
     if args.iterations < 1 or args.iterations > 2:
         print("Error: Iterations must be between 1 and 2")
-        sys.exit(1)
-    
+        return 1
+
     try:
         generator = ScientificSchematicGenerator(api_key=api_key, verbose=args.verbose)
         results = generator.generate_iterative(
@@ -807,20 +839,22 @@ Environment:
             iterations=args.iterations,
             doc_type=args.doc_type
         )
-        
-        if results["success"]:
-            print(f"\n[OK] Success! Image saved to: {args.output}")
-            if results.get("early_stop"):
-                print(f"  (Completed in {len([r for r in results['iterations'] if r.get('success')])} iteration(s) - quality threshold met)")
-            sys.exit(0)
-        else:
+
+        if not results["success"]:
             print(f"\n[FAIL] Generation failed. Check review log for details.")
-            sys.exit(1)
+            return 1
+        if results.get("review_skipped"):
+            print(f"\n[WARN] Image saved to {args.output}, but its quality was NOT verified "
+                  f"(the review failed); exiting 1")
+            return 1
+        print(f"\n[OK] Success! Image saved to: {args.output}")
+        if results.get("early_stop"):
+            print(f"  (Completed in {len([r for r in results['iterations'] if r.get('success')])} iteration(s) - quality threshold met)")
+        return 0
     except Exception as e:
         print(f"\n[FAIL] Error: {str(e)}")
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())

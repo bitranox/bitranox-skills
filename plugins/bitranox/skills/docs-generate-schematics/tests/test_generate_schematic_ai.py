@@ -1,7 +1,7 @@
 """Tests for generate_schematic_ai.py pure / offline logic.
 
 No network is performed: _make_request is monkeypatched where a response is
-needed. The module imports cleanly because it only depends on requests.
+needed. The module imports cleanly because its only third-party dependency is httpx2.
 """
 
 import base64
@@ -11,10 +11,19 @@ import pytest
 
 def test_constructor_raises_without_key(gen_ai, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    # Neutralise any .env fallback so the test is deterministic.
-    monkeypatch.setattr(gen_ai, "_load_env_file", lambda: False)
     with pytest.raises(ValueError):
         gen_ai.ScientificSchematicGenerator()
+
+
+def test_constructor_reads_no_dotenv_file(gen_ai, monkeypatch, tmp_path):
+    # The key comes from the environment only: a .env beside the run is not read, and the
+    # error does not send the reader to one.
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=from-dotenv-fake\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(ValueError) as err:
+        gen_ai.ScientificSchematicGenerator()
+    assert ".env" not in str(err.value)
 
 
 def test_constructor_accepts_explicit_key(generator):
@@ -144,9 +153,10 @@ def test_review_image_request_error_is_swallowed(generator, tmp_path, monkeypatc
         str(img), "p", iteration=1, doc_type="journal", max_iterations=2
     )
 
-    # Review failure must not fail the pipeline: assume acceptable.
+    # A failed review does not stop the pipeline, but it yields no score: nothing may claim
+    # the image met a threshold nobody checked.
     assert needs is False
-    assert score == 7.5
+    assert score is None
     assert "skipped" in critique.lower()
 
 

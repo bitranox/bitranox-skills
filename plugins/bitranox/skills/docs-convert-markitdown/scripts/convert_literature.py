@@ -1,19 +1,66 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["markitdown[pdf]"]
+# ///
 """
 Convert scientific literature PDFs to Markdown for analysis and review.
 
 This script is specifically designed for converting academic papers,
 organizing them, and preparing them for literature review workflows.
+
+Output layout: each paper keeps its subdirectory (with -r, in/a/x.pdf becomes
+out/a/x.md), under a year directory when --organize-by-year is set. Two papers
+that would still write the same file are both reported as failed rather than
+one silently overwriting the other. INDEX.md links each paper's actual output.
+
+Exit status: 0 every paper converted, 1 no PDF files found,
+2 an error (bad input directory, a failed conversion, an output collision,
+an unreadable subdirectory, or markitdown missing).
 """
+
+from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
-from pathlib import Path
-from typing import List, Dict, Optional
-from markitdown import MarkItDown
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+EXIT_OK = 0
+EXIT_NONE_FOUND = 1
+EXIT_ERROR = 2
+
+
+def _configure_console() -> None:
+    """Replace unencodable characters instead of crashing on a narrow console (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+def _make_converter() -> Any:
+    """Build a MarkItDown instance.
+
+    markitdown is imported here, not at module top, so --help, the "no PDFs"
+    path and the test suite work in an environment without it.
+    """
+    try:
+        from markitdown import MarkItDown
+    except ImportError as exc:
+        raise RuntimeError(
+            "markitdown is not installed: run this script with `uv run` (it declares its "
+            "dependencies) or `pip install 'markitdown[pdf]'`"
+        ) from exc
+    return MarkItDown()
 
 
 def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
@@ -22,16 +69,16 @@ def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
     Supports patterns like: Author_Year_Title.pdf
     """
     metadata = {}
-    
+
     # Remove extension
     name = Path(filename).stem
-    
+
     # Try to extract year. NOT \b: an underscore is a word character, so \b never fires
     # between '_' and a digit and the year is missed in the documented Author_Year_Title form.
     year_match = re.search(r'(?<!\d)(19|20)\d{2}(?!\d)', name)
     if year_match:
         metadata['year'] = year_match.group()
-    
+
     # Split by underscores or dashes
     parts = [p for p in re.split(r'[_\-]', name) if p]
     if 'year' in metadata:
@@ -43,107 +90,147 @@ def extract_metadata_from_filename(filename: str) -> Dict[str, str]:
         metadata['title'] = ' '.join(parts[1:])
     else:
         metadata['title'] = name.replace('_', ' ')
-    
+
     return metadata
 
 
+def find_pdfs(input_dir: Path, recursive: bool, walk_errors: List[str]) -> List[Path]:
+    """
+    List the PDFs under input_dir, matching the .pdf suffix in any case.
+
+    A directory that cannot be read is appended to walk_errors instead of
+    being skipped silently.
+    """
+    def on_error(err: OSError) -> None:
+        walk_errors.append(f"{err.filename}: {err.strerror or err}")
+
+    found = []
+    for root, dirs, names in os.walk(input_dir, onerror=on_error):
+        found.extend(Path(root) / name for name in names if name.lower().endswith(".pdf"))
+        if not recursive:
+            dirs.clear()
+    return sorted(found)
+
+
+def plan_outputs(pdf_files: List[Path], input_dir: Path, output_dir: Path,
+                 organize_by_year: bool) -> tuple[Dict[Path, Path], Dict[Path, str]]:
+    """
+    Map each PDF to its Markdown output, keeping its subdirectory.
+
+    Returns:
+        (planned, collisions): planned maps input -> output for the papers that
+        can be converted; collisions maps each paper that shares its output with
+        another to a failure message. Paths are compared case-folded, because
+        Windows and macOS file systems do.
+    """
+    target = {}
+    by_output: Dict[str, List[Path]] = {}
+    for pdf in pdf_files:
+        base = output_dir
+        year = extract_metadata_from_filename(pdf.name).get('year')
+        if organize_by_year and year:
+            base = base / year
+        target[pdf] = base / pdf.relative_to(input_dir).parent / f"{pdf.stem}.md"
+        by_output.setdefault(str(target[pdf]).casefold(), []).append(pdf)
+
+    planned, collisions = {}, {}
+    for group in by_output.values():
+        if len(group) == 1:
+            planned[group[0]] = target[group[0]]
+            continue
+        names = ", ".join(str(p.relative_to(input_dir)) for p in group)
+        for pdf in group:
+            collisions[pdf] = f"[FAIL] Output collision: {names} would all write {target[pdf].name}"
+    return planned, collisions
+
+
+def _yaml_str(value: str) -> str:
+    """A YAML double-quoted scalar. JSON string syntax is a valid subset, so quotes and
+    backslashes in a filename cannot break the front matter."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def render_paper(metadata: Dict[str, str], text_content: str) -> str:
+    """The Markdown document for one paper: YAML front matter, a header block, the text."""
+    title = metadata['title']
+    content = "---\n"
+    content += f"title: {_yaml_str(title)}\n"
+    if 'author' in metadata:
+        content += f"author: {_yaml_str(metadata['author'])}\n"
+    if 'year' in metadata:
+        content += f"year: {metadata['year']}\n"
+    content += f"source: {_yaml_str(metadata['source_file'])}\n"
+    content += f"converted: {_yaml_str(metadata['converted_date'])}\n"
+    content += "---\n\n"
+
+    content += f"# {title}\n\n"
+
+    content += "## Document Information\n\n"
+    if 'author' in metadata:
+        content += f"**Author**: {metadata['author']}\n"
+    if 'year' in metadata:
+        content += f"**Year**: {metadata['year']}\n"
+    content += f"**Source File**: {metadata['source_file']}\n"
+    content += f"**Converted**: {metadata['converted_date']}\n\n"
+    content += "---\n\n"
+
+    return content + text_content
+
+
 def convert_paper(
-    md: MarkItDown,
+    md: Any,
     input_file: Path,
-    output_dir: Path,
-    organize_by_year: bool = False
+    output_file: Path,
+    output_dir: Path
 ) -> tuple[bool, Dict]:
     """
     Convert a single paper to Markdown with metadata extraction.
-    
+
     Args:
-        md: MarkItDown instance
+        md: MarkItDown instance (anything with a compatible convert())
         input_file: Path to PDF file
-        output_dir: Output directory
-        organize_by_year: Organize into year subdirectories
-        
+        output_file: Markdown file to write (see plan_outputs)
+        output_dir: Root output directory; metadata['output_file'] is relative to it
+
     Returns:
         Tuple of (success, metadata_dict)
     """
+    print(f"Converting: {input_file.name}")
     try:
-        print(f"Converting: {input_file.name}")
-        
-        # Convert to Markdown
         result = md.convert(str(input_file))
-        
-        # Extract metadata from filename
+
+        # The title always comes from the filename: extract_metadata_from_filename sets
+        # one for every name, and markitdown reports no title for a PDF anyway.
         metadata = extract_metadata_from_filename(input_file.name)
         metadata['source_file'] = input_file.name
         metadata['converted_date'] = datetime.now().isoformat()
-        
-        # Try to extract title from content if not in filename
-        if 'title' not in metadata and result.title:
-            metadata['title'] = result.title
-        
-        # Create output path
-        if organize_by_year and 'year' in metadata:
-            output_subdir = output_dir / metadata['year']
-            output_subdir.mkdir(parents=True, exist_ok=True)
-        else:
-            output_subdir = output_dir
-            output_subdir.mkdir(parents=True, exist_ok=True)
-        
-        output_file = output_subdir / f"{input_file.stem}.md"
-        
-        # Create formatted Markdown with front matter
-        content = "---\n"
-        content += f"title: \"{metadata.get('title', input_file.stem)}\"\n"
-        if 'author' in metadata:
-            content += f"author: \"{metadata['author']}\"\n"
-        if 'year' in metadata:
-            content += f"year: {metadata['year']}\n"
-        content += f"source: \"{metadata['source_file']}\"\n"
-        content += f"converted: \"{metadata['converted_date']}\"\n"
-        content += "---\n\n"
-        
-        # Add title
-        content += f"# {metadata.get('title', input_file.stem)}\n\n"
-        
-        # Add metadata section
-        content += "## Document Information\n\n"
-        if 'author' in metadata:
-            content += f"**Author**: {metadata['author']}\n"
-        if 'year' in metadata:
-            content += f"**Year**: {metadata['year']}\n"
-        content += f"**Source File**: {metadata['source_file']}\n"
-        content += f"**Converted**: {metadata['converted_date']}\n\n"
-        content += "---\n\n"
-        
-        # Add content
-        content += result.text_content
-        
-        # Write to file
-        output_file.write_text(content, encoding='utf-8')
-        
-        print(f"[OK] Saved to: {output_file}")
-        
-        return True, metadata
-        
+        metadata['output_file'] = output_file.relative_to(output_dir).as_posix()
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(render_paper(metadata, result.text_content), encoding='utf-8')
     except Exception as e:
         print(f"[FAIL] Error converting {input_file.name}: {str(e)}")
         return False, {'source_file': input_file.name, 'error': str(e)}
 
+    print(f"[OK] Saved to: {output_file}")
+    return True, metadata
+
 
 def create_index(papers: List[Dict], output_dir: Path):
     """Create an index/catalog of all converted papers."""
-    
+
     # Sort by year (if available) and title
     papers_sorted = sorted(
         papers,
         key=lambda x: (x.get('year', '9999'), x.get('title', ''))
     )
-    
+
     # Create Markdown index
     index_content = "# Literature Review Index\n\n"
     index_content += f"**Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
     index_content += f"**Total Papers**: {len(papers)}\n\n"
     index_content += "---\n\n"
-    
+
     # Group by year
     by_year = {}
     for paper in papers_sorted:
@@ -151,7 +238,7 @@ def create_index(papers: List[Dict], output_dir: Path):
         if year not in by_year:
             by_year[year] = []
         by_year[year].append(paper)
-    
+
     # Write by year
     for year in sorted(by_year.keys()):
         index_content += f"## {year}\n\n"
@@ -159,22 +246,21 @@ def create_index(papers: List[Dict], output_dir: Path):
             title = paper.get('title', paper.get('source_file', 'Unknown'))
             author = paper.get('author', 'Unknown Author')
             source = paper.get('source_file', '')
-            
-            # Create link to markdown file
-            md_file = Path(source).stem + ".md"
-            if 'year' in paper and paper['year'] != 'Unknown':
-                md_file = f"{paper['year']}/{md_file}"
-            
+
+            # Link where the paper was actually written; the angle brackets keep a
+            # name with spaces a single link target.
+            md_file = paper.get('output_file') or Path(source).stem + ".md"
+
             index_content += f"- **{title}**\n"
             index_content += f"  - Author: {author}\n"
             index_content += f"  - Source: {source}\n"
-            index_content += f"  - [Read Markdown]({md_file})\n\n"
-    
+            index_content += f"  - [Read Markdown](<{md_file}>)\n\n"
+
     # Write index
     index_file = output_dir / "INDEX.md"
     index_file.write_text(index_content, encoding='utf-8')
     print(f"\n[OK] Created index: {index_file}")
-    
+
     # Also create JSON catalog
     catalog_file = output_dir / "catalog.json"
     with open(catalog_file, 'w', encoding='utf-8') as f:
@@ -182,7 +268,7 @@ def create_index(papers: List[Dict], output_dir: Path):
     print(f"[OK] Created catalog: {catalog_file}")
 
 
-def main():
+def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert scientific literature PDFs to Markdown",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -190,23 +276,25 @@ def main():
 Examples:
   # Convert all PDFs in a directory
   python convert_literature.py papers/ output/
-  
+
   # Organize by year
   python convert_literature.py papers/ output/ --organize-by-year
-  
+
   # Create index of all papers
   python convert_literature.py papers/ output/ --create-index
-  
+
 Filename Conventions:
   For best results, name your PDFs using this pattern:
     Author_Year_Title.pdf
-    
+
   Examples:
     Smith_2023_Machine_Learning_Applications.pdf
     Jones_2022_Climate_Change_Analysis.pdf
+
+Exit status: 0 all converted, 1 no PDF files found, 2 an error.
         """
     )
-    
+
     parser.add_argument('input_dir', type=Path, help='Directory with PDF files')
     parser.add_argument('output_dir', type=Path, help='Output directory for Markdown files')
     parser.add_argument(
@@ -222,67 +310,76 @@ Filename Conventions:
     parser.add_argument(
         '--recursive', '-r',
         action='store_true',
-        help='Search subdirectories recursively'
+        help='Search subdirectories recursively (output keeps the subdirectories)'
     )
-    
-    args = parser.parse_args()
-    
-    # Validate input
-    if not args.input_dir.exists():
-        print(f"Error: Input directory '{args.input_dir}' does not exist")
-        sys.exit(1)
-    
-    if not args.input_dir.is_dir():
-        print(f"Error: '{args.input_dir}' is not a directory")
-        sys.exit(1)
-    
-    # Find PDF files
-    if args.recursive:
-        pdf_files = list(args.input_dir.rglob("*.pdf"))
-    else:
-        pdf_files = list(args.input_dir.glob("*.pdf"))
-    
-    if not pdf_files:
-        print("No PDF files found")
-        sys.exit(1)
-    
-    print(f"Found {len(pdf_files)} PDF file(s)")
-    
-    # Create MarkItDown instance
-    md = MarkItDown()
-    
-    # Convert all papers
-    results = []
-    success_count = 0
-    
-    for pdf_file in pdf_files:
-        success, metadata = convert_paper(
-            md,
-            pdf_file,
-            args.output_dir,
-            args.organize_by_year
-        )
-        
-        if success:
-            success_count += 1
-            results.append(metadata)
-    
-    # Create index if requested
-    if args.create_index and results:
-        create_index(results, args.output_dir)
-    
-    # Print summary
+    return parser.parse_args(argv)
+
+
+def _print_summary(total: int, success_count: int, failures: List[str]) -> None:
     print("\n" + "="*50)
     print("CONVERSION SUMMARY")
     print("="*50)
-    print(f"Total papers:    {len(pdf_files)}")
+    print(f"Total papers:    {total}")
     print(f"Successful:      {success_count}")
-    print(f"Failed:          {len(pdf_files) - success_count}")
-    print(f"Success rate:    {success_count/len(pdf_files)*100:.1f}%")
-    
-    sys.exit(0 if success_count == len(pdf_files) else 1)
+    print(f"Failed:          {len(failures)}")
+    if total:
+        print(f"Success rate:    {success_count/total*100:.1f}%")
+    if failures:
+        print("\nFailures:")
+        for failure in failures:
+            print(f"  - {failure}")
+
+
+def _run(args: argparse.Namespace) -> int:
+    if not args.input_dir.exists():
+        print(f"Error: Input directory '{args.input_dir}' does not exist", file=sys.stderr)
+        return EXIT_ERROR
+    if not args.input_dir.is_dir():
+        print(f"Error: '{args.input_dir}' is not a directory", file=sys.stderr)
+        return EXIT_ERROR
+
+    walk_errors: List[str] = []
+    pdf_files = find_pdfs(args.input_dir, args.recursive, walk_errors)
+    failures = [f"cannot read directory {error}" for error in walk_errors]
+    for failure in failures:
+        print(f"[FAIL] {failure[0].upper()}{failure[1:]}")
+    if not pdf_files:
+        print("No PDF files found")
+        return EXIT_ERROR if failures else EXIT_NONE_FOUND
+
+    print(f"Found {len(pdf_files)} PDF file(s)")
+    planned, collisions = plan_outputs(pdf_files, args.input_dir, args.output_dir,
+                                       args.organize_by_year)
+    for message in collisions.values():
+        print(message)
+    failures += list(collisions.values())
+
+    results = []
+    if planned:
+        md = _make_converter()
+        for pdf_file, output_file in planned.items():
+            success, metadata = convert_paper(md, pdf_file, output_file, args.output_dir)
+            if success:
+                results.append(metadata)
+            else:
+                failures.append(f"{pdf_file}: {metadata['error']}")
+
+    if args.create_index and results:
+        create_index(results, args.output_dir)
+
+    _print_summary(len(pdf_files), len(results), failures)
+    return EXIT_ERROR if failures else EXIT_OK
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    _configure_console()
+    args = _parse_args(argv)
+    try:
+        return _run(args)
+    except Exception as exc:  # a crash must not share the "no PDFs found" exit code
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
 
 
 if __name__ == '__main__':
-    main()
-
+    sys.exit(main())

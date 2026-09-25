@@ -25,7 +25,8 @@ pip install 'markitdown[pdf]'
 
 **Limitations**:
 - Complex layouts may not preserve perfect formatting
-- Scanned PDFs require OCR setup
+- Scanned PDFs yield no text: markitdown has no local OCR, so route them through Azure
+  Document Intelligence (`docintel_endpoint`)
 - Some PDF features (annotations, forms) may not convert
 
 **Example**:
@@ -166,8 +167,8 @@ result = md.convert("experimental_data.xlsx")
 
 **Capabilities**:
 - EXIF metadata extraction
-- OCR text extraction
 - AI-powered image descriptions
+- No OCR: an image's text comes only from an LLM description or Azure Document Intelligence
 
 **Dependencies**:
 ```bash
@@ -175,7 +176,7 @@ pip install 'markitdown[all]'  # Includes image support
 ```
 
 **Best For**:
-- Scanned documents
+- Scanned pages, when an `llm_client` describes them
 - Charts and graphs
 - Scientific diagrams
 - Photographs with text
@@ -203,15 +204,9 @@ md = MarkItDown(
 result = md.convert("graph.png")
 ```
 
-**OCR for Text Extraction**:
-Requires Tesseract OCR:
-```bash
-# macOS
-brew install tesseract
-
-# Ubuntu
-sudo apt-get install tesseract-ocr
-```
+**No local OCR**: markitdown has no tesseract code path, so installing tesseract changes
+nothing. To get the text out of an image, pass an `llm_client` (above) or use Azure Document
+Intelligence.
 
 ---
 
@@ -459,9 +454,10 @@ result = md.convert("message.msg")
    md = MarkItDown(docintel_endpoint="endpoint_url")
    ```
 
-2. **For scanned PDFs, ensure OCR is set up**:
-   ```bash
-   brew install tesseract  # macOS
+2. **For scanned PDFs, use Azure Document Intelligence** - markitdown has no local OCR, and an
+   `llm_client` does not help here because a PDF's images are never sent to the LLM:
+   ```python
+   md = MarkItDown(docintel_endpoint="endpoint_url")
    ```
 
 3. **Split very large PDFs before conversion** for better performance
@@ -498,7 +494,7 @@ result = md.convert("message.msg")
    )
    ```
 
-2. **For text-heavy images, ensure OCR dependencies** are installed
+2. **For text-heavy images, pass an `llm_client`** - there is no OCR dependency to install
 
 3. **High-resolution images** may take longer to process
 

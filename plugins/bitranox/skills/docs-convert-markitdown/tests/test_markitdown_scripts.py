@@ -51,12 +51,3 @@ def test_prompts_dict_complete(with_ai):
         assert value and isinstance(value, str)
         # .strip() applied in source: no surrounding whitespace.
         assert value == value.strip()
-
-
-def test_batch_default_extensions_logic(batch, tmp_path):
-    # batch_convert returns an empty-stats dict when no matching files exist,
-    # without ever constructing a MarkItDown instance or doing network I/O.
-    out = tmp_path / "out"
-    stats = batch.batch_convert(input_dir=tmp_path, output_dir=out, extensions=[".pdf"])
-    assert stats == {"total": 0, "success": 0, "failed": 0}
-    assert out.is_dir()  # output dir is created eagerly

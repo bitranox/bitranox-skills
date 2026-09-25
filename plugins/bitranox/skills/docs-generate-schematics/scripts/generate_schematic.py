@@ -26,8 +26,21 @@ import sys
 from pathlib import Path
 
 
+def _configure_console() -> None:
+    """Replace unencodable characters instead of crashing on a narrow console (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def main():
     """Command-line interface."""
+    _configure_console()
     parser = argparse.ArgumentParser(
         description="Generate scientific schematics using AI with smart iterative refinement",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -68,7 +81,10 @@ Examples:
   python generate_schematic.py "Circuit diagram" -o circuit.png -v
 
 Environment Variables:
-  OPENROUTER_API_KEY    Required for AI generation
+  OPENROUTER_API_KEY    Required for AI generation (the only way to pass the key)
+
+Exit status: the AI script's own (0 image written and reviewed, 1 failure or review
+unavailable, 2 usage error); 1 when the AI script cannot be found or launched.
         """
     )
     
@@ -82,22 +98,26 @@ Environment Variables:
                        help="Document type for quality threshold (default: default)")
     parser.add_argument("--iterations", type=int, default=2,
                        help="Maximum refinement iterations (default: 2, max: 2)")
-    parser.add_argument("--api-key", 
-                       help="OpenRouter API key (or use OPENROUTER_API_KEY env var)")
+    # Refused below, never used: the key comes from OPENROUTER_API_KEY only.
+    parser.add_argument("--api-key", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--verbose", action="store_true",
                        help="Verbose output")
     
     args = parser.parse_args()
+    if args.api_key is not None:
+        # The value is never echoed. Refusing is all that is left to do: it is already in this
+        # process's argv, and forwarding it would keep it in the process list for the whole run.
+        parser.error("--api-key is not accepted: a key on the command line is visible in the "
+                     "process list for the whole run. Set OPENROUTER_API_KEY in the environment.")
     
     # Check for API key
-    api_key = args.api_key or os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("Error: OPENROUTER_API_KEY environment variable not set")
         print("\nFor AI generation, you need an OpenRouter API key.")
         print("Get one at: https://openrouter.ai/keys")
         print("\nSet it with:")
         print("  export OPENROUTER_API_KEY='your_api_key'")
-        print("\nOr use --api-key flag")
         sys.exit(1)
     
     # Find AI generation script
@@ -108,8 +128,9 @@ Environment Variables:
         print(f"Error: AI generation script not found: {ai_script}")
         sys.exit(1)
     
-    # Build command
-    cmd = [sys.executable, str(ai_script), args.prompt, "-o", args.output]
+    # Build command. The output travels as --output=VALUE and the prompt after "--", so a
+    # value that starts with a dash is never re-read by the child as an option.
+    cmd = [sys.executable, str(ai_script), f"--output={args.output}"]
     
     if args.doc_type != "default":
         cmd.extend(["--doc-type", args.doc_type])
@@ -121,12 +142,12 @@ Environment Variables:
     
     if args.verbose:
         cmd.append("-v")
+    cmd.extend(["--", args.prompt])
     
-    # Execute  -  pass API key via environment to avoid exposure in process listings
+    # Execute. The child inherits the key through the environment, never through its argv.
     try:
         env = os.environ.copy()
-        if api_key:
-            env["OPENROUTER_API_KEY"] = api_key
+        env["OPENROUTER_API_KEY"] = api_key
         result = subprocess.run(cmd, check=False, env=env)
         sys.exit(result.returncode)
     except Exception as e:

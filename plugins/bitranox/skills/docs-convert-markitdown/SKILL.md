@@ -296,8 +296,9 @@ docker run --rm -i markitdown:latest < ~/document.pdf > output.md
 - **Simple documents**: Use basic `MarkItDown()`
 - **Complex PDFs**: Use Azure Document Intelligence
 - **Visual content**: Enable AI image descriptions
-- **Scanned documents**: Use Azure Document Intelligence, or pass an `llm_client`; there is no
-  local OCR path
+- **Scanned documents**: there is no local OCR path. Scanned images (PNG/JPG) and pictures in a
+  PPTX can be read by passing an `llm_client`; a scanned PDF only through Azure Document
+  Intelligence, because markitdown never sends a PDF's images to the LLM
 
 ### 2. Handle Errors Gracefully
 

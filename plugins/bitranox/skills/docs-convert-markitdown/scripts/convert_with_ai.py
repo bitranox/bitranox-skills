@@ -1,17 +1,35 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["markitdown[all]", "openai"]
+# ///
 """
 Convert documents to Markdown with AI-enhanced image descriptions.
 
 This script demonstrates how to use MarkItDown with OpenRouter to generate
-detailed descriptions of images in documents (PowerPoint, PDFs with images, etc.)
+detailed descriptions of images: image files (.png, .jpg, .jpeg) and the
+pictures in PowerPoint decks (.pptx). markitdown sends nothing else to the LLM
+- a PDF's images are never described - so any other input is refused; convert
+it with plain markitdown instead.
+
+A deck whose picture descriptions fail is reported as a failure: markitdown
+itself swallows those errors and would otherwise write a Markdown file with no
+descriptions under an "AI Model" header.
+
+Exit status: 0 converted, 1 an error, 2 a usage error.
 """
+
+from __future__ import annotations
 
 import argparse
 import os
 import sys
 from pathlib import Path
-from markitdown import MarkItDown
-from openai import OpenAI
+from types import SimpleNamespace
+from typing import Any
+
+# The inputs markitdown 0.1.x asks the LLM about: ImageConverter and PptxConverter.
+AI_DESCRIBED_SUFFIXES = (".png", ".jpg", ".jpeg", ".pptx")
 
 
 # Predefined prompts for different use cases
@@ -67,6 +85,56 @@ Be professional and precise.
 }
 
 
+def _configure_console() -> None:
+    """Replace unencodable characters instead of crashing on a narrow console (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+class CaptionCounter:
+    """An OpenAI-compatible client wrapper that counts image-description calls.
+
+    markitdown's PPTX converter catches a failed description call and carries on,
+    so without this count a deck whose every call failed (a bad key, a 401) would
+    convert "successfully" with no descriptions in it.
+    """
+
+    def __init__(self, client: Any):
+        self._client = client
+        self.attempts = 0
+        self.failures = 0
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, *args: Any, **kwargs: Any) -> Any:
+        self.attempts += 1
+        try:
+            return self._client.chat.completions.create(*args, **kwargs)
+        except Exception:
+            self.failures += 1
+            raise
+
+
+def _make_client(api_key: str) -> Any:
+    """The OpenRouter client (OpenAI-compatible).
+
+    openai is imported here, not at module top, so --help and --list-prompts
+    work without it.
+    """
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+
+
+def _make_converter(client: Any, model: str, prompt: str) -> Any:
+    from markitdown import MarkItDown
+    return MarkItDown(llm_client=client, llm_model=model, llm_prompt=prompt)
+
+
 def convert_with_ai(
     input_file: Path,
     output_file: Path,
@@ -77,45 +145,29 @@ def convert_with_ai(
 ) -> bool:
     """
     Convert a file to Markdown with AI image descriptions.
-    
+
     Args:
-        input_file: Path to input file
+        input_file: Path to input file (.png, .jpg, .jpeg or .pptx)
         output_file: Path to output Markdown file
         api_key: OpenRouter API key
         model: Model name (default: anthropic/claude-sonnet-4.5; use opus for hard vision/OCR)
         prompt_type: Type of prompt to use
         custom_prompt: Custom prompt (overrides prompt_type)
-        
+
     Returns:
-        True if successful, False otherwise
+        True if successful, False otherwise. A failed image description is a
+        failure even when the Markdown file was written.
     """
+    prompt = custom_prompt or PROMPTS.get(prompt_type, PROMPTS['general'])
+    print(f"Using model: {model}")
+    print(f"Prompt type: {prompt_type if not custom_prompt else 'custom'}")
+    print(f"Converting: {input_file}")
+
     try:
-        # Initialize OpenRouter client (OpenAI-compatible)
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1"
-        )
-        
-        # Select prompt
-        if custom_prompt:
-            prompt = custom_prompt
-        else:
-            prompt = PROMPTS.get(prompt_type, PROMPTS['general'])
-        
-        print(f"Using model: {model}")
-        print(f"Prompt type: {prompt_type if not custom_prompt else 'custom'}")
-        print(f"Converting: {input_file}")
-        
-        # Create MarkItDown with AI support
-        md = MarkItDown(
-            llm_client=client,
-            llm_model=model,
-            llm_prompt=prompt
-        )
-        
-        # Convert file
+        counter = CaptionCounter(_make_client(api_key))
+        md = _make_converter(counter, model, prompt)
         result = md.convert(str(input_file))
-        
+
         # Create output with metadata
         content = f"# {result.title or input_file.stem}\n\n"
         content += f"**Source**: {input_file.name}\n"
@@ -124,24 +176,33 @@ def convert_with_ai(
         content += f"**Prompt Type**: {prompt_type if not custom_prompt else 'custom'}\n\n"
         content += "---\n\n"
         content += result.text_content
-        
+
         # Write output
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(content, encoding='utf-8')
-        
-        print(f"[OK] Successfully converted to: {output_file}")
-        return True
-        
     except Exception as e:
         print(f"[FAIL] Error: {str(e)}", file=sys.stderr)
         return False
 
+    if counter.failures:
+        print(
+            f"[FAIL] {counter.failures} of {counter.attempts} image description call(s) failed; "
+            f"{output_file} was written without those descriptions",
+            file=sys.stderr,
+        )
+        return False
+    print(f"[OK] Successfully converted to: {output_file}")
+    return True
 
-def main():
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Convert documents to Markdown with AI-enhanced image descriptions",
+        description="Convert images and PowerPoint decks to Markdown with AI-enhanced image descriptions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
+Supported inputs: {', '.join(AI_DESCRIBED_SUFFIXES)} (markitdown describes no other format's
+images, so anything else is refused - convert it with plain markitdown).
+
 Available prompt types:
   scientific    - For scientific diagrams, graphs, and charts
   presentation  - For presentation slides
@@ -150,15 +211,15 @@ Available prompt types:
   medical       - For medical imaging
 
 Examples:
-  # Convert a scientific paper
-  python convert_with_ai.py paper.pdf output.md --prompt-type scientific
-  
+  # Describe a scientific figure
+  python convert_with_ai.py figure.png figure.md --prompt-type scientific
+
   # Convert a presentation with custom model
   python convert_with_ai.py slides.pptx slides.md --model anthropic/claude-opus-4.5 --prompt-type presentation
-  
+
   # Use custom prompt with advanced vision model
   python convert_with_ai.py diagram.png diagram.md --model anthropic/claude-opus-4.5 --custom-prompt "Describe this technical diagram"
-  
+
   # Set API key via environment variable
   export OPENROUTER_API_KEY="sk-or-v1-..."
   python convert_with_ai.py image.jpg image.md
@@ -169,11 +230,13 @@ Environment Variables:
 Popular Models (use with --model):
   anthropic/claude-opus-4.5 - Recommended for scientific vision
   google/gemini-3-pro-preview   - Gemini Pro Vision
+
+Exit status: 0 converted, 1 an error (including a failed image description), 2 a usage error.
         """
     )
-    
-    parser.add_argument('input', type=Path, help='Input file')
-    parser.add_argument('output', type=Path, help='Output Markdown file')
+
+    parser.add_argument('input', type=Path, nargs='?', help='Input file (.png, .jpg, .jpeg or .pptx)')
+    parser.add_argument('output', type=Path, nargs='?', help='Output Markdown file')
     parser.add_argument(
         '--api-key', '-k',
         help='OpenRouter API key (or set OPENROUTER_API_KEY env var)'
@@ -198,9 +261,14 @@ Popular Models (use with --model):
         action='store_true',
         help='List available prompt types and exit'
     )
-    
-    args = parser.parse_args()
-    
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    _configure_console()
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
     # List prompts and exit
     if args.list_prompts:
         print("Available prompt types:\n")
@@ -208,20 +276,33 @@ Popular Models (use with --model):
             print(f"[{name}]")
             print(prompt)
             print("\n" + "="*60 + "\n")
-        sys.exit(0)
-    
+        return 0
+
+    # input/output are optional only so --list-prompts can stand alone
+    if args.input is None or args.output is None:
+        parser.error("the following arguments are required: input, output")
+
     # Get API key
     api_key = args.api_key or os.environ.get('OPENROUTER_API_KEY')
     if not api_key:
         print("Error: OpenRouter API key required. Set OPENROUTER_API_KEY environment variable or use --api-key")
         print("Get your API key at: https://openrouter.ai/keys")
-        sys.exit(1)
-    
+        return 1
+
     # Validate input file
     if not args.input.exists():
         print(f"Error: Input file '{args.input}' does not exist")
-        sys.exit(1)
-    
+        return 1
+
+    if args.input.suffix.lower() not in AI_DESCRIBED_SUFFIXES:
+        print(
+            f"Error: {args.input.suffix or 'this input'} gets no AI image descriptions from "
+            f"markitdown (only {', '.join(AI_DESCRIBED_SUFFIXES)} do); convert it with plain "
+            "markitdown instead",
+            file=sys.stderr,
+        )
+        return 1
+
     # Convert file
     success = convert_with_ai(
         input_file=args.input,
@@ -231,10 +312,9 @@ Popular Models (use with --model):
         prompt_type=args.prompt_type,
         custom_prompt=args.custom_prompt
     )
-    
-    sys.exit(0 if success else 1)
+
+    return 0 if success else 1
 
 
 if __name__ == '__main__':
-    main()
-
+    sys.exit(main())
