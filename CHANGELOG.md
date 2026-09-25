@@ -29,6 +29,15 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.24.0]
+
+### Fixed
+
+- The secret-pattern linear-growth test no longer fails on scheduler noise. The small arm doubles
+  its input until it takes at least 50 ms (it took about 10 ms before, where a few ms of jitter
+  pushed a linear scan's 4x ratio past the bound on macOS CI). A new test puts a planted quadratic
+  and a planted linear scan through the same calibration, so the check has been seen to fail.
+
 ## [7.23.6]
 
 ### Fixed

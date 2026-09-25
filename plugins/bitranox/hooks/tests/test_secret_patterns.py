@@ -593,32 +593,74 @@ def _sized_case(prefix, unit, suffix, target_len):
     return prefix + unit * count + suffix
 
 
-def _fastest_of(text, repeats=3):
+def _scan(text):
+    sp.redact(text)
+    sp.holds_a_credential(text)
+
+
+def _fastest_of(text, scan=_scan, repeats=3):
     """The minimum of a few timed passes, which filters a transient scheduling stall without
     hiding real quadratic growth - a slow pass recurs on every repeat, a stall does not."""
     best = None
     for _ in range(repeats):
         start = time.monotonic()
-        sp.redact(text)
-        sp.holds_a_credential(text)
+        scan(text)
         elapsed = time.monotonic() - start
         best = elapsed if best is None else min(best, elapsed)
     return best
 
 
+# The small arm must run long enough that scheduler noise is a small share of it. At a fixed
+# 50k chars the fastest shape took ~10 ms on a macOS runner, where a few ms of jitter alone moved
+# a linear scan's ratio to 8.03 and failed the bound. Doubling the size until the small arm takes
+# this long keeps the ratio a measurement of growth rather than of noise.
+_SMALL_ARM_FLOOR_S = 0.05
+_START_LEN = 50_000
+_MAX_SMALL_LEN = 1_600_000
+
+
+def _growth_ratio(prefix, unit, suffix, scan=_scan):
+    """Time `scan` on the shape at a calibrated size n and at 4n; return (t_n, t_4n)."""
+    length = _START_LEN
+    t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan)
+    while t_n < _SMALL_ARM_FLOOR_S and length < _MAX_SMALL_LEN:
+        length *= 2
+        t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan)
+    t_4n = _fastest_of(_sized_case(prefix, unit, suffix, 4 * length), scan)
+    return t_n, t_4n
+
+
+# A 4x input costs a linear scan ~4x (measured 3.9-4.1x locally); a quadratic scan costs ~16x.
+# 8 sits well clear of both, so it survives a noisy shared runner without going blind to the
+# defect it exists to catch.
+_MAX_LINEAR_RATIO = 8
+
+
 @pytest.mark.parametrize("shape", sorted(_ADVERSARIAL_CASE_SHAPES))
 def test_adversarial_inputs_stay_linear(shape):
     prefix, unit, suffix = _ADVERSARIAL_CASE_SHAPES[shape]
-    text_n = _sized_case(prefix, unit, suffix, target_len=50_000)
-    text_4n = _sized_case(prefix, unit, suffix, target_len=200_000)
-    t_n = _fastest_of(text_n)
-    t_4n = _fastest_of(text_4n)
+    t_n, t_4n = _growth_ratio(prefix, unit, suffix)
     # A generous absolute backstop: on ANY runner this must never crawl, quadratic or not.
-    assert t_4n < 5.0, (shape, t_4n)
-    if t_n <= 0:
-        return
+    assert t_4n < 10.0, (shape, t_4n)
     ratio = t_4n / t_n
-    # A 4x input costs a linear scan ~4x (measured 3.9-4.1x locally); a quadratic scan costs
-    # ~16x. 8 sits well clear of both, so it survives a noisy shared runner without going blind
-    # to the defect it exists to catch.
-    assert ratio < 8, (shape, t_n, t_4n, ratio)
+    assert ratio < _MAX_LINEAR_RATIO, (shape, t_n, t_4n, ratio)
+
+
+def _sleep_for(seconds):
+    time.sleep(max(seconds, 0.0))
+
+
+def test_growth_ratio_flags_a_planted_quadratic_and_passes_a_planted_linear():
+    """The instrument must be able to fail: a scan whose cost grows with the square of the input
+    has to land above the bound, and a linear one below it, through the same calibration."""
+
+    def quadratic(text):
+        _sleep_for(0.004 * (len(text) / _START_LEN) ** 2)
+
+    def linear(text):
+        _sleep_for(0.004 * (len(text) / _START_LEN))
+
+    q_n, q_4n = _growth_ratio("", "a", "", scan=quadratic)
+    l_n, l_4n = _growth_ratio("", "a", "", scan=linear)
+    assert q_4n / q_n > _MAX_LINEAR_RATIO, (q_n, q_4n)
+    assert l_4n / l_n < _MAX_LINEAR_RATIO, (l_n, l_4n)
