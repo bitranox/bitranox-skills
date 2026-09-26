@@ -71,8 +71,19 @@ _SNIPPET_INERT = str.maketrans({"<": "(", ">": ")", "|": "/", '"': "'"})
 _SNIPPET_ESCAPED_MARK = " [escaped]"   # rendered OUTSIDE the fence, never inside the text
 
 
-def inert_snippet(text, limit=None):
+_SNIPPET_LEAD = "..."    # marks a snippet whose window does not start at the text's first character
+
+
+def inert_snippet(text, limit=None, *, around=None):
     """`text` as one line of quoted evidence that cannot escape the frame it is displayed in.
+
+    `around` is an offset into the WHITESPACE-COLLAPSED text (what `" ".join(text.split())` gives,
+    which is what this function quotes). With it and a `limit`, the snippet is a window of at most
+    `limit` characters placed so that offset falls inside it, a short lead of context before it,
+    and a window that does not start at character 0 opens with `...` (counted within `limit`).
+    Without it the snippet is the text's head, as it always was. A caller that found its reason
+    to quote the text part-way through - a learning stated after a long preamble - passes the
+    offset, or the head cap cuts away the very sentence the snippet exists to show.
 
     Untrusted text reaches a model's context through three frames - the `<SELF-IMPROVE-AUDIT>`
     envelope injected at SessionStart, the Stop hook's block reason, and the dream's report - and
@@ -95,7 +106,16 @@ def inert_snippet(text, limit=None):
     collapsed = " ".join(str(text or "").split())
     # 1:1 substitution, so the cap still means exactly `limit` characters.
     inert = collapsed.translate(_SNIPPET_INERT)
-    return inert if limit is None else inert[:limit]
+    if limit is None:
+        return inert
+    if around is None or len(inert) <= limit:
+        return inert[:limit]
+    start = max(0, min(int(around) - limit // 5, len(inert) - limit))
+    if start == 0:
+        return inert[:limit]
+    # The marker replaces the first characters of the LEAD, never the tail: the window can sit at
+    # the very end of the text, and the offset is always at least `limit // 5` past `start`.
+    return _SNIPPET_LEAD + inert[start + len(_SNIPPET_LEAD):start + limit]
 
 
 def snippet_was_escaped(text):
@@ -1689,7 +1709,7 @@ def drain_subagent_learnings(session):
         pass
 
 
-# ---- touched-paths: the per-session evidence of WHICH repos a turn actually edited -------------
+# ---- touched-paths: the per-session evidence of WHICH repos this session actually edited -------
 # Written by the PostToolUse `touched-paths` hook, read by the Stop gate / capture. Session-keyed
 # (the probe proved `session_id` is stable across PostToolUse/Stop/SubagentStop), OUT of the dreamed
 # store so it never bumps a store mtime or affects convergence.
@@ -1709,9 +1729,15 @@ def read_touched_paths(session):
 
 
 def record_touched_path(session, path, max_lines=400):
-    """Append `path` for `session` (deduped, newest-capped). Best-effort: never raises."""
+    """Append `path` for `session` (deduped, newest-capped). Best-effort: never raises.
+
+    A path carrying a line break (CR or LF) is REFUSED, not recorded: the file holds one path per
+    line, so such a path came back as two bogus fragments that never deduped against each other,
+    and each repeat grew the file. Escaping it instead would only hand `nearest_level` a path that
+    names no file, so dropping that one path as routing evidence is the cheaper failure.
+    """
     path = str(path or "").strip()
-    if not path or not session:
+    if not path or not session or "\n" in path or "\r" in path:
         return
     try:
         cur = read_touched_paths(session)
@@ -1756,11 +1782,11 @@ def nearest_level(path):
 
 
 def subject_levels(touched, cwd):
-    """The OTHER memory levels this turn actually touched - the routing evidence for capture.
+    """The OTHER memory levels the given paths belong to - the routing evidence for capture.
 
     Capture is cwd-keyed, so a learning ABOUT a repo you edited from somewhere else lands in the
-    wrong store (and cross-tree it can never be re-homed). Given the file paths a turn wrote/edited
-    and the session cwd, return the DISTINCT levels those paths belong to that are NOT cwd's own
+    wrong store (and cross-tree it can never be re-homed). Given the file paths the session
+    wrote/edited and the session cwd, return the DISTINCT levels those paths belong to that are NOT cwd's own
     level - each as {"level", "anchor", "cross_tree"}. `cross_tree` marks a level in a DIFFERENT
     knowledge tree than cwd (the unrecoverable case); False means a sibling project in the SAME tree
     (the common case, which the tree dream can still re-level). Ancestors/descendants of cwd's own
@@ -2384,6 +2410,19 @@ def broad_matches(role, text):
     """
     rx = BROAD_USER_PATTERN if role == "user" else BROAD_ASST_PATTERN
     return sorted({m.group(0).strip().lower() for m in rx.finditer(text or "")})
+
+
+def asst_signal_offset(text):
+    """Offset in `text` of the EARLIEST assistant learning signal, strict or broad; None if none.
+
+    The same four patterns `strict_asst_hit` and `broad_matches("assistant", ...)` consult, so a
+    message those two call a hit always has an offset here. It tells a producer WHERE the learning
+    sits, for `inert_snippet(..., around=)`: offsets are into `text` exactly as passed, so pass the
+    whitespace-collapsed form when the offset is meant for `inert_snippet`.
+    """
+    starts = [m.start() for rx in (ASST_PATTERN, REALIZATION_PATTERN, ENDORSE_PATTERN, BROAD_ASST_PATTERN)
+              for m in (rx.search(text or ""),) if m]
+    return min(starts) if starts else None
 
 
 # ---- TOOL signals (audit-only): a learning that never reached prose -------------------------

@@ -51,3 +51,19 @@ def test_noop_without_file_path_or_session(monkeypatch):
 def test_never_wedges_a_turn_on_bad_input(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json at all"))
     assert T.main() == 0                       # fail-open: a recorder must never block a turn
+
+
+def test_records_a_notebook_edit_by_its_notebook_path(monkeypatch):
+    # NotebookEdit is in the registration, but its event carries tool_input.notebook_path, not
+    # file_path, so every notebook edit went unrecorded.
+    ev = {"hook_event_name": "PostToolUse", "tool_name": "NotebookEdit", "session_id": "sNB",
+          "tool_input": {"notebook_path": "/repo/nb.ipynb", "new_source": "x = 1"}}
+    assert _run(monkeypatch, ev) == 0
+    assert S.read_touched_paths("sNB") == ["/repo/nb.ipynb"]
+
+
+def test_file_path_wins_when_both_are_present(monkeypatch):
+    ev = _event("/repo/a.py", session="sBoth")
+    ev["tool_input"]["notebook_path"] = "/repo/other.ipynb"
+    _run(monkeypatch, ev)
+    assert S.read_touched_paths("sBoth") == ["/repo/a.py"]
