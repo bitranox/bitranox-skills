@@ -24,8 +24,12 @@ is deliberately narrow. Ordinary iteration changes the operands, the program, or
 directions; only the "bolt an option onto the thing that just failed" shape adds flags while
 touching nothing else. A changed operand means a different target and is not this.
 
-Heredoc bodies are stripped before anything is compared, because a body is data being written and a
-script that CONTAINS a failing command is not that command.
+Heredoc bodies are blanked before anything is compared, because a body is data being written and a
+script that CONTAINS a failing command is not that command. Statement and pipe separators are found
+on the data-masked text, so a `;` or `|` inside a quoted sed script or grep pattern is not one, and
+the command is then sliced from the raw text at the same offsets. The command is split into words by
+the TOOL's language (`split_for_tool`): a PowerShell `C:\\data\\logs` keeps its backslashes, where
+POSIX splitting collapsed it into `C:datalogs` and two different targets compared equal.
 
 TUNED AGAINST THE REAL CORPUS, not guessed. Replayed over 181 sessions and 32948 commands, the
 first version fired 536 times - 216 in one session - and essentially every hit was a pipeline tail,
@@ -43,11 +47,17 @@ Pure standard library, ASCII only; launched via run-python.sh so it works on Win
 from __future__ import annotations
 
 import json
-import shlex
 import sys
 from pathlib import Path
 
-from shell_text import LIST_SEP, is_shell_tool, strip_heredoc_bodies
+from shell_text import (
+    LIST_SEP,
+    basename_for_tool,
+    blank_heredoc_bodies,
+    is_shell_tool,
+    mask_data_regions,
+    split_for_tool,
+)
 
 # Statement separators (`shell_text.LIST_SEP`), NOT including `|`. A pipeline is ONE statement:
 # its last element is usually a filter, and `shell_text.SEP` splits on `|` because the guards that use it ask
@@ -56,6 +66,7 @@ from shell_text import LIST_SEP, is_shell_tool, strip_heredoc_bodies
 # the command `head` with the flag `-60` and NO operands, so any two pipeline tails compare
 # equal. Measured over 181 real sessions before this was fixed: 536 firings, 216 of them in a
 # single session, essentially all of them pipeline tails rather than retries.
+# Applied to the MASKED text only: on the raw text a quoted `;` split a sed script in two.
 _STATEMENT_SEP = LIST_SEP
 
 STATE_VERSION = 1
@@ -87,30 +98,50 @@ def _save(session: str, state: dict) -> None:
         pass
 
 
-def shape(command):
+def _command_head(command: str, tool_name: str) -> str:
+    """The raw text of the first pipeline element of the LAST statement, or "". PURE.
+
+    Separators are FOUND on the masked text - heredoc bodies blanked in place, quoted text,
+    substitutions and comments masked, every step length-preserving - and the command is SLICED
+    from the unmasked text at the same offsets, so a quoted `;` or `|` is data, not structure.
+    """
+    text = blank_heredoc_bodies(command)
+    masked = mask_data_regions(text, tool_name=tool_name)
+    spans, start = [], 0
+    for sep in _STATEMENT_SEP.finditer(masked):
+        spans.append((start, sep.start()))
+        start = sep.end()
+    spans.append((start, len(masked)))
+    spans = [(a, b) for a, b in spans if masked[a:b].strip()]
+    if not spans:
+        return ""
+    begin, end = spans[-1]
+    # Within the last statement take the FIRST pipeline element: that is the command being run,
+    # where the rest of the pipeline only shapes its output.
+    pipe = masked.find("|", begin, end)
+    return text[begin:end if pipe < 0 else pipe]
+
+
+def shape(command, tool_name="Bash"):
     """(program, sorted flags, operands) for the LAST statement of `command`, or None. PURE.
 
     The last statement is the one whose failure the event reports; an earlier statement in a `&&`
     chain succeeded. Heredoc bodies are dropped first so a written script is not read as a command.
+    `tool_name` picks the word-splitting and path rules (`split_for_tool`, `basename_for_tool`).
 
     Flags are a SET because reordering them is not a new attempt, and operands stay a LIST because
     their order is part of what the command targets.
     """
     if not command or not isinstance(command, str):
         return None
-    statements = [s for s in _STATEMENT_SEP.split(strip_heredoc_bodies(command)) if s.strip()]
-    if not statements:
-        return None
-    # Within the last statement take the FIRST pipeline element: that is the command being run,
-    # where the rest of the pipeline only shapes its output.
-    head = statements[-1].split("|")[0]
+    head = _command_head(command, tool_name)
     try:
-        tokens = shlex.split(head)
-    except ValueError:
+        tokens = split_for_tool(head, tool_name, comments=True)
+    except ValueError:                                    # an unclosed quote: shlex refuses it
         tokens = head.split()
     if not tokens:
         return None
-    program = tokens[0].split("/")[-1]                    # basename: /usr/bin/sed and sed are one
+    program = basename_for_tool(tokens[0], tool_name)     # /usr/bin/sed, sed.exe and sed are one
     flags, operands = set(), []
     for token in tokens[1:]:
         (flags.add(token) if token.startswith("-") else operands.append(token))
@@ -132,9 +163,9 @@ def only_flags_added(pending, failed) -> bool:
     return set(was_flags) < set(flags)
 
 
-def notice(pending_command, recorded):
+def notice(pending_command, recorded, tool_name="Bash"):
     """The nudge text when this pending command re-runs a failed one with added flags, else None."""
-    pending = shape(pending_command)
+    pending = shape(pending_command, tool_name)
     if not pending:
         return None
     for entry in recorded:
@@ -158,13 +189,17 @@ def _record(event) -> int:
     """PostToolUseFailure: remember the shape of the command that failed."""
     if not is_shell_tool(event.get("tool_name")) or event.get("is_interrupt"):
         return 0                                          # an interrupt is the user, not a failure
-    current = shape((event.get("tool_input") or {}).get("command"))
+    current = shape((event.get("tool_input") or {}).get("command"), event.get("tool_name"))
     if not current:
         return 0
+    # Stored as JSON reads it back - lists all the way down - so the dedup compares like with like.
+    # Comparing against `list(current)`, which still holds tuples, never matched: one command
+    # failing in a loop filled every slot and evicted the failure that mattered.
+    entry = [current[0], list(current[1]), list(current[2])]
     session = str(event.get("session_id") or "")
     state = _load(session)
-    recorded = [e for e in state.get("failed", []) if e != list(current)]
-    recorded.append(list(current))
+    recorded = [e for e in state.get("failed", []) if e != entry]
+    recorded.append(entry)
     state.update({"v": STATE_VERSION, "failed": recorded[-MAX_RECORDED:]})
     _save(session, state)
     return 0
@@ -178,7 +213,8 @@ def _judge(event) -> int:
     state = _load(session)
     if state.get("fired", 0) >= FIRE_CAP:
         return 0
-    message = notice((event.get("tool_input") or {}).get("command"), state.get("failed", []))
+    message = notice((event.get("tool_input") or {}).get("command"), state.get("failed", []),
+                     event.get("tool_name"))
     if not message:
         return 0
     state["fired"] = state.get("fired", 0) + 1

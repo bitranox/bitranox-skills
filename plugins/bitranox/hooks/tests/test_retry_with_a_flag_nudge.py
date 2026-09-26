@@ -195,3 +195,86 @@ def test_malformed_input_fails_open(payload):
         input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert (proc.returncode, proc.stdout.strip()) == (0, "")
+
+
+# ---------------------------------------------------------------- rank 10 regressions
+
+def test_a_quoted_pipe_does_not_cut_the_command():
+    """`split("|")` ran on the raw text, so a `|` inside a quoted pattern truncated the command and
+    greps on DIFFERENT files compared equal."""
+    assert R.shape('grep -n "error|warn" alpha.log') == ("grep", ("-n",), ("error|warn", "alpha.log"))
+    failed = R.shape('grep -n "error|warn" alpha.log')
+    assert R.notice('grep -n -r "error|warn" beta.log', [list(failed)]) is None
+    # Control: the same pattern on the SAME file with a flag added is the retry.
+    assert R.notice('grep -n -r "error|warn" alpha.log', [list(failed)]) is not None
+
+
+def test_a_quoted_semicolon_does_not_split_the_statement():
+    """The statement split ran on the raw text, so a sed script's `;` made the program `'`."""
+    assert R.shape("sed -i 's/a/b/;s/c/d/' report.txt") == ("sed", ("-i",), ("s/a/b/;s/c/d/", "report.txt"))
+    failed = R.shape("sed -i 's/a/b/;s/c/d/' report.txt")
+    assert R.notice("sed -i -E 's/a/b/;s/c/d/' report.txt", [list(failed)]) is not None
+
+
+def test_a_real_pipe_and_a_real_separator_still_split():
+    """The direction the masking must NOT change."""
+    assert R.shape("cd /tmp && grep -n x f.md | head -60") == ("grep", ("-n",), ("x", "f.md"))
+    assert R.shape("true; sed -i s/a/b/ r.txt") == ("sed", ("-i",), ("s/a/b/", "r.txt"))
+
+
+def test_a_trailing_comment_is_not_an_operand():
+    assert R.shape("rsync -a src dst  # retry after the mount") == ("rsync", ("-a",), ("src", "dst"))
+
+
+def test_powershell_paths_keep_their_backslashes():
+    """POSIX shlex ate the separators, so `C:\\data\\logs` and `C:\\datalogs` compared equal and the
+    hook nudged on a different target."""
+    failed = R.shape("Copy-Item C:\\data\\logs C:\\backup", "PowerShell")
+    assert failed == ("Copy-Item", (), ("C:\\data\\logs", "C:\\backup"))
+    assert R.notice("Copy-Item -Force C:\\datalogs C:\\backup", [list(failed)], "PowerShell") is None
+    # Control: the same target with a flag added is the retry.
+    assert R.notice("Copy-Item -Force C:\\data\\logs C:\\backup", [list(failed)], "PowerShell") is not None
+
+
+@pytest.mark.parametrize(("command", "tool"), [
+    ('"C:\\tools\\rsync.exe" -a -z src dst', "Bash"),
+    ("C:\\tools\\rsync.exe -a -z src dst", "PowerShell"),
+    ("/opt/tools/rsync -a -z src dst", "Bash"),
+    ("rsync.exe -a -z src dst", "Bash"),
+])
+def test_the_program_is_the_basename_under_either_separator(command, tool):
+    assert R.shape(command, tool)[0] == "rsync"
+
+
+def test_an_unbalanced_quote_falls_back_to_a_whitespace_split():
+    """shlex refuses an unclosed quote; the hook still reads a program and operands."""
+    assert R.shape('grep -n "error alpha.log') == ("grep", ("-n",), ('"error', "alpha.log"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_one_looping_failure_does_not_evict_the_real_one(session):
+    """The dedup compared a stored JSON list with a tuple-bearing list, so it never matched: one
+    command failing 60 times filled every slot and pushed the real failure out."""
+    assert _run(_failure(session, "rsync -a src dst")) == (0, "", "")
+    for _ in range(R.MAX_RECORDED):
+        _run(_failure(session, "pytest -x t.py"))
+    assert len(R._load(session)["failed"]) == 2
+    rc, out, _err = _run(_pending(session, "rsync -a -z src dst"))
+    assert rc == 0 and out, "the rsync failure was evicted by one looping command"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_a_powershell_retry_through_a_full_path_is_caught(session):
+    failure = _failure(session, "rsync.exe -a src dst")
+    failure["tool_name"] = "PowerShell"
+    assert _run(failure) == (0, "", "")
+    rc, out, _err = _run(_pending(session, "C:\\tools\\rsync.exe -a -z src dst", tool_name="PowerShell"))
+    assert rc == 0 and out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="drives the bash shim directly")
+def test_the_fire_cap_silences_the_session_after_it_is_spent(session):
+    assert _run(_failure(session, "rsync -a src dst")) == (0, "", "")
+    outs = [_run(_pending(session, "rsync -a -z src dst"))[1] for _ in range(R.FIRE_CAP + 1)]
+    assert all(outs[:R.FIRE_CAP]), "every nudge up to the cap must speak"
+    assert outs[R.FIRE_CAP] == "", "the nudge past the cap must be silent"
