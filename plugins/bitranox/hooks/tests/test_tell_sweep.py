@@ -155,3 +155,47 @@ def test_the_encoding_message_names_a_remedy_the_model_can_perform(tmp_path, mon
     f.write_bytes("Prose".encode("cp1252") + b"\x97 tail\n")
     assert _run(monkeypatch, {"tool_input": {"file_path": str(f)}}) == 2
     assert "Write tool" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["a.md", "a.markdown", "a.txt", "CLAUDE.md", "A.MARKDOWN"])
+def test_every_prose_suffix_is_swept(tmp_path, monkeypatch, name):
+    assert _run(monkeypatch, _md(tmp_path, "A real %s dash in prose.\n" % EM_DASH, name=name)) == 2
+
+
+def _hit_lines(err):
+    return [ln for ln in err.splitlines() if ln[:1].isdigit()]
+
+
+def test_a_report_past_the_cap_says_how_many_it_left_out(tmp_path, monkeypatch, capsys):
+    # The list stops at 20 lines. A report that stops silently reads as the complete list, so a
+    # model fixes those 20, re-runs, and meets a second batch it had no way to expect.
+    text = "".join("line %d has a %s dash\n" % (i, EM_DASH) for i in range(1, 26))
+    assert _run(monkeypatch, _md(tmp_path, text)) == 2
+    err = capsys.readouterr().err
+    assert len(_hit_lines(err)) == 20
+    assert "... and 5 more" in err
+
+
+def test_a_report_within_the_cap_lists_everything_and_claims_no_more(tmp_path, monkeypatch, capsys):
+    text = "".join("line %d has a %s dash\n" % (i, EM_DASH) for i in range(1, 21))
+    assert _run(monkeypatch, _md(tmp_path, text)) == 2
+    err = capsys.readouterr().err
+    assert len(_hit_lines(err)) == 20
+    assert "more" not in err
+
+
+def test_the_continuation_report_past_the_cap_says_how_many_it_left_out(tmp_path, monkeypatch, capsys):
+    arrow = chr(0x2190)
+    text = "".join("wget https://example.com/k- %sle%d.gpg\n" % (arrow, i) for i in range(1, 24))
+    assert _run(monkeypatch, _md(tmp_path, text)) == 2
+    err = capsys.readouterr().err
+    assert "... and 3 more" in err
+
+
+def test_a_notebook_edit_is_not_swept(tmp_path, monkeypatch):
+    # Documented scope: notebooks are JSON whose code cells legitimately carry unicode, and the
+    # event names the target `notebook_path`, which this hook deliberately does not read.
+    f = tmp_path / "nb.md"
+    f.write_text("A real %s dash in prose.\n" % EM_DASH, encoding="utf-8")
+    assert _run(monkeypatch, {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": str(f)}}) == 0
+    assert "NotebookEdit" in (T.__doc__ or "") and "not swept" in (T.__doc__ or "")

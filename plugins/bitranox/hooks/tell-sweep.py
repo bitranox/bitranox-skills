@@ -15,6 +15,12 @@ examples. A genuine reference to the character itself belongs in backticks anywa
 Code files are skipped (legit unicode in test data / identifiers); commit messages
 and code comments rely on the manual sweep plus the humanizer skill.
 
+NotebookEdit is in the matcher but notebooks are not swept: the event names its target
+`notebook_path`, which this hook deliberately does not read, and a notebook is JSON whose code
+cells and outputs carry legitimate unicode that a line scan of the raw file cannot tell from prose.
+Sweeping one would need a JSON-aware reader of its markdown cells; until then the registration is
+a no-op for that tool.
+
 The tell codepoints and the ignore-code-span scanner live in the shared `tell_chars` module
 (so the `commit-tell-sweep` PreToolUse hook uses the exact same set). This source stays pure ASCII.
 
@@ -26,6 +32,20 @@ import json
 import sys
 
 import tell_chars
+
+_MAX_LISTED = 20
+
+
+def _capped(lines):
+    """The first `_MAX_LISTED` report lines, plus a count of the rest when there are more.
+
+    A list that stops silently reads as the complete list: the model fixes those lines, re-runs,
+    and meets a second batch it had no reason to expect.
+    """
+    shown = lines[:_MAX_LISTED]
+    if len(lines) > _MAX_LISTED:
+        shown = shown + ["... and %d more" % (len(lines) - _MAX_LISTED)]
+    return "\n".join(shown) + "\n"
 
 
 def main() -> int:
@@ -68,7 +88,7 @@ def main() -> int:
             "(em/en-dash, curly quote, ellipsis, NBSP, ZWSP, BOM, etc.).\n"
             "Replace with ASCII (use - , . : () ...).\n" % fp
         )
-        sys.stderr.write("\n".join(hits[:20]) + "\n")
+        sys.stderr.write(_capped(hits))
     if joins:
         sys.stderr.write(
             "Extraction line-continuation artifact(s) in %s (U+2190 at a wrapped join).\n"
@@ -76,7 +96,7 @@ def main() -> int:
             "halves and delete the marker. An arrow FOLLOWED by a space is prose and is not this.\n"
             % fp
         )
-        sys.stderr.write("\n".join(joins[:20]) + "\n")
+        sys.stderr.write(_capped(joins))
     return 2
 
 
