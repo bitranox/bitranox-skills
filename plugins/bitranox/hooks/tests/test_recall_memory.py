@@ -477,3 +477,61 @@ def test_matched_section_finds_a_sharp_s_keyword_behind_folding_sections():
     text = ("# Masse\n\n" + "Ma\u00dfe und Gr\u00fc\u00dfe\n" * 100
             + "# Adresse\n\nDie Hauptstra\u00dfe 5.\n\n# Danach\n\nnothing\n")
     assert R._matched_section(text, [_street_keyword()]) == ("# Adresse", "Die Hauptstra\u00dfe 5.")
+
+
+# scan() matches a keyword only at a word boundary, so "test" matches the note because of "test
+# suite" and not because of "latest". The window and the section must centre on that same word
+# match; a substring search stops at the earlier "latest" and shows the wrong part of the note.
+def test_snippet_centres_on_the_word_match_not_an_earlier_substring(tmp_path):
+    m = tmp_path / "note.md"
+    m.write_text("The latest build notes.\n" + "filler line about nothing\n" * 130
+                 + "RULE: run the test suite with -x\n", encoding="utf-8")
+    snip = R._snippet(str(m), ["test"], 300)
+    assert "RULE: run the test suite with -x" in snip
+    assert "latest" not in snip
+
+
+def test_snippet_control_without_the_substring_decoy_finds_the_same_rule(tmp_path):
+    m = tmp_path / "note.md"
+    m.write_text("The newest build notes.\n" + "filler line about nothing\n" * 130
+                 + "RULE: run the test suite with -x\n", encoding="utf-8")
+    assert "RULE: run the test suite with -x" in R._snippet(str(m), ["test"], 300)
+
+
+def test_matched_section_skips_a_substring_decoy_in_an_earlier_section():
+    text = ("# Releases\n\nthe latest release notes\n\n"
+            "# Testing\n\nrun the test suite with -x\n")
+    assert R._matched_section(text, ["test"]) == ("# Testing", "run the test suite with -x")
+
+
+def test_first_match_has_no_hit_when_the_keyword_only_occurs_inside_words():
+    assert R._first_match("the latest contest attestation", ["test"]) == -1
+
+
+def test_first_match_treats_hyphen_and_underscore_as_separators_like_scan():
+    text = "latest; make_test runs"
+    assert R._first_match(text, ["test"]) == text.index("test runs")
+
+
+# cross_tree_search=False walls recall into the CURRENT tree. With no resolvable anchor there is no
+# tree to wall into, and recall is OFF for that prompt: nothing is injected, the native tier (notes
+# under ~/.claude, which have no tree attribution) included. This pins the current behaviour; keeping
+# the native tier instead would be a design change, not a fix.
+def test_walled_recall_with_no_anchor_recalls_nothing_not_even_native_notes(
+        monkeypatch, capsys, home, tmp_path):
+    loose = tmp_path / "loose" / "cwd"
+    loose.mkdir(parents=True)
+    assert sig.resolve_anchor(str(loose)) is None
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    _cfg_write(home, cross_tree_search=False)
+    rc, out = run(monkeypatch, capsys, "run make test", cwd=str(loose))
+    assert rc == 0 and out == ""
+
+
+def test_control_the_same_native_note_is_recalled_for_that_cwd_when_not_walled(
+        monkeypatch, capsys, home, tmp_path):
+    loose = tmp_path / "loose" / "cwd"
+    loose.mkdir(parents=True)
+    _mem("/p/other", "make-test.md", "Run make test with VIRTUAL_ENV=$PWD/.venv before committing")
+    rc, out = run(monkeypatch, capsys, "run make test", cwd=str(loose))
+    assert rc == 0 and "VIRTUAL_ENV" in out

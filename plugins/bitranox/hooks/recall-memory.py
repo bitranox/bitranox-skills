@@ -12,6 +12,7 @@ Pure standard library. Fail-open: every error path exits 0, so a broken or slow 
 
 import json
 import os
+import re
 import sys
 import unicodedata
 from pathlib import Path
@@ -112,6 +113,11 @@ def _label(path):
 def _first_match(text, keywords):
     """Index in `text` (already NFC) of the earliest keyword occurrence, else -1.
 
+    An occurrence counts only at a word boundary, by the same rule scan() used to match the note
+    (gather_scan._WORD_CHAR may not touch the keyword on either side), so "test" is found in "the
+    test suite" and not inside an earlier "latest". A substring search stopped at the decoy and
+    centred the window, or chose the section, away from the text that actually matched.
+
     The keywords arrive folded the way scan() matched them (gather_scan._fold: NFC, then casefold),
     so the text is folded the same way here; a plain lower() leaves a sharp s as one character where
     the keyword has "ss" and never finds it. Casefolding can lengthen the text (a sharp s becomes two
@@ -124,8 +130,14 @@ def _first_match(text, keywords):
         folded.append(f)
         owner.extend([i] * len(f))
     low = "".join(folded)
-    hits = [low.find(gs._fold(k)) for k in keywords if k]
-    hits = [i for i in hits if i != -1]
+    hits = []
+    for k in keywords:
+        k = gs._fold(k) if k else ""
+        if not k:
+            continue
+        m = re.search("(?<!%s)%s(?!%s)" % (gs._WORD_CHAR, re.escape(k), gs._WORD_CHAR), low)
+        if m:
+            hits.append(m.start())
     return owner[min(hits)] if hits else -1
 
 
@@ -285,7 +297,9 @@ def main():
         # and a bakery - share nothing). The native tier (under ~/.claude) has no reliable tree
         # attribution by path, so it counts as outside and is excluded too. Cross-tree knowledge
         # then moves only via the explicit paths (meta-collect-knowledge import, the crosstree
-        # dream).
+        # dream). A cwd with NO resolvable anchor has no tree to wall into, so walled recall
+        # injects nothing at all for it, the native tier included (pinned by
+        # test_walled_recall_with_no_anchor_recalls_nothing_not_even_native_notes).
         if sig.load_config().get("cross_tree_search", True):
             for r in sig.discovery_roots():
                 files += gs._find_curated_stores(str(r))
