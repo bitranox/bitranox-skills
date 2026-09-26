@@ -113,11 +113,48 @@ def heredoc_writes(command):
         # hands back /dev/null, whose suffix is not a script, so the write is dropped in silence.
         # Measured live: three scripts authored, one recorded, no nudge. Filtering by suffix also
         # makes the ORDER of the redirects irrelevant (`cat > f.sh 2>/dev/null <<EOS` works too).
-        head = line[:opener.start()]
+        #
+        # The text AFTER the opener token is the same command too: `cat <<'EOS' > tool.sh` is as
+        # common a spelling as `cat > tool.sh <<'EOS'`, and reading only the text before `<<`
+        # recorded nothing for it.
+        head = line[:opener.start()] + " " + line[opener.end():]
         targets = [m.group(2) for m in _REDIRECT.finditer(head)
                    if Path(m.group(2)).suffix.lower() in SCRIPT_SUFFIXES]
         if targets:
             out.append((targets[-1], "\n".join(body)))
+    return out
+
+
+# A PowerShell here-string: `@'` or `@"` ending its line, the body, then `'@` / `"@` at the start of
+# a line. The PowerShell tool authors a script with one of these handed to a writer, never a heredoc.
+_HERE_STRING = re.compile(r"""@(['"])[ \t]*\r?\n(.*?)\r?\n\1@""", re.S)
+# Something on the here-string's own statement that WRITES a file: a content cmdlet (or its alias)
+# or a redirect. Without one the here-string is only a value, and its script-named words are data.
+_PS_WRITER = re.compile(r"(?i)(?:^|[\s;|(])(?:set-content|add-content|out-file|sc|ac)(?=[\s(]|$)|>")
+_PS_PATH = re.compile(r"""'([^'\n]+)'|"([^"\n]+)"|([^\s'";|&<>(),]+)""")
+
+
+def here_string_writes(command):
+    """[(path, body)] for every PowerShell here-string in `command` written to a SCRIPT file. PURE.
+
+    The writer and its target sit on the here-string's own statement: the text before `@'` on the
+    opening line (`Set-Content -Path x.ps1 -Value @'`) or after `'@` on the closing line
+    (`'@ | Out-File x.ps1`, `'@ > x.ps1`). The LAST script-suffixed word there is the target, the
+    same rule heredoc_writes uses; a target held in a variable cannot be read and is skipped.
+    """
+    text = command or ""
+    out = []
+    for m in _HERE_STRING.finditer(text):
+        before = text[text.rfind("\n", 0, m.start()) + 1:m.start()]
+        close = text.find("\n", m.end())
+        after = text[m.end():close if close >= 0 else len(text)]
+        statement = before + " " + after
+        if not _PS_WRITER.search(statement):
+            continue
+        words = [next(g for g in w.groups() if g) for w in _PS_PATH.finditer(statement)]
+        targets = [w for w in words if Path(w.replace("\\", "/")).suffix.lower() in SCRIPT_SUFFIXES]
+        if targets:
+            out.append((targets[-1], m.group(2).replace("\r\n", "\n")))
     return out
 
 
@@ -327,18 +364,29 @@ def topic_tokens(name, script_purpose):
 
 # A script that CHANGES the machine. Deliberately broad - a false "this mutates" costs one extra
 # consultation of the ledger, while a false "this only reads" is how a rewrite lineage stays silent.
+#
+# The closing `\b` suits only the alternatives that END in a word character. A spelling that ends
+# otherwise needs its own end test, or the `\b` silently rejects it: `rm -rf` failed because the
+# `r` it matched is followed by `f`, and `dd if=/dev/zero` because `=` is followed by `/`. Those
+# spellings, and the Python and long-option ones (.py is a script suffix), sit in the second group.
 CHANGES_STATE = re.compile(r"""(?xi) \b (?:
       remove-item | remove-itemproperty | move-item | rename-item | clear-content | new-itemproperty
     | set-acl | set-service | stop-service | start-service | restart-service | set-itemproperty
     | add-appxpackage | remove-appxpackage | restart-computer | stop-computer
     | takeown | icacls | robocopy | rd \s+ /s | rmdir | del \s+ / | erase \s+ /
     | reg \s+ (?:add|delete|import) | sc \s+ config | net \s+ (?:stop|start)
-    | schtasks \s+ /(?:create|delete|change) | dism | mkfs | dd \s+ if=
-    | rm \s+ -[rf] | systemctl \s+ (?:start|stop|restart|enable|disable|mask)
+    | schtasks \s+ /(?:create|delete|change) | dism | mkfs
+    | systemctl \s+ (?:start|stop|restart|enable|disable|mask)
     | apt-get | apt \s+ (?:install|remove|upgrade) | pip \s+ install | chmod | chown
     | zfs \s+ (?:set|destroy|rollback) | zpool \s+ (?:destroy|replace)
     | qm \s+ (?:set|destroy|stop|start) | pct \s+ (?:set|destroy|stop|start)
-) \b """)
+) \b
+  | \b rm \s+ (?: -[a-z]*[rf][a-z]* | --(?:recursive|force) ) (?![\w-])
+  | ['"] rm ['"] \s* , \s* ['"] (?: -[a-z]*[rf][a-z]* | --(?:recursive|force) ) ['"]
+  | \b dd \s+ if=
+  | \b shutil \s* \. \s* rmtree \b | \b os \s* \. \s* (?:remove|unlink|rmdir|removedirs) \s* \(
+  | \. \s* unlink \s* \(
+""")
 
 
 def changes_state(text):
@@ -516,7 +564,10 @@ def _written_scripts(event):
     if tool == "Write":
         written = [(str(tool_input.get("file_path") or ""), tool_input.get("content") or "")]
     elif is_shell_tool(tool):
-        written = heredoc_writes(tool_input.get("command") or "")
+        command = tool_input.get("command") or ""
+        written = heredoc_writes(command)
+        if tool == "PowerShell":                          # a here-string is PowerShell syntax only
+            written += here_string_writes(command)
     else:
         return []
     return [(p, c) for p, c in written if Path(p).suffix.lower() in SCRIPT_SUFFIXES]

@@ -759,3 +759,127 @@ EOS
 def pathlib_name(entry):
     from pathlib import Path as _P
     return _P(entry.get("p", "")).name if isinstance(entry, dict) else ""
+
+
+# --------------------------------------------------------------------------- changes_state spellings
+# The pattern ended in `\b`, so any spelling whose last matched character is not followed by a
+# word boundary was read as read-only: `rm -rf` (the `r` is followed by `f`), `dd if=/dev/zero`
+# (`=` followed by `/`). The Python and long-option spellings were missing entirely although .py
+# is a script suffix, so a Python cleanup lineage always landed on the observe track.
+
+MUTATING_SPELLINGS = [
+    "rm -rf /srv/build/old", "rm -fr /srv/build/old", "rm -Rf /srv/build/old", "rm -rfv old/",
+    "rm --recursive --force /srv/old", "rm --force stale.lock",
+    "dd if=/dev/zero of=/dev/sda bs=1M",
+    "shutil.rmtree('/srv/old')", "os.remove(p)", "os.unlink(p)", "os.rmdir(d)",
+    "Path(p).unlink()", "p.unlink(missing_ok=True)",
+    "subprocess.run(['rm', '-rf', '/x'])",
+]
+
+
+def test_changes_state_sees_every_deletion_spelling():
+    missed = [t for t in MUTATING_SPELLINGS if not mod.changes_state(t)]
+    assert missed == []
+
+
+def test_changes_state_controls_still_hold():
+    for text in ("rm -r /srv/old", "rm -f x", "dd if=disk.img of=/dev/sdb",
+                 "Remove-Item -Recurse C:\\old"):
+        assert mod.changes_state(text), text
+    for text in ("ls -rf", "grep -rf patterns.txt src", "firmware=1", "os.removal_count = 3",
+                 "p.unlinked", "cat /etc/os-release",
+                 "farm -rf", "json.load(open(p))"):
+        assert not mod.changes_state(text), text
+
+
+def test_a_rm_rf_lineage_lands_on_the_change_track(tmp_path):
+    sess = "sess-rmrf"
+    for i in (1, 2, 3):
+        _run(_write_event(sess, "/tmp/purge_old%d.sh" % i,
+                          "# purge old build dirs\nrm -rf /srv/build/old%d\n" % i), tmp_path)
+    (state,) = list(tmp_path.rglob("*.jig-ledger.json"))
+    d = json.loads(state.read_text(encoding="utf-8"))
+    assert [e.get("m") for e in d["entries"]] == [True, True, True]
+
+
+# --------------------------------------------------------------------------- redirect after the opener
+
+def test_a_redirect_after_the_heredoc_opener_is_the_target():
+    got = mod.heredoc_writes("cat <<'EOS' > tool.sh\nrm -rf /x\nEOS\n")
+    assert got == [("tool.sh", "rm -rf /x")]
+
+
+def test_control_the_redirect_before_the_opener_still_works():
+    got = mod.heredoc_writes("cat > tool.sh <<'EOS'\nrm -rf /x\nEOS\n")
+    assert got == [("tool.sh", "rm -rf /x")]
+
+
+def test_a_pipe_after_the_opener_into_a_non_script_writes_nothing():
+    assert mod.heredoc_writes("cat <<'EOS' | tee notes.md\nhello\nEOS\n") == []
+
+
+# --------------------------------------------------------------------------- two heredocs in one call
+
+def test_both_scripts_of_a_two_heredoc_command_enter_the_ledger(tmp_path):
+    cmd = ("cat > first_probe.sh <<'A'\necho one\nA\n"
+           "cat > second_probe.py <<'B'\nprint(2)\nB\n")
+    assert [p for p, _ in mod.heredoc_writes(cmd)] == ["first_probe.sh", "second_probe.py"]
+    _run(_bash_event("sess-two-heredocs", cmd), tmp_path)
+    (state,) = list(tmp_path.rglob("*.jig-ledger.json"))
+    entries = json.loads(state.read_text(encoding="utf-8"))["entries"]
+    assert [pathlib_name(e) for e in entries] == ["first_probe.sh", "second_probe.py"]
+
+
+# --------------------------------------------------------------------------- PowerShell here-strings
+# The hook is registered for the PowerShell tool, whose way to author a script file is a
+# here-string piped or passed to Set-Content / Out-File / Add-Content or redirected with `>`.
+# Only bash heredocs were understood, so every such script write was invisible.
+
+def _ps_event(session, command):
+    return {"tool_name": "PowerShell", "session_id": session, "tool_input": {"command": command}}
+
+
+PS_SHAPES = [
+    ("Set-Content -Path delrobo.ps1 -Value @'\nrobocopy a b /MIR\n'@", "delrobo.ps1",
+     "robocopy a b /MIR"),
+    ("@\"\nWrite-Host $env:COMPUTERNAME\n\"@ | Out-File -FilePath C:\\tmp\\probe.ps1 -Encoding utf8",
+     "C:\\tmp\\probe.ps1", "Write-Host $env:COMPUTERNAME"),
+    ("@'\nimport os\nprint(os.getcwd())\n'@ > run_it.py", "run_it.py", "import os\nprint(os.getcwd())"),
+    ("$body = @'\nrd /s /q C:\\x\n'@\nSet-Content 'C:\\my dir\\del x.ps1' $body", None, None),
+    ("Add-Content -LiteralPath \"C:\\my dir\\step.ps1\" -Value @'\nStop-Service wuauserv\n'@",
+     "C:\\my dir\\step.ps1", "Stop-Service wuauserv"),
+]
+
+
+def test_powershell_here_string_script_writes_are_extracted():
+    for command, path, body in PS_SHAPES:
+        got = mod._written_scripts(_ps_event("s", command))
+        expected = [] if path is None else [(path, body)]
+        assert got == expected, command
+
+
+def test_a_here_string_that_writes_no_script_is_ignored():
+    for command in ("Set-Content -Path notes.txt -Value @'\nhello\n'@",
+                    "$x = @'\nrobocopy a b /MIR\n'@\nInvoke-Expression $x",
+                    "Write-Host @'\nsee run.ps1\n'@"):
+        assert mod._written_scripts(_ps_event("s", command)) == [], command
+
+
+def test_a_here_string_in_a_bash_command_is_not_read_as_one():
+    assert mod._written_scripts(_bash_event("s", "echo @'\nx\n'@ > a.ps1")) == []
+
+
+def test_control_a_bash_style_heredoc_in_powershell_is_still_read():
+    got = mod._written_scripts(_ps_event("s", "cat > x.ps1 <<'EOS'\nrobocopy a b\nEOS\n"))
+    assert got == [("x.ps1", "robocopy a b")]
+
+
+def test_here_string_variants_written_via_powershell_nudge(tmp_path):
+    sess = "sess-herestring"
+    outs = []
+    for name, body in (("del_v1.ps1", DELETE_V1), ("del_v2.ps1", DELETE_V2),
+                       ("del_v3.ps1", DELETE_V3)):
+        cmd = "Set-Content -Path %s -Value @'\n%s\n'@" % (name, body.strip("\n"))
+        outs.append(_run(_ps_event(sess, cmd), tmp_path).stdout)
+    assert outs[0].strip() == "" and outs[1].strip() == ""
+    assert "TESTED JIG" in outs[2]
