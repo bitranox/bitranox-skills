@@ -166,3 +166,13 @@ def test_an_event_without_a_tool_name_takes_the_stricter_reading(monkeypatch):
     payload = {"tool_input": {"command": r"cd C:\; git rev-parse --short A B"}}
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     assert G.main() == 2
+
+
+def test_a_trailing_ampersand_is_backgrounding_not_a_revision():
+    # A lone `&` ends the statement (shell_text splits there), so it never reaches the operand
+    # list: `--short HEAD &` is one revision run in the background. The operand filter used to
+    # carry its own `t != "&"` clause for this, which segmentation had made unreachable.
+    assert G.broken_revparse("git rev-parse --short HEAD &") is False
+    assert G.broken_revparse("git rev-parse --short HEAD & git log -1") is False
+    assert G.broken_revparse("git rev-parse --short A B &") is True        # control
+    assert G.broken_revparse("git rev-parse --short HEAD &", "PowerShell") is False

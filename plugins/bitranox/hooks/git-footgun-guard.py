@@ -60,9 +60,10 @@ def broken_revparse(command: str, tool_name: str | None = None) -> bool:
             continue
         if not any(t == "--short" or t.startswith("--short=") for t in rest):
             continue
-        # Operands are the non-option tokens after rev-parse (the revisions);
-        # redirections are already stripped, `&` is backgrounding, not a revision.
-        operands = [t for t in rest if not t.startswith("-") and t != "&"]
+        # Operands are the non-option tokens after rev-parse (the revisions). Redirections are
+        # already stripped, and a backgrounding `&` never gets here: iter_segments ends the
+        # statement at it.
+        operands = [t for t in rest if not t.startswith("-")]
         if len(operands) >= 2:
             return True
     return False
