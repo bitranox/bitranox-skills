@@ -27,6 +27,7 @@ library; launched via run-python.sh so it works on Windows too.
 """
 import json
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -48,6 +49,8 @@ _MARKER_STEMS = ("BITRANOX-MEMORY-INDEX:", "BITRANOX-UUID-INDEX:")
 # any path segment `.claude-memory/` (live store) or `.claude-bx-selflearning/` (legacy store)
 _STORE = re.compile(r"(?:^|/)(?:\.claude-memory|\.claude-bx-selflearning)/")
 _TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# a Windows drive-letter path is absolute even when this runs on POSIX
+_DRIVE = re.compile(r"^[A-Za-z]:/")
 _BYPASS_ENV = "BITRANOX_MEMORY_ENGINE"
 
 _DENY = (
@@ -59,6 +62,11 @@ _DENY = (
     "the canonical render, and tree-unique slug enforcement, and makes the PostToolUse hooks churn "
     "the file. For a deliberate hand-repair session, relaunch with %s=1 set at session start "
     "(a Bash `export` does not reach this hook). File: %s"
+)
+_UNPLACEABLE = (
+    "This CLAUDE.local.md is not valid UTF-8 and the edit's old_string cannot be located in it, so "
+    "the guard cannot tell whether the edit reaches the managed pointer block. Convert the file to "
+    "UTF-8, then retry the edit. File: %s"
 )
 
 
@@ -105,34 +113,54 @@ def _overlaps_block(current, needle, spans):
 
 
 def _read(path):
+    """(text, exact) of the file at `path`. A file that is not valid UTF-8 is decoded with
+    replacement characters and exact=False: the fence markers are ASCII and survive that, so the
+    block stays locatable, whereas treating the file as unreadable would drop every deny on it.
+    A UTF-16 BOM is honoured because the Edit/Write tools read and write UTF-16LE files too."""
     try:
-        return path.read_text(encoding="utf-8")
+        data = path.read_bytes()
     except OSError:
-        return ""
+        return "", True
+    codec = "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8"
+    try:
+        return data.decode(codec), True
+    except UnicodeDecodeError:
+        return data.decode(codec, errors="replace"), False
+
+
+def _resolve(raw, cwd):
+    """`raw` (forward slashes) as a normalised absolute path: a relative path is joined to the
+    event cwd BEFORE any store check, so `facts/f.md` from inside a store is judged as the store
+    file it is, and a `..` that leaves the store is judged by where it lands."""
+    if not (raw.startswith("/") or _DRIVE.match(raw)):
+        raw = (cwd or ".").replace("\\", "/").rstrip("/") + "/" + raw
+    return posixpath.normpath(raw)
+
+
+def _apply(text, old_s, new_s, replace_all):
+    return text.replace(old_s, new_s) if replace_all else text.replace(old_s, new_s, 1)
 
 
 def decide(event, env):
     """Pure: (event, env) -> a deny-reason string, or None to allow silently. Never raises to the
-    caller (main wraps it); internal file reads fail-open to ''."""
+    caller (main wraps it); a missing or unreadable file reads as ''."""
     if (event.get("tool_name") or "") not in _TOOLS:
         return None
     tool_input = event.get("tool_input") or {}
-    raw = (tool_input.get("file_path") or "").replace("\\", "/")
+    # NotebookEdit names its target notebook_path, never file_path
+    raw = (tool_input.get("file_path") or tool_input.get("notebook_path") or "").replace("\\", "/")
     if not raw:
         return None
     if env.get(_BYPASS_ENV):
         return None                                    # deliberately-declared maintenance session
 
-    if _STORE.search(raw):
+    resolved = _resolve(raw, event.get("cwd"))
+    if _STORE.search(resolved):
         return _DENY % ("a store file", _BYPASS_ENV, raw)
-
-    path = Path(raw)
-    if not path.is_absolute():
-        path = Path(event.get("cwd") or ".") / path
-    if path.name != "CLAUDE.local.md":
+    if posixpath.basename(resolved) != "CLAUDE.local.md":
         return None
 
-    current = _read(path)
+    current, exact = _read(Path(resolved))
     tool = event["tool_name"]
     deny = _DENY % ("the managed pointer block in CLAUDE.local.md", _BYPASS_ENV, raw)
 
@@ -142,15 +170,28 @@ def decide(event, env):
             return deny                                # block added, altered, or deleted by hand
         return None
 
-    spans = _block_spans(current)
+    # MultiEdit applies its edits in order, each to the result of the previous one, so every edit
+    # is judged against that working copy: judged against the original, a later edit whose target
+    # only exists after an earlier one is never found and can remove the block unseen.
+    working = current
     edits = tool_input.get("edits") if tool == "MultiEdit" else [tool_input]
     for e in edits or []:
         old_s = e.get("old_string") or ""
         new_s = e.get("new_string") or ""
         if _injects_marker(new_s) and not _injects_marker(old_s):
             return deny                                # hand-injecting a fence marker
-        if _overlaps_block(current, old_s, spans):
+        spans = _block_spans(working)
+        if _overlaps_block(working, old_s, spans):
             return deny                                # the edit target sits inside the block
+        if not old_s:
+            continue                                   # nothing to locate, nothing to apply
+        if old_s not in working:
+            if not exact and spans:
+                return _UNPLACEABLE % raw              # the undecodable bytes may hide the match
+            continue                                   # the tool rejects a target it cannot find
+        working = _apply(working, old_s, new_s, e.get("replace_all"))
+    if _block_region(working) != _block_region(current):
+        return deny                                    # the edits together change the block
     return None
 
 
