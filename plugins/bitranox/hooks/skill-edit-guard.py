@@ -6,15 +6,22 @@ Law (baseline test first, sibling tests for any bundled script) - is the exact m
 A skill grows into a mess by accretion when edits bypass that process; the standing "use the applicable
 skill" rule is advisory prose that loses under momentum, so this is the deterministic backstop.
 
-Decision on an `Edit`/`Write`/`MultiEdit` whose target is a `.../skills/<name>/SKILL.md`:
+Decision on an `Edit`/`Write`/`MultiEdit`/`NotebookEdit` whose target (`file_path`, or
+`notebook_path` for NotebookEdit) is a `.../skills/<name>/SKILL.md`, matched ignoring letter case and
+after backslashes become `/` and `.`/`..` segments collapse:
   - BLOCK (exit 2): the tool call is denied and the reason is fed back to the MODEL, which then redirects
     itself to meta-skill-writer. The user is NOT prompted (enforced, not asked).
-  - UNLESS the env `BITRANOX_SKILL_WRITER` is set: a deliberately-declared skill-authoring session opts
-    out. NOTE: a shell `export` in a Bash tool call does NOT reach this hook (separate process) - the env
-    must be set at SESSION start.
+  - UNLESS this session holds a fresh meta-skill-writer receipt: `skill_receipt.is_fresh`, keyed by the
+    event's `session_id`, valid for 8 hours. Step 0 of meta-skill-writer arms it by running
+    `skill_receipt.py start meta-skill-writer`, so entering the procedure is what allows the edit, and
+    a receipt from another session never does.
+  - UNLESS the env `BITRANOX_SKILL_WRITER` is set: the emergency bypass. NOTE: a shell `export` in a
+    Bash tool call does NOT reach this hook (separate process) - the env must be set at SESSION start.
 
-Fail-open: any parse/IO error -> exit 0 (a broken guard must never wedge a turn). Pure standard library;
-launched via run-python.sh so it works on Windows too.
+Errors split by direction. Unparseable stdin and any error escaping `main` fail OPEN (exit 0): a broken
+guard must never wedge a turn. An error while consulting the receipt store fails CLOSED: it counts as
+no receipt and the edit is blocked, because a store that cannot be read must not disarm the guard.
+Pure standard library; launched via run-python.sh so it works on Windows too.
 """
 import json
 import os
@@ -22,7 +29,9 @@ import posixpath
 import re
 import sys
 
-_SKILL_MD = re.compile(r"(?:^|/)skills/[^/]+/SKILL\.md$")
+# IGNORECASE because macOS and Windows filesystems are case-insensitive: there `Skills/x/skill.md`
+# opens the real SKILL.md, and the guard cannot tell from a path string which filesystem it names.
+_SKILL_MD = re.compile(r"(?:^|/)skills/[^/]+/SKILL\.md$", re.IGNORECASE)
 _TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _BYPASS_ENV = "BITRANOX_SKILL_WRITER"
 
@@ -34,7 +43,10 @@ def decide(event, env):
     # posixpath.normpath, not os.path: the separators are already forward slashes, and
     # os.path would put Windows ones back. Without collapsing "." and ".." first, the
     # tail-anchored regex missed .../skills/<name>/./SKILL.md - the same file, unguarded.
-    raw = ((event.get("tool_input") or {}).get("file_path") or "").replace("\\", "/")
+    # NotebookEdit names its target `notebook_path`; without the fallback that registration
+    # could never produce a decision.
+    tool_input = event.get("tool_input") or {}
+    raw = (tool_input.get("file_path") or tool_input.get("notebook_path") or "").replace("\\", "/")
     path = posixpath.normpath(raw) if raw else raw
     if not _SKILL_MD.search(path):
         return None
