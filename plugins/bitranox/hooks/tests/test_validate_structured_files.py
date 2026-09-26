@@ -13,6 +13,7 @@ import io
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -22,9 +23,6 @@ import validate_structured_files as V
 HOOKS_DIR = Path(__file__).resolve().parent.parent
 SCRIPT = HOOKS_DIR / "validate-structured-files.py"
 SHIM = HOOKS_DIR / "run-python.sh"
-
-# Whether a JSON5 reader is installed decides whether JSONC validates or skips.
-HAVE_JSON5 = any(__import__("importlib.util", fromlist=["util"]).find_spec(m) for m in ("pyjson5", "json5"))
 
 
 # --------------------------------------------------------------------------
@@ -88,11 +86,6 @@ def test_validate_json_trailing_comma_blocks():
     assert ok is False and msg
 
 
-def test_validate_json_jsonc_never_blocks():
-    # With a JSON5 reader -> (True, None); without -> (None, None). Never False.
-    ok, _ = V.validate_json("tsconfig.json", "{\n  // comment\n  \"a\": 1,\n}")
-    assert ok is not False
-    assert ok is (True if HAVE_JSON5 else None)
 
 
 # --------------------------------------------------------------------------
@@ -282,3 +275,218 @@ def test_plain_valid_and_plain_broken_json_are_unaffected(tmp_path, monkeypatch)
         "file_path": _write(tmp_path, "ok.json", '{"a": 1}')}}) == 0
     assert run_main(monkeypatch, {"tool_input": {
         "file_path": _write(tmp_path, "bad.json", '{"a": 1,,}')}}) == 2
+
+
+# --- rank 10 re-adjudication: string-aware signals, BOM, notebooks, library fallbacks ------------
+#
+# Library absence is simulated at the import system, the one seam this hook has for its optional
+# dependencies: a None entry in sys.modules makes the next `import` of that name raise ImportError,
+# and a module object placed there is what `import` returns. Nothing inside the hook is patched.
+
+
+def _block_imports(monkeypatch, *names):
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, None)
+
+
+def _json5_stub(monkeypatch, *, accept):
+    """Install a fake pyjson5 whose loads() accepts or rejects everything, and hide json5."""
+    stub = types.ModuleType("pyjson5")
+
+    def loads(text):
+        if not accept:
+            raise ValueError("stub json5 rejects this document")
+        return {}
+
+    stub.loads = loads
+    monkeypatch.setitem(sys.modules, "pyjson5", stub)
+    _block_imports(monkeypatch, "json5")
+
+
+def _event(tmp_path, name, content, *, key="file_path", tool="Write"):
+    p = tmp_path / name
+    if isinstance(content, bytes):
+        p.write_bytes(content)
+    else:
+        p.write_text(content, encoding="utf-8")
+    return {"tool_name": tool, "tool_input": {key: str(p)}}
+
+
+# A9: a // or /* inside a JSON string is data, not a comment.
+
+@pytest.mark.parametrize("text", [
+    '{"homepage": "https://github.com/bitranox/bitranox-skills"}',
+    '{"include": ["src/**/*.py"]}',
+    '{"a": "x\\"// still inside the string"}',
+])
+def test_a_comment_digraph_inside_a_string_is_not_jsonc(text):
+    assert V.looks_jsonc("plain.json", text) is False
+
+
+@pytest.mark.parametrize("text", [
+    '{\n  // c\n  "a": 1\n}',
+    '{ /* c */ "a": 1 }',
+    '{"url": "https://x"} // trailing comment',
+    '{"a": "ends in a backslash\\\\"} // c',
+])
+def test_a_real_comment_outside_strings_is_still_jsonc(text):
+    assert V.looks_jsonc("plain.json", text) is True
+
+
+@pytest.mark.parametrize("name", ["tsconfig.json", "tsconfig.build.json", "jsconfig.json", "devcontainer.json"])
+def test_the_filename_allowlist_is_unchanged(name):
+    assert V.looks_jsonc(name, '{"a": 1}') is True
+
+
+def test_a_url_no_longer_exempts_a_broken_json_without_a_json5_reader(tmp_path, monkeypatch):
+    _block_imports(monkeypatch, "pyjson5", "json5")
+    broken = '{\n  "homepage": "https://github.com/bitranox/bitranox-skills",\n  "name": "x"\n'
+    glob = '{"include": ["src/**/*.py"], "name": "x"\n'
+    assert run_main(monkeypatch, _event(tmp_path, "url_broken.json", broken)) == 2
+    assert run_main(monkeypatch, _event(tmp_path, "glob_broken.json", glob)) == 2
+
+
+def test_a_url_no_longer_routes_strict_json_to_a_lenient_reader(tmp_path, monkeypatch):
+    # The stub accepts anything, so reaching it would approve the trailing comma.
+    _json5_stub(monkeypatch, accept=True)
+    text = '{"repository": "https://github.com/x/y", "name": "x",}'
+    assert run_main(monkeypatch, _event(tmp_path, "url_trailing.json", text)) == 2
+
+
+# A10: the {{ template marker.
+
+@pytest.mark.parametrize("text", [
+    '{{\n  "name": "x"\n}\n',
+    '{{ "name": "x"}\n',
+    '{\n  "a": "{{VALUE}}",\n  "b": 1,,\n}\n',
+    '{\n  "a": "{{ VALUE }}",\n  "b": 1,,\n}\n',
+    '{\n  "a": "{% raw %}",\n  "b": 1,,\n}\n',
+])
+def test_a_brace_digraph_that_is_not_a_template_tag_does_not_skip(tmp_path, monkeypatch, text):
+    assert run_main(monkeypatch, _event(tmp_path, "plugin.json", text)) == 2
+
+
+@pytest.mark.parametrize("name,text", [
+    ("values.yaml", 'name: {{ "foo" | quote }}\nkey: [unclosed\n'),
+    ("t.json", '{"a": {{ "literal" }}}'),
+    ("t.json", '{"a": "{{ "nested" | upper }}", "b": 1}'),
+    ("t.json", '{"a": "{{VALUE}}"}'),
+])
+def test_a_real_template_or_valid_placeholder_still_passes(tmp_path, monkeypatch, name, text):
+    assert run_main(monkeypatch, _event(tmp_path, name, text)) == 0
+
+
+# A12: NotebookEdit sends notebook_path, and a notebook is JSON.
+
+def test_classify_ipynb_as_json():
+    assert V.classify("a.ipynb")[0] == "json"
+
+
+def test_a_notebook_edit_is_validated(tmp_path, monkeypatch):
+    bad = _event(tmp_path, "broken.ipynb", '{"cells": [,}\n', key="notebook_path", tool="NotebookEdit")
+    good = _event(tmp_path, "good.ipynb", '{"cells": [], "metadata": {}}\n', key="notebook_path", tool="NotebookEdit")
+    assert run_main(monkeypatch, bad) == 2
+    assert run_main(monkeypatch, good) == 0
+
+
+# B7: a UTF-8 byte-order mark is not a syntax error.
+
+@pytest.mark.parametrize("name,body", [
+    ("bom.json", b'{"name": "x"}\n'),
+    ("bom.yml", b"name: x\n"),
+    ("bom.xml", b'<?xml version="1.0" encoding="utf-8"?>\n<foo/>\n'),
+])
+def test_a_bom_prefixed_valid_file_passes(tmp_path, monkeypatch, name, body):
+    assert run_main(monkeypatch, _event(tmp_path, name, b"\xef\xbb\xbf" + body)) == 0
+
+
+def test_a_bom_prefixed_broken_json_still_blocks(tmp_path, monkeypatch):
+    assert run_main(monkeypatch, _event(tmp_path, "bom_bad.json", b'\xef\xbb\xbf{"name": "x",,}\n')) == 2
+
+
+# B8 + D3: the defusedxml fallback (lxml absent).
+
+ENTITY_DOC = '<?xml version="1.0"?>\n<!DOCTYPE foo [ <!ENTITY a "expanded"> ]>\n<foo>&a;</foo>\n'
+
+
+def test_defusedxml_fallback_accepts_valid_and_blocks_broken(monkeypatch):
+    _block_imports(monkeypatch, "lxml", "lxml.etree")
+    assert V.validate_xml("a.xml", "<foo>plain</foo>") == (True, None)
+    ok, msg = V.validate_xml("a.xml", "<foo>plain</fooo>")
+    assert ok is False and "mismatched tag" in msg
+
+
+def test_defusedxml_fallback_skips_an_entity_document_it_refuses_to_parse(tmp_path, monkeypatch):
+    _block_imports(monkeypatch, "lxml", "lxml.etree")
+    assert V.validate_xml("ent.xml", ENTITY_DOC) == (None, None)
+    assert run_main(monkeypatch, _event(tmp_path, "ent.xml", ENTITY_DOC)) == 0
+
+
+def test_no_safe_xml_parser_skips(monkeypatch):
+    _block_imports(monkeypatch, "lxml", "lxml.etree", "defusedxml", "defusedxml.ElementTree")
+    assert V.validate_xml("a.xml", "<foo>plain</fooo>") == (None, None)
+
+
+# D3: the ruamel.yaml fallback (PyYAML absent).
+
+def test_ruamel_fallback_accepts_valid_and_blocks_broken(monkeypatch):
+    _block_imports(monkeypatch, "yaml")
+    assert V.validate_yaml("a.yml", "---\na: 1\n---\nb: [1, 2]\n") == (True, None)
+    ok, msg = V.validate_yaml("a.yml", "a: 1\n  b: 2\n")
+    assert ok is False and msg
+
+
+def test_no_yaml_library_skips(monkeypatch):
+    _block_imports(monkeypatch, "yaml", "ruamel", "ruamel.yaml")
+    assert V.validate_yaml("a.yml", "a: 1\n  b: 2\n") == (None, None)
+
+
+# D3: the JSON5 reader's accept and reject branches.
+
+JSONC_DOC = '{\n  // comment\n  "a": 1,\n}'
+
+
+def test_jsonc_with_no_json5_reader_skips(monkeypatch):
+    _block_imports(monkeypatch, "pyjson5", "json5")
+    assert V.validate_json("tsconfig.json", JSONC_DOC) == (None, None)
+
+
+def test_jsonc_accepted_by_the_json5_reader_passes(monkeypatch):
+    _json5_stub(monkeypatch, accept=True)
+    assert V.validate_json("tsconfig.json", JSONC_DOC) == (True, None)
+
+
+def test_jsonc_rejected_by_the_json5_reader_blocks(tmp_path, monkeypatch, capsys):
+    _json5_stub(monkeypatch, accept=False)
+    assert V.validate_json("tsconfig.json", JSONC_DOC) == (False, "stub json5 rejects this document")
+    assert run_main(monkeypatch, _event(tmp_path, "tsconfig.json", JSONC_DOC)) == 2
+    assert "stub json5 rejects" in capsys.readouterr().err
+
+
+def test_the_json5_decode_spelling_is_used_when_there_is_no_loads(monkeypatch):
+    stub = types.ModuleType("pyjson5")
+    stub.decode = lambda text: {}
+    monkeypatch.setitem(sys.modules, "pyjson5", stub)
+    _block_imports(monkeypatch, "json5")
+    assert V.validate_json("tsconfig.json", JSONC_DOC) == (True, None)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('"a"', [(True, '"a"')]),
+    ('{"a": 1}', [(False, "{"), (True, '"a"'), (False, ": 1}")]),
+    ('"a\\"b" x', [(True, '"a\\"b"'), (False, " x")]),
+    # An unterminated string ends at the line break, so the next line is scanned as data again.
+    ('{"a": "x\n}', [(False, "{"), (True, '"a"'), (False, ": "), (True, '"x'), (False, "\n}")]),
+])
+def test_json_segments(text, expected):
+    assert V.json_segments(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('"{{VALUE}}"', False),  # a placeholder string that is the whole document
+    ('{"a": "{{ ""}}", "b": 1,,}', True),  # a quote inside the tag leaves two adjacent strings
+    ('{"a": {{ .x }}}', True),
+    ('{"a": "{{VALUE}}"}', False),
+])
+def test_json_is_template(text, expected):
+    assert V.json_is_template(text) is expected

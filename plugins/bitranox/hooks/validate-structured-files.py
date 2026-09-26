@@ -10,9 +10,11 @@ parse error is fed back to the model, which then corrects it.
 Why PostToolUse and not PreToolUse: a Write carries the whole file, but an Edit /
 MultiEdit only carries a fragment - you cannot judge whole-file validity from a
 fragment. PostToolUse reads the finished file from disk, so it validates the same
-way regardless of how the edit was produced (Write, Edit, MultiEdit, or several
-edits in a row). The bad bytes briefly touch disk; the exit-2 feedback loop makes
-the model fix them immediately.
+way regardless of how the edit was produced (Write, Edit, MultiEdit, NotebookEdit,
+or several edits in a row). NotebookEdit names its target in notebook_path rather
+than file_path, and a .ipynb notebook is JSON, so it is validated as JSON. The bad
+bytes briefly touch disk; the exit-2 feedback loop makes the model fix them
+immediately.
 
 It validates *provenance-blind* (it cannot tell library output from hand-typed
 output - both are byte-identical when valid), so it only ever judges *validity*,
@@ -22,8 +24,12 @@ False-block avoidance is the priority - a noisy gate gets disabled. So it SKIPS
 (exit 0) rather than blocks whenever it cannot be certain the file is meant to be
 strict data:
   - templates (Helm / Jinja / Go / ERB markers {{ }}, {% %}, <% %>) are not data;
-  - JSONC (tsconfig, .vscode/*, files with // or /* */ comments) is parsed with a
-    JSON5 reader if one is installed, and skipped if none is;
+    in a .json only a marker outside a string literal counts;
+  - JSONC (tsconfig, .vscode/*, files with // or /* */ comments outside string
+    literals) is parsed with a JSON5 reader if one is installed, and skipped if
+    none is;
+  - an XML document the hardened fallback parser refuses on security grounds
+    (an entity declaration, when lxml is absent) is skipped, not blocked;
   - empty / whitespace-only files (intentional stubs);
   - the validating library not being installed (cannot validate -> do not block);
   - multi-document YAML is handled (safe_load_all), so k8s/--- manifests pass.
@@ -33,6 +39,7 @@ missing one degrades to skip. Reads the PostToolUse event JSON on stdin. Exit 2
 blocks (feeds stderr to the model); every other path - including any internal
 error - exits 0, so a broken validator never wedges a turn.
 """
+import bisect
 import json
 import os
 import re
@@ -42,20 +49,86 @@ import sys
 # (shell/compose interpolation) is deliberately NOT here - it is valid in a string.
 # A template is not strict data, so this hook stays out of its way. But `{{` opens a Jinja/Helm
 # tag AND is how an Edit most often breaks a JSON file - by doubling its opening brace - so the
-# bare digraph skipped exactly the corruption this hook exists to catch. A template EXPRESSION
-# never opens on a JSON string quote or on another brace, which separates the two.
-#
-# The trade-off is deliberate and one-directional: the Jinja spelling `{{"literal"}}`, written
-# with no space, is now validated instead of skipped. That direction is a LOUD false block on a
-# rare spelling; the other ships a corrupted manifest in silence.
-TEMPLATE_RX = re.compile(r"\{\{(?![\"{])|\{%|<%")
+# bare digraph skipped exactly the corruption this hook exists to catch. What follows a doubled
+# JSON brace is another brace or an object KEY (a string, then a colon), possibly after a newline
+# and indentation; a template expression is neither, so only that shape is excluded. A bare
+# "a string follows" rule would also exclude `{{ "x" | quote }}`, a real Helm/Jinja expression.
+TEMPLATE_RX = re.compile(r"\{\{(?!\s*(?:\{|\"(?:[^\"\\\r\n]|\\.)*\"\s*:))|\{%|<%")
 
-JSON_EXTS = (".json",)
+# After a JSON string closes, only these may follow it (plus whitespace or end of text). A string
+# holding a template marker and followed by anything else was cut short by a quote INSIDE a
+# template expression ("{{ "x" | upper }}"), so the file is a template, not broken data.
+_AFTER_JSON_STRING = frozenset(":,}]")
+
+JSON_EXTS = (".json", ".ipynb")
 YAML_EXTS = (".yml", ".yaml")
 XML_EXTS = (".xml", ".svg", ".xsd", ".xsl", ".rss", ".wsdl", ".pom")
 
 # Skill names to point the model at in the remediation message.
 SKILL = {"json": "bitranox:files-edit-json", "yaml": "bitranox:files-edit-yml", "xml": "bitranox:files-edit-xml"}
+
+
+def json_segments(text: str):
+    """Split JSON text into (is_string, segment) runs, honouring backslash escapes.
+
+    A string also ends at a line break: JSON forbids a raw newline inside one, so ending
+    there re-synchronises the scan after an unterminated string in a broken file instead
+    of treating the rest of the file as string content.
+    """
+    segments = []
+    start, i, n = 0, 0, len(text)
+    while i < n:
+        if text[i] != '"':
+            i += 1
+            continue
+        if i > start:
+            segments.append((False, text[start:i]))
+        j = i + 1
+        while j < n and text[j] not in '"\r\n':
+            j += 2 if text[j] == "\\" else 1
+        end = min(j + 1, n) if j < n and text[j] == '"' else min(j, n)
+        segments.append((True, text[i:end]))
+        start = i = end
+    if start < n:
+        segments.append((False, text[start:]))
+    return segments
+
+
+def json_has_comment(text: str) -> bool:
+    """True if a // or /* appears outside every string literal (a URL or glob is not a comment)."""
+    return any(not is_str and ("//" in seg or "/*" in seg) for is_str, seg in json_segments(text))
+
+
+def json_is_template(text: str) -> bool:
+    """True if a template marker sits where JSON data would be, not inside a string value.
+
+    A placeholder such as "{{VALUE}}" inside a string is ordinary data, so it must not exempt
+    the file around it from validation.
+    """
+    segments = json_segments(text)
+    # Match against the WHOLE text so the lookahead can see a key that follows `{{` in the next
+    # segment, then judge each hit by the segment it starts in.
+    starts, offset = [], 0
+    for _, seg in segments:
+        starts.append(offset)
+        offset += len(seg)
+    for match in TEMPLATE_RX.finditer(text):
+        idx = bisect.bisect_right(starts, match.start()) - 1
+        if not segments[idx][0] or _string_cut_by_template(segments, idx):
+            return True
+    return False
+
+
+def _string_cut_by_template(segments, idx: int) -> bool:
+    for is_str, seg in segments[idx + 1 : idx + 3]:
+        if is_str:
+            # Two strings with no separator between: JSON never does that, a quote inside a
+            # template expression does.
+            return True
+        head = seg.lstrip()
+        if head:
+            return head[0] not in _AFTER_JSON_STRING
+    return False  # the string ends the text
 
 
 def looks_jsonc(path: str, text: str) -> bool:
@@ -69,7 +142,7 @@ def looks_jsonc(path: str, text: str) -> bool:
     if base.endswith(".code-workspace"):
         return True
     # Generic signal: a // or /* */ comment outside the JSON grammar.
-    return "//" in text or "/*" in text
+    return json_has_comment(text)
 
 
 def try_json5(text: str):
@@ -140,12 +213,17 @@ def validate_xml(path: str, text: str):
     # Fallback: defusedxml, which hardens stdlib parsing against XXE and the
     # billion-laughs entity-expansion bomb that bare xml.etree is vulnerable to.
     try:
+        from defusedxml import DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden
         from defusedxml.ElementTree import fromstring as defused_fromstring
     except ImportError:
         return None, None  # no safe XML parser installed -> skip (never parse unsafely)
     try:
         defused_fromstring(data)
         return True, None
+    except (DTDForbidden, EntitiesForbidden, ExternalReferenceForbidden):
+        # A security refusal, not a syntax verdict: the document may be well-formed (lxml,
+        # which parses it without expanding entities, accepts it). Unable to judge -> skip.
+        return None, None
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 
@@ -161,12 +239,23 @@ def classify(path: str):
     return None, None
 
 
+def is_template(kind: str, text: str) -> bool:
+    # JSON strings have one simple, scannable syntax, so a marker inside a string value can be
+    # told apart from one in data position. YAML quoting (single, double, block scalars) is not
+    # worth a scanner here, so a YAML/XML marker anywhere still means "template".
+    if kind == "json":
+        return json_is_template(text)
+    return bool(TEMPLATE_RX.search(text))
+
+
 def main() -> int:
     try:
         event = json.load(sys.stdin)
     except Exception:  # noqa: BLE001
         return 0
-    path = (event.get("tool_input") or {}).get("file_path") or ""
+    tool_input = event.get("tool_input") or {}
+    # NotebookEdit names its target notebook_path; every other matched tool uses file_path.
+    path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if not path:
         return 0
 
@@ -175,14 +264,16 @@ def main() -> int:
         return 0
 
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig: a byte-order mark is legal at the start of a UTF-8 file and says nothing
+        # about validity; plain utf-8 hands it to json.loads, which rejects it.
+        with open(path, "r", encoding="utf-8-sig") as fh:
             text = fh.read()
     except Exception:  # noqa: BLE001 - unreadable/binary/gone -> nothing to validate
         return 0
 
     if not text.strip():
         return 0  # empty / whitespace-only stub: intentional, not the failure class we guard
-    if TEMPLATE_RX.search(text):
+    if is_template(kind, text):
         return 0  # Helm / Jinja / Go / ERB template: not strict data
 
     result, detail = validator(path, text)
