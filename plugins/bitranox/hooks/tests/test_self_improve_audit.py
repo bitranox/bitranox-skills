@@ -281,3 +281,98 @@ def test_a_message_that_QUOTES_the_marker_mid_sentence_still_surfaces(tmp_path):
     t = make_transcript(tmp_path, [
         ("user", "the header reads 'Base directory for this skill: /x' but the deploy path is wrong")])
     assert A.find_candidates(t)
+
+
+# ---- D6: list-shaped tool_result.content (a list of blocks, incl. a non-text block) -----------
+
+def test_list_shaped_tool_result_content_yields_the_same_candidate_as_str(tmp_path):
+    """A tool_result's content can be a list of blocks (real transcripts do this), not just a
+    string. A non-text block (an image) must be skipped without breaking the join."""
+    t = write_raw(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "frobnicate"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": [
+                {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                {"type": "text", "text": "bash: frobnicate: command not found"},
+            ]}]}},
+    ])
+    cands = A.find_candidates(str(t))
+    assert any("command not found" in m for c in cands for m in c["matched"]), cands
+
+
+def test_list_shaped_tool_result_with_no_signal_is_not_a_candidate(tmp_path):
+    t = write_raw(tmp_path, [
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": [
+                {"type": "text", "text": "1170 passed, 7 skipped in 14.18s"}]}]}},
+    ])
+    assert A.find_candidates(str(t)) == []
+
+
+# ---- D6(b): the _MAX_BYTES tail seek in _iter_messages and _skill_tally -----------------------
+
+def test_over_cap_transcript_drops_the_head_and_keeps_the_tail(tmp_path, monkeypatch):
+    """With _MAX_BYTES small, a transcript bigger than the cap must be read from the tail: the
+    head record's candidate AND skill tally entry are dropped, the tail record's are kept.
+
+    _MAX_BYTES is picked so the seek lands inside a FILLER line, not inside the tail block
+    itself: readline() drops only the partial filler line after the seek, so the whole tail
+    assistant+user pair survives intact (a cap that lands mid-tail would drop the tail's own
+    Skill tool_use too, which would not discriminate head-dropped from tail-truncated)."""
+    filler = json.dumps({"type": "assistant", "message": {"content": "padding " * 40}})
+    head = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:head-skill"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "bash: frobnicate: command not found"}]}},
+    ]
+    tail = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:tail-skill"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "zsh: command not found: quuxify"}]}},
+    ]
+    p = tmp_path / "big.jsonl"
+    lines = [json.dumps(o) for o in head] + [filler] * 20 + [json.dumps(o) for o in tail]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(A, "_MAX_BYTES", 344)  # cuts inside a filler line, ahead of the tail block
+
+    cands = A.find_candidates(str(p))
+    matched_snippets = [c["snippet"] for c in cands if c["role"] == "tool"]
+    assert any("quuxify" in s for s in matched_snippets), cands
+    assert not any("frobnicate" in s for s in matched_snippets), cands
+
+    skills = A._skill_tally(str(p))
+    assert skills.get("bitranox:tail-skill") == 1
+    assert "bitranox:head-skill" not in skills
+
+
+def test_under_cap_transcript_keeps_both_head_and_tail(tmp_path, monkeypatch):
+    """Control: with the same records but under the cap, both head and tail are seen."""
+    filler = json.dumps({"type": "assistant", "message": {"content": "padding " * 40}})
+    head = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:head-skill"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "bash: frobnicate: command not found"}]}},
+    ]
+    tail = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Skill", "input": {"skill": "bitranox:tail-skill"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "zsh: command not found: quuxify"}]}},
+    ]
+    p = tmp_path / "small.jsonl"
+    lines = [json.dumps(o) for o in head] + [filler] * 20 + [json.dumps(o) for o in tail]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(A, "_MAX_BYTES", 10 * 1024 * 1024)
+
+    cands = A.find_candidates(str(p))
+    matched_snippets = [c["snippet"] for c in cands if c["role"] == "tool"]
+    assert any("quuxify" in s for s in matched_snippets), cands
+    assert any("frobnicate" in s for s in matched_snippets), cands
+
+    skills = A._skill_tally(str(p))
+    assert skills.get("bitranox:head-skill") == 1
+    assert skills.get("bitranox:tail-skill") == 1

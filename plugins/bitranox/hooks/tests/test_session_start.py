@@ -209,6 +209,48 @@ def test_nudge_silent_when_optout_present(tmp_path, monkeypatch, capsys):
     assert _sysmsg(out) == ""
 
 
+# D8: the settings-candidate loop (_autoupdate_enabled) must move PAST a file that parses but
+# does not enable, on to the next candidate - not stop and report "not enabled" on the first hit.
+
+def test_a_parseable_but_non_enabling_settings_file_falls_through_to_the_next_candidate(
+        tmp_path, monkeypatch, capsys, isolate_home):
+    """User settings.json parses and explicitly sets autoUpdate false (a real file, not just
+    missing); the project's settings.local.json is the one that enables it. The loop must not
+    stop at the first parseable candidate - it must keep looking until one actually enables."""
+    _optout(isolate_home).unlink()
+    user_settings = isolate_home / ".claude" / "settings.json"
+    user_settings.write_text(
+        json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": False}}}),
+        encoding="utf-8")
+    proj = tmp_path / "proj"
+    (proj / ".claude").mkdir(parents=True)
+    (proj / ".claude" / "settings.local.json").write_text(
+        json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": True}}}),
+        encoding="utf-8")
+    root = make_plugin_root(tmp_path / "plugin", skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert _sysmsg(out) == ""  # enabled at the project layer: no nudge
+
+
+def test_control_all_candidates_parse_but_none_enables_still_nudges(
+        tmp_path, monkeypatch, capsys, isolate_home):
+    """Control for the test above: same shape, but the last candidate does NOT enable either -
+    the nudge must still fire."""
+    _optout(isolate_home).unlink()
+    user_settings = isolate_home / ".claude" / "settings.json"
+    user_settings.write_text(
+        json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": False}}}),
+        encoding="utf-8")
+    proj = tmp_path / "proj2"
+    (proj / ".claude").mkdir(parents=True)
+    (proj / ".claude" / "settings.local.json").write_text(
+        json.dumps({"extraKnownMarketplaces": {"bitranox-skills": {"autoUpdate": False}}}),
+        encoding="utf-8")
+    root = make_plugin_root(tmp_path / "plugin2", skill_body="---\nname: meta-using-bitranox-skills\n---\n\nB\n")
+    rc, out = run_with_stdin(monkeypatch, capsys, root, str(proj))
+    assert "auto-update" in _sysmsg(out)
+
+
 # --------------------------------------------------------------------------
 # meta-dream-tree due nudge (additionalContext, self-silencing)
 # --------------------------------------------------------------------------

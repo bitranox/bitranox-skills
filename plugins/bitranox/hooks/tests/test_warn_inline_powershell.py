@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import warn_inline_powershell as W
 
 HOOK = Path(__file__).resolve().parent.parent / "warn-inline-powershell.py"
@@ -164,3 +166,66 @@ def test_a_commit_message_describing_the_footgun_is_quiet():
 def test_a_real_invocation_after_an_echo_of_one_still_fires():
     assert W.build_notice(
         "echo 'do not do this' && ssh win 'powershell -Command \"Get-Process\"'") is not None
+
+
+# ---- D7: every abbreviated prefix answers the same as its full-length flag ----------------------
+# COVERAGE gap: only the extremes (-c/-Com/-Comm/-Command and -File/-f) had a test; the middle
+# prefixes -fi/-fil (silent, like -File) and -com/-comm (fires, like -Command) did not, and a
+# non-prefix lookalike like -filex must stay silent (it is not a valid abbreviation at all).
+
+@pytest.mark.parametrize("flag", ["-fi", "-fil", "-File"])
+def test_file_flag_prefixes_are_all_silent(flag):
+    assert W.build_notice("ssh win 'powershell %s C:\\t\\x.ps1'" % flag) is None, flag
+
+
+@pytest.mark.parametrize("flag", ["-com", "-comm", "-Command"])
+def test_command_flag_prefixes_all_fire(flag):
+    notice = W.build_notice('ssh win \'powershell %s "Get-Process | Select -First 1"\'' % flag)
+    assert notice and "INLINE REMOTE POWERSHELL" in notice, flag
+
+
+def test_filex_is_not_a_flag_prefix_and_stays_silent():
+    """-filex is not a valid abbreviation of -File (extra trailing letters); with no other command
+    flag in the invocation, the whole thing must be silent, not treated as -File OR as a hit."""
+    assert W.build_notice("ssh win 'powershell -filex \"Get-Process\"'") is None
+
+
+@pytest.mark.parametrize("flag", ["-fi", "-fil", "-File"])
+def test_file_flag_regex_matches_every_prefix_directly(flag):
+    """build_notice cannot discriminate a -fi/-fil MATCH from a no-match here (both end up
+    silent, since neither has a command flag either) - a narrowed regex would be an equivalent
+    mutant at the build_notice level. Assert the regex hit directly so that narrowing IS caught."""
+    assert W._FILE_FLAG_RX.search(flag), flag
+
+
+# ---- D7: direct tests for the two helpers, not only through build_notice ------------------------
+
+def test_strip_data_regions_removes_a_heredoc_body():
+    stripped = W._strip_data_regions("cat <<'EOF' > n.md\nssh host powershell -Command x\nEOF\nls")
+    assert "powershell" not in stripped
+    assert "ls" in stripped
+
+
+def test_strip_data_regions_keeps_the_ssh_argument_the_hook_exists_to_find():
+    """The ssh argument stays quoted-but-present: ssh RUNS its argument, so masking it here would
+    delete the exact thing this hook exists to detect."""
+    command = "ssh host 'powershell -Command x'"
+    assert W._strip_data_regions(command) == command
+
+
+def test_strip_data_regions_masks_a_sink_statements_argument():
+    """echo stores/prints its argument rather than running it, so the footgun text inside it is
+    data, not an instance of the footgun."""
+    stripped = W._strip_data_regions("echo 'ssh host powershell -command x'")
+    assert "powershell" not in stripped
+
+
+def test_powershell_invocation_stops_at_the_statement_boundary():
+    """Only `wc`'s -c is after &&, not PowerShell's; the returned span must end before it."""
+    invocation = W._powershell_invocation("ssh win 'powershell job.ps1' && wc -c out.txt")
+    assert invocation is not None
+    assert "wc" not in invocation
+
+
+def test_powershell_invocation_is_none_without_a_shell_name():
+    assert W._powershell_invocation("ssh win 'Get-Date'") is None
