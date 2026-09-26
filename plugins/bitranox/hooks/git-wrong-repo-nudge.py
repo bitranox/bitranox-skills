@@ -60,9 +60,9 @@ import sys
 
 from shell_text import SEP, commands_only_aligned, is_shell_tool
 
-# `cd` as the statement's own verb, optionally behind env assignments. The target is optional: a
+# `cd` as the statement's own verb, optionally behind env assignments. The operands are optional: a
 # bare `cd` is still a directory change, to $HOME, and must not read as "no cd happened".
-_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?:\s+(?P<target>[^\s;&|]+))?(?:\s|$)")
+_CD = re.compile(r"^\s*(?:\w+=\S*\s+)*cd(?P<args>\s.*)?$")
 _GIT = re.compile(r"^\s*(?:\w+=\S*\s+)*(?:sudo\s+|timeout\s+\S+\s+)*git\b")
 
 
@@ -85,6 +85,19 @@ def _statements(command, tool_name="Bash"):
 
 
 _UNKNOWABLE = re.compile(r"[$`<>|\n*?]")          # a destination no static read can resolve
+
+
+def _cd_target(args):
+    """The destination among `cd`'s operands: its own options (`-P`, `-L`, `--`) are skipped.
+
+    Taking the first word as the target read `cd -P <dir>` as a cd into "<previous>/-P".
+    """
+    for index, token in enumerate(args):
+        if token == "--":
+            return args[index + 1] if index + 1 < len(args) else None
+        if token == "-" or not token.startswith("-"):
+            return token
+    return None
 
 
 def _unknowable(target):
@@ -144,8 +157,12 @@ def notice(command, cwd, tool_name="Bash"):
         cd_hit = _CD.match(masked[start:end])
         if cd_hit:
             target = None
-            if cd_hit.group("target") is not None:
-                target = command[start:end][cd_hit.start("target"):cd_hit.end("target")]
+            if cd_hit.group("args") is not None:
+                # Words are found on the MASKED text, where a quoted path is one word however many
+                # spaces it holds, and each is then sliced from the raw statement.
+                raw, offset = command[start:end], cd_hit.start("args")
+                target = _cd_target([raw[offset + w.start():offset + w.end()]
+                                     for w in re.finditer(r"\S+", cd_hit.group("args"))])
             if _unknowable(target):
                 return None            # where it lands is not readable here
             here = _resolve(target, here)

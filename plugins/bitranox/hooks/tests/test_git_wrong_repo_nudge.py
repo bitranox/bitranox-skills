@@ -263,3 +263,18 @@ def test_a_cd_with_a_trailing_redirect_is_still_a_cd(tmp_path):
     here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
     cmd = f"cd {one} 2>/dev/null && git log && cd {two} 2>/dev/null && git log"
     assert G.notice(cmd, str(here)) is not None
+
+
+def test_cd_options_are_not_the_destination(tmp_path):
+    # `cd -P <dir>` used to take `-P` as the target, resolve "<previous>/-P" and attribute it to the
+    # previous landing's repo, so two different repos read as one and the call went unflagged.
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "two")
+    assert G.notice(f"cd {one} && git log && cd -P {two} && git log", str(here)) is not None
+    assert G.notice(f"cd {one} && git log && cd -- {two} && git log", str(here)) is not None
+    assert G.notice(f"cd {one} && git log && cd -L && git log", str(here)) is None      # no operand
+
+
+def test_a_quoted_destination_with_a_space_is_one_destination(tmp_path):
+    here, one, two = _repo(tmp_path, "here"), _repo(tmp_path, "one"), _repo(tmp_path, "t w o")
+    assert G.notice(f'cd {one} && git log && cd "{two}" && git log', str(here)) is not None
+    assert G.notice(f'cd {one} && git log && cd -P "{two}" && git log', str(here)) is not None
