@@ -235,7 +235,7 @@ def test_match_a_duplicated_keyword_counts_once():
 
 def test_match_does_not_split_a_german_compound_at_an_umlaut():
     triggers = {"fx": ["file", "code"]}
-    assert R.match("die Fileübersicht und der Codeüberblick sind falsch", triggers) == []
+    assert R.match("die File\u00fcbersicht und der Code\u00fcberblick sind falsch", triggers) == []
 
 
 def test_match_control_the_separate_words_still_match():
@@ -332,7 +332,7 @@ def test_shipped_map_does_not_route_plain_prose_with_one_keyword():
 
 def test_shipped_map_does_not_route_german_umlaut_compounds():
     triggers = R.load_triggers()
-    assert R.match("die Fileübersicht und der Codeüberblick sind falsch", triggers) == []
+    assert R.match("die File\u00fcbersicht und der Code\u00fcberblick sind falsch", triggers) == []
 
 
 def test_shipped_map_control_routes_a_real_json_editing_prompt():
