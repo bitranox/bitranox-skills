@@ -50,13 +50,13 @@ _CLAIM = re.compile(
     r"|\bis not used\b|\bare not used\b|\bnever used\b"
     r"|\bis never called\b|\bnever called\b|\bno caller\b|\bno callers\b"
     r"|\bnot wired\b|\bdead code\b|\bdead path\b|\bdoes not exist\b",
-    re.I,
+    re.IGNORECASE,
 )
 
 # Evidence that the init path WAS read: a concrete file, module path, or line reference.
 _EVIDENCE = re.compile(
     r"\b[\w./-]+\.(?:py|rs|ts|js|go|sh|ps1|toml|json)\b|\bline \d+|\b__init__\b|\bcomposition/",
-    re.I,
+    re.IGNORECASE,
 )
 
 _NOTICE = (

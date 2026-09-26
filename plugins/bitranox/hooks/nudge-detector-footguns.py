@@ -43,7 +43,12 @@ import re
 import sys
 from pathlib import Path
 
-from shell_text import argv_for_match, basename_for_tool, iter_segments, strip_heredoc_bodies
+from shell_text import (
+    argv_for_match,
+    basename_for_tool,
+    iter_segments,
+    strip_heredoc_bodies,
+)
 
 # A -newermt value bfs cannot parse. ISO-like stamps are fine; these are not.
 _RELATIVE_TIME_RE = re.compile(
@@ -140,7 +145,7 @@ def pyright_without_pinned_interpreter(
         return False
     # A pin flag counts only if it is PYRIGHT's. `-p` is also mkdir's, and reading `mkdir -p build
     # && pyright` as pinned silenced the nudge on an unpinned run.
-    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith("--pythonpath=") or t.startswith("--venvpath=")
+    if any(t in _PYRIGHT_PIN_FLAGS or t.startswith(("--pythonpath=", "--venvpath="))
            for run in runs for t in run):
         return False
     # `Path.is_dir` swallows only some errnos before Python 3.14: a parent directory that denies
