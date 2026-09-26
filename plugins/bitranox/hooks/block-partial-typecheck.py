@@ -15,8 +15,9 @@ TRUST, and it reads identically to the real thing, which is why re-reading a not
 about it does not help.
 
 The block is deliberately narrow, so false positives are near zero. It fires only
-when ALL of these hold:
-  - the command actually invokes pyright as a check (not --version/--help);
+when ALL of these hold for at least one pyright invocation in the command (every
+invocation is judged, not only the first):
+  - it actually invokes pyright as a check (not --version/--help);
   - pyright is given at least one positional path (no paths = the config's own
     include list = the full project = fine);
   - the project HAS a test directory (nothing to miss otherwise);
@@ -96,8 +97,13 @@ _NON_CHECK = frozenset({"--version", "--help", "-h", "--stats", "--verifytypes"}
 _TEST_DIR_NAMES = ("tests", "test")
 
 
-def _pyright_positionals(cmd: str, tool_name: str = "Bash") -> list[str] | None:
-    r"""Positional paths handed to pyright, or None if this is not a check run.
+def _pyright_invocations(cmd: str, tool_name: str = "Bash") -> list[list[str]]:
+    r"""The positional paths of EVERY pyright check run in `cmd`, one list per invocation.
+
+    An invocation that is not a check (`--version`, `--help`, ...) contributes nothing and the scan
+    goes on: ending the whole scan there let `pyright --version && pyright src` through, and judging
+    only the first invocation let `pyright tests && pyright src` through. An empty list for an
+    invocation means no paths were given, which is the full project. Unbalanced quotes give `[]`.
 
     `tool_name` picks the splitting language AND the path-separator rules, because both decide
     whether argv names pyright at all: POSIX shlex eats the separators out of a PowerShell
@@ -111,8 +117,9 @@ def _pyright_positionals(cmd: str, tool_name: str = "Bash") -> list[str] | None:
         tokens = shell_text.split_for_tool(
             shell_text.strip_heredoc_bodies(cmd), tool_name, comments=True)
     except ValueError:
-        return None  # unbalanced quotes: not ours to judge
+        return []  # unbalanced quotes: not ours to judge
 
+    invocations: list[list[str]] = []
     for index, token in enumerate(tokens):
         # Match the executable itself, not a substring of some other word.
         if shell_text.basename_for_tool(token, tool_name) not in {"pyright", "pyright.exe"}:
@@ -123,22 +130,32 @@ def _pyright_positionals(cmd: str, tool_name: str = "Bash") -> list[str] | None:
         if index and tokens[index - 1] in _NAME_VALUE_FLAGS:
             continue
 
-        positionals: list[str] = []
-        skip_next = False
-        for arg in tokens[index + 1 :]:
-            if arg in _SHELL_BREAKS or _REDIRECT_RE.match(arg):
-                break
-            if skip_next:
-                skip_next = False
-                continue
-            if arg in _NON_CHECK:
-                return None
-            if arg.startswith("-"):
-                skip_next = arg in _VALUE_FLAGS
-                continue
-            positionals.append(arg)
-        return positionals
-    return None
+        positionals = _invocation_positionals(tokens[index + 1 :])
+        if positionals is not None:
+            invocations.append(positionals)
+    return invocations
+
+
+def _invocation_positionals(args: list[str]) -> list[str] | None:
+    """The paths one pyright invocation is given, or None when it is not a check run.
+
+    Reads `args` up to the first shell operator or redirection, which ends this invocation.
+    """
+    positionals: list[str] = []
+    skip_next = False
+    for arg in args:
+        if arg in _SHELL_BREAKS or _REDIRECT_RE.match(arg):
+            break
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in _NON_CHECK:
+            return None
+        if arg.startswith("-"):
+            skip_next = arg in _VALUE_FLAGS
+            continue
+        positionals.append(arg)
+    return positionals
 
 
 def _test_dir(cwd: Path) -> Path | None:
@@ -155,8 +172,10 @@ def _covers(path_arg: str, cwd: Path, tests: Path) -> bool:
     try:
         target = (cwd / path_arg).resolve()
         tests_resolved = tests.resolve()
-    except OSError:
-        return True  # cannot tell -> do not block
+    except (OSError, ValueError):
+        # Cannot tell -> do not block. ValueError is what pathlib raises for an embedded NUL; it
+        # escaped here once and ended the whole hook instead of this one path's verdict.
+        return True
     # Either the argument IS/contains the test dir, or it sits inside it.
     return target == tests_resolved or tests_resolved.is_relative_to(target) or target.is_relative_to(tests_resolved)
 
@@ -174,10 +193,9 @@ def main() -> int:
     if not re.search(r"\bpyright\b", cmd):
         return 0
 
-    positionals = _pyright_positionals(cmd, data.get("tool_name") or "Bash")
-    if not positionals:
-        # None = not a check run. Empty = no paths given, so pyright uses its
-        # config's include list: that IS the full project.
+    # Invocations with no paths use the config's include list: that IS the full project.
+    narrowed = [p for p in _pyright_invocations(cmd, data.get("tool_name") or "Bash") if p]
+    if not narrowed:
         return 0
 
     cwd_raw = data.get("cwd")
@@ -188,7 +206,10 @@ def main() -> int:
     if tests is None:
         return 0  # no tests to miss
 
-    if any(_covers(p, cwd, tests) for p in positionals):
+    # Each run's result is read on its own, so each is judged on its own.
+    positionals = next(
+        (paths for paths in narrowed if not any(_covers(p, cwd, tests) for p in paths)), None)
+    if positionals is None:
         return 0
 
     rel = tests.name

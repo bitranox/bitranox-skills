@@ -123,7 +123,7 @@ def test_redirect_ends_the_invocation(monkeypatch, project):
     and the redirect target gets counted as a positional.
     """
     assert run_main(monkeypatch, "pyright tests 2>/dev/null", project) == 0
-    assert B._pyright_positionals("pyright src 2>/dev/null") == ["src"]
+    assert B._pyright_invocations("pyright src 2>/dev/null") == [["src"]]
 
 
 # --- blocked: narrowed away from the tests ---------------------------------
@@ -212,9 +212,56 @@ def test_a_pyright_call_inside_a_heredoc_body_is_not_a_call():
     """A heredoc body is DATA. A doc or script that merely CONTAINS a narrow pyright invocation
     is not one, and blocking it stops the footgun being written down."""
     cmd = "cat > notes.md <<EOF\npyright src/one_file.py\nEOF"
-    assert B._pyright_positionals(cmd) is None
+    assert B._pyright_invocations(cmd) == []
 
 
 def test_a_real_pyright_call_after_a_heredoc_is_still_seen():
     cmd = "cat > notes.md <<EOF\nprose\nEOF\npyright src/one_file.py"
-    assert B._pyright_positionals(cmd) == ["src/one_file.py"]
+    assert B._pyright_invocations(cmd) == [["src/one_file.py"]]
+
+
+# --- every invocation is judged, not only the first ------------------------
+
+
+def test_a_version_query_before_a_narrowed_run_does_not_hide_it(monkeypatch, project):
+    """`--version` made the scan return "not a check run" for the WHOLE line, so the narrowed
+    `pyright src` after it was never judged."""
+    assert run_main(monkeypatch, "pyright --version && pyright src", project) == 2
+
+
+def test_a_second_narrowed_run_is_judged_on_its_own(monkeypatch, project, capsys):
+    """Only the first invocation was judged; `pyright src` after `pyright tests` escaped.
+
+    Each run's verdict is read on its own, so each is judged on its own.
+    """
+    assert run_main(monkeypatch, "pyright tests && pyright src", project) == 2
+    assert "paths given: src" in capsys.readouterr().err
+
+
+def test_several_full_runs_still_pass(monkeypatch, project):
+    """The control: judging every invocation must not block runs that each cover the tests."""
+    assert run_main(monkeypatch, "pyright --version && pyright", project) == 0
+    assert run_main(monkeypatch, "pyright tests && pyright src tests", project) == 0
+    assert run_main(monkeypatch, "pyright --version", project) == 0
+
+
+def test_a_shell_operator_ends_the_invocation():
+    """The `_SHELL_BREAKS` arm: `&&` and `||` end pyright's argv, they are not paths."""
+    assert B._pyright_invocations("pyright src && echo x") == [["src"]]
+    assert B._pyright_invocations("pyright src || true") == [["src"]]
+    assert B._pyright_invocations("pyright tests && pyright src") == [["tests"], ["src"]]
+    assert B._pyright_invocations("pyright --version && pyright src") == [["src"]]
+
+
+# --- a path pathlib cannot resolve -------------------------------------------
+
+
+def test_a_path_with_a_nul_byte_is_undecidable_not_a_crash(monkeypatch, project):
+    """pathlib raises ValueError, not OSError, for an embedded NUL. `_covers` caught only OSError,
+    so the ValueError escaped `main()`. It is now the documented "cannot tell -> do not block"."""
+    assert B._covers("src" + chr(0) + "x", project, project / "tests") is True
+    assert run_main(monkeypatch, "pyright 'src" + chr(0) + "x'", project) == 0
+
+
+def test_an_undecidable_path_does_not_excuse_a_narrowed_run_beside_it(monkeypatch, project):
+    assert run_main(monkeypatch, "pyright 'src" + chr(0) + "x' && pyright src", project) == 2
