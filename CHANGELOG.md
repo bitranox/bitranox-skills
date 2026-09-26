@@ -29,6 +29,16 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.5]
+
+### Fixed
+
+- The growth-ratio meta-test in `test_secret_patterns.py` measures its planted quadratic and
+  linear scans on a virtual clock the scans advance by exact amounts. They used to sleep, and a
+  macOS runner overshoots every sleep by about 0.12 s: added to both arms, that turned a true 16x
+  into 7.8x, under the bound of 8, and failed CI on a tree that had just passed. A second test
+  pins that the calibration grows a too-fast small arm past its floor.
+
 ## [7.25.4]
 
 ### Fixed

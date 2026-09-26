@@ -1,14 +1,16 @@
-# Handover - 2026-09-26, rank 8 MED batch shipped as 7.25.4; the LOW batch is next
+# Handover - 2026-09-26, rank 8 MED batch shipped as 7.25.4 (+ a CI flake fix, 7.25.5); the LOW batch is next
 
 ## In flight
 
 Nothing running and nothing part-done. 7.25.4 carries every MED finding of the rank-8 review,
-and both workflows are green on it. The `OPEN-WORK.md` rank 8 line carries the state and the next
+and both workflows were green on it. The next push then failed macOS CI on the growth-ratio
+meta-test in `test_secret_patterns.py` (sleep overshoot, not a code change); 7.25.5 moves that
+meta-test onto a virtual clock. Check CI on the 7.25.5 commit before starting new work. The `OPEN-WORK.md` rank 8 line carries the state and the next
 step.
 
 ## Committed, or not
 
-- **In git and pushed:** 7.25.4, and this handover plus `OPEN-WORK.md` on top of it. Run
+- **In git and pushed:** 7.25.4, a handover commit, and 7.25.5 (this file plus the flake fix). Run
   `git log --oneline -3` for the shas; CI was confirmed on the release commit.
 - **Not in git, by design (gitignored, main checkout):**
   `.plan/rank8-review-2026-09-26/REVIEW.txt` (every review finding, the LOWs still open) and

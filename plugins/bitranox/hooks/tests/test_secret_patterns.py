@@ -598,14 +598,14 @@ def _scan(text):
     sp.holds_a_credential(text)
 
 
-def _fastest_of(text, scan=_scan, repeats=3):
+def _fastest_of(text, scan=_scan, repeats=3, clock=time.monotonic):
     """The minimum of a few timed passes, which filters a transient scheduling stall without
     hiding real quadratic growth - a slow pass recurs on every repeat, a stall does not."""
     best = None
     for _ in range(repeats):
-        start = time.monotonic()
+        start = clock()
         scan(text)
-        elapsed = time.monotonic() - start
+        elapsed = clock() - start
         best = elapsed if best is None else min(best, elapsed)
     return best
 
@@ -619,14 +619,14 @@ _START_LEN = 50_000
 _MAX_SMALL_LEN = 1_600_000
 
 
-def _growth_ratio(prefix, unit, suffix, scan=_scan):
+def _growth_ratio(prefix, unit, suffix, scan=_scan, clock=time.monotonic):
     """Time `scan` on the shape at a calibrated size n and at 4n; return (t_n, t_4n)."""
     length = _START_LEN
-    t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan)
+    t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan, clock=clock)
     while t_n < _SMALL_ARM_FLOOR_S and length < _MAX_SMALL_LEN:
         length *= 2
-        t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan)
-    t_4n = _fastest_of(_sized_case(prefix, unit, suffix, 4 * length), scan)
+        t_n = _fastest_of(_sized_case(prefix, unit, suffix, length), scan, clock=clock)
+    t_4n = _fastest_of(_sized_case(prefix, unit, suffix, 4 * length), scan, clock=clock)
     return t_n, t_4n
 
 
@@ -649,24 +649,52 @@ def test_adversarial_inputs_stay_linear(shape):
 _PLANTED_BASE_S = 0.1
 
 
-def _sleep_for(seconds):
-    time.sleep(max(seconds, 0.0))
+class _VirtualClock:
+    """A clock only the planted scans move, so the instrument is tested on exact costs.
+
+    The planted scans used to SLEEP, and a macOS runner overshoots every sleep by a roughly
+    constant ~0.12 s: added to both arms it turned a true 16x into (1.6+0.12)/(0.1+0.12) = 7.8x,
+    under the bound, and failed CI on a tree that had just passed. This test is about the
+    calibration and the ratio bound, not the OS scheduler, so it needs no real time at all."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def spend(self, seconds):
+        self.now += max(seconds, 0.0)
 
 
 def test_growth_ratio_flags_a_planted_quadratic_and_passes_a_planted_linear():
     """The instrument must be able to fail: a scan whose cost grows with the square of the input
-    has to land above the bound, and a linear one below it, through the same calibration.
-
-    The planted cost starts at 100 ms, well above timer slack: a macOS runner's sleep overshoots
-    by tens of ms, and with a 4 ms base that noise flattened the quadratic arm to a ratio of 4."""
+    has to land above the bound, and a linear one below it, through the same calibration."""
+    clock = _VirtualClock()
 
     def quadratic(text):
-        _sleep_for(_PLANTED_BASE_S * (len(text) / _START_LEN) ** 2)
+        clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN) ** 2)
 
     def linear(text):
-        _sleep_for(_PLANTED_BASE_S * (len(text) / _START_LEN))
+        clock.spend(_PLANTED_BASE_S * (len(text) / _START_LEN))
 
-    q_n, q_4n = _growth_ratio("", "a", "", scan=quadratic)
-    l_n, l_4n = _growth_ratio("", "a", "", scan=linear)
-    assert q_4n / q_n > _MAX_LINEAR_RATIO, (q_n, q_4n)
-    assert l_4n / l_n < _MAX_LINEAR_RATIO, (l_n, l_4n)
+    q_n, q_4n = _growth_ratio("", "a", "", scan=quadratic, clock=clock)
+    l_n, l_4n = _growth_ratio("", "a", "", scan=linear, clock=clock)
+    assert q_4n / q_n == pytest.approx(16.0) and q_4n / q_n > _MAX_LINEAR_RATIO, (q_n, q_4n)
+    assert l_4n / l_n == pytest.approx(4.0) and l_4n / l_n < _MAX_LINEAR_RATIO, (l_n, l_4n)
+
+
+def test_the_calibration_grows_the_small_arm_until_it_clears_the_floor():
+    """A scan too fast to time at the start size is measured at a doubled size, not left at a
+    duration where scheduler noise would dominate the ratio."""
+    clock = _VirtualClock()
+    sizes = []
+
+    def cheap(text):
+        sizes.append(len(text))
+        clock.spend(0.004 * (len(text) / _START_LEN))
+
+    t_n, t_4n = _growth_ratio("", "a", "", scan=cheap, clock=clock)
+    assert t_n >= _SMALL_ARM_FLOOR_S, t_n
+    assert max(sizes) > 4 * _START_LEN, sizes
+    assert t_4n / t_n == pytest.approx(4.0)
