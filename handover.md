@@ -1,89 +1,86 @@
-# STALE - read 2026-09-26, work continued
+# Handover - 2026-09-26, rank 8 closed: LOW pass shipped as 7.25.6, CI fixes 7.25.7-7.25.8, green
 
 ## In flight
 
-Nothing running and nothing part-done. 7.25.4 carries every MED finding of the rank-8 review,
-and both workflows were green on it. The next push then failed macOS CI on the growth-ratio
-meta-test in `test_secret_patterns.py` (sleep overshoot, not a code change); 7.25.5 moves that
-meta-test onto a virtual clock. Check CI on the 7.25.5 commit before starting new work. The `OPEN-WORK.md` rank 8 line carries the state and the next
-step.
+Nothing. The 7.24 fix-group review (rank 8) is finished: HIGH in 7.25.3, MED in 7.25.4, LOW in
+7.25.6 (13 fixer groups, each landed only after its tests-only half failed on the old source).
+7.25.6 failed CI on py3.14 and Windows and 7.25.7 on py3.11; both were test or depth-limit
+defects, fixed in 7.25.7 and 7.25.8. CI is green on 7.25.8 in both workflows.
 
 ## Committed, or not
 
-- **In git and pushed:** 7.25.4, a handover commit, and 7.25.5 (this file plus the flake fix). Run
-  `git log --oneline -3` for the shas; CI was confirmed on the release commit.
+- **In git and pushed:** 7.25.6, 7.25.7, 7.25.8 on master (`git log --oneline -4`). This file and
+  the `OPEN-WORK.md` updates are in the commit after them.
 - **Not in git, by design (gitignored, main checkout):**
-  `.plan/rank8-review-2026-09-26/REVIEW.txt` (every review finding, the LOWs still open) and
-  `.plan/rank8-review-2026-09-26/MED-FOLLOWUPS.txt` (what the MED fixers found and left, rank 179).
-- The 11 fixer worktrees still hold their changes UNCOMMITTED; the content is already in 7.25.4.
-  They are listed under rank 160 for wtclean, to be discarded rather than merged.
+  `.plan/rank8-review-2026-09-26/LOW-LEDGER.txt` holds, per fixer group, the RED/GREEN counts, the
+  "Left:" findings (rank 181) and the 16 DESIGN questions with options and a recommendation each
+  (rank 177). `REVIEW.txt` and `MED-FOLLOWUPS.txt` beside it are now fully worked.
+- The 13 fixer worktrees (`.claude/worktrees/agent-*`) still hold their changes uncommitted; the
+  content is in 7.25.6. Rank 160 lists them for wtclean, to discard rather than merge.
+- Both queued block-masked-gate-exit contributions are shipped in `contrib_queue`.
 
 ## Decided, and why - do not reopen
 
-- **The adopt license gate scopes its evidence to the skill's own folder plus the governing files
-  of each ancestor folder.** A whole-tree scope stopped all 30 Apache skills of
-  claude-plugins-official because a sibling plugin is proprietary. A symlinked folder, or a link
-  out of the skill, stops the gate (copytree would ship the target unread).
-- **task_brief ends a task at the next task heading or a HIGHER-level heading**, not at any
-  same-level one. Across the 13 real plans only two briefs changed, both correctly. A same-level
-  section after the last task now stays with that task (it reverses an earlier LOW fix).
-- **A NEEDS_IMPROVEMENT verdict scoring at or above the threshold exits 0**, the literal reading of
-  the user's exit-1 decision (below the threshold means exit 1). Flagged in rank 179 for a yes/no.
-- **Jigs that run the caller's commands declare `LAUNCH_WITH = "python3"`** (gate, ci_triage,
-  transfer, diffbehave), and toolbox-nudge reads the declaration. A test pins every nudged jig.
+- **jsonl_grep's stdlib fallback refuses nesting past 1024 levels, orjson's own limit.** Measured:
+  orjson reads `{"x":` + 1023 lists and refuses 1024. Leaving it to the stack made the verdict
+  depend on the interpreter: CPython 3.14 reads 100,000 levels and then fails serialising, 3.11
+  stops near 1000. The test's readable control sits at 500 levels for that reason.
+- **orjson's serialiser refuses values its reader accepts**, so `_dumps` falls back to the stdlib
+  in orjson's compact form (`separators=(",", ":")`) instead of a traceback.
+- **The transfer tests for single-quote and backslash quoting run only on POSIX.** Under Windows
+  command-line rules neither quotes anything, so the refusal there is right; the Windows rules have
+  their own tests.
+- **Every DESIGN question stayed unchanged in code**; none is decided by the coordinator.
 
 ## Decided against, and why
 
-- The LOW findings and the fixers' own follow-ups were kept out of 7.25.4: they are a separate
-  pass by the rank-8 plan, and mixing them would have hidden which change fixed which MED.
-- Deleting the 1704 `/tmp/factedit-*` dirs the old factedit leaked: not asked for, and some may
-  belong to live sessions. The leak itself is fixed.
+- Running a behavioural RED on the installed skills for the seven SKILL.md doc syncs: the installed
+  text would answer both arms. The arms were pasted passages built from the porcelain word diff, on
+  an inert haiku probe; each checklist records the questions and quotes.
 
 ## Still open, untouched
 
 `OPEN-WORK.md` is the list; read it before this file.
 
-- Rank 8 (USER): the ~85 LOW findings of REVIEW.txt.
+- Rank 10 (USER): review all skills and scripts one by one.
+- Rank 177 (FOUND, blocked on the user): 16 design decisions from the LOW fixers.
+- Rank 181 (FOUND): about 45 left-alone claims from the LOW fixers.
 - Rank 175 (FOUND): decision (c), the table-padding waiver in repo-gate, still to implement.
-- Rank 179 (FOUND): about 35 follow-ups the MED fixers left.
-- Rank 160 (FOUND): 45 finished worktrees, including this one; wtclean from the main checkout.
+- Rank 160 (FOUND): 58 finished worktrees; wtclean from the main checkout.
 
 ## Lessons for the next nap
 
-- When you hand a fixer's patch back to your own tree, apply its tests-only half first
-  (`git apply --include='*/tests/*'`) and require RED on the old source, then the rest and require
-  GREEN. It is a cheap independent check of the fixer's RED claim, and it caught nothing wrong this
-  time only because each claim held.
-- When a fixer's refusal widens a scope (a gate reading more files), measure it on the real
-  corpus before landing: the license gate's whole-tree read looked conservative and blocked an
-  entire marketplace.
-- When a padded or recalled 40-char sha feeds ci_wait, it polls to "no runs" - derive it in the
-  same command or copy it from `git rev-parse` output (recurred this session despite the memory
-  rule and a nudge that fired).
-- tooling: block-masked-gate-exit blocks a SINGLE backgrounded `ci_wait.py` call (queued in
-  contrib_queue); the running 7.25.2 cache also still suggests `uv run gate.py`, fixed in 7.25.4.
-- tooling: a worktree-isolated session refuses any Bash command whose TEXT contains a git
-  subcommand phrase, even inside a Python string literal; use Edit or a scratchpad script.
+- When a test's control depends on how deep the stdlib JSON decoder can recurse, pin the control
+  well inside every supported interpreter's limit: 3.11 stops near 1000, 3.14 reads 100,000.
+- When a fixer builds a path in a test with `str.replace("/x/", ...)`, it is a no-op on Windows;
+  build the variant from path parts and assert it differs.
+- When a word-diff (`--word-diff=plain`) must be split into old and new text, use
+  `--word-diff=porcelain`: literal text such as `[--type` is read as a deletion marker.
+- When a checklist line claims a probe result, confirm the question was actually in the probe; one
+  of seven was not and needed its own RED/GREEN pair.
+- tooling: the cached 7.25.2 block-masked-gate-exit still blocks a lone backgrounded ci_wait in
+  sessions that have not reloaded; run it in the foreground until they have.
+- tooling: a worktree-isolated session refuses any Bash command naming git in a compound form, and
+  `env -u` in a long command; keep scratchpad scripts (`rt.sh`, `land.sh`) for test and patch runs.
 
 ## The exact next action
 
-Rank 8's LOW batch is the top open USER item. Read `.plan/rank8-review-2026-09-26/REVIEW.txt` in
-the main checkout, group its LOW lines by file owner, and fold in the rank 179 lines that overlap.
-Then dispatch one fixer per group with the MED brief's rules: reproduce, RED test, fix. Land each
-patch the same way, tests-only half RED first, then GREEN.
+Rank 10 is the top open USER item. Before starting it, put the rank 177 decisions to the user one
+at a time, weightiest first, since the user is present and each only needs an answer; the options
+and recommendations are in `LOW-LEDGER.txt`.
 
 ## Files that matter
 
-- `.plan/rank8-review-2026-09-26/REVIEW.txt` and `MED-FOLLOWUPS.txt` (main checkout, gitignored).
-- `OPEN-WORK.md` ranks 8, 175, 179 and 160.
-- `CHANGELOG.md` `## [7.25.4]` - what the MED batch changed, per script.
+- `OPEN-WORK.md` ranks 10, 160, 175, 177, 181.
+- `.plan/rank8-review-2026-09-26/LOW-LEDGER.txt` (main checkout, gitignored).
+- `CHANGELOG.md` `## [7.25.6]` to `## [7.25.8]`.
 
 ## How to verify this still stands
 
-- `grep '"version"' plugins/bitranox/.claude-plugin/plugin.json` prints 7.25.4.
-- `python3 <plugin>/skills/compuse-toolbox/scripts/ci_wait.py --sha <full sha of the 7.25.4
+- `grep '"version"' plugins/bitranox/.claude-plugin/plugin.json` prints 7.25.8, and
+  `pyproject.toml` says the same.
+- `python3 plugins/bitranox/skills/compuse-toolbox/scripts/ci_wait.py --sha <full sha of the 7.25.8
   commit, from git log>` reports `workflow=success ci=success`.
-- `grep -c '^## ' .plan/rank8-review-2026-09-26/REVIEW.txt` in the main checkout prints 17.
 
 > Read this, then replace the first line with `# STALE - read <date>, work continued`. Do not
 > delete it - if this session ends badly it is the only record of where things stood.
