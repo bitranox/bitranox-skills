@@ -67,8 +67,20 @@ def run_main(payload, monkeypatch, capsys):
     return rc, capsys.readouterr().out
 
 
-def signals(commands=(), goal_state=DRN.GOAL_NONE, offset=0):
-    return DRN.Signals(list(commands), goal_state, offset)
+def signals(commands=(), goal_state=DRN.GOAL_NONE, offset=0, tool="Bash"):
+    return DRN.Signals([DRN.ShellCall(c, tool) for c in commands], goal_state, offset)
+
+
+def texts(scan):
+    """The command strings a scan collected, in order - what most assertions compare."""
+    return [call.command for call in scan.commands]
+
+
+def shell_line(cmd, tool):
+    return json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": tool, "input": {"command": cmd}}]},
+    })
 
 
 # --------------------------------------------------------------------------
@@ -176,7 +188,7 @@ def test_a_met_goal_fires_even_with_no_commit_at_all():
 
 def test_every_bash_command_is_read_in_order(tmp_path):
     path = transcript(tmp_path, bash_line("ls"), bash_line("git commit -m x"), bash_line("git push"))
-    assert DRN.transcript_signals(path).commands == ["ls", "git commit -m x", "git push"]
+    assert texts(DRN.transcript_signals(path)) == ["ls", "git commit -m x", "git push"]
 
 
 def test_a_transcript_without_a_goal_reports_none(tmp_path):
@@ -203,12 +215,12 @@ def test_a_goal_that_went_back_to_running_is_active_again(tmp_path):
 def test_a_half_written_last_line_is_tolerated(tmp_path):
     """A transcript is appended to live, so the tail can be mid-write when the hook reads it."""
     path = transcript(tmp_path, bash_line("git commit -m x"), trailing_partial=True)
-    assert DRN.transcript_signals(path).commands == ["git commit -m x"]
+    assert texts(DRN.transcript_signals(path)) == ["git commit -m x"]
 
 
 def test_a_missing_transcript_reads_as_nothing(tmp_path):
     s = DRN.transcript_signals(str(tmp_path / "nope.jsonl"))
-    assert s.commands == [] and s.goal_state == DRN.GOAL_NONE
+    assert texts(s) == [] and s.goal_state == DRN.GOAL_NONE
 
 
 # --------------------------------------------------------------------------
@@ -251,24 +263,24 @@ def test_a_line_that_was_mid_write_is_seen_once_it_completes(tmp_path):
     p = tmp_path / "live.jsonl"
     p.write_text(first + "\n" + bash_line("git commit -m late")[:20], encoding="utf-8")
     partial = DRN.transcript_signals(str(p))
-    assert not any("git commit" in c for c in partial.commands)
+    assert not any("git commit" in c for c in texts(partial))
     p.write_text(first + "\n" + bash_line("git commit -m late") + "\n", encoding="utf-8")
     resumed = DRN.transcript_signals(str(p), start=partial.offset)
-    assert any("git commit" in c for c in resumed.commands), "the completed line must be read"
+    assert any("git commit" in c for c in texts(resumed)), "the completed line must be read"
 
 
 def test_an_offset_past_the_end_starts_over(tmp_path):
     """A shrunk or replaced transcript would otherwise read nothing, silently, forever."""
     path = transcript(tmp_path, bash_line("git commit -m x"))
     resumed = DRN.transcript_signals(path, start=10_000_000)
-    assert resumed.commands == ["git commit -m x"]
+    assert texts(resumed) == ["git commit -m x"]
 
 
 def test_a_scan_that_starts_late_sees_only_what_follows(tmp_path):
     first, second = bash_line("git commit -m one"), bash_line("git push")
     path = transcript(tmp_path, first, second)
     resumed = DRN.transcript_signals(path, start=len(first) + 1)
-    assert resumed.commands == ["git push"], "a resumed scan must not re-read what it already saw"
+    assert texts(resumed) == ["git push"], "a resumed scan must not re-read what it already saw"
 
 
 def test_a_window_without_a_goal_record_keeps_the_goal_it_was_given(tmp_path):
@@ -284,11 +296,11 @@ def test_a_commit_past_the_size_cap_is_still_reached_on_a_later_run(tmp_path):
     path = transcript(tmp_path, *(filler + [bash_line("git commit -m past-the-cap")]))
     cap = 400                                   # far smaller than the file, to force truncation
     first = DRN.transcript_signals(path, start=0, max_bytes=cap)
-    assert first.commands and "git commit" not in " ".join(first.commands), "cap must truncate here"
+    assert texts(first) and "git commit" not in " ".join(texts(first)), "cap must truncate here"
     seen, guard = first.offset, 0
     while guard < 50:                           # later runs resume where the previous one stopped
         nxt = DRN.transcript_signals(path, start=seen, max_bytes=cap)
-        if any("git commit" in c for c in nxt.commands):
+        if any("git commit" in c for c in texts(nxt)):
             return
         if nxt.offset <= seen:
             break
@@ -312,7 +324,7 @@ def test_non_bash_tool_uses_are_ignored(tmp_path):
         "type": "assistant",
         "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/x"}}]},
     })
-    assert DRN.transcript_signals(transcript(tmp_path, line)).commands == []
+    assert texts(DRN.transcript_signals(transcript(tmp_path, line))) == []
 
 
 # --------------------------------------------------------------------------
@@ -410,6 +422,150 @@ def test_an_event_without_a_session_id_is_ignored(scratch_home, monkeypatch, cap
     path = transcript(tmp_path, bash_line("git commit -m x"))
     rc, out = run_main({"transcript_path": path}, monkeypatch, capsys)
     assert rc == 0 and out == ""
+
+
+# --------------------------------------------------------------------------
+# Inputs that used to silence or crash it
+# --------------------------------------------------------------------------
+
+
+def test_a_pr_opened_through_the_powershell_tool_concludes_the_work(tmp_path):
+    """The scan matched the literal tool name "Bash", so a Windows PR was invisible."""
+    path = transcript(tmp_path, shell_line("gh pr create --title x --body y", "PowerShell"))
+    scan = DRN.transcript_signals(path)
+    assert scan.commands == [DRN.ShellCall("gh pr create --title x --body y", "PowerShell")]
+    assert DRN.reached_a_conclusion(scan)
+
+
+def test_the_tool_name_reaches_the_pr_predicate(tmp_path, monkeypatch):
+    """opens_a_pr tokenises by tool; the scan must hand it the tool that ran the command."""
+    seen = []
+    monkeypatch.setattr(DRN.shell_text, "opens_a_pr",
+                        lambda command, tool_name=None: seen.append(tool_name) or False)
+    DRN.conclusion_score(signals(["gh pr create -f"], tool="PowerShell"))
+    assert seen == ["PowerShell"]
+
+
+def test_a_non_shell_tool_still_carries_no_command(tmp_path):
+    """Control for the widening: only a shell tool's `command` is a command."""
+    path = transcript(tmp_path, shell_line("gh pr create --fill", "Task"))
+    assert DRN.transcript_signals(path).commands == []
+
+
+@pytest.mark.parametrize("junk", ["compacted", 7, ["a"], None])
+def test_a_non_object_message_is_skipped_not_fatal(tmp_path, junk):
+    """`.get` on a string message raised, main() swallowed it, and no state was ever written -
+    so the same line raised again on every later Stop and the hook never spoke in that session."""
+    path = transcript(tmp_path, json.dumps({"type": "user", "message": junk}),
+                      bash_line("gh pr create --title x --body y"))
+    assert texts(DRN.transcript_signals(path)) == ["gh pr create --title x --body y"]
+
+
+def test_a_line_past_the_cap_is_consumed_not_stalled_on(tmp_path):
+    """A single line longer than the cap never advanced the offset, so every later run stopped
+    at the same byte and the PR after it was never seen."""
+    huge = json.dumps({"type": "user", "message": {"content": "x" * 5000}})
+    path = transcript(tmp_path, huge, bash_line("gh pr create --fill"))
+    first = DRN.transcript_signals(path, max_bytes=1000)
+    assert first.offset == len(huge) + 1, "the over-cap line must be consumed"
+    second = DRN.transcript_signals(path, start=first.offset, max_bytes=1000)
+    assert texts(second) == ["gh pr create --fill"]
+
+
+def test_an_over_cap_line_is_still_read_before_it_is_consumed(tmp_path):
+    """Consuming without reading would lose whatever that one line recorded."""
+    big_pr = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "y" * 5000},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "gh pr create --fill"}}]}})
+    path = transcript(tmp_path, big_pr)
+    assert texts(DRN.transcript_signals(path, max_bytes=1000)) == ["gh pr create --fill"]
+
+
+def test_an_over_cap_line_later_in_the_window_waits_for_the_next_run(tmp_path):
+    """Control: only the FIRST line of a window may overrun the cap; a later one ends the window
+    before it, so one run's work stays bounded and the next run starts on it."""
+    small = bash_line("ls")
+    huge = json.dumps({"type": "user", "message": {"content": "x" * 5000}})
+    path = transcript(tmp_path, small, huge)
+    assert DRN.transcript_signals(path, max_bytes=1000).offset == len(small) + 1
+
+
+def test_a_continuation_a_stop_hook_forced_is_not_asked_again(scratch_home, monkeypatch, capsys):
+    """With an unwritable state dir the ask-once flag never lands, so without honouring
+    stop_hook_active every forced continuation blocked again."""
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
+    event = {"session_id": "s-cont", "transcript_path": path, "stop_hook_active": True}
+    rc, out = run_main(event, monkeypatch, capsys)
+    assert (rc, out) == (0, "")
+    assert not DRN.asked_flag("s-cont").exists(), "a skipped continuation must record nothing"
+    # control: the next ordinary Stop still asks
+    _, out = run_main(dict(event, stop_hook_active=False), monkeypatch, capsys)
+    assert json.loads(out)["decision"] == "block"
+
+
+def test_an_unwritable_state_dir_blocks_once_not_on_every_forced_stop(scratch_home, monkeypatch,
+                                                                     capsys):
+    """The case the finding measured: the ask-once state cannot be written, so only
+    stop_hook_active stands between one ask and a block on every continuation."""
+    audit = sig.touched_file("s-ro").parent
+    audit.parent.mkdir(parents=True, exist_ok=True)
+    audit.write_text("a FILE where the dir should be, so every write under it fails\n",
+                     encoding="utf-8")
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
+    event = {"session_id": "s-ro", "transcript_path": path}
+    _, first = run_main(event, monkeypatch, capsys)
+    assert json.loads(first)["decision"] == "block"
+    for _turn in range(2):
+        rc, out = run_main(dict(event, stop_hook_active=True), monkeypatch, capsys)
+        assert (rc, out) == (0, "")
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", "7", '"text"'])
+def test_a_non_object_event_never_wedges_the_turn(payload, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert DRN.main() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_scan_that_raises_is_swallowed(scratch_home, monkeypatch, capsys):
+    """main()'s catch-all around the scan: a transcript_path that is not a path makes the size
+    check raise TypeError, which must end the run quietly, not wedge the turn."""
+    rc, out = run_main({"session_id": "s-bad", "transcript_path": ["not", "a", "path"]},
+                       monkeypatch, capsys)
+    assert (rc, out) == (0, "")
+
+
+@pytest.mark.parametrize("stored", ['{"offset": "abc", "score": 0, "goal": "none"}',
+                                    '{"offset": 0, "score": [1], "goal": "none"}',
+                                    '{"offset": {}, "score": 0}'])
+def test_a_corrupt_state_file_reads_as_empty(scratch_home, monkeypatch, capsys, stored):
+    """int() on a corrupt offset raised outside any guard: rc 1 on every Stop until the file was
+    removed by hand. Now it reads as no state, and the next write replaces it."""
+    flag = DRN.asked_flag("s-corrupt")
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(stored, encoding="utf-8")
+    assert DRN.read_state("s-corrupt") == DRN.EMPTY_STATE
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
+    rc, out = run_main({"session_id": "s-corrupt", "transcript_path": path}, monkeypatch, capsys)
+    assert rc == 0 and json.loads(out)["decision"] == "block"
+
+
+def test_a_legacy_bare_integer_state_file_starts_clean(scratch_home, monkeypatch, capsys):
+    """An earlier version stored a bare integer; it must read as no state, not as a score."""
+    flag = DRN.asked_flag("s-legacy")
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text("99\n", encoding="utf-8")
+    assert DRN.read_state("s-legacy") == DRN.EMPTY_STATE
+    path = transcript(scratch_home, bash_line("gh pr create --fill"))
+    _, out = run_main({"session_id": "s-legacy", "transcript_path": path}, monkeypatch, capsys)
+    assert json.loads(out)["decision"] == "block"
+
+
+def test_the_docstring_describes_the_goal_record_the_code_reads():
+    """The code reads goal_status nested under `attachment`; the docstring said top level."""
+    doc = DRN.__doc__
+    assert '"attachment": {"type": "goal_status"' in doc
+    assert '`{"type": "goal_status", "met"' not in doc
 
 
 # --------------------------------------------------------------------------

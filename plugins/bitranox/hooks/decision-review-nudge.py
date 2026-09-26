@@ -10,10 +10,13 @@ to ask, which is exactly what does not happen at the end of a long session.
 **What counts as concluded:**
 
 1. A `/goal` is in play at all - met, or still running. Claude Code records progress in the
-   transcript as `{"type": "goal_status", "met": <bool>, "condition": ...}`, and the LAST record
-   is the current state. Firing on EITHER state is deliberate, and it is the fix for a real lag:
-   the goal's verdict is emitted DURING Stop-hook processing, so at the instant this hook reads
-   the transcript the record still says `met: false` and the `met: true` line lands moments later.
+   transcript as an attachment record,
+   `{"type": "attachment", "attachment": {"type": "goal_status", "met": <bool>, ...}}`,
+   and the LAST one is the current state. Only that nested shape is read; a top-level
+   `goal_status` record is not what the CLI writes. Firing on EITHER state is deliberate, and it
+   is the fix for a real lag: the goal's verdict is emitted DURING Stop-hook processing, so at
+   the instant this hook reads the transcript the record still says `met: false` and the
+   `met: true` line lands moments later.
    Waiting for it costs a whole turn, and a session that ends there never gets asked at all.
    Since the ask happens once per session, the choice is between sometimes-early and
    sometimes-never, and early is the better failure.
@@ -42,6 +45,11 @@ It asks ONCE per session. The flag is keyed by session id, so a flag left behind
 session can never satisfy this one (a per-PROJECT flag would, and has - it demanded work for a
 compaction that happened in a different session).
 
+It stays quiet on `stop_hook_active`: that Stop follows a continuation some Stop hook already
+forced, and asking again there stacks a second block on one turn - with an unwritable state dir,
+on every one. A conclusion reached during the continuation is still in the unread window, so the
+next ordinary Stop asks about it.
+
 Pure standard library. Reads the event JSON on stdin. ALWAYS exits 0 - a nudge must never wedge
 a turn.
 """
@@ -67,10 +75,22 @@ GOAL_ACTIVE = "active"
 GOAL_MET = "met"
 
 
+class ShellCall(NamedTuple):
+    """One shell command from the transcript, with the tool that ran it.
+
+    The tool travels with the command because `shell_text` tokenises by it: PowerShell keeps
+    backslashes and has its own quoting, so judging its command by the Bash reading answers a
+    different question.
+    """
+
+    command: str
+    tool: str
+
+
 class Signals(NamedTuple):
     """What one pass over a WINDOW of the transcript found."""
 
-    commands: list
+    commands: list                                        # of ShellCall, in transcript order
     goal_state: str
     offset: int
 
@@ -88,16 +108,21 @@ def read_line(raw, commands, goal_state):
         # The LAST record wins: a goal reports `met: false` on every turn it is still running,
         # then once with `met: true`.
         goal_state = GOAL_MET if attachment.get("met") is True else GOAL_ACTIVE
-    content = (msg.get("message") or {}).get("content")
+    message = msg.get("message")
+    if not isinstance(message, dict):
+        return goal_state                                 # a string or null message has no tools
+    content = message.get("content")
     if isinstance(content, list):
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_use":
                 continue
-            if block.get("name") != "Bash":
+            tool = block.get("name")
+            if not shell_text.is_shell_tool(tool):
                 continue
-            cmd = (block.get("input") or {}).get("command")
+            tool_input = block.get("input")
+            cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
             if isinstance(cmd, str) and cmd:
-                commands.append(cmd)
+                commands.append(ShellCall(cmd, tool))
     return goal_state
 
 
@@ -124,6 +149,11 @@ def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES
     The offset stops at the last COMPLETE line. A transcript is appended to live, so its tail can
     be mid-write; consuming a partial line would mean the rest arrives later as an unparseable
     fragment, and whatever that line recorded is then lost for good rather than merely late.
+
+    `max_bytes` ends the window BEFORE a line that would overrun it - except the window's first
+    line, which is read and consumed whatever its size. Breaking before that one too meant a single
+    line longer than the cap was never passed: every later run stopped at the same byte, and
+    nothing after it was ever seen.
     """
     commands = []
     start = _resume_from(transcript_path, start)
@@ -137,9 +167,9 @@ def transcript_signals(transcript_path, start=0, max_bytes=_MAX_TRANSCRIPT_BYTES
             fh.seek(start)
             read = 0
             for raw in fh:
+                if read and read + len(raw) > max_bytes:
+                    break                                 # the next run starts on this line
                 read += len(raw)
-                if read > max_bytes:
-                    break
                 goal_state = read_line(raw, commands, goal_state)
                 if not raw.endswith(b"\n"):
                     break                                 # parsed, but not consumed - see above
@@ -169,7 +199,7 @@ def conclusion_score(signals, previous=0, previous_goal=GOAL_NONE):
     module docstring for the measurement behind that.
     """
     goal_delta = max(0, _GOAL_SCORE[signals.goal_state] - _GOAL_SCORE[previous_goal])
-    prs = sum(1 for c in signals.commands if shell_text.opens_a_pr(c))
+    prs = sum(1 for call in signals.commands if shell_text.opens_a_pr(call.command, call.tool))
     return previous + goal_delta + prs
 
 
@@ -213,7 +243,12 @@ def asked_flag(session):
 
 
 def read_state(session):
-    """The previous run's state. EMPTY_STATE when this session has none, or it is unreadable."""
+    """The previous run's state. EMPTY_STATE when this session has none, or it is unreadable.
+
+    A corrupt field reads as no state at all rather than raising: the file is rewritten at the end
+    of this run, so starting clean repairs it, while raising would repeat on every Stop until
+    someone deleted the file by hand.
+    """
     try:
         raw = json.loads(asked_flag(session).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -221,8 +256,11 @@ def read_state(session):
     if not isinstance(raw, dict):
         return EMPTY_STATE            # an earlier bare-integer file: start clean rather than guess
     goal = raw.get("goal")
-    return State(int(raw.get("offset") or 0), int(raw.get("score") or 0),
-                 goal if goal in _GOAL_SCORE else GOAL_NONE)
+    try:
+        return State(int(raw.get("offset") or 0), int(raw.get("score") or 0),
+                     goal if goal in _GOAL_SCORE else GOAL_NONE)
+    except (TypeError, ValueError):
+        return EMPTY_STATE
 
 
 def write_state(session, state):
@@ -265,6 +303,8 @@ def main():
         event = json.load(sys.stdin)
     except Exception:                                     # noqa: BLE001 - never wedge a turn
         return 0
+    if not isinstance(event, dict) or event.get("stop_hook_active"):
+        return 0
     session = str(event.get("session_id") or "")
     transcript = event.get("transcript_path") or ""
     if not session or not transcript:
@@ -291,4 +331,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:                                     # noqa: BLE001 - never wedge a turn
+        sys.exit(0)
