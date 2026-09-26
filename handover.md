@@ -1,4 +1,4 @@
-# Handover - 2026-09-26, rank 8 closed: LOW pass shipped as 7.25.6, CI fixes 7.25.7-7.25.8, green
+# STALE - read 2026-09-26, work continued
 
 ## In flight
 

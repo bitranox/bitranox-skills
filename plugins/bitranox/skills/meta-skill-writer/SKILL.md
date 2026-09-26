@@ -512,6 +512,11 @@ digraph when_flowchart {
 ./render-graphs.js ../some-skill           # Each diagram separately
 ./render-graphs.js ../some-skill --combine # All diagrams in one SVG
 ```
+It exits 1 when any diagram fails to render, after an `N rendered, M failed` line. `--combine`
+merges only `digraph` blocks and refuses, with exit 1, a block of bare statements with no wrapper,
+an undirected `graph` block, and two blocks that share a node id (dot node names are global, so a
+`start` in both would become one node with the edges of both). Render those without `--combine`:
+separate mode renders every `digraph` block, shared node ids included.
 
 ## Code Examples
 
@@ -634,15 +639,17 @@ so Windows does not silently break it:
 - **Do not assume an interpreter name resolves.** On Windows `python3` is usually the
   Microsoft Store stub (exits non-zero in a subprocess), `python` may be Python 2, and
   `py -3` is Windows-only. Launch Python through a small bash shim that probes
-  `python3 -> python -> py -3` and converts POSIX paths with `cygpath` when present.
+  `python3 -> python -> py -3` and converts the script's own path with `cygpath` when present
+  (only that path: the script's arguments are its own business).
   The plugin's `hooks/run-python.sh` is the working reference; reuse it. It is strict by default:
   when it cannot run the script (missing file, no Python 3, an unexpected shell) it exits 3, so
   a hook registration must pass `--hook` as the FIRST shim argument, before the script path, to
   get the exit-0 contract below. Copy the exact command form from any entry in the plugin's
   `hooks/hooks.json`; a skill step that launches a script never passes `--hook`.
-- **Git Bash only on Windows.** Hooks run through Git Bash (Git for Windows), not WSL or
-  Cygwin (those mount drives differently and resolve a Linux interpreter). Guard
-  `uname -s` and skip loudly to stderr under an unexpected shell.
+- **Git Bash on Windows.** Write hooks for Git Bash (Git for Windows). `run-python.sh` also
+  runs them under Cygwin, best-effort and untested there. WSL reports `Linux` to `uname -s`, so
+  nothing can tell it apart from Linux; it runs as Linux and resolves a Linux interpreter. Guard
+  `uname -s` and skip loudly to stderr under any other shell.
 - **A hook must never wedge a turn.** Every failure path exits 0; degrade silently
   (with a one-line stderr note) rather than erroring. Through `run-python.sh` that holds only with
   `--hook`; a CLI or gate call leaves it off, so a mistyped path there fails loudly.
@@ -1181,8 +1188,8 @@ step1 [label="import fs"];
 step2 [label="read file"];
 ```
 (Fenced `text`, not `dot`, on purpose: `render-graphs.js` renders every ` ```dot ` block, and
-these two bare statements have no `digraph {}` wrapper, so a `dot` fence makes the tool report a
-failure on this very file. Fence an illustration that is not a renderable diagram as `text`.)
+these two bare statements have no `digraph {}` wrapper, so a `dot` fence makes the tool fail
+(exit 1) on this very file. Fence an illustration that is not a renderable diagram as `text`.)
 **Why bad:** Can't copy-paste, hard to read
 
 ### NO Generic Labels

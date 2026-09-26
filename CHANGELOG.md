@@ -29,6 +29,49 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.9]
+
+### Fixed
+
+- `run-python.sh` never produces exit 2 (the code Claude Code treats as a block) on its own. A
+  hook script that was unreadable, vanished between the check and the launch, or came out of
+  `cygpath` as a path Python could not open made Python exit 2, which blocked every Bash call,
+  rejected every prompt or looped Stop. The shim now launches through a small `-c` bootstrap that
+  degrades per its contract (0 with `--hook`, 3 without) when the script cannot be opened, and
+  runs it with `runpy` otherwise; the script's own exit code still passes through. `cygpath`
+  converts only the script path, a `cygpath` failure degrades with a labelled line, and the
+  docs say what the code does: Git Bash is the supported Windows shell, Cygwin runs best-effort,
+  and WSL cannot be told apart from Linux.
+- `sha-literal-nudge` judges each sha on its own. Any `$(`, backtick or `rev-parse` anywhere in
+  a command used to silence it for every sha, so `cd "$(git rev-parse --show-toplevel)" &&
+  ci_wait --sha <invented>` passed unnudged. A literal is now quiet only when it is itself the
+  operand of a `cat-file`, `merge-base` or checking `rev-parse`; a `test "$SHA" = <literal>`
+  comparison nudges. The loud-git exemption goes by operand role (`--grep=`, `-S`, `--author=`,
+  a pathspec after `--`, a new branch or tag name are not revisions), a PowerShell backtick
+  escape no longer silences it, `Write-Host`/`Write-Output` are data sinks under PowerShell, and
+  neither a Write/Edit result echo nor git's own "bad object <sha>" refusal counts as showing a
+  sha. Inside a subagent, a sha from its brief counts as shown only if the parent transcript
+  showed it.
+- `skill-listing-budget` cannot ratchet the fraction up from one stale listing. On a model
+  above 200k x 3 characters, a listing made under an older fraction passed the staleness check
+  and raised the fraction again on every SessionStart until the 0.5 cap. A listing older than
+  `settings.json` is now stale. The hook reads listings through `skill_roster`'s reader (a
+  non-listing line naming `skill_listing` no longer abandons the transcript, a non-object JSON
+  line no longer loses the disk estimate, and the LAST listing in a transcript wins), tolerates
+  a manifest whose `plugins` is not an object, and manages only the user-level fraction: a
+  listing from a project that sets its own is skipped.
+- `render-graphs.js` (meta-skill-writer) exits 1 when a diagram fails to render, never
+  overwrites a diagram whose name repeats (`flow_2.svg`), refuses in `--combine` two blocks that
+  share a node id instead of fusing them, and refuses a block of bare statements or an
+  undirected `graph` block instead of dropping it silently. It reads CRLF files, quotes the
+  combined graph id, and runs `dot` without a shell, so native Windows works. It now has tests,
+  including one that renders every shipped `SKILL.md` diagram.
+- `detectors.js` (web-frontend-responsive-ux): touching tap targets report a gap of 0 instead of
+  being skipped as overlapping; overflow offenders count only the side that scrolls (right for
+  LTR, left for RTL), skip boxes an ancestor clips or scrolls sideways, fold descendants into
+  their offender and rank by overflow, so the element that widens the page is named; and the file
+  is one bare function expression, the shape both MCP evaluate tools accept.
+
 ## [7.25.8]
 
 ### Fixed
