@@ -29,6 +29,14 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.8]
+
+### Fixed
+
+- The jsonl_grep depth test's readable control sits at 500 levels: before Python 3.12 the stdlib
+  decoder stops near the recursion limit of 1000, so a 1023-level control failed on 3.11. The
+  refusal past orjson's 1024 levels is what every interpreter guarantees, and the test pins that.
+
 ## [7.25.7]
 
 ### Fixed

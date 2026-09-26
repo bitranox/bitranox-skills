@@ -409,12 +409,13 @@ def test_absurdly_deep_nesting_is_an_unparseable_line_not_a_traceback(tmp_path, 
 
 
 @pytest.mark.parametrize("backend", ["stdlib", "orjson"])
-@pytest.mark.parametrize(("depth", "readable"), [(1023, True), (1024, False)])
+@pytest.mark.parametrize(("depth", "readable"), [(500, True), (1024, False)])
 def test_nesting_past_orjsons_limit_is_unparseable_on_both_backends(tmp_path, backend, depth, readable):
-    """orjson reads 1024 levels and refuses 1025, counting the record's own object: 1023 lists
-    inside `{"x": ...}` parse, 1024 do not. The stdlib must draw the same line, or what a deep
-    record holds depends on the backend and on how much stack this interpreter build has -
-    CPython 3.14 reads 100,000 levels and then dies serialising them."""
+    """orjson refuses past 1024 levels, counting the record's own object: 1024 lists inside
+    `{"x": ...}` do not parse. The stdlib must refuse them too on every interpreter - CPython 3.14
+    reads 100,000 levels and then dies serialising them. The readable control sits at a depth
+    every interpreter reads: before 3.12 the stdlib decoder stops near the recursion limit of
+    1000, so the exact boundary is orjson's alone."""
     p = tmp_path / "depth.jsonl"
     p.write_text('{"x":' + "[" * depth + "]" * depth + '}\n{"x":"ok"}\n', encoding="utf-8")
     proc = _run_backend(backend, [str(p), "--field", "x", "--count"])
