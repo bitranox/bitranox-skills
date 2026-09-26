@@ -1447,7 +1447,8 @@ def test_a_posix_pin_in_another_letter_case_is_not_the_same_directory(tmp_path: 
     """Control: on a case-sensitive filesystem `.Claude` and `.claude` are different
     directories, so a pin naming the other one keeps nothing."""
     version = tmp_path / ".claude" / "plugins" / "cache" / "m" / "p" / "1.0.0"
-    other = str(version).replace("/.claude/", "/.Claude/")
+    other = str(tmp_path / ".Claude" / "plugins" / "cache" / "m" / "p" / "1.0.0")  # any separator
+    assert other != str(version)
     settings = P.SettingsFile(
         Path("settings.json"), json.dumps({"command": f"bash {other}/x.sh"}), frozenset()
     )

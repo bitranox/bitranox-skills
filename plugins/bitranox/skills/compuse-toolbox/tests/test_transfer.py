@@ -350,11 +350,19 @@ class TestCommandArgument:
         cmd = _join(["ssh", "host", "cat /proc/net/dev | grep eth0"])
         assert pc.command_argument(cmd) == cmd
 
+    @pytest.mark.skipif(os.name == "nt", reason="single quotes and a backslash quote nothing in a "
+                        "Windows command line, so these reach the program split; the Windows rules "
+                        "are pinned in TestShellOperatorsWindowsRules")
     @pytest.mark.parametrize("cmd", [
         "sh -c 'grep eth0 /proc/net/dev;'", "sh -c 'a; b'", "find . -exec stat {} ';'",
-        r"find . -exec stat {} \;", 'sh -c "grep x f;"'])
-    def test_a_quoted_or_escaped_operator_is_literal_and_accepted(self, cmd):
+        r"find . -exec stat {} \;"])
+    def test_a_posix_quoted_or_escaped_operator_is_literal_and_accepted(self, cmd):
         """The wrapper the refusal itself recommends, and find's `\\;`, are not shell syntax."""
+        assert pc.command_argument(cmd) == cmd
+
+    def test_a_double_quoted_operator_is_literal_on_every_platform(self):
+        """Double quotes group an argument under both rule sets."""
+        cmd = 'sh -c "grep x f;"'
         assert pc.command_argument(cmd) == cmd
 
     @pytest.mark.parametrize("cmd", ["echo a|wc -l", "cat f>out", "a&b", "echo 1;"])

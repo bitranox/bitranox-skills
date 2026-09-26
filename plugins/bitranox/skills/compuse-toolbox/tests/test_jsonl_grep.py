@@ -408,6 +408,20 @@ def test_absurdly_deep_nesting_is_an_unparseable_line_not_a_traceback(tmp_path, 
         assert b"1 unparseable line(s)" in proc.stderr
 
 
+@pytest.mark.parametrize("backend", ["stdlib", "orjson"])
+@pytest.mark.parametrize(("depth", "readable"), [(1023, True), (1024, False)])
+def test_nesting_past_orjsons_limit_is_unparseable_on_both_backends(tmp_path, backend, depth, readable):
+    """orjson reads 1024 levels and refuses 1025, counting the record's own object: 1023 lists
+    inside `{"x": ...}` parse, 1024 do not. The stdlib must draw the same line, or what a deep
+    record holds depends on the backend and on how much stack this interpreter build has -
+    CPython 3.14 reads 100,000 levels and then dies serialising them."""
+    p = tmp_path / "depth.jsonl"
+    p.write_text('{"x":' + "[" * depth + "]" * depth + '}\n{"x":"ok"}\n', encoding="utf-8")
+    proc = _run_backend(backend, [str(p), "--field", "x", "--count"])
+    assert proc.returncode == 0, proc.stderr
+    assert (b"1 unparseable line(s)" in proc.stderr) is not readable
+
+
 # --- a path that exists but is not a regular file (a pipe from <(...)) is read -------------------
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes need os.mkfifo (POSIX)")

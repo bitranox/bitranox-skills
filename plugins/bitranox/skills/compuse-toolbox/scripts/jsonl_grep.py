@@ -57,7 +57,13 @@ try:                                                     # fast path when availa
     _JSONDecodeError = orjson.JSONDecodeError
 
     def _dumps(obj):
-        return orjson.dumps(obj).decode()
+        """orjson's serialiser stops far shallower than its reader ("Recursion limit reached", a
+        TypeError), so a value it read is written by the stdlib in orjson's compact form."""
+        try:
+            return orjson.dumps(obj).decode()
+        except TypeError:
+            import json  # noqa: PLC0415 - only a value nested past orjson's writer needs it
+            return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 except ModuleNotFoundError:                              # stdlib fallback so the script runs anywhere
     import json as _json
 
@@ -66,14 +72,35 @@ except ModuleNotFoundError:                              # stdlib fallback so th
     def _reject_constant(name):
         raise _JSONDecodeError(f"{name} is not JSON", name, 0)
 
+    _MAX_DEPTH = 1024                                    # orjson reads 1024 levels and refuses 1025
+
+    def _deeper_than(obj, limit: int) -> bool:
+        """Whether `obj` nests containers more than `limit` levels, walked without recursion."""
+        stack = [(obj, 1)]
+        while stack:
+            node, depth = stack.pop()
+            if not isinstance(node, (dict, list)):
+                continue
+            if depth > limit:
+                return True
+            children = node.values() if isinstance(node, dict) else node
+            stack.extend((child, depth + 1) for child in children)
+        return False
+
     def _loads(raw):
         """Read strictly as orjson does, so the backend never decides what a line holds: NaN and
-        Infinity are refused, and nesting too deep for the stack is an unparseable line rather
-        than a RecursionError escaping as a traceback."""
+        Infinity are refused, and nesting past orjson's 1024 levels is an unparseable line. The
+        depth has to be checked, not left to the stack: CPython 3.14 reads 100,000 levels without
+        a RecursionError and then fails serialising them, while older builds fail reading."""
         try:
-            return _json.loads(raw, parse_constant=_reject_constant)
+            value = _json.loads(raw, parse_constant=_reject_constant)
         except RecursionError:
             raise _JSONDecodeError("nesting too deep", raw[:40], 0) from None
+        opens = raw.count("[" if isinstance(raw, str) else b"[") + raw.count(
+            "{" if isinstance(raw, str) else b"{")
+        if opens > _MAX_DEPTH and _deeper_than(value, _MAX_DEPTH):  # the count skips every ordinary line
+            raise _JSONDecodeError("nesting too deep", raw[:40], 0)
+        return value
 
     def _dumps(obj):
         return _json.dumps(obj, ensure_ascii=False)

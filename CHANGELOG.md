@@ -29,6 +29,20 @@ than the change, so entries reconstructed from them would read like coverage wit
 a hole nobody has drawn a line under is one that gets rediscovered and half-filled - which is how
 two "versions with no entry" notes came to sit in this file disagreeing with it.
 
+## [7.25.7]
+
+### Fixed
+
+- jsonl_grep's stdlib fallback refuses nesting past orjson's 1024 levels itself instead of relying
+  on the stack: CPython 3.14 read a 100,000-level line without a RecursionError and then died
+  serialising it. With orjson installed, a value orjson reads but its shallower serialiser refuses
+  ("Recursion limit reached") is written by the stdlib in orjson's compact form instead of a
+  traceback.
+- Two 7.25.6 tests assumed POSIX: the transfer cases that quote with single quotes or a backslash
+  run only on POSIX (neither quotes anything in a Windows command line, whose rules have their own
+  tests), and the pluginprune letter-case control builds its path from parts rather than replacing
+  a `/`.
+
 ## [7.25.6]
 
 ### Fixed
