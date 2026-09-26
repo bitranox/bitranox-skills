@@ -117,8 +117,16 @@ def test_the_absolute_cap_bites_on_a_large_window():
 
 
 def test_a_nonsense_config_cannot_produce_a_zero_threshold():
-    """A threshold of 0 would fire on turn one of every session, forever."""
+    """The floor keeps the threshold above an empty reading; it does NOT stop an early ask.
+
+    A zero threshold would count a reading of 0 tokens as crossed. A knob at 0 or 1 still asks on
+    the first measured turn, which is what that setting asks for - the settings CLI accepts 1 as a
+    valid value, so the hook does not second-guess it.
+    """
     assert W.threshold(0, 0, 0) == 1
+    assert W.threshold(200_000, 0, 400_000) == 1
+    assert W.verdict(0, 200_000, 0, 400_000)[0] == "quiet"
+    assert W.verdict(502, 200_000, 0, 400_000)[0] == "offer"
     assert W.threshold("x", 70, 400_000) is None
 
 
@@ -350,10 +358,11 @@ def session(request):
     """
     name = f"ctxwatch-{request.node.name}-{uuid.uuid4().hex[:8]}"
     yield name
-    try:
-        W._asked_flag(name).unlink()
-    except OSError:
-        pass
+    for flag in (W._asked_flag(name), W._misconfigured_flag(name)):
+        try:
+            flag.unlink()
+        except OSError:
+            pass
 
 
 CFG = {"nudges": True, "context_window": 200_000,
@@ -409,6 +418,61 @@ def test_the_nap_check_failing_does_not_wedge_the_turn(tmp_path, session, monkey
         raise RuntimeError("helper gone")
     monkeypatch.setattr(W.sig, "is_nap_owed", boom)
     t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+
+
+def test_an_earlier_offer_does_not_silence_the_misconfigured_notice(tmp_path, session):
+    """The two answers are different questions, so an answer to one cannot latch the other.
+
+    Offering at 150k and then measuring MORE than the window means the window is wrong - the one
+    thing the misconfigured notice exists to say. When both shared one flag, the offer's flag read
+    as "already reported" and the notice never spoke for the rest of the session.
+    """
+    offer = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    reason = W.decide(_event(session, offer, tmp_path), CFG)
+    assert reason is not None and "handover" in reason
+
+    over = _transcript(tmp_path, _usage_line(cache_read=211_000))
+    notice = W.decide(_event(session, over, tmp_path), CFG)
+    assert notice is not None and "MORE than the 200,000" in notice
+
+
+def test_the_misconfigured_notice_still_says_itself_only_once(tmp_path, session):
+    """The control for the latch split: the notice keeps its own once-per-session latch."""
+    over = _transcript(tmp_path, _usage_line(cache_read=211_000))
+    assert W.decide(_event(session, over, tmp_path), CFG) is not None
+    further = _transcript(tmp_path, _usage_line(cache_read=260_000))
+    assert W.decide(_event(session, further, tmp_path), CFG) is None
+
+
+def test_a_misconfigured_notice_does_not_consume_the_offer(tmp_path, session):
+    """The other direction of the split: a notice first leaves the offer's re-ask level unset."""
+    over = _transcript(tmp_path, _usage_line(cache_read=211_000))
+    assert W.decide(_event(session, over, tmp_path), CFG) is not None
+    assert W.asked_at(session) == 0
+
+
+def test_a_continuation_another_stop_hook_forced_is_not_blocked_again(tmp_path, session):
+    """`stop_hook_active` means a Stop hook already kept this turn going; blocking it again stacks
+    a second interruption on the same turn and burns the consecutive-block budget."""
+    t = _transcript(tmp_path, _usage_line(cache_read=150_000))
+    forced = dict(_event(session, t, tmp_path), stop_hook_active=True)
+    assert W.decide(forced, CFG) is None
+    # control: the same reading on an ordinary Stop still asks, and the flag above consumed nothing
+    assert W.decide(_event(session, t, tmp_path), CFG) is not None
+
+
+@pytest.mark.parametrize("junk", ["plain string", 7, ["a", "list"]])
+def test_a_non_object_message_is_skipped_not_fatal(tmp_path, session, junk):
+    """A record whose `message` is not an object must be skipped, not end the scan.
+
+    `.get` on a string raised AttributeError; main() swallowed it, so the watcher returned nothing
+    for every later turn of a transcript holding one such line.
+    """
+    t = _transcript(tmp_path, _usage_line(cache_read=190_000),
+                    json.dumps({"type": "user", "message": junk}))
+    assert W.read_session(t) == (190_000, "claude-opus-5")
+    assert W.context_tokens(t) == 190_000
     assert W.decide(_event(session, t, tmp_path), CFG) is not None
 
 
