@@ -13,6 +13,10 @@ This hook sizes the fraction to the catalogue actually installed. The budget is 
 a reservation - the listing only ever contains the entries that exist - so raising it costs nothing
 when the catalogue is small, and the fraction is only ever raised, never lowered.
 
+Only the USER-level fraction (`<config>/settings.json`) is managed. A project can set its own in
+`<project>/.claude/settings.json` or `settings.local.json`; a listing produced in such a project
+says nothing about the user-level value, so it is skipped rather than used as a correction.
+
 Emits the Claude Code SessionStart contract on stdout. Pure standard library. Every failure path
 emits nothing and exits 0, so a broken hook never blocks a session.
 """
@@ -21,9 +25,11 @@ import json
 import math
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import skill_frontmatter
+import skill_roster
 
 # The harness truncates a single description at this many characters (skillListingMaxDescChars).
 MAX_DESC_CHARS = 1536
@@ -84,6 +90,8 @@ def installed_skills(config):
         plugins = json.loads(manifest.read_text(encoding="utf-8")).get("plugins", {})
     except (OSError, ValueError, AttributeError):
         plugins = {}
+    if not isinstance(plugins, dict):
+        plugins = {}  # a malformed manifest must not stop the personal skills below being measured
     for key, installs in plugins.items():
         name = str(key).split("@")[0]
         for install in installs if isinstance(installs, list) else []:
@@ -157,41 +165,102 @@ def raise_fraction(settings_path, wanted):
     return current, wanted
 
 
-def newest_listing(config, max_files=5):
-    """Return the most recent injected listing as {"total", "bare"}, or None if none is readable.
+def _epoch(stamp):
+    """Return a transcript record's ISO-8601 `timestamp` as epoch seconds, or None if unreadable."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        # fromisoformat accepts a trailing Z only from Python 3.11
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
 
+
+def _last_full_listing(transcript):
+    """Return the transcript's LAST full listing as a summary dict, or None when it has none.
+
+    A later full listing (after /reload-plugins) supersedes an earlier one. A delta
+    (`isInitial: false`) carries only the skills added since, so it is not the listing the budget
+    packed and never stands in for one.
+    """
+    found = None
+    for record, attachment in skill_roster.listing_records(transcript):
+        if attachment.get("isInitial") is False:
+            continue
+        content = attachment.get("content")
+        if isinstance(content, list):
+            content = "\n".join(str(part) for part in content)
+        if not isinstance(content, str) or not content:
+            continue
+        lines = [ln for ln in content.splitlines() if ln.startswith("- ")]
+        found = {
+            "total": len(content),
+            "bare": [ln[2:].strip() for ln in lines if ": " not in ln],
+            "timestamp": _epoch(record.get("timestamp")),
+            "cwd": record.get("cwd"),
+        }
+    return found
+
+
+def newest_listing(config, max_files=5):
+    """Return the most recent injected listing, or None if none is readable.
+
+    The result is {"total", "bare", "timestamp", "cwd"}: its length, the entries that arrived as a
+    bare `- name`, when it was produced (epoch seconds, None if unreadable) and in which directory.
     The listing is the OUTCOME the estimate is trying to predict, so reading it back closes the
-    loop: any entry that arrived as a bare `- name` is a description the router never saw. Only
-    the newest few transcripts are opened, and the attachment sits near the start of a session, so
-    the scan stops almost immediately.
+    loop: any bare entry is a description the router never saw. Only the newest `max_files`
+    transcripts are opened; the first of them holding a full listing answers, with its last one.
     """
     try:
         files = sorted(config.glob("projects/*/*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
     except OSError:
         return None
     for path in files[:max_files]:
-        try:
-            handle = path.open(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        with handle:
-            for line in handle:
-                if '"skill_listing"' not in line:
-                    continue
-                try:
-                    attachment = (json.loads(line).get("attachment") or {})
-                except ValueError:
-                    break
-                if attachment.get("type") != "skill_listing":
-                    break
-                content = attachment.get("content")
-                if isinstance(content, list):
-                    content = "\n".join(str(part) for part in content)
-                if not isinstance(content, str) or not content:
-                    break
-                lines = [ln for ln in content.splitlines() if ln.startswith("- ")]
-                return {"total": len(content), "bare": [ln[2:].strip() for ln in lines if ": " not in ln]}
+        found = _last_full_listing(path)
+        if found is not None:
+            return found
     return None
+
+
+def listing_is_current(listing, settings_path):
+    """Whether `listing` was produced after settings.json last changed.
+
+    A listing produced before the file's last write - this hook's own raise, or a hand edit - was
+    packed under a value the file no longer holds, whatever the model. A listing whose timestamp
+    cannot be read cannot be placed, so it is not trusted either.
+    """
+    produced = listing.get("timestamp")
+    if produced is None:
+        return False
+    try:
+        changed = settings_path.stat().st_mtime
+    except OSError:
+        return True  # no settings file: nothing was written after the listing
+    return produced >= changed
+
+
+def project_overrides_fraction(cwd, config):
+    """Whether the project at `cwd` sets its own `skillListingBudgetFraction`.
+
+    Such a listing was packed under the project's value, not the user-level one this hook manages.
+    A session run from the home directory is not a project: its `.claude` IS the config dir.
+    """
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    project = Path(cwd) / ".claude"
+    try:
+        if project.resolve() == config.resolve():
+            return False
+    except OSError:
+        return False
+    for name in ("settings.json", "settings.local.json"):
+        try:
+            settings = json.loads((project / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(settings, dict) and "skillListingBudgetFraction" in settings:
+            return True
+    return False
 
 
 def observed_requirement(listing, descriptions, current):
@@ -204,9 +273,13 @@ def observed_requirement(listing, descriptions, current):
 
     That cancellation only works while `current` is the fraction that PRODUCED this listing. A
     listing from before the last raise was produced under a smaller one, and scaling today's value
-    by yesterday's shortfall compounds the two into a wild over-correction. Such a listing is
-    recognisable without recording any history: whatever the model, its budget is at least
-    DENOMINATOR_FLOOR * current, so a total below that cannot have come from the current setting.
+    by yesterday's shortfall compounds the two into a wild over-correction. Two checks keep such a
+    listing out. `listing_is_current` rejects one produced before settings.json last changed; the
+    caller applies it, and it is the check that holds on every model. This function keeps a floor
+    check that needs no timestamp: whatever the model, a budget is at least DENOMINATOR_FLOOR *
+    current, so a total below that cannot have come from the current setting. The converse does
+    not hold - above 200k tokens x 3 chars an old listing clears the floor - which is why the
+    floor alone let a re-read listing ratchet the fraction up at every SessionStart.
     """
     if not listing or not listing["bare"]:
         return None
@@ -233,21 +306,42 @@ def build_message(entries, demand, change, dropped=0):
     )
 
 
-def wanted_fraction(config, entries, current):
+def _correction(config, entries, current, settings_path):
+    """Return (fraction, dropped) the newest usable listing asks for, or None when it asks nothing.
+
+    A listing is usable when it was produced under the user-level value as it stands now: after
+    settings.json last changed, and not in a project that overrides the fraction.
+    """
+    listing = newest_listing(config)
+    if listing is None or not listing_is_current(listing, settings_path):
+        return None
+    if project_overrides_fraction(listing.get("cwd"), config):
+        return None
+    observed = observed_requirement(listing, dict(entries), current)
+    if observed is None:
+        return None
+    return min(FRACTION_CAP, math.ceil(observed * 100) / 100), len(listing["bare"])
+
+
+def wanted_fraction(config, entries, current, settings_path=None):
     """Return the fraction to aim for, and how many descriptions the last listing dropped.
 
     Two independent readings, and the larger wins: an ESTIMATE from what is installed on disk,
     which works on a machine with no history, and a CORRECTION from the listing the harness
     actually produced, which is the outcome the estimate is guessing at and needs none of its
-    constants to be right.
+    constants to be right. A correction that cannot be computed costs only itself: the estimate
+    still stands.
     """
     estimate = required_fraction(listing_demand(entries))
-    listing = newest_listing(config)
-    observed = observed_requirement(listing, dict(entries), current)
-    if observed is None:
+    settings_path = settings_path if settings_path is not None else config / "settings.json"
+    try:
+        correction = _correction(config, entries, current, settings_path)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, OverflowError):
+        correction = None
+    if correction is None:
         return estimate, 0
-    corrected = min(FRACTION_CAP, math.ceil(observed * 100) / 100)
-    return max(estimate, corrected), len(listing["bare"])
+    corrected, dropped = correction
+    return max(estimate, corrected), dropped
 
 
 def main():
@@ -256,7 +350,7 @@ def main():
     if not entries:
         return  # nothing measured means nothing to conclude; never guess a fraction
     settings_path = config / "settings.json"
-    wanted, dropped = wanted_fraction(config, entries, stored_fraction(settings_path))
+    wanted, dropped = wanted_fraction(config, entries, stored_fraction(settings_path), settings_path)
     change = raise_fraction(settings_path, wanted)
     if change is None:
         return

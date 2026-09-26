@@ -229,9 +229,16 @@ def parse_listing(content, names, cwd=None):
     return _keyed(_raw_listing(content, names), _Describer(cwd))
 
 
-def _listings(transcript_path):
-    """Every `skill_listing` attachment in the transcript, in order. A substring test skips the
-    JSON decode of every other line, which keeps a 12 MB transcript at about 10 ms."""
+def listing_records(transcript_path):
+    """(record, attachment) for every `skill_listing` attachment in the transcript, in order.
+
+    The record carries what the attachment does not: its `timestamp` and the session's `cwd`. A
+    line that only MENTIONS the marker (a prompt, a tool call, another attachment type), a
+    truncated line and a JSON value that is not an object are all skipped, never a reason to stop.
+    A substring test skips the JSON decode of every other line, which keeps a 12 MB transcript at
+    about 10 ms. The one transcript reader: the skill router and the skill-listing-budget hook both
+    read through it.
+    """
     try:
         fh = Path(transcript_path).open("rb")
     except (OSError, TypeError, ValueError):
@@ -241,11 +248,18 @@ def _listings(transcript_path):
             if _MARKER not in line:
                 continue
             try:
-                att = json.loads(line).get("attachment")
-            except (ValueError, AttributeError):
+                record = json.loads(line)
+            except ValueError:
                 continue
+            att = record.get("attachment") if isinstance(record, dict) else None
             if isinstance(att, dict) and att.get("type") == "skill_listing":
-                yield att
+                yield record, att
+
+
+def _listings(transcript_path):
+    """Every `skill_listing` attachment in the transcript, in order."""
+    for _record, att in listing_records(transcript_path):
+        yield att
 
 
 def listing_from_transcript(transcript_path, cwd=None):

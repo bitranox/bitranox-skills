@@ -5,6 +5,9 @@ substitution is CLAUDE_CONFIG_DIR, which is the hook's actual environment seam.
 """
 
 import json
+import os
+import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -24,9 +27,9 @@ def write_skill(directory, name, description):
     return path
 
 
-def make_config(tmp_path, plugin_skills=(), user_skills=()):
+def make_config(tmp_path, plugin_skills=(), user_skills=(), name="claude"):
     """Build a config dir with one installed plugin and a personal skills dir."""
-    config = tmp_path / "claude"
+    config = tmp_path / name
     install = tmp_path / "cache" / "demo" / "1.0.0"
     (install / "skills").mkdir(parents=True)
     for name, desc in plugin_skills:
@@ -93,6 +96,13 @@ class TestInstalledSkills:
     def test_unparsable_manifest_does_not_raise(self, tmp_path):
         config = make_config(tmp_path, user_skills=[("solo", "Use when solo")])
         (config / "plugins" / "installed_plugins.json").write_text("{not json", encoding="utf-8")
+        assert budget.installed_skills(config) == [("solo", "Use when solo")]
+
+    @pytest.mark.parametrize("plugins", [[], "x", 7])
+    def test_a_plugins_value_that_is_not_an_object_still_finds_user_skills(self, tmp_path, plugins):
+        config = make_config(tmp_path, user_skills=[("solo", "Use when solo")])
+        manifest = config / "plugins" / "installed_plugins.json"
+        manifest.write_text(json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8")
         assert budget.installed_skills(config) == [("solo", "Use when solo")]
 
 
@@ -266,21 +276,40 @@ def test_required_fraction_always_covers_its_demand(demand):
     assert budget.required_fraction(demand) * budget.DENOMINATOR_FLOOR >= min(demand * budget.SAFETY, 300_000)
 
 
-def write_listing(config, session, content, mtime=None):
-    """Write a transcript carrying one skill_listing attachment, and return its path."""
+def iso(epoch):
+    """Render an epoch the way a transcript record stamps itself: UTC, milliseconds, a Z."""
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def listing_record(content, timestamp=None, cwd=None, initial=True):
+    """A skill_listing transcript record. It is stamped a minute AHEAD by default, so it reads as
+    produced under whatever settings.json holds when the test runs."""
+    record = {
+        "type": "attachment",
+        "timestamp": iso(time.time() + 60 if timestamp is None else timestamp),
+        "attachment": {"type": "skill_listing", "content": content, "isInitial": initial},
+    }
+    if cwd is not None:
+        record["cwd"] = str(cwd)
+    return record
+
+
+def write_transcript(config, session, records, mtime=None):
+    """Write a transcript; a str record is written verbatim so a test can plant a broken line."""
     project = config / "projects" / "proj"
     project.mkdir(parents=True, exist_ok=True)
     path = project / f"{session}.jsonl"
     path.write_text(
-        json.dumps({"type": "other"}) + "\n"
-        + json.dumps({"type": "attachment", "attachment": {"type": "skill_listing", "content": content}}) + "\n",
-        encoding="utf-8",
+        "\n".join(r if isinstance(r, str) else json.dumps(r) for r in records) + "\n", encoding="utf-8"
     )
     if mtime is not None:
-        import os
-
         os.utime(path, (mtime, mtime))
     return path
+
+
+def write_listing(config, session, content, mtime=None, **record):
+    """Write a transcript carrying one skill_listing attachment, and return its path."""
+    return write_transcript(config, session, [{"type": "other"}, listing_record(content, **record)], mtime)
 
 
 class TestStoredFraction:
@@ -410,3 +439,202 @@ class TestBuildMessageEvidence:
     def test_falls_back_to_the_disk_estimate_wording(self):
         message = budget.build_message([("a", "b")] * 7, 500, (0.01, 0.13), dropped=0)
         assert "7 installed skills" in message
+
+
+GOOD = "- a:one: described\n- z:fresh"
+PROMPT_NAMING_THE_MARKER = {"type": "user", "message": {"content": "skill_listing"}}
+TOOL_USE_NAMING_THE_MARKER = {
+    "type": "assistant",
+    "message": {"content": [{"type": "tool_use", "name": "Grep", "input": {"pattern": "skill_listing"}}]},
+}
+HOOK_NOTE_NAMING_THE_MARKER = {"type": "attachment", "attachment": {"type": "hook_note", "text": "skill_listing"}}
+
+
+class TestListingReader:
+    """Every line that merely MENTIONS the marker is skipped, and the real listing after it is read.
+
+    These are the cases the roster's reader already skips; the hook now reads through that reader.
+    """
+
+    @pytest.mark.parametrize("noise", [PROMPT_NAMING_THE_MARKER, TOOL_USE_NAMING_THE_MARKER, HOOK_NOTE_NAMING_THE_MARKER])
+    def test_a_line_naming_the_marker_is_skipped_and_the_later_listing_read(self, tmp_path, noise):
+        assert '"skill_listing"' in json.dumps(noise)  # it passes the substring filter
+        config = make_config(tmp_path)
+        write_transcript(config, "s1", [noise, listing_record(GOOD)])
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_a_truncated_listing_line_is_skipped_and_the_later_listing_read(self, tmp_path):
+        config = make_config(tmp_path)
+        cut = json.dumps(listing_record("- cut:off"))[:120]
+        assert '"skill_listing"' in cut  # it passes the substring filter and must fail the decode
+        write_transcript(config, "s1", [cut, listing_record(GOOD)])
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_a_json_line_that_is_not_an_object_is_skipped(self, tmp_path):
+        config = make_config(tmp_path)
+        write_transcript(config, "s1", ['["skill_listing"]', HOOK_NOTE_NAMING_THE_MARKER, listing_record(GOOD)])
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_a_skipped_line_does_not_send_the_scan_to_an_older_transcript(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "old", "- OLD:stale", mtime=1_000_000)
+        write_transcript(config, "new", [TOOL_USE_NAMING_THE_MARKER, listing_record(GOOD)], mtime=2_000_000)
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_the_last_listing_in_a_transcript_wins(self, tmp_path):
+        # /reload-plugins writes a second full listing; the first no longer describes the session
+        config = make_config(tmp_path)
+        write_transcript(config, "s1", [listing_record("- FIRST:one"), listing_record("- LAST:two")])
+        assert budget.newest_listing(config)["bare"] == ["LAST:two"]
+
+    def test_a_delta_listing_does_not_replace_the_full_one(self, tmp_path):
+        # a delta carries only the skills added since, so it is not the listing the budget packed
+        config = make_config(tmp_path)
+        write_transcript(config, "s1", [listing_record("- full:bare"), listing_record("- new:x: d", initial=False)])
+        assert budget.newest_listing(config)["bare"] == ["full:bare"]
+
+    @pytest.mark.parametrize("empty", ["", [], None])
+    def test_a_later_listing_with_no_content_does_not_hide_an_earlier_one(self, tmp_path, empty):
+        config = make_config(tmp_path)
+        write_transcript(config, "s1", [listing_record(GOOD), listing_record(empty)])
+        assert budget.newest_listing(config)["bare"] == ["z:fresh"]
+
+    def test_only_the_newest_transcripts_are_opened(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "oldest", "- a:b", mtime=1_000_000)
+        for i in range(5):
+            write_transcript(config, f"s{i}", [{"type": "other"}], mtime=2_000_000 + i)
+        assert budget.newest_listing(config, max_files=5) is None
+        assert budget.newest_listing(config, max_files=6)["bare"] == ["a:b"]
+
+    def test_it_reports_when_and_where_the_listing_was_produced(self, tmp_path):
+        config = make_config(tmp_path)
+        write_listing(config, "s1", GOOD, timestamp=1_700_000_000, cwd=tmp_path / "proj")
+        found = budget.newest_listing(config)
+        assert found["timestamp"] == pytest.approx(1_700_000_000, abs=0.001)
+        assert found["cwd"] == str(tmp_path / "proj")
+
+
+def big_skill_config(tmp_path, fraction, **kwargs):
+    """One personal skill whose 2k description the disk estimate covers at any fraction >= 0.03."""
+    config = make_config(tmp_path, user_skills=[("big", "Use when " + "b" * 2000)], **kwargs)
+    (config / "settings.json").write_text(json.dumps({"skillListingBudgetFraction": fraction}), encoding="utf-8")
+    return config
+
+
+def over_budget_listing(total):
+    """A listing packed to `total` chars that still dropped `big` to a bare name."""
+    head = "- big\n- filler:x: "
+    return head + "y" * (total - len(head))
+
+
+def stored(config):
+    return json.loads((config / "settings.json").read_text())["skillListingBudgetFraction"]
+
+
+def age(path, seconds):
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+    return then
+
+
+class TestStaleListing:
+    def test_a_listing_read_again_at_every_session_start_moves_the_fraction_once(self, tmp_path, monkeypatch, capsys):
+        # 1M-token context x 4 chars/token x 0.10 = 400,000 chars: above the floor guard at every
+        # fraction up to the cap, so only the timestamp can tell the listing is from before a raise.
+        config = big_skill_config(tmp_path, 0.10)
+        settings_written = age(config / "settings.json", 3600)
+        write_listing(config, "s1", over_budget_listing(400_000), timestamp=settings_written + 1800)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        seen = [stored(config)]
+        for _ in range(8):
+            budget.main()
+            seen.append(stored(config))
+        capsys.readouterr()
+        moves = [pair for pair in zip(seen, seen[1:]) if pair[0] != pair[1]]
+        assert len(moves) == 1, seen
+
+    def test_a_listing_older_than_the_settings_file_is_no_correction(self, tmp_path, monkeypatch, capsys):
+        config = big_skill_config(tmp_path, 0.10)
+        settings_written = age(config / "settings.json", 3600)
+        write_listing(config, "s1", over_budget_listing(400_000), timestamp=settings_written - 10)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        budget.main()
+        assert capsys.readouterr().out == ""
+        assert stored(config) == 0.10
+
+    @pytest.mark.parametrize("stamp", [None, "not a time", 12345])
+    def test_a_listing_with_no_readable_timestamp_is_no_correction(self, tmp_path, stamp):
+        config = big_skill_config(tmp_path, 0.10)
+        record = listing_record(over_budget_listing(400_000))
+        record["timestamp"] = stamp
+        write_transcript(config, "s1", [record])
+        entries = budget.installed_skills(config)
+        assert budget.wanted_fraction(config, entries, 0.10) == (budget.required_fraction(budget.listing_demand(entries)), 0)
+
+    def test_with_no_settings_file_a_listing_is_current(self, tmp_path):
+        assert budget.listing_is_current({"timestamp": 1.0}, tmp_path / "settings.json") is True
+
+    def test_a_fresh_listing_with_nothing_bare_asks_for_no_correction(self, tmp_path):
+        config = big_skill_config(tmp_path, 0.10)
+        write_listing(config, "s1", "- big: Use when b")
+        assert budget.wanted_fraction(config, budget.installed_skills(config), 0.10)[1] == 0
+
+    def test_a_fresh_listing_is_still_a_correction(self, tmp_path):
+        config = big_skill_config(tmp_path, 0.10)
+        write_listing(config, "s1", over_budget_listing(400_000))
+        _, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.10)
+        assert dropped == 1
+
+
+class TestProjectOverride:
+    """Only the USER-level fraction is managed; a listing a project override produced is skipped."""
+
+    @pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
+    def test_a_listing_from_a_project_that_sets_its_own_fraction_is_skipped(self, tmp_path, name):
+        config = big_skill_config(tmp_path, 0.10)
+        project = tmp_path / "work"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / name).write_text(json.dumps({"skillListingBudgetFraction": 0.3}), encoding="utf-8")
+        write_listing(config, "s1", over_budget_listing(400_000), cwd=project)
+        entries = budget.installed_skills(config)
+        assert budget.wanted_fraction(config, entries, 0.10) == (budget.required_fraction(budget.listing_demand(entries)), 0)
+
+    def test_a_project_settings_file_without_the_key_is_no_override(self, tmp_path):
+        config = big_skill_config(tmp_path, 0.10)
+        project = tmp_path / "work"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "settings.json").write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+        write_listing(config, "s1", over_budget_listing(400_000), cwd=project)
+        _, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.10)
+        assert dropped == 1
+
+    def test_a_session_run_from_home_is_not_overridden_by_the_user_settings(self, tmp_path):
+        # cwd == HOME makes <cwd>/.claude the config dir itself: that is the value this hook manages
+        config = big_skill_config(tmp_path, 0.10, name=".claude")
+        write_listing(config, "s1", over_budget_listing(400_000), cwd=tmp_path)
+        _, dropped = budget.wanted_fraction(config, budget.installed_skills(config), 0.10)
+        assert dropped == 1
+
+
+class TestTheEstimateSurvivesABadReading:
+    def forty_skills(self, tmp_path):
+        return make_config(tmp_path, plugin_skills=[(f"s{i}", "Use when " + "z" * 400) for i in range(40)])
+
+    def test_a_non_object_marker_line_does_not_cost_the_disk_estimate(self, tmp_path, monkeypatch, capsys):
+        config = self.forty_skills(tmp_path)
+        write_transcript(config, "s1", ['["skill_listing"]'])
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        budget.main()
+        assert "raised" in json.loads(capsys.readouterr().out)["systemMessage"]
+        assert stored(config) == budget.required_fraction(budget.listing_demand(budget.installed_skills(config)))
+
+    def test_a_correction_that_cannot_be_computed_falls_back_to_the_estimate(self, tmp_path, monkeypatch, capsys):
+        # Python's json reads NaN, and a NaN fraction makes the correction's arithmetic raise
+        config = self.forty_skills(tmp_path)
+        (config / "settings.json").write_text('{"skillListingBudgetFraction": NaN}', encoding="utf-8")
+        write_listing(config, "s1", "- demo:s0\n- filler:x: " + "y" * 7_000)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        budget.main()
+        capsys.readouterr()
+        assert stored(config) == budget.required_fraction(budget.listing_demand(budget.installed_skills(config)))

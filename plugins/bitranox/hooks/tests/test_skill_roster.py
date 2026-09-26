@@ -366,6 +366,20 @@ def test_a_marker_line_that_is_not_a_listing_attachment_is_skipped(tmp_path):
                                                   "update-config"}
 
 
+def test_listing_records_yields_each_listing_with_the_record_that_carries_it(tmp_path):
+    # A reader that needs WHEN and WHERE a listing was produced gets the record, not just the
+    # attachment, and every line the attachment reader skips is skipped here too.
+    first = dict(_listing(BASE), timestamp="2026-09-01T10:00:00.000Z", cwd="/work")
+    second = dict(_listing(BASE, initial=False), timestamp="2026-09-01T11:00:00.000Z")
+    t = _transcript(tmp_path, [first, '["skill_listing"]', "not json {", second])
+    got = [(rec.get("timestamp"), att.get("isInitial")) for rec, att in SR.listing_records(t)]
+    assert got == [("2026-09-01T10:00:00.000Z", True), ("2026-09-01T11:00:00.000Z", False)]
+
+
+def test_listing_records_of_a_missing_transcript_is_empty(tmp_path):
+    assert list(SR.listing_records(tmp_path / "gone.jsonl")) == []
+
+
 def test_a_bare_name_arriving_in_a_delta_does_not_overwrite_this_plugins_skill(tmp_path):
     t = _transcript(tmp_path, [_listing([("bitranox:meta-self-improve", "shipped")]),
                                _listing([("meta-self-improve", "local")], initial=False)])
