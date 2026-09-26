@@ -1,4 +1,10 @@
 """Tests for git-wrong-repo-nudge.py - a git answer that is confidently about another repo. ASCII."""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import git_wrong_repo_nudge as G
 
 
@@ -205,12 +211,6 @@ def test_a_git_after_each_of_two_different_landings_fires(tmp_path):
 
 
 # --- main(): the hook as the harness runs it -----------------------------------------------------
-
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
 _HOOK = Path(__file__).resolve().parent.parent / "git-wrong-repo-nudge.py"
 
